@@ -15,7 +15,7 @@ import "hardhat/console.sol";
 contract YourContract {
     // State Variables
     address public immutable owner;
-    string public greeting = "Building Unstoppable Apps!!!";
+    string public greeting = "Building Unstoppable Apps1234!";
     bool public premium = false;
     uint256 public totalCounter = 0;
     mapping(address => uint) public userGreetingCounter;
@@ -47,7 +47,7 @@ contract YourContract {
         console.log("Setting new greeting '%s' from %s", _newGreeting, msg.sender);
 
         // Change state variables
-        greeting = _newGreeting;
+        greeting = string(abi.encodePacked(_newGreeting, " LOL!"));
         totalCounter += 1;
         userGreetingCounter[msg.sender] += 1;
 

@@ -2455,7 +2455,7 @@ const externalContracts = {
           }
         }
       },
-      Indexer: {
+      OldIndexer: {
         "address": "0xaEF4103A04090071165F78D45D83A0C0782c2B2a",
         "abi": [
           {
