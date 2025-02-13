@@ -35,8 +35,8 @@ const deployYourContract: DeployFunction = async function (hre: HardhatRuntimeEn
   // Get the deployed contract to interact with it after deploying.
   const yourContract = await hre.ethers.getContract<Contract>("Indexer", deployer);
   const eas = await yourContract.getEAS();
-  const indexer = await yourContract.getOldIndexer();
-  console.log("Indexer deployed using EAS ", eas, indexer);
+  const indexer = await yourContract.getPrevIndexer();
+  console.log("Indexer deployed using EAS %s and prevIndexer %s", eas, indexer);
 };
 
 export default deployYourContract;

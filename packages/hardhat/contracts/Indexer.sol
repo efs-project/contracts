@@ -39,17 +39,17 @@ contract Indexer is Semver {
     // The address of the global EAS contract.
     IEAS private immutable _eas;
 
-    // Old Indexer contract address.
-    address private immutable _oldIndexer;
+    // Previously deployed Indexer contract address.
+    address private immutable _prevIndexer;
 
     /// @dev Creates a new Indexer instance.
     /// @param eas The address of the global EAS contract.
-    constructor(IEAS eas, address oldIndexer) Semver(2, 0, 0) {
+    constructor(IEAS eas, address prevIndexer) Semver(2, 0, 0) {
         if (address(eas) == address(0)) {
             revert InvalidEAS();
         }
-        if (oldIndexer != address(0)) {
-            _oldIndexer = oldIndexer;
+        if (prevIndexer != address(0)) {
+            _prevIndexer = prevIndexer;
         }
 
         _eas = eas;
@@ -60,9 +60,9 @@ contract Indexer is Semver {
         return _eas;
     }
 
-    /// @notice Returns the old EAS Indexer.
-    function getOldIndexer() external view returns (address) {
-        return _oldIndexer;
+    /// @notice Returns the previously deployed EAS Indexer.
+    function getPrevIndexer() external view returns (address) {
+        return _prevIndexer;
     }
 
     /// @notice Indexes an existing attestation.
@@ -259,8 +259,8 @@ contract Indexer is Semver {
         }
 
         // Add attestation to old index as well
-        if (_oldIndexer != address(0)) {
-            Indexer(_oldIndexer).indexAttestation(attestationUID);
+        if (_prevIndexer != address(0)) {
+            Indexer(_prevIndexer).indexAttestation(attestationUID);
         }
 
         emit Indexed({ uid: uid });
