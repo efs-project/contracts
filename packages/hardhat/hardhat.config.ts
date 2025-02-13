@@ -51,9 +51,13 @@ const config: HardhatUserConfig = {
     // If the network you are looking for is not here you can add new network settings
     hardhat: {
       forking: {
-        url: `https://eth-mainnet.alchemyapi.io/v2/${providerApiKey}`,
+        url: `https://eth-sepolia.g.alchemy.com/v2/${providerApiKey}`,
         enabled: process.env.MAINNET_FORKING_ENABLED === "true",
       },
+      // forking: {
+      //   url: `https://eth-mainnet.alchemyapi.io/v2/${providerApiKey}`,
+      //   enabled: process.env.MAINNET_FORKING_ENABLED === "true",
+      // },
     },
     mainnet: {
       url: `https://eth-mainnet.alchemyapi.io/v2/${providerApiKey}`,
