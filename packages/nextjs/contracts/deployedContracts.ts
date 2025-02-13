@@ -7,13 +7,18 @@ import { GenericContractsDeclaration } from "~~/utils/scaffold-eth/contract";
 const deployedContracts = {
   31337: {
     Indexer: {
-      address: "0x78dc38a5678725694C734b14F0b5f191e11127AC",
+      address: "0x5bDefD3A24697740c399E8238fDa524Ec9726960",
       abi: [
         {
           inputs: [
             {
               internalType: "contract IEAS",
               name: "eas",
+              type: "address",
+            },
+            {
+              internalType: "address",
+              name: "oldIndexer",
               type: "address",
             },
           ],
@@ -54,6 +59,19 @@ const deployedContracts = {
           outputs: [
             {
               internalType: "contract IEAS",
+              name: "",
+              type: "address",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "getOldIndexer",
+          outputs: [
+            {
+              internalType: "address",
               name: "",
               type: "address",
             },
@@ -430,7 +448,7 @@ const deployedContracts = {
       },
     },
     YourContract: {
-      address: "0xa1Fa2F4a70AaFFd05e26DEaEbf054E6447108Ec6",
+      address: "0x91E3D3Df5a27fa072748B456a920D5353bf4C1d2",
       abi: [
         {
           inputs: [

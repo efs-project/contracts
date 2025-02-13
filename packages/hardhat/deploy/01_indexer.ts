@@ -25,7 +25,7 @@ const deployYourContract: DeployFunction = async function (hre: HardhatRuntimeEn
   await deploy("Indexer", {
     from: deployer,
     // Contract constructor arguments
-    args: ["0xC2679fBD37d54388Ce493F1DB75320D236e1815e"],
+    args: ["0xC2679fBD37d54388Ce493F1DB75320D236e1815e", "0xaEF4103A04090071165F78D45D83A0C0782c2B2a"],
     log: true,
     // autoMine: can be passed to the deploy function to make the deployment process faster on local networks by
     // automatically mining the contract deployment transaction. There is no effect on live networks.
@@ -34,7 +34,9 @@ const deployYourContract: DeployFunction = async function (hre: HardhatRuntimeEn
 
   // Get the deployed contract to interact with it after deploying.
   const yourContract = await hre.ethers.getContract<Contract>("Indexer", deployer);
-  console.log("Indexer deployed using EAS at ", await yourContract.getEAS());
+  const eas = await yourContract.getEAS();
+  const indexer = await yourContract.getOldIndexer();
+  console.log("Indexer deployed using EAS ", eas, indexer);
 };
 
 export default deployYourContract;

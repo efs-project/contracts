@@ -2,15 +2,12 @@
 
 pragma solidity 0.8.28;
 
-// Useful for debugging. Remove when deploying to a live network.
-import "hardhat/console.sol";
-
 import { IEAS, Attestation } from "../eas/contracts/IEAS.sol";
 import { EMPTY_UID } from "../eas/contracts/Common.sol";
 import { Semver } from "../eas/contracts/Semver.sol";
 
 /// @title Indexer
-/// @notice Indexing Service for the Ethereum Attestation Service with Ethereum File System extensions
+/// @notice Indexing Service for the Ethereum Attestation Service
 contract Indexer is Semver {
     error InvalidEAS();
     error InvalidAttestation();
@@ -42,11 +39,17 @@ contract Indexer is Semver {
     // The address of the global EAS contract.
     IEAS private immutable _eas;
 
+    // Old Indexer contract address.
+    address private immutable _oldIndexer;
+
     /// @dev Creates a new Indexer instance.
     /// @param eas The address of the global EAS contract.
-    constructor(IEAS eas) Semver(2, 0, 0) {
+    constructor(IEAS eas, address oldIndexer) Semver(2, 0, 0) {
         if (address(eas) == address(0)) {
             revert InvalidEAS();
+        }
+        if (oldIndexer != address(0)) {
+            _oldIndexer = oldIndexer;
         }
 
         _eas = eas;
@@ -55,6 +58,11 @@ contract Indexer is Semver {
     /// @notice Returns the EAS.
     function getEAS() external view returns (IEAS) {
         return _eas;
+    }
+
+    /// @notice Returns the old EAS Indexer.
+    function getOldIndexer() external view returns (address) {
+        return _oldIndexer;
     }
 
     /// @notice Indexes an existing attestation.
@@ -250,6 +258,10 @@ contract Indexer is Semver {
             _indexAttestation(refUID);
         }
 
+        // Add attestation to old index as well
+        if (_oldIndexer != address(0)) {
+            Indexer(_oldIndexer).indexAttestation(attestationUID);
+        }
 
         emit Indexed({ uid: uid });
     }
