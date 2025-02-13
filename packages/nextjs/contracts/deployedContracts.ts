@@ -7,7 +7,7 @@ import { GenericContractsDeclaration } from "~~/utils/scaffold-eth/contract";
 const deployedContracts = {
   31337: {
     Indexer: {
-      address: "0xd4C513e57b7b261e5af28e65b342040ED96c1FC6",
+      address: "0x8D07830cb71e2b184646C094e8eFE7F7cf36655A",
       abi: [
         {
           inputs: [
@@ -149,6 +149,11 @@ const deployedContracts = {
               name: "attestionUID",
               type: "bytes32",
             },
+            {
+              internalType: "bytes32",
+              name: "schemaUID",
+              type: "bytes32",
+            },
           ],
           name: "getReferencingAttestationUIDCount",
           outputs: [
@@ -166,6 +171,11 @@ const deployedContracts = {
             {
               internalType: "bytes32",
               name: "attestionUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "schemaUID",
               type: "bytes32",
             },
             {
