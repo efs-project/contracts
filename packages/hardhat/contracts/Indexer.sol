@@ -2,6 +2,9 @@
 
 pragma solidity 0.8.28;
 
+// Useful for debugging. Remove when deploying to a live network.
+import "hardhat/console.sol";
+
 import { IEAS, Attestation } from "../eas/contracts/IEAS.sol";
 import { EMPTY_UID } from "../eas/contracts/Common.sol";
 import { Semver } from "../eas/contracts/Semver.sol";
@@ -240,7 +243,13 @@ contract Indexer is Semver {
         _receivedAttestations[recipient][schemaUID].push(attestationUID);
         _sentAttestations[attester][schemaUID].push(attestationUID);
         _schemaAttesterRecipientAttestations[schemaUID][attester][recipient].push(attestationUID);
-        _referencingAttestations[attestationUID].push(refUID);
+        _referencingAttestations[refUID].push(uid);
+
+        // Index the referenced attestation
+        if (refUID != EMPTY_UID) {
+            _indexAttestation(refUID);
+        }
+
 
         emit Indexed({ uid: uid });
     }
