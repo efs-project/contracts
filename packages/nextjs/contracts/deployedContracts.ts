@@ -7,7 +7,7 @@ import { GenericContractsDeclaration } from "~~/utils/scaffold-eth/contract";
 const deployedContracts = {
   31337: {
     Indexer: {
-      address: "0x8D07830cb71e2b184646C094e8eFE7F7cf36655A",
+      address: "0x8Be252963b93a99A08E003Fe7f0cd266944c5192",
       abi: [
         {
           inputs: [
@@ -154,6 +154,35 @@ const deployedContracts = {
               name: "schemaUID",
               type: "bytes32",
             },
+            {
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+          ],
+          name: "getReferencingAttestationUIDByAddressCount",
+          outputs: [
+            {
+              internalType: "uint256",
+              name: "",
+              type: "uint256",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "attestionUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "schemaUID",
+              type: "bytes32",
+            },
           ],
           name: "getReferencingAttestationUIDCount",
           outputs: [
@@ -195,6 +224,50 @@ const deployedContracts = {
             },
           ],
           name: "getReferencingAttestationUIDs",
+          outputs: [
+            {
+              internalType: "bytes32[]",
+              name: "",
+              type: "bytes32[]",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "attestionUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "schemaUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+            {
+              internalType: "uint256",
+              name: "start",
+              type: "uint256",
+            },
+            {
+              internalType: "uint256",
+              name: "length",
+              type: "uint256",
+            },
+            {
+              internalType: "bool",
+              name: "reverseOrder",
+              type: "bool",
+            },
+          ],
+          name: "getReferencingAttestationUIDsByAddress",
           outputs: [
             {
               internalType: "bytes32[]",
@@ -458,7 +531,7 @@ const deployedContracts = {
       },
     },
     YourContract: {
-      address: "0x91E3D3Df5a27fa072748B456a920D5353bf4C1d2",
+      address: "0xF0a61673168A356d8e9E43227b780D7Ba4ee4BC8",
       abi: [
         {
           inputs: [

@@ -18,13 +18,16 @@ contract Indexer is Semver {
     event Indexed(bytes32 indexed uid);
 
     /// A mapping between an attestation and its referencing attestations.
-    mapping(bytes32 attestationUID => mapping(bytes32 => bytes32[] uids) referencingAttestations) private _referencingAttestations;
+    mapping(bytes32 attestationUID => mapping(bytes32 schemaUID => bytes32[] uids) referencingAttestations) private _referencingAttestations;
+
+    /// A mapping between an attestation and its referencing attestations indexed by user.
+    mapping(bytes32 attestationUID => mapping(bytes32 schemaUID => mapping(address attester => bytes32[] uids)) referencingAttestationsByAddress) private _referencingAttestationsByAddress;
 
     /// A mapping between an account and its received attestations.
-    mapping(address account => mapping(bytes32 => bytes32[] uids) receivedAttestations) private _receivedAttestations;
+    mapping(address account => mapping(bytes32 schemaUID => bytes32[] uids) receivedAttestations) private _receivedAttestations;
 
     // A mapping between an account and its sent attestations.
-    mapping(address account => mapping(bytes32 => bytes32[] uids) sentAttestations) private _sentAttestations;
+    mapping(address account => mapping(bytes32 schemaUID => bytes32[] uids) sentAttestations) private _sentAttestations;
 
     // A mapping between a schema, attester, and recipient.
     mapping(bytes32 schemaUID => mapping(address attester => mapping(address recipient => bytes32[] uids)))
@@ -89,7 +92,7 @@ contract Indexer is Semver {
 
     /// @notice Returns the UIDs of attestations referencing a specific attestation.
     /// @param attestionUID The UID of the attestation being referenced.
-    /// @param attestionUID The UID of the schema of the referencing attestations.
+    /// @param schemaUID The UID of the schema of the referencing attestations.
     /// @param start The offset to start from.
     /// @param length The number of total members to retrieve.
     /// @param reverseOrder Whether the offset starts from the end and the data is returned in reverse.
@@ -106,10 +109,38 @@ contract Indexer is Semver {
 
     /// @notice Returns the total number of references to a specific attestation.
     /// @param attestionUID The UID of the attestation.
-    /// @param attestionUID The UID of the schema.
+    /// @param schemaUID The UID of the schema.
     /// @return An array of attestation UIDs.
     function getReferencingAttestationUIDCount(bytes32 attestionUID, bytes32 schemaUID) external view returns (uint256) {
         return _referencingAttestations[attestionUID][schemaUID].length;
+    }
+
+    /// @notice Returns the UIDs of attestations referencing a specific attestation.
+    /// @param attestionUID The UID of the attestation being referenced.
+    /// @param schemaUID The UID of the schema of the referencing attestations.
+    /// @param attester The attester of the referencing attestations.
+    /// @param start The offset to start from.
+    /// @param length The number of total members to retrieve.
+    /// @param reverseOrder Whether the offset starts from the end and the data is returned in reverse.
+    /// @return An array of attestation UIDs.
+    function getReferencingAttestationUIDsByAddress(
+        bytes32 attestionUID,
+        bytes32 schemaUID,
+        address attester,
+        uint256 start,
+        uint256 length,
+        bool reverseOrder
+    ) external view returns (bytes32[] memory) {
+        return _sliceUIDs(_referencingAttestationsByAddress[attestionUID][schemaUID][attester], start, length, reverseOrder);
+    }
+
+    /// @notice Returns the total number of references to a specific attestation.
+    /// @param attestionUID The UID of the attestation.
+    /// @param schemaUID The UID of the schema.
+    /// @param attester The attester of the referencing attestations.
+    /// @return An array of attestation UIDs.
+    function getReferencingAttestationUIDByAddressCount(bytes32 attestionUID, bytes32 schemaUID, address attester) external view returns (uint256) {
+        return _referencingAttestationsByAddress[attestionUID][schemaUID][attester].length;
     }
 
     /// @notice Returns the UIDs of attestations to a specific schema which were attested to/received by a specific
@@ -257,6 +288,7 @@ contract Indexer is Semver {
 
         if (refUID != EMPTY_UID) {
             _referencingAttestations[refUID][schemaUID].push(attestationUID);
+            _referencingAttestationsByAddress[refUID][schemaUID][attester].push(attestationUID);
 
             // Ensure the referenced attestation is also indexed
             _indexAttestation(refUID);
