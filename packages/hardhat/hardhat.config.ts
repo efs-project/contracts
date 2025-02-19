@@ -50,6 +50,9 @@ const config: HardhatUserConfig = {
     // View the networks that are pre-configured.
     // If the network you are looking for is not here you can add new network settings
     hardhat: {
+      gasPrice: "auto",
+      gas: "auto",
+      gasMultiplier: 3,
       forking: {
         url: `https://eth-sepolia.g.alchemy.com/v2/${providerApiKey}`,
         enabled: process.env.MAINNET_FORKING_ENABLED === "true",
