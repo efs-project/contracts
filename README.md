@@ -1,3 +1,27 @@
+# Ethereum File System Contracts
+
+This project is in early development and takes some technical skill to set up and use.
+
+First install dependencies via 'yarn install'
+
+Then:
+```
+yarn fork
+```
+
+In a separate prompt:
+```
+yarn deploy
+```
+
+For debugging and easily using the contracts, start the Scaffold UI via
+```
+yarn start
+```
+
+
+Scaffold-ETH boilerplate:
+
 # 🏗 Scaffold-ETH 2
 
 <h4 align="center">
