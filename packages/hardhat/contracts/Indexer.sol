@@ -2,9 +2,9 @@
 
 pragma solidity 0.8.28;
 
-import { IEAS, Attestation } from "../eas/contracts/IEAS.sol";
-import { EMPTY_UID } from "../eas/contracts/Common.sol";
-import { Semver } from "../eas/contracts/Semver.sol";
+import { IEAS, Attestation } from "@ethereum-attestation-service/eas-contracts/contracts/IEAS.sol";
+import { EMPTY_UID } from "@ethereum-attestation-service/eas-contracts/contracts/Common.sol";
+import { Semver } from "@ethereum-attestation-service/eas-contracts/contracts/Semver.sol";
 
 /// @title Indexer
 /// @notice Indexing Service for the Ethereum Attestation Service
