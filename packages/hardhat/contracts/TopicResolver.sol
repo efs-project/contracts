@@ -11,7 +11,11 @@ import { Attestation } from "@ethereum-attestation-service/eas-contracts/contrac
  */
 contract TopicResolver is SchemaResolver {
     // Event for logging validated topics
-    event TopicValidated(bytes32 uid, string name);
+    event TopicCreated(bytes32 uid, string name);
+    event RootTopicCreated(bytes32 uid);
+
+    // Root topic UID - initialized to zero
+    bytes32 public rootTopicUid;
 
     /**
      * @dev Constructor
@@ -37,8 +41,17 @@ contract TopicResolver is SchemaResolver {
 
         isValid = isValidIriComponentForStorage(name) && isValid;
         
+        // Check if this is the root topic (first topic attested)
+        if (rootTopicUid == bytes32(0)) {
+            rootTopicUid = attestation.uid;
+            emit RootTopicCreated(attestation.uid);
+        } else {
+            // All non-root topics must reference a parent topic
+            isValid = attestation.refUID != bytes32(0) && isValid;
+        }
+        
         if (isValid) {
-            emit TopicValidated(attestation.uid, name);
+            emit TopicCreated(attestation.uid, name);
         }
         
         return isValid;
