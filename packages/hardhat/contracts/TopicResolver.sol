@@ -129,6 +129,6 @@ contract TopicResolver is SchemaResolver {
         returns (bool) 
     {
         // Allow revocations
-        return true;
+        return false;
     }
 }
