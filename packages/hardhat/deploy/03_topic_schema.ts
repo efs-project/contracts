@@ -36,7 +36,7 @@ const deployTopicSchema: DeployFunction = async function (hre: HardhatRuntimeEnv
 
   // Define the schema
   const schemaDefinition = "string name";
-  const revocable = true;
+  const revocable = false;
   
   // Generate schema UID - using the same algorithm as the contracts use
   const schemaUID = hre.ethers.solidityPackedKeccak256(
