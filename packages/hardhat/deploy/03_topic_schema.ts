@@ -1,6 +1,8 @@
 import { HardhatRuntimeEnvironment } from "hardhat/types";
 import { DeployFunction } from "hardhat-deploy/types";
 import { Contract, Signer } from "ethers";
+import * as fs from "fs";
+import * as path from "path";
 
 /**
  * Deploys the TopicResolver and registers the Topic schema
@@ -10,10 +12,16 @@ const deployTopicSchema: DeployFunction = async function (hre: HardhatRuntimeEnv
   const { deployer } = await hre.getNamedAccounts();
   const { deploy } = hre.deployments;
 
+  // Clear the attestations file at the start
+  const attestationsFile = "topic-attestations.txt";
+  if (fs.existsSync(attestationsFile)) {
+    fs.unlinkSync(attestationsFile);
+  }
+
   // Get EAS address from the Indexer contract
   const indexer = await hre.ethers.getContract<Contract>("Indexer", deployer);
   const easAddress = await indexer.getEAS();
-  
+
   console.log("EAS address:", easAddress);
 
   // Deploy the TopicResolver contract
@@ -37,49 +45,49 @@ const deployTopicSchema: DeployFunction = async function (hre: HardhatRuntimeEnv
   // Define the schema
   const schemaDefinition = "string name";
   const revocable = false;
-  
+
   // Generate schema UID - using the same algorithm as the contracts use
   const schemaUID = hre.ethers.solidityPackedKeccak256(
     ["string", "address", "bool"],
     [schemaDefinition, TopicResolver.address, revocable]
   );
-  
+
   console.log("Calculated Topic schema UID:", schemaUID);
-   // Store the schema UID in a file for later reference
+  // Store the schema UID in a file for later reference
   // We check if this UID already exists as the last entry to avoid duplicates
-  
+
   // Check if the file exists and read its contents
-  const fs = require("fs");
-  const path = "schema-uids.txt";
+  const schemaFile = "schema-uids.txt";
   let shouldWriteUID = true;
   let schemaExists = false;
-  
+
   try {
-    if (fs.existsSync(path)) {
-      const fileContent = fs.readFileSync(path, 'utf8');
+    if (fs.existsSync(schemaFile)) {
+      const fileContent = fs.readFileSync(schemaFile, 'utf8');
       const lines = fileContent.split('\n');
-      
+
       // Find the last non-empty line that starts with "Topic Schema:"
       const topicSchemaLines = lines
         .filter((line: string) => line.trim().startsWith("Topic Schema:") && line.trim().length > 12);
-      
+
       if (topicSchemaLines.length > 0) {
         // Get the UID from the last entry
         const lastLine = topicSchemaLines[topicSchemaLines.length - 1];
         const lastUID = lastLine.split(": ")[1].trim();
-        
+
         // Check if the new UID is the same as the last one
         if (lastUID === schemaUID) {
           console.log("Schema UID already exists as the last entry. Skipping write.");
           shouldWriteUID = false;
-          schemaExists = true;
+          // Do NOT set schemaExists = true here. The file might persist while the chain is reset.
+          // schemaExists = true; 
         }
       }
     }
   } catch (error) {
     console.error("Error checking schema-uids.txt:", error);
   }
-  
+
   // Check if the schema already exists in the registry
   if (!schemaExists) {
     try {
@@ -112,18 +120,18 @@ const deployTopicSchema: DeployFunction = async function (hre: HardhatRuntimeEnv
   }
 
   console.log("Schema registration complete. Schema UID:", schemaUID);
-  
+
   // Only write to file if the UID doesn't match the last entry
   if (shouldWriteUID) {
     console.log("Writing new schema UID to schema-uids.txt");
     fs.appendFileSync(
-      path, 
+      schemaFile,
       `Topic Schema: ${schemaUID}\n`
     );
   }
   async function createTopicAttestation(topicName: string, parentTopicUID?: string): Promise<string | null> {
     console.log(`Creating Topic attestation for: ${topicName}${parentTopicUID ? ` (parent: ${parentTopicUID})` : ' (root topic)'}`);
-    
+
     try {
       // Encode the attestation data according to the schema "string name"
       const encodedData = hre.ethers.AbiCoder.defaultAbiCoder().encode(
@@ -147,21 +155,21 @@ const deployTopicSchema: DeployFunction = async function (hre: HardhatRuntimeEnv
 
       console.log(`Waiting for transaction confirmation for ${topicName}...`);
       const attestationReceipt = await attestationTx.wait();
-      
+
       if (attestationReceipt) {
         console.log(`${topicName} Topic attestation created successfully. Transaction hash:`, attestationReceipt.hash);
-        
+
         // The EAS attest function returns the attestation UID directly
         // Let's try to get it from the transaction result first
         let attestationUID: string | null = null;
-        
+
         try {
           // Method 1: Try to get the return value from the transaction
           // Note: This might not work with all RPC providers
           const iface = new hre.ethers.Interface([
             "event Attested(address indexed recipient, address indexed attester, bytes32 uid, bytes32 indexed schemaUID)"
           ]);
-          
+
           // Look for the Attested event in the logs
           for (const log of attestationReceipt.logs) {
             try {
@@ -181,10 +189,10 @@ const deployTopicSchema: DeployFunction = async function (hre: HardhatRuntimeEnv
         } catch (error) {
           console.log("Could not parse attestation UID from logs, trying alternative method");
         }
-        
+
         if (attestationUID) {
           console.log(`${topicName} Topic attestation UID:`, attestationUID);
-          
+
           // Verify the attestation exists
           try {
             const attestation = await eas.getAttestation(attestationUID);
@@ -193,7 +201,7 @@ const deployTopicSchema: DeployFunction = async function (hre: HardhatRuntimeEnv
             console.error(`✗ Could not verify attestation ${attestationUID} on-chain:`, error);
             return null;
           }
-          
+
           // Index the attestation
           try {
             console.log(`Indexing attestation ${attestationUID} for ${topicName}...`);
@@ -206,14 +214,13 @@ const deployTopicSchema: DeployFunction = async function (hre: HardhatRuntimeEnv
             console.error(`✗ Failed to index attestation ${attestationUID} for ${topicName}:`, error);
             // Continue execution even if indexing fails
           }
-          
+
           // Store the attestation UID in a file
-          const fs = require("fs");
           fs.appendFileSync(
-            "topic-attestations.txt",
+            attestationsFile,
             `${topicName} Topic Attestation: ${attestationUID}${parentTopicUID ? ` (parent: ${parentTopicUID})` : ' (root)'}\n`
           );
-          
+
           return attestationUID;
         } else {
           console.error(`Could not extract attestation UID for ${topicName}`);
@@ -222,14 +229,14 @@ const deployTopicSchema: DeployFunction = async function (hre: HardhatRuntimeEnv
       }
     } catch (error) {
       console.error(`Error creating ${topicName} Topic attestation:`, error);
-      
+
       // If it's the custom error 0xc5723b51, let's try to understand what it means
       if (error && typeof error === 'object' && 'message' in error && typeof error.message === 'string' && error.message.includes("0xc5723b51")) {
         console.error("This appears to be a custom contract error. Possible causes:");
         console.error("1. Schema UID might not be registered properly");
         console.error("2. TopicResolver might be rejecting the attestation");
         console.error("3. Parent topic UID might be invalid or not exist");
-        
+
         // Let's verify the schema exists
         try {
           const schema = await schemaRegistry.getSchema(schemaUID);
@@ -237,7 +244,7 @@ const deployTopicSchema: DeployFunction = async function (hre: HardhatRuntimeEnv
         } catch (e) {
           console.error("Schema does not exist in registry!");
         }
-        
+
         // If this is not the root topic, verify parent exists
         if (parentTopicUID && parentTopicUID !== hre.ethers.ZeroHash) {
           try {
@@ -249,16 +256,16 @@ const deployTopicSchema: DeployFunction = async function (hre: HardhatRuntimeEnv
         }
       }
     }
-    
+
     return null;
   }
 
   // Check if root topic already exists
   const topicResolver = await hre.ethers.getContractAt("TopicResolver", TopicResolver.address);
   const existingRootTopicUID = await topicResolver.rootTopicUid();
-  
+
   let rootTopicUID: string | null = null;
-  
+
   if (existingRootTopicUID === hre.ethers.ZeroHash) {
     console.log("No root topic exists, creating new root topic");
     rootTopicUID = await createTopicAttestation("root");
@@ -266,23 +273,29 @@ const deployTopicSchema: DeployFunction = async function (hre: HardhatRuntimeEnv
     console.log("Root topic already exists with UID:", existingRootTopicUID);
     rootTopicUID = existingRootTopicUID;
   }
-  
+
+  if (!rootTopicUID) {
+    console.error("CRITICAL ERROR: Failed to obtain root topic UID!");
+  } else {
+    console.log("Root Topic UID obtained:", rootTopicUID);
+  }
+
   // Create blockchain-related sample topics
   if (rootTopicUID) {
     // Helper function to add delay between attestations
     const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-    
+
     // Create main blockchain topics
     console.log("Creating main blockchain topics...");
     const ethereumUID = await createTopicAttestation("ethereum", rootTopicUID);
     await delay(1000); // 1 second delay
-    
+
     const bitcoinUID = await createTopicAttestation("bitcoin", rootTopicUID);
     await delay(1000);
-    
+
     const solanaUID = await createTopicAttestation("solana", rootTopicUID);
     await delay(1000);
-    
+
     // Create Ethereum-related subtopics
     if (ethereumUID) {
       console.log("Creating Ethereum subtopics...");
@@ -295,7 +308,7 @@ const deployTopicSchema: DeployFunction = async function (hre: HardhatRuntimeEnv
       await createTopicAttestation("eip", ethereumUID);
       await delay(1000);
     }
-    
+
     // Create Bitcoin-related subtopics
     if (bitcoinUID) {
       console.log("Creating Bitcoin subtopics...");
@@ -306,7 +319,7 @@ const deployTopicSchema: DeployFunction = async function (hre: HardhatRuntimeEnv
       await createTopicAttestation("lightning", bitcoinUID);
       await delay(1000);
     }
-    
+
     // Create Solana-related subtopics
     if (solanaUID) {
       console.log("Creating Solana subtopics...");
@@ -316,6 +329,37 @@ const deployTopicSchema: DeployFunction = async function (hre: HardhatRuntimeEnv
       await delay(1000);
       await createTopicAttestation("phantom", solanaUID);
     }
+  }
+  // ... existing code ...
+
+  // Generate client constants file
+  console.log("Generating client constants...");
+  const clientConstantsPath = "../../../../client/src/libefs/contractConstants.ts";
+  const indexerArtifact = await hre.deployments.getArtifact("Indexer");
+  const topicResolverArtifact = await hre.deployments.getArtifact("TopicResolver");
+
+  const fileContent = `// This file is auto-generated by the deploy script.
+// Do not edit manually.
+
+export const TOPIC_SCHEMA = "${schemaUID}";
+export const TOPIC_ROOT_PARENT = "${hre.ethers.ZeroHash}";
+export const TOPIC_ROOT = "${rootTopicUID || ""}";
+
+export const INDEXER_ADDRESS = "${indexer.target}";
+export const TOPIC_RESOLVER_ADDRESS = "${TopicResolver.address}";
+
+export const INDEXER_ABI = ${JSON.stringify(indexerArtifact.abi, null, 2)} as const;
+
+export const TOPIC_RESOLVER_ABI = ${JSON.stringify(topicResolverArtifact.abi, null, 2)} as const;
+`;
+
+  try {
+    const resolvedPath = path.resolve(__dirname, clientConstantsPath);
+
+    fs.writeFileSync(resolvedPath, fileContent);
+    console.log(`Successfully generated contract constants at ${resolvedPath}`);
+  } catch (error) {
+    console.error("Failed to generate contract constants:", error);
   }
 };
 
