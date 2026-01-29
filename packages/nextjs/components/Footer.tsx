@@ -37,6 +37,10 @@ export const Footer = () => {
                   <MagnifyingGlassIcon className="h-4 w-4" />
                   <span>Block Explorer</span>
                 </Link>
+                <Link href="/easexplorer" passHref className="btn btn-primary btn-sm font-normal gap-1">
+                  <MagnifyingGlassIcon className="h-4 w-4" />
+                  <span>EAS Explorer</span>
+                </Link>
               </>
             )}
           </div>

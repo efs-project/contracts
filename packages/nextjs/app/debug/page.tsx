@@ -1,7 +1,7 @@
+import { AttestationLauncher } from "./_components/AttestationLauncher";
 import { DebugContracts } from "./_components/DebugContracts";
 import type { NextPage } from "next";
 import { getMetadata } from "~~/utils/scaffold-eth/getMetadata";
-import { AttestationLauncher } from "./_components/AttestationLauncher";
 
 export const metadata = getMetadata({
   title: "Debug Contracts",

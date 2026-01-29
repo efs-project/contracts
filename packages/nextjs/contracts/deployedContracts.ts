@@ -7,7 +7,7 @@ import { GenericContractsDeclaration } from "~~/utils/scaffold-eth/contract";
 const deployedContracts = {
   31337: {
     BlobResolver: {
-      address: "0x9841806AC68865af1FDE1033e04cC4241D4f911b",
+      address: "0x79cA020FeE712048cAA49De800B4606cC516A331",
       abi: [
         {
           inputs: [
@@ -386,7 +386,7 @@ const deployedContracts = {
       },
     },
     FileResolver: {
-      address: "0xff45Fcd36E04C07b53D909b00E915837fD1E3234",
+      address: "0x71cEE012bA3B9642277f189c2C26488cAA28CF13",
       abi: [
         {
           inputs: [
@@ -765,7 +765,7 @@ const deployedContracts = {
       },
     },
     Indexer: {
-      address: "0x4AE53A8BD1f39a18207B2B7AaE70f849e6Cafea2",
+      address: "0xdc8832f7bc16bE8a97E6c7cB66f912B6922246B5",
       abi: [
         {
           inputs: [
@@ -1290,7 +1290,7 @@ const deployedContracts = {
       },
     },
     PropertyResolver: {
-      address: "0xc1ec8B65bb137602963f88eb063fa7236f4744f2",
+      address: "0x9841806AC68865af1FDE1033e04cC4241D4f911b",
       abi: [
         {
           inputs: [
@@ -1669,7 +1669,7 @@ const deployedContracts = {
       },
     },
     TagResolver: {
-      address: "0x2A12E7beEC60808b4e0a5340544947D56429430a",
+      address: "0xff45Fcd36E04C07b53D909b00E915837fD1E3234",
       abi: [
         {
           inputs: [
@@ -2048,7 +2048,7 @@ const deployedContracts = {
       },
     },
     TopicResolver: {
-      address: "0x731c8103f5e39e7241f6833F68617c4da4ec31Cb",
+      address: "0xc1ec8B65bb137602963f88eb063fa7236f4744f2",
       abi: [
         {
           inputs: [
