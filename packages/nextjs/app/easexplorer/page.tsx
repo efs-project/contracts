@@ -138,7 +138,7 @@ export default function EASExplorer() {
   // References to this Attestation (replies)
   const { data: referencingAttestations } = useScaffoldReadContract({
     contractName: "Indexer",
-    functionName: "getReferencingAttestationUIDs",
+    functionName: "getReferencingAttestations",
     args: [
       (uidParam as `0x${string}`) || zeroHash,
       (relevantSchema as `0x${string}`) || zeroHash,
@@ -152,17 +152,13 @@ export default function EASExplorer() {
   });
 
   // Attestations using this Schema (if viewing Schema)
+  // Attestations using this Schema (if viewing Schema)
+  // Note: getSchemaAttestations not currently implemented in Indexer
   const { data: schemaAttestations } = useScaffoldReadContract({
     contractName: "Indexer",
-    functionName: "getSchemaAttestationUIDs",
-    args: [
-      (uidParam as `0x${string}`) || zeroHash,
-      0n,
-      20n,
-      true
-    ],
+    functionName: "getEAS", // Dummy call to avoid crashing, or just null
     query: {
-      enabled: !isAttestationFound && !!schemaRecord && schemaRecord.uid === uidParam
+      enabled: false
     }
   });
 
@@ -397,7 +393,7 @@ export default function EASExplorer() {
               </div>
             </div>
 
-            {renderAttestationList(schemaAttestations, "Recent Attestations")}
+            {renderAttestationList(schemaAttestations as unknown as `0x${string}`[], "Recent Attestations")}
           </div>
         )}
 
