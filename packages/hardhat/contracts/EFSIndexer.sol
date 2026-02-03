@@ -72,6 +72,11 @@ contract EFSIndexer is SchemaResolver {
     // Tag Weights: targetUID => labelUID => weight
     mapping(bytes32 => mapping(bytes32 => int256)) private _tagWeights;
 
+    // List of Schemas referencing a target: targetUID => schemaUIDs
+    mapping(bytes32 => bytes32[]) private _referencingSchemas;
+    // Helper to check existence: targetUID => schemaUID => exists
+    mapping(bytes32 => mapping(bytes32 => bool)) private _hasReferencingSchema;
+
 
     constructor(
         IEAS eas,
@@ -147,6 +152,7 @@ contract EFSIndexer is SchemaResolver {
             if (parentUID != bytes32(0)) {
                 _referencingAttestations[parentUID][schema].push(attestation.uid);
                 _uidIndices[attestation.uid].ref = uint32(_referencingAttestations[parentUID][schema].length);
+                _addReferencingSchema(parentUID, schema);
             }
             
             // Index Sender
@@ -182,6 +188,7 @@ contract EFSIndexer is SchemaResolver {
             // Index Reference for Explorer
             _referencingAttestations[attestation.refUID][schema].push(attestation.uid);
             _uidIndices[attestation.uid].ref = uint32(_referencingAttestations[attestation.refUID][schema].length);
+            _addReferencingSchema(attestation.refUID, schema);
 
             return true;
         } else if (schema == TAG_SCHEMA_UID) {
@@ -198,6 +205,7 @@ contract EFSIndexer is SchemaResolver {
             if (attestation.refUID != EMPTY_UID) {
                 _referencingAttestations[attestation.refUID][schema].push(attestation.uid);
                 _uidIndices[attestation.uid].ref = uint32(_referencingAttestations[attestation.refUID][schema].length);
+                _addReferencingSchema(attestation.refUID, schema);
             }
             
              // Index Sender
@@ -223,6 +231,7 @@ contract EFSIndexer is SchemaResolver {
         if (attestation.refUID != EMPTY_UID) {
             _referencingAttestations[attestation.refUID][schema].push(attestation.uid);
             _uidIndices[attestation.uid].ref = uint32(_referencingAttestations[attestation.refUID][schema].length);
+            _addReferencingSchema(attestation.refUID, schema);
         }
 
         return true;
@@ -290,6 +299,8 @@ contract EFSIndexer is SchemaResolver {
         // Fix: Remove from _referencingAttestations (Ghost References) - O(1)
         if (attestation.refUID != EMPTY_UID) {
             _removeRef(_referencingAttestations[attestation.refUID][schema], attestation.uid);
+            // Check if we need to remove schema from list
+            _removeReferencingSchema(attestation.refUID, schema);
         }
 
         // Fix: Remove from _sentAttestations - O(1)
@@ -354,6 +365,10 @@ contract EFSIndexer is SchemaResolver {
     
     function getReferencingAttestations(bytes32 targetUID, bytes32 schemaUID, uint256 start, uint256 length, bool reverseOrder) external view returns (bytes32[] memory) {
         return _sliceUIDs(_referencingAttestations[targetUID][schemaUID], start, length, reverseOrder);
+    }
+
+    function getReferencingSchemas(bytes32 targetUID) external view returns (bytes32[] memory) {
+        return _referencingSchemas[targetUID];
     }
 
     // ============================================================================================
@@ -422,9 +437,11 @@ contract EFSIndexer is SchemaResolver {
         uint256 idx = uint256(index) - 1;
         bytes32 lastUID = array[array.length - 1];
         
+        // Swap
         array[idx] = lastUID;
         array.pop();
         
+        // Update index of moved element
         if (lastUID != uid) {
             _uidIndices[lastUID].ref = index;
         }
@@ -438,9 +455,11 @@ contract EFSIndexer is SchemaResolver {
         uint256 idx = uint256(index) - 1;
         bytes32 lastUID = array[array.length - 1];
         
+        // Swap
         array[idx] = lastUID;
         array.pop();
         
+        // Update index of moved element
         if (lastUID != uid) {
             _uidIndices[lastUID].sent = index;
         }
@@ -454,9 +473,11 @@ contract EFSIndexer is SchemaResolver {
         uint256 idx = uint256(index) - 1;
         bytes32 lastUID = array[array.length - 1];
         
+        // Swap
         array[idx] = lastUID;
         array.pop();
         
+        // Update index of moved element
         if (lastUID != uid) {
             _uidIndices[lastUID].rec = index;
         }
@@ -503,9 +524,11 @@ contract EFSIndexer is SchemaResolver {
         uint256 idx = uint256(index) - 1;
         bytes32 lastUID = array[array.length - 1];
         
+        // Swap
         array[idx] = lastUID;
         array.pop();
         
+        // Update index of moved element
         if (lastUID != uid) {
             _uidIndices[lastUID].attester = index;
         }
@@ -519,14 +542,42 @@ contract EFSIndexer is SchemaResolver {
         uint256 idx = uint256(index) - 1;
         bytes32 lastUID = array[array.length - 1];
         
+        // Swap
         array[idx] = lastUID;
         array.pop();
         
+        // Update index of moved element
         if (lastUID != uid) {
             if (isFull) _uidIndices[lastUID].typeFull = index;
             else _uidIndices[lastUID].typeCat = index;
         }
         if (isFull) delete _uidIndices[uid].typeFull;
         else delete _uidIndices[uid].typeCat;
+    }
+
+    function _addReferencingSchema(bytes32 targetUID, bytes32 schemaUID) private {
+        if (!_hasReferencingSchema[targetUID][schemaUID]) {
+            _referencingSchemas[targetUID].push(schemaUID);
+            _hasReferencingSchema[targetUID][schemaUID] = true;
+        }
+    }
+
+    function _removeReferencingSchema(bytes32 targetUID, bytes32 schemaUID) private {
+        // If no more attestations reference this schema, remove it from list
+        if (_referencingAttestations[targetUID][schemaUID].length == 0) {
+            // Remove O(N) unfortunately unless we track index of schema in list
+            // Since schema list is small (usually < 10), O(N) is acceptable.
+            
+            bytes32[] storage array = _referencingSchemas[targetUID];
+            for (uint256 i = 0; i < array.length; i++) {
+                if (array[i] == schemaUID) {
+                     // Swap with last
+                    array[i] = array[array.length - 1];
+                    array.pop();
+                    break;
+                }
+            }
+            _hasReferencingSchema[targetUID][schemaUID] = false;
+        }
     }
 }

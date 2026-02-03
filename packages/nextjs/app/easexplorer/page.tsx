@@ -83,6 +83,40 @@ export default function EASExplorer() {
   );
 }
 
+const ReferencingAttestationsList = ({
+  uid,
+  schemaUid,
+  title,
+}: {
+  uid: string;
+  schemaUid: string | undefined;
+  title: string;
+}) => {
+  const { data: uids } = useScaffoldReadContract({
+    contractName: "Indexer",
+    functionName: "getReferencingAttestations",
+    args: [(uid as `0x${string}`) || zeroHash, (schemaUid as `0x${string}`) || zeroHash, 0n, 20n, true],
+    query: {
+      enabled: !!uid && !!schemaUid && uid !== zeroHash,
+    },
+  });
+
+  if (!uids || uids.length === 0) return null;
+
+  return (
+    <div className="mt-8">
+      <h3 className="text-xl font-bold mb-4">{title}</h3>
+      <div className="flex flex-col gap-2">
+        {uids.map(u => (
+          <Link key={u} href={`/easexplorer?uid=${u}`} className="link link-primary font-mono block">
+            {u}
+          </Link>
+        ))}
+      </div>
+    </div>
+  );
+};
+
 function EASExplorerContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -102,6 +136,28 @@ function EASExplorerContent() {
   const { data: easAddress } = useScaffoldReadContract({
     contractName: "Indexer",
     functionName: "getEAS",
+  });
+
+  // Get EFS Schema UIDs
+  const { data: anchorSchemaUid } = useScaffoldReadContract({
+    contractName: "Indexer",
+    functionName: "ANCHOR_SCHEMA_UID",
+  });
+  const { data: propertySchemaUid } = useScaffoldReadContract({
+    contractName: "Indexer",
+    functionName: "PROPERTY_SCHEMA_UID",
+  });
+  const { data: dataSchemaUid } = useScaffoldReadContract({
+    contractName: "Indexer",
+    functionName: "DATA_SCHEMA_UID",
+  });
+  const { data: blobSchemaUid } = useScaffoldReadContract({
+    contractName: "Indexer",
+    functionName: "BLOB_SCHEMA_UID",
+  });
+  const { data: tagSchemaUid } = useScaffoldReadContract({
+    contractName: "Indexer",
+    functionName: "TAG_SCHEMA_UID",
   });
 
   // 2. Fetch Attestation
@@ -141,14 +197,24 @@ function EASExplorerContent() {
     },
   });
 
-  // 5. Fetch Related Attestations (Indexer)
+  // 5. Fetch Referencing Schemas (Dynamic Discovery)
+  const { data: referencingSchemas } = useScaffoldReadContract({
+    contractName: "Indexer",
+    functionName: "getReferencingSchemas",
+    args: [(uidParam as `0x${string}`) || zeroHash],
+    query: {
+      enabled: !!isAttestationFound && !!uidParam,
+    },
+  });
+
+  // 6. Fetch Related Attestations (Indexer)
   const relevantSchema = isAttestationFound
     ? attestation.schema
     : schemaRecord?.uid === uidParam
       ? uidParam
       : undefined;
 
-  // References to this Attestation (replies)
+  // Old fallback fetching (for backward compatibility or same schema)
   const { data: referencingAttestations } = useScaffoldReadContract({
     contractName: "Indexer",
     functionName: "getReferencingAttestations",
@@ -159,11 +225,9 @@ function EASExplorerContent() {
   });
 
   // Attestations using this Schema (if viewing Schema)
-  // Attestations using this Schema (if viewing Schema)
-  // Note: getSchemaAttestations not currently implemented in Indexer
   const { data: schemaAttestations } = useScaffoldReadContract({
     contractName: "Indexer",
-    functionName: "getEAS", // Dummy call to avoid crashing, or just null
+    functionName: "getEAS", // Dummy call
     query: {
       enabled: false,
     },
@@ -260,6 +324,16 @@ function EASExplorerContent() {
         </div>
       </div>
     );
+  };
+
+  // Function to get title for a schema UID
+  const getSchemaTitle = (schemaUid: string) => {
+    if (schemaUid === anchorSchemaUid) return "Referencing Anchors (Children)";
+    if (schemaUid === propertySchemaUid) return "Referencing Properties";
+    if (schemaUid === dataSchemaUid) return "Linked Data";
+    if (schemaUid === blobSchemaUid) return "Linked Blobs";
+    if (schemaUid === tagSchemaUid) return "Tags";
+    return `Referencing Attestations (Schema: ${schemaUid.slice(0, 8)}...)`;
   };
 
   // Determine State
@@ -381,7 +455,19 @@ function EASExplorerContent() {
             </div>
             <div className="bg-base-100 border-base-300 rounded-b-box border p-6">{renderDataDisplay()}</div>
 
-            {renderAttestationList(referencingAttestations, "Referencing Attestations (Same Schema)")}
+            {/* Referenced By ... (Dynamic) */}
+            {referencingSchemas && referencingSchemas.map((schemaUid) => (
+              <ReferencingAttestationsList
+                key={schemaUid}
+                uid={attestation.uid}
+                schemaUid={schemaUid}
+                title={getSchemaTitle(schemaUid)}
+              />
+            ))}
+
+            {/* Fallback/Legacy if no schemas found (or manual check for same schema refs) */}
+            {(!referencingSchemas || referencingSchemas.length === 0) && renderAttestationList(referencingAttestations, "Referencing Attestations (Same Schema)")}
+
           </div>
         )}
 
