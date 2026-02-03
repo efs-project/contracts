@@ -1,3 +1,25 @@
+// Polyfill indexedDB for server-side build/prerendering
+if (typeof window === "undefined" && !global.indexedDB) {
+  const mockDB = {
+    createObjectStore: () => { },
+    transaction: () => ({
+      objectStore: () => ({
+        get: () => ({ set onsuccess(cb: any) { cb({ target: { result: null } }); } }),
+        put: () => ({ set onsuccess(cb: any) { cb({ target: { result: null } }); } }),
+      }),
+    }),
+  };
+  global.indexedDB = {
+    open: () => ({
+      result: mockDB,
+      set onupgradeneeded(cb: any) { if (cb) cb({ target: { result: mockDB } }); },
+      set onsuccess(cb: any) { if (cb) cb({ target: { result: mockDB } }); },
+      addEventListener: () => { },
+      removeEventListener: () => { },
+    }),
+  } as any;
+}
+
 import { connectorsForWallets } from "@rainbow-me/rainbowkit";
 import {
   coinbaseWallet,
@@ -21,7 +43,9 @@ const wallets = [
   rainbowWallet,
   safeWallet,
   ...(!targetNetworks.some(network => network.id !== (chains.hardhat as chains.Chain).id) || !onlyLocalBurnerWallet
-    ? [rainbowkitBurnerWallet]
+    ? typeof window !== "undefined"
+      ? [rainbowkitBurnerWallet]
+      : []
     : []),
 ];
 

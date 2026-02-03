@@ -7,7 +7,7 @@ import { GenericContractsDeclaration } from "~~/utils/scaffold-eth/contract";
 const deployedContracts = {
   31337: {
     Indexer: {
-      address: "0xb9Dc81280065098338EA7E358243943b41127660",
+      address: "0x2A12E7beEC60808b4e0a5340544947D56429430a",
       abi: [
         {
           inputs: [
@@ -62,6 +62,11 @@ const deployedContracts = {
         },
         {
           inputs: [],
+          name: "InvalidAttestation",
+          type: "error",
+        },
+        {
+          inputs: [],
           name: "InvalidEAS",
           type: "error",
         },
@@ -73,6 +78,11 @@ const deployedContracts = {
         {
           inputs: [],
           name: "InvalidOffset",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "MissingParent",
           type: "error",
         },
         {

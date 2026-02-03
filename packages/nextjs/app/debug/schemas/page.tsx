@@ -117,6 +117,7 @@ export default function DebugSchemas() {
       if (!dataRef || dataRef === zeroHash) setDataRef(registry.rootTopicUid);
       if (!blobRef || blobRef === zeroHash) setBlobRef(registry.rootTopicUid);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [registry.rootTopicUid]);
 
   const attestWithArgs = async (args: any): Promise<string | null> => {
@@ -153,7 +154,7 @@ export default function DebugSchemas() {
             uid = decoded.args.uid;
             break;
           }
-        } catch (e) {
+        } catch {
           // Not the right event
         }
       }
@@ -163,7 +164,6 @@ export default function DebugSchemas() {
         return uid;
       }
       return null;
-
     } catch (e) {
       console.error("Attestation failed", e);
       notification.error("Attestation failed. Check console.");
@@ -184,7 +184,6 @@ export default function DebugSchemas() {
       },
     });
   };
-
 
   if (!registry.schemas || !registry.easAddress || !registry.indexerAddress) {
     return (
@@ -275,7 +274,7 @@ export default function DebugSchemas() {
                     schemas.ANCHOR,
                     ref,
                     encodeAbiParameters(parseAbiParameters("string"), [name]),
-                    false // revocable
+                    false, // revocable
                   );
                 }}
               >
@@ -336,11 +335,11 @@ export default function DebugSchemas() {
                       labelBytes = stringToHex(tagDef, { size: 32 });
                     }
                     // Schema: bytes32 labelUID, int256 weight
-                    const encoded = encodeAbiParameters(
-                      parseAbiParameters("bytes32, int256"),
-                      [labelBytes, BigInt(tagWeight)]
-                    );
-                    attest(schemas.TAG, tagRef, encoded);
+                    const encoded = encodeAbiParameters(parseAbiParameters("bytes32, int256"), [
+                      labelBytes,
+                      BigInt(tagWeight),
+                    ]);
+                    attest(schemas.TAG as string, tagRef, encoded);
                   } catch (e) {
                     console.error(e);
                     notification.error("Encoding failed");
@@ -397,7 +396,10 @@ export default function DebugSchemas() {
                 className="btn btn-primary"
                 disabled={isPending}
                 onClick={async () => {
-                  if (!propName) { notification.error("Name required"); return; }
+                  if (!propName) {
+                    notification.error("Name required");
+                    return;
+                  }
 
                   // Step 1: Create Anchor
                   notification.info("Step 1/2: Creating Anchor...");
@@ -495,8 +497,14 @@ export default function DebugSchemas() {
                 className="btn btn-primary"
                 disabled={isPending}
                 onClick={async () => {
-                  if (!dataName) { notification.error("Name required"); return; }
-                  if (!dataBlobUID.startsWith("0x")) { notification.error("Blob UID must be 0x hex"); return; }
+                  if (!dataName) {
+                    notification.error("Name required");
+                    return;
+                  }
+                  if (!dataBlobUID.startsWith("0x")) {
+                    notification.error("Blob UID must be 0x hex");
+                    return;
+                  }
 
                   // Step 1: Create Anchor
                   notification.info("Step 1/2: Creating Anchor...");
@@ -524,7 +532,10 @@ export default function DebugSchemas() {
                       expirationTime: 0n,
                       revocable: true,
                       refUID: anchorUID as `0x${string}`,
-                      data: encodeAbiParameters(parseAbiParameters("bytes32, string"), [dataBlobUID as `0x${string}`, dataFileMode]),
+                      data: encodeAbiParameters(parseAbiParameters("bytes32, string"), [
+                        dataBlobUID as `0x${string}`,
+                        dataFileMode,
+                      ]),
                       value: 0n,
                     },
                   };
@@ -581,7 +592,7 @@ export default function DebugSchemas() {
                   const bytes = toHex(blobData);
                   // Schema: bytes data, string contentType
                   attest(
-                    schemas.BLOB,
+                    schemas.BLOB as string,
                     blobRef,
                     encodeAbiParameters(parseAbiParameters("bytes, string"), [bytes, blobType]),
                   );
@@ -631,11 +642,41 @@ function AttestationViewer({ rootUid, schemas, easAddress }: { rootUid: string; 
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
         {/* Added Anchors Column */}
-        <SchemaList title="Anchors" schemaUID={schemas.ANCHOR} targetRef={targetUID} easAddress={easAddress} onFocus={setTargetUID} />
-        <SchemaList title="Tags" schemaUID={schemas.TAG} targetRef={targetUID} easAddress={easAddress} onFocus={setTargetUID} />
-        <SchemaList title="Properties" schemaUID={schemas.PROPERTY} targetRef={targetUID} easAddress={easAddress} onFocus={setTargetUID} />
-        <SchemaList title="Data" schemaUID={schemas.DATA} targetRef={targetUID} easAddress={easAddress} onFocus={setTargetUID} />
-        <SchemaList title="Blobs" schemaUID={schemas.BLOB} targetRef={targetUID} easAddress={easAddress} onFocus={setTargetUID} />
+        <SchemaList
+          title="Anchors"
+          schemaUID={schemas.ANCHOR}
+          targetRef={targetUID}
+          easAddress={easAddress}
+          onFocus={setTargetUID}
+        />
+        <SchemaList
+          title="Tags"
+          schemaUID={schemas.TAG}
+          targetRef={targetUID}
+          easAddress={easAddress}
+          onFocus={setTargetUID}
+        />
+        <SchemaList
+          title="Properties"
+          schemaUID={schemas.PROPERTY}
+          targetRef={targetUID}
+          easAddress={easAddress}
+          onFocus={setTargetUID}
+        />
+        <SchemaList
+          title="Data"
+          schemaUID={schemas.DATA}
+          targetRef={targetUID}
+          easAddress={easAddress}
+          onFocus={setTargetUID}
+        />
+        <SchemaList
+          title="Blobs"
+          schemaUID={schemas.BLOB}
+          targetRef={targetUID}
+          easAddress={easAddress}
+          onFocus={setTargetUID}
+        />
       </div>
     </div>
   );
@@ -669,10 +710,12 @@ function SchemaList({
           <p className="text-xs opacity-50">No attestations found.</p>
         ) : (
           <div className="flex flex-col gap-2">
-            // @ts-ignore
-            {uids.map(uid => (
-              <AttestationItem key={uid} uid={uid} title={title} easAddress={easAddress} onFocus={onFocus} />
-            ))}
+            {
+              // @ts-ignore
+              uids.map(uid => (
+                <AttestationItem key={uid} uid={uid} title={title} easAddress={easAddress} onFocus={onFocus} />
+              ))
+            }
           </div>
         )}
       </div>
@@ -680,7 +723,17 @@ function SchemaList({
   );
 }
 
-function AttestationItem({ uid, title, easAddress, onFocus }: { uid: string; title: string; easAddress: string; onFocus: (uid: string) => void }) {
+function AttestationItem({
+  uid,
+  title,
+  easAddress,
+  onFocus,
+}: {
+  uid: string;
+  title: string;
+  easAddress: string;
+  onFocus: (uid: string) => void;
+}) {
   const { data: attestation } = useReadContract({
     address: easAddress as `0x${string}`,
     abi: EAS_ABI,
@@ -738,9 +791,11 @@ function AttestationItem({ uid, title, easAddress, onFocus }: { uid: string; tit
       decodedValue = (
         <div className="flex justify-between items-center w-full">
           <span className="font-bold text-lg">{name}</span>
-          <button className="btn btn-xs btn-outline" onClick={() => onFocus(uid)}>Focus</button>
+          <button className="btn btn-xs btn-outline" onClick={() => onFocus(uid)}>
+            Focus
+          </button>
         </div>
-      )
+      );
     }
   } catch (e) {
     console.error("Decode error for", title, uid, e);

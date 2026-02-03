@@ -7,6 +7,10 @@
 
 ## Project Setup Commands
 
+You need to run a fork of Sepolia so we can use the pre-deployed EAS contracts.
+
+When using the Browser you must also click the money icon in the top right as that's the faucet that adds ETH for gas to your account.
+
 ### Blockchain
 1. **Start Chain**: 
    ```bash

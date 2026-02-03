@@ -19,7 +19,10 @@ export const useSchemaRegistry = () => {
 
   // 3. Fetch Schema UIDs directly from Indexer (Source of Truth)
   const { data: anchorUID } = useScaffoldReadContract({ contractName: "Indexer", functionName: "ANCHOR_SCHEMA_UID" });
-  const { data: propertyUID } = useScaffoldReadContract({ contractName: "Indexer", functionName: "PROPERTY_SCHEMA_UID" });
+  const { data: propertyUID } = useScaffoldReadContract({
+    contractName: "Indexer",
+    functionName: "PROPERTY_SCHEMA_UID",
+  });
   const { data: dataUID } = useScaffoldReadContract({ contractName: "Indexer", functionName: "DATA_SCHEMA_UID" });
   const { data: blobUID } = useScaffoldReadContract({ contractName: "Indexer", functionName: "BLOB_SCHEMA_UID" });
   const { data: tagUID } = useScaffoldReadContract({ contractName: "Indexer", functionName: "TAG_SCHEMA_UID" });
@@ -37,7 +40,7 @@ export const useSchemaRegistry = () => {
 
   return {
     schemas,
-    rootTopicUid: (rootAnchorUID && rootAnchorUID !== zeroHash) ? (rootAnchorUID as string) : null,
+    rootTopicUid: rootAnchorUID && rootAnchorUID !== zeroHash ? (rootAnchorUID as string) : null,
     easAddress,
     indexerAddress: indexer?.address,
     indexerAbi: indexer?.abi,

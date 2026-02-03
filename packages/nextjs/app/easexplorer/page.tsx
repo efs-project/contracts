@@ -1,20 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
-import CopyToClipboard from "react-copy-to-clipboard";
-import {
-  CheckCircleIcon,
-  DocumentDuplicateIcon,
-  ArrowTopRightOnSquareIcon
-} from "@heroicons/react/24/outline";
-import { useReadContract, usePublicClient } from "wagmi";
-import { isAddress, maxUint256, zeroHash } from "viem";
-import { useScaffoldReadContract } from "~~/hooks/scaffold-eth";
-import { EAS, SchemaEncoder, SchemaRegistry } from "@ethereum-attestation-service/eas-sdk";
-import { Address } from "~~/components/scaffold-eth";
+import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
-import { decodeAbiParameters, parseAbiParameters, toHex } from 'viem'
+import { useRouter, useSearchParams } from "next/navigation";
+import { SchemaEncoder } from "@ethereum-attestation-service/eas-sdk";
+import CopyToClipboard from "react-copy-to-clipboard";
+import { zeroHash } from "viem";
+import { useReadContract } from "wagmi";
+import { DocumentDuplicateIcon } from "@heroicons/react/24/outline";
+import { Address } from "~~/components/scaffold-eth";
+import { useScaffoldReadContract } from "~~/hooks/scaffold-eth";
 
 // Minimal ABI for EAS and SchemaRegistry
 const EAS_ABI = [
@@ -75,6 +70,20 @@ const SCHEMA_REGISTRY_ABI = [
 ] as const;
 
 export default function EASExplorer() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex justify-center p-10">
+          <span className="loading loading-spinner loading-lg"></span>
+        </div>
+      }
+    >
+      <EASExplorerContent />
+    </Suspense>
+  );
+}
+
+function EASExplorerContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const uidParam = searchParams.get("uid");
@@ -96,7 +105,7 @@ export default function EASExplorer() {
   });
 
   // 2. Fetch Attestation
-  const { data: attestation, isError: isAttestationError, isLoading: isAttestationLoading } = useReadContract({
+  const { data: attestation, isLoading: isAttestationLoading } = useReadContract({
     address: easAddress as `0x${string}` | undefined,
     abi: EAS_ABI,
     functionName: "getAttestation",
@@ -115,8 +124,8 @@ export default function EASExplorer() {
     abi: EAS_ABI,
     functionName: "getSchemaRegistry",
     query: {
-      enabled: !!easAddress
-    }
+      enabled: !!easAddress,
+    },
   });
 
   // 4. Fetch Schema (if attestation found, fetch its schema; else try fetching schema by UID)
@@ -133,22 +142,20 @@ export default function EASExplorer() {
   });
 
   // 5. Fetch Related Attestations (Indexer)
-  const relevantSchema = isAttestationFound ? attestation.schema : (schemaRecord?.uid === uidParam ? uidParam : undefined);
+  const relevantSchema = isAttestationFound
+    ? attestation.schema
+    : schemaRecord?.uid === uidParam
+      ? uidParam
+      : undefined;
 
   // References to this Attestation (replies)
   const { data: referencingAttestations } = useScaffoldReadContract({
     contractName: "Indexer",
     functionName: "getReferencingAttestations",
-    args: [
-      (uidParam as `0x${string}`) || zeroHash,
-      (relevantSchema as `0x${string}`) || zeroHash,
-      0n,
-      20n,
-      true
-    ],
+    args: [(uidParam as `0x${string}`) || zeroHash, (relevantSchema as `0x${string}`) || zeroHash, 0n, 20n, true],
     query: {
-      enabled: !!isAttestationFound && !!relevantSchema && !!uidParam
-    }
+      enabled: !!isAttestationFound && !!relevantSchema && !!uidParam,
+    },
   });
 
   // Attestations using this Schema (if viewing Schema)
@@ -158,10 +165,9 @@ export default function EASExplorer() {
     contractName: "Indexer",
     functionName: "getEAS", // Dummy call to avoid crashing, or just null
     query: {
-      enabled: false
-    }
+      enabled: false,
+    },
   });
-
 
   // Decode Data
   useEffect(() => {
@@ -187,7 +193,9 @@ export default function EASExplorer() {
     if (activeTab === "raw") {
       return (
         <div className="mockup-code bg-base-300 text-sm">
-          <pre data-prefix=">"><code>{attestation?.data}</code></pre>
+          <pre data-prefix=">">
+            <code>{attestation?.data}</code>
+          </pre>
         </div>
       );
     }
@@ -214,9 +222,7 @@ export default function EASExplorer() {
                   if (val.hex) {
                     return val.hex;
                   }
-                  return JSON.stringify(val, (key, value) =>
-                    typeof value === 'bigint' ? value.toString() : value
-                  );
+                  return JSON.stringify(val, (key, value) => (typeof value === "bigint" ? value.toString() : value));
                 }
                 return String(val);
               };
@@ -230,7 +236,9 @@ export default function EASExplorer() {
               );
             })}
             {decodedData.length === 0 && (
-              <tr><td colSpan={3}>No decoded data or unable to decode.</td></tr>
+              <tr>
+                <td colSpan={3}>No decoded data or unable to decode.</td>
+              </tr>
             )}
           </tbody>
         </table>
@@ -244,7 +252,7 @@ export default function EASExplorer() {
       <div className="mt-8">
         <h3 className="text-xl font-bold mb-4">{title}</h3>
         <div className="flex flex-col gap-2">
-          {uids.map((u) => (
+          {uids.map(u => (
             <Link key={u} href={`/easexplorer?uid=${u}`} className="link link-primary font-mono block">
               {u}
             </Link>
@@ -252,7 +260,7 @@ export default function EASExplorer() {
         </div>
       </div>
     );
-  }
+  };
 
   // Determine State
   const isLoading = !easAddress || isAttestationLoading || isSchemaLoading;
@@ -271,8 +279,8 @@ export default function EASExplorer() {
             placeholder="Enter Attestation or Schema UID"
             className="input input-bordered w-full font-mono"
             value={uid}
-            onChange={(e) => setUid(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+            onChange={e => setUid(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && handleSearch()}
           />
           <button className="btn btn-primary" onClick={handleSearch}>
             Go
@@ -320,7 +328,10 @@ export default function EASExplorer() {
                       <DocumentDuplicateIcon className="h-3 w-3" />
                     </button>
                   </CopyToClipboard>
-                  <Link href={`/easexplorer?uid=${attestation.schema}`} className="link link-primary font-mono text-xs break-all">
+                  <Link
+                    href={`/easexplorer?uid=${attestation.schema}`}
+                    className="link link-primary font-mono text-xs break-all"
+                  >
                     {attestation.schema}
                   </Link>
                 </div>
@@ -330,7 +341,10 @@ export default function EASExplorer() {
                 {attestation.refUID === zeroHash ? (
                   <span className="text-xs opacity-50 font-mono">None</span>
                 ) : (
-                  <Link href={`/easexplorer?uid=${attestation.refUID}`} className="link link-primary font-mono text-xs break-all">
+                  <Link
+                    href={`/easexplorer?uid=${attestation.refUID}`}
+                    className="link link-primary font-mono text-xs break-all"
+                  >
                     {attestation.refUID}
                   </Link>
                 )}
@@ -341,17 +355,31 @@ export default function EASExplorer() {
               </div>
               <div>
                 <span className="font-bold block">Expiration</span>
-                <span>{Number(attestation.expirationTime) === 0 ? "Never" : new Date(Number(attestation.expirationTime) * 1000).toLocaleString()}</span>
+                <span>
+                  {Number(attestation.expirationTime) === 0
+                    ? "Never"
+                    : new Date(Number(attestation.expirationTime) * 1000).toLocaleString()}
+                </span>
               </div>
             </div>
 
             <div role="tablist" className="tabs tabs-lifted">
-              <a role="tab" className={`tab ${activeTab === "human" ? "tab-active" : ""}`} onClick={() => setActiveTab("human")}>Human Readable</a>
-              <a role="tab" className={`tab ${activeTab === "raw" ? "tab-active" : ""}`} onClick={() => setActiveTab("raw")}>Raw Data</a>
+              <a
+                role="tab"
+                className={`tab ${activeTab === "human" ? "tab-active" : ""}`}
+                onClick={() => setActiveTab("human")}
+              >
+                Human Readable
+              </a>
+              <a
+                role="tab"
+                className={`tab ${activeTab === "raw" ? "tab-active" : ""}`}
+                onClick={() => setActiveTab("raw")}
+              >
+                Raw Data
+              </a>
             </div>
-            <div className="bg-base-100 border-base-300 rounded-b-box border p-6">
-              {renderDataDisplay()}
-            </div>
+            <div className="bg-base-100 border-base-300 rounded-b-box border p-6">{renderDataDisplay()}</div>
 
             {renderAttestationList(referencingAttestations, "Referencing Attestations (Same Schema)")}
           </div>
@@ -388,15 +416,12 @@ export default function EASExplorer() {
 
             <div className="mb-6">
               <span className="font-bold block mb-2">Schema String</span>
-              <div className="bg-base-200 p-4 rounded-xl font-mono text-sm overflow-x-auto">
-                {schemaRecord.schema}
-              </div>
+              <div className="bg-base-200 p-4 rounded-xl font-mono text-sm overflow-x-auto">{schemaRecord.schema}</div>
             </div>
 
             {renderAttestationList(schemaAttestations as unknown as `0x${string}`[], "Recent Attestations")}
           </div>
         )}
-
       </div>
     </div>
   );

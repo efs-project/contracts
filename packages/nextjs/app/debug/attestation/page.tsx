@@ -223,7 +223,7 @@ function DecodedData({ schemaUID, data, schemas }: { schemaUID: string; data: st
       let text = "";
       try {
         text = hexToString(val, { size: 32 }).replace(/\0/g, "");
-      } catch { }
+      } catch {}
       return (
         <div className="p-4 bg-primary/10 rounded-lg border border-primary/20">
           <div className="text-xs font-bold uppercase mb-1">Tag</div>
@@ -269,7 +269,7 @@ function DecodedData({ schemaUID, data, schemas }: { schemaUID: string; data: st
       if (isText) {
         try {
           displayText = hexToString(content) as any;
-        } catch { }
+        } catch {}
       }
       return (
         <div className="p-4 bg-info/10 rounded-lg border border-info/20">
@@ -305,49 +305,19 @@ function ReferencingAttestations({
       <h3 className="text-xl font-bold px-1">Referencing Attestations</h3>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         {registry.schemas.TAG && (
-          <ReferencingList
-            title="Tags"
-            schema={registry.schemas.TAG}
-            target={uid}
-            onNavigate={onNavigate}
-            registry={registry}
-          />
+          <ReferencingList title="Tags" schema={registry.schemas.TAG} target={uid} onNavigate={onNavigate} />
         )}
         {registry.schemas.ANCHOR && (
-          <ReferencingList
-            title="Anchors"
-            schema={registry.schemas.ANCHOR}
-            target={uid}
-            onNavigate={onNavigate}
-            registry={registry}
-          />
+          <ReferencingList title="Anchors" schema={registry.schemas.ANCHOR} target={uid} onNavigate={onNavigate} />
         )}
         {registry.schemas.PROPERTY && (
-          <ReferencingList
-            title="Properties"
-            schema={registry.schemas.PROPERTY}
-            target={uid}
-            onNavigate={onNavigate}
-            registry={registry}
-          />
+          <ReferencingList title="Properties" schema={registry.schemas.PROPERTY} target={uid} onNavigate={onNavigate} />
         )}
         {registry.schemas.DATA && (
-          <ReferencingList
-            title="Data"
-            schema={registry.schemas.DATA}
-            target={uid}
-            onNavigate={onNavigate}
-            registry={registry}
-          />
+          <ReferencingList title="Data" schema={registry.schemas.DATA} target={uid} onNavigate={onNavigate} />
         )}
         {registry.schemas.BLOB && (
-          <ReferencingList
-            title="Blobs"
-            schema={registry.schemas.BLOB}
-            target={uid}
-            onNavigate={onNavigate}
-            registry={registry}
-          />
+          <ReferencingList title="Blobs" schema={registry.schemas.BLOB} target={uid} onNavigate={onNavigate} />
         )}
       </div>
     </div>
@@ -359,13 +329,11 @@ function ReferencingList({
   schema,
   target,
   onNavigate,
-  registry,
 }: {
   title: string;
   schema: string;
   target: string;
   onNavigate: (uid: string) => void;
-  registry: ReturnType<typeof useSchemaRegistry>;
 }) {
   const { data: uids, isLoading } = useScaffoldReadContract({
     contractName: "Indexer",
