@@ -145,12 +145,16 @@ describe("EFSIndexer", function () {
                 data: { recipient: ZeroAddress, expirationTime: NO_EXPIRATION, revocable: false, refUID: ZERO_BYTES32, data: data1, value: 0n }
             });
 
-            // 2. Try to create Second Root (Should Fail)
+            // 2. Try to create Second Root (Should ensure parentUID is checked properly)
+            // Note: New logic allows multiple roots if they have internal validation? NO.
+            // Logic: if rootAnchorUID != 0, and parent == 0, and uid != rootAnchorUID -> MissingParent.
+            // So this test should still pass (revert).
+
             const data2 = schemaEncoder.encode(["string"], ["root2"]);
             await expect(eas.attest({
                 schema: anchorSchemaUID,
                 data: { recipient: ZeroAddress, expirationTime: NO_EXPIRATION, revocable: false, refUID: ZERO_BYTES32, data: data2, value: 0n }
-            })).to.be.reverted;
+            })).to.be.revertedWithCustomError(indexer, "MissingParent");
         });
 
         it("should Revert when creating duplicate filename in same directory", async function () {
@@ -371,6 +375,9 @@ describe("EFSIndexer", function () {
             const page2 = await indexer.getChildren(parentUID, 2, 2, false);
             expect(page2.length).to.equal(1);
             expect(page2[0]).to.equal(child3UID);
+
+            const count = await indexer.getChildrenCount(parentUID);
+            expect(count).to.equal(3);
         });
 
         it("Should paginate children (Reverse)", async function () {
@@ -598,6 +605,46 @@ describe("EFSIndexer", function () {
             // 100 - 50 = 50
             const weight = await indexer.getTagWeight(anchorUID, ethers.ZeroHash);
             expect(weight).to.equal(50n);
+        });
+
+        it("Should return the correct count of referencing attestations", async function () {
+            const schemaEncoder = new ethers.AbiCoder();
+            const tx = await eas.attest({
+                schema: anchorSchemaUID,
+                data: {
+                    recipient: ZeroAddress,
+                    expirationTime: NO_EXPIRATION,
+                    revocable: false,
+                    refUID: ZERO_BYTES32,
+                    data: schemaEncoder.encode(["string"], ["file_for_count"]),
+                    value: 0n
+                }
+            });
+            const receipt = await tx.wait();
+            const anchorUID = getUIDFromReceipt(receipt);
+
+            // Create a tag
+            const tagTx = await eas.attest({
+                schema: tagSchemaUID,
+                data: {
+                    recipient: ZeroAddress,
+                    expirationTime: NO_EXPIRATION,
+                    revocable: true,
+                    refUID: anchorUID,
+                    data: schemaEncoder.encode(["bytes32", "int256"], [ethers.ZeroHash, 10n]),
+                    value: 0n
+                }
+            });
+            const tagReceipt = await tagTx.wait();
+            const tagUID = getUIDFromReceipt(tagReceipt);
+
+            // Verify via Generic Index
+            const attestations = await indexer.getReferencingAttestations(anchorUID, tagSchemaUID, 0, 10, false);
+            expect(attestations.length).to.equal(1);
+            expect(attestations[0]).to.equal(tagUID);
+
+            const count = await indexer.getReferencingAttestationCount(anchorUID, tagSchemaUID);
+            expect(count).to.equal(1);
         });
     });
 

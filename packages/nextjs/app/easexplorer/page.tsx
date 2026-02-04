@@ -174,6 +174,23 @@ function EASExplorerContent() {
   // Check if attestation is valid (non-empty UID)
   const isAttestationFound = attestation && attestation.uid !== zeroHash;
 
+  // Fetch Schema Name (if we are looking at a Schema or an Attestation with a Schema)
+  // For Attestation View: we want name of attestation.schema
+  // For Schema View: we want name of schemaRecord.uid (which is uidParam)
+  // For Lists: we want name of schemaUid passed to list.
+
+  // Let's create a helper hook component or just fetch for the current main view
+  const schemaUidForName = isAttestationFound ? attestation.schema : uidParam;
+
+  const { data: schemaName } = useScaffoldReadContract({
+    contractName: "SchemaNameIndex",
+    functionName: "schemaNames",
+    args: [schemaUidForName as `0x${string}`],
+    query: {
+      enabled: !!schemaUidForName && schemaUidForName !== zeroHash,
+    },
+  });
+
   // 3. Get SchemaRegistry Address (only if we found an attestation or we want to try fetching schema)
   const { data: schemaRegistryAddress } = useReadContract({
     address: easAddress as `0x${string}` | undefined,
@@ -221,15 +238,6 @@ function EASExplorerContent() {
     args: [(uidParam as `0x${string}`) || zeroHash, (relevantSchema as `0x${string}`) || zeroHash, 0n, 20n, true],
     query: {
       enabled: !!isAttestationFound && !!relevantSchema && !!uidParam,
-    },
-  });
-
-  // Attestations using this Schema (if viewing Schema)
-  const { data: schemaAttestations } = useScaffoldReadContract({
-    contractName: "Indexer",
-    functionName: "getEAS", // Dummy call
-    query: {
-      enabled: false,
     },
   });
 
@@ -333,12 +341,25 @@ function EASExplorerContent() {
     if (schemaUid === dataSchemaUid) return "Linked Data";
     if (schemaUid === blobSchemaUid) return "Linked Blobs";
     if (schemaUid === tagSchemaUid) return "Tags";
+
+    // ideally we would fetch the name for each schema in the list, but that requires a multi-read or sub-component.
+    // For now, let's just stick to known or generic.
     return `Referencing Attestations (Schema: ${schemaUid.slice(0, 8)}...)`;
   };
 
   // Determine State
   const isLoading = !easAddress || isAttestationLoading || isSchemaLoading;
   const isSchemaView = !isAttestationFound && schemaRecord && schemaRecord.uid === uidParam;
+
+  // Attestations using this Schema (if viewing Schema)
+  const { data: schemaAttestations } = useScaffoldReadContract({
+    contractName: "Indexer",
+    functionName: "getAttestationsBySchema",
+    args: [uidParam as `0x${string}`, 0n, 20n, true],
+    query: {
+      enabled: !!isSchemaView,
+    },
+  });
 
   // Render
   return (
@@ -406,7 +427,9 @@ function EASExplorerContent() {
                     href={`/easexplorer?uid=${attestation.schema}`}
                     className="link link-primary font-mono text-xs break-all"
                   >
-                    {attestation.schema}
+                    {schemaName && attestation.schema === schemaUidForName
+                      ? `${schemaName} (${attestation.schema.slice(0, 8)}...)`
+                      : attestation.schema}
                   </Link>
                 </div>
               </div>
@@ -456,18 +479,19 @@ function EASExplorerContent() {
             <div className="bg-base-100 border-base-300 rounded-b-box border p-6">{renderDataDisplay()}</div>
 
             {/* Referenced By ... (Dynamic) */}
-            {referencingSchemas && referencingSchemas.map((schemaUid) => (
-              <ReferencingAttestationsList
-                key={schemaUid}
-                uid={attestation.uid}
-                schemaUid={schemaUid}
-                title={getSchemaTitle(schemaUid)}
-              />
-            ))}
+            {referencingSchemas &&
+              referencingSchemas.map(schemaUid => (
+                <ReferencingAttestationsList
+                  key={schemaUid}
+                  uid={attestation.uid}
+                  schemaUid={schemaUid}
+                  title={getSchemaTitle(schemaUid)}
+                />
+              ))}
 
             {/* Fallback/Legacy if no schemas found (or manual check for same schema refs) */}
-            {(!referencingSchemas || referencingSchemas.length === 0) && renderAttestationList(referencingAttestations, "Referencing Attestations (Same Schema)")}
-
+            {(!referencingSchemas || referencingSchemas.length === 0) &&
+              renderAttestationList(referencingAttestations, "Referencing Attestations (Same Schema)")}
           </div>
         )}
 
@@ -476,7 +500,7 @@ function EASExplorerContent() {
           <div className="bg-base-100 rounded-xl shadow-md p-6">
             <div className="flex justify-between items-start mb-6">
               <h2 className="text-2xl font-bold flex items-center gap-2">
-                Schema
+                {schemaName || "Schema"}
                 <div className="badge badge-accent">Schema</div>
               </h2>
               <div className="flex items-center gap-2">
