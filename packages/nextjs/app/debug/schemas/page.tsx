@@ -273,7 +273,7 @@ export default function DebugSchemas() {
                   attest(
                     schemas.ANCHOR,
                     ref,
-                    encodeAbiParameters(parseAbiParameters("string"), [name]),
+                    encodeAbiParameters(parseAbiParameters("string, bytes32"), [name, zeroHash]),
                     false, // revocable
                   );
                 }}
@@ -410,7 +410,10 @@ export default function DebugSchemas() {
                       expirationTime: 0n,
                       revocable: false,
                       refUID: (propRef || zeroHash) as `0x${string}`,
-                      data: encodeAbiParameters(parseAbiParameters("string"), [propName]),
+                      data: encodeAbiParameters(parseAbiParameters("string, bytes32"), [
+                        propName,
+                        (schemas.PROPERTY || zeroHash) as `0x${string}`,
+                      ]),
                       value: 0n,
                     },
                   };
@@ -421,7 +424,7 @@ export default function DebugSchemas() {
                   // Step 2: Create Property
                   notification.info("Step 2/2: Creating Property...");
                   const propArgs = {
-                    schema: schemas.PROPERTY as `0x${string}`,
+                    schema: (schemas.PROPERTY || zeroHash) as `0x${string}`,
                     data: {
                       recipient: zeroAddress,
                       expirationTime: 0n,
@@ -515,7 +518,10 @@ export default function DebugSchemas() {
                       expirationTime: 0n,
                       revocable: false,
                       refUID: (dataRef || zeroHash) as `0x${string}`,
-                      data: encodeAbiParameters(parseAbiParameters("string"), [dataName]),
+                      data: encodeAbiParameters(parseAbiParameters("string, bytes32"), [
+                        dataName,
+                        (schemas.DATA || zeroHash) as `0x${string}`,
+                      ]),
                       value: 0n,
                     },
                   };
@@ -786,14 +792,19 @@ function AttestationItem({
         </div>
       );
     } else if (title === "Anchors") {
-      // string name
-      const [name] = decodeAbiParameters(parseAbiParameters("string"), attestation.data);
+      // string name, bytes32 schemaUID
+      const [name, anchorSchema] = decodeAbiParameters(parseAbiParameters("string, bytes32"), attestation.data);
       decodedValue = (
-        <div className="flex justify-between items-center w-full">
-          <span className="font-bold text-lg">{name}</span>
-          <button className="btn btn-xs btn-outline" onClick={() => onFocus(uid)}>
-            Focus
-          </button>
+        <div className="flex flex-col gap-1 w-full">
+          <div className="flex justify-between items-center w-full">
+            <span className="font-bold text-lg">{name}</span>
+            <button className="btn btn-xs btn-outline" onClick={() => onFocus(uid)}>
+              Focus
+            </button>
+          </div>
+          <div className="text-xs opacity-50 font-mono">
+            Type: {anchorSchema === zeroHash ? "Generic" : anchorSchema}
+          </div>
         </div>
       );
     }

@@ -14,7 +14,7 @@ export const Toolbar = ({
   currentPath,
   currentAnchorUID,
   anchorSchemaUID,
-
+  dataSchemaUID,
   onNavigate,
 }: {
   currentPath: PathItem[];
@@ -60,7 +60,8 @@ export const Toolbar = ({
     setIsSubmitting(true);
 
     try {
-      const encodedName = ethers.AbiCoder.defaultAbiCoder().encode(["string"], [newName]);
+      const schemaUID = creationType === "File" ? (dataSchemaUID as `0x${string}`) : ethers.ZeroHash;
+      const encodedName = ethers.AbiCoder.defaultAbiCoder().encode(["string", "bytes32"], [newName, schemaUID]);
 
       await attest({
         functionName: "attest",

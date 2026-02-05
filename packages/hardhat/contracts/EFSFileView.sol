@@ -21,7 +21,9 @@ contract EFSFileView {
         uint256 childCount;
         uint256 propertyCount;
         uint64 timestamp;
+
         address attester;
+        bytes32 schema; // Anchor Schema Type
     }
 
     IEFSIndexer public immutable indexer;
@@ -49,8 +51,9 @@ contract EFSFileView {
             Attestation memory att = eas.getAttestation(uid);
             
             string memory name = "";
+            bytes32 anchorType = bytes32(0);
             if (att.data.length > 0) {
-               name = abi.decode(att.data, (string));
+               (name, anchorType) = abi.decode(att.data, (string, bytes32));
             }
 
             uint256 childCount = indexer.getChildrenCount(uid);
@@ -66,7 +69,8 @@ contract EFSFileView {
                 childCount: childCount,
                 propertyCount: propertyCount,
                 timestamp: att.time,
-                attester: att.attester
+                attester: att.attester,
+                schema: anchorType
             });
         }
 
@@ -74,6 +78,7 @@ contract EFSFileView {
     }
 
     function decodeName(bytes memory data) external pure returns (string memory) {
-        return abi.decode(data, (string));
+        (string memory name, ) = abi.decode(data, (string, bytes32));
+        return name;
     }
 }

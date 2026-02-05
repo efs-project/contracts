@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { PropertiesModal } from "./PropertiesModal";
+import { zeroHash } from "viem";
 import {
   DocumentIcon,
   FolderIcon,
@@ -12,7 +13,8 @@ import {
   XMarkIcon,
 } from "@heroicons/react/24/outline";
 import { useScaffoldReadContract } from "~~/hooks/scaffold-eth";
-
+import { notification } from "~~/utils/scaffold-eth";
+import { isTopic, isFile } from "~~/utils/efs/efsTypes";
 export const FileBrowser = ({
   currentAnchorUID,
   dataSchemaUID,
@@ -52,8 +54,8 @@ export const FileBrowser = ({
     watch: true,
   });
 
-  if (isLoading) return <div>Loading files...</div>;
-  if (!currentAnchorUID) return <div>Select a folder</div>;
+  if (isLoading) return <div>Loading items...</div>;
+  if (!currentAnchorUID) return <div>Select a topic</div>;
 
   const DebugField = ({ label, value, type = "uid" }: { label: string; value: string; type?: "uid" | "address" }) => (
     <div>
@@ -80,65 +82,73 @@ export const FileBrowser = ({
   return (
     <div className="relative h-full">
       <div className="grid grid-cols-4 gap-4 p-4">
-        {items?.map((item: any) => {
-          const isFolder = item.childCount > 0n || !item.hasData;
+        {items
+          ?.filter((item: any) => isTopic(item) || isFile(item, dataSchemaUID))
+          .map((item: any) => {
+            // isTopic = Generic Anchor (Schema 0 or undefined legacy)
+            // isFile = Data Anchor (Schema DATA_SCHEMA_UID)
+            const isItemTopic = isTopic(item);
+            const isItemFile = isFile(item, dataSchemaUID);
 
-          return (
-            <div
-              key={item.uid}
-              className="card bg-base-100 shadow-xl group relative hover:bg-base-200 transition-colors"
-              onClick={() => {
-                if (isFolder) {
-                  onNavigate(item.uid, item.name);
-                } else {
-                  console.log("File Selected:", item.name);
-                }
-              }}
-            >
-              {/* Actions Group */}
-              <div className="absolute top-2 right-2 flex gap-1 z-10">
-                {/* Properties Button */}
-                <button
-                  className="p-1 rounded-full bg-base-100 shadow-sm hover:bg-base-300 transition-colors"
-                  onClick={e => {
-                    e.stopPropagation();
-                    setPropertiesModalUID(item.uid);
-                  }}
-                  title="Properties"
-                >
-                  <TagIcon className="w-5 h-5 text-gray-400 hover:text-secondary" />
-                </button>
+            return (
+              <div
+                key={item.uid}
+                className="card bg-base-100 shadow-xl group relative hover:bg-base-200 transition-colors"
+                onClick={() => {
+                  if (isItemTopic) {
+                    onNavigate(item.uid, item.name);
+                  } else if (isItemFile) {
+                    // Files are not navigation targets (yet).
+                    // Maybe open a preview or show a toast?
+                    console.log("File Selected:", item.name);
+                    notification.info(`File: ${item.name} (Preview coming soon)`);
+                  }
+                }}
+              >
+                {/* Actions Group */}
+                <div className="absolute top-2 right-2 flex gap-1 z-10">
+                  {/* Properties Button */}
+                  <button
+                    className="p-1 rounded-full bg-base-100 shadow-sm hover:bg-base-300 transition-colors"
+                    onClick={e => {
+                      e.stopPropagation();
+                      setPropertiesModalUID(item.uid);
+                    }}
+                    title="Properties"
+                  >
+                    <TagIcon className="w-5 h-5 text-gray-400 hover:text-secondary" />
+                  </button>
 
-                {/* Debug Info Button */}
-                <button
-                  className="p-1 rounded-full bg-base-100 shadow-sm hover:bg-base-300 transition-colors"
-                  onClick={e => {
-                    e.stopPropagation();
-                    setSelectedDebugItem(item);
-                  }}
-                  title="Debug Info"
-                >
-                  <InformationCircleIcon className="w-5 h-5 text-gray-400 hover:text-primary" />
-                </button>
-              </div>
-
-              <div className="card-body items-center text-center p-4 cursor-pointer">
-                <div className="text-4xl">
-                  {isFolder ? (
-                    <FolderIcon className="w-12 h-12 text-yellow-500" />
-                  ) : (
-                    <DocumentIcon className="w-12 h-12 text-blue-500" />
-                  )}
+                  {/* Debug Info Button */}
+                  <button
+                    className="p-1 rounded-full bg-base-100 shadow-sm hover:bg-base-300 transition-colors"
+                    onClick={e => {
+                      e.stopPropagation();
+                      setSelectedDebugItem(item);
+                    }}
+                    title="Debug Info"
+                  >
+                    <InformationCircleIcon className="w-5 h-5 text-gray-400 hover:text-primary" />
+                  </button>
                 </div>
-                <h2 className="card-title text-sm break-all text-center">{item.name || "Unnamed"}</h2>
-                <div className="text-xs text-gray-400">
-                  {isFolder ? (item.childCount > 0 ? `${item.childCount} items` : "Empty") : "File"}
+
+                <div className="card-body items-center text-center p-4 cursor-pointer">
+                  <div className="text-4xl">
+                    {isItemTopic ? (
+                      <FolderIcon className="w-12 h-12 text-yellow-500" />
+                    ) : (
+                      <DocumentIcon className="w-12 h-12 text-blue-500" />
+                    )}
+                  </div>
+                  <h2 className="card-title text-sm break-all text-center">{item.name || "Unnamed"}</h2>
+                  <div className="text-xs text-gray-400">
+                    {isItemTopic ? (item.childCount > 0 ? `${item.childCount} items` : "Empty") : "File"}
+                  </div>
                 </div>
               </div>
-            </div>
-          );
-        })}
-        {items?.length === 0 && <div className="col-span-4 text-center text-gray-500">Folder is empty</div>}
+            );
+          })}
+        {items?.length === 0 && <div className="col-span-4 text-center text-gray-500">Topic is empty</div>}
       </div>
 
       {/* Debug Overlay */}

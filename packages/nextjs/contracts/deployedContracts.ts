@@ -7,7 +7,7 @@ import { GenericContractsDeclaration } from "~~/utils/scaffold-eth/contract";
 const deployedContracts = {
   31337: {
     EFSFileView: {
-      address: "0xFe2a7099f7810C486505016482beE86665244A2C",
+      address: "0xab489F00Eae0aF8330be54e73C0F48038a07d1b2",
       abi: [
         {
           inputs: [
@@ -129,6 +129,11 @@ const deployedContracts = {
                   name: "attester",
                   type: "address",
                 },
+                {
+                  internalType: "bytes32",
+                  name: "schema",
+                  type: "bytes32",
+                },
               ],
               internalType: "struct EFSFileView.FileSystemItem[]",
               name: "",
@@ -155,7 +160,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     Indexer: {
-      address: "0xc1ec8B65bb137602963f88eb063fa7236f4744f2",
+      address: "0x22aB23e2b26CFa9dCadcF4273add6A0C3eE6F311",
       abi: [
         {
           inputs: [
@@ -372,6 +377,45 @@ const deployedContracts = {
             },
           ],
           stateMutability: "payable",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "anchorUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "schema",
+              type: "bytes32",
+            },
+            {
+              internalType: "uint256",
+              name: "start",
+              type: "uint256",
+            },
+            {
+              internalType: "uint256",
+              name: "length",
+              type: "uint256",
+            },
+            {
+              internalType: "bool",
+              name: "reverseOrder",
+              type: "bool",
+            },
+          ],
+          name: "getAnchorsBySchema",
+          outputs: [
+            {
+              internalType: "bytes32[]",
+              name: "",
+              type: "bytes32[]",
+            },
+          ],
+          stateMutability: "view",
           type: "function",
         },
         {
@@ -981,6 +1025,35 @@ const deployedContracts = {
             },
           ],
           stateMutability: "payable",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "parentUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "string",
+              name: "name",
+              type: "string",
+            },
+            {
+              internalType: "bytes32",
+              name: "schema",
+              type: "bytes32",
+            },
+          ],
+          name: "resolveAnchor",
+          outputs: [
+            {
+              internalType: "bytes32",
+              name: "",
+              type: "bytes32",
+            },
+          ],
+          stateMutability: "view",
           type: "function",
         },
         {

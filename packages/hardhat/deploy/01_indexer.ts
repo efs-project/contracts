@@ -26,7 +26,7 @@ const deployEFSIndexer: DeployFunction = async function (hre: HardhatRuntimeEnvi
 
   // 2. Define Schemas
   const schemas = [
-    { name: "ANCHOR", definition: "string name", revocable: false }, // Permanent
+    { name: "ANCHOR", definition: "string name, bytes32 schemaUID", revocable: false }, // Permanent
     { name: "PROPERTY", definition: "string value", revocable: true }, // Value only (Name is in Anchor)
     { name: "DATA", definition: "bytes32 blobUID, string fileMode", revocable: true }, // Removed metadata
     { name: "BLOB", definition: "string mimeType, uint8 storageType, bytes location", revocable: true, noResolver: true },
@@ -182,7 +182,7 @@ const deployEFSIndexer: DeployFunction = async function (hre: HardhatRuntimeEnvi
           expirationTime: 0,
           revocable: false, // Anchors are NOT revocable
           refUID: ethers.ZeroHash,
-          data: ethers.AbiCoder.defaultAbiCoder().encode(["string"], ["root"]),
+          data: ethers.AbiCoder.defaultAbiCoder().encode(["string", "bytes32"], ["root", ethers.ZeroHash]),
           value: 0,
         },
       });

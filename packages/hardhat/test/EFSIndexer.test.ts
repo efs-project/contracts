@@ -48,8 +48,8 @@ describe("EFSIndexer", function () {
         const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: nonce + 7 }); // Adjusted nonce for new schemas
 
         // Register Schemas with the future resolver address
-        // ANCHOR: string name
-        const tx1 = await registry.register("string name", futureIndexerAddr, true);
+        // ANCHOR: string name, bytes32 schemaUID
+        const tx1 = await registry.register("string name, bytes32 schemaUID", futureIndexerAddr, true);
         const rc1 = await tx1.wait();
         anchorSchemaUID = rc1!.logs[0].topics[1]; // Registered(bytes32 uid, ...)
 
@@ -120,7 +120,7 @@ describe("EFSIndexer", function () {
         it("should allow creating a root anchor (First Anchor)", async function () {
             // ... (Existing logic) ...
             const schemaEncoder = new ethers.AbiCoder();
-            const data = schemaEncoder.encode(["string"], ["root"]);
+            const data = schemaEncoder.encode(["string", "bytes32"], ["root", ZERO_BYTES32]);
             const tx = await eas.attest({
                 schema: anchorSchemaUID,
                 data: { recipient: ZeroAddress, expirationTime: NO_EXPIRATION, revocable: false, refUID: ZERO_BYTES32, data: data, value: 0n }
@@ -139,7 +139,7 @@ describe("EFSIndexer", function () {
             const schemaEncoder = new ethers.AbiCoder();
 
             // 1. Create First Root (Should Succeed)
-            const data1 = schemaEncoder.encode(["string"], ["root1"]);
+            const data1 = schemaEncoder.encode(["string", "bytes32"], ["root1", ZERO_BYTES32]);
             await eas.attest({
                 schema: anchorSchemaUID,
                 data: { recipient: ZeroAddress, expirationTime: NO_EXPIRATION, revocable: false, refUID: ZERO_BYTES32, data: data1, value: 0n }
@@ -150,7 +150,7 @@ describe("EFSIndexer", function () {
             // Logic: if rootAnchorUID != 0, and parent == 0, and uid != rootAnchorUID -> MissingParent.
             // So this test should still pass (revert).
 
-            const data2 = schemaEncoder.encode(["string"], ["root2"]);
+            const data2 = schemaEncoder.encode(["string", "bytes32"], ["root2", ZERO_BYTES32]);
             await expect(eas.attest({
                 schema: anchorSchemaUID,
                 data: { recipient: ZeroAddress, expirationTime: NO_EXPIRATION, revocable: false, refUID: ZERO_BYTES32, data: data2, value: 0n }
@@ -161,7 +161,7 @@ describe("EFSIndexer", function () {
             const schemaEncoder = new ethers.AbiCoder();
 
             // 1. Create Root
-            const rootData = schemaEncoder.encode(["string"], ["root"]);
+            const rootData = schemaEncoder.encode(["string", "bytes32"], ["root", ZERO_BYTES32]);
             const rootTx = await eas.attest({
                 schema: anchorSchemaUID,
                 data: { recipient: ZeroAddress, expirationTime: NO_EXPIRATION, revocable: false, refUID: ZERO_BYTES32, data: rootData, value: 0n }
@@ -169,8 +169,8 @@ describe("EFSIndexer", function () {
             const rootReceipt = await rootTx.wait();
             const rootUID = getUIDFromReceipt(rootReceipt);
 
-            // 2. Create "config.json" in Root
-            const data = schemaEncoder.encode(["string"], ["config.json"]);
+            // 2. Create "config.json" in Root (Generic Anchor)
+            const data = schemaEncoder.encode(["string", "bytes32"], ["config.json", ZERO_BYTES32]);
             await eas.attest({
                 schema: anchorSchemaUID,
                 data: { recipient: ZeroAddress, expirationTime: NO_EXPIRATION, revocable: false, refUID: rootUID, data: data, value: 0n }
@@ -245,7 +245,7 @@ describe("EFSIndexer", function () {
                     expirationTime: NO_EXPIRATION,
                     revocable: false,
                     refUID: ZERO_BYTES32,
-                    data: schemaEncoder.encode(["string"], ["test_file"]),
+                    data: schemaEncoder.encode(["string", "bytes32"], ["test_file", ZERO_BYTES32]),
                     value: 0n
                 }
             });
@@ -266,7 +266,7 @@ describe("EFSIndexer", function () {
                     expirationTime: NO_EXPIRATION,
                     revocable: false,
                     refUID: ZERO_BYTES32,
-                    data: schemaEncoder.encode(["string"], ["home"]),
+                    data: schemaEncoder.encode(["string", "bytes32"], ["home", ZERO_BYTES32]),
                     value: 0n,
                 },
             });
@@ -290,7 +290,7 @@ describe("EFSIndexer", function () {
                     expirationTime: NO_EXPIRATION,
                     revocable: false,
                     refUID: homeUID,
-                    data: schemaEncoder.encode(["string"], ["user"]),
+                    data: schemaEncoder.encode(["string", "bytes32"], ["user", ZERO_BYTES32]),
                     value: 0n,
                 },
             });
@@ -310,7 +310,7 @@ describe("EFSIndexer", function () {
                     expirationTime: NO_EXPIRATION,
                     revocable: false,
                     refUID: userUID,
-                    data: schemaEncoder.encode(["string"], ["docs"]),
+                    data: schemaEncoder.encode(["string", "bytes32"], ["docs", ZERO_BYTES32]),
                     value: 0n,
                 },
             });
@@ -336,7 +336,7 @@ describe("EFSIndexer", function () {
                     expirationTime: NO_EXPIRATION,
                     revocable: false,
                     refUID: ZERO_BYTES32,
-                    data: schemaEncoder.encode(["string"], ["parent"]),
+                    data: schemaEncoder.encode(["string", "bytes32"], ["parent", ZERO_BYTES32]),
                     value: 0n,
                 },
             });
@@ -352,7 +352,7 @@ describe("EFSIndexer", function () {
                         expirationTime: NO_EXPIRATION,
                         revocable: false,
                         refUID: parentUID,
-                        data: schemaEncoder.encode(["string"], [name]),
+                        data: schemaEncoder.encode(["string", "bytes32"], [name, ZERO_BYTES32]),
                         value: 0n,
                     },
                 });
@@ -408,7 +408,7 @@ describe("EFSIndexer", function () {
                     expirationTime: NO_EXPIRATION,
                     revocable: false,
                     refUID: ZERO_BYTES32,
-                    data: schemaEncoder.encode(["string"], ["files"]),
+                    data: schemaEncoder.encode(["string", "bytes32"], ["files", ZERO_BYTES32]),
                     value: 0n,
                 },
             });
@@ -441,7 +441,8 @@ describe("EFSIndexer", function () {
                     expirationTime: NO_EXPIRATION,
                     revocable: false,
                     refUID: parentUID,
-                    data: schemaEncoder.encode(["string"], ["my_video.mp4"]),
+                    // Create as Data Anchor!
+                    data: schemaEncoder.encode(["string", "bytes32"], ["my_video.mp4", dataSchemaUID]),
                     value: 0n
                 }
             });
@@ -474,7 +475,7 @@ describe("EFSIndexer", function () {
                     expirationTime: NO_EXPIRATION,
                     revocable: false,
                     refUID: parentUID,
-                    data: schemaEncoder.encode(["string"], ["user1.txt"]),
+                    data: schemaEncoder.encode(["string", "bytes32"], ["user1.txt", ZERO_BYTES32]),
                     value: 0n,
                 },
             });
@@ -489,7 +490,7 @@ describe("EFSIndexer", function () {
                     expirationTime: NO_EXPIRATION,
                     revocable: false,
                     refUID: parentUID,
-                    data: schemaEncoder.encode(["string"], ["user2.txt"]),
+                    data: schemaEncoder.encode(["string", "bytes32"], ["user2.txt", ZERO_BYTES32]),
                     value: 0n,
                 },
             });
@@ -532,7 +533,7 @@ describe("EFSIndexer", function () {
                     expirationTime: NO_EXPIRATION,
                     revocable: false, // Schema is now irrevocable
                     refUID: ZERO_BYTES32,
-                    data: schemaEncoder.encode(["string"], ["temp.txt"]),
+                    data: schemaEncoder.encode(["string", "bytes32"], ["temp.txt", ZERO_BYTES32]),
                     value: 0n
                 }
             });
@@ -564,7 +565,7 @@ describe("EFSIndexer", function () {
                     expirationTime: NO_EXPIRATION,
                     revocable: false,
                     refUID: ZERO_BYTES32,
-                    data: schemaEncoder.encode(["string"], ["tagged_file"]),
+                    data: schemaEncoder.encode(["string", "bytes32"], ["tagged_file", ZERO_BYTES32]),
                     value: 0n
                 }
             });
@@ -616,7 +617,7 @@ describe("EFSIndexer", function () {
                     expirationTime: NO_EXPIRATION,
                     revocable: false,
                     refUID: ZERO_BYTES32,
-                    data: schemaEncoder.encode(["string"], ["file_for_count"]),
+                    data: schemaEncoder.encode(["string", "bytes32"], ["file_for_count", ZERO_BYTES32]),
                     value: 0n
                 }
             });
@@ -646,6 +647,237 @@ describe("EFSIndexer", function () {
             const count = await indexer.getReferencingAttestationCount(anchorUID, tagSchemaUID);
             expect(count).to.equal(1);
         });
+        describe("Typed Anchors", function () {
+            let parentUID: string;
+            const schemaEncoder = new ethers.AbiCoder();
+
+            beforeEach(async function () {
+                // Create Parent "typed_root"
+                const tx = await eas.attest({
+                    schema: anchorSchemaUID,
+                    data: {
+                        recipient: ZeroAddress,
+                        expirationTime: NO_EXPIRATION,
+                        revocable: false,
+                        refUID: ZERO_BYTES32,
+                        data: schemaEncoder.encode(["string", "bytes32"], ["typed_root", ZERO_BYTES32]),
+                        value: 0n
+                    }
+                });
+                const receipt = await tx.wait();
+                parentUID = getUIDFromReceipt(receipt);
+            });
+
+            it("Should index Anchors by Schema", async function () {
+                // 1. Create Property Anchor "color"
+                const txProp = await eas.attest({
+                    schema: anchorSchemaUID,
+                    data: {
+                        recipient: ZeroAddress,
+                        expirationTime: NO_EXPIRATION,
+                        revocable: false,
+                        refUID: parentUID,
+                        data: schemaEncoder.encode(["string", "bytes32"], ["color", propertySchemaUID]),
+                        value: 0n
+                    }
+                });
+                const receiptProp = await txProp.wait();
+                const propUID = getUIDFromReceipt(receiptProp);
+
+                // 2. Create File Anchor "data.json"
+                const txFile = await eas.attest({
+                    schema: anchorSchemaUID,
+                    data: {
+                        recipient: ZeroAddress,
+                        expirationTime: NO_EXPIRATION,
+                        revocable: false,
+                        refUID: parentUID,
+                        data: schemaEncoder.encode(["string", "bytes32"], ["data.json", dataSchemaUID]),
+                        value: 0n
+                    }
+                });
+                const receiptFile = await txFile.wait();
+                const fileUID = getUIDFromReceipt(receiptFile);
+
+                // 3. Verify getAnchorsBySchema(Property)
+                const props = await indexer.getAnchorsBySchema(parentUID, propertySchemaUID, 0, 10, false);
+                expect(props.length).to.equal(1);
+                expect(props[0]).to.equal(propUID);
+
+                // 4. Verify getAnchorsBySchema(Data)
+                const files = await indexer.getAnchorsBySchema(parentUID, dataSchemaUID, 0, 10, false);
+                expect(files.length).to.equal(1);
+                expect(files[0]).to.equal(fileUID);
+
+                // 5. Verify Generic Children contains ALL
+                const all = await indexer.getChildren(parentUID, 0, 10, false);
+                expect(all.length).to.equal(2);
+                expect(all).to.include(propUID);
+                expect(all).to.include(fileUID);
+            });
+
+            it("Should resolve Anchors by Schema", async function () {
+                // Create "test_name" as Property
+                const txProp = await eas.attest({
+                    schema: anchorSchemaUID,
+                    data: {
+                        recipient: ZeroAddress,
+                        expirationTime: NO_EXPIRATION,
+                        revocable: false,
+                        refUID: parentUID,
+                        data: schemaEncoder.encode(["string", "bytes32"], ["test_name", propertySchemaUID]),
+                        value: 0n
+                    }
+                });
+                const receiptProp = await txProp.wait();
+                const propUID = getUIDFromReceipt(receiptProp);
+
+                // Create "test_name" as Generic (Different Schema!) - Should succeed (unique by parent+name+schema)
+                const txGen = await eas.attest({
+                    schema: anchorSchemaUID,
+                    data: {
+                        recipient: ZeroAddress,
+                        expirationTime: NO_EXPIRATION,
+                        revocable: false,
+                        refUID: parentUID,
+                        data: schemaEncoder.encode(["string", "bytes32"], ["test_name", ZERO_BYTES32]),
+                        value: 0n
+                    }
+                });
+                const receiptGen = await txGen.wait();
+                const genUID = getUIDFromReceipt(receiptGen);
+
+                // Resolve Property
+                const resolvedProp = await indexer.resolveAnchor(parentUID, "test_name", propertySchemaUID);
+                expect(resolvedProp).to.equal(propUID);
+
+                // Resolve Generic (resolvePath defaults to 0)
+                const resolvedGen = await indexer.resolvePath(parentUID, "test_name");
+                expect(resolvedGen).to.equal(genUID);
+
+                // Resolve Generic Explicitly
+                const resolvedGenExplicit = await indexer.resolveAnchor(parentUID, "test_name", ZERO_BYTES32);
+                expect(resolvedGenExplicit).to.equal(genUID);
+            });
+        });
+
     });
 
+
+
+    describe("End-to-End Multi-Hop Flows", function () {
+        let parentUID: string;
+        const schemaEncoder = new ethers.AbiCoder();
+
+        beforeEach(async function () {
+            const tx = await eas.attest({
+                schema: anchorSchemaUID,
+                data: {
+                    recipient: ZeroAddress,
+                    expirationTime: NO_EXPIRATION,
+                    revocable: false,
+                    refUID: ZERO_BYTES32,
+                    data: schemaEncoder.encode(["string", "bytes32"], ["multihop_root", ZERO_BYTES32]),
+                    value: 0n
+                }
+            });
+            const receipt = await tx.wait();
+            parentUID = getUIDFromReceipt(receipt);
+        });
+
+        it("Should resolve Property Value (Anchor -> Value)", async function () {
+            // 1. Create Property Anchor "theme"
+            const txAnchor = await eas.attest({
+                schema: anchorSchemaUID,
+                data: {
+                    recipient: ZeroAddress,
+                    expirationTime: NO_EXPIRATION,
+                    revocable: false,
+                    refUID: parentUID,
+                    data: schemaEncoder.encode(["string", "bytes32"], ["theme", propertySchemaUID]),
+                    value: 0n
+                }
+            });
+            const receiptAnchor = await txAnchor.wait();
+            const anchorUID = getUIDFromReceipt(receiptAnchor);
+
+            // 2. Attest Value "DarkMode"
+            const txValue = await eas.attest({
+                schema: propertySchemaUID,
+                data: {
+                    recipient: ZeroAddress,
+                    expirationTime: NO_EXPIRATION,
+                    revocable: true,
+                    refUID: anchorUID,
+                    data: schemaEncoder.encode(["string"], ["DarkMode"]),
+                    value: 0n
+                }
+            });
+            const receiptValue = await txValue.wait();
+            const valueUID = getUIDFromReceipt(receiptValue);
+
+            // 3. Resolve Anchor first
+            const resolvedAnchor = await indexer.resolveAnchor(parentUID, "theme", propertySchemaUID);
+            expect(resolvedAnchor).to.equal(anchorUID);
+
+            // 4. Get Property Values
+            const values = await indexer.getReferencingAttestations(anchorUID, propertySchemaUID, 0, 10, false);
+            expect(values.length).to.equal(1);
+            expect(values[0]).to.equal(valueUID);
+        });
+
+        it("Should resolve File Data (Anchor -> Data -> Blob)", async function () {
+            // 1. Create File Anchor "intro.mp4"
+            const txAnchor = await eas.attest({
+                schema: anchorSchemaUID,
+                data: {
+                    recipient: ZeroAddress,
+                    expirationTime: NO_EXPIRATION,
+                    revocable: false,
+                    refUID: parentUID,
+                    data: schemaEncoder.encode(["string", "bytes32"], ["intro.mp4", dataSchemaUID]),
+                    value: 0n
+                }
+            });
+            const receiptAnchor = await txAnchor.wait();
+            const anchorUID = getUIDFromReceipt(receiptAnchor);
+
+            // 2. Create Blob
+            const txBlob = await eas.attest({
+                schema: blobSchemaUID,
+                data: {
+                    recipient: ZeroAddress,
+                    expirationTime: NO_EXPIRATION,
+                    revocable: true,
+                    refUID: ZERO_BYTES32,
+                    data: schemaEncoder.encode(["string", "uint8", "bytes"], ["video/mp4", 0, "0xFACE"]),
+                    value: 0n
+                }
+            });
+            const receiptBlob = await txBlob.wait();
+            const blobUID = getUIDFromReceipt(receiptBlob);
+
+            // 3. Link Anchor to Blob via Data Schema
+            const txData = await eas.attest({
+                schema: dataSchemaUID,
+                data: {
+                    recipient: ZeroAddress,
+                    expirationTime: NO_EXPIRATION,
+                    revocable: true,
+                    refUID: anchorUID,
+                    data: schemaEncoder.encode(["bytes32", "string"], [blobUID, "0644"]),
+                    value: 0n
+                }
+            });
+            const receiptData = await txData.wait();
+            const dataUID = getUIDFromReceipt(receiptData);
+
+            // 4. Resolve Anchor
+            const resolvedAnchor = await indexer.resolveAnchor(parentUID, "intro.mp4", dataSchemaUID);
+            expect(resolvedAnchor).to.equal(anchorUID);
+
+            // 5. Get Data Attestations
+            const dataAttestations = await indexer.getReferencingAttestations(anchorUID, dataSchemaUID, 0, 10, false);
+        });
+    });
 });

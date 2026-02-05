@@ -1,6 +1,9 @@
-import { PathItem } from "./Toolbar";
+"use client";
+
+import type { PathItem } from "./Toolbar";
 import { FolderIcon } from "@heroicons/react/24/outline";
 import { useScaffoldReadContract } from "~~/hooks/scaffold-eth";
+import { isTopic } from "~~/utils/efs/efsTypes";
 
 const TreeNode = ({
   uid,
@@ -10,6 +13,7 @@ const TreeNode = ({
   dataSchemaUID,
   propertySchemaUID,
   defaultOpen,
+  expandedUIDs,
 }: {
   uid: string;
   name: string;
@@ -18,46 +22,62 @@ const TreeNode = ({
   dataSchemaUID: string;
   propertySchemaUID: string;
   defaultOpen?: boolean;
+  expandedUIDs?: Set<string>;
 }) => {
   // Fetch children for this node
-  // Note: This fetches purely to check for subfolders.
-  // Optimization: Only fetch if expanded? For now, simple.
-
-  // We assume we want to show children if they are folders.
-  // EFSFileView returns paginated list.
+  // Note: This fetches purely to check for sub-topics.
   const { data: children } = useScaffoldReadContract({
     contractName: "EFSFileView",
     functionName: "getDirectoryPage",
-    args: [uid as `0x${string}`, 0n, 50n, dataSchemaUID as `0x${string}`, propertySchemaUID as `0x${string}`],
+    args: [uid as `0x${string} `, 0n, 50n, dataSchemaUID as `0x${string} `, propertySchemaUID as `0x${string} `],
     watch: true,
   });
 
-  // Treat anything that doesn't have data as a Folder
-  const folders = children?.filter((c: any) => !c.hasData);
+  const topics = children?.filter((item: any) => isTopic(item));
+
+  if (!topics || topics.length === 0) {
+    return (
+      <li className="py-1">
+        <div
+          className={`flex items-center gap-2 cursor-pointer transition-colors px-2 py-1 rounded-md ${selectedUID === uid ? "text-base-content bg-base-300 font-bold" : "text-base-content font-medium"
+            }`}
+          onClick={() => onSelect(uid, [{ uid, name }])}
+        >
+          {/* Spacer for alignment with details marker if needed, or just standard icon */}
+          <FolderIcon className="w-4 h-4" />
+          <span className="truncate text-sm">{name}</span>
+        </div>
+      </li>
+    );
+  }
 
   return (
     <li>
-      <details open={defaultOpen}>
+      <details open={defaultOpen || (expandedUIDs && expandedUIDs.has(uid))}>
         <summary
-          className={`${selectedUID === uid ? "active" : ""}`}
-          onClick={e => {
-            e.preventDefault();
+          className={`list-none flex items-center gap-2 cursor-pointer transition-colors px-2 py-1 rounded-md ${selectedUID === uid ? "text-base-content bg-base-300 font-bold" : "text-base-content font-medium"
+            }`}
+          onClick={(e) => {
+            // Do NOT preventDefault, otherwise details won't toggle.
+            // But we might want to manually manage it if we want separate select vs expand logic.
+            // For now, let's allow both.
             onSelect(uid, [{ uid, name }]);
           }}
         >
           <FolderIcon className="w-4 h-4" /> {name}
         </summary>
-        {folders && folders.length > 0 && (
-          <ul>
-            {folders.map((folder: any) => (
+        {topics && topics.length > 0 && (
+          <ul className="pl-4 border-l border-base-300 ml-2 mt-1">
+            {topics.map((child: any) => (
               <TreeNode
-                key={folder.uid}
-                uid={folder.uid}
-                name={folder.name}
+                key={child.uid}
+                uid={child.uid}
+                name={child.name}
                 selectedUID={selectedUID}
                 onSelect={(id, p) => onSelect(id, [{ uid, name }, ...p])}
                 dataSchemaUID={dataSchemaUID}
                 propertySchemaUID={propertySchemaUID}
+                expandedUIDs={expandedUIDs}
               />
             ))}
           </ul>
@@ -67,14 +87,16 @@ const TreeNode = ({
   );
 };
 
-export const FileTree = ({
+export const TopicTree = ({
   rootUID,
   selectedUID,
   onSelect,
+  expandedUIDs,
 }: {
   rootUID: string;
   selectedUID: string | null;
   onSelect: (uid: string, path: PathItem[]) => void;
+  expandedUIDs?: Set<string>;
 }) => {
   const { data: dataSchemaUID } = useScaffoldReadContract({
     contractName: "Indexer",
@@ -97,6 +119,8 @@ export const FileTree = ({
         onSelect={onSelect}
         dataSchemaUID={dataSchemaUID}
         propertySchemaUID={propertySchemaUID}
+        defaultOpen={true}
+        expandedUIDs={expandedUIDs}
       />
     </ul>
   );
