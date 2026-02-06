@@ -3,7 +3,6 @@
 import { useState } from "react";
 import Link from "next/link";
 import { PropertiesModal } from "./PropertiesModal";
-import { zeroHash } from "viem";
 import {
   DocumentIcon,
   FolderIcon,
@@ -13,8 +12,9 @@ import {
   XMarkIcon,
 } from "@heroicons/react/24/outline";
 import { useScaffoldReadContract } from "~~/hooks/scaffold-eth";
+import { isFile, isTopic } from "~~/utils/efs/efsTypes";
 import { notification } from "~~/utils/scaffold-eth";
-import { isTopic, isFile } from "~~/utils/efs/efsTypes";
+
 export const FileBrowser = ({
   currentAnchorUID,
   dataSchemaUID,

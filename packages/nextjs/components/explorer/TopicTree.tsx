@@ -39,8 +39,9 @@ const TreeNode = ({
     return (
       <li className="py-1">
         <div
-          className={`flex items-center gap-2 cursor-pointer transition-colors px-2 py-1 rounded-md ${selectedUID === uid ? "text-base-content bg-base-300 font-bold" : "text-base-content font-medium"
-            }`}
+          className={`flex items-center gap-2 cursor-pointer transition-colors px-2 py-1 rounded-md ${
+            selectedUID === uid ? "text-base-content bg-base-300 font-bold" : "text-base-content font-medium"
+          }`}
           onClick={() => onSelect(uid, [{ uid, name }])}
         >
           {/* Spacer for alignment with details marker if needed, or just standard icon */}
@@ -55,9 +56,10 @@ const TreeNode = ({
     <li>
       <details open={defaultOpen || (expandedUIDs && expandedUIDs.has(uid))}>
         <summary
-          className={`list-none flex items-center gap-2 cursor-pointer transition-colors px-2 py-1 rounded-md ${selectedUID === uid ? "text-base-content bg-base-300 font-bold" : "text-base-content font-medium"
-            }`}
-          onClick={(e) => {
+          className={`list-none flex items-center gap-2 cursor-pointer transition-colors px-2 py-1 rounded-md ${
+            selectedUID === uid ? "text-base-content bg-base-300 font-bold" : "text-base-content font-medium"
+          }`}
+          onClick={() => {
             // Do NOT preventDefault, otherwise details won't toggle.
             // But we might want to manually manage it if we want separate select vs expand logic.
             // For now, let's allow both.

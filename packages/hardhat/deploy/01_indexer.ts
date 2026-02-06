@@ -18,7 +18,7 @@ const deployEFSIndexer: DeployFunction = async function (hre: HardhatRuntimeEnvi
   let schemaRegistryAddress;
   try {
     schemaRegistryAddress = await eas.getSchemaRegistry();
-  } catch (e) {
+  } catch {
     console.log("Could not fetch SchemaRegistry from EAS, defaulting to known address.");
     schemaRegistryAddress = SCHEMA_REGISTRY_ADDRESS;
   }
@@ -29,7 +29,12 @@ const deployEFSIndexer: DeployFunction = async function (hre: HardhatRuntimeEnvi
     { name: "ANCHOR", definition: "string name, bytes32 schemaUID", revocable: false }, // Permanent
     { name: "PROPERTY", definition: "string value", revocable: true }, // Value only (Name is in Anchor)
     { name: "DATA", definition: "bytes32 blobUID, string fileMode", revocable: true }, // Removed metadata
-    { name: "BLOB", definition: "string mimeType, uint8 storageType, bytes location", revocable: true, noResolver: true },
+    {
+      name: "BLOB",
+      definition: "string mimeType, uint8 storageType, bytes location",
+      revocable: true,
+      noResolver: true,
+    },
     { name: "TAG", definition: "bytes32 labelUID, int256 weight", revocable: true },
     { name: "NAMING", definition: "bytes32 schemaId, string name", revocable: true, noResolver: true }, // New Naming Schema (Standard)
   ];
@@ -54,7 +59,7 @@ const deployEFSIndexer: DeployFunction = async function (hre: HardhatRuntimeEnvi
     // Calculate UID locally
     const uid = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
-      [schema.definition, resolver, schema.revocable]
+      [schema.definition, resolver, schema.revocable],
     );
     schemaUIDs[schema.name] = uid;
 
@@ -64,7 +69,7 @@ const deployEFSIndexer: DeployFunction = async function (hre: HardhatRuntimeEnvi
       const tx = await schemaRegistry.register(schema.definition, resolver, schema.revocable);
       await tx.wait();
       console.log(`Registered ${schema.name}`);
-    } catch (e) {
+    } catch {
       console.log(`Failed to register ${schema.name} (likely already exists). Skipping.`);
     }
   }
@@ -79,7 +84,7 @@ const deployEFSIndexer: DeployFunction = async function (hre: HardhatRuntimeEnvi
       schemaUIDs["PROPERTY"],
       schemaUIDs["DATA"],
       schemaUIDs["BLOB"],
-      schemaUIDs["TAG"]
+      schemaUIDs["TAG"],
     ],
     log: true,
     autoMine: true,
@@ -115,10 +120,7 @@ const deployEFSIndexer: DeployFunction = async function (hre: HardhatRuntimeEnvi
 
     try {
       // 1. Attest
-      const encodedData = ethers.AbiCoder.defaultAbiCoder().encode(
-        ["bytes32", "string"],
-        [targetSchemaUID, name]
-      );
+      const encodedData = ethers.AbiCoder.defaultAbiCoder().encode(["bytes32", "string"], [targetSchemaUID, name]);
 
       const tx = await eas.attest({
         schema: namingSchemaUID,
@@ -128,8 +130,8 @@ const deployEFSIndexer: DeployFunction = async function (hre: HardhatRuntimeEnvi
           revocable: true,
           refUID: ethers.ZeroHash, // Standard Naming Schema uses refUID=0
           data: encodedData,
-          value: 0n
-        }
+          value: 0n,
+        },
       });
       const receipt = await tx.wait();
       // Get UID from logs (or predictable event if we parse it, but EAS returns UID in return value which we can't access easily in ethers v6 tx response directly without callStatic)
@@ -137,7 +139,7 @@ const deployEFSIndexer: DeployFunction = async function (hre: HardhatRuntimeEnvi
       // Or cleaner: staticCall to get UID, then send tx.
 
       // Use static call to simulate
-      // const uid = await eas.attest.staticCall({ ... }); 
+      // const uid = await eas.attest.staticCall({ ... });
       // But wait, we need the actual tx to be mined.
 
       // Simpler: Parse the Attested event from the logs.
@@ -147,7 +149,9 @@ const deployEFSIndexer: DeployFunction = async function (hre: HardhatRuntimeEnvi
       const log = receipt?.logs.find((l: any) => {
         try {
           return eas.interface.parseLog(l)?.name === "Attested";
-        } catch { return false; }
+        } catch {
+          return false;
+        }
       });
 
       if (log) {
@@ -162,7 +166,6 @@ const deployEFSIndexer: DeployFunction = async function (hre: HardhatRuntimeEnvi
       } else {
         console.log(`Failed to find Attested event for ${schema.name}`);
       }
-
     } catch (e) {
       console.error(`Failed to name ${schema.name}:`, e);
     }

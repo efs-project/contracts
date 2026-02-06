@@ -4,8 +4,8 @@ import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { usePublicClient } from "wagmi";
 import { FileBrowser } from "~~/components/explorer/FileBrowser";
-import { TopicTree } from "~~/components/explorer/TopicTree";
 import { PathItem, Toolbar } from "~~/components/explorer/Toolbar";
+import { TopicTree } from "~~/components/explorer/TopicTree";
 import deployedContracts from "~~/contracts/deployedContracts";
 import { useScaffoldReadContract } from "~~/hooks/scaffold-eth";
 
