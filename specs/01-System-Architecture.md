@@ -1,0 +1,21 @@
+# EFS System Architecture
+
+## High-Level Vision
+The Ethereum File System (EFS) is designed to be a fully decentralized, credibly neutral protocol for indexing and retrieving data. 
+- **Credibly Neutral**: EFS has no admin keys, no upgradeability, no censorship capabilities, and no single point of ownership.
+- **Onchain Native**: EFS works entirely onchain without relying on offchain indexers or centralized databases as external dependencies. Lookups of key data are natively indexed and efficient.
+- **Extensible**: EFS is designed to be extended by developers. It avoids hardcoding application-specific functionality into the core protocol, encouraging the creation of modular and extendable Web UIs. See [Extensibility and Web UI](./05-Extensibility-and-Web-UI.md).
+
+## Core Principles
+EFS is built on the **Ethereum Attestation Service (EAS)**, utilizing onchain schemas and Ethereum addresses as key identifiers alongside conceptual folders ("Anchors"). The design of the protocol inherently considers standard query patterns, such as GraphQL, to accommodate application developers seamlessly.
+
+EFS also heavily leverages existing standards whenever possible, including:
+- **EAS (Ethereum Attestation Service)**: For data structuring and relationships.
+- **ENS (Ethereum Name Service)**: For resolving human-readable names.
+- **MIME Types**: For standardized data and file categorization.
+
+## Component Overview
+EFS relies fundamentally on EAS schemas to form a directed graph of named relationships:
+- **Attestations as Files/Folders**: Every entity in the filesystem is represented as an EAS attestation. See [Data Models and Schemas](./02-Data-Models-and-Schemas.md).
+- **Anchors as Schelling Points**: To create human-readable structures (like folders or filenames), EFS introduces **Anchors**. An Anchor acts as an intermediary node—a Schelling point—that groups underlying data or metadata.
+- **Permissionless Writing, Curated Reading**: Any piece of data can be written by any user. However, reading and resolving the "state" of this data is based on specific user contexts (e.g., viewing an "edition" or folder state curated by a specific address) or a web of trust.
