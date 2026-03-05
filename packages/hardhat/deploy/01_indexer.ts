@@ -14,7 +14,7 @@ const deployEFSIndexer: DeployFunction = async function (hre: HardhatRuntimeEnvi
   console.log("Deploying EFSIndexer with account:", deployer);
 
   // 1. Get EAS and SchemaRegistry
-  const eas = await ethers.getContractAt("IEAS", EAS_ADDRESS);
+  const eas = await ethers.getContractAt("@ethereum-attestation-service/eas-contracts/contracts/IEAS.sol:IEAS", EAS_ADDRESS);
   let schemaRegistryAddress;
   try {
     schemaRegistryAddress = await eas.getSchemaRegistry();
@@ -22,7 +22,7 @@ const deployEFSIndexer: DeployFunction = async function (hre: HardhatRuntimeEnvi
     console.log("Could not fetch SchemaRegistry from EAS, defaulting to known address.");
     schemaRegistryAddress = SCHEMA_REGISTRY_ADDRESS;
   }
-  const schemaRegistry = await ethers.getContractAt("ISchemaRegistry", schemaRegistryAddress);
+  const schemaRegistry = await ethers.getContractAt("@ethereum-attestation-service/eas-contracts/contracts/ISchemaRegistry.sol:ISchemaRegistry", schemaRegistryAddress);
 
   // 2. Define Schemas
   const schemas = [

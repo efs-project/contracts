@@ -7,7 +7,7 @@ import { GenericContractsDeclaration } from "~~/utils/scaffold-eth/contract";
 const deployedContracts = {
   31337: {
     EFSFileView: {
-      address: "0xFe2a7099f7810C486505016482beE86665244A2C",
+      address: "0x3BB97372ea4bB4F62058FeB55b010bd4604cbbc3",
       abi: [
         {
           inputs: [
@@ -160,7 +160,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     Indexer: {
-      address: "0xc1ec8B65bb137602963f88eb063fa7236f4744f2",
+      address: "0x80e0799Ca066368427d4F89996Bae018A71bC93d",
       abi: [
         {
           inputs: [
@@ -1185,7 +1185,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     SchemaNameIndex: {
-      address: "0xff45Fcd36E04C07b53D909b00E915837fD1E3234",
+      address: "0x9059Dcb75213f49Eaf2ad5Fc19D37678d6D893b2",
       abi: [
         {
           inputs: [
