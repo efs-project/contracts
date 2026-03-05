@@ -55,6 +55,8 @@
     "node": ">=18.18.0"
   },
   "dependencies": {
-    "@ethereum-attestation-service/eas-sdk": "^2.9.0"
+    "@ethereum-attestation-service/eas-sdk": "^2.9.0",
+    "web3curl": "^0.2.2",
+    "web3protocol": "^0.6.3"
   }
 }

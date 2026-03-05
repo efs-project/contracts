@@ -5,6 +5,8 @@
 - **EAS General Docs**: `/contracts/reference/eas-docs.txt` - High-level concepts.
 - **EAS SDK Docs**: `/contracts/reference/eas-sdk-docs.txt` - Official interaction with attestations.
 - **EIPs**: `/contracts/reference/EIPs/` - EIPs relevant to this project. Noteable ones are 4804 / 6860 (Main Web3 URI spec), 5219 (Contract Resource Requests), 6944 (ERC-5219 Resolve Mode), 7617 (Chunk support for ERC-5219 mode in Web3 URL), 6821 (Support ENS Name for Web3 URL), 7618 (Content encoding in ERC-5219 mode), and 7774 (Cache invalidation in ERC-5219 mode).
+- **Web3Protocol**: `/contracts/reference/web3protocol.md` - JS library to parse and fetch Web3 URLs.
+- **Web3Curl**: `/contracts/reference/web3curl.md` - CLI tool to fetch and debug Web3 URLs.
 
 ## Project Setup Commands
 
