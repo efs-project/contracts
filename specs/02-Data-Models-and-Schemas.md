@@ -1,6 +1,6 @@
 # Data Models and Schemas
 
-EFS is composed of five core EAS schemas, adhering to the principles outlined in [System Architecture](./01-System-Architecture.md). These schemas interact through `refUID` links to create a hierarchical, permissionless filesystem state natively on Ethereum. For details on how these are tracked, refer to the [Onchain Indexing Strategy](./03-Onchain-Indexing-Strategy.md).
+EFS is composed of a "Quad-Schema" model (four core EAS schemas), adhering to the principles outlined in [System Architecture](./01-System-Architecture.md). These schemas interact through `refUID` links to create a hierarchical, permissionless filesystem state natively on Ethereum. For details on how these are tracked, refer to the [Onchain Indexing Strategy](./03-Onchain-Indexing-Strategy.md).
 
 ## 1. Anchor Schema
 **Purpose**: Acts as a "Schelling Point" or a shared naming reference for a given Topic.
@@ -20,25 +20,16 @@ EFS is composed of five core EAS schemas, adhering to the principles outlined in
 **Details**: A Property must reference an Anchor in its `refUID` to be associated with a name. It is an onchain string containing simple text data easily usable by contracts and users (e.g., an icon URL, a descriptive text, or metadata).
 
 ## 3. Data Schema
-**Purpose**: File system metadata linking names to BLOBs.
+**Purpose**: File system metadata directly linking names to content URIs.
 **Structure**:
 `refUID = Anchor UID`
-- `blobUID` (bytes32)
+- `uri` (string) - URI resolving to the content (e.g., web3://, ipfs://, ar://, or plain HTTPS).
+- `contentType` (string) - Valid MIME type (e.g., `image/jpeg` or `text/markdown`).
 - `fileMode` (string) - Defines the file type (e.g., normal file, `tombstone` for deletion, symlink, etc).
 
-**Details**: Data attestations must reference an Anchor in their `refUID` to be given a name within a folder. They contain file system data such as whether an item is a 'normal file', a 'symlink', a 'hardlink', 'deletion info', or 'rename info'. If denoting a normal file, the `data` field typically contains an EAS link to a BLOB UID.
+**Details**: Data attestations must reference an Anchor in their `refUID` to be given a name within a folder. They contain file system data such as whether an item is a 'normal file', a 'symlink', a 'hardlink', 'deletion info', or 'rename info'. They directly embed the `uri` and `contentType` avoiding the need for a separate physical BLOB attestation.
 
-## 4. BLOB Schema
-**Purpose**: Raw data storage and content resolution.
-**Structure**:
-`refUID = empty (bytes32(0))`
-- `mimeType` (string) - Valid MIME type (e.g., `image/jpeg`).
-- `storageType` (uint8) - Denotes where the data is stored (0 = Onchain, 1 = IPFS, 2 = HTTPS, etc).
-- `location` (bytes) - The raw bytes of the file, or an encoded URI/Hash based on `storageType`.
-
-**Details**: BLOBs contain information on where the actual data resides. The `data` field contains the bytes of the file itself or a URI (like an IPFS hash or HTTPS link) determining where to find the data. By utilizing `contentType`, it strictly relies on standard MIME types (e.g., `image/jpeg`, `video/mp4`) to define the nature of the file.
-
-## 5. Tag Schema
+## 4. Tag Schema
 **Purpose**: Categorization, weighting, and filtering.
 **Structure**:
 `refUID = Target Attestation UID`
@@ -51,5 +42,4 @@ EFS is composed of five core EAS schemas, adhering to the principles outlined in
 To represent a standard filesystem interaction where a file has a name within a folder:
 1. **Parent Topic** (e.g., Folder "memes") ->
 2. **Anchor** (name: "vitalik.jpg", `refUID` points to Parent Topic) ->
-3. **Data** (`refUID` points to Anchor, holds info linking to BLOB) ->
-4. **BLOB** (Holds actual bytes or IPFS link).
+3. **Data** (`refUID` points to Anchor, securely holds `uri` answering directly to an IPFS, Web3, or external link alongside `contentType`).

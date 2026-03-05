@@ -12,10 +12,12 @@ EFS is built on the **Ethereum Attestation Service (EAS)**, utilizing onchain sc
 EFS also heavily leverages existing standards whenever possible, including:
 - **EAS (Ethereum Attestation Service)**: For data structuring and relationships.
 - **ENS (Ethereum Name Service)**: For resolving human-readable names.
-- **MIME Types**: For standardized data and file categorization.
+- **web3:// URIs (EIP-4804, EIP-6860, EIP-5219)**: For native EVM web routing and decentralized HTTP-like file serving.
+- **Content Types**: For standardized data and file categorization.
 
 ## Component Overview
 EFS relies fundamentally on EAS schemas to form a directed graph of named relationships:
 - **Attestations as Files/Folders**: Every entity in the filesystem is represented as an EAS attestation. See [Data Models and Schemas](./02-Data-Models-and-Schemas.md).
 - **Anchors as Schelling Points**: To create human-readable structures (like folders or filenames), EFS introduces **Anchors**. An Anchor acts as an intermediary node—a Schelling point—that groups underlying data or metadata.
 - **Permissionless Writing, Curated Reading**: Any piece of data can be written by any user. However, reading and resolving the "state" of this data is based on specific user contexts (e.g., viewing an "edition" or folder state curated by a specific address) or a web of trust.
+- **EFSRouter as Web Server**: The EFSRouter acts as an EIP-5219 compliant decentralized web server natively on the EVM. It resolves web3:// URIs (EIP-4804/6860), translating standard HTTP-like requests to the subjective on-chain filesystem traversal and serving the final data or external content appropriately.
