@@ -13,7 +13,7 @@ contract EFSIndexer is SchemaResolver {
 
     // State Variables
     bytes32 public rootAnchorUID;
-    
+
     // Immutable Schema UIDs
     bytes32 public immutable ANCHOR_SCHEMA_UID;
     bytes32 public immutable PROPERTY_SCHEMA_UID;
@@ -31,7 +31,7 @@ contract EFSIndexer is SchemaResolver {
         uint32 attester; // For _childrenByAttester
         uint32 typeFull;
         uint32 typeCat;
-        uint32 schema;   // For _schemaAttestations
+        uint32 schema; // For _schemaAttestations
         uint32 schemaAttester; // For _schemaAttesterAttestations
     }
     mapping(bytes32 => IndexData) private _uidIndices;
@@ -40,25 +40,21 @@ contract EFSIndexer is SchemaResolver {
     // STORAGE: FILE SYSTEM INDICES (EFS CORE)
     // ============================================================================================
 
-    // Directory Index (Path Resolution): parentAnchorUID => name => childAnchorUID
-    // Renamed from _directory for clarity
     // Directory Index (Path Resolution): parentAnchorUID => name => schemaUID => childAnchorUID
     mapping(bytes32 => mapping(string => mapping(bytes32 => bytes32))) private _nameToAnchor;
 
-    // Hierarchy List: parentAnchorUID => childAnchorUIDs
     // Hierarchy List: parentAnchorUID => childAnchorUIDs
     mapping(bytes32 => bytes32[]) private _children;
 
     // Children By Schema: parentAnchorUID => schemaUID => childAnchorUIDs
     mapping(bytes32 => mapping(bytes32 => bytes32[])) private _childrenBySchema;
     struct ChildSchemaIndex {
-        uint32 schemaIndex; 
+        uint32 schemaIndex;
         uint32 genericIndex;
     }
     // We need to track two indices for children now: One in _children, one in _childrenBySchema
     // But _uidIndices only has `child`. We need to expand IndexData or use a separate mapping?
     // Let's expand IndexData.
-
 
     // Parent Lookups: childAnchorUID => parentAnchorUID
     mapping(bytes32 => bytes32) private _parents;
@@ -69,7 +65,6 @@ contract EFSIndexer is SchemaResolver {
     // Attester Index: parentAnchorUID => attester => childAnchorUIDs
     mapping(bytes32 => mapping(address => bytes32[])) private _childrenByAttester;
 
-
     // ============================================================================================
     // STORAGE: GENERIC INDICES (SOCIAL LAYER)
     // ============================================================================================
@@ -77,7 +72,7 @@ contract EFSIndexer is SchemaResolver {
     // Global Schema Index: schemaUID => attestationUIDs
     mapping(bytes32 => bytes32[]) private _schemaAttestations;
 
-    // User Schema Index: attester => schemaUID => attestationUIDs (Note: distinct from _sentAttestations which is same structure. 
+    // User Schema Index: attester => schemaUID => attestationUIDs (Note: distinct from _sentAttestations which is same structure.
     // The plan asks for: mapping(address attester => mapping(bytes32 schemaUID => bytes32[] uids)) called "User Schema Index".
     // _sentAttestations already exists with this signature. I will use _sentAttestations for this.)
     mapping(address => mapping(bytes32 => bytes32[])) private _sentAttestations;
@@ -99,7 +94,6 @@ contract EFSIndexer is SchemaResolver {
     mapping(bytes32 => bytes32[]) private _referencingSchemas;
     // Helper to check existence: targetUID => schemaUID => exists
     mapping(bytes32 => mapping(bytes32 => bool)) private _hasReferencingSchema;
-
 
     constructor(
         IEAS eas,
@@ -124,7 +118,9 @@ contract EFSIndexer is SchemaResolver {
         _uidIndices[attestation.uid].schema = uint32(_schemaAttestations[schema].length);
 
         _schemaAttesterAttestations[schema][attestation.attester].push(attestation.uid);
-        _uidIndices[attestation.uid].schemaAttester = uint32(_schemaAttesterAttestations[schema][attestation.attester].length);
+        _uidIndices[attestation.uid].schemaAttester = uint32(
+            _schemaAttesterAttestations[schema][attestation.attester].length
+        );
 
         _sentAttestations[attestation.attester][schema].push(attestation.uid);
         _uidIndices[attestation.uid].sent = uint32(_sentAttestations[attestation.attester][schema].length);
@@ -143,18 +139,18 @@ contract EFSIndexer is SchemaResolver {
         // 2. EFS CORE LOGIC (ANCHORS)
         if (schema == ANCHOR_SCHEMA_UID) {
             (string memory name, bytes32 anchorSchema) = abi.decode(attestation.data, (string, bytes32));
-            
+
             // Resolve Parent (Use refUID, else recipient cast to bytes32, else generic root if 0)
             bytes32 parentUID = attestation.refUID;
             if (parentUID == EMPTY_UID && attestation.recipient != address(0)) {
                 parentUID = bytes32(uint256(uint160(attestation.recipient)));
             }
-            
+
             // ROOT ANCHOR LOGIC
             // If this is the FIRST generic anchor (schema 0), it can be root if root is unset.
             if (rootAnchorUID == bytes32(0)) {
                 if (anchorSchema == bytes32(0)) {
-                   rootAnchorUID = attestation.uid;
+                    rootAnchorUID = attestation.uid;
                 } else {
                     revert MissingParent(); // First anchor must be generic root
                 }
@@ -162,11 +158,11 @@ contract EFSIndexer is SchemaResolver {
                 if (parentUID == bytes32(0)) {
                     // If no parent, it must be the root itself (already handled by rootAnchorUID logic mostly, but let's be strict)
                     if (attestation.uid != rootAnchorUID) {
-                         revert MissingParent(); 
+                        revert MissingParent();
                     }
                 }
             }
-                
+
             // Validation: Enforce unique filenames O(1) per Schema
             if (_nameToAnchor[parentUID][name][anchorSchema] != bytes32(0)) {
                 revert DuplicateFileName();
@@ -174,7 +170,7 @@ contract EFSIndexer is SchemaResolver {
 
             // Write Directory
             _nameToAnchor[parentUID][name][anchorSchema] = attestation.uid;
-            
+
             // Hierarchy Index (All Children)
             _children[parentUID].push(attestation.uid);
             _uidIndices[attestation.uid].child = uint32(_children[parentUID].length);
@@ -184,13 +180,12 @@ contract EFSIndexer is SchemaResolver {
             _uidIndices[attestation.uid].childSchema = uint32(_childrenBySchema[parentUID][anchorSchema].length);
 
             _parents[attestation.uid] = parentUID;
-            
+
             // Attester Index (My Files)
             _childrenByAttester[parentUID][attestation.attester].push(attestation.uid);
             _uidIndices[attestation.uid].attester = uint32(_childrenByAttester[parentUID][attestation.attester].length);
 
             return true;
-
         } else if (schema == DATA_SCHEMA_UID) {
             // VALIDATION: Check refUID is a valid Anchor AND matches DATA_SCHEMA constraint
             if (attestation.refUID == EMPTY_UID) return false;
@@ -199,9 +194,9 @@ contract EFSIndexer is SchemaResolver {
             if (target.schema != ANCHOR_SCHEMA_UID) return false;
 
             // Enforce that the attributes/data are attached to a FILE ANCHOR (schema == DATA_SCHEMA_UID)
-            // Decode the anchor to check its type? No, we don't have the data decoded. 
+            // Decode the anchor to check its type? No, we don't have the data decoded.
             // BUT we can check _nameToAnchor? No, we have the UID.
-            // We need to know the schema of the Anchor. 
+            // We need to know the schema of the Anchor.
             // We can decode the target.data.
             (, bytes32 targetAnchorSchema) = abi.decode(target.data, (string, bytes32));
             if (targetAnchorSchema != DATA_SCHEMA_UID) {
@@ -215,20 +210,20 @@ contract EFSIndexer is SchemaResolver {
             }
             return true;
         } else if (schema == PROPERTY_SCHEMA_UID) {
-             // VALIDATION: Check refUID is a valid Anchor AND matches PROPERTY_SCHEMA constraint
+            // VALIDATION: Check refUID is a valid Anchor AND matches PROPERTY_SCHEMA constraint
             if (attestation.refUID == EMPTY_UID) return false;
 
             Attestation memory target = _eas.getAttestation(attestation.refUID);
             if (target.schema != ANCHOR_SCHEMA_UID) return false;
 
             // Enforce that properties are attached to PROPERTY ANCHORS
-             (, bytes32 targetAnchorSchema) = abi.decode(target.data, (string, bytes32));
-             // Optimization: If property anchor schema is 0 (generic), we might allow properties on generic anchors?
-             // User plan said: "Properties must verify their parent Anchor has schema == PROPERTY_SCHEMA"
-             if (targetAnchorSchema != PROPERTY_SCHEMA_UID) {
-                 return false;
-             }
-             
+            (, bytes32 targetAnchorSchema) = abi.decode(target.data, (string, bytes32));
+            // Optimization: If property anchor schema is 0 (generic), we might allow properties on generic anchors?
+            // User plan said: "Properties must verify their parent Anchor has schema == PROPERTY_SCHEMA"
+            if (targetAnchorSchema != PROPERTY_SCHEMA_UID) {
+                return false;
+            }
+
             // Ensure Anchor is valid (has parent or recipient)
             if (target.refUID == EMPTY_UID && target.recipient == address(0)) {
                 return false; // Floating anchor
@@ -238,11 +233,11 @@ contract EFSIndexer is SchemaResolver {
         } else if (schema == TAG_SCHEMA_UID) {
             // Encode: (bytes32 labelUID, int256 weight)
             (, int256 weight) = abi.decode(attestation.data, (bytes32, int256));
-            
+
             // Crowd Source: Aggregate weight
-            (bytes32 labelUID, ) = abi.decode(attestation.data, (bytes32, int256)); 
+            (bytes32 labelUID, ) = abi.decode(attestation.data, (bytes32, int256));
             _tagWeights[attestation.refUID][labelUID] += weight;
-            
+
             return true;
         }
 
@@ -256,7 +251,7 @@ contract EFSIndexer is SchemaResolver {
         _removeSchemaAttestation(_schemaAttestations[schema], attestation.uid);
         _removeSchemaAttesterAttestation(_schemaAttesterAttestations[schema][attestation.attester], attestation.uid);
         _removeSent(_sentAttestations[attestation.attester][schema], attestation.uid);
-        
+
         if (attestation.recipient != address(0)) {
             _removeReceived(_receivedAttestations[attestation.recipient][schema], attestation.uid);
         }
@@ -269,12 +264,12 @@ contract EFSIndexer is SchemaResolver {
         // 2. CLEANUP EFS SPECIFIC
         if (schema == ANCHOR_SCHEMA_UID) {
             (string memory name, bytes32 anchorSchema) = abi.decode(attestation.data, (string, bytes32));
-            
+
             bytes32 parentUID = attestation.refUID;
             if (parentUID == EMPTY_UID && attestation.recipient != address(0)) {
                 parentUID = bytes32(uint256(uint160(attestation.recipient)));
             }
-            
+
             if (parentUID != EMPTY_UID) {
                 _removeChild(_children[parentUID], attestation.uid);
                 _removeChildSchema(_childrenBySchema[parentUID][anchorSchema], attestation.uid);
@@ -285,37 +280,35 @@ contract EFSIndexer is SchemaResolver {
             }
 
             _removeAttester(_childrenByAttester[parentUID][attestation.attester], attestation.uid);
-            
         } else if (schema == DATA_SCHEMA_UID) {
-             bytes32 anchorUID = attestation.refUID;
-             if (anchorUID != EMPTY_UID) {
-                 bytes32 parentUID = _parents[anchorUID];
-                 if (parentUID != bytes32(0)) {
-                    (bytes32 blobUID, ) = abi.decode(attestation.data, (bytes32, string));
-                    Attestation memory blobAttestation = _eas.getAttestation(blobUID);
-                    if (blobAttestation.uid != bytes32(0)) {
-                         (string memory mimeType, , ) = abi.decode(blobAttestation.data, (string, uint8, bytes));
-                         bytes32 fullHash = keccak256(abi.encodePacked(mimeType));
-                         _removeType(_childrenByType[parentUID][fullHash], anchorUID, true);
-        
-                         bytes memory mimeBytes = bytes(mimeType);
-                         for (uint i = 0; i < mimeBytes.length; i++) {
-                             if (mimeBytes[i] == 0x2f) {
-                                  bytes memory category = new bytes(i);
-                                  for (uint j = 0; j < i; j++) {
-                                      category[j] = mimeBytes[j];
-                                  }
-                                  bytes32 catHash = keccak256(category);
-                                  _removeType(_childrenByType[parentUID][catHash], anchorUID, false);
-                                  break;
-                             }
-                         }
+            bytes32 anchorUID = attestation.refUID;
+            if (anchorUID != EMPTY_UID) {
+                bytes32 parentUID = _parents[anchorUID];
+                if (parentUID != bytes32(0)) {
+                    (, string memory contentType, ) = abi.decode(attestation.data, (string, string, string));
+
+                    if (bytes(contentType).length > 0) {
+                        bytes32 fullHash = keccak256(abi.encodePacked(contentType));
+                        _removeType(_childrenByType[parentUID][fullHash], anchorUID, true);
+
+                        bytes memory mimeBytes = bytes(contentType);
+                        for (uint i = 0; i < mimeBytes.length; i++) {
+                            if (mimeBytes[i] == 0x2f) {
+                                bytes memory category = new bytes(i);
+                                for (uint j = 0; j < i; j++) {
+                                    category[j] = mimeBytes[j];
+                                }
+                                bytes32 catHash = keccak256(category);
+                                _removeType(_childrenByType[parentUID][catHash], anchorUID, false);
+                                break;
+                            }
+                        }
                     }
-                 }
-             }
+                }
+            }
         } else if (schema == TAG_SCHEMA_UID) {
-             (bytes32 labelUID, int256 weight) = abi.decode(attestation.data, (bytes32, int256));
-             _tagWeights[attestation.refUID][labelUID] -= weight;
+            (bytes32 labelUID, int256 weight) = abi.decode(attestation.data, (bytes32, int256));
+            _tagWeights[attestation.refUID][labelUID] -= weight;
         }
 
         return true;
@@ -326,7 +319,7 @@ contract EFSIndexer is SchemaResolver {
     // ============================================================================================
 
     // EFS Core
-    
+
     function resolvePath(bytes32 parentUID, string memory name) external view returns (bytes32) {
         return _nameToAnchor[parentUID][name][bytes32(0)]; // Default to Generic
     }
@@ -335,57 +328,113 @@ contract EFSIndexer is SchemaResolver {
         return _nameToAnchor[parentUID][name][schema];
     }
 
-    function getChildren(bytes32 anchorUID, uint256 start, uint256 length, bool reverseOrder) external view returns (bytes32[] memory) {
+    function getChildren(
+        bytes32 anchorUID,
+        uint256 start,
+        uint256 length,
+        bool reverseOrder
+    ) external view returns (bytes32[] memory) {
         return _sliceUIDs(_children[anchorUID], start, length, reverseOrder);
     }
-    
+
     function getChildrenCount(bytes32 anchorUID) external view returns (uint256) {
         return _children[anchorUID].length;
     }
 
-    function getChildrenByType(bytes32 anchorUID, string memory mimeType, uint256 start, uint256 length, bool reverseOrder) external view returns (bytes32[] memory) {
-        return _sliceUIDs(_childrenByType[anchorUID][keccak256(abi.encodePacked(mimeType))], start, length, reverseOrder);
+    function getChildrenByType(
+        bytes32 anchorUID,
+        string memory mimeType,
+        uint256 start,
+        uint256 length,
+        bool reverseOrder
+    ) external view returns (bytes32[] memory) {
+        return
+            _sliceUIDs(_childrenByType[anchorUID][keccak256(abi.encodePacked(mimeType))], start, length, reverseOrder);
     }
 
-    function getChildrenByAttester(bytes32 anchorUID, address attester, uint256 start, uint256 length, bool reverseOrder) external view returns (bytes32[] memory) {
+    function getChildrenByAttester(
+        bytes32 anchorUID,
+        address attester,
+        uint256 start,
+        uint256 length,
+        bool reverseOrder
+    ) external view returns (bytes32[] memory) {
         return _sliceUIDs(_childrenByAttester[anchorUID][attester], start, length, reverseOrder);
     }
 
-    function getAnchorsBySchema(bytes32 anchorUID, bytes32 schema, uint256 start, uint256 length, bool reverseOrder) external view returns (bytes32[] memory) {
-         return _sliceUIDs(_childrenBySchema[anchorUID][schema], start, length, reverseOrder);
+    function getAnchorsBySchema(
+        bytes32 anchorUID,
+        bytes32 schema,
+        uint256 start,
+        uint256 length,
+        bool reverseOrder
+    ) external view returns (bytes32[] memory) {
+        return _sliceUIDs(_childrenBySchema[anchorUID][schema], start, length, reverseOrder);
     }
 
     // Generic Explorer
 
-    function getAttestationsBySchema(bytes32 schemaUID, uint256 start, uint256 length, bool reverseOrder) external view returns (bytes32[] memory) {
+    function getAttestationsBySchema(
+        bytes32 schemaUID,
+        uint256 start,
+        uint256 length,
+        bool reverseOrder
+    ) external view returns (bytes32[] memory) {
         return _sliceUIDs(_schemaAttestations[schemaUID], start, length, reverseOrder);
     }
-    
+
     function getAttestationCountBySchema(bytes32 schemaUID) external view returns (uint256) {
         return _schemaAttestations[schemaUID].length;
     }
 
-    function getAttestationsBySchemaAndAttester(bytes32 schemaUID, address attester, uint256 start, uint256 length, bool reverseOrder) external view returns (bytes32[] memory) {
+    function getAttestationsBySchemaAndAttester(
+        bytes32 schemaUID,
+        address attester,
+        uint256 start,
+        uint256 length,
+        bool reverseOrder
+    ) external view returns (bytes32[] memory) {
         return _sliceUIDs(_schemaAttesterAttestations[schemaUID][attester], start, length, reverseOrder);
     }
-    
-    function getAttestationCountBySchemaAndAttester(bytes32 schemaUID, address attester) external view returns (uint256) {
+
+    function getAttestationCountBySchemaAndAttester(
+        bytes32 schemaUID,
+        address attester
+    ) external view returns (uint256) {
         return _schemaAttesterAttestations[schemaUID][attester].length;
     }
 
-    function getReferencingAttestations(bytes32 targetUID, bytes32 schemaUID, uint256 start, uint256 length, bool reverseOrder) external view returns (bytes32[] memory) {
+    function getReferencingAttestations(
+        bytes32 targetUID,
+        bytes32 schemaUID,
+        uint256 start,
+        uint256 length,
+        bool reverseOrder
+    ) external view returns (bytes32[] memory) {
         return _sliceUIDs(_referencingAttestations[targetUID][schemaUID], start, length, reverseOrder);
     }
-    
+
     function getReferencingAttestationCount(bytes32 targetUID, bytes32 schemaUID) external view returns (uint256) {
         return _referencingAttestations[targetUID][schemaUID].length;
     }
 
-    function getIncomingAttestations(address recipient, bytes32 schemaUID, uint256 start, uint256 length, bool reverseOrder) external view returns (bytes32[] memory) {
+    function getIncomingAttestations(
+        address recipient,
+        bytes32 schemaUID,
+        uint256 start,
+        uint256 length,
+        bool reverseOrder
+    ) external view returns (bytes32[] memory) {
         return _sliceUIDs(_receivedAttestations[recipient][schemaUID], start, length, reverseOrder);
     }
 
-    function getOutgoingAttestations(address attester, bytes32 schemaUID, uint256 start, uint256 length, bool reverseOrder) external view returns (bytes32[] memory) {
+    function getOutgoingAttestations(
+        address attester,
+        bytes32 schemaUID,
+        uint256 start,
+        uint256 length,
+        bool reverseOrder
+    ) external view returns (bytes32[] memory) {
         return _sliceUIDs(_sentAttestations[attester][schemaUID], start, length, reverseOrder);
     }
 
@@ -396,7 +445,7 @@ contract EFSIndexer is SchemaResolver {
     function getReferencingSchemas(bytes32 targetUID) external view returns (bytes32[] memory) {
         return _referencingSchemas[targetUID];
     }
-    
+
     function getEAS() external view returns (IEAS) {
         return _eas;
     }
@@ -437,32 +486,32 @@ contract EFSIndexer is SchemaResolver {
     }
 
     // O(1) REMOVAL HELPERS
-    
+
     function _swapPop(bytes32[] storage array, uint32 indexInMapping) private returns (uint32) {
         if (indexInMapping == 0) return 0;
         uint256 idx = uint256(indexInMapping) - 1;
         bytes32 lastUID = array[array.length - 1];
-        
+
         array[idx] = lastUID;
         array.pop();
-        
+
         return indexInMapping; // Returns the index reused (unless popped) - Wait, we need to return new index for lastUID
     }
 
     // NOTE: The helpers need to update indices for the moved element (lastUID).
-    
+
     function _removeChild(bytes32[] storage array, bytes32 uid) private {
         uint32 index = _uidIndices[uid].child;
         if (index == 0) return;
-        
+
         uint256 idx = uint256(index) - 1;
         bytes32 lastUID = array[array.length - 1];
-        
+
         array[idx] = lastUID;
         array.pop();
-        
+
         if (lastUID != uid) {
-            _uidIndices[lastUID].child = index; 
+            _uidIndices[lastUID].child = index;
         }
         delete _uidIndices[uid].child;
     }
@@ -470,30 +519,30 @@ contract EFSIndexer is SchemaResolver {
     function _removeChildSchema(bytes32[] storage array, bytes32 uid) private {
         uint32 index = _uidIndices[uid].childSchema;
         if (index == 0) return;
-        
+
         uint256 idx = uint256(index) - 1;
         bytes32 lastUID = array[array.length - 1];
-        
+
         array[idx] = lastUID;
         array.pop();
-        
+
         if (lastUID != uid) {
-            _uidIndices[lastUID].childSchema = index; 
+            _uidIndices[lastUID].childSchema = index;
         }
         delete _uidIndices[uid].childSchema;
     }
-    
+
     function _removeSchemaAttestation(bytes32[] storage array, bytes32 uid) private {
         uint32 index = _uidIndices[uid].schema;
         if (index == 0) return;
-        
+
         uint256 idx = uint256(index) - 1;
         bytes32 lastUID = array[array.length - 1];
         array[idx] = lastUID;
         array.pop();
-        
+
         if (lastUID != uid) {
-            _uidIndices[lastUID].schema = index; 
+            _uidIndices[lastUID].schema = index;
         }
         delete _uidIndices[uid].schema;
     }
@@ -501,14 +550,14 @@ contract EFSIndexer is SchemaResolver {
     function _removeSchemaAttesterAttestation(bytes32[] storage array, bytes32 uid) private {
         uint32 index = _uidIndices[uid].schemaAttester;
         if (index == 0) return;
-        
+
         uint256 idx = uint256(index) - 1;
         bytes32 lastUID = array[array.length - 1];
         array[idx] = lastUID;
         array.pop();
-        
+
         if (lastUID != uid) {
-            _uidIndices[lastUID].schemaAttester = index; 
+            _uidIndices[lastUID].schemaAttester = index;
         }
         delete _uidIndices[uid].schemaAttester;
     }
@@ -516,12 +565,12 @@ contract EFSIndexer is SchemaResolver {
     function _removeRef(bytes32[] storage array, bytes32 uid) private {
         uint32 index = _uidIndices[uid].ref;
         if (index == 0) return;
-        
+
         uint256 idx = uint256(index) - 1;
         bytes32 lastUID = array[array.length - 1];
         array[idx] = lastUID;
         array.pop();
-        
+
         if (lastUID != uid) {
             _uidIndices[lastUID].ref = index;
         }
@@ -536,7 +585,7 @@ contract EFSIndexer is SchemaResolver {
         bytes32 lastUID = array[array.length - 1];
         array[idx] = lastUID;
         array.pop();
-        
+
         if (lastUID != uid) {
             _uidIndices[lastUID].sent = index;
         }
@@ -551,7 +600,7 @@ contract EFSIndexer is SchemaResolver {
         bytes32 lastUID = array[array.length - 1];
         array[idx] = lastUID;
         array.pop();
-        
+
         if (lastUID != uid) {
             _uidIndices[lastUID].rec = index;
         }
@@ -566,7 +615,7 @@ contract EFSIndexer is SchemaResolver {
         bytes32 lastUID = array[array.length - 1];
         array[idx] = lastUID;
         array.pop();
-        
+
         if (lastUID != uid) {
             _uidIndices[lastUID].attester = index;
         }
@@ -581,7 +630,7 @@ contract EFSIndexer is SchemaResolver {
         bytes32 lastUID = array[array.length - 1];
         array[idx] = lastUID;
         array.pop();
-        
+
         if (lastUID != uid) {
             if (isFull) _uidIndices[lastUID].typeFull = index;
             else _uidIndices[lastUID].typeCat = index;
@@ -591,35 +640,28 @@ contract EFSIndexer is SchemaResolver {
     }
 
     function _indexMimeType(bytes32 parentUID, bytes32 attestationUID, bytes memory data) private {
-        ( , string memory fileMode) = abi.decode(data, (bytes32, string));
-         if (keccak256(bytes(fileMode)) == keccak256(bytes("tombstone"))) {
-             return;
-         }
-         
-        (bytes32 blobUID, ) = abi.decode(data, (bytes32, string));
-        Attestation memory blobAttestation = _eas.getAttestation(blobUID);
-        
-        if (blobAttestation.uid != bytes32(0)) {
-            if (blobAttestation.schema != BLOB_SCHEMA_UID) return;
+        (, string memory contentType, string memory fileMode) = abi.decode(data, (string, string, string));
+        if (keccak256(bytes(fileMode)) == keccak256(bytes("tombstone"))) {
+            return;
+        }
 
-            (string memory mimeType, , ) = abi.decode(blobAttestation.data, (string, uint8, bytes));
-            if (bytes(mimeType).length > 255) return; // Safety check
-            
-            bytes32 fullHash = keccak256(abi.encodePacked(mimeType));
+        if (bytes(contentType).length > 0) {
+            bytes32 fullHash = keccak256(abi.encodePacked(contentType));
             _childrenByType[parentUID][fullHash].push(attestationUID);
-            _uidIndices[attestationUID].typeFull = uint32(_childrenByType[parentUID][fullHash].length);    
+            _uidIndices[attestationUID].typeFull = uint32(_childrenByType[parentUID][fullHash].length);
 
-            bytes memory mimeBytes = bytes(mimeType);
+            bytes memory mimeBytes = bytes(contentType);
             for (uint i = 0; i < mimeBytes.length; i++) {
-                if (mimeBytes[i] == 0x2f) { // "/"
-                        bytes memory category = new bytes(i);
-                        for (uint j = 0; j < i; j++) {
-                            category[j] = mimeBytes[j];
-                        }
-                        bytes32 catHash = keccak256(category);
-                        _childrenByType[parentUID][catHash].push(attestationUID);
-                        _uidIndices[attestationUID].typeCat = uint32(_childrenByType[parentUID][catHash].length);
-                        break;
+                if (mimeBytes[i] == 0x2f) {
+                    // "/"
+                    bytes memory category = new bytes(i);
+                    for (uint j = 0; j < i; j++) {
+                        category[j] = mimeBytes[j];
+                    }
+                    bytes32 catHash = keccak256(category);
+                    _childrenByType[parentUID][catHash].push(attestationUID);
+                    _uidIndices[attestationUID].typeCat = uint32(_childrenByType[parentUID][catHash].length);
+                    break;
                 }
             }
         }

@@ -182,6 +182,7 @@ export default function ExplorerPage() {
               <FileBrowser
                 currentAnchorUID={currentAnchorUID}
                 dataSchemaUID={dataSchemaUID}
+                currentPathNames={currentPath.slice(1).map(p => p.name)}
                 onNavigate={(uid, name) => {
                   // Append to current path
                   navigateToPath([...currentPath, { uid, name }]);

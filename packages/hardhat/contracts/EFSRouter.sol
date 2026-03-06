@@ -12,7 +12,7 @@ interface IDecentralizedApp {
     function request(
         string[] memory resource,
         KeyValue[] memory params
-    ) external view returns (uint256 statusCode, string memory body, KeyValue[] memory headers);
+    ) external view returns (uint256 statusCode, bytes memory body, KeyValue[] memory headers);
 }
 
 interface IChunkedSSTORE2 {
@@ -92,10 +92,13 @@ contract EFSRouter is IDecentralizedApp {
     function request(
         string[] memory resource,
         KeyValue[] memory params
-    ) external view override returns (uint256 statusCode, string memory body, KeyValue[] memory headers) {
+    ) external view override returns (uint statusCode, bytes memory body, KeyValue[] memory headers) {
         // 1. Path Resolution: Traverse directory from Root Anchor
         bytes32 currentParent = indexer.rootAnchorUID();
         bytes32 targetAnchor = currentParent;
+
+        // Empty path guard (must be before the loop)
+        if (resource.length == 0) return (404, bytes("Not Found: Empty path"), new KeyValue[](0));
 
         for (uint i = 0; i < resource.length; i++) {
             // Traverse down the hierarchy
@@ -109,7 +112,7 @@ contract EFSRouter is IDecentralizedApp {
             }
 
             if (targetAnchor == bytes32(0)) {
-                return (404, "Not Found: Path does not exist", new KeyValue[](0));
+                return (404, bytes("Not Found: Path does not exist"), new KeyValue[](0));
             }
             currentParent = targetAnchor;
         }
@@ -148,14 +151,14 @@ contract EFSRouter is IDecentralizedApp {
 
         // 3. Evaluate FileMode
         if (_stringsEqual(fileMode, "tombstone")) {
-            return (404, "Not Found: Deleted", new KeyValue[](0));
+            return (404, bytes("Not Found: Deleted"), new KeyValue[](0));
         }
         if (_stringsEqual(fileMode, "symlink")) {
             // Return HTTP 307 Redirect.
             // `uri` holds the redirect target (another web3:// or Path)
             headers = new KeyValue[](1);
             headers[0] = KeyValue("Location", uri);
-            return (307, "", headers);
+            return (307, bytes(""), headers);
         }
 
         // 4. Content Retrieval & Translation
@@ -167,7 +170,7 @@ contract EFSRouter is IDecentralizedApp {
                 string(abi.encodePacked('message/external-body; access-type=URL; URL="', uri, '"'))
             );
             headers[1] = KeyValue("Content-Type", contentType); // Provide hint
-            return (200, "", headers);
+            return (200, bytes(""), headers);
         } else if (_startsWith(uri, "web3://")) {
             // On-chain fetch via SSTORE2 or similar.
             // In a real deployed version, web3:// contract addresses are queried.
@@ -176,7 +179,7 @@ contract EFSRouter is IDecentralizedApp {
             // EIP-7617 Chunking Validation
             address targetContract = _parseContractFromWeb3URI(uri);
             if (targetContract == address(0)) {
-                return (500, "Invalid on-chain URI", new KeyValue[](0));
+                return (500, bytes("Invalid on-chain URI"), new KeyValue[](0));
             }
 
             uint256 chunkIdx = _parseUint(chunkIndexStr);
@@ -197,14 +200,14 @@ contract EFSRouter is IDecentralizedApp {
 
             if (isChunked) {
                 if (chunkIdx >= totalChunks) {
-                    return (404, "Chunk out of bounds", new KeyValue[](0));
+                    return (404, bytes("Chunk out of bounds"), new KeyValue[](0));
                 }
 
                 (bool successAddr, bytes memory addrData) = targetContract.staticcall(
                     abi.encodeWithSelector(IChunkedSSTORE2.chunkAddress.selector, chunkIdx)
                 );
                 if (!successAddr || addrData.length < 32) {
-                    return (500, "Chunk reading failed", new KeyValue[](0));
+                    return (500, bytes("Chunk reading failed"), new KeyValue[](0));
                 }
                 targetContract = abi.decode(addrData, (address));
 
@@ -224,14 +227,23 @@ contract EFSRouter is IDecentralizedApp {
                 headers[0] = KeyValue("Content-Type", contentType);
             }
 
-            // Using inline assembly to read SSTORE2 bytes (skipping first 1 byte format check for simplicity)
-            string memory rawData = "";
+            // Guard: if the storage contract has no code, return 500
+            uint256 codeLen;
+            assembly {
+                codeLen := extcodesize(targetContract)
+            }
+            if (codeLen == 0) {
+                return (500, bytes("Storage contract has no code"), new KeyValue[](0));
+            }
+
+            // Using inline assembly to read SSTORE2 bytes (skipping first 1 byte STOP opcode)
+            bytes memory rawData = "";
             assembly {
                 let size := extcodesize(targetContract)
                 if gt(size, 1) {
                     // Normal SSTORE2 skips first byte 0x00
                     rawData := mload(0x40) // get free memory pointer
-                    mstore(0x40, add(rawData, and(add(add(size, 0x20), 0x1f), not(0x1f)))) // advance free memory pointer
+                    mstore(0x40, add(rawData, and(add(add(sub(size, 1), 0x20), 0x1f), not(0x1f)))) // advance free memory pointer
                     mstore(rawData, sub(size, 1)) // store length (excluding first byte)
                     extcodecopy(targetContract, add(rawData, 0x20), 1, sub(size, 1)) // copy code
                 }
@@ -242,10 +254,10 @@ contract EFSRouter is IDecentralizedApp {
         // Fallback for raw byte URIs / encoded data
         headers = new KeyValue[](1);
         headers[0] = KeyValue("Content-Type", contentType);
-        return (200, uri, headers);
+        return (200, bytes(uri), headers);
     }
 
-    // ---------- MOCK AND HELPER FUNCTIONS ------------
+    // ---------- HELPER FUNCTIONS ------------
 
     function _parseAddress(string memory addrStr) private pure returns (address) {
         // String to address parsing.
@@ -339,12 +351,12 @@ contract EFSRouter is IDecentralizedApp {
     }
 
     // Searches Indexer for the most recent Data attestation attached to an Anchor by Edition
+    // SECURITY: V1 intentionally serves the most-recent data attestation regardless of edition/attester.
+    // The `edition` parameter is accepted but not yet filtered. Edition-based curation (subjective
+    // filesystem views) is a planned V2 feature that requires `getReferencingAttestationsByAttester`
+    // or equivalent filtering on the Indexer side. Until then, any attester can publish a newer
+    // data attestation that supersedes older ones for a given file anchor.
     function _findActiveDataAttestation(bytes32 targetAnchor, address /*edition*/) private view returns (bytes32) {
-        // EFS is subjective. Query the reverse links: What attachs to this anchor under DATA schema?
-        // In production we read `_childrenBySchema[targetAnchor][dataSchemaUID]` and filter by `edition`.
-        // For the sake of the router interface, we assume indexer allows fetching this natively.
-        // NOTE: `getReferencingAttestations` can do this.
-        // indexer.getReferencingAttestations(targetAnchor, dataSchemaUID, 0, 100, true);
         bytes32[] memory records = indexer.getReferencingAttestations(targetAnchor, dataSchemaUID, 0, 1, true);
         if (records.length > 0) {
             return records[0];

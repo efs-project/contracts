@@ -58,8 +58,8 @@ describe("EFSIndexer", function () {
     const rc2 = await tx2.wait();
     propertySchemaUID = rc2!.logs[0].topics[1];
 
-    // DATA: bytes32 blobUID, string fileMode (Removed metadata)
-    const tx3 = await registry.register("bytes32 blobUID, string fileMode", futureIndexerAddr, true);
+    // DATA: string uri, string contentType, string fileMode (matches EFSRouter schema)
+    const tx3 = await registry.register("string uri, string contentType, string fileMode", futureIndexerAddr, true);
     const rc3 = await tx3.wait();
     dataSchemaUID = rc3!.logs[0].topics[1];
 
@@ -442,7 +442,6 @@ describe("EFSIndexer", function () {
 
   describe("Filtering & MimeTypes", function () {
     let parentUID: string;
-    let blobUID: string;
     // let dataUID: string;
     let userFileUID: string;
     let user2FileUID: string;
@@ -477,8 +476,7 @@ describe("EFSIndexer", function () {
           value: 0n,
         },
       });
-      const blobReceipt = await blobTx.wait();
-      blobUID = getUIDFromReceipt(blobReceipt);
+      await blobTx.wait();
 
       // 3. Create Anchor "my_video.mp4" inside "files"
       const txFile = await eas.attest({
@@ -497,6 +495,7 @@ describe("EFSIndexer", function () {
       fileUID = getUIDFromReceipt(rcFile);
 
       // 4. Attach DATA to "my_video.mp4"
+      // DATA schema is `string uri, string contentType, string fileMode`
       const dataTx = await eas.attest({
         schema: dataSchemaUID,
         data: {
@@ -504,7 +503,7 @@ describe("EFSIndexer", function () {
           expirationTime: NO_EXPIRATION,
           revocable: true,
           refUID: fileUID, // Points to the file Anchor
-          data: schemaEncoder.encode(["bytes32", "string"], [blobUID, "0644"]),
+          data: schemaEncoder.encode(["string", "string", "string"], ["web3://", "video/mp4", "file"]),
           value: 0n,
         },
       });
@@ -901,6 +900,8 @@ describe("EFSIndexer", function () {
       const blobUID = getUIDFromReceipt(receiptBlob);
 
       // 3. Link Anchor to Blob via Data Schema
+      // DATA schema is `string uri, string contentType, string fileMode`
+      // The blobUID is encoded as the uri field to preserve the reference
       const txData = await eas.attest({
         schema: dataSchemaUID,
         data: {
@@ -908,7 +909,7 @@ describe("EFSIndexer", function () {
           expirationTime: NO_EXPIRATION,
           revocable: true,
           refUID: anchorUID,
-          data: schemaEncoder.encode(["bytes32", "string"], [blobUID, "0644"]),
+          data: schemaEncoder.encode(["string", "string", "string"], [blobUID, "video/mp4", "file"]),
           value: 0n,
         },
       });

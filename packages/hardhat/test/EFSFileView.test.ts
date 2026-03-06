@@ -35,8 +35,8 @@ describe("EFSFileView", function () {
     // Note: Empirical testing showed +5 offset (5 transactions consumed before Indexer).
     const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: nonce + 5 });
 
-    // Register Schemas
-    const tx1 = await registry.register("string name", futureIndexerAddr, true);
+    // Register Schemas (aligned with canonical EFSIndexer and EFSRouter schemas)
+    const tx1 = await registry.register("string name, bytes32 schemaUID", futureIndexerAddr, true);
     const rc1 = await tx1.wait();
     anchorSchemaUID = rc1!.logs[0].topics[1];
 
@@ -45,8 +45,8 @@ describe("EFSFileView", function () {
     const rc2 = await tx2.wait();
     propertySchemaUID = rc2!.logs[0].topics[1];
 
-    // Data
-    const tx3 = await registry.register("bytes32 blobUID, string fileMode", futureIndexerAddr, true);
+    // Data (aligned with EFSRouter: string uri, string contentType, string fileMode)
+    const tx3 = await registry.register("string uri, string contentType, string fileMode", futureIndexerAddr, true);
     const rc3 = await tx3.wait();
     dataSchemaUID = rc3!.logs[0].topics[1];
 
@@ -88,7 +88,7 @@ describe("EFSFileView", function () {
         if (parsed && parsed.name === "Attested") {
           return parsed.args.uid;
         }
-      } catch { }
+      } catch {}
     }
     console.log("Logs:", receipt.logs);
     throw new Error("Attested event not found in receipt");
@@ -160,7 +160,8 @@ describe("EFSFileView", function () {
     const fileUID = getUIDFromReceipt(fileReceipt);
 
     // Add Data to File to make it a "File" (hasData = true)
-    const contentData = schemaEncoder.encode(["bytes32", "string"], [ZERO_BYTES32, "0644"]);
+    // Aligned with canonical DATA schema: string uri, string contentType, string fileMode
+    const contentData = schemaEncoder.encode(["string", "string", "string"], ["web3://0x0000", "text/plain", "file"]);
     await eas.attest({
       schema: dataSchemaUID,
       data: {

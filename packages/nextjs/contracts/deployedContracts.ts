@@ -7,7 +7,7 @@ import { GenericContractsDeclaration } from "~~/utils/scaffold-eth/contract";
 const deployedContracts = {
   31337: {
     EFSFileView: {
-      address: "0x3BB97372ea4bB4F62058FeB55b010bd4604cbbc3",
+      address: "0x60F6Af3d35864866A66EA76025EB0D513a4a3bAD",
       abi: [
         {
           inputs: [
@@ -159,8 +159,145 @@ const deployedContracts = {
       ],
       inheritedFunctions: {},
     },
+    EFSRouter: {
+      address: "0xab9654b6C606bA2ce4D3e0e884931945F76F53C5",
+      abi: [
+        {
+          inputs: [
+            {
+              internalType: "address",
+              name: "_indexer",
+              type: "address",
+            },
+            {
+              internalType: "address",
+              name: "_eas",
+              type: "address",
+            },
+            {
+              internalType: "bytes32",
+              name: "_dataSchemaUID",
+              type: "bytes32",
+            },
+          ],
+          stateMutability: "nonpayable",
+          type: "constructor",
+        },
+        {
+          inputs: [],
+          name: "dataSchemaUID",
+          outputs: [
+            {
+              internalType: "bytes32",
+              name: "",
+              type: "bytes32",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "eas",
+          outputs: [
+            {
+              internalType: "contract IEAS",
+              name: "",
+              type: "address",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "indexer",
+          outputs: [
+            {
+              internalType: "contract IEFSIndexer",
+              name: "",
+              type: "address",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "string[]",
+              name: "resource",
+              type: "string[]",
+            },
+            {
+              components: [
+                {
+                  internalType: "string",
+                  name: "key",
+                  type: "string",
+                },
+                {
+                  internalType: "string",
+                  name: "value",
+                  type: "string",
+                },
+              ],
+              internalType: "struct IDecentralizedApp.KeyValue[]",
+              name: "params",
+              type: "tuple[]",
+            },
+          ],
+          name: "request",
+          outputs: [
+            {
+              internalType: "uint256",
+              name: "statusCode",
+              type: "uint256",
+            },
+            {
+              internalType: "bytes",
+              name: "body",
+              type: "bytes",
+            },
+            {
+              components: [
+                {
+                  internalType: "string",
+                  name: "key",
+                  type: "string",
+                },
+                {
+                  internalType: "string",
+                  name: "value",
+                  type: "string",
+                },
+              ],
+              internalType: "struct IDecentralizedApp.KeyValue[]",
+              name: "headers",
+              type: "tuple[]",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "resolveMode",
+          outputs: [
+            {
+              internalType: "bytes32",
+              name: "",
+              type: "bytes32",
+            },
+          ],
+          stateMutability: "pure",
+          type: "function",
+        },
+      ],
+      inheritedFunctions: {},
+    },
     Indexer: {
-      address: "0x80e0799Ca066368427d4F89996Bae018A71bC93d",
+      address: "0x9ca081248748a5a741ea5a6cF8718a033638CEA8",
       abi: [
         {
           inputs: [

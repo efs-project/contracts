@@ -28,7 +28,7 @@ const deployEFSIndexer: DeployFunction = async function (hre: HardhatRuntimeEnvi
   const schemas = [
     { name: "ANCHOR", definition: "string name, bytes32 schemaUID", revocable: false }, // Permanent
     { name: "PROPERTY", definition: "string value", revocable: true }, // Value only (Name is in Anchor)
-    { name: "DATA", definition: "bytes32 blobUID, string fileMode", revocable: true }, // Removed metadata
+    { name: "DATA", definition: "string uri, string contentType, string fileMode", revocable: true }, // Updated to match EFSRouter
     {
       name: "BLOB",
       definition: "string mimeType, uint8 storageType, bytes location",
