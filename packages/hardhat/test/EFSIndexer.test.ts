@@ -925,4 +925,288 @@ describe("EFSIndexer", function () {
       expect(dataAttestations.length).to.equal(1);
     });
   });
+
+  describe("Perspectives (Address-Based Namespaces)", function () {
+    let parentUID: string;
+    let fileAnchorUID: string;
+    const schemaEncoder = new ethers.AbiCoder();
+
+    beforeEach(async function () {
+      // 1. Create a root directory (parent)
+      const txParent = await eas.connect(owner).attest({
+        schema: anchorSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: NO_EXPIRATION,
+          revocable: false,
+          refUID: ZERO_BYTES32,
+          data: schemaEncoder.encode(["string", "bytes32"], ["perspectives_dir", ZERO_BYTES32]),
+          value: 0n,
+        },
+      });
+      const receiptParent = await txParent.wait();
+      parentUID = getUIDFromReceipt(receiptParent);
+
+      // 2. Create a file anchor inside the directory
+      const txFile = await eas.connect(owner).attest({
+        schema: anchorSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: NO_EXPIRATION,
+          revocable: false,
+          refUID: parentUID,
+          data: schemaEncoder.encode(["string", "bytes32"], ["shared_file.json", dataSchemaUID]),
+          value: 0n,
+        },
+      });
+      const receiptFile = await txFile.wait();
+      fileAnchorUID = getUIDFromReceipt(receiptFile);
+    });
+
+    it("Should track core Referencing mappings properly (All, Schema, Attester)", async function () {
+      // User 1 tags the file
+      const tagTx = await eas.connect(user1).attest({
+        schema: tagSchemaUID,
+        data: { recipient: ZeroAddress, expirationTime: 0n, revocable: true, refUID: fileAnchorUID, data: schemaEncoder.encode(["bytes32", "int256"], [ethers.ZeroHash, 10n]), value: 0n },
+      });
+      const tagReceipt = await tagTx.wait();
+      const tagUID = getUIDFromReceipt(tagReceipt);
+
+      // Check _allReferencing
+      const allRef = await indexer.getAllReferencing(fileAnchorUID, 0, 10, false);
+      expect(allRef).to.include(tagUID);
+
+      // Check _referencingByAttester
+      const attesterRef = await indexer.getReferencingByAttester(fileAnchorUID, await user1.getAddress(), 0, 10, false);
+      expect(attesterRef).to.include(tagUID);
+
+      // Check _referencingBySchemaAndAttester
+      const schemaAttesterRef = await indexer.getReferencingBySchemaAndAttester(fileAnchorUID, tagSchemaUID, await user1.getAddress(), 0, 10, false);
+      expect(schemaAttesterRef).to.include(tagUID);
+
+      // User 1 revokes the tag
+      await eas.connect(user1).revoke({
+        schema: tagSchemaUID,
+        data: { uid: tagUID, value: 0n },
+      });
+
+      // Verify the revoked item is NOT removed from these arrays
+      const allRefAfter = await indexer.getAllReferencing(fileAnchorUID, 0, 10, false);
+      expect(allRefAfter.length).to.equal(1);
+    });
+
+    it("Should return Single Address History (showRevoked vs active)", async function () {
+      // User 1 makes an edit
+      const dataTx1 = await eas.connect(user1).attest({
+        schema: dataSchemaUID,
+        data: { recipient: ZeroAddress, expirationTime: 0n, revocable: true, refUID: fileAnchorUID, data: schemaEncoder.encode(["string", "string", "string"], ["ipfs://v1", "application/json", "file"]), value: 0n },
+      });
+      const r1 = await dataTx1.wait();
+      const uid1 = getUIDFromReceipt(r1);
+
+      // User 1 makes a second edit
+      const dataTx2 = await eas.connect(user1).attest({
+        schema: dataSchemaUID,
+        data: { recipient: ZeroAddress, expirationTime: 0n, revocable: true, refUID: fileAnchorUID, data: schemaEncoder.encode(["string", "string", "string"], ["ipfs://v2", "application/json", "file"]), value: 0n },
+      });
+      const r2 = await dataTx2.wait();
+      const uid2 = getUIDFromReceipt(r2);
+
+      // Test active history (should return both)
+      const [historyActive] = await indexer.getDataHistoryByAddress(fileAnchorUID, await user1.getAddress(), 0, 10, false, false);
+      expect(historyActive.length).to.equal(2);
+
+      // Revoke the first edit
+      await eas.connect(user1).revoke({
+        schema: dataSchemaUID,
+        data: { uid: uid1, value: 0n },
+      });
+
+      // Test history without revoked 
+      const [historyFiltered] = await indexer.getDataHistoryByAddress(fileAnchorUID, await user1.getAddress(), 0, 10, false, false);
+      expect(historyFiltered.length).to.equal(1);
+      expect(historyFiltered[0]).to.equal(uid2);
+
+      // Test history with revoked (showRevoked = true)
+      const [historyAll] = await indexer.getDataHistoryByAddress(fileAnchorUID, await user1.getAddress(), 0, 10, false, true);
+      expect(historyAll.length).to.equal(2);
+    });
+
+    it("Should fallback correctly via getDataByAddressList", async function () {
+      // User 1 edit
+      const dataTx1 = await eas.connect(user1).attest({
+        schema: dataSchemaUID,
+        data: { recipient: ZeroAddress, expirationTime: 0n, revocable: true, refUID: fileAnchorUID, data: schemaEncoder.encode(["string", "string", "string"], ["ipfs://user1", "application/json", "file"]), value: 0n },
+      });
+      const r1 = await dataTx1.wait();
+      const uid1 = getUIDFromReceipt(r1);
+
+      // User 2 edit
+      const dataTx2 = await eas.connect(user2).attest({
+        schema: dataSchemaUID,
+        data: { recipient: ZeroAddress, expirationTime: 0n, revocable: true, refUID: fileAnchorUID, data: schemaEncoder.encode(["string", "string", "string"], ["ipfs://user2", "application/json", "file"]), value: 0n },
+      });
+      const r2 = await dataTx2.wait();
+      const uid2 = getUIDFromReceipt(r2);
+
+      // Pass [User2, User1]. Should prefer User2.
+      const u1Address = await user1.getAddress();
+      const u2Address = await user2.getAddress();
+      const result1 = await indexer.getDataByAddressList(fileAnchorUID, [u2Address, u1Address], false);
+      expect(result1).to.equal(uid2);
+
+      // Pass [Unrelated, User1]. Should fallback to User1.
+      const ownerAddress = await owner.getAddress();
+      const result2 = await indexer.getDataByAddressList(fileAnchorUID, [ownerAddress, u1Address], false);
+      expect(result2).to.equal(uid1);
+
+      // Revoke User 2's edit
+      await eas.connect(user2).revoke({ schema: dataSchemaUID, data: { uid: uid2, value: 0n } });
+
+      // Pass [User2, User1] again. User 2 is revoked so it should fallback to User 1.
+      const result3 = await indexer.getDataByAddressList(fileAnchorUID, [u2Address, u1Address], false);
+      expect(result3).to.equal(uid1);
+      
+      // Pass with showRevoked = true. Should grab User2 again.
+      const result4 = await indexer.getDataByAddressList(fileAnchorUID, [u2Address, u1Address], true);
+      expect(result4).to.equal(uid2);
+    });
+
+    it("Should do Round-Robin Directory Pagination safely (getChildrenByAddressList)", async function () {
+      // Setup: User 1 creates 3 files, User 2 creates 3 files in `parentUID`
+      const createFile = async (signer: Signer, name: string) => {
+        const tx = await eas.connect(signer).attest({
+          schema: anchorSchemaUID,
+          data: { recipient: ZeroAddress, expirationTime: 0n, revocable: false, refUID: parentUID, data: schemaEncoder.encode(["string", "bytes32"], [name, ZERO_BYTES32]), value: 0n },
+        });
+        const r = await tx.wait();
+        return getUIDFromReceipt(r);
+      };
+
+      const u1File1 = await createFile(user1, "u1_1");
+      const u1File2 = await createFile(user1, "u1_2");
+      const u1File3 = await createFile(user1, "u1_3");
+
+      const u2File1 = await createFile(user2, "u2_1");
+      const u2File2 = await createFile(user2, "u2_2");
+      const u2File3 = await createFile(user2, "u2_3");
+
+      const u1Address = await user1.getAddress();
+      const u2Address = await user2.getAddress();
+
+      // Page 1: pageSize = 4, reverseOrder = false. Should grab 2 from U1, 2 from U2.
+      // Order: u1_1, u2_1, u1_2, u2_2
+      const [page1Results, page1Cursor] = await indexer.getChildrenByAddressList(
+        parentUID,
+        [u1Address, u2Address],
+        0n,
+        4,
+        false,
+        false
+      );
+
+      expect(page1Results.length).to.equal(4);
+      expect(page1Results[0]).to.equal(u1File1);
+      expect(page1Results[1]).to.equal(u2File1);
+      expect(page1Results[2]).to.equal(u1File2);
+      expect(page1Results[3]).to.equal(u2File2);
+      expect(page1Cursor).to.be.greaterThan(0n);
+
+      // Page 2: use page1Cursor. Should pick up where it left off.
+      // Order: u1_3, u2_3
+      const [page2Results, page2Cursor] = await indexer.getChildrenByAddressList(
+        parentUID,
+        [u1Address, u2Address],
+        page1Cursor,
+        4,
+        false,
+        false
+      );
+
+      expect(page2Results.length).to.equal(2);
+      expect(page2Results[0]).to.equal(u1File3);
+      expect(page2Results[1]).to.equal(u2File3);
+    });
+
+    it("Should return bytes32(0) from getDataByAddressList when all data is revoked", async function () {
+      const dataTx1 = await eas.connect(user1).attest({
+        schema: dataSchemaUID,
+        data: { recipient: ZeroAddress, expirationTime: 0n, revocable: true, refUID: fileAnchorUID, data: schemaEncoder.encode(["string", "string", "string"], ["ipfs://user1", "application/json", "file"]), value: 0n },
+      });
+      const r1 = await dataTx1.wait();
+      const uid1 = getUIDFromReceipt(r1);
+
+      await eas.connect(user1).revoke({ schema: dataSchemaUID, data: { uid: uid1, value: 0n } });
+
+      const u1Address = await user1.getAddress();
+      const result = await indexer.getDataByAddressList(fileAnchorUID, [u1Address], false);
+      expect(result).to.equal(ZERO_BYTES32);
+    });
+
+    it("Should do Round-Robin with unequal list lengths", async function () {
+      const createFile = async (signer: Signer, name: string) => {
+        const tx = await eas.connect(signer).attest({
+          schema: anchorSchemaUID,
+          data: { recipient: ZeroAddress, expirationTime: 0n, revocable: false, refUID: parentUID, data: schemaEncoder.encode(["string", "bytes32"], [name, ZERO_BYTES32]), value: 0n },
+        });
+        const r = await tx.wait();
+        return getUIDFromReceipt(r);
+      };
+
+      // User 1 has 5 files, User 2 has 1 file
+      const u1Files = [];
+      for(let i=1; i<=5; i++) {
+        u1Files.push(await createFile(user1, `u1_${i}`));
+      }
+      const u2File1 = await createFile(user2, "u2_1");
+
+      const u1Address = await user1.getAddress();
+      const u2Address = await user2.getAddress();
+
+      // Page 1: pageSize = 4
+      const [page1Results, page1Cursor] = await indexer.getChildrenByAddressList(
+        parentUID, [u1Address, u2Address], 0n, 4, false, false
+      );
+      
+      expect(page1Results.length).to.equal(4);
+      expect(page1Results[0]).to.equal(u1Files[0]);
+      expect(page1Results[1]).to.equal(u2File1);
+      expect(page1Results[2]).to.equal(u1Files[1]);
+      expect(page1Results[3]).to.equal(u1Files[2]); // u2 is exhausted
+
+      // Page 2: pageSize = 4
+      const [page2Results, page2Cursor] = await indexer.getChildrenByAddressList(
+        parentUID, [u1Address, u2Address], page1Cursor, 4, false, false
+      );
+
+      expect(page2Results.length).to.equal(2);
+      expect(page2Results[0]).to.equal(u1Files[3]);
+      expect(page2Results[1]).to.equal(u1Files[4]);
+    });
+
+    it("Should do Round-Robin with 3+ users", async function () {
+      const createFile = async (signer: Signer, name: string) => {
+        const tx = await eas.connect(signer).attest({
+          schema: anchorSchemaUID,
+          data: { recipient: ZeroAddress, expirationTime: 0n, revocable: false, refUID: parentUID, data: schemaEncoder.encode(["string", "bytes32"], [name, ZERO_BYTES32]), value: 0n },
+        });
+        return getUIDFromReceipt(await tx.wait());
+      };
+
+      const ownerFile = await createFile(owner, "owner_1");
+      const u1File = await createFile(user1, "u1_1");
+      const u2File = await createFile(user2, "u2_1");
+
+      const [res, cursor] = await indexer.getChildrenByAddressList(
+        parentUID, 
+        [await owner.getAddress(), await user1.getAddress(), await user2.getAddress()], 
+        0n, 3, false, false
+      );
+
+      expect(res.length).to.equal(3);
+      expect(res[0]).to.equal(fileAnchorUID); // Owner's first file created in beforeEach
+      expect(res[1]).to.equal(u1File);
+      expect(res[2]).to.equal(u2File);
+    });
+  });
 });

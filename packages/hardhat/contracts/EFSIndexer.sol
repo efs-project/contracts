@@ -36,6 +36,8 @@ contract EFSIndexer is SchemaResolver {
     }
     mapping(bytes32 => IndexData) private _uidIndices;
 
+    bytes32 private constant TOMBSTONE_HASH = keccak256("tombstone");
+
     // ============================================================================================
     // STORAGE: FILE SYSTEM INDICES (EFS CORE)
     // ============================================================================================
@@ -48,13 +50,6 @@ contract EFSIndexer is SchemaResolver {
 
     // Children By Schema: parentAnchorUID => schemaUID => childAnchorUIDs
     mapping(bytes32 => mapping(bytes32 => bytes32[])) private _childrenBySchema;
-    struct ChildSchemaIndex {
-        uint32 schemaIndex;
-        uint32 genericIndex;
-    }
-    // We need to track two indices for children now: One in _children, one in _childrenBySchema
-    // But _uidIndices only has `child`. We need to expand IndexData or use a separate mapping?
-    // Let's expand IndexData.
 
     // Parent Lookups: childAnchorUID => parentAnchorUID
     mapping(bytes32 => bytes32) private _parents;
@@ -72,13 +67,10 @@ contract EFSIndexer is SchemaResolver {
     // Global Schema Index: schemaUID => attestationUIDs
     mapping(bytes32 => bytes32[]) private _schemaAttestations;
 
-    // User Schema Index: attester => schemaUID => attestationUIDs (Note: distinct from _sentAttestations which is same structure.
-    // The plan asks for: mapping(address attester => mapping(bytes32 schemaUID => bytes32[] uids)) called "User Schema Index".
-    // _sentAttestations already exists with this signature. I will use _sentAttestations for this.)
+    // User Schema Index: attester => schemaUID => attestationUIDs
     mapping(address => mapping(bytes32 => bytes32[])) private _sentAttestations;
 
-    // User Schema Specific Index (for efficient "Sort by User" on a schema): schemaUID => attester => attestationUIDs
-    // Plan asked for: getAttestationsBySchemaAndAttester. This maps to:
+    // User Schema Specific Index: schemaUID => attester => attestationUIDs
     mapping(bytes32 => mapping(address => bytes32[])) private _schemaAttesterAttestations;
 
     // Incoming: recipient => schemaUID => attestationUIDs
@@ -94,6 +86,18 @@ contract EFSIndexer is SchemaResolver {
     mapping(bytes32 => bytes32[]) private _referencingSchemas;
     // Helper to check existence: targetUID => schemaUID => exists
     mapping(bytes32 => mapping(bytes32 => bool)) private _hasReferencingSchema;
+
+    // ============================================================================================
+    // STORAGE: EDITIONS (APPEND-ONLY HISTORY)
+    // ============================================================================================
+
+    // Mappings to track full references (mimics EAS core indexer)
+    mapping(bytes32 => bytes32[]) private _allReferencing;
+    mapping(bytes32 => mapping(address => bytes32[])) private _referencingByAttester;
+    mapping(bytes32 => mapping(bytes32 => mapping(address => bytes32[]))) private _referencingBySchemaAndAttester;
+
+    // Specific mapping for fast lookups of Data payloads per user for subjective File content
+    mapping(bytes32 => mapping(address => bytes32[])) private _dataAttestationsByAddress;
 
     constructor(
         IEAS eas,
@@ -134,6 +138,11 @@ contract EFSIndexer is SchemaResolver {
             _referencingAttestations[attestation.refUID][schema].push(attestation.uid);
             _uidIndices[attestation.uid].ref = uint32(_referencingAttestations[attestation.refUID][schema].length);
             _addReferencingSchema(attestation.refUID, schema);
+
+            // Perspective Mappings (Append-only history, no swap-and-pop)
+            _allReferencing[attestation.refUID].push(attestation.uid);
+            _referencingByAttester[attestation.refUID][attestation.attester].push(attestation.uid);
+            _referencingBySchemaAndAttester[attestation.refUID][schema][attestation.attester].push(attestation.uid);
         }
 
         // 2. EFS CORE LOGIC (ANCHORS)
@@ -208,6 +217,10 @@ contract EFSIndexer is SchemaResolver {
             if (parentUID != bytes32(0)) {
                 _indexMimeType(parentUID, attestation.refUID, attestation.data);
             }
+
+            // Index File Content Perspectives (Append-only by design, not deleted in onRevoke)
+            _dataAttestationsByAddress[attestation.refUID][attestation.attester].push(attestation.uid);
+
             return true;
         } else if (schema == PROPERTY_SCHEMA_UID) {
             // VALIDATION: Check refUID is a valid Anchor AND matches PROPERTY_SCHEMA constraint
@@ -438,6 +451,209 @@ contract EFSIndexer is SchemaResolver {
         return _sliceUIDs(_sentAttestations[attester][schemaUID], start, length, reverseOrder);
     }
 
+    // ============================================================================================
+    // READ FUNCTIONS: PERSPECTIVES (Address-Based Queries & History)
+    // ============================================================================================
+
+    // --- Generic Referencing Mappings ---
+
+    function getAllReferencing(
+        bytes32 targetUID,
+        uint256 start,
+        uint256 length,
+        bool reverseOrder
+    ) external view returns (bytes32[] memory) {
+        return _sliceUIDs(_allReferencing[targetUID], start, length, reverseOrder);
+    }
+
+    function getReferencingByAttester(
+        bytes32 targetUID,
+        address attester,
+        uint256 start,
+        uint256 length,
+        bool reverseOrder
+    ) external view returns (bytes32[] memory) {
+        return _sliceUIDs(_referencingByAttester[targetUID][attester], start, length, reverseOrder);
+    }
+
+    function getReferencingBySchemaAndAttester(
+        bytes32 targetUID,
+        bytes32 schemaUID,
+        address attester,
+        uint256 start,
+        uint256 length,
+        bool reverseOrder
+    ) external view returns (bytes32[] memory) {
+        return _sliceUIDs(_referencingBySchemaAndAttester[targetUID][schemaUID][attester], start, length, reverseOrder);
+    }
+
+    // --- File Content Perspectives (DATA Schema) ---
+
+    // Standard pagination for a single user's edits
+    // Returns results and the nextStart cursor for subsequent pages. If nextStart is 0, the end is reached.
+    function getDataHistoryByAddress(
+        bytes32 anchorUID,
+        address attester,
+        uint256 start,
+        uint256 length,
+        bool reverseOrder,
+        bool showRevoked
+    ) external view returns (bytes32[] memory results, uint256 nextStart) {
+        bytes32[] storage allEdits = _dataAttestationsByAddress[anchorUID][attester];
+        uint256 totalLen = allEdits.length;
+        
+        if (start >= totalLen || length == 0) {
+            return (new bytes32[](0), 0);
+        }
+
+        bytes32[] memory tempResults = new bytes32[](length);
+        uint256 count = 0;
+        uint256 currentIndex = start;
+
+        while (count < length && currentIndex < totalLen) {
+            uint256 actualIdx = reverseOrder ? totalLen - 1 - currentIndex : currentIndex;
+            bytes32 uid = allEdits[actualIdx];
+            
+            if (showRevoked || _eas.getAttestation(uid).revocationTime == 0) {
+                tempResults[count++] = uid;
+            }
+            currentIndex++;
+        }
+
+        bytes32[] memory finalResults = new bytes32[](count);
+        for (uint256 i = 0; i < count; i++) {
+            finalResults[i] = tempResults[i];
+        }
+
+        // If we hit the end of the array, return 0 for nextStart
+        uint256 next = currentIndex >= totalLen ? 0 : currentIndex;
+        return (finalResults, next);
+    }
+
+    // Subjective lookup combining multiple trusted addresses into a final single data UID return value
+    function getDataByAddressList(bytes32 anchorUID, address[] calldata attesters, bool showRevoked) external view returns (bytes32) {
+        require(attesters.length > 0, "Attesters list cannot be empty");
+        address[] memory addressesToCheck = attesters;
+
+        for (uint256 i = 0; i < addressesToCheck.length; i++) {
+            bytes32[] storage userHistory = _dataAttestationsByAddress[anchorUID][addressesToCheck[i]];
+            if (userHistory.length > 0) {
+                // Loop backwards to find the most recent valid one
+                for (uint256 j = userHistory.length; j > 0; j--) {
+                    bytes32 uid = userHistory[j - 1];
+                    if (showRevoked || _eas.getAttestation(uid).revocationTime == 0) {
+                        return uid; // Win condition
+                    }
+                }
+            }
+        }
+
+        return bytes32(0);
+    }
+
+    // --- Directory Perspectives (ANCHOR Schema) ---
+
+    // Round-Robin pagination merging files from multiple users in a directory
+    // cursor format: (userIndex << 128) | itemIndex
+    function getChildrenByAddressList(
+        bytes32 parentUID,
+        address[] calldata attesters,
+        uint256 startingCursor,
+        uint256 pageSize,
+        bool reverseOrder,
+        bool showRevoked
+    ) external view returns (bytes32[] memory results, uint256 nextCursor) {
+        require(attesters.length > 0, "Attesters list cannot be empty");
+        address[] memory addressesToCheck = attesters;
+
+        uint256 userCount = addressesToCheck.length;
+        uint256[] memory currentIndices = new uint256[](userCount);
+        bool[] memory userExhausted = new bool[](userCount);
+        uint256 exhaustedCount = 0;
+
+        uint256 startingUserIdx = 0;
+
+        // Decode O(1) cursor if provided
+        if (startingCursor != 0) {
+            uint256 cursorUserIdx = startingCursor >> 128; // Top 128 bits
+            uint256 cursorItemIdx = startingCursor & ((1 << 128) - 1); // Bottom 128 bits
+            
+            if (cursorUserIdx < userCount) {
+                // Reconstruct exactly where each user was based on the cursor
+                // We know exactly how many items we processed from each user to get to this point
+                
+                for (uint256 i = 0; i < userCount; i++) {
+                    if (i <= cursorUserIdx) {
+                        currentIndices[i] = cursorItemIdx + 1;
+                    } else {
+                        currentIndices[i] = cursorItemIdx;
+                    }
+                }
+                startingUserIdx = (cursorUserIdx + 1) % userCount;
+            }
+        }
+
+        // Pre-check for already exhausted lists based on indices
+        for (uint256 i = 0; i < userCount; i++) {
+             if (currentIndices[i] >= _childrenByAttester[parentUID][addressesToCheck[i]].length) {
+                 userExhausted[i] = true;
+                 exhaustedCount++;
+             }
+        }
+
+
+
+        // Now, collect results
+        bytes32[] memory tempResults = new bytes32[](pageSize);
+        uint256 resultCount = 0;
+        uint256 currentUser = startingUserIdx;
+        uint256 finalCursor = 0;
+
+        while (resultCount < pageSize && exhaustedCount < userCount) {
+            if (!userExhausted[currentUser]) {
+                bytes32[] storage userList = _childrenByAttester[parentUID][addressesToCheck[currentUser]];
+                uint256 listLen = userList.length;
+                uint256 relIdx = currentIndices[currentUser]; // Number of items processed from this list
+
+                // Loop until we find a valid item or exhaust the list
+                bool validItemFound = false;
+                while (relIdx < listLen && !validItemFound) {
+                    uint256 actualIdx = reverseOrder ? listLen - 1 - relIdx : relIdx;
+                    bytes32 candidateUID = userList[actualIdx];
+                    
+                    if (showRevoked || _eas.getAttestation(candidateUID).revocationTime == 0) {
+                        tempResults[resultCount++] = candidateUID;
+                        // Pack cursor as (userIndex << 128) | relIdx
+                        finalCursor = (currentUser << 128) | relIdx;
+                        validItemFound = true;
+                    }
+                    relIdx++; // Look at next item next time
+                }
+
+                currentIndices[currentUser] = relIdx; // Save progress
+                if (relIdx >= listLen) {
+                    userExhausted[currentUser] = true;
+                    exhaustedCount++;
+                }
+            }
+
+            currentUser = (currentUser + 1) % userCount;
+        }
+
+        // Trim results
+        bytes32[] memory finalResults = new bytes32[](resultCount);
+        for (uint256 i = 0; i < resultCount; i++) {
+            finalResults[i] = tempResults[i];
+        }
+
+        // If we hit the end, return 0 for the cursor
+        if (exhaustedCount == userCount) {
+            finalCursor = 0;
+        }
+
+        return (finalResults, finalCursor);
+    }
+
     function getTagWeight(bytes32 targetUID, bytes32 labelUID) external view returns (int256) {
         return _tagWeights[targetUID][labelUID];
     }
@@ -450,8 +666,24 @@ contract EFSIndexer is SchemaResolver {
         return _eas;
     }
 
+    function getDataHistoryCountByAddress(bytes32 anchorUID, address attester) external view returns (uint256) {
+        return _dataAttestationsByAddress[anchorUID][attester].length;
+    }
+
+    function getAllReferencingCount(bytes32 targetUID) external view returns (uint256) {
+        return _allReferencing[targetUID].length;
+    }
+
+    function getReferencingByAttesterCount(bytes32 targetUID, address attester) external view returns (uint256) {
+        return _referencingByAttester[targetUID][attester].length;
+    }
+
+    function getReferencingBySchemaAndAttesterCount(bytes32 targetUID, bytes32 schemaUID, address attester) external view returns (uint256) {
+        return _referencingBySchemaAndAttester[targetUID][schemaUID][attester].length;
+    }
+
     // ============================================================================================
-    // HELPERS
+    // INTERNAL HELPERS
     // ============================================================================================
 
     function _sliceUIDs(
@@ -487,18 +719,7 @@ contract EFSIndexer is SchemaResolver {
 
     // O(1) REMOVAL HELPERS
 
-    function _swapPop(bytes32[] storage array, uint32 indexInMapping) private returns (uint32) {
-        if (indexInMapping == 0) return 0;
-        uint256 idx = uint256(indexInMapping) - 1;
-        bytes32 lastUID = array[array.length - 1];
-
-        array[idx] = lastUID;
-        array.pop();
-
-        return indexInMapping; // Returns the index reused (unless popped) - Wait, we need to return new index for lastUID
-    }
-
-    // NOTE: The helpers need to update indices for the moved element (lastUID).
+    // Note: The _swapPop method was removed as it was unused dead code.
 
     function _removeChild(bytes32[] storage array, bytes32 uid) private {
         uint32 index = _uidIndices[uid].child;
@@ -641,7 +862,7 @@ contract EFSIndexer is SchemaResolver {
 
     function _indexMimeType(bytes32 parentUID, bytes32 attestationUID, bytes memory data) private {
         (, string memory contentType, string memory fileMode) = abi.decode(data, (string, string, string));
-        if (keccak256(bytes(fileMode)) == keccak256(bytes("tombstone"))) {
+        if (keccak256(bytes(fileMode)) == TOMBSTONE_HASH) {
             return;
         }
 

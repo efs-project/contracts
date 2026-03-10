@@ -8,7 +8,8 @@ EFS is meant to serve as foundational infrastructure rather than a highly opinio
 
 ## Avoid Centralized Infrastructure
 - Web UI clients should query directly from standard Ethereum RPC nodes or credibly neutral indexing networks (like The Graph/envio, if utilizing a standard subgraph schema identical to the onchain logic).
-- To adhere to EFS's vision, indexers must accurately reflect the subjective nature of EFS—they should allow querying by Edition (specific address graph) or a user's local web of trust, without forcing a globally curated feed.
+- To adhere to EFS's vision, indexers must accurately reflect the subjective nature of EFS (Editions). They should allow querying by Edition (specific address graph) or a user's local web of trust, without forcing a globally curated feed.
+- The File Explorer should allow users to configure their "Trusted List" of addresses, and exclusively use APIs like `getDataByAddressList(anchor, trustedList)` and `getChildrenByAddressList(parent, trustedList)` to render file contents seamlessly curated to the user's explicit edition.
 
 ## Supporting New Workflows
 - If developers wish to create a "Social Media App" on top of EFS, they do not need a new protocol. They can define a standard folder convention (e.g., `/users/0x123/posts/`) and create `Data` attestations correctly embedding `text/plain` or `text/markdown` URIs. 

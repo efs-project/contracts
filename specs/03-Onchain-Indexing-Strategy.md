@@ -27,6 +27,12 @@ Because EAS is permissionless, anyone can attest files to a folder. To prevent O
 - **Read Pagination**: The indexer’s read functions (like `getChildren`) require `start` and `length` offset parameters, allowing frontends to paginate through massive directories without hitting block limits.
 - **O(1) Data Removals**: When an attestation is revoked (`onRevoke`), the indexer must remove it from the arrays. To prevent O(N) array scanning, the contract maintains a `_uidIndices` struct that tracks the exact array index of every UID across all relationship sets. Removals use an O(1) "swap-and-pop" mechanism.
 
+## Editions (Address-Based Namespaces)
+To support subjective file resolution natively onchain, the Indexer maintains additional append-only mappings:
+- **Core Referencing History**: `_allReferencing` and `_referencingByAttester` track immutable history, ensuring revocations do not break the chain of edits.
+- **Subjective File Content**: `_dataAttestationsByAddress` tracks user iterations of a file payload. Clients use `getDataByAddressList` with a list of trusted addresses to auto-fallback and resolve the highest-trusted active file version in fast time.
+- **Round-Robin Directory Listings**: To merge an unbiased directory listing curated by multiple users, the `getChildrenByAddressList` API implements a gas-safe round-robin cursor pagination, scanning across existing user-specific arrays rather than iterating over global spam-filled lists.
+
 ## Efficient Client Traversal
 When a web client needs to load a directory:
 1. It queries the Indexer contract for the list of names (Anchors) inside the target Folder.

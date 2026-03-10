@@ -36,3 +36,13 @@ EFS files are modified by issuing new attestations over existing paths.
 - **Delete (`/memes/vitalik.jpg`)**: Create a new `Data` attestation for the existing Anchor where `fileMode` is explicitly set to `"tombstone"`. The indexer recognizes this and removes the file from active directory queries.
 - **Add Shortcut (`/memes/vitalikinfo` -> `/people/vitalik/`)**: Create a `Data` attestation where `fileMode` denotes "symlink/shortcut", and the generic bytes point to the destination UID. The Web UI recognizes this mode and requires a user click to navigate.
 - **Add Hardlink (`/memes/vitalik.jpg` -> `/funny/vitalikfunny.jpg`)**: Create a `Data` attestation where `fileMode` denotes "hardlink". The Web UI indexes the destination link and automatically resolves to view the content.
+
+### 7. Resolve Subjective File Content (Editions)
+- **Action**: User wants to load `/pets/best.jpg`, trusting "Vitalik", "LocalDAO", and "Self".
+- **Execution**: The client calls `getDataByAddressList` on the Anchor UID, passing `[Self, LocalDAO, Vitalik]`. 
+- **Result**: The Indexer checks `Self`'s history first, then `LocalDAO`'s, returning the first valid, unrevoked file data it finds.
+
+### 8. List Merged Directory by Trusted Addresses
+- **Action**: User opens `/pets/` and wants to see files uploaded by both "Vitalik" and "Self".
+- **Execution**: The client calls `getChildrenByAddressList` with the `parentUID`, passing `[Self, Vitalik]` and a target `pageSize`.
+- **Result**: The Indexer performs round-robin pagination, returning a mixed list of files from both users and a cursor to fetch the next page safely.
