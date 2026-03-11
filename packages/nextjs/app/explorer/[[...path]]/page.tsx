@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
-import { usePublicClient } from "wagmi";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useAccount, usePublicClient } from "wagmi";
 import { FileBrowser } from "~~/components/explorer/FileBrowser";
 import { PathItem, Toolbar } from "~~/components/explorer/Toolbar";
 import { TopicTree } from "~~/components/explorer/TopicTree";
@@ -15,9 +15,15 @@ export default function ExplorerPage() {
   const [isResolving, setIsResolving] = useState(false);
   const [pathError, setPathError] = useState<string | null>(null);
 
+  // Editions state
+  const [editionAddresses, setEditionAddresses] = useState<string[]>([]);
+  const [isResolvingEditions, setIsResolvingEditions] = useState(true);
+
   const router = useRouter();
   const params = useParams();
+  const searchParams = useSearchParams();
   const publicClient = usePublicClient();
+  const { address: connectedAddress } = useAccount();
 
   // Fetch Root UID
   const { data: rootUID } = useScaffoldReadContract({
@@ -36,6 +42,49 @@ export default function ExplorerPage() {
     contractName: "Indexer",
     functionName: "ANCHOR_SCHEMA_UID",
   });
+
+  // Editions Resolution Effect
+  useEffect(() => {
+    const resolveEditions = async () => {
+      setIsResolvingEditions(true);
+      const editionsParam = searchParams.get("editions");
+
+      if (!editionsParam) {
+        // Default to connected user
+        if (connectedAddress) {
+          setEditionAddresses([connectedAddress]);
+        } else {
+          setEditionAddresses([]);
+        }
+        setIsResolvingEditions(false);
+        return;
+      }
+
+      const editionNames = editionsParam
+        .split(",")
+        .map(s => s.trim())
+        .filter(Boolean);
+      const resolvedAddresses: string[] = [];
+
+      for (const name of editionNames) {
+        if (name.endsWith(".eth")) {
+          try {
+            const addr = await publicClient?.getEnsAddress({ name });
+            if (addr) resolvedAddresses.push(addr);
+          } catch (e) {
+            console.error(`Failed to resolve ENS name ${name}`, e);
+          }
+        } else if (name.startsWith("0x") && name.length === 42) {
+          resolvedAddresses.push(name);
+        }
+      }
+
+      setEditionAddresses(resolvedAddresses);
+      setIsResolvingEditions(false);
+    };
+
+    resolveEditions();
+  }, [searchParams, connectedAddress, publicClient]);
 
   // Path Resolution Effect
   useEffect(() => {
@@ -104,11 +153,17 @@ export default function ExplorerPage() {
   const navigateToPath = (newPathItems: PathItem[]) => {
     // Skip Root ("Root") when building URL
     const urlSegments = newPathItems.slice(1).map(p => encodeURIComponent(p.name));
-    const url = `/explorer/${urlSegments.join("/")}`;
+
+    // Preserve URL parameters (especially editions)
+    const currentQuery = searchParams.toString();
+    const queryPart = currentQuery ? `?${currentQuery}` : "";
+    const url = `/explorer/${urlSegments.join("/")}${queryPart}`;
+
     router.push(url);
   };
 
   if (!rootUID || !dataSchemaUID || !anchorSchemaUID) return <div>Loading System...</div>;
+  if (isResolvingEditions) return <div>Resolving Editions...</div>;
   // We could show a specific "Resolving..." skeleton here if we want, but keeping global loading is safer for now.
 
   return (
@@ -116,7 +171,7 @@ export default function ExplorerPage() {
       <h1 className="text-3xl font-bold">EFS Explorer</h1>
 
       <div
-        className={`flex flex-col gap-2 rounded-xl bg-base-200 p-4 shadow-lg flex-grow ${isResolving ? "opacity-50 pointer-events-none" : ""}`}
+        className={`flex flex-col gap-2 rounded-xl bg-base-200 p-4 shadow-lg flex-grow ${isResolving || isResolvingEditions ? "opacity-50 pointer-events-none" : ""}`}
       >
         <Toolbar
           currentPath={currentPath}
@@ -158,6 +213,7 @@ export default function ExplorerPage() {
               <TopicTree
                 rootUID={rootUID}
                 selectedUID={currentAnchorUID}
+                editionAddresses={editionAddresses}
                 onSelect={(uid, path) => {
                   // Path needs to be constructed from tree logic.
                   // For now, let's just use the tree as navigation and update URL.
@@ -182,6 +238,7 @@ export default function ExplorerPage() {
               <FileBrowser
                 currentAnchorUID={currentAnchorUID}
                 dataSchemaUID={dataSchemaUID}
+                editionAddresses={editionAddresses}
                 currentPathNames={currentPath.slice(1).map(p => p.name)}
                 onNavigate={(uid, name) => {
                   // Append to current path

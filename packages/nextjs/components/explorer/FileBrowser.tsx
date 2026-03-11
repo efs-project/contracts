@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import { PropertiesModal } from "./PropertiesModal";
 import { ethers } from "ethers";
@@ -22,11 +22,13 @@ export const FileBrowser = ({
   currentAnchorUID,
   dataSchemaUID,
   currentPathNames,
+  editionAddresses,
   onNavigate,
 }: {
   currentAnchorUID: string | null;
   dataSchemaUID: string;
   currentPathNames: string[];
+  editionAddresses: string[];
   onNavigate: (uid: string, name: string) => void;
 }) => {
   const [selectedDebugItem, setSelectedDebugItem] = useState<any | null>(null);
@@ -36,7 +38,7 @@ export const FileBrowser = ({
   const [fileContentType, setFileContentType] = useState<string | null>(null);
   const [isFileLoading, setIsFileLoading] = useState(false);
 
-  const { data: efsRouter } = useDeployedContractInfo("EFSRouter");
+  const { data: efsRouter } = useDeployedContractInfo({ contractName: "EFSRouter" });
   const { targetNetwork } = useTargetNetwork();
   const publicClient = usePublicClient();
 
@@ -88,7 +90,9 @@ export const FileBrowser = ({
 
       // In a real app, `currentPath` and its string names should be passed to `FileBrowser`.
       const joinedPath = currentPathNames.length > 0 ? currentPathNames.join("/") + "/" : "";
-      const uri = `web3://${efsRouter.address}:31337/${joinedPath}${item.name}`;
+      const editionParams =
+        editionAddresses.length > 0 ? `?editions=${editionAddresses.map(a => a.trim()).join(",")}` : "";
+      const uri = `web3://${efsRouter.address}:31337/${joinedPath}${item.name}${editionParams}`;
 
       let result: number[] = [];
       let contentTypeStr = "text/plain";
@@ -121,7 +125,10 @@ export const FileBrowser = ({
         let currentChunkHeader = "";
 
         while (hasMoreChunks) {
-          const args: any[] = [[...currentPathNames, item.name], []];
+          const queryParams: any[] = [];
+          if (editionAddresses.length > 0) {
+            queryParams.push({ key: "editions", value: editionAddresses.join(",") });
+          }
 
           // Mimic web3protocol query formatting for chunk queries if not the first chunk
           // In EFSRouter, `request(string[] memory path, KeyValue[] memory queries)` takes queries.
@@ -129,9 +136,11 @@ export const FileBrowser = ({
             // currentChunkHeader is "?chunk=1"
             const chunkIndex = currentChunkHeader.split("=")[1];
             if (chunkIndex !== undefined) {
-              args[1] = [{ key: "chunk", value: chunkIndex }];
+              queryParams.push({ key: "chunk", value: chunkIndex });
             }
           }
+
+          const args: any[] = [[...currentPathNames, item.name], queryParams];
 
           const response = (await publicClient.readContract({
             address: efsRouter.address as `0x${string}`,
@@ -203,8 +212,10 @@ export const FileBrowser = ({
     functionName: "PROPERTY_SCHEMA_UID",
   });
 
+  const hasEditions = editionAddresses && editionAddresses.length > 0;
+
   // Pagination (Simple for now: fetch first 50)
-  const { data: items, isLoading } = useScaffoldReadContract({
+  const { data: standardItems, isLoading: isStandardLoading } = useScaffoldReadContract({
     contractName: "EFSFileView",
     functionName: "getDirectoryPage",
     args: [
@@ -214,8 +225,29 @@ export const FileBrowser = ({
       dataSchemaUID as `0x${string}`,
       propertySchemaUID as `0x${string}`,
     ],
-    watch: true,
+    query: {
+      enabled: !hasEditions,
+    },
   });
+
+  const { data: editionItemsRaw, isLoading: isEditionLoading } = useScaffoldReadContract({
+    contractName: "EFSFileView",
+    functionName: "getDirectoryPageByAddressList",
+    args: [
+      (currentAnchorUID ? currentAnchorUID : undefined) as `0x${string}` | undefined,
+      editionAddresses as string[],
+      0n,
+      50n,
+      dataSchemaUID as `0x${string}`,
+      propertySchemaUID as `0x${string}`,
+    ],
+    query: {
+      enabled: hasEditions,
+    },
+  });
+
+  const isLoading = hasEditions ? isEditionLoading : isStandardLoading;
+  const items = hasEditions ? (editionItemsRaw ? (editionItemsRaw as any)[0] : undefined) : standardItems;
 
   if (isLoading) return <div>Loading items...</div>;
   if (!currentAnchorUID) return <div>Select a topic</div>;

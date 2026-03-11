@@ -90,14 +90,24 @@ contract EFSIndexer is SchemaResolver {
     // ============================================================================================
     // STORAGE: EDITIONS (APPEND-ONLY HISTORY)
     // ============================================================================================
-
-    // Mappings to track full references (mimics EAS core indexer)
+    // These mappings are append-only. Revocations do NOT remove entries from these arrays.
+    // This preserves the full edit history and allows clients to filter by showRevoked.
     mapping(bytes32 => bytes32[]) private _allReferencing;
     mapping(bytes32 => mapping(address => bytes32[])) private _referencingByAttester;
     mapping(bytes32 => mapping(bytes32 => mapping(address => bytes32[]))) private _referencingBySchemaAndAttester;
 
     // Specific mapping for fast lookups of Data payloads per user for subjective File content
     mapping(bytes32 => mapping(address => bytes32[])) private _dataAttestationsByAddress;
+
+    // Edition Activity Trackers
+    // NOTE: These flags are SET-ONLY and never cleared on revocation.
+    // `_containsAttestations[uid][attester]` means "attester has EVER contributed under this anchor",
+    // not "attester currently has active/unrevoked data here". This is intentional:
+    //   - Clearing on revoke would require expensive decrement logic on every revocation
+    //   - The UI handles revoked content correctly via getDataByAddressList filtering
+    //   - The early-break optimization in the recursive loop depends on monotonic set-only behavior
+    mapping(bytes32 => mapping(address => bool)) private _containsAttestations;
+    mapping(bytes32 => mapping(address => mapping(bytes32 => bool))) private _containsSchemaAttestations;
 
     constructor(
         IEAS eas,
@@ -143,6 +153,42 @@ contract EFSIndexer is SchemaResolver {
             _allReferencing[attestation.refUID].push(attestation.uid);
             _referencingByAttester[attestation.refUID][attestation.attester].push(attestation.uid);
             _referencingBySchemaAndAttester[attestation.refUID][schema][attestation.attester].push(attestation.uid);
+            // Edition Mappings (Recursive upward propagation for Folder Visibility)
+            // This loop walks the _parents chain from attestation.refUID to root, marking each
+            // ancestor as "containing activity by this attester". It also pushes each ancestor
+            // into its parent's _childrenByAttester, so edition-filtered directory listings
+            // transitively include intermediate folders that contain the attester's work.
+            //
+            // Example: User2 attests DATA on /pets/cats/fluffy.png
+            //   → _childrenByAttester[catsUID][user2]  gets fluffy.png's anchor
+            //   → _childrenByAttester[petsUID][user2]  gets catsUID
+            //   → _childrenByAttester[rootUID][user2]  gets petsUID
+            // This enables getChildrenByAddressList to show the full navigable tree for each user.
+            bytes32 currentUID = attestation.refUID;
+            
+            // Set specific schema interaction on the direct target only (not recursively)
+            if (!_containsSchemaAttestations[currentUID][attestation.attester][schema]) {
+                _containsSchemaAttestations[currentUID][attestation.attester][schema] = true;
+            }
+
+            // Propagate generic "active in this structure" flag all the way up the tree
+            while (currentUID != bytes32(0)) {
+                // If this level is already flagged true, the rest of the chain above it must be too.
+                // Break early to save gas (amortized O(1) for repeat contributions by same user).
+                if (_containsAttestations[currentUID][attestation.attester]) {
+                    break;
+                }
+                
+                _containsAttestations[currentUID][attestation.attester] = true;
+
+                // Drive the structural index: push this child into the parent's Edition array
+                bytes32 parentUID = _parents[currentUID];
+                if (parentUID != bytes32(0)) {
+                    _childrenByAttester[parentUID][attestation.attester].push(currentUID);
+                }
+
+                currentUID = parentUID;
+            }
         }
 
         // 2. EFS CORE LOGIC (ANCHORS)
@@ -191,8 +237,15 @@ contract EFSIndexer is SchemaResolver {
             _parents[attestation.uid] = parentUID;
 
             // Attester Index (My Files)
-            _childrenByAttester[parentUID][attestation.attester].push(attestation.uid);
-            _uidIndices[attestation.uid].attester = uint32(_childrenByAttester[parentUID][attestation.attester].length);
+            // Note: Since _childrenByAttester is now natively tracking collaborative interactions deeply via the recursion loop above,
+            // we only push to it here IF it's the very first time this creator has interacted with this parent, to prevent duplicates.
+            if (!_containsAttestations[attestation.uid][attestation.attester]) {
+               _containsAttestations[attestation.uid][attestation.attester] = true;
+               if (parentUID != bytes32(0)) {
+                   _childrenByAttester[parentUID][attestation.attester].push(attestation.uid);
+                   _uidIndices[attestation.uid].attester = uint32(_childrenByAttester[parentUID][attestation.attester].length);
+               }
+            }
 
             return true;
         } else if (schema == DATA_SCHEMA_UID) {
@@ -452,7 +505,7 @@ contract EFSIndexer is SchemaResolver {
     }
 
     // ============================================================================================
-    // READ FUNCTIONS: PERSPECTIVES (Address-Based Queries & History)
+    // READ FUNCTIONS: EDITIONS (Address-Based Queries & History)
     // ============================================================================================
 
     // --- Generic Referencing Mappings ---
@@ -680,6 +733,14 @@ contract EFSIndexer is SchemaResolver {
 
     function getReferencingBySchemaAndAttesterCount(bytes32 targetUID, bytes32 schemaUID, address attester) external view returns (uint256) {
         return _referencingBySchemaAndAttester[targetUID][schemaUID][attester].length;
+    }
+
+    function containsAttestations(bytes32 targetUID, address attester) external view returns (bool) {
+        return _containsAttestations[targetUID][attester];
+    }
+
+    function containsSchemaAttestations(bytes32 targetUID, address attester, bytes32 schemaUID) external view returns (bool) {
+        return _containsSchemaAttestations[targetUID][attester][schemaUID];
     }
 
     // ============================================================================================

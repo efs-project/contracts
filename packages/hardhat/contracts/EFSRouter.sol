@@ -29,6 +29,8 @@ interface IEFSIndexer {
 
     function rootAnchorUID() external view returns (bytes32);
 
+    function getDataByAddressList(bytes32 anchorUID, address[] calldata attesters, bool showRevoked) external view returns (bytes32);
+
     function getReferencingAttestations(
         bytes32 targetUID,
         bytes32 schemaUID,
@@ -118,11 +120,11 @@ contract EFSRouter is IDecentralizedApp {
         }
 
         // Combine parameter checks
-        address edition = address(0);
+        address[] memory editions;
         string memory chunkIndexStr = "";
         for (uint i = 0; i < params.length; i++) {
-            if (_stringsEqual(params[i].key, "edition") || _stringsEqual(params[i].key, "curator")) {
-                edition = _parseAddress(params[i].value);
+            if (_stringsEqual(params[i].key, "editions") || _stringsEqual(params[i].key, "edition") || _stringsEqual(params[i].key, "curator")) {
+                editions = _parseAddressList(params[i].value);
             } else if (_stringsEqual(params[i].key, "chunk")) {
                 chunkIndexStr = params[i].value;
             }
@@ -134,9 +136,9 @@ contract EFSRouter is IDecentralizedApp {
         // or retrieving the 'live' state from the Edition resolving layer.
         // For simplicity in this router V1, we will trust a method that returns the *active*
         // Data attestation UID for this anchor by this edition.
-        // Since `EFSRouter` runs natively on the EVM, we mock `getDataAttestationId` logic inline.
+        // Since `EFSRouter` runs natively on the EVM, we use `getDataByAddressList`.
 
-        bytes32 dataUID = _findActiveDataAttestation(targetAnchor, edition);
+        bytes32 dataUID = _findActiveDataAttestation(targetAnchor, editions);
         if (dataUID == bytes32(0)) {
             return (404, "Not Found: No data attached or curator unset", new KeyValue[](0));
         }
@@ -260,10 +262,61 @@ contract EFSRouter is IDecentralizedApp {
     // ---------- HELPER FUNCTIONS ------------
 
     function _parseAddress(string memory addrStr) private pure returns (address) {
-        // String to address parsing.
-        // For simplicity in mock/test, assume address conversion or rely on indexer.
-        // (Production requires full hex validation)
-        return address(bytes20(bytes(addrStr))); // stub
+        bytes memory addrBytes = bytes(addrStr);
+        uint offset = 0;
+        
+        while (offset < addrBytes.length && addrBytes[offset] == 0x20) {
+            offset++;
+        }
+        
+        if (offset + 1 < addrBytes.length && addrBytes[offset] == "0" && (addrBytes[offset + 1] == "x" || addrBytes[offset + 1] == "X")) {
+            offset += 2;
+        }
+
+        if (addrBytes.length < offset + 40) return address(0);
+
+        uint160 parsed = 0;
+        for (uint i = 0; i < 40; i++) {
+            parsed *= 16;
+            parsed += _hexCharToByte(uint8(addrBytes[offset + i]));
+        }
+        return address(parsed);
+    }
+
+    function _parseAddressList(string memory addrListStr) private pure returns (address[] memory) {
+        bytes memory strBytes = bytes(addrListStr);
+        if (strBytes.length == 0) return new address[](0);
+
+        uint256 count = 1;
+        for (uint i = 0; i < strBytes.length; i++) {
+            if (strBytes[i] == ',') count++;
+        }
+
+        address[] memory addresses = new address[](count);
+        uint256 addrIdx = 0;
+        uint256 lastSplit = 0;
+
+        for (uint i = 0; i < strBytes.length; i++) {
+            if (strBytes[i] == ',') {
+                addresses[addrIdx++] = _parseAddress(_substring(addrListStr, lastSplit, i));
+                lastSplit = i + 1;
+            }
+        }
+        
+        if (lastSplit < strBytes.length) {
+             addresses[addrIdx] = _parseAddress(_substring(addrListStr, lastSplit, strBytes.length));
+        }
+
+        return addresses;
+    }
+
+    function _substring(string memory str, uint256 startIndex, uint256 endIndex) private pure returns (string memory) {
+        bytes memory strBytes = bytes(str);
+        bytes memory result = new bytes(endIndex - startIndex);
+        for (uint i = startIndex; i < endIndex; i++) {
+            result[i - startIndex] = strBytes[i];
+        }
+        return string(result);
     }
 
     // Helper to decode 1 hex char
@@ -351,15 +404,15 @@ contract EFSRouter is IDecentralizedApp {
     }
 
     // Searches Indexer for the most recent Data attestation attached to an Anchor by Edition
-    // SECURITY: V1 intentionally serves the most-recent data attestation regardless of edition/attester.
-    // The `edition` parameter is accepted but not yet filtered. Edition-based curation (subjective
-    // filesystem views) is a planned V2 feature that requires `getReferencingAttestationsByAttester`
-    // or equivalent filtering on the Indexer side. Until then, any attester can publish a newer
-    // data attestation that supersedes older ones for a given file anchor.
-    function _findActiveDataAttestation(bytes32 targetAnchor, address /*edition*/) private view returns (bytes32) {
-        bytes32[] memory records = indexer.getReferencingAttestations(targetAnchor, dataSchemaUID, 0, 1, true);
-        if (records.length > 0) {
-            return records[0];
+    function _findActiveDataAttestation(bytes32 targetAnchor, address[] memory editions) private view returns (bytes32) {
+        if (editions.length > 0) {
+            return indexer.getDataByAddressList(targetAnchor, editions, false);
+        } else {
+             // Fallback to most recent overall if no editions provided
+             bytes32[] memory records = indexer.getReferencingAttestations(targetAnchor, dataSchemaUID, 0, 1, true);
+             if (records.length > 0) {
+                 return records[0];
+             }
         }
         return bytes32(0);
     }

@@ -14,6 +14,7 @@ const TreeNode = ({
   propertySchemaUID,
   defaultOpen,
   expandedUIDs,
+  editionAddresses,
 }: {
   uid: string;
   name: string;
@@ -23,15 +24,38 @@ const TreeNode = ({
   propertySchemaUID: string;
   defaultOpen?: boolean;
   expandedUIDs?: Set<string>;
+  editionAddresses: string[];
 }) => {
   // Fetch children for this node
   // Note: This fetches purely to check for sub-topics.
-  const { data: children } = useScaffoldReadContract({
+  const hasEditions = editionAddresses && editionAddresses.length > 0;
+
+  const { data: standardChildren } = useScaffoldReadContract({
     contractName: "EFSFileView",
     functionName: "getDirectoryPage",
-    args: [uid as `0x${string} `, 0n, 50n, dataSchemaUID as `0x${string} `, propertySchemaUID as `0x${string} `],
-    watch: true,
+    args: [uid as `0x${string}`, 0n, 50n, dataSchemaUID as `0x${string}`, propertySchemaUID as `0x${string}`],
+    query: {
+      enabled: !hasEditions,
+    },
   });
+
+  const { data: editionChildrenRaw } = useScaffoldReadContract({
+    contractName: "EFSFileView",
+    functionName: "getDirectoryPageByAddressList",
+    args: [
+      uid as `0x${string}`,
+      editionAddresses as string[],
+      0n,
+      50n,
+      dataSchemaUID as `0x${string}`,
+      propertySchemaUID as `0x${string}`,
+    ],
+    query: {
+      enabled: hasEditions,
+    },
+  });
+
+  const children = hasEditions ? (editionChildrenRaw ? (editionChildrenRaw as any)[0] : undefined) : standardChildren;
 
   const topics = children?.filter((item: any) => isTopic(item));
 
@@ -80,6 +104,7 @@ const TreeNode = ({
                 dataSchemaUID={dataSchemaUID}
                 propertySchemaUID={propertySchemaUID}
                 expandedUIDs={expandedUIDs}
+                editionAddresses={editionAddresses}
               />
             ))}
           </ul>
@@ -94,11 +119,13 @@ export const TopicTree = ({
   selectedUID,
   onSelect,
   expandedUIDs,
+  editionAddresses,
 }: {
   rootUID: string;
   selectedUID: string | null;
   onSelect: (uid: string, path: PathItem[]) => void;
   expandedUIDs?: Set<string>;
+  editionAddresses: string[];
 }) => {
   const { data: dataSchemaUID } = useScaffoldReadContract({
     contractName: "Indexer",
@@ -123,6 +150,7 @@ export const TopicTree = ({
         propertySchemaUID={propertySchemaUID}
         defaultOpen={true}
         expandedUIDs={expandedUIDs}
+        editionAddresses={editionAddresses}
       />
     </ul>
   );

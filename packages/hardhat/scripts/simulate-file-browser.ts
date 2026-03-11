@@ -338,7 +338,36 @@ async function main() {
   const weight = await indexer.getTagWeight(vitalikUID, funnyLabel);
   assert("Tag weight = 70 (100 - 30)", weight === 70n, `got ${weight}`);
 
-  // ── Report ──
+  // ── Test 13: Deep Nesting (> 5 levels) ──
+  console.log("\n[13] Deep Navigational Nesting");
+  const l1 = await anchor(owner, `l1_${S}`, rootUID);
+  const l2 = await anchor(owner, `l2`, l1);
+  const l3 = await anchor(owner, `l3`, l2);
+  const l4 = await anchor(owner, `l4`, l3);
+  const l5 = await anchor(owner, `l5`, l4);
+  const l6 = await anchor(owner, `l6`, l5, dataSchemaUID);
+  
+  const deepRes1 = await indexer.resolvePath(rootUID, `l1_${S}`);
+  const deepRes2 = await indexer.resolvePath(deepRes1, `l2`);
+  const deepRes3 = await indexer.resolvePath(deepRes2, `l3`);
+  const deepRes4 = await indexer.resolvePath(deepRes3, `l4`);
+  const deepRes5 = await indexer.resolvePath(deepRes4, `l5`);
+  // l6 was created with dataSchemaUID → resolvePath (which defaults to ZERO_BYTES32 schema) won't match it.
+  // Use resolveAnchor with the explicit schema UID.
+  const deepRes6 = await indexer.resolveAnchor(deepRes5, `l6`, dataSchemaUID);
+
+  assert("Layer 1 resolved", deepRes1 === l1);
+  assert("Layer 2 resolved", deepRes2 === l2);
+  assert("Layer 3 resolved", deepRes3 === l3);
+  assert("Layer 4 resolved", deepRes4 === l4);
+  assert("Layer 5 resolved", deepRes5 === l5);
+  assert("Layer 6 resolved", deepRes6 === l6);
+
+  // Attach data to L6
+  await data(owner, l6, "ipfs://deep-layer-6", "text/plain");
+  const deepData = await indexer.getDataByAddressList(l6, [ownerAddr], false);
+  const [deepUri] = decodeData((await eas.getAttestation(deepData)).data);
+  assert("Data resolves at Layer 6", deepUri === "ipfs://deep-layer-6", `got: ${deepUri}`);
   console.log("\n════════════════════════════════════════");
   console.log(`  Results: ${passed} passed, ${failed} failed`);
   console.log("════════════════════════════════════════\n");

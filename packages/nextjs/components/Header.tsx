@@ -5,6 +5,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Bars3Icon, BugAntIcon, FolderIcon } from "@heroicons/react/24/outline";
+import { DevWalletSwitcher } from "~~/components/DevWalletSwitcher";
 import { FaucetButton, RainbowKitCustomConnectButton } from "~~/components/scaffold-eth";
 import { useOutsideClick } from "~~/hooks/scaffold-eth";
 
@@ -112,6 +113,7 @@ export const Header = () => {
         </ul>
       </div>
       <div className="navbar-end flex-grow mr-4">
+        <DevWalletSwitcher />
         <RainbowKitCustomConnectButton />
         <FaucetButton />
       </div>

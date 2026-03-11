@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { ethers } from "ethers";
 import { decodeEventLog, encodeDeployData, parseAbiItem, toHex } from "viem";
 import { usePublicClient, useWalletClient } from "wagmi";
-import { useScaffoldWriteContract } from "~~/hooks/scaffold-eth";
+import { useDeployedContractInfo, useScaffoldWriteContract } from "~~/hooks/scaffold-eth";
 import { notification } from "~~/utils/scaffold-eth";
 
 const MOCK_CHUNKED_FILE_ABI = [
@@ -50,7 +51,8 @@ export const Toolbar = ({
   dataSchemaUID: string;
   onNavigate: (uid: string) => void;
 }) => {
-  const { writeContractAsync: attest } = useScaffoldWriteContract("EAS");
+  const { writeContractAsync: attest } = useScaffoldWriteContract({ contractName: "EAS" });
+  const { data: indexer } = useDeployedContractInfo({ contractName: "Indexer" });
 
   // Modal State
   const [creationType, setCreationType] = useState<"Folder" | "File" | null>(null);
@@ -62,6 +64,11 @@ export const Toolbar = ({
   const modalRef = useRef<HTMLDialogElement>(null);
   const publicClient = usePublicClient();
   const { data: walletClient } = useWalletClient();
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
+  // Editions Input State
+  const [editionsInput, setEditionsInput] = useState(searchParams.get("editions") || "");
 
   useEffect(() => {
     if (creationType && modalRef.current) {
@@ -98,33 +105,55 @@ export const Toolbar = ({
       const schemaUID = creationType === "File" ? (dataSchemaUID as `0x${string}`) : ethers.ZeroHash;
       const encodedName = ethers.AbiCoder.defaultAbiCoder().encode(["string", "bytes32"], [newName, schemaUID]);
 
-      const txHash = await attest({
-        functionName: "attest",
-        args: [
-          {
-            schema: anchorSchemaUID as `0x${string}`,
-            data: {
-              recipient: ethers.ZeroAddress,
-              expirationTime: 0n,
-              revocable: false,
-              refUID: currentAnchorUID as `0x${string}`,
-              data: encodedName as `0x${string}`,
-              value: 0n,
-            },
-          },
-        ],
-      });
+      let newAnchorUID: `0x${string}` | undefined;
 
-      if (creationType === "File") {
-        notification.info("File Anchor created. Uploading data...");
+      // 1) First check if the Anchor already exists
+      if (indexer) {
+        try {
+          const existingUID = await publicClient.readContract({
+            address: indexer.address as `0x${string}`,
+            abi: indexer.abi,
+            functionName: "resolveAnchor",
+            args: [currentAnchorUID as `0x${string}`, newName, schemaUID as `0x${string}`],
+          }) as `0x${string}`;
+
+          if (existingUID && existingUID !== ethers.ZeroHash) {
+            newAnchorUID = existingUID;
+            notification.info("Namespace already exists. Appending to it...");
+          }
+        } catch (e) {
+          console.warn("Failed to check if anchor exists", e);
+        }
+      }
+
+      // 2) If not existing, create a new Anchor
+      if (!newAnchorUID) {
+        const txHash = await attest({
+          functionName: "attest",
+          args: [
+            {
+              schema: anchorSchemaUID as `0x${string}`,
+              data: {
+                recipient: ethers.ZeroAddress,
+                expirationTime: 0n,
+                revocable: false,
+                refUID: currentAnchorUID as `0x${string}`,
+                data: encodedName as `0x${string}`,
+                value: 0n,
+              },
+            },
+          ],
+        });
+
+        if (creationType === "File") {
+          notification.info("File Anchor created. Uploading data...");
+        }
+
         if (!txHash) throw new Error("No txHash returned for ANCHOR creation.");
 
-        // Wait for receipt
         const receipt = await publicClient?.waitForTransactionReceipt({ hash: txHash });
         if (!receipt) throw new Error("Failed to get transaction receipt for ANCHOR");
 
-        // Parse Log to find the new Anchor UID
-        let newAnchorUID: `0x${string}` | undefined;
         for (const log of receipt.logs) {
           try {
             const event = decodeEventLog({
@@ -144,7 +173,11 @@ export const Toolbar = ({
         }
 
         if (!newAnchorUID) throw new Error("Could not extract new Anchor UID");
-        notification.info(`New Anchor UID: ${newAnchorUID}`);
+      }
+
+      // 3) Create Data / Folder logic
+      if (creationType === "File") {
+        notification.info(`Target Anchor UID: ${newAnchorUID}`);
         // Read file contents as bytes for accurate chunking
         const fileArrayBuffer = await fileToUpload!.arrayBuffer();
         const dataBytes = new Uint8Array(fileArrayBuffer);
@@ -195,7 +228,6 @@ export const Toolbar = ({
         uri = `web3://${managerReceipt.contractAddress}:31337`;
         notification.info(`File URI: ${uri}`);
 
-
         // Encode DATA schema: string uri, string contentType, string fileMode
         const encodedData = ethers.AbiCoder.defaultAbiCoder().encode(
           ["string", "string", "string"],
@@ -237,8 +269,24 @@ export const Toolbar = ({
     }
   };
 
+  const handleUpdateEditions = () => {
+    const currentQuery = new URLSearchParams(searchParams.toString());
+    if (editionsInput.trim() === "") {
+      currentQuery.delete("editions");
+    } else {
+      currentQuery.set("editions", editionsInput.trim());
+    }
+
+    // Build path from currentPath
+    const urlSegments = currentPath.slice(1).map(p => encodeURIComponent(p.name));
+    const queryPart = currentQuery.toString() ? `?${currentQuery.toString()}` : "";
+    const url = `/explorer/${urlSegments.join("/")}${queryPart}`;
+
+    router.push(url);
+  };
+
   return (
-    <div className="flex justify-between items-center p-2 bg-base-100 rounded-lg">
+    <div className="flex justify-between items-center p-2 bg-base-100 rounded-lg gap-4">
       <div className="breadcrumbs text-sm">
         <ul>
           {currentPath.map((p, i) => (
@@ -253,6 +301,25 @@ export const Toolbar = ({
             </li>
           ))}
         </ul>
+      </div>
+
+      <div className="flex gap-2 items-center flex-grow max-w-md">
+        <label className="input input-bordered input-sm flex items-center gap-2 flex-grow">
+          Editions:
+          <input
+            type="text"
+            className="grow"
+            placeholder="vitalik.eth, 0x..."
+            value={editionsInput}
+            onChange={e => setEditionsInput(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === "Enter") handleUpdateEditions();
+            }}
+          />
+        </label>
+        <button className="btn btn-sm btn-outline" onClick={handleUpdateEditions}>
+          Apply
+        </button>
       </div>
 
       <div className="flex gap-2">

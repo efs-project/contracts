@@ -1039,5 +1039,113 @@ describe("EFSRouter Web3 Capabilities", function () {
         "Invalid web3:// URI should return 500 because parsed address is address(0) with no code.",
       );
     });
+
+    /**
+     * EFSRouter _parseAddressList test for Editions.
+     * Verifies that the router correctly parses a comma-separated list of addresses
+     * and filters the file visibility accordingly.
+     */
+    it("Should parse comma-separated editions list and filter file visibility", async function () {
+      const u1 = "0x1111111111111111111111111111111111111111";
+      const u2 = "0x2222222222222222222222222222222222222222";
+      
+      const targetAddress1 = "0x0000000000000000000000000000000000000071";
+      const targetAddress2 = "0x0000000000000000000000000000000000000072";
+      
+      await setCode(targetAddress1, "0x00" + Buffer.from("User 1 Data").toString("hex"));
+      await setCode(targetAddress2, "0x00" + Buffer.from("User 2 Data").toString("hex"));
+
+      const schemaEncoder = new ethers.AbiCoder();
+      
+      // Create a shared file anchor
+      const txFA = await eas.attest({
+        schema: anchorSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: NO_EXPIRATION,
+          revocable: false,
+          refUID: ideasUID,
+          data: schemaEncoder.encode(["string", "bytes32"], ["shared.txt", dataSchemaUID]),
+          value: 0n,
+        },
+      });
+      const fileUID = getUIDFromReceipt(await txFA.wait());
+
+      // User 1 attaches Data
+      // To mimic another user, we impersonate them via hardhat
+      await ethers.provider.send("hardhat_impersonateAccount", [u1]);
+      const signer1 = await ethers.getSigner(u1);
+      // Give them eth to attest
+      await owner.sendTransaction({ to: u1, value: ethers.parseEther("1.0") });
+      
+      await eas.connect(signer1).attest({
+        schema: dataSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: NO_EXPIRATION,
+          revocable: true,
+          refUID: fileUID,
+          data: schemaEncoder.encode(
+            ["string", "string", "string"],
+            [`web3://${targetAddress1}`, "text/plain", "file"]
+          ),
+          value: 0n,
+        },
+      });
+
+      // User 2 attaches Data
+      await ethers.provider.send("hardhat_impersonateAccount", [u2]);
+      const signer2 = await ethers.getSigner(u2);
+      await owner.sendTransaction({ to: u2, value: ethers.parseEther("1.0") });
+      
+      await eas.connect(signer2).attest({
+        schema: dataSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: NO_EXPIRATION,
+          revocable: true,
+          refUID: fileUID,
+          data: schemaEncoder.encode(
+            ["string", "string", "string"],
+            [`web3://${targetAddress2}`, "text/plain", "file"]
+          ),
+          value: 0n,
+        },
+      });
+
+      // Request with ONLY User 2 in the editions list
+      const [statusCode2, body2] = await router.request(
+        ["ideas", "shared.txt"],
+        [{ key: "editions", value: u2 }]
+      );
+      expect(statusCode2).to.equal(200);
+      expect(Buffer.from(ethers.getBytes(body2)).toString()).to.equal("User 2 Data");
+
+      // Request with comma-separated list [u2, u1] -> should resolve u2 because round-robin prioritizes the first matching in list iteration
+      const [statusCodeBoth, bodyBoth] = await router.request(
+        ["ideas", "shared.txt"],
+        [{ key: "editions", value: `${u2},${u1}` }]
+      );
+      expect(statusCodeBoth).to.equal(200);
+      expect(Buffer.from(ethers.getBytes(bodyBoth)).toString()).to.equal("User 2 Data", 
+        "Comma-separated parsing should prioritize earlier addresses in the list");
+        
+      // Request with comma-separated list [u1, u2] -> should resolve u1
+      const [statusCodeRev, bodyRev] = await router.request(
+        ["ideas", "shared.txt"],
+        [{ key: "editions", value: `${u1},${u2}` }]
+      );
+      expect(statusCodeRev).to.equal(200);
+      expect(Buffer.from(ethers.getBytes(bodyRev)).toString()).to.equal("User 1 Data");
+      
+      // Request with nonsense and then u1
+      const [statusCodeNonsense, bodyNonsense] = await router.request(
+        ["ideas", "shared.txt"],
+        [{ key: "editions", value: `nonsense,${u1}` }]
+      );
+      expect(statusCodeNonsense).to.equal(200);
+      expect(Buffer.from(ethers.getBytes(bodyNonsense)).toString()).to.equal("User 1 Data",
+        "Should skip invalid addresses cleanly and continue to u1");
+    });
   });
 });

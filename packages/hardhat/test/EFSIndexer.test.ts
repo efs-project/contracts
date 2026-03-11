@@ -1209,4 +1209,100 @@ describe("EFSIndexer", function () {
       expect(res[2]).to.equal(u2File);
     });
   });
+
+  describe("Editions & Recursive Indexing", function () {
+    const schemaEncoder = new ethers.AbiCoder();
+    let rootUID: string;
+    let folder1UID: string;
+    let folder2UID: string;
+    let fileUID: string;
+
+    beforeEach(async function () {
+      // Create Root (Zero Hash)
+      let tx = await eas.connect(owner).attest({
+        schema: anchorSchemaUID,
+        data: { recipient: ZeroAddress, expirationTime: 0n, revocable: false, refUID: ZERO_BYTES32, data: schemaEncoder.encode(["string", "bytes32"], ["root", ZERO_BYTES32]), value: 0n },
+      });
+      rootUID = getUIDFromReceipt(await tx.wait());
+
+      // Create Folder 1 under Root (by owner)
+      tx = await eas.connect(owner).attest({
+        schema: anchorSchemaUID,
+        data: { recipient: ZeroAddress, expirationTime: 0n, revocable: false, refUID: rootUID, data: schemaEncoder.encode(["string", "bytes32"], ["folder1", ZERO_BYTES32]), value: 0n },
+      });
+      folder1UID = getUIDFromReceipt(await tx.wait());
+
+      // Create Folder 2 under Folder 1 (by owner)
+      tx = await eas.connect(owner).attest({
+        schema: anchorSchemaUID,
+        data: { recipient: ZeroAddress, expirationTime: 0n, revocable: false, refUID: folder1UID, data: schemaEncoder.encode(["string", "bytes32"], ["folder2", ZERO_BYTES32]), value: 0n },
+      });
+      folder2UID = getUIDFromReceipt(await tx.wait());
+    });
+
+    it("Should flag containsAttestations for the Anchor creator", async function () {
+      // User1 creates a file anchor under folder2
+      const tx = await eas.connect(user1).attest({
+        schema: anchorSchemaUID,
+        data: { recipient: ZeroAddress, expirationTime: 0n, revocable: false, refUID: folder2UID, data: schemaEncoder.encode(["string", "bytes32"], ["user1_file.txt", dataSchemaUID]), value: 0n },
+      });
+      fileUID = getUIDFromReceipt(await tx.wait());
+
+      // Check direct flag on the folder (since anchor refUID = folder2UID)
+      const u1Address = await user1.getAddress();
+      expect(await indexer.containsAttestations(folder2UID, u1Address)).to.be.true;
+      
+      // Check schema-specific flag
+      expect(await indexer.containsSchemaAttestations(folder2UID, u1Address, anchorSchemaUID)).to.be.true;
+    });
+
+    it("Should recursively flag parent folders up to root", async function () {
+      // User2 creates a file directly under folder2
+      const tx = await eas.connect(user2).attest({
+        schema: anchorSchemaUID,
+        data: { recipient: ZeroAddress, expirationTime: 0n, revocable: false, refUID: folder2UID, data: schemaEncoder.encode(["string", "bytes32"], ["user2_file.txt", dataSchemaUID]), value: 0n },
+      });
+      await tx.wait();
+      
+      const u2Address = await user2.getAddress();
+
+      // Check all parents up to root
+      expect(await indexer.containsAttestations(folder2UID, u2Address)).to.be.true;
+      expect(await indexer.containsAttestations(folder1UID, u2Address)).to.be.true;
+      expect(await indexer.containsAttestations(rootUID, u2Address)).to.be.true;
+    });
+
+    it("Should flag containsAttestations when a user attaches DATA schemas (Editions)", async function () {
+      // User1 creates a file anchor
+      let tx = await eas.connect(user1).attest({
+        schema: anchorSchemaUID,
+        data: { recipient: ZeroAddress, expirationTime: 0n, revocable: false, refUID: folder2UID, data: schemaEncoder.encode(["string", "bytes32"], ["shared_file.txt", dataSchemaUID]), value: 0n },
+      });
+      fileUID = getUIDFromReceipt(await tx.wait());
+
+      // User2 attaches data to User1's file anchor (Collaborative Edition)
+      tx = await eas.connect(user2).attest({
+        schema: dataSchemaUID,
+        data: { recipient: ZeroAddress, expirationTime: 0n, revocable: true, refUID: fileUID, data: schemaEncoder.encode(["string", "string", "string"], ["ipfs://content", "text/plain", "file"]), value: 0n },
+      });
+      await tx.wait();
+
+      const u1Address = await user1.getAddress();
+      const u2Address = await user2.getAddress();
+
+      // User1 should be flagged on the folder because they created the anchor
+      expect(await indexer.containsAttestations(folder2UID, u1Address)).to.be.true;
+      
+      // User2 should be flagged on the FILE ANCHOR because they attached DATA to it
+      expect(await indexer.containsAttestations(fileUID, u2Address)).to.be.true;
+      
+      // User2 should ALSO be recursively flagged all the way up to ROOT because the indexing logic traverses _parents
+      expect(await indexer.containsAttestations(folder2UID, u2Address)).to.be.true;
+      expect(await indexer.containsAttestations(folder1UID, u2Address)).to.be.true;
+      expect(await indexer.containsAttestations(rootUID, u2Address)).to.be.true;
+      
+      // Check Schema specific flag for User2 on the File Anchor
+      expect(await indexer.containsSchemaAttestations(fileUID, u2Address, dataSchemaUID)).to.be.true;
+    });
+  });
 });
