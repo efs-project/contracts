@@ -6,6 +6,7 @@ import { ethers } from "ethers";
 import { decodeEventLog, encodeDeployData, parseAbiItem, toHex } from "viem";
 import { usePublicClient, useWalletClient } from "wagmi";
 import { useDeployedContractInfo, useScaffoldWriteContract } from "~~/hooks/scaffold-eth";
+import { useTargetNetwork } from "~~/hooks/scaffold-eth/useTargetNetwork";
 import { notification } from "~~/utils/scaffold-eth";
 
 const MOCK_CHUNKED_FILE_ABI = [
@@ -53,6 +54,7 @@ export const Toolbar = ({
 }) => {
   const { writeContractAsync: attest } = useScaffoldWriteContract({ contractName: "EAS" });
   const { data: indexer } = useDeployedContractInfo({ contractName: "Indexer" });
+  const { targetNetwork } = useTargetNetwork();
 
   // Modal State
   const [creationType, setCreationType] = useState<"Folder" | "File" | null>(null);
@@ -183,13 +185,20 @@ export const Toolbar = ({
         const dataBytes = new Uint8Array(fileArrayBuffer);
         const contentType = fileToUpload!.type || "text/plain";
 
+        if (dataBytes.length === 0) {
+          notification.error("Cannot upload an empty file.");
+          setIsSubmitting(false);
+          return;
+        }
+
         let uri = "";
         const CHUNK_SIZE = 24000; // Under 24576 bytes limit to leave room for 1-byte SSTORE2 prefix
 
         // Always upload to SSTORE2 — `uri` must be a web3:// URI, never raw file content.
         // Embedding file bytes directly in an EAS attestation calldata causes gas estimation
         // to time out even for files a few KB in size.
-        notification.info(`Uploading ${Math.round(dataBytes.length / 1024) || 1}KB via SSTORE2...`);
+        const totalChunks = Math.ceil(dataBytes.length / CHUNK_SIZE) || 1;
+        notification.info(`Uploading ${Math.round(dataBytes.length / 1024) || 1}KB in ${totalChunks} chunk${totalChunks > 1 ? "s" : ""} via SSTORE2...`);
         const chunkAddresses: string[] = [];
 
         for (let i = 0; i < dataBytes.length; i += CHUNK_SIZE) {
@@ -208,7 +217,7 @@ export const Toolbar = ({
           const chunkReceipt = await publicClient.waitForTransactionReceipt({ hash });
           if (!chunkReceipt.contractAddress) throw new Error("Chunk deployment failed");
           chunkAddresses.push(chunkReceipt.contractAddress);
-          notification.info(`Deployed chunk ${chunkAddresses.length}...`);
+          notification.info(`Deployed chunk ${chunkAddresses.length} of ${totalChunks}...`);
         }
 
         notification.info("Deploying chunk manager...");
@@ -225,7 +234,7 @@ export const Toolbar = ({
         const managerReceipt = await publicClient.waitForTransactionReceipt({ hash: managerHash });
         if (!managerReceipt.contractAddress) throw new Error("Manager deployment failed");
 
-        uri = `web3://${managerReceipt.contractAddress}:31337`;
+        uri = `web3://${managerReceipt.contractAddress}:${targetNetwork.id}`;
         notification.info(`File URI: ${uri}`);
 
         // Encode DATA schema: string uri, string contentType, string fileMode
@@ -304,7 +313,10 @@ export const Toolbar = ({
       </div>
 
       <div className="flex gap-2 items-center flex-grow max-w-md">
-        <label className="input input-bordered input-sm flex items-center gap-2 flex-grow">
+        <label
+          className="input input-bordered input-sm flex items-center gap-2 flex-grow"
+          title="Filter files by attester address or ENS name. Only files attested by the given addresses will be shown. Leave blank to see all files from any attester."
+        >
           Editions:
           <input
             type="text"

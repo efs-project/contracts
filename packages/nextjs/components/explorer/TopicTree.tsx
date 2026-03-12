@@ -1,6 +1,7 @@
 "use client";
 
 import type { PathItem } from "./Toolbar";
+import { useRef } from "react";
 import { FolderIcon } from "@heroicons/react/24/outline";
 import { useScaffoldReadContract } from "~~/hooks/scaffold-eth";
 import { isTopic } from "~~/utils/efs/efsTypes";
@@ -30,16 +31,23 @@ const TreeNode = ({
   // Note: This fetches purely to check for sub-topics.
   const hasEditions = editionAddresses && editionAddresses.length > 0;
 
-  const { data: standardChildren } = useScaffoldReadContract({
+  // Once we've ever had editions, stay locked to the editions query so that
+  // the brief moment connectedAddress is undefined during account switch
+  // doesn't flash the unfiltered standard query results.
+  const lockedToEditions = useRef(false);
+  if (hasEditions) lockedToEditions.current = true;
+  const useEditionsQuery = hasEditions || lockedToEditions.current;
+
+  const { data: standardChildren, isLoading: isStandardLoading } = useScaffoldReadContract({
     contractName: "EFSFileView",
     functionName: "getDirectoryPage",
     args: [uid as `0x${string}`, 0n, 50n, dataSchemaUID as `0x${string}`, propertySchemaUID as `0x${string}`],
     query: {
-      enabled: !hasEditions,
+      enabled: !useEditionsQuery,
     },
   });
 
-  const { data: editionChildrenRaw } = useScaffoldReadContract({
+  const { data: editionChildrenRaw, isLoading: isEditionLoading } = useScaffoldReadContract({
     contractName: "EFSFileView",
     functionName: "getDirectoryPageByAddressList",
     args: [
@@ -47,17 +55,27 @@ const TreeNode = ({
       editionAddresses as string[],
       0n,
       50n,
-      dataSchemaUID as `0x${string}`,
-      propertySchemaUID as `0x${string}`,
     ],
     query: {
-      enabled: hasEditions,
+      enabled: useEditionsQuery,
     },
   });
 
-  const children = hasEditions ? (editionChildrenRaw ? (editionChildrenRaw as any)[0] : undefined) : standardChildren;
+  const isLoading = useEditionsQuery ? isEditionLoading : isStandardLoading;
+  const children = useEditionsQuery ? (editionChildrenRaw ? (editionChildrenRaw as any)[0] : undefined) : standardChildren;
 
   const topics = children?.filter((item: any) => isTopic(item));
+
+  if (isLoading) {
+    return (
+      <li className="py-1 px-2">
+        <div className="flex items-center gap-2">
+          <FolderIcon className="w-4 h-4 opacity-30" />
+          <span className="loading loading-dots loading-xs opacity-40"></span>
+        </div>
+      </li>
+    );
+  }
 
   if (!topics || topics.length === 0) {
     return (
