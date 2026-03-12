@@ -40,6 +40,7 @@ export const FileBrowser = ({
   const [isFileLoading, setIsFileLoading] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [pageSize, setPageSize] = useState<bigint>(50n);
+  const [deletedUIDs, setDeletedUIDs] = useState<Set<string>>(new Set());
 
   const { data: efsRouter } = useDeployedContractInfo({ contractName: "EFSRouter" });
   const { data: indexerInfo } = useDeployedContractInfo({ contractName: "Indexer" });
@@ -50,6 +51,7 @@ export const FileBrowser = ({
 
   useEffect(() => {
     setPageSize(50n);
+    setDeletedUIDs(new Set());
   }, [currentAnchorUID]);
 
   const fetchFileContent = async (item: any) => {
@@ -238,9 +240,10 @@ export const FileBrowser = ({
         functionName: "revoke",
         args: [{ schema: dataSchemaUID as `0x${string}`, data: { uid: dataUID, value: 0n } }],
       });
+      // ANCHOR attestations are non-revocable, so the contract listing will still return
+      // this item after the DATA revoke. Hide it locally for the current session.
+      setDeletedUIDs(prev => new Set([...prev, item.uid]));
       notification.success(`"${item.name}" deleted.`);
-      if (hasEditions) refetchEditions();
-      else refetchStandard();
     } catch (e: any) {
       console.error("Delete failed", e);
       notification.error("Delete failed. See console.");
@@ -261,11 +264,7 @@ export const FileBrowser = ({
   if (hasEditions) lockedToEditions.current = true;
   const useEditionsQuery = hasEditions || lockedToEditions.current;
 
-  const {
-    data: standardItems,
-    isLoading: isStandardLoading,
-    refetch: refetchStandard,
-  } = useScaffoldReadContract({
+  const { data: standardItems, isLoading: isStandardLoading } = useScaffoldReadContract({
     contractName: "EFSFileView",
     functionName: "getDirectoryPage",
     args: [
@@ -280,11 +279,7 @@ export const FileBrowser = ({
     },
   });
 
-  const {
-    data: editionItemsRaw,
-    isLoading: isEditionLoading,
-    refetch: refetchEditions,
-  } = useScaffoldReadContract({
+  const { data: editionItemsRaw, isLoading: isEditionLoading } = useScaffoldReadContract({
     contractName: "EFSFileView",
     functionName: "getDirectoryPageByAddressList",
     args: [
@@ -299,7 +294,8 @@ export const FileBrowser = ({
   });
 
   const isLoading = useEditionsQuery ? isEditionLoading : isStandardLoading;
-  const items = useEditionsQuery ? (editionItemsRaw ? (editionItemsRaw as any)[0] : undefined) : standardItems;
+  const rawItems = useEditionsQuery ? (editionItemsRaw ? (editionItemsRaw as any)[0] : undefined) : standardItems;
+  const items = rawItems?.filter((item: any) => !deletedUIDs.has(item.uid));
 
   if (!currentAnchorUID) return <div>Select a topic</div>;
   if (isLoading) return <div>Loading items...</div>;
