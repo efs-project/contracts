@@ -29,7 +29,11 @@ interface IEFSIndexer {
 
     function rootAnchorUID() external view returns (bytes32);
 
-    function getDataByAddressList(bytes32 anchorUID, address[] calldata attesters, bool showRevoked) external view returns (bytes32);
+    function getDataByAddressList(
+        bytes32 anchorUID,
+        address[] calldata attesters,
+        bool showRevoked
+    ) external view returns (bytes32);
 
     function getReferencingAttestations(
         bytes32 targetUID,
@@ -123,7 +127,11 @@ contract EFSRouter is IDecentralizedApp {
         address[] memory editions;
         string memory chunkIndexStr = "";
         for (uint i = 0; i < params.length; i++) {
-            if (_stringsEqual(params[i].key, "editions") || _stringsEqual(params[i].key, "edition") || _stringsEqual(params[i].key, "curator")) {
+            if (
+                _stringsEqual(params[i].key, "editions") ||
+                _stringsEqual(params[i].key, "edition") ||
+                _stringsEqual(params[i].key, "curator")
+            ) {
                 editions = _parseAddressList(params[i].value);
             } else if (_stringsEqual(params[i].key, "chunk")) {
                 chunkIndexStr = params[i].value;
@@ -264,12 +272,16 @@ contract EFSRouter is IDecentralizedApp {
     function _parseAddress(string memory addrStr) private pure returns (address) {
         bytes memory addrBytes = bytes(addrStr);
         uint offset = 0;
-        
+
         while (offset < addrBytes.length && addrBytes[offset] == 0x20) {
             offset++;
         }
-        
-        if (offset + 1 < addrBytes.length && addrBytes[offset] == "0" && (addrBytes[offset + 1] == "x" || addrBytes[offset + 1] == "X")) {
+
+        if (
+            offset + 1 < addrBytes.length &&
+            addrBytes[offset] == "0" &&
+            (addrBytes[offset + 1] == "x" || addrBytes[offset + 1] == "X")
+        ) {
             offset += 2;
         }
 
@@ -289,7 +301,7 @@ contract EFSRouter is IDecentralizedApp {
 
         uint256 count = 1;
         for (uint i = 0; i < strBytes.length; i++) {
-            if (strBytes[i] == ',') count++;
+            if (strBytes[i] == ",") count++;
         }
 
         address[] memory addresses = new address[](count);
@@ -297,14 +309,14 @@ contract EFSRouter is IDecentralizedApp {
         uint256 lastSplit = 0;
 
         for (uint i = 0; i < strBytes.length; i++) {
-            if (strBytes[i] == ',') {
+            if (strBytes[i] == ",") {
                 addresses[addrIdx++] = _parseAddress(_substring(addrListStr, lastSplit, i));
                 lastSplit = i + 1;
             }
         }
-        
+
         if (lastSplit < strBytes.length) {
-             addresses[addrIdx] = _parseAddress(_substring(addrListStr, lastSplit, strBytes.length));
+            addresses[addrIdx] = _parseAddress(_substring(addrListStr, lastSplit, strBytes.length));
         }
 
         return addresses;
@@ -404,15 +416,18 @@ contract EFSRouter is IDecentralizedApp {
     }
 
     // Searches Indexer for the most recent Data attestation attached to an Anchor by Edition
-    function _findActiveDataAttestation(bytes32 targetAnchor, address[] memory editions) private view returns (bytes32) {
+    function _findActiveDataAttestation(
+        bytes32 targetAnchor,
+        address[] memory editions
+    ) private view returns (bytes32) {
         if (editions.length > 0) {
             return indexer.getDataByAddressList(targetAnchor, editions, false);
         } else {
-             // Fallback to most recent overall if no editions provided
-             bytes32[] memory records = indexer.getReferencingAttestations(targetAnchor, dataSchemaUID, 0, 1, true);
-             if (records.length > 0) {
-                 return records[0];
-             }
+            // Fallback to most recent overall if no editions provided
+            bytes32[] memory records = indexer.getReferencingAttestations(targetAnchor, dataSchemaUID, 0, 1, true);
+            if (records.length > 0) {
+                return records[0];
+            }
         }
         return bytes32(0);
     }

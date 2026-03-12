@@ -165,7 +165,7 @@ contract EFSIndexer is SchemaResolver {
             //   → _childrenByAttester[rootUID][user2]  gets petsUID
             // This enables getChildrenByAddressList to show the full navigable tree for each user.
             bytes32 currentUID = attestation.refUID;
-            
+
             // Set specific schema interaction on the direct target only (not recursively)
             if (!_containsSchemaAttestations[currentUID][attestation.attester][schema]) {
                 _containsSchemaAttestations[currentUID][attestation.attester][schema] = true;
@@ -178,7 +178,7 @@ contract EFSIndexer is SchemaResolver {
                 if (_containsAttestations[currentUID][attestation.attester]) {
                     break;
                 }
-                
+
                 _containsAttestations[currentUID][attestation.attester] = true;
 
                 // Drive the structural index: push this child into the parent's Edition array
@@ -240,11 +240,13 @@ contract EFSIndexer is SchemaResolver {
             // Note: Since _childrenByAttester is now natively tracking collaborative interactions deeply via the recursion loop above,
             // we only push to it here IF it's the very first time this creator has interacted with this parent, to prevent duplicates.
             if (!_containsAttestations[attestation.uid][attestation.attester]) {
-               _containsAttestations[attestation.uid][attestation.attester] = true;
-               if (parentUID != bytes32(0)) {
-                   _childrenByAttester[parentUID][attestation.attester].push(attestation.uid);
-                   _uidIndices[attestation.uid].attester = uint32(_childrenByAttester[parentUID][attestation.attester].length);
-               }
+                _containsAttestations[attestation.uid][attestation.attester] = true;
+                if (parentUID != bytes32(0)) {
+                    _childrenByAttester[parentUID][attestation.attester].push(attestation.uid);
+                    _uidIndices[attestation.uid].attester = uint32(
+                        _childrenByAttester[parentUID][attestation.attester].length
+                    );
+                }
             }
 
             return true;
@@ -554,7 +556,7 @@ contract EFSIndexer is SchemaResolver {
     ) external view returns (bytes32[] memory results, uint256 nextStart) {
         bytes32[] storage allEdits = _dataAttestationsByAddress[anchorUID][attester];
         uint256 totalLen = allEdits.length;
-        
+
         if (start >= totalLen || length == 0) {
             return (new bytes32[](0), 0);
         }
@@ -566,7 +568,7 @@ contract EFSIndexer is SchemaResolver {
         while (count < length && currentIndex < totalLen) {
             uint256 actualIdx = reverseOrder ? totalLen - 1 - currentIndex : currentIndex;
             bytes32 uid = allEdits[actualIdx];
-            
+
             if (showRevoked || _eas.getAttestation(uid).revocationTime == 0) {
                 tempResults[count++] = uid;
             }
@@ -584,7 +586,11 @@ contract EFSIndexer is SchemaResolver {
     }
 
     // Subjective lookup combining multiple trusted addresses into a final single data UID return value
-    function getDataByAddressList(bytes32 anchorUID, address[] calldata attesters, bool showRevoked) external view returns (bytes32) {
+    function getDataByAddressList(
+        bytes32 anchorUID,
+        address[] calldata attesters,
+        bool showRevoked
+    ) external view returns (bytes32) {
         require(attesters.length > 0, "Attesters list cannot be empty");
         address[] memory addressesToCheck = attesters;
 
@@ -630,11 +636,11 @@ contract EFSIndexer is SchemaResolver {
         if (startingCursor != 0) {
             uint256 cursorUserIdx = startingCursor >> 128; // Top 128 bits
             uint256 cursorItemIdx = startingCursor & ((1 << 128) - 1); // Bottom 128 bits
-            
+
             if (cursorUserIdx < userCount) {
                 // Reconstruct exactly where each user was based on the cursor
                 // We know exactly how many items we processed from each user to get to this point
-                
+
                 for (uint256 i = 0; i < userCount; i++) {
                     if (i <= cursorUserIdx) {
                         currentIndices[i] = cursorItemIdx + 1;
@@ -648,13 +654,11 @@ contract EFSIndexer is SchemaResolver {
 
         // Pre-check for already exhausted lists based on indices
         for (uint256 i = 0; i < userCount; i++) {
-             if (currentIndices[i] >= _childrenByAttester[parentUID][addressesToCheck[i]].length) {
-                 userExhausted[i] = true;
-                 exhaustedCount++;
-             }
+            if (currentIndices[i] >= _childrenByAttester[parentUID][addressesToCheck[i]].length) {
+                userExhausted[i] = true;
+                exhaustedCount++;
+            }
         }
-
-
 
         // Now, collect results
         bytes32[] memory tempResults = new bytes32[](pageSize);
@@ -673,7 +677,7 @@ contract EFSIndexer is SchemaResolver {
                 while (relIdx < listLen && !validItemFound) {
                     uint256 actualIdx = reverseOrder ? listLen - 1 - relIdx : relIdx;
                     bytes32 candidateUID = userList[actualIdx];
-                    
+
                     if (showRevoked || _eas.getAttestation(candidateUID).revocationTime == 0) {
                         tempResults[resultCount++] = candidateUID;
                         // Pack cursor as (userIndex << 128) | relIdx
@@ -731,7 +735,11 @@ contract EFSIndexer is SchemaResolver {
         return _referencingByAttester[targetUID][attester].length;
     }
 
-    function getReferencingBySchemaAndAttesterCount(bytes32 targetUID, bytes32 schemaUID, address attester) external view returns (uint256) {
+    function getReferencingBySchemaAndAttesterCount(
+        bytes32 targetUID,
+        bytes32 schemaUID,
+        address attester
+    ) external view returns (uint256) {
         return _referencingBySchemaAndAttester[targetUID][schemaUID][attester].length;
     }
 
@@ -739,7 +747,11 @@ contract EFSIndexer is SchemaResolver {
         return _containsAttestations[targetUID][attester];
     }
 
-    function containsSchemaAttestations(bytes32 targetUID, address attester, bytes32 schemaUID) external view returns (bool) {
+    function containsSchemaAttestations(
+        bytes32 targetUID,
+        address attester,
+        bytes32 schemaUID
+    ) external view returns (bool) {
         return _containsSchemaAttestations[targetUID][attester][schemaUID];
     }
 

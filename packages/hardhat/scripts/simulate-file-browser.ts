@@ -3,10 +3,10 @@ import { EFSIndexer } from "../typechain-types";
 
 /**
  * EFS File Browser Simulation
- * 
+ *
  * Exercises the full file browser workflow against a deployed EFSIndexer.
  * Run: npx hardhat run scripts/simulate-file-browser.ts --network localhost
- * 
+ *
  * All anchor names use a session timestamp suffix so the script is re-runnable
  * against persistent chain state without DuplicateFileName collisions.
  */
@@ -41,7 +41,7 @@ async function main() {
   const easAddress = await indexer.getEAS();
   const eas = await ethers.getContractAt(
     "@ethereum-attestation-service/eas-contracts/contracts/IEAS.sol:IEAS",
-    easAddress
+    easAddress,
   );
 
   const anchorSchemaUID = await indexer.ANCHOR_SCHEMA_UID();
@@ -116,8 +116,7 @@ async function main() {
     return getUID(tx);
   };
 
-  const decodeData = (raw: string) =>
-    encode.decode(["string", "string", "string"], raw) as [string, string, string];
+  const decodeData = (raw: string) => encode.decode(["string", "string", "string"], raw) as [string, string, string];
 
   // ══════════════════════════════════════════════════════════════
   // PHASE 1: Build realistic file tree
@@ -177,7 +176,11 @@ async function main() {
   // ── Test 2: List Children (global) ──
   console.log("\n[2] Children Listing");
   const petsChildren = await indexer.getChildren(petsUID, 0n, 10, false);
-  assert("getChildren(/pets/) returns 3 (best.jpg, cats, dogs)", petsChildren.length === 3, `got ${petsChildren.length}`);
+  assert(
+    "getChildren(/pets/) returns 3 (best.jpg, cats, dogs)",
+    petsChildren.length === 3,
+    `got ${petsChildren.length}`,
+  );
 
   const petsCount = await indexer.getChildrenCount(petsUID);
   assert("getChildrenCount matches", petsCount === 3n);
@@ -185,34 +188,33 @@ async function main() {
   // ── Test 3: Edition List (getChildrenByAddressList) ──
   console.log("\n[3] Edition Directory Listing");
   const [editionList] = await indexer.getChildrenByAddressList(
-    petsUID, [u1Addr, u2Addr, ownerAddr], 0n, 10, false, false
+    petsUID,
+    [u1Addr, u2Addr, ownerAddr],
+    0n,
+    10,
+    false,
+    false,
   );
   assert(
     "getChildrenByAddressList returns items from all 3 users",
     editionList.length > 0,
-    `got ${editionList.length} items`
+    `got ${editionList.length} items`,
   );
 
   // ── Test 4: Open File (getDataByAddressList) ──
   console.log("\n[4] Open File — Edition Fallback");
-  const openResult = await indexer.getDataByAddressList(
-    bestUID, [u1Addr, u2Addr, ownerAddr], false
-  );
+  const openResult = await indexer.getDataByAddressList(bestUID, [u1Addr, u2Addr, ownerAddr], false);
   const openAtt = await eas.getAttestation(openResult);
   const [openUri] = decodeData(openAtt.data);
   assert("Prefers User1 (first in list)", openUri === "ipfs://user1-best", `got: ${openUri}`);
 
   // Flip order: prefer User2
-  const openResult2 = await indexer.getDataByAddressList(
-    bestUID, [u2Addr, u1Addr, ownerAddr], false
-  );
+  const openResult2 = await indexer.getDataByAddressList(bestUID, [u2Addr, u1Addr, ownerAddr], false);
   const [openUri2] = decodeData((await eas.getAttestation(openResult2)).data);
   assert("Prefers User2 when listed first", openUri2 === "ipfs://user2-best", `got: ${openUri2}`);
 
   // Gas cost for the lookup
-  const gasEstimate = await indexer.getDataByAddressList.estimateGas(
-    bestUID, [u1Addr, u2Addr, ownerAddr], false
-  );
+  const gasEstimate = await indexer.getDataByAddressList.estimateGas(bestUID, [u1Addr, u2Addr, ownerAddr], false);
   console.log(`  ℹ️  Gas estimate for getDataByAddressList: ${gasEstimate}`);
 
   // ── Test 5: Subdirectory Navigation ──
@@ -235,25 +237,19 @@ async function main() {
   console.log("\n[7] Revoke and Fallback");
   await eas.connect(user1).revoke({ schema: dataSchemaUID, data: { uid: bestU1Data, value: 0n } });
 
-  const afterRevoke = await indexer.getDataByAddressList(
-    bestUID, [u1Addr, u2Addr, ownerAddr], false
-  );
+  const afterRevoke = await indexer.getDataByAddressList(bestUID, [u1Addr, u2Addr, ownerAddr], false);
   const [revokedUri] = decodeData((await eas.getAttestation(afterRevoke)).data);
   assert("Falls back to User2 after User1 revoked", revokedUri === "ipfs://user2-best", `got: ${revokedUri}`);
 
   // showRevoked=true should still return User1
-  const showRevokedResult = await indexer.getDataByAddressList(
-    bestUID, [u1Addr, u2Addr, ownerAddr], true
-  );
+  const showRevokedResult = await indexer.getDataByAddressList(bestUID, [u1Addr, u2Addr, ownerAddr], true);
   const [showRevokedUri] = decodeData((await eas.getAttestation(showRevokedResult)).data);
   assert("showRevoked=true returns User1", showRevokedUri === "ipfs://user1-best", `got: ${showRevokedUri}`);
 
   // All-revoked returns zero
   await eas.connect(user2).revoke({ schema: dataSchemaUID, data: { uid: bestU2Data, value: 0n } });
   await eas.connect(owner).revoke({ schema: dataSchemaUID, data: { uid: bestOwnerData, value: 0n } });
-  const allRevokedResult = await indexer.getDataByAddressList(
-    bestUID, [u1Addr, u2Addr, ownerAddr], false
-  );
+  const allRevokedResult = await indexer.getDataByAddressList(bestUID, [u1Addr, u2Addr, ownerAddr], false);
   assert("All revoked → returns bytes32(0)", allRevokedResult === ethers.ZeroHash);
 
   // ── Test 8: Data History (getDataHistoryByAddress) ──
@@ -280,7 +276,12 @@ async function main() {
   let pages = 0;
   do {
     const [pageRes, nextCursor] = await indexer.getChildrenByAddressList(
-      spamParent, [ownerAddr, u1Addr, u2Addr], cursor, 5, false, false
+      spamParent,
+      [ownerAddr, u1Addr, u2Addr],
+      cursor,
+      5,
+      false,
+      false,
     );
     allResults.push(...pageRes);
     cursor = nextCursor;
@@ -291,17 +292,21 @@ async function main() {
 
   // Check for duplicates
   const uniqueUIDs = new Set(allResults);
-  assert("No duplicates in pagination", uniqueUIDs.size === allResults.length, `${uniqueUIDs.size} unique / ${allResults.length} total`);
+  assert(
+    "No duplicates in pagination",
+    uniqueUIDs.size === allResults.length,
+    `${uniqueUIDs.size} unique / ${allResults.length} total`,
+  );
 
   // ── Test 10: Reverse Order ──
   console.log("\n[10] Reverse Order");
-  const [fwd] = await indexer.getChildrenByAddressList(
-    spamParent, [ownerAddr, u1Addr, u2Addr], 0n, 5, false, false
+  const [fwd] = await indexer.getChildrenByAddressList(spamParent, [ownerAddr, u1Addr, u2Addr], 0n, 5, false, false);
+  const [rev] = await indexer.getChildrenByAddressList(spamParent, [ownerAddr, u1Addr, u2Addr], 0n, 5, true, false);
+  assert(
+    "Forward ≠ Reverse first element",
+    fwd[0] !== rev[0],
+    `fwd[0]=${fwd[0].slice(0, 10)}… rev[0]=${rev[0].slice(0, 10)}…`,
   );
-  const [rev] = await indexer.getChildrenByAddressList(
-    spamParent, [ownerAddr, u1Addr, u2Addr], 0n, 5, true, false
-  );
-  assert("Forward ≠ Reverse first element", fwd[0] !== rev[0], `fwd[0]=${fwd[0].slice(0,10)}… rev[0]=${rev[0].slice(0,10)}…`);
 
   // ── Test 11: Unequal List Lengths ──
   console.log("\n[11] Unequal List Lengths");
@@ -313,7 +318,12 @@ async function main() {
   const smallUserFile = await anchor(user2, `small0`, unequalParent);
 
   const [uneqPage1, uneqCursor1] = await indexer.getChildrenByAddressList(
-    unequalParent, [u1Addr, u2Addr], 0n, 5, false, false
+    unequalParent,
+    [u1Addr, u2Addr],
+    0n,
+    5,
+    false,
+    false,
   );
   assert("Page 1: 5 items", uneqPage1.length === 5, `got ${uneqPage1.length}`);
   // Should round-robin: big0, small0, big1, big2, big3 (user2 exhausted after small0)
@@ -321,12 +331,18 @@ async function main() {
   assert("Page 1 item 1 = User2's only file", uneqPage1[1] === smallUserFile);
 
   const [uneqPage2, _uneqCursor2] = await indexer.getChildrenByAddressList(
-    unequalParent, [u1Addr, u2Addr], uneqCursor1, 10, false, false
+    unequalParent,
+    [u1Addr, u2Addr],
+    uneqCursor1,
+    10,
+    false,
+    false,
   );
   assert("Page 2: remaining 4 items", uneqPage2.length === 4, `got ${uneqPage2.length}`);
-  assert("All 9 items returned across pages",
+  assert(
+    "All 9 items returned across pages",
     uneqPage1.length + uneqPage2.length === 9,
-    `${uneqPage1.length} + ${uneqPage2.length}`
+    `${uneqPage1.length} + ${uneqPage2.length}`,
   );
 
   // ── Test 12: Tagging ──
@@ -346,7 +362,7 @@ async function main() {
   const l4 = await anchor(owner, `l4`, l3);
   const l5 = await anchor(owner, `l5`, l4);
   const l6 = await anchor(owner, `l6`, l5, dataSchemaUID);
-  
+
   const deepRes1 = await indexer.resolvePath(rootUID, `l1_${S}`);
   const deepRes2 = await indexer.resolvePath(deepRes1, `l2`);
   const deepRes3 = await indexer.resolvePath(deepRes2, `l3`);
@@ -375,7 +391,7 @@ async function main() {
   if (failed > 0) process.exit(1);
 }
 
-main().catch((err) => {
+main().catch(err => {
   console.error(err);
   process.exit(1);
 });
