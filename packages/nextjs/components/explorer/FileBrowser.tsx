@@ -42,8 +42,10 @@ export const FileBrowser = ({
   const [pageSize, setPageSize] = useState<bigint>(50n);
 
   const { data: efsRouter } = useDeployedContractInfo({ contractName: "EFSRouter" });
+  const { data: indexerInfo } = useDeployedContractInfo({ contractName: "Indexer" });
   const { targetNetwork } = useTargetNetwork();
   const publicClient = usePublicClient();
+  const { address: connectedAddress } = useAccount();
   const { writeContractAsync: easWrite } = useScaffoldWriteContract({ contractName: "EAS" });
 
   useEffect(() => {
@@ -219,9 +221,22 @@ export const FileBrowser = ({
   const handleDelete = async (item: any) => {
     if (!window.confirm(`Delete "${item.name}"? This revokes the attestation and cannot be undone.`)) return;
     try {
+      if (!publicClient || !indexerInfo || !connectedAddress) throw new Error("Not ready");
+      // item.uid is the ANCHOR uid (non-revocable). We need the DATA attestation uid for this anchor.
+      const dataUID = await publicClient.readContract({
+        address: indexerInfo.address,
+        abi: indexerInfo.abi,
+        functionName: "getDataByAddressList",
+        args: [item.uid as `0x${string}`, [connectedAddress], false],
+      }) as `0x${string}`;
+      const zeroHash = "0x0000000000000000000000000000000000000000000000000000000000000000";
+      if (!dataUID || dataUID === zeroHash) {
+        notification.error("No data attestation found to delete.");
+        return;
+      }
       await easWrite({
         functionName: "revoke",
-        args: [{ schema: dataSchemaUID as `0x${string}`, data: { uid: item.uid as `0x${string}`, value: 0n } }],
+        args: [{ schema: dataSchemaUID as `0x${string}`, data: { uid: dataUID, value: 0n } }],
       });
       notification.success(`"${item.name}" deleted.`);
       hasEditions ? refetchEditions() : refetchStandard();

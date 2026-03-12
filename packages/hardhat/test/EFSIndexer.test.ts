@@ -1114,7 +1114,7 @@ describe("EFSIndexer", function () {
 
       // Page 2: use page1Cursor. Should pick up where it left off.
       // Order: u1_3, u2_3
-      const [page2Results, page2Cursor] = await indexer.getChildrenByAddressList(
+      const [page2Results, _page2Cursor] = await indexer.getChildrenByAddressList(
         parentUID,
         [u1Address, u2Address],
         page1Cursor,
@@ -1175,7 +1175,7 @@ describe("EFSIndexer", function () {
       expect(page1Results[3]).to.equal(u1Files[2]); // u2 is exhausted
 
       // Page 2: pageSize = 4
-      const [page2Results, page2Cursor] = await indexer.getChildrenByAddressList(
+      const [page2Results, _page2Cursor] = await indexer.getChildrenByAddressList(
         parentUID, [u1Address, u2Address], page1Cursor, 4, false, false
       );
 
@@ -1193,11 +1193,11 @@ describe("EFSIndexer", function () {
         return getUIDFromReceipt(await tx.wait());
       };
 
-      const ownerFile = await createFile(owner, "owner_1");
+      const _ownerFile = await createFile(owner, "owner_1");
       const u1File = await createFile(user1, "u1_1");
       const u2File = await createFile(user2, "u2_1");
 
-      const [res, cursor] = await indexer.getChildrenByAddressList(
+      const [res, _cursor] = await indexer.getChildrenByAddressList(
         parentUID, 
         [await owner.getAddress(), await user1.getAddress(), await user2.getAddress()], 
         0n, 3, false, false
@@ -1250,10 +1250,10 @@ describe("EFSIndexer", function () {
 
       // Check direct flag on the folder (since anchor refUID = folder2UID)
       const u1Address = await user1.getAddress();
-      expect(await indexer.containsAttestations(folder2UID, u1Address)).to.be.true;
-      
+      expect(await indexer.containsAttestations(folder2UID, u1Address)).to.equal(true);
+
       // Check schema-specific flag
-      expect(await indexer.containsSchemaAttestations(folder2UID, u1Address, anchorSchemaUID)).to.be.true;
+      expect(await indexer.containsSchemaAttestations(folder2UID, u1Address, anchorSchemaUID)).to.equal(true);
     });
 
     it("Should recursively flag parent folders up to root", async function () {
@@ -1267,9 +1267,9 @@ describe("EFSIndexer", function () {
       const u2Address = await user2.getAddress();
 
       // Check all parents up to root
-      expect(await indexer.containsAttestations(folder2UID, u2Address)).to.be.true;
-      expect(await indexer.containsAttestations(folder1UID, u2Address)).to.be.true;
-      expect(await indexer.containsAttestations(rootUID, u2Address)).to.be.true;
+      expect(await indexer.containsAttestations(folder2UID, u2Address)).to.equal(true);
+      expect(await indexer.containsAttestations(folder1UID, u2Address)).to.equal(true);
+      expect(await indexer.containsAttestations(rootUID, u2Address)).to.equal(true);
     });
 
     it("Should flag containsAttestations when a user attaches DATA schemas (Editions)", async function () {
@@ -1291,18 +1291,18 @@ describe("EFSIndexer", function () {
       const u2Address = await user2.getAddress();
 
       // User1 should be flagged on the folder because they created the anchor
-      expect(await indexer.containsAttestations(folder2UID, u1Address)).to.be.true;
-      
+      expect(await indexer.containsAttestations(folder2UID, u1Address)).to.equal(true);
+
       // User2 should be flagged on the FILE ANCHOR because they attached DATA to it
-      expect(await indexer.containsAttestations(fileUID, u2Address)).to.be.true;
-      
+      expect(await indexer.containsAttestations(fileUID, u2Address)).to.equal(true);
+
       // User2 should ALSO be recursively flagged all the way up to ROOT because the indexing logic traverses _parents
-      expect(await indexer.containsAttestations(folder2UID, u2Address)).to.be.true;
-      expect(await indexer.containsAttestations(folder1UID, u2Address)).to.be.true;
-      expect(await indexer.containsAttestations(rootUID, u2Address)).to.be.true;
-      
+      expect(await indexer.containsAttestations(folder2UID, u2Address)).to.equal(true);
+      expect(await indexer.containsAttestations(folder1UID, u2Address)).to.equal(true);
+      expect(await indexer.containsAttestations(rootUID, u2Address)).to.equal(true);
+
       // Check Schema specific flag for User2 on the File Anchor
-      expect(await indexer.containsSchemaAttestations(fileUID, u2Address, dataSchemaUID)).to.be.true;
+      expect(await indexer.containsSchemaAttestations(fileUID, u2Address, dataSchemaUID)).to.equal(true);
     });
   });
 });

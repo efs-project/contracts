@@ -320,7 +320,7 @@ async function main() {
   assert("Page 1 item 0 = User1's first", uneqPage1[0] === bigUserFiles[0]);
   assert("Page 1 item 1 = User2's only file", uneqPage1[1] === smallUserFile);
 
-  const [uneqPage2, uneqCursor2] = await indexer.getChildrenByAddressList(
+  const [uneqPage2, _uneqCursor2] = await indexer.getChildrenByAddressList(
     unequalParent, [u1Addr, u2Addr], uneqCursor1, 10, false, false
   );
   assert("Page 2: remaining 4 items", uneqPage2.length === 4, `got ${uneqPage2.length}`);
