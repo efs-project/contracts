@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { PropertiesModal } from "./PropertiesModal";
 import { ethers } from "ethers";
@@ -37,10 +37,17 @@ export const FileBrowser = ({
   const [fileContent, setFileContent] = useState<string | null>(null);
   const [fileContentType, setFileContentType] = useState<string | null>(null);
   const [isFileLoading, setIsFileLoading] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  const [pageSize, setPageSize] = useState<bigint>(50n);
 
   const { data: efsRouter } = useDeployedContractInfo({ contractName: "EFSRouter" });
+
   const { targetNetwork } = useTargetNetwork();
   const publicClient = usePublicClient();
+
+  useEffect(() => {
+    setPageSize(50n);
+  }, [currentAnchorUID]);
 
   const fetchFileContent = async (item: any) => {
     if (!efsRouter) {
@@ -50,6 +57,7 @@ export const FileBrowser = ({
     setIsFileLoading(true);
     setFileContent(null);
     setFileContentType(null);
+    setFetchError(null);
     try {
       // In a real implementation we might pass the full path from the Toolbar/Page.
       // EFS Router expects the path elements. For now, we'll just request the item.name
@@ -92,7 +100,7 @@ export const FileBrowser = ({
       const joinedPath = currentPathNames.length > 0 ? currentPathNames.join("/") + "/" : "";
       const editionParams =
         editionAddresses.length > 0 ? `?editions=${editionAddresses.map(a => a.trim()).join(",")}` : "";
-      const uri = `web3://${efsRouter.address}:31337/${joinedPath}${item.name}${editionParams}`;
+      const uri = `web3://${efsRouter.address}:${targetNetwork.id}/${joinedPath}${item.name}${editionParams}`;
 
       let result: number[] = [];
       let contentTypeStr = "text/plain";
@@ -193,7 +201,7 @@ export const FileBrowser = ({
       const err = e as Error;
       console.error("Failed to fetch file content", err);
       setFileContent(null);
-      notification.error(`Fetch failed: ${err.message || String(e)}`);
+      setFetchError(err.message || String(e));
     } finally {
       setIsFileLoading(false);
     }
@@ -214,19 +222,25 @@ export const FileBrowser = ({
 
   const hasEditions = editionAddresses && editionAddresses.length > 0;
 
-  // Pagination (Simple for now: fetch first 50)
+  // Once we've ever been in editions mode, stay there — prevents the standard (show-all) query
+  // from firing its cached result during the brief window when editionAddresses is transitioning
+  // to a new address (e.g. wallet account switch causes a momentary empty array).
+  const lockedToEditions = useRef(false);
+  if (hasEditions) lockedToEditions.current = true;
+  const useEditionsQuery = hasEditions || lockedToEditions.current;
+
   const { data: standardItems, isLoading: isStandardLoading } = useScaffoldReadContract({
     contractName: "EFSFileView",
     functionName: "getDirectoryPage",
     args: [
       (currentAnchorUID ? currentAnchorUID : undefined) as `0x${string}` | undefined,
       0n,
-      50n,
+      pageSize,
       dataSchemaUID as `0x${string}`,
       propertySchemaUID as `0x${string}`,
     ],
     query: {
-      enabled: !hasEditions,
+      enabled: !useEditionsQuery,
     },
   });
 
@@ -237,20 +251,18 @@ export const FileBrowser = ({
       (currentAnchorUID ? currentAnchorUID : undefined) as `0x${string}` | undefined,
       editionAddresses as string[],
       0n,
-      50n,
-      dataSchemaUID as `0x${string}`,
-      propertySchemaUID as `0x${string}`,
+      pageSize,
     ],
     query: {
-      enabled: hasEditions,
+      enabled: useEditionsQuery,
     },
   });
 
-  const isLoading = hasEditions ? isEditionLoading : isStandardLoading;
-  const items = hasEditions ? (editionItemsRaw ? (editionItemsRaw as any)[0] : undefined) : standardItems;
+  const isLoading = useEditionsQuery ? isEditionLoading : isStandardLoading;
+  const items = useEditionsQuery ? (editionItemsRaw ? (editionItemsRaw as any)[0] : undefined) : standardItems;
 
-  if (isLoading) return <div>Loading items...</div>;
   if (!currentAnchorUID) return <div>Select a topic</div>;
+  if (isLoading) return <div>Loading items...</div>;
 
   const DebugField = ({ label, value, type = "uid" }: { label: string; value: string; type?: "uid" | "address" }) => (
     <div>
@@ -343,15 +355,23 @@ export const FileBrowser = ({
           })}
         {items?.length === 0 && <div className="col-span-4 text-center text-gray-500">Topic is empty</div>}
       </div>
+      {items && items.length > 0 && items.length >= Number(pageSize) && (
+        <div className="flex justify-center py-4">
+          <button className="btn btn-sm btn-outline" onClick={() => setPageSize(prev => prev + 50n)}>
+            Load more
+          </button>
+        </div>
+      )}
 
       {/* File Preview Modal */}
       {selectedFile && (
         <div
-          className="absolute inset-0 bg-black/20 z-20 flex items-center justify-center p-8 transition-all"
+          className="fixed inset-0 bg-black/20 z-20 flex items-center justify-center p-8 transition-all"
           onClick={() => {
             setSelectedFile(null);
             setFileContent(null);
             setFileContentType(null);
+            setFetchError(null);
           }}
         >
           <div
@@ -367,6 +387,7 @@ export const FileBrowser = ({
                     setSelectedFile(null);
                     setFileContent(null);
                     setFileContentType(null);
+                    setFetchError(null);
                   }}
                 >
                   <XMarkIcon className="w-6 h-6" />
@@ -378,10 +399,16 @@ export const FileBrowser = ({
                   <div className="flex items-center justify-center h-full">
                     <span className="loading loading-spinner loading-lg text-primary"></span>
                   </div>
+                ) : fetchError ? (
+                  <div className="text-center text-error">
+                    <p className="font-semibold mb-1">Failed to load file</p>
+                    <p className="text-xs opacity-70">{fetchError}</p>
+                  </div>
                 ) : fileContent ? (
                   fileContentType?.includes("image/svg") ? (
                     <div className="flex justify-center" dangerouslySetInnerHTML={{ __html: fileContent }} />
                   ) : fileContentType?.startsWith("image/") ? (
+                    // eslint-disable-next-line @next/next/no-img-element
                     <img
                       src={
                         fileContent.startsWith("blob:") ? fileContent : `data:${fileContentType};base64,${fileContent}`
@@ -389,11 +416,16 @@ export const FileBrowser = ({
                       alt={selectedFile.name}
                       className="max-w-full h-auto"
                     />
+                  ) : fileContentType && !fileContentType.startsWith("text/") ? (
+                    <div className="text-center text-gray-500">
+                      <p className="font-semibold mb-1">Binary file — cannot preview</p>
+                      <p className="text-xs opacity-60">{fileContentType}</p>
+                    </div>
                   ) : (
                     <pre className="whitespace-pre-wrap text-sm">{fileContent}</pre>
                   )
                 ) : (
-                  <div className="text-center text-gray-500">No content found or failed to load.</div>
+                  <div className="text-center text-gray-500">No content found.</div>
                 )}
               </div>
             </div>
@@ -404,7 +436,7 @@ export const FileBrowser = ({
       {/* Debug Overlay */}
       {selectedDebugItem && (
         <div
-          className="absolute inset-0 bg-black/20 z-20 flex items-center justify-center p-8 transition-all" // Removed backdrop-blur-sm, changed to black/20
+          className="fixed inset-0 bg-black/20 z-20 flex items-center justify-center p-8 transition-all" // Removed backdrop-blur-sm, changed to black/20
           onClick={() => setSelectedDebugItem(null)}
         >
           <div

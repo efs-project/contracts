@@ -19,7 +19,7 @@ contract SchemaNameIndex {
 
     function indexAttestation(bytes32 uid) external {
         Attestation memory attestation = _eas.getAttestation(uid);
-        
+
         // Basic Validation
         require(attestation.uid != bytes32(0), "Attestation not found");
         require(attestation.schema == NAMING_SCHEMA_UID, "Invalid schema: Must be Naming Schema");
@@ -27,11 +27,11 @@ contract SchemaNameIndex {
 
         // Decode Data: bytes32 schemaId, string name
         (bytes32 targetSchemaUID, string memory name) = abi.decode(attestation.data, (bytes32, string));
-        
+
         // In a real decentralized system there might be conflict resolution rules.
         // For this explorer/indexer, simplest "Last Indexed Wins" is sufficient.
         schemaNames[targetSchemaUID] = name;
-        
+
         emit SchemaNameIndexed(targetSchemaUID, name, uid);
     }
 }

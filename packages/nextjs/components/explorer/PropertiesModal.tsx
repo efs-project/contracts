@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { decodeEventLog, parseAbiItem, zeroHash } from "viem";
 import { usePublicClient } from "wagmi";
 import { PlusIcon, XMarkIcon } from "@heroicons/react/24/outline";
@@ -293,7 +293,7 @@ const PropertyValueItem = ({ uid }: { uid: string }) => {
 const PropertyValueDecoded = ({ data }: { data: string }) => {
   const [value, setValue] = useState<string | null>(null);
 
-  useState(() => {
+  useEffect(() => {
     const decode = async () => {
       try {
         const { decodeAbiParameters, parseAbiParameters } = await import("viem");
@@ -304,7 +304,7 @@ const PropertyValueDecoded = ({ data }: { data: string }) => {
       }
     };
     decode();
-  });
+  }, [data]);
 
   if (value === null) return <span>?</span>;
   return <span className="badge badge-sm badge-neutral">{value}</span>;

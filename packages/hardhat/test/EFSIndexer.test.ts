@@ -967,7 +967,14 @@ describe("EFSIndexer", function () {
       // User 1 tags the file
       const tagTx = await eas.connect(user1).attest({
         schema: tagSchemaUID,
-        data: { recipient: ZeroAddress, expirationTime: 0n, revocable: true, refUID: fileAnchorUID, data: schemaEncoder.encode(["bytes32", "int256"], [ethers.ZeroHash, 10n]), value: 0n },
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: 0n,
+          revocable: true,
+          refUID: fileAnchorUID,
+          data: schemaEncoder.encode(["bytes32", "int256"], [ethers.ZeroHash, 10n]),
+          value: 0n,
+        },
       });
       const tagReceipt = await tagTx.wait();
       const tagUID = getUIDFromReceipt(tagReceipt);
@@ -981,7 +988,14 @@ describe("EFSIndexer", function () {
       expect(attesterRef).to.include(tagUID);
 
       // Check _referencingBySchemaAndAttester
-      const schemaAttesterRef = await indexer.getReferencingBySchemaAndAttester(fileAnchorUID, tagSchemaUID, await user1.getAddress(), 0, 10, false);
+      const schemaAttesterRef = await indexer.getReferencingBySchemaAndAttester(
+        fileAnchorUID,
+        tagSchemaUID,
+        await user1.getAddress(),
+        0,
+        10,
+        false,
+      );
       expect(schemaAttesterRef).to.include(tagUID);
 
       // User 1 revokes the tag
@@ -999,7 +1013,14 @@ describe("EFSIndexer", function () {
       // User 1 makes an edit
       const dataTx1 = await eas.connect(user1).attest({
         schema: dataSchemaUID,
-        data: { recipient: ZeroAddress, expirationTime: 0n, revocable: true, refUID: fileAnchorUID, data: schemaEncoder.encode(["string", "string", "string"], ["ipfs://v1", "application/json", "file"]), value: 0n },
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: 0n,
+          revocable: true,
+          refUID: fileAnchorUID,
+          data: schemaEncoder.encode(["string", "string", "string"], ["ipfs://v1", "application/json", "file"]),
+          value: 0n,
+        },
       });
       const r1 = await dataTx1.wait();
       const uid1 = getUIDFromReceipt(r1);
@@ -1007,13 +1028,27 @@ describe("EFSIndexer", function () {
       // User 1 makes a second edit
       const dataTx2 = await eas.connect(user1).attest({
         schema: dataSchemaUID,
-        data: { recipient: ZeroAddress, expirationTime: 0n, revocable: true, refUID: fileAnchorUID, data: schemaEncoder.encode(["string", "string", "string"], ["ipfs://v2", "application/json", "file"]), value: 0n },
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: 0n,
+          revocable: true,
+          refUID: fileAnchorUID,
+          data: schemaEncoder.encode(["string", "string", "string"], ["ipfs://v2", "application/json", "file"]),
+          value: 0n,
+        },
       });
       const r2 = await dataTx2.wait();
       const uid2 = getUIDFromReceipt(r2);
 
       // Test active history (should return both)
-      const [historyActive] = await indexer.getDataHistoryByAddress(fileAnchorUID, await user1.getAddress(), 0, 10, false, false);
+      const [historyActive] = await indexer.getDataHistoryByAddress(
+        fileAnchorUID,
+        await user1.getAddress(),
+        0,
+        10,
+        false,
+        false,
+      );
       expect(historyActive.length).to.equal(2);
 
       // Revoke the first edit
@@ -1022,13 +1057,27 @@ describe("EFSIndexer", function () {
         data: { uid: uid1, value: 0n },
       });
 
-      // Test history without revoked 
-      const [historyFiltered] = await indexer.getDataHistoryByAddress(fileAnchorUID, await user1.getAddress(), 0, 10, false, false);
+      // Test history without revoked
+      const [historyFiltered] = await indexer.getDataHistoryByAddress(
+        fileAnchorUID,
+        await user1.getAddress(),
+        0,
+        10,
+        false,
+        false,
+      );
       expect(historyFiltered.length).to.equal(1);
       expect(historyFiltered[0]).to.equal(uid2);
 
       // Test history with revoked (showRevoked = true)
-      const [historyAll] = await indexer.getDataHistoryByAddress(fileAnchorUID, await user1.getAddress(), 0, 10, false, true);
+      const [historyAll] = await indexer.getDataHistoryByAddress(
+        fileAnchorUID,
+        await user1.getAddress(),
+        0,
+        10,
+        false,
+        true,
+      );
       expect(historyAll.length).to.equal(2);
     });
 
@@ -1036,7 +1085,14 @@ describe("EFSIndexer", function () {
       // User 1 edit
       const dataTx1 = await eas.connect(user1).attest({
         schema: dataSchemaUID,
-        data: { recipient: ZeroAddress, expirationTime: 0n, revocable: true, refUID: fileAnchorUID, data: schemaEncoder.encode(["string", "string", "string"], ["ipfs://user1", "application/json", "file"]), value: 0n },
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: 0n,
+          revocable: true,
+          refUID: fileAnchorUID,
+          data: schemaEncoder.encode(["string", "string", "string"], ["ipfs://user1", "application/json", "file"]),
+          value: 0n,
+        },
       });
       const r1 = await dataTx1.wait();
       const uid1 = getUIDFromReceipt(r1);
@@ -1044,7 +1100,14 @@ describe("EFSIndexer", function () {
       // User 2 edit
       const dataTx2 = await eas.connect(user2).attest({
         schema: dataSchemaUID,
-        data: { recipient: ZeroAddress, expirationTime: 0n, revocable: true, refUID: fileAnchorUID, data: schemaEncoder.encode(["string", "string", "string"], ["ipfs://user2", "application/json", "file"]), value: 0n },
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: 0n,
+          revocable: true,
+          refUID: fileAnchorUID,
+          data: schemaEncoder.encode(["string", "string", "string"], ["ipfs://user2", "application/json", "file"]),
+          value: 0n,
+        },
       });
       const r2 = await dataTx2.wait();
       const uid2 = getUIDFromReceipt(r2);
@@ -1066,7 +1129,7 @@ describe("EFSIndexer", function () {
       // Pass [User2, User1] again. User 2 is revoked so it should fallback to User 1.
       const result3 = await indexer.getDataByAddressList(fileAnchorUID, [u2Address, u1Address], false);
       expect(result3).to.equal(uid1);
-      
+
       // Pass with showRevoked = true. Should grab User2 again.
       const result4 = await indexer.getDataByAddressList(fileAnchorUID, [u2Address, u1Address], true);
       expect(result4).to.equal(uid2);
@@ -1077,7 +1140,14 @@ describe("EFSIndexer", function () {
       const createFile = async (signer: Signer, name: string) => {
         const tx = await eas.connect(signer).attest({
           schema: anchorSchemaUID,
-          data: { recipient: ZeroAddress, expirationTime: 0n, revocable: false, refUID: parentUID, data: schemaEncoder.encode(["string", "bytes32"], [name, ZERO_BYTES32]), value: 0n },
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: 0n,
+            revocable: false,
+            refUID: parentUID,
+            data: schemaEncoder.encode(["string", "bytes32"], [name, ZERO_BYTES32]),
+            value: 0n,
+          },
         });
         const r = await tx.wait();
         return getUIDFromReceipt(r);
@@ -1102,7 +1172,7 @@ describe("EFSIndexer", function () {
         0n,
         4,
         false,
-        false
+        false,
       );
 
       expect(page1Results.length).to.equal(4);
@@ -1114,13 +1184,13 @@ describe("EFSIndexer", function () {
 
       // Page 2: use page1Cursor. Should pick up where it left off.
       // Order: u1_3, u2_3
-      const [page2Results, page2Cursor] = await indexer.getChildrenByAddressList(
+      const [page2Results, _page2Cursor] = await indexer.getChildrenByAddressList(
         parentUID,
         [u1Address, u2Address],
         page1Cursor,
         4,
         false,
-        false
+        false,
       );
 
       expect(page2Results.length).to.equal(2);
@@ -1131,7 +1201,14 @@ describe("EFSIndexer", function () {
     it("Should return bytes32(0) from getDataByAddressList when all data is revoked", async function () {
       const dataTx1 = await eas.connect(user1).attest({
         schema: dataSchemaUID,
-        data: { recipient: ZeroAddress, expirationTime: 0n, revocable: true, refUID: fileAnchorUID, data: schemaEncoder.encode(["string", "string", "string"], ["ipfs://user1", "application/json", "file"]), value: 0n },
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: 0n,
+          revocable: true,
+          refUID: fileAnchorUID,
+          data: schemaEncoder.encode(["string", "string", "string"], ["ipfs://user1", "application/json", "file"]),
+          value: 0n,
+        },
       });
       const r1 = await dataTx1.wait();
       const uid1 = getUIDFromReceipt(r1);
@@ -1147,7 +1224,14 @@ describe("EFSIndexer", function () {
       const createFile = async (signer: Signer, name: string) => {
         const tx = await eas.connect(signer).attest({
           schema: anchorSchemaUID,
-          data: { recipient: ZeroAddress, expirationTime: 0n, revocable: false, refUID: parentUID, data: schemaEncoder.encode(["string", "bytes32"], [name, ZERO_BYTES32]), value: 0n },
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: 0n,
+            revocable: false,
+            refUID: parentUID,
+            data: schemaEncoder.encode(["string", "bytes32"], [name, ZERO_BYTES32]),
+            value: 0n,
+          },
         });
         const r = await tx.wait();
         return getUIDFromReceipt(r);
@@ -1155,7 +1239,7 @@ describe("EFSIndexer", function () {
 
       // User 1 has 5 files, User 2 has 1 file
       const u1Files = [];
-      for(let i=1; i<=5; i++) {
+      for (let i = 1; i <= 5; i++) {
         u1Files.push(await createFile(user1, `u1_${i}`));
       }
       const u2File1 = await createFile(user2, "u2_1");
@@ -1165,9 +1249,14 @@ describe("EFSIndexer", function () {
 
       // Page 1: pageSize = 4
       const [page1Results, page1Cursor] = await indexer.getChildrenByAddressList(
-        parentUID, [u1Address, u2Address], 0n, 4, false, false
+        parentUID,
+        [u1Address, u2Address],
+        0n,
+        4,
+        false,
+        false,
       );
-      
+
       expect(page1Results.length).to.equal(4);
       expect(page1Results[0]).to.equal(u1Files[0]);
       expect(page1Results[1]).to.equal(u2File1);
@@ -1175,8 +1264,13 @@ describe("EFSIndexer", function () {
       expect(page1Results[3]).to.equal(u1Files[2]); // u2 is exhausted
 
       // Page 2: pageSize = 4
-      const [page2Results, page2Cursor] = await indexer.getChildrenByAddressList(
-        parentUID, [u1Address, u2Address], page1Cursor, 4, false, false
+      const [page2Results, _page2Cursor] = await indexer.getChildrenByAddressList(
+        parentUID,
+        [u1Address, u2Address],
+        page1Cursor,
+        4,
+        false,
+        false,
       );
 
       expect(page2Results.length).to.equal(2);
@@ -1188,19 +1282,29 @@ describe("EFSIndexer", function () {
       const createFile = async (signer: Signer, name: string) => {
         const tx = await eas.connect(signer).attest({
           schema: anchorSchemaUID,
-          data: { recipient: ZeroAddress, expirationTime: 0n, revocable: false, refUID: parentUID, data: schemaEncoder.encode(["string", "bytes32"], [name, ZERO_BYTES32]), value: 0n },
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: 0n,
+            revocable: false,
+            refUID: parentUID,
+            data: schemaEncoder.encode(["string", "bytes32"], [name, ZERO_BYTES32]),
+            value: 0n,
+          },
         });
         return getUIDFromReceipt(await tx.wait());
       };
 
-      const ownerFile = await createFile(owner, "owner_1");
+      const _ownerFile = await createFile(owner, "owner_1");
       const u1File = await createFile(user1, "u1_1");
       const u2File = await createFile(user2, "u2_1");
 
-      const [res, cursor] = await indexer.getChildrenByAddressList(
-        parentUID, 
-        [await owner.getAddress(), await user1.getAddress(), await user2.getAddress()], 
-        0n, 3, false, false
+      const [res, _cursor] = await indexer.getChildrenByAddressList(
+        parentUID,
+        [await owner.getAddress(), await user1.getAddress(), await user2.getAddress()],
+        0n,
+        3,
+        false,
+        false,
       );
 
       expect(res.length).to.equal(3);
@@ -1221,21 +1325,42 @@ describe("EFSIndexer", function () {
       // Create Root (Zero Hash)
       let tx = await eas.connect(owner).attest({
         schema: anchorSchemaUID,
-        data: { recipient: ZeroAddress, expirationTime: 0n, revocable: false, refUID: ZERO_BYTES32, data: schemaEncoder.encode(["string", "bytes32"], ["root", ZERO_BYTES32]), value: 0n },
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: 0n,
+          revocable: false,
+          refUID: ZERO_BYTES32,
+          data: schemaEncoder.encode(["string", "bytes32"], ["root", ZERO_BYTES32]),
+          value: 0n,
+        },
       });
       rootUID = getUIDFromReceipt(await tx.wait());
 
       // Create Folder 1 under Root (by owner)
       tx = await eas.connect(owner).attest({
         schema: anchorSchemaUID,
-        data: { recipient: ZeroAddress, expirationTime: 0n, revocable: false, refUID: rootUID, data: schemaEncoder.encode(["string", "bytes32"], ["folder1", ZERO_BYTES32]), value: 0n },
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: 0n,
+          revocable: false,
+          refUID: rootUID,
+          data: schemaEncoder.encode(["string", "bytes32"], ["folder1", ZERO_BYTES32]),
+          value: 0n,
+        },
       });
       folder1UID = getUIDFromReceipt(await tx.wait());
 
       // Create Folder 2 under Folder 1 (by owner)
       tx = await eas.connect(owner).attest({
         schema: anchorSchemaUID,
-        data: { recipient: ZeroAddress, expirationTime: 0n, revocable: false, refUID: folder1UID, data: schemaEncoder.encode(["string", "bytes32"], ["folder2", ZERO_BYTES32]), value: 0n },
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: 0n,
+          revocable: false,
+          refUID: folder1UID,
+          data: schemaEncoder.encode(["string", "bytes32"], ["folder2", ZERO_BYTES32]),
+          value: 0n,
+        },
       });
       folder2UID = getUIDFromReceipt(await tx.wait());
     });
@@ -1244,46 +1369,74 @@ describe("EFSIndexer", function () {
       // User1 creates a file anchor under folder2
       const tx = await eas.connect(user1).attest({
         schema: anchorSchemaUID,
-        data: { recipient: ZeroAddress, expirationTime: 0n, revocable: false, refUID: folder2UID, data: schemaEncoder.encode(["string", "bytes32"], ["user1_file.txt", dataSchemaUID]), value: 0n },
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: 0n,
+          revocable: false,
+          refUID: folder2UID,
+          data: schemaEncoder.encode(["string", "bytes32"], ["user1_file.txt", dataSchemaUID]),
+          value: 0n,
+        },
       });
       fileUID = getUIDFromReceipt(await tx.wait());
 
       // Check direct flag on the folder (since anchor refUID = folder2UID)
       const u1Address = await user1.getAddress();
-      expect(await indexer.containsAttestations(folder2UID, u1Address)).to.be.true;
-      
+      expect(await indexer.containsAttestations(folder2UID, u1Address)).to.equal(true);
+
       // Check schema-specific flag
-      expect(await indexer.containsSchemaAttestations(folder2UID, u1Address, anchorSchemaUID)).to.be.true;
+      expect(await indexer.containsSchemaAttestations(folder2UID, u1Address, anchorSchemaUID)).to.equal(true);
     });
 
     it("Should recursively flag parent folders up to root", async function () {
       // User2 creates a file directly under folder2
       const tx = await eas.connect(user2).attest({
         schema: anchorSchemaUID,
-        data: { recipient: ZeroAddress, expirationTime: 0n, revocable: false, refUID: folder2UID, data: schemaEncoder.encode(["string", "bytes32"], ["user2_file.txt", dataSchemaUID]), value: 0n },
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: 0n,
+          revocable: false,
+          refUID: folder2UID,
+          data: schemaEncoder.encode(["string", "bytes32"], ["user2_file.txt", dataSchemaUID]),
+          value: 0n,
+        },
       });
       await tx.wait();
-      
+
       const u2Address = await user2.getAddress();
 
       // Check all parents up to root
-      expect(await indexer.containsAttestations(folder2UID, u2Address)).to.be.true;
-      expect(await indexer.containsAttestations(folder1UID, u2Address)).to.be.true;
-      expect(await indexer.containsAttestations(rootUID, u2Address)).to.be.true;
+      expect(await indexer.containsAttestations(folder2UID, u2Address)).to.equal(true);
+      expect(await indexer.containsAttestations(folder1UID, u2Address)).to.equal(true);
+      expect(await indexer.containsAttestations(rootUID, u2Address)).to.equal(true);
     });
 
     it("Should flag containsAttestations when a user attaches DATA schemas (Editions)", async function () {
       // User1 creates a file anchor
       let tx = await eas.connect(user1).attest({
         schema: anchorSchemaUID,
-        data: { recipient: ZeroAddress, expirationTime: 0n, revocable: false, refUID: folder2UID, data: schemaEncoder.encode(["string", "bytes32"], ["shared_file.txt", dataSchemaUID]), value: 0n },
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: 0n,
+          revocable: false,
+          refUID: folder2UID,
+          data: schemaEncoder.encode(["string", "bytes32"], ["shared_file.txt", dataSchemaUID]),
+          value: 0n,
+        },
       });
       fileUID = getUIDFromReceipt(await tx.wait());
 
       // User2 attaches data to User1's file anchor (Collaborative Edition)
       tx = await eas.connect(user2).attest({
         schema: dataSchemaUID,
-        data: { recipient: ZeroAddress, expirationTime: 0n, revocable: true, refUID: fileUID, data: schemaEncoder.encode(["string", "string", "string"], ["ipfs://content", "text/plain", "file"]), value: 0n },
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: 0n,
+          revocable: true,
+          refUID: fileUID,
+          data: schemaEncoder.encode(["string", "string", "string"], ["ipfs://content", "text/plain", "file"]),
+          value: 0n,
+        },
       });
       await tx.wait();
 
@@ -1291,18 +1444,18 @@ describe("EFSIndexer", function () {
       const u2Address = await user2.getAddress();
 
       // User1 should be flagged on the folder because they created the anchor
-      expect(await indexer.containsAttestations(folder2UID, u1Address)).to.be.true;
-      
+      expect(await indexer.containsAttestations(folder2UID, u1Address)).to.equal(true);
+
       // User2 should be flagged on the FILE ANCHOR because they attached DATA to it
-      expect(await indexer.containsAttestations(fileUID, u2Address)).to.be.true;
-      
+      expect(await indexer.containsAttestations(fileUID, u2Address)).to.equal(true);
+
       // User2 should ALSO be recursively flagged all the way up to ROOT because the indexing logic traverses _parents
-      expect(await indexer.containsAttestations(folder2UID, u2Address)).to.be.true;
-      expect(await indexer.containsAttestations(folder1UID, u2Address)).to.be.true;
-      expect(await indexer.containsAttestations(rootUID, u2Address)).to.be.true;
-      
+      expect(await indexer.containsAttestations(folder2UID, u2Address)).to.equal(true);
+      expect(await indexer.containsAttestations(folder1UID, u2Address)).to.equal(true);
+      expect(await indexer.containsAttestations(rootUID, u2Address)).to.equal(true);
+
       // Check Schema specific flag for User2 on the File Anchor
-      expect(await indexer.containsSchemaAttestations(fileUID, u2Address, dataSchemaUID)).to.be.true;
+      expect(await indexer.containsSchemaAttestations(fileUID, u2Address, dataSchemaUID)).to.equal(true);
     });
   });
 });

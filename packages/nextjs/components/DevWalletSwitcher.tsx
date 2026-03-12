@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { hardhat } from "viem/chains";
+import { useConnect, useConnectors, useDisconnect } from "wagmi";
 import { useTargetNetwork } from "~~/hooks/scaffold-eth";
 
 // Deterministic Hardhat Accounts
@@ -112,6 +113,9 @@ export const DevWalletSwitcher = () => {
   const { targetNetwork } = useTargetNetwork();
   const [mounted, setMounted] = useState(false);
   const [activeAddress, setActiveAddress] = useState<string | null>(null);
+  const { disconnect } = useDisconnect();
+  const { connect } = useConnect();
+  const connectors = useConnectors();
 
   useEffect(() => {
     setMounted(true);
@@ -130,10 +134,16 @@ export const DevWalletSwitcher = () => {
   }
 
   const switchAccount = (pk: string) => {
-    if (typeof window !== "undefined") {
-      window.localStorage.setItem("burnerWallet.pk", pk);
-      // Reload page to re-initialize the burner connector with new PK
-      window.location.reload();
+    if (typeof window === "undefined") return;
+    const account = HARDHAT_ACCOUNTS.find(acc => acc.pk === pk);
+    window.localStorage.setItem("burnerWallet.pk", pk);
+    setActiveAddress(account?.address ?? null);
+    // Reconnect burner connector so wagmi picks up the new PK from localStorage
+    const burnerConnector = connectors.find(c => c.id === "burnerWallet");
+    if (burnerConnector) {
+      disconnect(undefined, {
+        onSettled: () => connect({ connector: burnerConnector }),
+      });
     }
   };
 

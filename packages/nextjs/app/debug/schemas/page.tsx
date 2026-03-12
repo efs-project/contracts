@@ -103,6 +103,9 @@ export default function DebugSchemas() {
 
   const [dataFileMode, setDataFileMode] = useState("100644"); // Default file mode
 
+  const [anchorRef, setAnchorRef] = useState("");
+  const [anchorName, setAnchorName] = useState("");
+
   const [blobRef, setBlobRef] = useState("");
   const [blobType, setBlobType] = useState("text/plain");
   const [blobData, setBlobData] = useState("");
@@ -228,18 +231,8 @@ export default function DebugSchemas() {
                 type="text"
                 className="input input-bordered"
                 placeholder="e.g. 0x... (Empty for Root)"
-                id="anchor-ref-input"
-              />
-            </div>
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text">Recipient (Address)</span>
-              </label>
-              <input
-                type="text"
-                className="input input-bordered"
-                placeholder="e.g. 0x... (Optional)"
-                id="anchor-recipient-input"
+                value={anchorRef}
+                onChange={e => setAnchorRef(e.target.value)}
               />
             </div>
             <div className="form-control">
@@ -250,7 +243,8 @@ export default function DebugSchemas() {
                 type="text"
                 className="input input-bordered"
                 placeholder="e.g. 'root' or 'docs'"
-                id="anchor-name-input"
+                value={anchorName}
+                onChange={e => setAnchorName(e.target.value)}
               />
             </div>
             <div className="card-actions justify-end mt-4">
@@ -258,22 +252,14 @@ export default function DebugSchemas() {
                 className="btn btn-primary"
                 disabled={isPending}
                 onClick={() => {
-                  const nameInput = document.getElementById("anchor-name-input") as HTMLInputElement;
-                  const refInput = document.getElementById("anchor-ref-input") as HTMLInputElement;
-                  const name = nameInput.value;
-                  const ref = refInput.value;
-
-                  if (!name) {
+                  if (!anchorName) {
                     notification.error("Name is required");
                     return;
                   }
-                  // Schema: string name
-                  // RefUID provided or zeroHash
-                  // Revocable: FALSE
                   attest(
                     schemas.ANCHOR,
-                    ref,
-                    encodeAbiParameters(parseAbiParameters("string, bytes32"), [name, zeroHash]),
+                    anchorRef,
+                    encodeAbiParameters(parseAbiParameters("string, bytes32"), [anchorName, zeroHash]),
                     false, // revocable
                   );
                 }}
@@ -785,7 +771,7 @@ function AttestationItem({
       decodedValue = (
         <div className="flex flex-col gap-1">
           <div className="badge badge-sm badge-info">{contentType}</div>
-          <div className="text-xs opacity-50">{data.length / 2 - 1} bytes</div>
+          <div className="text-xs opacity-50">{(data.length - 2) / 2} bytes</div>
           <div className="text-xs break-all font-mono bg-base-300 p-1 rounded max-h-20 overflow-auto">
             {contentType.includes("text") ? hexToString(data) : data.slice(0, 50) + "..."}
           </div>
