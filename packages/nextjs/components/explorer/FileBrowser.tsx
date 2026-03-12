@@ -223,12 +223,12 @@ export const FileBrowser = ({
     try {
       if (!publicClient || !indexerInfo || !connectedAddress) throw new Error("Not ready");
       // item.uid is the ANCHOR uid (non-revocable). We need the DATA attestation uid for this anchor.
-      const dataUID = await publicClient.readContract({
+      const dataUID = (await publicClient.readContract({
         address: indexerInfo.address,
         abi: indexerInfo.abi,
         functionName: "getDataByAddressList",
         args: [item.uid as `0x${string}`, [connectedAddress], false],
-      }) as `0x${string}`;
+      })) as `0x${string}`;
       const zeroHash = "0x0000000000000000000000000000000000000000000000000000000000000000";
       if (!dataUID || dataUID === zeroHash) {
         notification.error("No data attestation found to delete.");
@@ -239,7 +239,8 @@ export const FileBrowser = ({
         args: [{ schema: dataSchemaUID as `0x${string}`, data: { uid: dataUID, value: 0n } }],
       });
       notification.success(`"${item.name}" deleted.`);
-      hasEditions ? refetchEditions() : refetchStandard();
+      if (hasEditions) refetchEditions();
+      else refetchStandard();
     } catch (e: any) {
       console.error("Delete failed", e);
       notification.error("Delete failed. See console.");
@@ -260,7 +261,11 @@ export const FileBrowser = ({
   if (hasEditions) lockedToEditions.current = true;
   const useEditionsQuery = hasEditions || lockedToEditions.current;
 
-  const { data: standardItems, isLoading: isStandardLoading, refetch: refetchStandard } = useScaffoldReadContract({
+  const {
+    data: standardItems,
+    isLoading: isStandardLoading,
+    refetch: refetchStandard,
+  } = useScaffoldReadContract({
     contractName: "EFSFileView",
     functionName: "getDirectoryPage",
     args: [
@@ -275,7 +280,11 @@ export const FileBrowser = ({
     },
   });
 
-  const { data: editionItemsRaw, isLoading: isEditionLoading, refetch: refetchEditions } = useScaffoldReadContract({
+  const {
+    data: editionItemsRaw,
+    isLoading: isEditionLoading,
+    refetch: refetchEditions,
+  } = useScaffoldReadContract({
     contractName: "EFSFileView",
     functionName: "getDirectoryPageByAddressList",
     args: [
@@ -453,6 +462,7 @@ export const FileBrowser = ({
                   fileContentType?.includes("image/svg") ? (
                     <div className="flex justify-center" dangerouslySetInnerHTML={{ __html: fileContent }} />
                   ) : fileContentType?.startsWith("image/") ? (
+                    // eslint-disable-next-line @next/next/no-img-element
                     <img
                       src={
                         fileContent.startsWith("blob:") ? fileContent : `data:${fileContentType};base64,${fileContent}`

@@ -112,12 +112,12 @@ export const Toolbar = ({
       // 1) First check if the Anchor already exists
       if (indexer) {
         try {
-          const existingUID = await publicClient.readContract({
+          const existingUID = (await publicClient.readContract({
             address: indexer.address as `0x${string}`,
             abi: indexer.abi,
             functionName: "resolveAnchor",
             args: [currentAnchorUID as `0x${string}`, newName, schemaUID as `0x${string}`],
-          }) as `0x${string}`;
+          })) as `0x${string}`;
 
           if (existingUID && existingUID !== ethers.ZeroHash) {
             newAnchorUID = existingUID;
@@ -198,7 +198,9 @@ export const Toolbar = ({
         // Embedding file bytes directly in an EAS attestation calldata causes gas estimation
         // to time out even for files a few KB in size.
         const totalChunks = Math.ceil(dataBytes.length / CHUNK_SIZE) || 1;
-        notification.info(`Uploading ${Math.round(dataBytes.length / 1024) || 1}KB in ${totalChunks} chunk${totalChunks > 1 ? "s" : ""} via SSTORE2...`);
+        notification.info(
+          `Uploading ${Math.round(dataBytes.length / 1024) || 1}KB in ${totalChunks} chunk${totalChunks > 1 ? "s" : ""} via SSTORE2...`,
+        );
         const chunkAddresses: string[] = [];
 
         for (let i = 0; i < dataBytes.length; i += CHUNK_SIZE) {

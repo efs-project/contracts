@@ -1,7 +1,7 @@
 "use client";
 
-import type { PathItem } from "./Toolbar";
 import { useRef } from "react";
+import type { PathItem } from "./Toolbar";
 import { FolderIcon } from "@heroicons/react/24/outline";
 import { useScaffoldReadContract } from "~~/hooks/scaffold-eth";
 import { isTopic } from "~~/utils/efs/efsTypes";
@@ -50,19 +50,18 @@ const TreeNode = ({
   const { data: editionChildrenRaw, isLoading: isEditionLoading } = useScaffoldReadContract({
     contractName: "EFSFileView",
     functionName: "getDirectoryPageByAddressList",
-    args: [
-      uid as `0x${string}`,
-      editionAddresses as string[],
-      0n,
-      50n,
-    ],
+    args: [uid as `0x${string}`, editionAddresses as string[], 0n, 50n],
     query: {
       enabled: useEditionsQuery,
     },
   });
 
   const isLoading = useEditionsQuery ? isEditionLoading : isStandardLoading;
-  const children = useEditionsQuery ? (editionChildrenRaw ? (editionChildrenRaw as any)[0] : undefined) : standardChildren;
+  const children = useEditionsQuery
+    ? editionChildrenRaw
+      ? (editionChildrenRaw as any)[0]
+      : undefined
+    : standardChildren;
 
   const topics = children?.filter((item: any) => isTopic(item));
 
