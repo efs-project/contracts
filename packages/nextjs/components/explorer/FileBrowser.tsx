@@ -4,17 +4,16 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { PropertiesModal } from "./PropertiesModal";
 import { ethers } from "ethers";
-import { useAccount, usePublicClient } from "wagmi";
+import { usePublicClient } from "wagmi";
 import {
   DocumentIcon,
   FolderIcon,
   InformationCircleIcon,
   Square2StackIcon,
   TagIcon,
-  TrashIcon,
   XMarkIcon,
 } from "@heroicons/react/24/outline";
-import { useDeployedContractInfo, useScaffoldReadContract, useScaffoldWriteContract } from "~~/hooks/scaffold-eth";
+import { useDeployedContractInfo, useScaffoldReadContract } from "~~/hooks/scaffold-eth";
 import { useTargetNetwork } from "~~/hooks/scaffold-eth/useTargetNetwork";
 import { isFile, isTopic } from "~~/utils/efs/efsTypes";
 import { notification } from "~~/utils/scaffold-eth";
@@ -40,18 +39,14 @@ export const FileBrowser = ({
   const [isFileLoading, setIsFileLoading] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [pageSize, setPageSize] = useState<bigint>(50n);
-  const [deletedUIDs, setDeletedUIDs] = useState<Set<string>>(new Set());
 
   const { data: efsRouter } = useDeployedContractInfo({ contractName: "EFSRouter" });
-  const { data: indexerInfo } = useDeployedContractInfo({ contractName: "Indexer" });
+
   const { targetNetwork } = useTargetNetwork();
   const publicClient = usePublicClient();
-  const { address: connectedAddress } = useAccount();
-  const { writeContractAsync: easWrite } = useScaffoldWriteContract({ contractName: "EAS" });
 
   useEffect(() => {
     setPageSize(50n);
-    setDeletedUIDs(new Set());
   }, [currentAnchorUID]);
 
   const fetchFileContent = async (item: any) => {
@@ -220,36 +215,6 @@ export const FileBrowser = ({
     }
   };
 
-  const handleDelete = async (item: any) => {
-    if (!window.confirm(`Delete "${item.name}"? This revokes the attestation and cannot be undone.`)) return;
-    try {
-      if (!publicClient || !indexerInfo || !connectedAddress) throw new Error("Not ready");
-      // item.uid is the ANCHOR uid (non-revocable). We need the DATA attestation uid for this anchor.
-      const dataUID = (await publicClient.readContract({
-        address: indexerInfo.address,
-        abi: indexerInfo.abi,
-        functionName: "getDataByAddressList",
-        args: [item.uid as `0x${string}`, [connectedAddress], false],
-      })) as `0x${string}`;
-      const zeroHash = "0x0000000000000000000000000000000000000000000000000000000000000000";
-      if (!dataUID || dataUID === zeroHash) {
-        notification.error("No data attestation found to delete.");
-        return;
-      }
-      await easWrite({
-        functionName: "revoke",
-        args: [{ schema: dataSchemaUID as `0x${string}`, data: { uid: dataUID, value: 0n } }],
-      });
-      // ANCHOR attestations are non-revocable, so the contract listing will still return
-      // this item after the DATA revoke. Hide it locally for the current session.
-      setDeletedUIDs(prev => new Set([...prev, item.uid]));
-      notification.success(`"${item.name}" deleted.`);
-    } catch (e: any) {
-      console.error("Delete failed", e);
-      notification.error("Delete failed. See console.");
-    }
-  };
-
   const { data: propertySchemaUID } = useScaffoldReadContract({
     contractName: "Indexer",
     functionName: "PROPERTY_SCHEMA_UID",
@@ -294,8 +259,7 @@ export const FileBrowser = ({
   });
 
   const isLoading = useEditionsQuery ? isEditionLoading : isStandardLoading;
-  const rawItems = useEditionsQuery ? (editionItemsRaw ? (editionItemsRaw as any)[0] : undefined) : standardItems;
-  const items = rawItems?.filter((item: any) => !deletedUIDs.has(item.uid));
+  const items = useEditionsQuery ? (editionItemsRaw ? (editionItemsRaw as any)[0] : undefined) : standardItems;
 
   if (!currentAnchorUID) return <div>Select a topic</div>;
   if (isLoading) return <div>Loading items...</div>;
@@ -359,20 +323,6 @@ export const FileBrowser = ({
                   >
                     <TagIcon className="w-5 h-5 text-gray-400 hover:text-secondary" />
                   </button>
-
-                  {/* Delete Button (files only) */}
-                  {isItemFile && (
-                    <button
-                      className="p-1 rounded-full bg-base-100 shadow-sm hover:bg-base-300 transition-colors"
-                      onClick={e => {
-                        e.stopPropagation();
-                        handleDelete(item);
-                      }}
-                      title="Delete file"
-                    >
-                      <TrashIcon className="w-5 h-5 text-gray-400 hover:text-error" />
-                    </button>
-                  )}
 
                   {/* Debug Info Button */}
                   <button
