@@ -42,8 +42,17 @@ describe("TagResolver", function () {
     eas = await EASFactory.deploy(await registry.getAddress());
     await eas.waitForDeployment();
 
+    // Pre-compute TagResolver address and TAG schema UID before deploying
+    const ownerAddr = await owner.getAddress();
+    const resolverNonce = await ethers.provider.getTransactionCount(ownerAddr);
+    const futureTagResolverAddress = ethers.getCreateAddress({ from: ownerAddr, nonce: resolverNonce });
+    const precomputedTagSchemaUID = ethers.solidityPackedKeccak256(
+      ["string", "address", "bool"],
+      ["bytes32 definition, bool applies", futureTagResolverAddress, true],
+    );
+
     const TagResolverFactory = await ethers.getContractFactory("TagResolver");
-    tagResolver = await TagResolverFactory.deploy(await eas.getAddress());
+    tagResolver = await TagResolverFactory.deploy(await eas.getAddress(), precomputedTagSchemaUID);
     await tagResolver.waitForDeployment();
 
     // TAG schema: registered with TagResolver

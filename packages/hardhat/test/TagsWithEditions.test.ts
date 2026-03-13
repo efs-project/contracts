@@ -53,14 +53,21 @@ describe("Tags with Editions (Integration)", function () {
     eas = await EASFactory.deploy(await registry.getAddress());
     await eas.waitForDeployment();
 
-    // Deploy TagResolver
+    // Deploy TagResolver — pre-compute its address to derive TAG schema UID before deployment
+    const ownerAddr = await owner.getAddress();
+    const resolverNonce = await ethers.provider.getTransactionCount(ownerAddr);
+    const futureTagResolverAddress = ethers.getCreateAddress({ from: ownerAddr, nonce: resolverNonce });
+    const precomputedTagSchemaUID = ethers.solidityPackedKeccak256(
+      ["string", "address", "bool"],
+      ["bytes32 definition, bool applies", futureTagResolverAddress, true],
+    );
+
     const TagResolverFactory = await ethers.getContractFactory("TagResolver");
-    tagResolver = await TagResolverFactory.deploy(await eas.getAddress());
+    tagResolver = await TagResolverFactory.deploy(await eas.getAddress(), precomputedTagSchemaUID);
     await tagResolver.waitForDeployment();
 
     // Calculate future EFSIndexer address
     // After deploying SchemaRegistry + EAS + TagResolver, the next nonce is:
-    const ownerAddr = await owner.getAddress();
     const nonce = await ethers.provider.getTransactionCount(ownerAddr);
     // nonce+0: ANCHOR schema  (resolver = futureIndexer)
     // nonce+1: PROPERTY schema (resolver = futureIndexer)

@@ -22,6 +22,9 @@ import { EMPTY_UID } from "@ethereum-attestation-service/eas-contracts/contracts
 contract TagResolver is SchemaResolver {
     error MustTargetSomething();
 
+    /// @notice The EAS schema UID for the Tag schema registered with this resolver
+    bytes32 public immutable TAG_SCHEMA_UID;
+
     // Singleton map: keccak256(attester, targetID, definition) => active attestation UID
     mapping(bytes32 => bytes32) private _activeTag;
 
@@ -33,7 +36,9 @@ contract TagResolver is SchemaResolver {
     mapping(bytes32 => bytes32[]) private _taggedTargets;
     mapping(bytes32 => mapping(bytes32 => bool)) private _hasTarget;
 
-    constructor(IEAS eas) SchemaResolver(eas) {}
+    constructor(IEAS eas, bytes32 tagSchemaUID) SchemaResolver(eas) {
+        TAG_SCHEMA_UID = tagSchemaUID;
+    }
 
     function onAttest(Attestation calldata attestation, uint256 /*value*/) internal override returns (bool) {
         (bytes32 definition, bool applies) = abi.decode(attestation.data, (bytes32, bool));

@@ -59,6 +59,14 @@ const deployEFSIndexer: DeployFunction = async function (hre: HardhatRuntimeEnvi
   console.log("Predicted TagResolver Address:", futureTagResolverAddress);
   console.log("Predicted EFSIndexer Address:", futureIndexerAddress);
 
+  // Pre-compute the TAG schema UID (deterministic: keccak256(definition, resolver, revocable))
+  const tagSchema = schemas.find(s => s.name === "TAG")!;
+  const tagSchemaUID = ethers.solidityPackedKeccak256(
+    ["string", "address", "bool"],
+    [tagSchema.definition, futureTagResolverAddress, tagSchema.revocable],
+  );
+  console.log("Pre-computed TAG_SCHEMA_UID:", tagSchemaUID);
+
   // 4. Deploy TagResolver first (needs to exist before schema registration)
   //    tagsRoot is not set yet — it requires the Indexer to exist first (EAS calls
   //    the Indexer resolver's onAttest when creating the anchor). setTagsRoot() is
@@ -66,7 +74,7 @@ const deployEFSIndexer: DeployFunction = async function (hre: HardhatRuntimeEnvi
   await deploy("TagResolver", {
     contract: "TagResolver",
     from: deployer,
-    args: [EAS_ADDRESS],
+    args: [EAS_ADDRESS, tagSchemaUID],
     log: true,
     autoMine: true,
   });

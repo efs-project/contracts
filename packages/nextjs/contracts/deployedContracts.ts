@@ -7,7 +7,7 @@ import { GenericContractsDeclaration } from "~~/utils/scaffold-eth/contract";
 const deployedContracts = {
   31337: {
     EFSFileView: {
-      address: "0xf9108e0797406c45Ca43f103B176cBd902a12fba",
+      address: "0x866687a67BbaCa249B6f967b293024cc4fC80559",
       abi: [
         {
           inputs: [
@@ -251,7 +251,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     EFSRouter: {
-      address: "0x7c9dc0e849c3b70bf46F59D127Fc8C568eA72180",
+      address: "0x31826044B6937353Dc8fad09b1D38DB08B462918",
       abi: [
         {
           inputs: [
@@ -388,7 +388,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     Indexer: {
-      address: "0x4f296AC081C3d218211E8537f417506888F96b9B",
+      address: "0xEbbde397226c386eBAAdBeee435f49a8324F1aA0",
       abi: [
         {
           inputs: [
@@ -1869,7 +1869,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     TagResolver: {
-      address: "0xB48dB95a489108ffa7baF8eBb2B4C740a8D4Db61",
+      address: "0x19C7dAeb1828942DeBf60FB78FF70292300E7800",
       abi: [
         {
           inputs: [
@@ -1877,6 +1877,11 @@ const deployedContracts = {
               internalType: "contract IEAS",
               name: "eas",
               type: "address",
+            },
+            {
+              internalType: "bytes32",
+              name: "tagSchemaUID",
+              type: "bytes32",
             },
           ],
           stateMutability: "nonpayable",
@@ -1911,6 +1916,19 @@ const deployedContracts = {
           inputs: [],
           name: "NotPayable",
           type: "error",
+        },
+        {
+          inputs: [],
+          name: "TAG_SCHEMA_UID",
+          outputs: [
+            {
+              internalType: "bytes32",
+              name: "",
+              type: "bytes32",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
         },
         {
           inputs: [
