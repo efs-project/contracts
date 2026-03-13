@@ -73,7 +73,6 @@ export const Toolbar = ({
   const [editionsInput, setEditionsInput] = useState(searchParams.get("editions") || "");
   // Tag Filter Input State
   const [tagFilterInput, setTagFilterInput] = useState(searchParams.get("tags") || "");
-  const { targetNetwork } = useTargetNetwork();
 
   useEffect(() => {
     if (creationType && modalRef.current) {
