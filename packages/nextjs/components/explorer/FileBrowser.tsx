@@ -51,6 +51,8 @@ export const FileBrowser = ({
   // Tag filter state: null = no filter active; Set<string> = allowed DATA/anchor UIDs
   const [tagFilteredUIDs, setTagFilteredUIDs] = useState<Set<string> | null>(null);
   const [isTagFilterLoading, setIsTagFilterLoading] = useState(false);
+  // Incremented whenever the user adds or removes a tag so the filter effect re-runs immediately.
+  const [tagFilterVersion, setTagFilterVersion] = useState(0);
   const [tagResolverAddress, setTagResolverAddress] = useState<`0x${string}` | null>(null);
   const [tagsRoot, setTagsRoot] = useState<`0x${string}` | null>(null);
   // Maps anchor UID → set of DATA UIDs for all relevant edition attesters.
@@ -200,7 +202,7 @@ export const FileBrowser = ({
     return () => {
       cancelled = true;
     };
-  }, [tagFilter, publicClient, indexerInfo, tagResolverAddress, tagsRoot]);
+  }, [tagFilter, tagFilterVersion, publicClient, indexerInfo, tagResolverAddress, tagsRoot]);
 
   const fetchFileContent = async (item: any) => {
     if (!efsRouter) {
@@ -740,6 +742,7 @@ export const FileBrowser = ({
             setTagModalUID(null);
             setTagModalIsFile(false);
           }}
+          onTagChange={() => setTagFilterVersion(v => v + 1)}
         />
       )}
     </div>

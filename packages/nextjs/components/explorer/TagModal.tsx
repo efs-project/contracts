@@ -12,9 +12,11 @@ interface TagModalProps {
   uid: string; // The anchor UID of the item being tagged
   isFile?: boolean; // When true, tags are attached to the connected user's DATA attestation for this anchor
   onClose: () => void;
+  /** Called after any successful tag add or remove so the parent can refresh filtered results. */
+  onTagChange?: () => void;
 }
 
-export const TagModal = ({ uid, isFile, onClose }: TagModalProps) => {
+export const TagModal = ({ uid, isFile, onClose, onTagChange }: TagModalProps) => {
   const [tagName, setTagName] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [tagDefinitions, setTagDefinitions] = useState<`0x${string}`[]>([]);
@@ -266,6 +268,7 @@ export const TagModal = ({ uid, isFile, onClose }: TagModalProps) => {
       notification.success("Tag applied!");
       setTagName("");
       setRefreshKey(prev => prev + 1);
+      onTagChange?.();
     } catch (e: any) {
       console.error("Error applying tag:", e);
       notification.error("Tag operation failed. Check console.");
@@ -293,6 +296,7 @@ export const TagModal = ({ uid, isFile, onClose }: TagModalProps) => {
       if (txHash) await publicClient.waitForTransactionReceipt({ hash: txHash });
       notification.success("Tag removed!");
       setRefreshKey(prev => prev + 1);
+      onTagChange?.();
     } catch (e) {
       console.error("Error removing tag:", e);
       notification.error("Failed to remove tag.");
@@ -349,13 +353,13 @@ export const TagModal = ({ uid, isFile, onClose }: TagModalProps) => {
             value={tagName}
             onChange={e => setTagName(e.target.value)}
             onKeyDown={e => {
-              if (e.key === "Enter" && tagName) handleAddTag();
+              if (e.key === "Enter" && tagName.trim()) handleAddTag();
             }}
           />
           <button
             className="btn btn-primary btn-sm w-full"
             onClick={() => handleAddTag()}
-            disabled={!tagName || isSubmitting}
+            disabled={!tagName.trim() || isSubmitting}
           >
             <PlusIcon className="w-4 h-4 mr-1" />
             {isSubmitting ? "Processing..." : "Add Tag"}
