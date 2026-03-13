@@ -226,12 +226,29 @@ describe("Tags with Editions (Integration)", function () {
     return false;
   };
 
-  /** Fetch all tagged target UIDs for a definition into a Set (lowercased). */
+  /** Fetch all tagged target UIDs for a definition into a Set (lowercased). Append-only. */
   const getTaggedTargetSet = async (definitionUID: string): Promise<Set<string>> => {
     const count = await tagResolver.getTaggedTargetCount(definitionUID);
     if (count === 0n) return new Set();
     const targets = await tagResolver.getTaggedTargets(definitionUID, 0n, count);
     return new Set(targets.map((t: string) => t.toLowerCase()));
+  };
+
+  /**
+   * Like getTaggedTargetSet but filters to only currently-active tags using isActivelyTagged.
+   * Mirrors the new frontend behaviour (FileBrowser step 4).
+   */
+  const getActivelyTaggedSet = async (definitionUID: string): Promise<Set<string>> => {
+    const count = await tagResolver.getTaggedTargetCount(definitionUID);
+    if (count === 0n) return new Set();
+    const targets = await tagResolver.getTaggedTargets(definitionUID, 0n, count);
+    const active = new Set<string>();
+    for (const target of targets) {
+      if (await tagResolver.isActivelyTagged(target, definitionUID)) {
+        active.add(target.toLowerCase());
+      }
+    }
+    return active;
   };
 
   // ─── Tests ──────────────────────────────────────────────────────────────────
@@ -565,6 +582,94 @@ describe("Tags with Editions (Integration)", function () {
       expect(await tagResolver.getTagDefinitionCount(dataA)).to.equal(1n);
     });
 
+    it("isActivelyTagged: true after tagging, false after revocation", async function () {
+      const fileAnchor = await createFileAnchor(userA, rootUID, "active-check.txt");
+      const dataA = await createData(userA, fileAnchor, "A");
+      const nsfwDef = await createTagDef("nsfw8b");
+
+      expect(await tagResolver.isActivelyTagged(dataA, nsfwDef)).to.be.false;
+
+      const tagUID = await tagTarget(userA, dataA, nsfwDef, true);
+      expect(await tagResolver.isActivelyTagged(dataA, nsfwDef)).to.be.true;
+
+      await revokeTag(userA, tagUID);
+      expect(await tagResolver.isActivelyTagged(dataA, nsfwDef)).to.be.false;
+    });
+
+    it("isActivelyTagged: stays true when one of two attesters revokes", async function () {
+      const fileAnchor = await createFileAnchor(userA, rootUID, "multi-tagger.txt");
+      const dataA = await createData(userA, fileAnchor, "A");
+      const nsfwDef = await createTagDef("nsfw8c");
+
+      const tagA = await tagTarget(userA, dataA, nsfwDef, true);
+      await tagTarget(userB, dataA, nsfwDef, true);
+
+      // Both tagged — actively tagged
+      expect(await tagResolver.isActivelyTagged(dataA, nsfwDef)).to.be.true;
+
+      // User A revokes — User B still has active tag
+      await revokeTag(userA, tagA);
+      expect(await tagResolver.isActivelyTagged(dataA, nsfwDef)).to.be.true;
+    });
+
+    it("isActivelyTagged: false after applies=false supersede", async function () {
+      const fileAnchor = await createFileAnchor(userA, rootUID, "negate-check.txt");
+      const dataA = await createData(userA, fileAnchor, "A");
+      const nsfwDef = await createTagDef("nsfw8d");
+
+      await tagTarget(userA, dataA, nsfwDef, true);
+      expect(await tagResolver.isActivelyTagged(dataA, nsfwDef)).to.be.true;
+
+      // Negate (applies=false) — supersedes the active tag
+      await tagTarget(userA, dataA, nsfwDef, false);
+      expect(await tagResolver.isActivelyTagged(dataA, nsfwDef)).to.be.false;
+    });
+
+    it("isActivelyTagged: true again after re-tagging following revocation", async function () {
+      const fileAnchor = await createFileAnchor(userA, rootUID, "retag-check.txt");
+      const dataA = await createData(userA, fileAnchor, "A");
+      const nsfwDef = await createTagDef("nsfw8e");
+
+      const tag1 = await tagTarget(userA, dataA, nsfwDef, true);
+      await revokeTag(userA, tag1);
+      expect(await tagResolver.isActivelyTagged(dataA, nsfwDef)).to.be.false;
+
+      await tagTarget(userA, dataA, nsfwDef, true);
+      expect(await tagResolver.isActivelyTagged(dataA, nsfwDef)).to.be.true;
+    });
+
+    it("getActivelyTaggedSet correctly excludes revoked targets from filter", async function () {
+      const anchorA = await createFileAnchor(userA, rootUID, "active-filter-a.txt");
+      const anchorB = await createFileAnchor(userA, rootUID, "active-filter-b.txt");
+      const dataA = await createData(userA, anchorA, "A");
+      const dataB = await createData(userA, anchorB, "B");
+      const nsfwDef = await createTagDef("nsfw8f");
+      const addrA = await userA.getAddress();
+
+      const tagA = await tagTarget(userA, dataA, nsfwDef, true);
+      await tagTarget(userA, dataB, nsfwDef, true);
+
+      // Both match before revocation
+      const activeSetBefore = await getActivelyTaggedSet(nsfwDef);
+      expect(await simulateTagFilter(anchorA, [addrA], activeSetBefore)).to.be.true;
+      expect(await simulateTagFilter(anchorB, [addrA], activeSetBefore)).to.be.true;
+
+      // Revoke tag on A
+      await revokeTag(userA, tagA);
+
+      // Discovery list still has both
+      const rawSet = await getTaggedTargetSet(nsfwDef);
+      expect(rawSet.size).to.equal(2);
+
+      // Active set only has B
+      const activeSetAfter = await getActivelyTaggedSet(nsfwDef);
+      expect(activeSetAfter.has(dataA.toLowerCase())).to.be.false;
+      expect(activeSetAfter.has(dataB.toLowerCase())).to.be.true;
+
+      expect(await simulateTagFilter(anchorA, [addrA], activeSetAfter)).to.be.false;
+      expect(await simulateTagFilter(anchorB, [addrA], activeSetAfter)).to.be.true;
+    });
+
     it("Re-tagging after revocation creates a new active tag", async function () {
       const fileAnchor = await createFileAnchor(userA, rootUID, "retag.txt");
       const dataA = await createData(userA, fileAnchor, "A");
@@ -694,22 +799,27 @@ describe("Tags with Editions (Integration)", function () {
     });
 
     it("Filter 'nsfw' after User A revokes tag → no match for any edition", async function () {
-      // Get User A's active tag UID and revoke it
       const activeTag = await tagResolver.getActiveTagUID(addrA, dataA, nsfwDef);
       await revokeTag(userA, activeTag);
 
-      const nsfwSet = await getTaggedTargetSet(nsfwDef);
-      // Note: dataA is still in the discovery list (append-only) but getActiveTagUID returns zero.
-      // The simulateTagFilter checks getDataByAddressList → DATA_UID in tagged set.
-      // The discovery list still contains dataA, so this would STILL match!
-      // This reveals an important behavior: the discovery list is append-only,
-      // so filtering purely by getTaggedTargets is insufficient after revocation.
-      // A correct filter must also check getActiveTagUID for each (attester, target, definition).
-      //
-      // For now, verify the raw contract behavior:
+      // Active tag is cleared
       expect(await tagResolver.getActiveTagUID(addrA, dataA, nsfwDef)).to.equal(ZERO_BYTES32);
-      // Discovery list still has it:
-      expect(nsfwSet.has(dataA.toLowerCase())).to.be.true;
+
+      // isActivelyTagged returns false now that all attesters have revoked
+      expect(await tagResolver.isActivelyTagged(dataA, nsfwDef)).to.be.false;
+
+      // Discovery list still contains dataA (append-only — expected)
+      const rawSet = await getTaggedTargetSet(nsfwDef);
+      expect(rawSet.has(dataA.toLowerCase())).to.be.true;
+
+      // Active-filtered set (mirrors frontend behaviour) excludes the revoked target
+      const activeSet = await getActivelyTaggedSet(nsfwDef);
+      expect(activeSet.has(dataA.toLowerCase())).to.be.false;
+
+      // simulateTagFilter with the active set: no edition matches
+      expect(await simulateTagFilter(fileAnchor, [addrA], activeSet)).to.be.false;
+      expect(await simulateTagFilter(fileAnchor, [addrB], activeSet)).to.be.false;
+      expect(await simulateTagFilter(fileAnchor, [addrC], activeSet)).to.be.false;
     });
   });
 

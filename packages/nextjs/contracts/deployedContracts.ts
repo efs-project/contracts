@@ -7,7 +7,7 @@ import { GenericContractsDeclaration } from "~~/utils/scaffold-eth/contract";
 const deployedContracts = {
   31337: {
     EFSFileView: {
-      address: "0x866687a67BbaCa249B6f967b293024cc4fC80559",
+      address: "0xF9A200ADDCCE01e02F4Ec4874F938d5066d7351A",
       abi: [
         {
           inputs: [
@@ -251,7 +251,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     EFSRouter: {
-      address: "0x31826044B6937353Dc8fad09b1D38DB08B462918",
+      address: "0x46EcF9e802Abc7FDc3D732DFE1Af409D2FAA1Aa8",
       abi: [
         {
           inputs: [
@@ -388,7 +388,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     Indexer: {
-      address: "0xEbbde397226c386eBAAdBeee435f49a8324F1aA0",
+      address: "0x5F3e642b835518fE589FE988eAef47BFd2FC35D3",
       abi: [
         {
           inputs: [
@@ -1869,7 +1869,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     TagResolver: {
-      address: "0x19C7dAeb1828942DeBf60FB78FF70292300E7800",
+      address: "0x1Ba8A94714658C24465d9C6BE075893b8CdEafCc",
       abi: [
         {
           inputs: [
@@ -2121,6 +2121,30 @@ const deployedContracts = {
               internalType: "bytes32[]",
               name: "",
               type: "bytes32[]",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "targetID",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "definition",
+              type: "bytes32",
+            },
+          ],
+          name: "isActivelyTagged",
+          outputs: [
+            {
+              internalType: "bool",
+              name: "",
+              type: "bool",
             },
           ],
           stateMutability: "view",

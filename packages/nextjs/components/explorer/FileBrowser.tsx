@@ -105,10 +105,12 @@ export const FileBrowser = ({
 
     if (tagNames.length === 0) {
       setTagFilteredUIDs(null);
+      setIsTagFilterLoading(false);
       return;
     }
 
     if (!publicClient || !indexerInfo || !tagResolverAddress || !tagsRoot) {
+      setIsTagFilterLoading(false);
       return;
     }
 
@@ -147,7 +149,7 @@ export const FileBrowser = ({
             continue;
           }
 
-          // Step 3: get all tagged targets (cap at 500 for now)
+          // Step 3: get all tagged targets from the append-only discovery list (cap at 500)
           const targets = (await publicClient.readContract({
             address: tagResolverAddress,
             abi: TAG_RESOLVER_ABI,
@@ -155,7 +157,21 @@ export const FileBrowser = ({
             args: [definitionUID, 0n, count > 500n ? 500n : count],
           })) as `0x${string}`[];
 
-          tagSets.push(new Set(targets.map(t => t.toLowerCase())));
+          // Step 4: filter to only currently-active tags via isActivelyTagged.
+          // getTaggedTargets is append-only and retains revoked entries; isActivelyTagged
+          // uses an on-chain counter maintained by onAttest/onRevoke so this is O(1) per target.
+          const activeChecks = await Promise.all(
+            targets.map(async target => {
+              const isActive = (await publicClient.readContract({
+                address: tagResolverAddress,
+                abi: TAG_RESOLVER_ABI,
+                functionName: "isActivelyTagged",
+                args: [target, definitionUID],
+              })) as boolean;
+              return isActive ? target.toLowerCase() : null;
+            }),
+          );
+          tagSets.push(new Set(activeChecks.filter((t): t is string => t !== null)));
         }
 
         if (cancelled) return;
@@ -406,13 +422,22 @@ export const FileBrowser = ({
   // Multiple attesters can have data for the same anchor, so we store a Set per anchor and
   // show the item if ANY of those DATA UIDs is in the tag filter set.
   useEffect(() => {
-    if (!tagFilteredUIDs || !rawItems || !publicClient || !indexerInfo || !connectedAddress) {
+    // connectedAddress is only needed as the own-files fallback; if editionAddresses is
+    // already provided (e.g. shared ?editions= link), we can build the map without a wallet.
+    if (!tagFilteredUIDs || !rawItems || !publicClient || !indexerInfo) {
       setDataUIDMap(new Map());
       return;
     }
 
     // Which attesters' data are we looking at?
-    const attesters: string[] = editionAddresses.length > 0 ? editionAddresses : [connectedAddress];
+    // editionAddresses takes precedence; fall back to connected wallet for own-files mode.
+    const attesters: string[] =
+      editionAddresses.length > 0 ? editionAddresses : connectedAddress ? [connectedAddress] : [];
+
+    if (attesters.length === 0) {
+      setDataUIDMap(new Map());
+      return;
+    }
 
     let cancelled = false;
     const map = new Map<string, Set<string>>();
@@ -452,16 +477,21 @@ export const FileBrowser = ({
     return () => {
       cancelled = true;
     };
-  }, [tagFilteredUIDs, rawItems, publicClient, indexerInfo, dataSchemaUID, connectedAddress, editionAddresses]);
+  }, [tagFilteredUIDs, rawItems, publicClient, indexerInfo, dataSchemaUID, connectedAddress, editionAddresses]); // connectedAddress kept for own-files fallback re-trigger
 
   // Apply tag filter if active. For file items, an item passes if ANY of the viewed
-  // edition's DATA UIDs for that anchor appears in the tag filter set.
+  // edition's DATA UIDs for that anchor appears in the tag filter set, OR if the anchor
+  // UID itself is tagged directly (TagModal falls back to the anchor when no DATA exists).
   const items =
     tagFilteredUIDs !== null
       ? rawItems?.filter((item: any) => {
           if (isFile(item, dataSchemaUID)) {
-            const dataUIDs = dataUIDMap.get(item.uid.toLowerCase());
-            return dataUIDs ? [...dataUIDs].some(uid => tagFilteredUIDs.has(uid)) : false;
+            const anchorUID = item.uid.toLowerCase();
+            // Primary: check per-edition DATA UIDs (correct edition-specific match)
+            const dataUIDs = dataUIDMap.get(anchorUID);
+            if (dataUIDs && [...dataUIDs].some(uid => tagFilteredUIDs.has(uid))) return true;
+            // Fallback: check anchor UID directly (TagModal tags anchor when no DATA found)
+            return tagFilteredUIDs.has(anchorUID);
           }
           // Folders: match by anchor UID directly
           return tagFilteredUIDs.has(item.uid.toLowerCase());
