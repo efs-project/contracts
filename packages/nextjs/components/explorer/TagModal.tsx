@@ -27,6 +27,9 @@ export const TagModal = ({ uid, isFile, onClose, onTagChange }: TagModalProps) =
   // effectiveUID: for files this is the DATA attestation UID (edition-specific);
   // for folders it stays as the anchor UID. Tags on DATA UIDs are per-user per-edition.
   const [effectiveUID, setEffectiveUID] = useState<string>(uid);
+  // True while the async DATA UID lookup is in flight for file items.
+  // Submission is blocked until this resolves so we never accidentally tag the anchor UID.
+  const [isResolvingDataUID, setIsResolvingDataUID] = useState(!!isFile);
 
   const { address: connectedAddress } = useAccount();
   const publicClient = usePublicClient();
@@ -50,10 +53,12 @@ export const TagModal = ({ uid, isFile, onClose, onTagChange }: TagModalProps) =
   useEffect(() => {
     if (!isFile || !publicClient || !connectedAddress) {
       setEffectiveUID(uid);
+      setIsResolvingDataUID(false);
       return;
     }
 
     let cancelled = false;
+    setIsResolvingDataUID(true);
 
     const resolve = async () => {
       try {
@@ -61,7 +66,10 @@ export const TagModal = ({ uid, isFile, onClose, onTagChange }: TagModalProps) =
           return (m.default as any)[publicClient.chain.id]?.Indexer;
         });
         if (!indexer) {
-          setEffectiveUID(uid);
+          if (!cancelled) {
+            setEffectiveUID(uid);
+            setIsResolvingDataUID(false);
+          }
           return;
         }
 
@@ -74,9 +82,13 @@ export const TagModal = ({ uid, isFile, onClose, onTagChange }: TagModalProps) =
 
         if (!cancelled) {
           setEffectiveUID(dataUID && dataUID !== zeroHash ? dataUID : uid);
+          setIsResolvingDataUID(false);
         }
       } catch {
-        if (!cancelled) setEffectiveUID(uid);
+        if (!cancelled) {
+          setEffectiveUID(uid);
+          setIsResolvingDataUID(false);
+        }
       }
     };
 
@@ -319,9 +331,11 @@ export const TagModal = ({ uid, isFile, onClose, onTagChange }: TagModalProps) =
 
         {isFile && (
           <p className="text-xs text-base-content/50 mb-3">
-            {usingDataUID
-              ? "Tagging your edition of this file."
-              : "No data found for your address — tagging the file anchor."}
+            {isResolvingDataUID
+              ? "Resolving your edition…"
+              : usingDataUID
+                ? "Tagging your edition of this file."
+                : "No data found for your address — tagging the file anchor."}
           </p>
         )}
 
@@ -353,13 +367,13 @@ export const TagModal = ({ uid, isFile, onClose, onTagChange }: TagModalProps) =
             value={tagName}
             onChange={e => setTagName(e.target.value)}
             onKeyDown={e => {
-              if (e.key === "Enter" && tagName.trim()) handleAddTag();
+              if (e.key === "Enter" && tagName.trim() && !isResolvingDataUID) handleAddTag();
             }}
           />
           <button
             className="btn btn-primary btn-sm w-full"
             onClick={() => handleAddTag()}
-            disabled={!tagName.trim() || isSubmitting}
+            disabled={!tagName.trim() || isSubmitting || isResolvingDataUID}
           >
             <PlusIcon className="w-4 h-4 mr-1" />
             {isSubmitting ? "Processing..." : "Add Tag"}

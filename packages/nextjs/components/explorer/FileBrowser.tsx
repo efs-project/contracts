@@ -151,19 +151,26 @@ export const FileBrowser = ({
             continue;
           }
 
-          // Step 3: get all tagged targets from the append-only discovery list (cap at 500)
-          const targets = (await publicClient.readContract({
-            address: tagResolverAddress,
-            abi: TAG_RESOLVER_ABI,
-            functionName: "getTaggedTargets",
-            args: [definitionUID, 0n, count > 500n ? 500n : count],
-          })) as `0x${string}`[];
+          // Step 3: paginate through ALL tagged targets in the append-only discovery list.
+          // Fetching in pages of 500 avoids a single huge call while ensuring no targets
+          // beyond the first page are silently dropped (which would cause false negatives).
+          const PAGE_SIZE = 500n;
+          const allTargets: `0x${string}`[] = [];
+          for (let cursor = 0n; cursor < count; cursor += PAGE_SIZE) {
+            const page = (await publicClient.readContract({
+              address: tagResolverAddress,
+              abi: TAG_RESOLVER_ABI,
+              functionName: "getTaggedTargets",
+              args: [definitionUID, cursor, PAGE_SIZE],
+            })) as `0x${string}`[];
+            allTargets.push(...page);
+          }
 
           // Step 4: filter to only currently-active tags via isActivelyTagged.
           // getTaggedTargets is append-only and retains revoked entries; isActivelyTagged
           // uses an on-chain counter maintained by onAttest/onRevoke so this is O(1) per target.
           const activeChecks = await Promise.all(
-            targets.map(async target => {
+            allTargets.map(async target => {
               const isActive = (await publicClient.readContract({
                 address: tagResolverAddress,
                 abi: TAG_RESOLVER_ABI,
