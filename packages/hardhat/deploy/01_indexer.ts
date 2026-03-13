@@ -60,6 +60,9 @@ const deployEFSIndexer: DeployFunction = async function (hre: HardhatRuntimeEnvi
   console.log("Predicted EFSIndexer Address:", futureIndexerAddress);
 
   // 4. Deploy TagResolver first (needs to exist before schema registration)
+  //    tagsRoot is not set yet — it requires the Indexer to exist first (EAS calls
+  //    the Indexer resolver's onAttest when creating the anchor). setTagsRoot() is
+  //    called after the Indexer is deployed and the tagsRoot anchor is created.
   await deploy("TagResolver", {
     contract: "TagResolver",
     from: deployer,
@@ -182,13 +185,28 @@ const deployEFSIndexer: DeployFunction = async function (hre: HardhatRuntimeEnvi
     }
   }
 
-  // 9. Create Root Anchor
+  // 9. Create Root Anchor and _tags Anchor
+  //    Tag definitions (e.g. "favorites") are normal anchors under "_tags", which is
+  //    itself a normal anchor under root. One tree, uniform anchors throughout.
+  const anchorSchemaUID = schemaUIDs["ANCHOR"];
+
+  const extractUID = (receipt: any): string | undefined => {
+    for (const log of receipt?.logs ?? []) {
+      try {
+        const parsed = eas.interface.parseLog(log);
+        if (parsed?.name === "Attested") return parsed.args.uid;
+      } catch {
+        // Not our event
+      }
+    }
+    return undefined;
+  };
+
   try {
-    console.log("Creating Root Anchor...");
-    const anchorSchemaUID = schemaUIDs["ANCHOR"];
-    const rootUID = await indexer.rootAnchorUID();
+    let rootUID = await indexer.rootAnchorUID();
 
     if (rootUID === ethers.ZeroHash) {
+      console.log("Creating Root Anchor...");
       const tx = await eas.attest({
         schema: anchorSchemaUID,
         data: {
@@ -200,13 +218,36 @@ const deployEFSIndexer: DeployFunction = async function (hre: HardhatRuntimeEnvi
           value: 0,
         },
       });
-      await tx.wait();
-      console.log("Root Anchor 'root' created successfully!");
+      const receipt = await tx.wait();
+      rootUID = extractUID(receipt) ?? ethers.ZeroHash;
+      console.log("Root Anchor 'root' created:", rootUID);
     } else {
       console.log("Root Anchor already exists:", rootUID);
     }
+
+    // Check if _tags already exists under root
+    const existingTagsUID = await indexer.resolvePath(rootUID, "_tags");
+    if (existingTagsUID === ethers.ZeroHash) {
+      console.log("Creating _tags Anchor under root...");
+      const tx = await eas.attest({
+        schema: anchorSchemaUID,
+        data: {
+          recipient: ethers.ZeroAddress,
+          expirationTime: 0,
+          revocable: false,
+          refUID: rootUID,
+          data: ethers.AbiCoder.defaultAbiCoder().encode(["string", "bytes32"], ["_tags", ethers.ZeroHash]),
+          value: 0,
+        },
+      });
+      const receipt = await tx.wait();
+      const tagsUID = extractUID(receipt);
+      console.log("_tags Anchor created:", tagsUID);
+    } else {
+      console.log("_tags Anchor already exists:", existingTagsUID);
+    }
   } catch (e) {
-    console.error("Failed to create Root Anchor:", e);
+    console.error("Failed to create Root / _tags Anchor:", e);
   }
 };
 

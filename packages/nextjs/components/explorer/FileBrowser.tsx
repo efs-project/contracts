@@ -51,6 +51,7 @@ export const FileBrowser = ({
   const [tagFilteredUIDs, setTagFilteredUIDs] = useState<Set<string> | null>(null);
   const [isTagFilterLoading, setIsTagFilterLoading] = useState(false);
   const [tagResolverAddress, setTagResolverAddress] = useState<`0x${string}` | null>(null);
+  const [tagsRoot, setTagsRoot] = useState<`0x${string}` | null>(null);
 
   const { data: efsRouter } = useDeployedContractInfo({ contractName: "EFSRouter" });
 
@@ -58,30 +59,37 @@ export const FileBrowser = ({
   const { targetNetwork } = useTargetNetwork();
   const publicClient = usePublicClient();
 
-  const { data: rootAnchorUID } = useScaffoldReadContract({
-    contractName: "Indexer",
-    functionName: "rootAnchorUID",
-  });
-
   useEffect(() => {
     setPageSize(50n);
   }, [currentAnchorUID]);
 
-  // Load TagResolver address once — used both for tag filter resolution and for hiding
-  // tag definition anchors (which are stored with tagResolverAddress as their schemaUID marker).
+  // Load TagResolver address and _tags anchor UID once.
+  // _tags is a normal anchor under the file system root — discovered the same way
+  // any folder is, via resolvePath. Tag definitions (e.g. "favorites") are its children.
   useEffect(() => {
-    if (!publicClient) return;
-    getTagResolverAddress(publicClient.chain.id).then(addr => {
-      if (addr) setTagResolverAddress(addr);
+    if (!publicClient || !indexerInfo) return;
+    getTagResolverAddress(publicClient.chain.id).then(async addr => {
+      if (!addr) return;
+      setTagResolverAddress(addr);
+      try {
+        const fsRoot = (await publicClient.readContract({
+          address: indexerInfo.address as `0x${string}`,
+          abi: indexerInfo.abi,
+          functionName: "rootAnchorUID",
+        })) as `0x${string}`;
+        if (!fsRoot || fsRoot === zeroHash) return;
+        const tagsUID = (await publicClient.readContract({
+          address: indexerInfo.address as `0x${string}`,
+          abi: indexerInfo.abi,
+          functionName: "resolvePath",
+          args: [fsRoot, "_tags"],
+        })) as `0x${string}`;
+        if (tagsUID && tagsUID !== zeroHash) setTagsRoot(tagsUID);
+      } catch {
+        // _tags not yet created — tag filter will be unavailable
+      }
     });
-  }, [publicClient]);
-
-  // bytes32 marker used to identify tag definition anchors in the directory listing.
-  // Tag def anchors store tagResolverAddress (left-padded to 32 bytes) as their schemaUID
-  // so they're invisible to resolvePath() and can be filtered from the UI.
-  const tagDefSchemaUID = tagResolverAddress
-    ? (`0x${"0".repeat(24)}${tagResolverAddress.slice(2).toLowerCase()}` as `0x${string}`)
-    : null;
+  }, [publicClient, indexerInfo]);
 
   // Resolve tag filter names → definition UIDs → tagged target sets → intersection
   useEffect(() => {
@@ -95,7 +103,7 @@ export const FileBrowser = ({
       return;
     }
 
-    if (!publicClient || !indexerInfo || !rootAnchorUID || !tagResolverAddress || !tagDefSchemaUID) {
+    if (!publicClient || !indexerInfo || !tagResolverAddress || !tagsRoot) {
       return;
     }
 
@@ -107,14 +115,12 @@ export const FileBrowser = ({
         const tagSets: Set<string>[] = [];
 
         for (const tagName of tagNames) {
-          // Step 1: resolve tag name → definition anchor UID via resolveAnchor
-          // (tag defs are stored with tagDefSchemaUID, not zeroHash, so they don't
-          //  appear as regular folders to resolvePath)
+          // Step 1: resolve tag name → definition anchor UID under _tags.
           const definitionUID = (await publicClient.readContract({
             address: indexerInfo.address as `0x${string}`,
             abi: indexerInfo.abi,
-            functionName: "resolveAnchor",
-            args: [rootAnchorUID as `0x${string}`, tagName, tagDefSchemaUID],
+            functionName: "resolvePath",
+            args: [tagsRoot as `0x${string}`, tagName],
           })) as `0x${string}`;
 
           if (!definitionUID || definitionUID === zeroHash) {
@@ -173,7 +179,7 @@ export const FileBrowser = ({
     return () => {
       cancelled = true;
     };
-  }, [tagFilter, publicClient, indexerInfo, rootAnchorUID, tagResolverAddress, tagDefSchemaUID]);
+  }, [tagFilter, publicClient, indexerInfo, tagResolverAddress, tagsRoot]);
 
   const fetchFileContent = async (item: any) => {
     if (!efsRouter) {
@@ -387,14 +393,12 @@ export const FileBrowser = ({
   const isLoading = useEditionsQuery ? isEditionLoading : isStandardLoading;
   const rawItems = useEditionsQuery ? (editionItemsRaw ? (editionItemsRaw as any)[0] : undefined) : standardItems;
 
-  // Apply filters:
-  // 1. Always hide tag definition anchors (they're system anchors, not user folders)
-  // 2. Apply tag filter if active
-  const items = rawItems?.filter((item: any) => {
-    if (tagDefSchemaUID && item.schema?.toLowerCase() === tagDefSchemaUID.toLowerCase()) return false;
-    if (tagFilteredUIDs !== null) return tagFilteredUIDs.has(item.uid.toLowerCase());
-    return true;
-  });
+  // Apply tag filter if active. Tag definition anchors live under tagsRoot
+  // (outside the file system tree), so they never appear here to begin with.
+  const items =
+    tagFilteredUIDs !== null
+      ? rawItems?.filter((item: any) => tagFilteredUIDs.has(item.uid.toLowerCase()))
+      : rawItems;
 
   if (!currentAnchorUID) return <div>Select a topic</div>;
   if (isLoading || isTagFilterLoading) return <div>Loading items...</div>;

@@ -7,7 +7,7 @@ import { GenericContractsDeclaration } from "~~/utils/scaffold-eth/contract";
 const deployedContracts = {
   31337: {
     EFSFileView: {
-      address: "0x64793E513C1CbC1fb25F3a56d450F914483Ef16D",
+      address: "0xB88ad5790577ea756F1a23d5878B8251A795E5e2",
       abi: [
         {
           inputs: [
@@ -251,7 +251,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     EFSRouter: {
-      address: "0x96A7D809851E5333A359a08c13CdedB24840F41d",
+      address: "0xdF0f1B5b4aeb72F9dF4dCb71B8AA2042D8FFBD59",
       abi: [
         {
           inputs: [
@@ -388,7 +388,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     Indexer: {
-      address: "0x63Eb1dc2A4ED65700EB71F939c6F2763941Cd5a5",
+      address: "0x1D05EC66a2Ad74a34687012933f6e201c273DB28",
       abi: [
         {
           inputs: [
@@ -1764,7 +1764,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     SchemaNameIndex: {
-      address: "0x2986E9f6ED5454eee338b8d86b30b34D7BaedC80",
+      address: "0xEA03D5BC870f06007C9Db92B3E87f03364F09F0f",
       abi: [
         {
           inputs: [
@@ -1869,7 +1869,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     TagResolver: {
-      address: "0x0d0F5dC25689a896B5442A44C66C516dd39Aa03D",
+      address: "0x0A09B7AaF980185651B25160ddaC8308aeA63290",
       abi: [
         {
           inputs: [

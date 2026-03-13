@@ -18,6 +18,7 @@ export const TagModal = ({ uid, onClose }: TagModalProps) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [tagDefinitions, setTagDefinitions] = useState<`0x${string}`[]>([]);
   const [tagResolverAddress, setTagResolverAddress] = useState<`0x${string}` | undefined>();
+  const [tagsRoot, setTagsRoot] = useState<`0x${string}` | undefined>();
   const [refreshKey, setRefreshKey] = useState(0);
 
   const { address: connectedAddress } = useAccount();
@@ -35,11 +36,28 @@ export const TagModal = ({ uid, onClose }: TagModalProps) => {
 
   const { writeContractAsync: attest } = useScaffoldWriteContract("EAS");
 
-  // Load TagResolver address
+  // Load TagResolver address and the _tags anchor UID (discovered from the normal tree).
   useEffect(() => {
-    if (!publicClient) return;
-    getTagResolverAddress(publicClient.chain.id).then(setTagResolverAddress);
-  }, [publicClient]);
+    if (!publicClient || !rootAnchorUID) return;
+    getTagResolverAddress(publicClient.chain.id).then(async addr => {
+      if (!addr) return;
+      setTagResolverAddress(addr);
+      // _tags is a normal anchor under root — discovered the same way any folder is.
+      const indexer = await import("~~/contracts/deployedContracts").then(m => {
+        return (m.default as any)[publicClient.chain.id]?.Indexer;
+      });
+      if (!indexer) return;
+      const tagsUID = (await publicClient.readContract({
+        address: indexer.address as `0x${string}`,
+        abi: indexer.abi,
+        functionName: "resolvePath",
+        args: [rootAnchorUID as `0x${string}`, "_tags"],
+      })) as `0x${string}`;
+      if (tagsUID && tagsUID !== "0x0000000000000000000000000000000000000000000000000000000000000000") {
+        setTagsRoot(tagsUID);
+      }
+    });
+  }, [publicClient, rootAnchorUID]);
 
   // Load tag definitions for this target via publicClient
   useEffect(() => {
@@ -82,7 +100,7 @@ export const TagModal = ({ uid, onClose }: TagModalProps) => {
   }, [publicClient, tagResolverAddress, uid, refreshKey]);
 
   const handleAddTag = async (applies: boolean, existingDefinitionUID?: string) => {
-    if (!anchorSchemaUID || !connectedAddress || !publicClient || !tagResolverAddress) return;
+    if (!anchorSchemaUID || !connectedAddress || !publicClient || !tagResolverAddress || !tagsRoot) return;
     setIsSubmitting(true);
 
     // Normalize tag names to lowercase so filter lookups (which also lowercase) always match
@@ -94,30 +112,20 @@ export const TagModal = ({ uid, onClose }: TagModalProps) => {
       let definitionUID = existingDefinitionUID;
 
       if (!definitionUID) {
-        // Need to find or create an Anchor for this tag name
-        if (!rootAnchorUID) {
-          notification.error("Root anchor not found");
-          setIsSubmitting(false);
-          return;
-        }
-
+        // Look up or create a tag definition anchor under tagsRoot (NOT under the
+        // file system root). This keeps tag definitions out of the file browser entirely
+        // while keeping anchor structure completely uniform (plain zeroHash schemaUID).
         const indexer = await import("~~/contracts/deployedContracts").then(m => {
           const chainId = publicClient.chain.id;
           return (m.default as any)[chainId]?.Indexer;
         });
 
-        // Tag definition anchors are stored with the TagResolver address (left-padded
-        // to bytes32) as their schemaUID marker.  This keeps them invisible to
-        // resolvePath() (which always looks up bytes32(0)) so they never appear as
-        // regular user-visible folders in the file browser.
-        const tagDefSchemaUID = `0x${"0".repeat(24)}${tagResolverAddress.slice(2).toLowerCase()}` as `0x${string}`;
-
         if (indexer) {
           const existingUID = (await publicClient.readContract({
             address: indexer.address as `0x${string}`,
             abi: indexer.abi,
-            functionName: "resolveAnchor",
-            args: [rootAnchorUID as `0x${string}`, normalizedTagName, tagDefSchemaUID],
+            functionName: "resolvePath",
+            args: [tagsRoot, normalizedTagName],
           })) as `0x${string}`;
 
           if (existingUID && existingUID !== zeroHash) {
@@ -126,12 +134,10 @@ export const TagModal = ({ uid, onClose }: TagModalProps) => {
         }
 
         if (!definitionUID) {
-          // Create a new Anchor for this tag definition.
-          // Use tagDefSchemaUID (not zeroHash) so the indexer stores it under a
-          // separate key — invisible to resolvePath and filterable in the UI.
+          // Create a plain anchor under tagsRoot — same structure as any folder.
           const encodedName = encodeAbiParameters(parseAbiParameters("string name, bytes32 schemaUID"), [
             normalizedTagName,
-            tagDefSchemaUID,
+            zeroHash,
           ]);
 
           const txHash = await attest({
@@ -143,7 +149,7 @@ export const TagModal = ({ uid, onClose }: TagModalProps) => {
                   recipient: "0x0000000000000000000000000000000000000000",
                   expirationTime: 0n,
                   revocable: false,
-                  refUID: rootAnchorUID as `0x${string}`,
+                  refUID: tagsRoot,
                   data: encodedName,
                   value: 0n,
                 },
