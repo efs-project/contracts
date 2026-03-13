@@ -25,7 +25,6 @@ export const useSchemaRegistry = () => {
   });
   const { data: dataUID } = useScaffoldReadContract({ contractName: "Indexer", functionName: "DATA_SCHEMA_UID" });
   const { data: blobUID } = useScaffoldReadContract({ contractName: "Indexer", functionName: "BLOB_SCHEMA_UID" });
-  const { data: tagUID } = useScaffoldReadContract({ contractName: "Indexer", functionName: "TAG_SCHEMA_UID" });
 
   const schemas = useMemo(() => {
     if (!anchorUID) return null;
@@ -34,9 +33,8 @@ export const useSchemaRegistry = () => {
       PROPERTY: propertyUID,
       DATA: dataUID,
       BLOB: blobUID,
-      TAG: tagUID,
     };
-  }, [anchorUID, propertyUID, dataUID, blobUID, tagUID]);
+  }, [anchorUID, propertyUID, dataUID, blobUID]);
 
   return {
     schemas,

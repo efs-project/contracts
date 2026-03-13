@@ -6,6 +6,7 @@ import { ethers } from "ethers";
 import { decodeEventLog, encodeDeployData, parseAbiItem, toHex } from "viem";
 import { usePublicClient, useWalletClient } from "wagmi";
 import { useDeployedContractInfo, useScaffoldWriteContract } from "~~/hooks/scaffold-eth";
+import { useTargetNetwork } from "~~/hooks/scaffold-eth/useTargetNetwork";
 import { notification } from "~~/utils/scaffold-eth";
 
 const MOCK_CHUNKED_FILE_ABI = [
@@ -69,6 +70,9 @@ export const Toolbar = ({
 
   // Editions Input State
   const [editionsInput, setEditionsInput] = useState(searchParams.get("editions") || "");
+  // Tag Filter Input State
+  const [tagFilterInput, setTagFilterInput] = useState(searchParams.get("tags") || "");
+  const { targetNetwork } = useTargetNetwork();
 
   useEffect(() => {
     if (creationType && modalRef.current) {
@@ -269,21 +273,23 @@ export const Toolbar = ({
     }
   };
 
-  const handleUpdateEditions = () => {
+  const updateQueryParam = (key: string, value: string) => {
     const currentQuery = new URLSearchParams(searchParams.toString());
-    if (editionsInput.trim() === "") {
-      currentQuery.delete("editions");
+    if (value.trim() === "") {
+      currentQuery.delete(key);
     } else {
-      currentQuery.set("editions", editionsInput.trim());
+      currentQuery.set(key, value.trim());
     }
 
-    // Build path from currentPath
     const urlSegments = currentPath.slice(1).map(p => encodeURIComponent(p.name));
     const queryPart = currentQuery.toString() ? `?${currentQuery.toString()}` : "";
     const url = `/explorer/${urlSegments.join("/")}${queryPart}`;
 
     router.push(url);
   };
+
+  const handleUpdateEditions = () => updateQueryParam("editions", editionsInput);
+  const handleUpdateTagFilter = () => updateQueryParam("tags", tagFilterInput);
 
   return (
     <div className="flex justify-between items-center p-2 bg-base-100 rounded-lg gap-4">
@@ -303,8 +309,11 @@ export const Toolbar = ({
         </ul>
       </div>
 
-      <div className="flex gap-2 items-center flex-grow max-w-md">
-        <label className="input input-bordered input-sm flex items-center gap-2 flex-grow">
+      <div className="flex gap-2 items-center flex-grow max-w-xl">
+        <label
+          className="input input-bordered input-sm flex items-center gap-2 flex-grow"
+          title="Filter files by attester address or ENS name"
+        >
           Editions:
           <input
             type="text"
@@ -317,7 +326,23 @@ export const Toolbar = ({
             }}
           />
         </label>
-        <button className="btn btn-sm btn-outline" onClick={handleUpdateEditions}>
+        <label
+          className="input input-bordered input-sm flex items-center gap-2 flex-grow"
+          title="Filter by tag names (comma-separated). Only items with matching tags are shown."
+        >
+          Tags:
+          <input
+            type="text"
+            className="grow"
+            placeholder="favorites, nsfw"
+            value={tagFilterInput}
+            onChange={e => setTagFilterInput(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === "Enter") handleUpdateTagFilter();
+            }}
+          />
+        </label>
+        <button className="btn btn-sm btn-outline" onClick={() => { handleUpdateEditions(); handleUpdateTagFilter(); }}>
           Apply
         </button>
       </div>

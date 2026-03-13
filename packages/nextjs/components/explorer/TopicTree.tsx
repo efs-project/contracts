@@ -47,8 +47,6 @@ const TreeNode = ({
       editionAddresses as string[],
       0n,
       50n,
-      dataSchemaUID as `0x${string}`,
-      propertySchemaUID as `0x${string}`,
     ],
     query: {
       enabled: hasEditions,

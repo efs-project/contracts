@@ -1,11 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { PropertiesModal } from "./PropertiesModal";
+import { TagModal } from "./TagModal";
 import { ethers } from "ethers";
+import { zeroHash } from "viem";
 import { usePublicClient } from "wagmi";
 import {
+  AdjustmentsHorizontalIcon,
   DocumentIcon,
   FolderIcon,
   InformationCircleIcon,
@@ -15,6 +18,7 @@ import {
 } from "@heroicons/react/24/outline";
 import { useDeployedContractInfo, useScaffoldReadContract } from "~~/hooks/scaffold-eth";
 import { useTargetNetwork } from "~~/hooks/scaffold-eth/useTargetNetwork";
+import { TAG_RESOLVER_ABI, getTagResolverAddress } from "~~/utils/efs/tagResolver";
 import { isFile, isTopic } from "~~/utils/efs/efsTypes";
 import { notification } from "~~/utils/scaffold-eth";
 
@@ -24,23 +28,133 @@ export const FileBrowser = ({
   currentPathNames,
   editionAddresses,
   onNavigate,
+  tagFilter = "",
 }: {
   currentAnchorUID: string | null;
   dataSchemaUID: string;
   currentPathNames: string[];
   editionAddresses: string[];
   onNavigate: (uid: string, name: string) => void;
+  tagFilter?: string;
 }) => {
   const [selectedDebugItem, setSelectedDebugItem] = useState<any | null>(null);
   const [propertiesModalUID, setPropertiesModalUID] = useState<string | null>(null);
+  const [tagModalUID, setTagModalUID] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<any | null>(null);
   const [fileContent, setFileContent] = useState<string | null>(null);
   const [fileContentType, setFileContentType] = useState<string | null>(null);
   const [isFileLoading, setIsFileLoading] = useState(false);
 
+  // Tag filter state: null = no filter active; Set<string> = allowed UIDs
+  const [tagFilteredUIDs, setTagFilteredUIDs] = useState<Set<string> | null>(null);
+  const [isTagFilterLoading, setIsTagFilterLoading] = useState(false);
+
   const { data: efsRouter } = useDeployedContractInfo({ contractName: "EFSRouter" });
+  const { data: indexerInfo } = useDeployedContractInfo({ contractName: "Indexer" });
   const { targetNetwork } = useTargetNetwork();
   const publicClient = usePublicClient();
+
+  const { data: rootAnchorUID } = useScaffoldReadContract({
+    contractName: "Indexer",
+    functionName: "rootAnchorUID",
+  });
+
+  // Resolve tag filter names → definition UIDs → tagged target sets → intersection
+  useEffect(() => {
+    const tagNames = tagFilter
+      .split(",")
+      .map(t => t.trim().toLowerCase())
+      .filter(Boolean);
+
+    if (tagNames.length === 0) {
+      setTagFilteredUIDs(null);
+      return;
+    }
+
+    if (!publicClient || !indexerInfo || !rootAnchorUID) {
+      return;
+    }
+
+    let cancelled = false;
+    setIsTagFilterLoading(true);
+
+    const resolve = async () => {
+      try {
+        const tagResolverAddress = await getTagResolverAddress(publicClient.chain.id);
+        if (!tagResolverAddress) {
+          console.warn("TagResolver not deployed yet — tag filter unavailable");
+          if (!cancelled) setTagFilteredUIDs(null);
+          return;
+        }
+
+        const tagSets: Set<string>[] = [];
+
+        for (const tagName of tagNames) {
+          // Step 1: resolve tag name to definition anchor UID
+          const definitionUID = (await publicClient.readContract({
+            address: indexerInfo.address as `0x${string}`,
+            abi: indexerInfo.abi,
+            functionName: "resolvePath",
+            args: [rootAnchorUID as `0x${string}`, tagName],
+          })) as `0x${string}`;
+
+          if (!definitionUID || definitionUID === zeroHash) {
+            // Tag definition doesn't exist → AND intersection will be empty
+            tagSets.push(new Set());
+            continue;
+          }
+
+          // Step 2: get count of targets with this tag
+          const count = (await publicClient.readContract({
+            address: tagResolverAddress,
+            abi: TAG_RESOLVER_ABI,
+            functionName: "getTaggedTargetCount",
+            args: [definitionUID],
+          })) as bigint;
+
+          if (count === 0n) {
+            tagSets.push(new Set());
+            continue;
+          }
+
+          // Step 3: get all tagged targets (cap at 500 for now)
+          const targets = (await publicClient.readContract({
+            address: tagResolverAddress,
+            abi: TAG_RESOLVER_ABI,
+            functionName: "getTaggedTargets",
+            args: [definitionUID, 0n, count > 500n ? 500n : count],
+          })) as `0x${string}`[];
+
+          tagSets.push(new Set(targets.map(t => t.toLowerCase())));
+        }
+
+        if (cancelled) return;
+
+        // AND logic: intersection of all tag sets
+        if (tagSets.length === 0) {
+          setTagFilteredUIDs(null);
+          return;
+        }
+
+        let intersection = tagSets[0];
+        for (let i = 1; i < tagSets.length; i++) {
+          intersection = new Set([...intersection].filter(uid => tagSets[i].has(uid)));
+        }
+
+        setTagFilteredUIDs(intersection);
+      } catch (e) {
+        console.error("Tag filter resolution failed", e);
+        if (!cancelled) setTagFilteredUIDs(null);
+      } finally {
+        if (!cancelled) setIsTagFilterLoading(false);
+      }
+    };
+
+    resolve();
+    return () => {
+      cancelled = true;
+    };
+  }, [tagFilter, publicClient, indexerInfo, rootAnchorUID]);
 
   const fetchFileContent = async (item: any) => {
     if (!efsRouter) {
@@ -238,8 +352,6 @@ export const FileBrowser = ({
       editionAddresses as string[],
       0n,
       50n,
-      dataSchemaUID as `0x${string}`,
-      propertySchemaUID as `0x${string}`,
     ],
     query: {
       enabled: hasEditions,
@@ -247,9 +359,15 @@ export const FileBrowser = ({
   });
 
   const isLoading = hasEditions ? isEditionLoading : isStandardLoading;
-  const items = hasEditions ? (editionItemsRaw ? (editionItemsRaw as any)[0] : undefined) : standardItems;
+  const rawItems = hasEditions ? (editionItemsRaw ? (editionItemsRaw as any)[0] : undefined) : standardItems;
 
-  if (isLoading) return <div>Loading items...</div>;
+  // Apply tag filter if active
+  const items =
+    tagFilteredUIDs !== null
+      ? rawItems?.filter((item: any) => tagFilteredUIDs.has(item.uid.toLowerCase()))
+      : rawItems;
+
+  if (isLoading || isTagFilterLoading) return <div>Loading items...</div>;
   if (!currentAnchorUID) return <div>Select a topic</div>;
 
   const DebugField = ({ label, value, type = "uid" }: { label: string; value: string; type?: "uid" | "address" }) => (
@@ -300,6 +418,18 @@ export const FileBrowser = ({
               >
                 {/* Actions Group */}
                 <div className="absolute top-2 right-2 flex gap-1 z-10">
+                  {/* Tags Button */}
+                  <button
+                    className="p-1 rounded-full bg-base-100 shadow-sm hover:bg-base-300 transition-colors"
+                    onClick={e => {
+                      e.stopPropagation();
+                      setTagModalUID(item.uid);
+                    }}
+                    title="Tags"
+                  >
+                    <TagIcon className="w-5 h-5 text-gray-400 hover:text-accent" />
+                  </button>
+
                   {/* Properties Button */}
                   <button
                     className="p-1 rounded-full bg-base-100 shadow-sm hover:bg-base-300 transition-colors"
@@ -309,7 +439,7 @@ export const FileBrowser = ({
                     }}
                     title="Properties"
                   >
-                    <TagIcon className="w-5 h-5 text-gray-400 hover:text-secondary" />
+                    <AdjustmentsHorizontalIcon className="w-5 h-5 text-gray-400 hover:text-secondary" />
                   </button>
 
                   {/* Debug Info Button */}
@@ -341,7 +471,11 @@ export const FileBrowser = ({
               </div>
             );
           })}
-        {items?.length === 0 && <div className="col-span-4 text-center text-gray-500">Topic is empty</div>}
+        {items?.length === 0 && (
+          <div className="col-span-4 text-center text-gray-500">
+            {tagFilteredUIDs !== null ? `No items match tag filter: "${tagFilter}"` : "Topic is empty"}
+          </div>
+        )}
       </div>
 
       {/* File Preview Modal */}
@@ -445,6 +579,8 @@ export const FileBrowser = ({
       )}
       {/* Properties Modal */}
       {propertiesModalUID && <PropertiesModal uid={propertiesModalUID} onClose={() => setPropertiesModalUID(null)} />}
+      {/* Tag Modal */}
+      {tagModalUID && <TagModal uid={tagModalUID} onClose={() => setTagModalUID(null)} />}
     </div>
   );
 };

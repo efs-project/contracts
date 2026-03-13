@@ -334,12 +334,19 @@ export default function DebugSchemas() {
                     } else {
                       labelBytes = stringToHex(tagDef, { size: 32 });
                     }
-                    // Schema: bytes32 labelUID, int256 weight
-                    const encoded = encodeAbiParameters(parseAbiParameters("bytes32, int256"), [
+                    // Schema: bytes32 definition, bool applies (via TagResolver)
+                    // NOTE: TAG attestations now go through the TagResolver contract.
+                    // Use the TagModal in the File Explorer for proper tag management.
+                    const tagSchema = (schemas as any).TAG as string | undefined;
+                    if (!tagSchema) {
+                      notification.error("TAG schema not available. Use TagModal in File Explorer.");
+                      return;
+                    }
+                    const encoded = encodeAbiParameters(parseAbiParameters("bytes32, bool"), [
                       labelBytes,
-                      BigInt(tagWeight),
+                      true, // applies
                     ]);
-                    attest(schemas.TAG as string, tagRef, encoded);
+                    attest(tagSchema, tagRef, encoded);
                   } catch (e) {
                     console.error(e);
                     notification.error("Encoding failed");
@@ -657,7 +664,7 @@ function AttestationViewer({ rootUid, schemas, easAddress }: { rootUid: string; 
         />
         <SchemaList
           title="Tags"
-          schemaUID={schemas.TAG}
+          schemaUID={(schemas as any).TAG}
           targetRef={targetUID}
           easAddress={easAddress}
           onFocus={setTargetUID}

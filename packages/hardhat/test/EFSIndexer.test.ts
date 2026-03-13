@@ -85,6 +85,9 @@ describe("EFSIndexer", function () {
     // commentSchemaUID = rc7!.logs[0].topics[1];
 
     // 3. Deploy Indexer
+    // Note: TAG schema is now handled by the separate TagResolver contract, not EFSIndexer.
+    // tagSchemaUID is still registered (with futureIndexerAddr as resolver) in tests so that
+    // generic referencing tests still exercise the indexer's _allReferencing / _referencingBySchema maps.
     const IndexerFactory = await ethers.getContractFactory("EFSIndexer");
     indexer = await IndexerFactory.deploy(
       await eas.getAddress(),
@@ -92,7 +95,6 @@ describe("EFSIndexer", function () {
       propertySchemaUID,
       dataSchemaUID,
       blobSchemaUID,
-      tagSchemaUID,
     );
     await indexer.waitForDeployment();
 
@@ -599,8 +601,12 @@ describe("EFSIndexer", function () {
     });
   });
 
-  describe("Tags (Crowd Sourcing)", function () {
-    it("Should allow tagging with weight (int256)", async function () {
+  describe("Tags (Generic Referencing via tagSchemaUID)", function () {
+    // Note: TAG attestations are now managed by the TagResolver contract (singleton pattern).
+    // The Indexer still generically indexes any schema with refUID, so these tests verify
+    // that generic referencing (getAllReferencing, getReferencingAttestations) still works
+    // for the tagSchemaUID registered with the Indexer as resolver.
+    it("Should generically index tag attestations by refUID", async function () {
       // Create Anchor
       const schemaEncoder = new ethers.AbiCoder();
       const tx = await eas.attest({
@@ -617,7 +623,7 @@ describe("EFSIndexer", function () {
       const receipt = await tx.wait();
       const anchorUID = getUIDFromReceipt(receipt);
 
-      // Forward Tag (Positive Weight)
+      // Tag 1 (using new "bytes32 definition, bool applies" schema format)
       await eas.attest({
         schema: tagSchemaUID,
         data: {
@@ -625,12 +631,12 @@ describe("EFSIndexer", function () {
           expirationTime: NO_EXPIRATION,
           revocable: true,
           refUID: anchorUID,
-          data: schemaEncoder.encode(["bytes32", "int256"], [ethers.ZeroHash, 100n]), // LabelUID generic, Weight 100
+          data: schemaEncoder.encode(["bytes32", "bool"], [ethers.ZeroHash, true]),
           value: 0n,
         },
       });
 
-      // Rejection Tag (Negative Weight)
+      // Tag 2 (second definition)
       await eas.attest({
         schema: tagSchemaUID,
         data: {
@@ -638,19 +644,14 @@ describe("EFSIndexer", function () {
           expirationTime: NO_EXPIRATION,
           revocable: true,
           refUID: anchorUID,
-          data: schemaEncoder.encode(["bytes32", "int256"], [ethers.ZeroHash, -50n]), // Weight -50
+          data: schemaEncoder.encode(["bytes32", "bool"], [ethers.ZeroHash, false]),
           value: 0n,
         },
       });
 
-      // Verify via Generic Index
+      // Verify via Generic Index (getReferencingAttestations still works for any schema)
       const referencing = await indexer.getReferencingAttestations(anchorUID, tagSchemaUID, 0, 10, false);
       expect(referencing.length).to.equal(2);
-
-      // Verify Aggregated Weight
-      // 100 - 50 = 50
-      const weight = await indexer.getTagWeight(anchorUID, ethers.ZeroHash);
-      expect(weight).to.equal(50n);
     });
 
     it("Should return the correct count of referencing attestations", async function () {

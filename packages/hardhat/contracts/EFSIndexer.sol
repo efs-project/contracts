@@ -19,7 +19,6 @@ contract EFSIndexer is SchemaResolver {
     bytes32 public immutable PROPERTY_SCHEMA_UID;
     bytes32 public immutable DATA_SCHEMA_UID;
     bytes32 public immutable BLOB_SCHEMA_UID;
-    bytes32 public immutable TAG_SCHEMA_UID;
 
     // O(1) Indexing Helpers
     struct IndexData {
@@ -79,9 +78,6 @@ contract EFSIndexer is SchemaResolver {
     // References: targetUID => schemaUID => attestationUIDs
     mapping(bytes32 => mapping(bytes32 => bytes32[])) private _referencingAttestations;
 
-    // Tag Weights: targetUID => labelUID => weight
-    mapping(bytes32 => mapping(bytes32 => int256)) private _tagWeights;
-
     // List of Schemas referencing a target: targetUID => schemaUIDs
     mapping(bytes32 => bytes32[]) private _referencingSchemas;
     // Helper to check existence: targetUID => schemaUID => exists
@@ -114,14 +110,12 @@ contract EFSIndexer is SchemaResolver {
         bytes32 anchorSchemaUID,
         bytes32 propertySchemaUID,
         bytes32 dataSchemaUID,
-        bytes32 blobSchemaUID,
-        bytes32 tagSchemaUID
+        bytes32 blobSchemaUID
     ) SchemaResolver(eas) {
         ANCHOR_SCHEMA_UID = anchorSchemaUID;
         PROPERTY_SCHEMA_UID = propertySchemaUID;
         DATA_SCHEMA_UID = dataSchemaUID;
         BLOB_SCHEMA_UID = blobSchemaUID;
-        TAG_SCHEMA_UID = tagSchemaUID;
     }
 
     function onAttest(Attestation calldata attestation, uint256 /*value*/) internal override returns (bool) {
@@ -296,15 +290,6 @@ contract EFSIndexer is SchemaResolver {
             }
 
             return true;
-        } else if (schema == TAG_SCHEMA_UID) {
-            // Encode: (bytes32 labelUID, int256 weight)
-            (, int256 weight) = abi.decode(attestation.data, (bytes32, int256));
-
-            // Crowd Source: Aggregate weight
-            (bytes32 labelUID, ) = abi.decode(attestation.data, (bytes32, int256));
-            _tagWeights[attestation.refUID][labelUID] += weight;
-
-            return true;
         }
 
         return true;
@@ -372,9 +357,6 @@ contract EFSIndexer is SchemaResolver {
                     }
                 }
             }
-        } else if (schema == TAG_SCHEMA_UID) {
-            (bytes32 labelUID, int256 weight) = abi.decode(attestation.data, (bytes32, int256));
-            _tagWeights[attestation.refUID][labelUID] -= weight;
         }
 
         return true;
@@ -705,10 +687,6 @@ contract EFSIndexer is SchemaResolver {
         }
 
         return (finalResults, finalCursor);
-    }
-
-    function getTagWeight(bytes32 targetUID, bytes32 labelUID) external view returns (int256) {
-        return _tagWeights[targetUID][labelUID];
     }
 
     function getReferencingSchemas(bytes32 targetUID) external view returns (bytes32[] memory) {

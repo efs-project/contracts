@@ -31,9 +31,8 @@ describe("EFSFileView", function () {
     const ownerAddr = await owner.getAddress();
     const nonce = await ethers.provider.getTransactionCount(ownerAddr);
 
-    // Transactions: Registry, EAS, Anchor, Property, Data, Blob, Tag -> Indexer
-    // Note: Empirical testing showed +5 offset (5 transactions consumed before Indexer).
-    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: nonce + 5 });
+    // Transactions before Indexer: Anchor, Property, Data, Blob schema registrations -> 4 txs -> Indexer
+    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: nonce + 4 });
 
     // Register Schemas (aligned with canonical EFSIndexer and EFSRouter schemas)
     const tx1 = await registry.register("string name, bytes32 schemaUID", futureIndexerAddr, true);
@@ -55,12 +54,10 @@ describe("EFSFileView", function () {
     const rc4 = await tx4.wait();
     const blobSchemaUID = rc4!.logs[0].topics[1];
 
-    // Tag
-    const tx5 = await registry.register("bytes32 labelUID, int256 weight", futureIndexerAddr, true);
-    const rc5 = await tx5.wait();
-    const tagSchemaUID = rc5!.logs[0].topics[1];
+    // Note: TAG schema is now handled by TagResolver, not EFSIndexer.
+    // We don't register it here since EFSIndexer no longer needs it in its constructor.
 
-    // Deploy Indexer
+    // Deploy Indexer (no tagSchemaUID — handled by separate TagResolver)
     const IndexerFactory = await ethers.getContractFactory("EFSIndexer");
     indexer = await IndexerFactory.deploy(
       await eas.getAddress(),
@@ -68,7 +65,6 @@ describe("EFSFileView", function () {
       propertySchemaUID,
       dataSchemaUID,
       blobSchemaUID,
-      tagSchemaUID,
     );
     await indexer.waitForDeployment();
 

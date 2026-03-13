@@ -30,13 +30,17 @@ EFS is composed of a "Quad-Schema" model (four core EAS schemas), adhering to th
 **Details**: Data attestations must reference an Anchor in their `refUID` to be given a name within a folder. They contain file system data such as whether an item is a 'normal file', a 'symlink', a 'hardlink', 'deletion info', or 'rename info'. They directly embed the `uri` and `contentType` avoiding the need for a separate physical BLOB attestation.
 
 ## 4. Tag Schema
-**Purpose**: Categorization, weighting, and filtering.
+**Purpose**: Subjective categorization, labeling, and filtering via the "Type as Topic" pattern.
 **Structure**:
-`refUID = Target Attestation UID`
-- `labelUID` (bytes32) - Refers to an Anchor UID defining the tag.
-- `weight` (int256) - A numeric weight or score assigned to the tag (enabling crowd-sourced voting on tags).
+`refUID = Target Attestation UID` or `recipient = Target Ethereum Address`
+- `definition` (bytes32) - The Anchor UID that defines the label of the tag. This points to a "Type as Topic" definition, such as the UID for the `/nsfw/` or `/favorites/` anchor. By forcing tags to reference an Anchor UID (rather than a raw string), the tag namespace remains hierarchical, collision-resistant, and indexable.
+- `applies` (bool) - `true` means the tag is active and applies to the target. `false` means the tag is explicitly negated or removed.
 
-**Details**: A tag has its `refUID` set to the attestation being tagged. The `definition` field holds the UID of the Anchor defining the tag itself (e.g., an Anchor representing "favorites" or "nsfw"). Tags are used for organizing lists and acting as frontend filters, such as hiding unwanted "nsfw" content for specific users.
+**Details**: Tags create a graph layer that overlays the strict tree-like directory structure. A single file can have many tags without data duplication, enabling many-to-many relationships.
+
+Tags target either an attestation (via `refUID`) or an Ethereum address (via `recipient`), keeping the custom payload minimal. The `EFSTagResolver` contract enforces a **singleton tagging pattern**: only one active tag exists per `(attester, target, definition)` triple. When a user applies a new tag matching an existing combination, the resolver logically supersedes the old tag by overwriting its internal mapping. This ensures query functions always return the latest state as a clean single source of truth.
+
+Complex aggregation logic (Sybil resistance, reputation weighting, running averages) is entirely delegated to upper-layer indexers and client UIs, not computed on-chain.
 
 ## Schema Hierarchy
 To represent a standard filesystem interaction where a file has a name within a folder:
