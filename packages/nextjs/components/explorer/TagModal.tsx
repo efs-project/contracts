@@ -106,12 +106,18 @@ export const TagModal = ({ uid, onClose }: TagModalProps) => {
           return (m.default as any)[chainId]?.Indexer;
         });
 
+        // Tag definition anchors are stored with the TagResolver address (left-padded
+        // to bytes32) as their schemaUID marker.  This keeps them invisible to
+        // resolvePath() (which always looks up bytes32(0)) so they never appear as
+        // regular user-visible folders in the file browser.
+        const tagDefSchemaUID = `0x${"0".repeat(24)}${tagResolverAddress.slice(2).toLowerCase()}` as `0x${string}`;
+
         if (indexer) {
           const existingUID = (await publicClient.readContract({
             address: indexer.address as `0x${string}`,
             abi: indexer.abi,
-            functionName: "resolvePath",
-            args: [rootAnchorUID as `0x${string}`, normalizedTagName],
+            functionName: "resolveAnchor",
+            args: [rootAnchorUID as `0x${string}`, normalizedTagName, tagDefSchemaUID],
           })) as `0x${string}`;
 
           if (existingUID && existingUID !== zeroHash) {
@@ -120,10 +126,12 @@ export const TagModal = ({ uid, onClose }: TagModalProps) => {
         }
 
         if (!definitionUID) {
-          // Create a new Anchor for this tag definition (generic folder under root)
+          // Create a new Anchor for this tag definition.
+          // Use tagDefSchemaUID (not zeroHash) so the indexer stores it under a
+          // separate key — invisible to resolvePath and filterable in the UI.
           const encodedName = encodeAbiParameters(parseAbiParameters("string name, bytes32 schemaUID"), [
             normalizedTagName,
-            zeroHash,
+            tagDefSchemaUID,
           ]);
 
           const txHash = await attest({

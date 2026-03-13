@@ -50,6 +50,7 @@ export const FileBrowser = ({
   // Tag filter state: null = no filter active; Set<string> = allowed UIDs
   const [tagFilteredUIDs, setTagFilteredUIDs] = useState<Set<string> | null>(null);
   const [isTagFilterLoading, setIsTagFilterLoading] = useState(false);
+  const [tagResolverAddress, setTagResolverAddress] = useState<`0x${string}` | null>(null);
 
   const { data: efsRouter } = useDeployedContractInfo({ contractName: "EFSRouter" });
 
@@ -66,6 +67,22 @@ export const FileBrowser = ({
     setPageSize(50n);
   }, [currentAnchorUID]);
 
+  // Load TagResolver address once — used both for tag filter resolution and for hiding
+  // tag definition anchors (which are stored with tagResolverAddress as their schemaUID marker).
+  useEffect(() => {
+    if (!publicClient) return;
+    getTagResolverAddress(publicClient.chain.id).then(addr => {
+      if (addr) setTagResolverAddress(addr);
+    });
+  }, [publicClient]);
+
+  // bytes32 marker used to identify tag definition anchors in the directory listing.
+  // Tag def anchors store tagResolverAddress (left-padded to 32 bytes) as their schemaUID
+  // so they're invisible to resolvePath() and can be filtered from the UI.
+  const tagDefSchemaUID = tagResolverAddress
+    ? (`0x${"0".repeat(24)}${tagResolverAddress.slice(2).toLowerCase()}` as `0x${string}`)
+    : null;
+
   // Resolve tag filter names → definition UIDs → tagged target sets → intersection
   useEffect(() => {
     const tagNames = tagFilter
@@ -78,7 +95,7 @@ export const FileBrowser = ({
       return;
     }
 
-    if (!publicClient || !indexerInfo || !rootAnchorUID) {
+    if (!publicClient || !indexerInfo || !rootAnchorUID || !tagResolverAddress || !tagDefSchemaUID) {
       return;
     }
 
@@ -87,22 +104,17 @@ export const FileBrowser = ({
 
     const resolve = async () => {
       try {
-        const tagResolverAddress = await getTagResolverAddress(publicClient.chain.id);
-        if (!tagResolverAddress) {
-          console.warn("TagResolver not deployed yet — tag filter unavailable");
-          if (!cancelled) setTagFilteredUIDs(null);
-          return;
-        }
-
         const tagSets: Set<string>[] = [];
 
         for (const tagName of tagNames) {
-          // Step 1: resolve tag name to definition anchor UID
+          // Step 1: resolve tag name → definition anchor UID via resolveAnchor
+          // (tag defs are stored with tagDefSchemaUID, not zeroHash, so they don't
+          //  appear as regular folders to resolvePath)
           const definitionUID = (await publicClient.readContract({
             address: indexerInfo.address as `0x${string}`,
             abi: indexerInfo.abi,
-            functionName: "resolvePath",
-            args: [rootAnchorUID as `0x${string}`, tagName],
+            functionName: "resolveAnchor",
+            args: [rootAnchorUID as `0x${string}`, tagName, tagDefSchemaUID],
           })) as `0x${string}`;
 
           if (!definitionUID || definitionUID === zeroHash) {
@@ -161,7 +173,7 @@ export const FileBrowser = ({
     return () => {
       cancelled = true;
     };
-  }, [tagFilter, publicClient, indexerInfo, rootAnchorUID]);
+  }, [tagFilter, publicClient, indexerInfo, rootAnchorUID, tagResolverAddress, tagDefSchemaUID]);
 
   const fetchFileContent = async (item: any) => {
     if (!efsRouter) {
@@ -375,11 +387,14 @@ export const FileBrowser = ({
   const isLoading = useEditionsQuery ? isEditionLoading : isStandardLoading;
   const rawItems = useEditionsQuery ? (editionItemsRaw ? (editionItemsRaw as any)[0] : undefined) : standardItems;
 
-  // Apply tag filter if active
-  const items =
-    tagFilteredUIDs !== null
-      ? rawItems?.filter((item: any) => tagFilteredUIDs.has(item.uid.toLowerCase()))
-      : rawItems;
+  // Apply filters:
+  // 1. Always hide tag definition anchors (they're system anchors, not user folders)
+  // 2. Apply tag filter if active
+  const items = rawItems?.filter((item: any) => {
+    if (tagDefSchemaUID && item.schema?.toLowerCase() === tagDefSchemaUID.toLowerCase()) return false;
+    if (tagFilteredUIDs !== null) return tagFilteredUIDs.has(item.uid.toLowerCase());
+    return true;
+  });
 
   if (!currentAnchorUID) return <div>Select a topic</div>;
   if (isLoading || isTagFilterLoading) return <div>Loading items...</div>;

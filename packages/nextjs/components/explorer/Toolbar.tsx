@@ -300,6 +300,25 @@ export const Toolbar = ({
   const handleUpdateEditions = () => updateQueryParam("editions", editionsInput);
   const handleUpdateTagFilter = () => updateQueryParam("tags", tagFilterInput);
 
+  // Apply both editions and tags in a single router.push — two separate calls would
+  // each read the same original searchParams and the second push would overwrite the first.
+  const handleApplyBoth = () => {
+    const currentQuery = new URLSearchParams(searchParams.toString());
+    if (editionsInput.trim() === "") {
+      currentQuery.delete("editions");
+    } else {
+      currentQuery.set("editions", editionsInput.trim());
+    }
+    if (tagFilterInput.trim() === "") {
+      currentQuery.delete("tags");
+    } else {
+      currentQuery.set("tags", tagFilterInput.trim());
+    }
+    const urlSegments = currentPath.slice(1).map(p => encodeURIComponent(p.name));
+    const queryPart = currentQuery.toString() ? `?${currentQuery.toString()}` : "";
+    router.push(`/explorer/${urlSegments.join("/")}${queryPart}`);
+  };
+
   return (
     <div className="flex justify-between items-center p-2 bg-base-100 rounded-lg gap-4">
       <div className="breadcrumbs text-sm">
@@ -351,7 +370,7 @@ export const Toolbar = ({
             }}
           />
         </label>
-        <button className="btn btn-sm btn-outline" onClick={() => { handleUpdateEditions(); handleUpdateTagFilter(); }}>
+        <button className="btn btn-sm btn-outline" onClick={handleApplyBoth}>
           Apply
         </button>
       </div>
