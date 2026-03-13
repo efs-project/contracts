@@ -141,14 +141,20 @@ export const TagModal = ({ uid, isFile, onClose, onTagChange }: TagModalProps) =
           return;
         }
 
-        const defs = (await publicClient.readContract({
-          address: tagResolverAddress,
-          abi: TAG_RESOLVER_ABI,
-          functionName: "getTagDefinitions",
-          args: [effectiveUID as `0x${string}`, 0n, count > 200n ? 200n : count],
-        })) as `0x${string}`[];
+        // Paginate through all definitions (append-only list; can exceed 200).
+        const PAGE_SIZE = 200n;
+        const allDefs: `0x${string}`[] = [];
+        for (let cursor = 0n; cursor < count; cursor += PAGE_SIZE) {
+          const page = (await publicClient.readContract({
+            address: tagResolverAddress,
+            abi: TAG_RESOLVER_ABI,
+            functionName: "getTagDefinitions",
+            args: [effectiveUID as `0x${string}`, cursor, PAGE_SIZE],
+          })) as `0x${string}`[];
+          allDefs.push(...page);
+        }
 
-        if (!cancelled) setTagDefinitions([...defs]);
+        if (!cancelled) setTagDefinitions(allDefs);
       } catch (e) {
         console.error("Failed to load tag definitions", e);
         if (!cancelled) setTagDefinitions([]);
