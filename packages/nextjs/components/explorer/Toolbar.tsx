@@ -71,6 +71,8 @@ export const Toolbar = ({
 
   // Editions Input State
   const [editionsInput, setEditionsInput] = useState(searchParams.get("editions") || "");
+  // Tag Filter Input State
+  const [tagFilterInput, setTagFilterInput] = useState(searchParams.get("tags") || "");
 
   useEffect(() => {
     if (creationType && modalRef.current) {
@@ -280,15 +282,14 @@ export const Toolbar = ({
     }
   };
 
-  const handleUpdateEditions = () => {
+  const updateQueryParam = (key: string, value: string) => {
     const currentQuery = new URLSearchParams(searchParams.toString());
-    if (editionsInput.trim() === "") {
-      currentQuery.delete("editions");
+    if (value.trim() === "") {
+      currentQuery.delete(key);
     } else {
-      currentQuery.set("editions", editionsInput.trim());
+      currentQuery.set(key, value.trim());
     }
 
-    // Build path from currentPath
     const urlSegments = currentPath.slice(1).map(p => encodeURIComponent(p.name));
     const queryPart = currentQuery.toString() ? `?${currentQuery.toString()}` : "";
     const url = `/explorer/${urlSegments.join("/")}${queryPart}`;
@@ -296,9 +297,31 @@ export const Toolbar = ({
     router.push(url);
   };
 
+  const handleUpdateEditions = () => updateQueryParam("editions", editionsInput);
+  const handleUpdateTagFilter = () => updateQueryParam("tags", tagFilterInput);
+
+  // Apply both editions and tags in a single router.push — two separate calls would
+  // each read the same original searchParams and the second push would overwrite the first.
+  const handleApplyBoth = () => {
+    const currentQuery = new URLSearchParams(searchParams.toString());
+    if (editionsInput.trim() === "") {
+      currentQuery.delete("editions");
+    } else {
+      currentQuery.set("editions", editionsInput.trim());
+    }
+    if (tagFilterInput.trim() === "") {
+      currentQuery.delete("tags");
+    } else {
+      currentQuery.set("tags", tagFilterInput.trim());
+    }
+    const urlSegments = currentPath.slice(1).map(p => encodeURIComponent(p.name));
+    const queryPart = currentQuery.toString() ? `?${currentQuery.toString()}` : "";
+    router.push(`/explorer/${urlSegments.join("/")}${queryPart}`);
+  };
+
   return (
-    <div className="flex justify-between items-center p-2 bg-base-100 rounded-lg gap-4">
-      <div className="breadcrumbs text-sm">
+    <div className="flex flex-wrap items-center p-2 bg-base-100 rounded-lg gap-2">
+      <div className="breadcrumbs text-sm flex-shrink-0">
         <ul>
           {currentPath.map((p, i) => (
             <li key={i}>
@@ -314,15 +337,15 @@ export const Toolbar = ({
         </ul>
       </div>
 
-      <div className="flex gap-2 items-center flex-grow max-w-md">
+      <div className="flex flex-wrap gap-2 items-center flex-grow min-w-0">
         <label
-          className="input input-bordered input-sm flex items-center gap-2 flex-grow"
+          className="input input-bordered input-sm flex items-center gap-2 flex-grow min-w-[180px]"
           title="Filter files by attester address or ENS name. Only files attested by the given addresses will be shown. Leave blank to see all files from any attester."
         >
           Editions:
           <input
             type="text"
-            className="grow"
+            className="grow min-w-0"
             placeholder="vitalik.eth, 0x..."
             value={editionsInput}
             onChange={e => setEditionsInput(e.target.value)}
@@ -331,12 +354,28 @@ export const Toolbar = ({
             }}
           />
         </label>
-        <button className="btn btn-sm btn-outline" onClick={handleUpdateEditions}>
+        <label
+          className="input input-bordered input-sm flex items-center gap-2 flex-grow min-w-[160px]"
+          title="Filter by tag names (comma-separated). Only items with matching tags are shown."
+        >
+          Tags:
+          <input
+            type="text"
+            className="grow min-w-0"
+            placeholder="favorites, nsfw"
+            value={tagFilterInput}
+            onChange={e => setTagFilterInput(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === "Enter") handleUpdateTagFilter();
+            }}
+          />
+        </label>
+        <button className="btn btn-sm btn-outline flex-shrink-0" onClick={handleApplyBoth}>
           Apply
         </button>
       </div>
 
-      <div className="flex gap-2">
+      <div className="flex gap-2 flex-shrink-0">
         <button className="btn btn-sm btn-ghost" onClick={() => handleOpenModal("Folder")} disabled={!currentAnchorUID}>
           New Folder
         </button>

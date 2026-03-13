@@ -156,7 +156,7 @@ function EASExplorerContent() {
     functionName: "BLOB_SCHEMA_UID",
   });
   const { data: tagSchemaUid } = useScaffoldReadContract({
-    contractName: "Indexer",
+    contractName: "TagResolver",
     functionName: "TAG_SCHEMA_UID",
   });
 

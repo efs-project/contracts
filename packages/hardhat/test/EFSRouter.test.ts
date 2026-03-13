@@ -50,10 +50,9 @@ describe("EFSRouter Web3 Capabilities", function () {
     indexer = await IndexerFactory.deploy(
       await eas.getAddress(),
       anchorSchemaUID,
-      anchorSchemaUID,
+      anchorSchemaUID, // propertySchemaUID (placeholder)
       dataSchemaUID,
-      anchorSchemaUID,
-      anchorSchemaUID,
+      anchorSchemaUID, // blobSchemaUID (placeholder)
     );
     await indexer.waitForDeployment();
 

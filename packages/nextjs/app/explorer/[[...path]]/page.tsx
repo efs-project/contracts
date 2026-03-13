@@ -242,6 +242,7 @@ export default function ExplorerPage() {
                 currentAnchorUID={currentAnchorUID}
                 dataSchemaUID={dataSchemaUID}
                 editionAddresses={editionAddresses}
+                tagFilter={searchParams.get("tags") || ""}
                 currentPathNames={currentPath.slice(1).map(p => p.name)}
                 onNavigate={(uid, name) => {
                   // Append to current path
