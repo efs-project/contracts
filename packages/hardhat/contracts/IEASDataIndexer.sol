@@ -29,7 +29,6 @@ interface IEASDataIndexer {
     error InvalidArgument(string reason);
     error SchemaNotSupported(bytes32 schemaUID);
 
-
     function getEAS() external view returns (address);
 
     /**

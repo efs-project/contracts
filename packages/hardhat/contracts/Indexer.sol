@@ -18,13 +18,16 @@ contract Indexer is Semver {
     event Indexed(bytes32 indexed uid);
 
     /// A mapping between an attestation and its referencing attestations.
-    mapping(bytes32 attestationUID => mapping(bytes32 schemaUID => bytes32[] uids) referencingAttestations) private _referencingAttestations;
+    mapping(bytes32 attestationUID => mapping(bytes32 schemaUID => bytes32[] uids) referencingAttestations)
+        private _referencingAttestations;
 
     /// A mapping between an attestation and its referencing attestations indexed by user.
-    mapping(bytes32 attestationUID => mapping(bytes32 schemaUID => mapping(address attester => bytes32[] uids)) referencingAttestationsByAddress) private _referencingAttestationsByAddress;
+    mapping(bytes32 attestationUID => mapping(bytes32 schemaUID => mapping(address attester => bytes32[] uids)) referencingAttestationsByAddress)
+        private _referencingAttestationsByAddress;
 
     /// A mapping between an account and its received attestations.
-    mapping(address account => mapping(bytes32 schemaUID => bytes32[] uids) receivedAttestations) private _receivedAttestations;
+    mapping(address account => mapping(bytes32 schemaUID => bytes32[] uids) receivedAttestations)
+        private _receivedAttestations;
 
     // A mapping between an account and its sent attestations.
     mapping(address account => mapping(bytes32 schemaUID => bytes32[] uids) sentAttestations) private _sentAttestations;
@@ -111,7 +114,10 @@ contract Indexer is Semver {
     /// @param attestionUID The UID of the attestation.
     /// @param schemaUID The UID of the schema.
     /// @return An array of attestation UIDs.
-    function getReferencingAttestationUIDCount(bytes32 attestionUID, bytes32 schemaUID) external view returns (uint256) {
+    function getReferencingAttestationUIDCount(
+        bytes32 attestionUID,
+        bytes32 schemaUID
+    ) external view returns (uint256) {
         return _referencingAttestations[attestionUID][schemaUID].length;
     }
 
@@ -131,7 +137,13 @@ contract Indexer is Semver {
         uint256 length,
         bool reverseOrder
     ) external view returns (bytes32[] memory) {
-        return _sliceUIDs(_referencingAttestationsByAddress[attestionUID][schemaUID][attester], start, length, reverseOrder);
+        return
+            _sliceUIDs(
+                _referencingAttestationsByAddress[attestionUID][schemaUID][attester],
+                start,
+                length,
+                reverseOrder
+            );
     }
 
     /// @notice Returns the total number of references to a specific attestation.
@@ -139,7 +151,11 @@ contract Indexer is Semver {
     /// @param schemaUID The UID of the schema.
     /// @param attester The attester of the referencing attestations.
     /// @return An array of attestation UIDs.
-    function getReferencingAttestationUIDByAddressCount(bytes32 attestionUID, bytes32 schemaUID, address attester) external view returns (uint256) {
+    function getReferencingAttestationUIDByAddressCount(
+        bytes32 attestionUID,
+        bytes32 schemaUID,
+        address attester
+    ) external view returns (uint256) {
         return _referencingAttestationsByAddress[attestionUID][schemaUID][attester].length;
     }
 

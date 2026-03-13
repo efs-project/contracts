@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useAccount, usePublicClient } from "wagmi";
 import { FileBrowser } from "~~/components/explorer/FileBrowser";
@@ -15,15 +15,24 @@ export default function ExplorerPage() {
   const [isResolving, setIsResolving] = useState(false);
   const [pathError, setPathError] = useState<string | null>(null);
 
-  // Editions state
-  const [editionAddresses, setEditionAddresses] = useState<string[]>([]);
-  const [isResolvingEditions, setIsResolvingEditions] = useState(true);
+  // Editions: resolved addresses from explicit ?editions= param (ENS resolution is async)
+  const [resolvedEditionAddresses, setResolvedEditionAddresses] = useState<string[]>([]);
+  const [isResolvingEditions, setIsResolvingEditions] = useState(false);
 
   const router = useRouter();
   const params = useParams();
   const searchParams = useSearchParams();
   const publicClient = usePublicClient();
   const { address: connectedAddress } = useAccount();
+
+  const editionsParam = searchParams.get("editions");
+
+  // Derive edition addresses synchronously — always in the same render as connectedAddress.
+  // This prevents any flash of unfiltered data during account switches.
+  const editionAddresses = useMemo(() => {
+    if (editionsParam) return resolvedEditionAddresses;
+    return connectedAddress ? [connectedAddress] : [];
+  }, [editionsParam, connectedAddress, resolvedEditionAddresses]);
 
   // Fetch Root UID
   const { data: rootUID } = useScaffoldReadContract({
@@ -43,22 +52,16 @@ export default function ExplorerPage() {
     functionName: "ANCHOR_SCHEMA_UID",
   });
 
-  // Editions Resolution Effect
+  // Editions Resolution Effect — only needed for ENS name resolution in explicit ?editions= param.
+  // Plain address filtering is handled synchronously via useMemo above.
   useEffect(() => {
+    if (!editionsParam) {
+      setIsResolvingEditions(false);
+      return;
+    }
+
     const resolveEditions = async () => {
       setIsResolvingEditions(true);
-      const editionsParam = searchParams.get("editions");
-
-      if (!editionsParam) {
-        // Default to connected user
-        if (connectedAddress) {
-          setEditionAddresses([connectedAddress]);
-        } else {
-          setEditionAddresses([]);
-        }
-        setIsResolvingEditions(false);
-        return;
-      }
 
       const editionNames = editionsParam
         .split(",")
@@ -79,12 +82,12 @@ export default function ExplorerPage() {
         }
       }
 
-      setEditionAddresses(resolvedAddresses);
+      setResolvedEditionAddresses(resolvedAddresses);
       setIsResolvingEditions(false);
     };
 
     resolveEditions();
-  }, [searchParams, connectedAddress, publicClient]);
+  }, [editionsParam, publicClient]);
 
   // Path Resolution Effect
   useEffect(() => {

@@ -6,7 +6,7 @@ const ZERO_BYTES32 = "0x00000000000000000000000000000000000000000000000000000000
 
 describe("TopicResolver", function () {
   let accounts: Signer[];
-  let sender: Signer;
+  let _sender: Signer;
   let recipient: Signer;
 
   let registry: Contract;
@@ -18,7 +18,7 @@ describe("TopicResolver", function () {
 
   before(async () => {
     accounts = await ethers.getSigners();
-    [sender, recipient] = accounts;
+    [_sender, recipient] = accounts;
   });
 
   beforeEach(async () => {
@@ -79,7 +79,7 @@ describe("TopicResolver", function () {
     const uid = receipt.logs[0].topics[1]; // Attested event is usually first? Or parse it.
 
     // Just verify no revert
-    expect(uid).to.not.be.undefined;
+    expect(uid).to.not.equal(undefined);
   });
 
   it("should reject an invalid topic attestation", async function () {

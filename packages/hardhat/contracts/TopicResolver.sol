@@ -27,20 +27,16 @@ contract TopicResolver is SchemaResolver {
      * @dev Validates an attestation using the given parameters
      * @return Whether the attestation is valid
      */
-    function onAttest(Attestation calldata attestation, uint256 /*value*/) 
-        internal 
-        override
-        returns (bool) 
-    {
+    function onAttest(Attestation calldata attestation, uint256 /*value*/) internal override returns (bool) {
         // Decode the name string from the data
         string memory name = abi.decode(attestation.data, (string));
-        
+
         // Validate that the name is not empty
         bytes memory nameBytes = bytes(name);
         bool isValid = nameBytes.length > 0;
 
         isValid = isValidIriComponentForStorage(name) && isValid;
-        
+
         // Check if this is the root topic (first topic attested)
         if (rootTopicUid == bytes32(0)) {
             rootTopicUid = attestation.uid;
@@ -49,14 +45,13 @@ contract TopicResolver is SchemaResolver {
             // All non-root topics must reference a parent topic
             isValid = attestation.refUID != bytes32(0) && isValid;
         }
-        
+
         if (isValid) {
             emit TopicCreated(attestation.uid, name);
         }
-        
+
         return isValid;
     }
-
 
     /**
      * @dev Validates if a string is suitable for use as an IRI component,
@@ -107,7 +102,7 @@ contract TopicResolver is SchemaResolver {
                 charByte == 0x60 || // ` (backtick) - generally unsafe
                 charByte == 0x7B || // { (open curly brace) - generally unsafe
                 charByte == 0x7C || // | (pipe) - generally unsafe
-                charByte == 0x7D    // } (close curly brace) - generally unsafe
+                charByte == 0x7D // } (close curly brace) - generally unsafe
                 // Note: Characters like '!', '(', ')', '*', '+', ',', ';' are "reserved" but often appear in data
                 // and would be percent-encoded by a consumer. This list focuses on characters
                 // that cause more fundamental parsing issues or are always treated as delimiters.
@@ -122,12 +117,7 @@ contract TopicResolver is SchemaResolver {
      * @dev Validates attestation revocation
      * @return Whether the attestation can be revoked
      */
-    function onRevoke(Attestation calldata /*attestation*/, uint256 /*value*/) 
-        internal 
-        override
-        pure
-        returns (bool) 
-    {
+    function onRevoke(Attestation calldata /*attestation*/, uint256 /*value*/) internal pure override returns (bool) {
         // Allow revocations
         return false;
     }

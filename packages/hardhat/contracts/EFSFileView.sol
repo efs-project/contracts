@@ -4,10 +4,26 @@ pragma solidity 0.8.26;
 import { IEAS, Attestation } from "@ethereum-attestation-service/eas-contracts/contracts/IEAS.sol";
 
 interface IEFSIndexer {
-    function getChildren(bytes32 anchorUID, uint256 start, uint256 length, bool reverseOrder) external view returns (bytes32[] memory);
-    function getChildrenByAddressList(bytes32 parentUID, address[] calldata attesters, uint256 startingCursor, uint256 pageSize, bool reverseOrder, bool showRevoked) external view returns (bytes32[] memory results, uint256 nextCursor);
+    function getChildren(
+        bytes32 anchorUID,
+        uint256 start,
+        uint256 length,
+        bool reverseOrder
+    ) external view returns (bytes32[] memory);
+    function getChildrenByAddressList(
+        bytes32 parentUID,
+        address[] calldata attesters,
+        uint256 startingCursor,
+        uint256 pageSize,
+        bool reverseOrder,
+        bool showRevoked
+    ) external view returns (bytes32[] memory results, uint256 nextCursor);
     function getChildrenCount(bytes32 anchorUID) external view returns (uint256);
-    function getDataByAddressList(bytes32 anchorUID, address[] calldata attesters, bool showRevoked) external view returns (bytes32);
+    function getDataByAddressList(
+        bytes32 anchorUID,
+        address[] calldata attesters,
+        bool showRevoked
+    ) external view returns (bytes32);
     function getReferencingAttestationCount(bytes32 targetUID, bytes32 schemaUID) external view returns (uint256);
     function containsAttestations(bytes32 targetUID, address attester) external view returns (bool);
     function getEAS() external view returns (IEAS);
@@ -16,7 +32,6 @@ interface IEFSIndexer {
 }
 
 contract EFSFileView {
-    
     struct FileSystemItem {
         bytes32 uid;
         string name;
@@ -26,7 +41,6 @@ contract EFSFileView {
         uint256 childCount;
         uint256 propertyCount;
         uint64 timestamp;
-
         address attester;
         bytes32 schema; // Anchor Schema Type
     }
@@ -40,15 +54,15 @@ contract EFSFileView {
     }
 
     function getDirectoryPage(
-        bytes32 parentAnchor, 
-        uint256 start, 
-        uint256 length, 
+        bytes32 parentAnchor,
+        uint256 start,
+        uint256 length,
         bytes32 dataSchemaUID,
         bytes32 propertySchemaUID
     ) external view returns (FileSystemItem[] memory) {
         // 1. Get UIDs from Indexer (Newest First = true)
         bytes32[] memory uids = indexer.getChildren(parentAnchor, start, length, true);
-        
+
         return _buildFileSystemItems(uids, parentAnchor, dataSchemaUID, propertySchemaUID);
     }
 
@@ -58,7 +72,6 @@ contract EFSFileView {
         uint256 startingCursor,
         uint256 pageSize
     ) external view returns (FileSystemItem[] memory items, uint256 nextCursor) {
-        
         // 1. Delegate directly to the Indexer's highly optimized, paginated Edition array
         // (Reverse = true for newest first, showRevoked = false)
         (bytes32[] memory resolvedUIDs, uint256 nextCur) = indexer.getChildrenByAddressList(
@@ -66,12 +79,17 @@ contract EFSFileView {
             attesters,
             startingCursor,
             pageSize,
-            true,   
-            false   
+            true,
+            false
         );
 
         // 2. Build the output FileSystemItems array containing full Metadata
-        items = _buildFileSystemItems(resolvedUIDs, parentAnchor, indexer.DATA_SCHEMA_UID(), indexer.PROPERTY_SCHEMA_UID());
+        items = _buildFileSystemItems(
+            resolvedUIDs,
+            parentAnchor,
+            indexer.DATA_SCHEMA_UID(),
+            indexer.PROPERTY_SCHEMA_UID()
+        );
 
         return (items, nextCur);
     }
@@ -87,11 +105,11 @@ contract EFSFileView {
         for (uint256 i = 0; i < uids.length; i++) {
             bytes32 uid = uids[i];
             Attestation memory att = eas.getAttestation(uid);
-            
+
             string memory name = "";
             bytes32 anchorType = bytes32(0);
             if (att.data.length > 0) {
-               (name, anchorType) = abi.decode(att.data, (string, bytes32));
+                (name, anchorType) = abi.decode(att.data, (string, bytes32));
             }
 
             uint256 childCount = indexer.getChildrenCount(uid);
