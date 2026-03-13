@@ -228,7 +228,9 @@ function DecodedData({ schemaUID, data, schemas }: { schemaUID: string; data: st
         <div className="p-4 bg-primary/10 rounded-lg border border-primary/20">
           <div className="text-xs font-bold uppercase mb-1">Tag</div>
           <div className="flex items-center gap-2">
-            <span className={`badge ${applies ? "badge-primary" : "badge-ghost"}`}>{applies ? "applied" : "removed"}</span>
+            <span className={`badge ${applies ? "badge-primary" : "badge-ghost"}`}>
+              {applies ? "applied" : "removed"}
+            </span>
           </div>
           <div className="text-xs font-mono opacity-50 mt-1">definition: {definition}</div>
         </div>

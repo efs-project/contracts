@@ -209,10 +209,10 @@ describe("TagResolver", function () {
       const tx = await eas.attest({
         schema: tagSchemaUID,
         data: {
-          recipient: recipientAddr,   // non-zero recipient
+          recipient: recipientAddr, // non-zero recipient
           expirationTime: NO_EXPIRATION,
           revocable: true,
-          refUID: refTarget,          // non-zero refUID takes priority
+          refUID: refTarget, // non-zero refUID takes priority
           data: encodeTag(definition, true),
           value: 0n,
         },
@@ -222,7 +222,9 @@ describe("TagResolver", function () {
       // Indexed under refTarget
       expect(await tagResolver.getActiveTagUID(await owner.getAddress(), refTarget, definition)).to.equal(tagUID);
       // NOT indexed under recipient
-      expect(await tagResolver.getActiveTagUID(await owner.getAddress(), recipientTargetID, definition)).to.equal(ZERO_BYTES32);
+      expect(await tagResolver.getActiveTagUID(await owner.getAddress(), recipientTargetID, definition)).to.equal(
+        ZERO_BYTES32,
+      );
     });
   });
 
@@ -320,9 +322,9 @@ describe("TagResolver", function () {
       const target = await createTarget("multi-round-target");
       const definition = ethers.id("def-multi-round");
 
-      await tagByRef(user1, target, definition, true);  // uid1 (will be superseded)
-      await tagByRef(user1, target, definition, true);  // uid2 (will be superseded)
-      const uid3 = await tagByRef(user1, target, definition, true);  // uid3 (active)
+      await tagByRef(user1, target, definition, true); // uid1 (will be superseded)
+      await tagByRef(user1, target, definition, true); // uid2 (will be superseded)
+      const uid3 = await tagByRef(user1, target, definition, true); // uid3 (active)
 
       await revoke(user1, uid3);
       expect(await tagResolver.getActiveTagUID(await user1.getAddress(), target, definition)).to.equal(ZERO_BYTES32);
@@ -401,7 +403,9 @@ describe("TagResolver", function () {
     it("Should paginate getTagDefinitions correctly", async function () {
       const target = await createTarget("disc-paginate");
       const defs = await Promise.all(
-        Array.from({ length: 5 }, (_, i) => tagByRef(user1, target, ethers.id(`def-pg-${i}`), true).then(() => ethers.id(`def-pg-${i}`))),
+        Array.from({ length: 5 }, (_, i) =>
+          tagByRef(user1, target, ethers.id(`def-pg-${i}`), true).then(() => ethers.id(`def-pg-${i}`)),
+        ),
       );
       void defs; // just to avoid lint warning
 
@@ -504,7 +508,7 @@ describe("TagResolver", function () {
       const target = await createTarget("neg-supersede");
       const def = ethers.id("def-neg-supersede");
 
-      await tagByRef(user1, target, def, true);   // initial apply
+      await tagByRef(user1, target, def, true); // initial apply
       const uid2 = await tagByRef(user1, target, def, false); // negation supersedes
 
       expect(await tagResolver.getActiveTagUID(await user1.getAddress(), target, def)).to.equal(uid2);

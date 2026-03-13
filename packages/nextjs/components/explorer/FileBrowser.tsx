@@ -6,7 +6,7 @@ import { PropertiesModal } from "./PropertiesModal";
 import { TagModal } from "./TagModal";
 import { ethers } from "ethers";
 import { zeroHash } from "viem";
-import { usePublicClient } from "wagmi";
+import { useAccount, usePublicClient } from "wagmi";
 import {
   AdjustmentsHorizontalIcon,
   DocumentIcon,
@@ -18,8 +18,8 @@ import {
 } from "@heroicons/react/24/outline";
 import { useDeployedContractInfo, useScaffoldReadContract } from "~~/hooks/scaffold-eth";
 import { useTargetNetwork } from "~~/hooks/scaffold-eth/useTargetNetwork";
-import { TAG_RESOLVER_ABI, getTagResolverAddress } from "~~/utils/efs/tagResolver";
 import { isFile, isTopic } from "~~/utils/efs/efsTypes";
+import { TAG_RESOLVER_ABI, getTagResolverAddress } from "~~/utils/efs/tagResolver";
 import { notification } from "~~/utils/scaffold-eth";
 
 export const FileBrowser = ({
@@ -40,6 +40,7 @@ export const FileBrowser = ({
   const [selectedDebugItem, setSelectedDebugItem] = useState<any | null>(null);
   const [propertiesModalUID, setPropertiesModalUID] = useState<string | null>(null);
   const [tagModalUID, setTagModalUID] = useState<string | null>(null);
+  const [tagModalIsFile, setTagModalIsFile] = useState(false);
   const [selectedFile, setSelectedFile] = useState<any | null>(null);
   const [fileContent, setFileContent] = useState<string | null>(null);
   const [fileContentType, setFileContentType] = useState<string | null>(null);
@@ -47,24 +48,28 @@ export const FileBrowser = ({
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [pageSize, setPageSize] = useState<bigint>(50n);
 
-  // Tag filter state: null = no filter active; Set<string> = allowed UIDs
+  // Tag filter state: null = no filter active; Set<string> = allowed DATA/anchor UIDs
   const [tagFilteredUIDs, setTagFilteredUIDs] = useState<Set<string> | null>(null);
   const [isTagFilterLoading, setIsTagFilterLoading] = useState(false);
   const [tagResolverAddress, setTagResolverAddress] = useState<`0x${string}` | null>(null);
   const [tagsRoot, setTagsRoot] = useState<`0x${string}` | null>(null);
+  // Maps anchor UID → set of DATA UIDs for all relevant edition attesters.
+  // Built when a tag filter is active; an item matches if ANY of its DATA UIDs is in the tag set.
+  const [dataUIDMap, setDataUIDMap] = useState<Map<string, Set<string>>>(new Map());
 
   const { data: efsRouter } = useDeployedContractInfo({ contractName: "EFSRouter" });
 
   const { data: indexerInfo } = useDeployedContractInfo({ contractName: "Indexer" });
   const { targetNetwork } = useTargetNetwork();
   const publicClient = usePublicClient();
+  const { address: connectedAddress } = useAccount();
 
   useEffect(() => {
     setPageSize(50n);
   }, [currentAnchorUID]);
 
-  // Load TagResolver address and _tags anchor UID once.
-  // _tags is a normal anchor under the file system root — discovered the same way
+  // Load TagResolver address and "tags" anchor UID once.
+  // "tags" is a normal anchor under the file system root — discovered the same way
   // any folder is, via resolvePath. Tag definitions (e.g. "favorites") are its children.
   useEffect(() => {
     if (!publicClient || !indexerInfo) return;
@@ -82,11 +87,11 @@ export const FileBrowser = ({
           address: indexerInfo.address as `0x${string}`,
           abi: indexerInfo.abi,
           functionName: "resolvePath",
-          args: [fsRoot, "_tags"],
+          args: [fsRoot, "tags"],
         })) as `0x${string}`;
         if (tagsUID && tagsUID !== zeroHash) setTagsRoot(tagsUID);
       } catch {
-        // _tags not yet created — tag filter will be unavailable
+        // "tags" not yet created — tag filter will be unavailable
       }
     });
   }, [publicClient, indexerInfo]);
@@ -393,11 +398,74 @@ export const FileBrowser = ({
   const isLoading = useEditionsQuery ? isEditionLoading : isStandardLoading;
   const rawItems = useEditionsQuery ? (editionItemsRaw ? (editionItemsRaw as any)[0] : undefined) : standardItems;
 
-  // Apply tag filter if active. Tag definition anchors live under tagsRoot
-  // (outside the file system tree), so they never appear here to begin with.
+  // When a tag filter is active, resolve DATA UIDs for each file item based on the
+  // currently-viewed attesters. item.attester is always the ANCHOR creator (fixed), so we
+  // derive the attester list from the viewing context instead:
+  //   - editions mode → editionAddresses (whose data is on screen)
+  //   - own-files mode → [connectedAddress]
+  // Multiple attesters can have data for the same anchor, so we store a Set per anchor and
+  // show the item if ANY of those DATA UIDs is in the tag filter set.
+  useEffect(() => {
+    if (!tagFilteredUIDs || !rawItems || !publicClient || !indexerInfo || !connectedAddress) {
+      setDataUIDMap(new Map());
+      return;
+    }
+
+    // Which attesters' data are we looking at?
+    const attesters: string[] = editionAddresses.length > 0 ? editionAddresses : [connectedAddress];
+
+    let cancelled = false;
+    const map = new Map<string, Set<string>>();
+
+    const resolve = async () => {
+      await Promise.all(
+        (rawItems as any[])
+          .filter((item: any) => isFile(item, dataSchemaUID) && item.hasData)
+          .map(async (item: any) => {
+            const dataUIDs = new Set<string>();
+            await Promise.all(
+              attesters.map(async attester => {
+                try {
+                  const dataUID = (await publicClient.readContract({
+                    address: indexerInfo.address as `0x${string}`,
+                    abi: indexerInfo.abi,
+                    functionName: "getDataByAddressList",
+                    args: [item.uid as `0x${string}`, [attester as `0x${string}`], false],
+                  })) as `0x${string}`;
+                  if (dataUID && dataUID !== zeroHash) {
+                    dataUIDs.add(dataUID.toLowerCase());
+                  }
+                } catch {
+                  // ignore
+                }
+              }),
+            );
+            if (dataUIDs.size > 0) {
+              map.set(item.uid.toLowerCase(), dataUIDs);
+            }
+          }),
+      );
+      if (!cancelled) setDataUIDMap(map);
+    };
+
+    resolve();
+    return () => {
+      cancelled = true;
+    };
+  }, [tagFilteredUIDs, rawItems, publicClient, indexerInfo, dataSchemaUID, connectedAddress, editionAddresses]);
+
+  // Apply tag filter if active. For file items, an item passes if ANY of the viewed
+  // edition's DATA UIDs for that anchor appears in the tag filter set.
   const items =
     tagFilteredUIDs !== null
-      ? rawItems?.filter((item: any) => tagFilteredUIDs.has(item.uid.toLowerCase()))
+      ? rawItems?.filter((item: any) => {
+          if (isFile(item, dataSchemaUID)) {
+            const dataUIDs = dataUIDMap.get(item.uid.toLowerCase());
+            return dataUIDs ? [...dataUIDs].some(uid => tagFilteredUIDs.has(uid)) : false;
+          }
+          // Folders: match by anchor UID directly
+          return tagFilteredUIDs.has(item.uid.toLowerCase());
+        })
       : rawItems;
 
   if (!currentAnchorUID) return <div>Select a topic</div>;
@@ -429,7 +497,7 @@ export const FileBrowser = ({
     <div className="relative h-full">
       <div className="grid grid-cols-4 gap-4 p-4">
         {items
-          ?.filter((item: any) => isTopic(item) || isFile(item, dataSchemaUID))
+          ?.filter((item: any) => (isTopic(item) || isFile(item, dataSchemaUID)) && item.uid !== tagsRoot)
           .map((item: any) => {
             // isTopic = Generic Anchor (Schema 0 or undefined legacy)
             // isFile = Data Anchor (Schema DATA_SCHEMA_UID)
@@ -457,6 +525,7 @@ export const FileBrowser = ({
                     onClick={e => {
                       e.stopPropagation();
                       setTagModalUID(item.uid);
+                      setTagModalIsFile(isItemFile);
                     }}
                     title="Tags"
                   >
@@ -633,7 +702,16 @@ export const FileBrowser = ({
       {/* Properties Modal */}
       {propertiesModalUID && <PropertiesModal uid={propertiesModalUID} onClose={() => setPropertiesModalUID(null)} />}
       {/* Tag Modal */}
-      {tagModalUID && <TagModal uid={tagModalUID} onClose={() => setTagModalUID(null)} />}
+      {tagModalUID && (
+        <TagModal
+          uid={tagModalUID}
+          isFile={tagModalIsFile}
+          onClose={() => {
+            setTagModalUID(null);
+            setTagModalIsFile(false);
+          }}
+        />
+      )}
     </div>
   );
 };

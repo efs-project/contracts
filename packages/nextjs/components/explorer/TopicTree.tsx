@@ -63,7 +63,7 @@ const TreeNode = ({
       : undefined
     : standardChildren;
 
-  const topics = children?.filter((item: any) => isTopic(item));
+  const topics = children?.filter((item: any) => isTopic(item) && item.name !== "tags");
 
   if (isLoading) {
     return (

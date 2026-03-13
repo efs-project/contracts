@@ -21,9 +21,11 @@ This document maps the step-by-step execution for specific developer and user in
 - **Sort & Query**: Return the newest 10 matches.
 
 ### 4. Show items tagged 'Funny', hide items tagged 'NSFW'
-- **Action**: When rendering the children of an Anchor, resolve all associated `Tag` schemas pointing at the child data.
-- **Filter (Include)**: Query for Tags resolving to the Anchor UID representing definition "Funny".
-- **Filter (Exclude)**: If an item has a tag pointing to the "NSFW" Anchor definition, immediately filter it out of the visible UI scope for the user.
+- **Action**: When rendering the children of an Anchor, resolve tag definitions and cross-reference against the edition-specific DATA UIDs.
+- **Resolve definitions**: Look up `resolvePath(tagsAnchorUID, "funny")` and `resolvePath(tagsAnchorUID, "nsfw")` to get the definition Anchor UIDs.
+- **Fetch tagged targets**: Call `getTaggedTargets(funnyDefUID, 0, count)` and `getTaggedTargets(nsfwDefUID, 0, count)` to get the sets of tagged DATA UIDs.
+- **Per-item check**: For each file item in the directory, call `getDataByAddressList(anchorUID, editionAddresses, false)` to get the currently viewed edition's DATA UID. Check if that DATA UID appears in the "Funny" set (include) or the "NSFW" set (exclude).
+- **Key invariant**: Tags are on DATA UIDs, not Anchor UIDs. If User A tagged their edition as NSFW, User B's edition of the same filename is unaffected.
 
 ### 5. Get property 'icon' in `/memes/` made by `0x123...`
 - **Action**: Find the Anchor uniquely representing the name "icon" inside the parent folder `/memes/`.
@@ -46,3 +48,31 @@ EFS files are modified by issuing new attestations over existing paths.
 - **Action**: User opens `/pets/` and wants to see files uploaded by both "Vitalik" and "Self".
 - **Execution**: The client calls `getChildrenByAddressList` with the `parentUID`, passing `[Self, Vitalik]` and a target `pageSize`.
 - **Result**: The Indexer performs round-robin pagination, returning a mixed list of files from both users and a cursor to fetch the next page safely.
+
+### 9. Tag a File (Edition-Specific)
+- **Action**: User wants to tag their edition of `/memes/vitalik.jpg` as "funny".
+- **Step 1 — Resolve or create the tag definition**: Look up `resolvePath(tagsAnchorUID, "funny")`. If zero, create an Anchor named "funny" under the `/tags/` folder (one EAS `attest` transaction).
+- **Step 2 — Resolve the user's DATA UID**: Call `getDataByAddressList(anchorUID, [connectedAddress], false)` to get the connected user's DATA attestation UID for this file.
+- **Step 3 — Create the tag**: Create a Tag attestation with `refUID = dataUID`, `definition = funnyDefUID`, `applies = true`.
+- **Result**: The `EFSTagResolver` stores the tag under `keccak256(attester, dataUID, funnyDefUID)`. The file appears when filtering by "funny" while viewing this user's edition, but other users' editions of the same filename are unaffected.
+
+### 10. Remove a Tag
+- **Action**: User wants to remove their "nsfw" tag from a file.
+- **Step 1 — Find the active tag**: Call `getActiveTagUID(connectedAddress, dataUID, nsfwDefUID)` to get the active attestation UID.
+- **Step 2 — Revoke it**: Call `eas.revoke(tagSchemaUID, activeTagUID)`. The `EFSTagResolver` clears the active mapping.
+- **Result**: The tag no longer appears as active. The DATA UID remains in the append-only discovery list (`getTaggedTargets`) but `getActiveTagUID` returns zero.
+
+### 11. Filter by Tags Across Editions
+- **Action**: User is viewing `/memes/` with `editions=[Alice, Bob]` and applies tag filter "funny".
+- **Resolve**: Look up the "funny" definition UID via `resolvePath(tagsAnchorUID, "funny")`.
+- **Build tagged set**: Fetch `getTaggedTargets(funnyDefUID, 0, count)` into a `Set`.
+- **Per-item check**: For each item in the directory listing:
+  - For Alice: `getDataByAddressList(anchorUID, [Alice], false)` returns Alice's DATA UID. Check if it is in the tagged set.
+  - For Bob: `getDataByAddressList(anchorUID, [Bob], false)` returns Bob's DATA UID. Check if it is in the tagged set.
+  - If **either** matches, include the item. If **neither** matches, exclude it.
+- **Result**: Only files where at least one of the viewed editions has been tagged "funny" appear in the listing.
+
+### 12. Cross-User Tagging (Curating Someone Else's Content)
+- **Action**: User B wants to mark User A's edition of `/memes/cat.gif` as "nsfw".
+- **Execution**: User B creates a Tag attestation with `refUID = dataA_UID` (User A's DATA UID), `definition = nsfwDefUID`, `applies = true`.
+- **Result**: The tag is stored under `keccak256(userB, dataA_UID, nsfwDefUID)`. User A's DATA UID now appears in `getTaggedTargets(nsfwDefUID)`. When anyone views User A's edition and filters by "nsfw", the file matches. User B's own edition is unaffected. Multiple users can independently tag the same DATA UID; each tag is stored under a separate attester key.

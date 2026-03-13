@@ -185,8 +185,8 @@ const deployEFSIndexer: DeployFunction = async function (hre: HardhatRuntimeEnvi
     }
   }
 
-  // 9. Create Root Anchor and _tags Anchor
-  //    Tag definitions (e.g. "favorites") are normal anchors under "_tags", which is
+  // 9. Create Root Anchor and "tags" Anchor
+  //    Tag definitions (e.g. "favorites") are normal anchors under "tags", which is
   //    itself a normal anchor under root. One tree, uniform anchors throughout.
   const anchorSchemaUID = schemaUIDs["ANCHOR"];
 
@@ -225,10 +225,10 @@ const deployEFSIndexer: DeployFunction = async function (hre: HardhatRuntimeEnvi
       console.log("Root Anchor already exists:", rootUID);
     }
 
-    // Check if _tags already exists under root
-    const existingTagsUID = await indexer.resolvePath(rootUID, "_tags");
+    // Check if "tags" already exists under root
+    const existingTagsUID = await indexer.resolvePath(rootUID, "tags");
     if (existingTagsUID === ethers.ZeroHash) {
-      console.log("Creating _tags Anchor under root...");
+      console.log("Creating 'tags' Anchor under root...");
       const tx = await eas.attest({
         schema: anchorSchemaUID,
         data: {
@@ -236,18 +236,18 @@ const deployEFSIndexer: DeployFunction = async function (hre: HardhatRuntimeEnvi
           expirationTime: 0,
           revocable: false,
           refUID: rootUID,
-          data: ethers.AbiCoder.defaultAbiCoder().encode(["string", "bytes32"], ["_tags", ethers.ZeroHash]),
+          data: ethers.AbiCoder.defaultAbiCoder().encode(["string", "bytes32"], ["tags", ethers.ZeroHash]),
           value: 0,
         },
       });
       const receipt = await tx.wait();
       const tagsUID = extractUID(receipt);
-      console.log("_tags Anchor created:", tagsUID);
+      console.log("'tags' Anchor created:", tagsUID);
     } else {
-      console.log("_tags Anchor already exists:", existingTagsUID);
+      console.log("'tags' Anchor already exists:", existingTagsUID);
     }
   } catch (e) {
-    console.error("Failed to create Root / _tags Anchor:", e);
+    console.error("Failed to create Root / 'tags' Anchor:", e);
   }
 };
 

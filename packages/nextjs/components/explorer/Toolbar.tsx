@@ -320,8 +320,8 @@ export const Toolbar = ({
   };
 
   return (
-    <div className="flex justify-between items-center p-2 bg-base-100 rounded-lg gap-4">
-      <div className="breadcrumbs text-sm">
+    <div className="flex flex-wrap items-center p-2 bg-base-100 rounded-lg gap-2">
+      <div className="breadcrumbs text-sm flex-shrink-0">
         <ul>
           {currentPath.map((p, i) => (
             <li key={i}>
@@ -337,15 +337,15 @@ export const Toolbar = ({
         </ul>
       </div>
 
-      <div className="flex gap-2 items-center flex-grow max-w-xl">
+      <div className="flex flex-wrap gap-2 items-center flex-grow min-w-0">
         <label
-          className="input input-bordered input-sm flex items-center gap-2 flex-grow"
+          className="input input-bordered input-sm flex items-center gap-2 flex-grow min-w-[180px]"
           title="Filter files by attester address or ENS name. Only files attested by the given addresses will be shown. Leave blank to see all files from any attester."
         >
           Editions:
           <input
             type="text"
-            className="grow"
+            className="grow min-w-0"
             placeholder="vitalik.eth, 0x..."
             value={editionsInput}
             onChange={e => setEditionsInput(e.target.value)}
@@ -355,13 +355,13 @@ export const Toolbar = ({
           />
         </label>
         <label
-          className="input input-bordered input-sm flex items-center gap-2 flex-grow"
+          className="input input-bordered input-sm flex items-center gap-2 flex-grow min-w-[160px]"
           title="Filter by tag names (comma-separated). Only items with matching tags are shown."
         >
           Tags:
           <input
             type="text"
-            className="grow"
+            className="grow min-w-0"
             placeholder="favorites, nsfw"
             value={tagFilterInput}
             onChange={e => setTagFilterInput(e.target.value)}
@@ -370,12 +370,12 @@ export const Toolbar = ({
             }}
           />
         </label>
-        <button className="btn btn-sm btn-outline" onClick={handleApplyBoth}>
+        <button className="btn btn-sm btn-outline flex-shrink-0" onClick={handleApplyBoth}>
           Apply
         </button>
       </div>
 
-      <div className="flex gap-2">
+      <div className="flex gap-2 flex-shrink-0">
         <button className="btn btn-sm btn-ghost" onClick={() => handleOpenModal("Folder")} disabled={!currentAnchorUID}>
           New Folder
         </button>
