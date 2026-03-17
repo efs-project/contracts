@@ -19,7 +19,7 @@ body {
 }
 
 /* ──────────────────────────────────────────────
-   Dark Mode — Ambient Glow Background
+   Dark Mode — Ambient Glow Background & Animated Grid
    ────────────────────────────────────────────── */
 
 [data-theme='dark'] body {
@@ -27,6 +27,24 @@ body {
     radial-gradient(ellipse at 50% 0%, rgba(0, 255, 65, 0.03) 0%, transparent 60%),
     radial-gradient(ellipse at 80% 100%, rgba(0, 255, 65, 0.015) 0%, transparent 50%),
     oklch(var(--b1));
+}
+
+[data-theme='dark'] body::before {
+  content: " ";
+  display: block;
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 200vw;
+  height: 200vh;
+  background-image:
+    linear-gradient(rgba(0, 255, 65, 0.02) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 255, 65, 0.02) 1px, transparent 1px);
+  background-size: 40px 40px;
+  z-index: 1;
+  pointer-events: none;
+  animation: grid-pan 40s linear infinite;
+  transform: translateZ(0); /* Hardware acceleration */
 }
 
 /* ──────────────────────────────────────────────
@@ -51,6 +69,11 @@ body {
   );
   z-index: 2;
   pointer-events: none;
+}
+
+@keyframes grid-pan {
+  0% { transform: translate(0, 0); }
+  100% { transform: translate(-40px, -40px); }
 }
 
 /* Light mode: no scanlines */

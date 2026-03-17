@@ -368,7 +368,7 @@ function EASExplorerContent() {
         <h1 className="text-4xl font-bold">EAS Explorer</h1>
 
         {/* Search Bar */}
-        <div className="flex gap-2 items-center bg-base-100 p-4 rounded-xl shadow-md">
+        <div className="flex gap-2 items-center bg-base-100 p-4 rounded-xl shadow-md terminal-panel">
           <input
             type="text"
             placeholder="Enter Attestation or Schema UID"
@@ -390,7 +390,7 @@ function EASExplorerContent() {
 
         {/* Attestation View */}
         {isAttestationFound && attestation && (
-          <div className="bg-base-100 rounded-xl shadow-md p-6">
+          <div className="bg-base-100 rounded-xl shadow-md p-6 terminal-panel">
             <div className="flex justify-between items-start mb-6">
               <h2 className="text-2xl font-bold flex items-center gap-2">
                 Attestation
@@ -476,7 +476,7 @@ function EASExplorerContent() {
                 Raw Data
               </a>
             </div>
-            <div className="bg-base-100 border-base-300 rounded-b-box border p-6">{renderDataDisplay()}</div>
+            <div className="bg-base-100 border-base-300 rounded-b-box border p-6 terminal-panel">{renderDataDisplay()}</div>
 
             {/* Referenced By ... (Dynamic) */}
             {referencingSchemas &&
@@ -497,7 +497,7 @@ function EASExplorerContent() {
 
         {/* Schema View */}
         {isSchemaView && schemaRecord && (
-          <div className="bg-base-100 rounded-xl shadow-md p-6">
+          <div className="bg-base-100 rounded-xl shadow-md p-6 terminal-panel">
             <div className="flex justify-between items-start mb-6">
               <h2 className="text-2xl font-bold flex items-center gap-2">
                 {schemaName || "Schema"}
