@@ -25,7 +25,11 @@ export const useSchemaRegistry = () => {
   });
   const { data: dataUID } = useScaffoldReadContract({ contractName: "Indexer", functionName: "DATA_SCHEMA_UID" });
   const { data: blobUID } = useScaffoldReadContract({ contractName: "Indexer", functionName: "BLOB_SCHEMA_UID" });
-  const { data: tagUID } = useScaffoldReadContract({ contractName: "Indexer", functionName: "TAG_SCHEMA_UID" });
+
+  // TAG_SCHEMA_UID lives on TagResolver (not Indexer) — it was registered with
+  // the TagResolver address as its resolver. Debug flows use this to attest and
+  // decode tag payloads via the schemas.TAG key.
+  const { data: tagUID } = useScaffoldReadContract({ contractName: "TagResolver", functionName: "TAG_SCHEMA_UID" });
 
   const schemas = useMemo(() => {
     if (!anchorUID) return null;

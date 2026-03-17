@@ -16,6 +16,7 @@ const TreeNode = ({
   defaultOpen,
   expandedUIDs,
   editionAddresses,
+  systemTagsUID,
 }: {
   uid: string;
   name: string;
@@ -26,6 +27,8 @@ const TreeNode = ({
   defaultOpen?: boolean;
   expandedUIDs?: Set<string>;
   editionAddresses: string[];
+  /** UID of the system-managed "tags" anchor under root. Hidden from the sidebar. */
+  systemTagsUID?: string;
 }) => {
   // Fetch children for this node
   // Note: This fetches purely to check for sub-topics.
@@ -63,7 +66,9 @@ const TreeNode = ({
       : undefined
     : standardChildren;
 
-  const topics = children?.filter((item: any) => isTopic(item));
+  // Hide the system "tags" anchor by its UID (not by name) so that user-created
+  // folders also named "tags" deeper in the hierarchy are still navigable.
+  const topics = children?.filter((item: any) => isTopic(item) && item.uid !== systemTagsUID);
 
   if (isLoading) {
     return (
@@ -122,6 +127,7 @@ const TreeNode = ({
                 propertySchemaUID={propertySchemaUID}
                 expandedUIDs={expandedUIDs}
                 editionAddresses={editionAddresses}
+                systemTagsUID={systemTagsUID}
               />
             ))}
           </ul>
@@ -154,6 +160,15 @@ export const TopicTree = ({
     functionName: "PROPERTY_SCHEMA_UID",
   });
 
+  // Resolve the UID of the system "tags" anchor (one level below root) so we can
+  // hide it by UID rather than by name — a name match would incorrectly hide any
+  // user-created folder also named "tags" elsewhere in the hierarchy.
+  const { data: systemTagsUID } = useScaffoldReadContract({
+    contractName: "Indexer",
+    functionName: "resolvePath",
+    args: [rootUID as `0x${string}`, "tags"],
+  });
+
   if (!dataSchemaUID || !propertySchemaUID) return <span className="loading loading-dots loading-xs"></span>;
 
   return (
@@ -168,6 +183,7 @@ export const TopicTree = ({
         defaultOpen={true}
         expandedUIDs={expandedUIDs}
         editionAddresses={editionAddresses}
+        systemTagsUID={systemTagsUID as string | undefined}
       />
     </ul>
   );

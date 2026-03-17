@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { hardhat } from "viem/chains";
 import { useConnect, useConnectors, useDisconnect } from "wagmi";
+import { ClipboardDocumentCheckIcon, ClipboardDocumentIcon } from "@heroicons/react/24/outline";
 import { useTargetNetwork } from "~~/hooks/scaffold-eth";
 
 // Deterministic Hardhat Accounts
@@ -113,6 +114,7 @@ export const DevWalletSwitcher = () => {
   const { targetNetwork } = useTargetNetwork();
   const [mounted, setMounted] = useState(false);
   const [activeAddress, setActiveAddress] = useState<string | null>(null);
+  const [copiedAddress, setCopiedAddress] = useState<string | null>(null);
   const { disconnect } = useDisconnect();
   const { connect } = useConnect();
   const connectors = useConnectors();
@@ -132,6 +134,13 @@ export const DevWalletSwitcher = () => {
   if (!mounted || targetNetwork.id !== hardhat.id) {
     return null;
   }
+
+  const copyAddress = (address: string) => {
+    navigator.clipboard.writeText(address).then(() => {
+      setCopiedAddress(address);
+      setTimeout(() => setCopiedAddress(null), 1500);
+    });
+  };
 
   const switchAccount = (pk: string) => {
     if (typeof window === "undefined") return;
@@ -159,15 +168,32 @@ export const DevWalletSwitcher = () => {
         <li className="menu-title px-4 py-2 text-sm">Switch Burner Wallet</li>
         {HARDHAT_ACCOUNTS.map(account => (
           <li key={account.address}>
-            <button
-              className={`text-sm ${activeAddress === account.address ? "bg-secondary" : ""}`}
-              onClick={() => switchAccount(account.pk)}
+            <div
+              className={`flex items-center justify-between gap-1 px-2 py-1 rounded-lg cursor-pointer text-sm ${
+                activeAddress === account.address ? "bg-secondary" : "hover:bg-base-300"
+              }`}
             >
-              <span>{account.name}</span>
-              <span className="text-xs opacity-50 block">
-                {account.address.slice(0, 6)}...{account.address.slice(-4)}
+              <span className="flex-1 min-w-0" onClick={() => switchAccount(account.pk)}>
+                <span className="block">{account.name}</span>
+                <span className="text-xs opacity-50">
+                  {account.address.slice(0, 6)}...{account.address.slice(-4)}
+                </span>
               </span>
-            </button>
+              <button
+                className="btn btn-ghost btn-xs p-0.5 opacity-50 hover:opacity-100 flex-shrink-0"
+                onClick={e => {
+                  e.stopPropagation();
+                  copyAddress(account.address);
+                }}
+                title="Copy address"
+              >
+                {copiedAddress === account.address ? (
+                  <ClipboardDocumentCheckIcon className="w-4 h-4 text-success" />
+                ) : (
+                  <ClipboardDocumentIcon className="w-4 h-4" />
+                )}
+              </button>
+            </div>
           </li>
         ))}
       </ul>

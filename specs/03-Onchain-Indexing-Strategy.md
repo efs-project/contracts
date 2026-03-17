@@ -38,3 +38,57 @@ When a web client needs to load a directory:
 1. It queries the Indexer contract for the list of names (Anchors) inside the target Folder.
 2. For each name returned, the client receives the associated resolved state (the newest/most valid Data or Property attestation).
 3. Under the hood, this requires indexing based on the *schema type* and the *attester's address*, as the active state of a directory is a subjective compilation based on a specific user's web of trust or explicit edition request.
+
+## Tag Indexing via EFSTagResolver
+Tag attestations are handled by a dedicated `EFSTagResolver` contract (separate from the `EFSIndexer`). The Tag schema is registered in EAS with the `EFSTagResolver` as its resolver.
+
+### Singleton Tagging Pattern
+The `EFSTagResolver` enforces that only one active tag exists per `(attester, target, definition)` triple. It maintains an internal mapping:
+```
+mapping(bytes32 compositeHash => bytes32 activeUID) _activeTag
+```
+where `compositeHash = keccak256(abi.encodePacked(attester, targetID, definition))`.
+
+When a user applies a tag that matches an existing combination, the resolver overwrites the mapping pointer to the new attestation UID. The old attestation remains on-chain but is logically superseded. This "logical superseding" approach avoids reentrancy issues that would arise from calling `eas.revoke()` inside a resolver hook (EAS requires `msg.sender == attester` for revocation, which the resolver cannot satisfy).
+
+### Tag Definition Storage
+Tag definitions are stored as normal Anchors under a reserved `/tags/` folder in the filesystem tree. This folder is created at deploy time as a child of the root Anchor. The UI hides `/tags/` from directory listings and the sidebar tree, but the definitions are discoverable via `resolvePath(tagsAnchorUID, "tagName")`. This approach keeps all anchors uniform (no special schema markers) while giving tags a dedicated namespace.
+
+### Discovery Indices
+The resolver maintains append-only discovery indices:
+- **Definitions by Target**: Which tag definitions have ever been applied to a given target (`_tagDefinitions[targetID]`).
+- **Targets by Definition**: Which targets have ever been tagged with a given definition (`_taggedTargets[definition]`).
+
+These indices only grow; revoked or negated tags are **not** removed from them. Consumers must cross-reference `getActiveTagUID` to determine whether a discovered entry is still active.
+
+### On-Chain Query Functions
+- `getActiveTagUID(attester, targetID, definition)` — Returns the active tag attestation UID for a specific triple. Returns zero if no active tag exists (never set, revoked, or the active attestation was for a different triple).
+- `getTagDefinitionCount(targetID)` — Number of distinct definitions ever applied to a target.
+- `getTagDefinitions(targetID, start, length)` — Paginated list of definitions applied to a target.
+- `getTaggedTargetCount(definition)` — Number of distinct targets ever tagged with a definition.
+- `getTaggedTargets(definition, start, length)` — Paginated list of targets tagged with a definition.
+
+### Edition-Aware Tag Filtering
+When filtering a directory listing by tags, the client must account for editions. Each file Anchor can have multiple DATA attestations (one per user). Tags target specific DATA UIDs, not the shared Anchor UID. The filtering algorithm is:
+
+1. **Resolve the tag definition**: `resolvePath(tagsAnchorUID, tagName)` returns the definition Anchor UID.
+2. **Fetch tagged targets**: `getTaggedTargets(definitionUID, 0, count)` returns all DATA UIDs ever tagged with this definition.
+3. **For each file item in the directory listing**:
+   a. Determine the relevant attesters: `editionAddresses` (if viewing specific editions) or `[connectedAddress]` (if viewing own files).
+   b. For each attester, call `getDataByAddressList(anchorUID, [attester], false)` to get their current DATA UID.
+   c. If **any** of those DATA UIDs appears in the tagged targets set, the item matches the filter.
+
+This ensures that tagging User A's edition of `test.txt` as "nsfw" does not cause User B's edition to appear when filtering by "nsfw".
+
+### Edge Cases and Caveats
+- **Append-only discovery**: `getTaggedTargets` returns UIDs that were ever tagged, including revoked ones. A strict filter should additionally verify each candidate via `getActiveTagUID` or by checking the `applies` field of the active attestation.
+- **Updated DATA (new uploads)**: If a user uploads a new version of a file, `getDataByAddressList` returns the latest DATA UID. Tags on the old DATA UID do not carry over to the new version. Users must re-tag after uploading a new version.
+- **Cross-user tagging**: User B can tag User A's DATA UID. The tag is stored under `(userB, dataA_UID, definition)` and `dataA_UID` appears in `getTaggedTargets`. When viewing User A's edition, the filter matches regardless of who applied the tag.
+- **Folder-level tags**: Tags on Anchor UIDs (folders) are checked directly against the anchor UID without DATA indirection.
+
+### Off-Chain Indexer API Patterns
+For a responsive web UI, off-chain indexers should expose these additional query patterns:
+1. **Attestations by Tag and Schema**: `getAttestationsByTag(definitionUID, targetSchemaUID, applies, cursor)` — Paginated list of items with a specific tag, filtered by the target's schema type.
+2. **Addresses by Tag**: `getAddressesByTag(definitionUID, applies, cursor)` — Paginated list of user addresses (from the `recipient` field) possessing a specific tag.
+3. **Tags for Target**: `getTagsForTarget(targetID)` — All active tags applied to a specific file, folder, or address.
+4. **Boolean State Check**: `checkIfTargetHasTag(targetID, definitionUID)` — Optimized boolean check for tag membership.

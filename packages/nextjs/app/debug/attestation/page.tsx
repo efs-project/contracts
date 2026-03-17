@@ -218,17 +218,21 @@ function DecodedData({ schemaUID, data, schemas }: { schemaUID: string; data: st
   try {
     if (!schemas) return <div className="text-sm italic opacity-60">Schemas loading...</div>;
 
-    if (schemaUID === schemas.TAG) {
-      const [val] = decodeAbiParameters(parseAbiParameters("bytes32"), data as `0x${string}`);
-      let text = "";
-      try {
-        text = hexToString(val, { size: 32 }).replace(/\0/g, "");
-      } catch {}
+    if ((schemas as any).TAG && schemaUID === (schemas as any).TAG) {
+      // TAG schema: "bytes32 definition, bool applies"
+      const [definition, applies] = decodeAbiParameters(
+        parseAbiParameters("bytes32 definition, bool applies"),
+        data as `0x${string}`,
+      );
       return (
         <div className="p-4 bg-primary/10 rounded-lg border border-primary/20">
           <div className="text-xs font-bold uppercase mb-1">Tag</div>
-          <div className="text-lg font-bold">{text}</div>
-          <div className="text-xs font-mono opacity-50">{val}</div>
+          <div className="flex items-center gap-2">
+            <span className={`badge ${applies ? "badge-primary" : "badge-ghost"}`}>
+              {applies ? "applied" : "removed"}
+            </span>
+          </div>
+          <div className="text-xs font-mono opacity-50 mt-1">definition: {definition}</div>
         </div>
       );
     }
@@ -304,8 +308,8 @@ function ReferencingAttestations({
     <div className="flex flex-col gap-4">
       <h3 className="text-xl font-bold px-1">Referencing Attestations</h3>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        {registry.schemas.TAG && (
-          <ReferencingList title="Tags" schema={registry.schemas.TAG} target={uid} onNavigate={onNavigate} />
+        {(registry.schemas as any)?.TAG && (
+          <ReferencingList title="Tags" schema={(registry.schemas as any).TAG} target={uid} onNavigate={onNavigate} />
         )}
         {registry.schemas.ANCHOR && (
           <ReferencingList title="Anchors" schema={registry.schemas.ANCHOR} target={uid} onNavigate={onNavigate} />
