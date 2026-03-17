@@ -25,12 +25,13 @@ body {
 [data-theme='dark'] body {
   background:
     radial-gradient(ellipse at 50% 0%, rgba(0, 255, 65, 0.03) 0%, transparent 60%),
-    radial-gradient(ellipse at 80% 100%, rgba(0, 255, 65, 0.02) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 100%, rgba(0, 255, 65, 0.015) 0%, transparent 50%),
     oklch(var(--b1));
 }
 
 /* ──────────────────────────────────────────────
    Scanlines — Dark mode only, very subtle
+   Excluded from modals and file previews
    ────────────────────────────────────────────── */
 
 [data-theme='dark'] body::after {
@@ -45,10 +46,10 @@ body {
     0deg,
     transparent,
     transparent 1px,
-    rgba(0, 0, 0, 0.06) 1px,
-    rgba(0, 0, 0, 0.06) 2px
+    rgba(0, 0, 0, 0.04) 1px,
+    rgba(0, 0, 0, 0.04) 2px
   );
-  z-index: 9999;
+  z-index: 2;
   pointer-events: none;
 }
 
@@ -85,7 +86,7 @@ p {
 }
 
 [data-theme='dark'] h2 {
-  text-shadow: 0 0 5px rgba(0, 255, 65, 0.2);
+  text-shadow: 0 0 5px rgba(0, 255, 65, 0.15);
 }
 
 /* ──────────────────────────────────────────────
@@ -93,13 +94,13 @@ p {
    ────────────────────────────────────────────── */
 
 [data-theme='dark'] ::selection {
-  background: rgba(0, 255, 65, 0.25);
+  background: rgba(0, 255, 65, 0.2);
   color: #00FF41;
 }
 
 [data-theme='light'] ::selection {
-  background: rgba(6, 95, 70, 0.2);
-  color: #065f46;
+  background: rgba(15, 118, 110, 0.15);
+  color: #0f766e;
 }
 
 /* ──────────────────────────────────────────────
@@ -133,24 +134,24 @@ p {
 
 [data-theme='dark'] .card,
 [data-theme='dark'] .terminal-panel {
-  border: 1px solid rgba(0, 255, 65, 0.12);
-  box-shadow: inset 0 0 20px rgba(0, 255, 65, 0.03);
+  border: 1px solid rgba(0, 255, 65, 0.1);
+  box-shadow: inset 0 0 20px rgba(0, 255, 65, 0.02);
 }
 
 [data-theme='dark'] .card:hover {
-  border-color: rgba(0, 255, 65, 0.25);
+  border-color: rgba(0, 255, 65, 0.22);
   box-shadow:
-    inset 0 0 20px rgba(0, 255, 65, 0.05),
-    0 0 15px rgba(0, 255, 65, 0.08);
+    inset 0 0 20px rgba(0, 255, 65, 0.04),
+    0 0 12px rgba(0, 255, 65, 0.06);
 }
 
 [data-theme='light'] .card {
-  border: 1px solid rgba(6, 95, 70, 0.1);
+  border: 1px solid #e2e8f0;
 }
 
 [data-theme='light'] .card:hover {
-  border-color: rgba(6, 95, 70, 0.2);
-  box-shadow: 0 4px 12px rgba(6, 95, 70, 0.06);
+  border-color: #cbd5e1;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.06);
 }
 
 /* ──────────────────────────────────────────────
@@ -160,15 +161,15 @@ p {
 [data-theme='dark'] .input,
 [data-theme='dark'] .textarea,
 [data-theme='dark'] .select {
-  border-color: rgba(0, 255, 65, 0.15);
+  border-color: rgba(0, 255, 65, 0.12);
   background: rgba(0, 255, 65, 0.02);
 }
 
 [data-theme='dark'] .input:focus,
 [data-theme='dark'] .textarea:focus,
 [data-theme='dark'] .select:focus {
-  border-color: rgba(0, 255, 65, 0.4);
-  box-shadow: 0 0 10px rgba(0, 255, 65, 0.12);
+  border-color: rgba(0, 255, 65, 0.35);
+  box-shadow: 0 0 10px rgba(0, 255, 65, 0.1);
   outline: none;
 }
 
@@ -177,7 +178,7 @@ p {
    ────────────────────────────────────────────── */
 
 [data-theme='dark'] a.link:hover {
-  text-shadow: 0 0 6px rgba(0, 255, 65, 0.4);
+  text-shadow: 0 0 6px rgba(0, 255, 65, 0.35);
 }
 
 /* ──────────────────────────────────────────────
@@ -194,12 +195,12 @@ p {
 }
 
 [data-theme='dark'] ::-webkit-scrollbar-thumb {
-  background: rgba(0, 255, 65, 0.15);
+  background: rgba(0, 255, 65, 0.12);
   border-radius: 3px;
 }
 
 [data-theme='dark'] ::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 255, 65, 0.3);
+  background: rgba(0, 255, 65, 0.25);
 }
 
 /* ──────────────────────────────────────────────
@@ -207,15 +208,15 @@ p {
    ────────────────────────────────────────────── */
 
 [data-theme='dark'] code {
-  background: rgba(0, 255, 65, 0.06);
-  border: 1px solid rgba(0, 255, 65, 0.1);
+  background: rgba(0, 255, 65, 0.05);
+  border: 1px solid rgba(0, 255, 65, 0.08);
   padding: 0.1em 0.4em;
   border-radius: 2px;
 }
 
 [data-theme='light'] code {
-  background: rgba(6, 95, 70, 0.06);
-  border: 1px solid rgba(6, 95, 70, 0.1);
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
   padding: 0.1em 0.4em;
   border-radius: 2px;
 }
@@ -225,6 +226,6 @@ p {
    ────────────────────────────────────────────── */
 
 [data-theme='dark'] .shadow-secondary {
-  --tw-shadow-color: rgba(0, 255, 65, 0.1);
+  --tw-shadow-color: rgba(0, 255, 65, 0.08);
   --tw-shadow: 0 4px 6px -1px var(--tw-shadow-color);
 }
