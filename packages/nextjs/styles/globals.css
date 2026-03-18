@@ -1,15 +1,84 @@
+@import url("https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=JetBrains+Mono:wght@400;500;700&display=swap");
 @import "tailwindcss/base";
 @import "tailwindcss/components";
 @import "tailwindcss/utilities";
 
+/* ──────────────────────────────────────────────
+   Base
+   ────────────────────────────────────────────── */
+
 :root,
 [data-theme] {
-  background: oklch(var(--b2));
+  background: oklch(var(--b1));
 }
 
 body {
   min-height: 100vh;
+  font-family: "Share Tech Mono", "JetBrains Mono", monospace;
+  position: relative;
 }
+
+/* ──────────────────────────────────────────────
+   Dark Mode — Ambient Glow Background & Animated Grid
+   ────────────────────────────────────────────── */
+
+/* Panning Grid Background (Default for Dark Mode) */
+[data-theme="dark"] body::before {
+  content: " ";
+  display: block;
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  background-image: linear-gradient(rgba(0, 255, 65, 0.6) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 255, 65, 0.6) 1px, transparent 1px);
+  background-size: 50px 50px;
+  z-index: 1;
+  pointer-events: none;
+  animation: grid-pan 60s linear infinite;
+}
+
+@keyframes grid-pan {
+  0% {
+    background-position: 0px 0px;
+  }
+  100% {
+    background-position: 1000px 1000px;
+  }
+}
+
+/* ──────────────────────────────────────────────
+   Scanlines — Dark mode only, very subtle
+   Excluded from modals and file previews
+   ────────────────────────────────────────────── */
+
+[data-theme="dark"] body::after {
+  content: " ";
+  display: block;
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  right: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 1px,
+    rgba(0, 0, 0, 0.06) 1px,
+    rgba(0, 0, 0, 0.06) 2px
+  );
+  z-index: 2; /* Layered behind UI cards (z-index 5) */
+  pointer-events: none;
+}
+
+/* Light mode: no scanlines */
+[data-theme="light"] body::after {
+  display: none;
+}
+
+/* ──────────────────────────────────────────────
+   Typography
+   ────────────────────────────────────────────── */
 
 h1,
 h2,
@@ -23,10 +92,298 @@ p {
   margin: 1rem 0;
 }
 
+/* ──────────────────────────────────────────────
+   Neon Text Glow (dark mode only)
+   ────────────────────────────────────────────── */
+
+[data-theme="dark"] h1,
+[data-theme="dark"] .neon-text {
+  text-shadow:
+    0 0 7px currentColor,
+    0 0 20px rgba(0, 255, 65, 0.25);
+}
+
+[data-theme="dark"] h2 {
+  text-shadow: 0 0 5px rgba(0, 255, 65, 0.15);
+}
+
+/* ──────────────────────────────────────────────
+   Selection
+   ────────────────────────────────────────────── */
+
+[data-theme="dark"] ::selection {
+  background: rgba(0, 255, 65, 0.2);
+  color: #00ff41;
+}
+
+[data-theme="light"] ::selection {
+  background: rgba(15, 118, 110, 0.15);
+  color: #0f766e;
+}
+
+/* ──────────────────────────────────────────────
+   Buttons — Cypherpunk style
+   ────────────────────────────────────────────── */
+
 .btn {
   @apply shadow-md;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  font-size: 0.8rem;
+  transition: all 0.2s ease;
 }
 
 .btn.btn-ghost {
   @apply shadow-none;
+}
+
+[data-theme="dark"] .btn-primary {
+  box-shadow: 0 0 8px rgba(0, 255, 65, 0.2);
+}
+
+[data-theme="dark"] .btn-primary:hover {
+  box-shadow:
+    0 0 15px rgba(0, 255, 65, 0.4),
+    0 0 30px rgba(0, 255, 65, 0.15);
+  transform: translateY(-1px);
+}
+
+[data-theme="light"] .btn-primary {
+  background-color: #0f766e !important;
+  color: white !important;
+  border-color: #0f766e !important;
+  opacity: 1 !important;
+}
+
+[data-theme="light"] .btn-primary:hover {
+  background-color: #0d9488 !important;
+  opacity: 1 !important;
+}
+
+[data-theme="light"] .btn:not(.btn-primary):not(.btn-secondary):not(.btn-ghost) {
+  opacity: 1 !important;
+  color: #0f766e !important;
+  border-color: #cbd5e1 !important;
+}
+
+[data-theme="light"] .btn.btn-ghost {
+  color: #0f766e !important;
+}
+
+[data-theme="light"] .btn-secondary:not(.bg-base-100):not(.bg-base-300) {
+  opacity: 1 !important;
+  color: #ffffff !important;
+}
+
+[data-theme="light"] .btn.bg-base-100,
+[data-theme="light"] .btn.bg-base-300 {
+  color: #0f766e !important;
+}
+
+/* ──────────────────────────────────────────────
+   Cards & Panels — Terminal window look
+   ────────────────────────────────────────────── */
+
+[data-theme="dark"] .card,
+[data-theme="dark"] .terminal-panel {
+  border: 1px solid rgba(0, 255, 65, 0.35) !important; /* Higher opacity and !important to override .border-base-200 */
+  box-shadow: inset 0 0 20px rgba(0, 255, 65, 0.02);
+  /* Glassmorphism: Refined opacity for better background visibility */
+  background-color: oklch(var(--b1) / 0.88);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+/* ──────────────────────────────────────────────
+   Layout Transparency & Stacking Context
+   Ensure only one layer of semi-transparency is used for depth.
+   ────────────────────────────────────────────── */
+
+/* Root layout containers: Completely transparent to show background grid */
+[data-theme="dark"] .scaffold-eth-app,
+[data-theme="dark"] main,
+[data-theme="dark"] main > div.flex.flex-col,
+[data-theme="dark"]
+  .bg-base-100:not(.card):not(.terminal-panel):not(.modal-box):not(.navbar):not(.rounded-3xl):not(.btn) {
+  background-color: transparent !important;
+  background-image: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* Header/Navbar: 85% opacity to stand out from background */
+[data-theme="dark"] .navbar.bg-base-100 {
+  background-color: oklch(var(--b1) / 0.85) !important;
+  backdrop-filter: blur(1.5px) !important;
+  -webkit-backdrop-filter: blur(1.5px) !important;
+  border-bottom: 1px solid rgba(0, 255, 65, 0.15); /* Subtle green bottom border */
+}
+
+/* Primary Glass Container (Explorer Wrapper, Sidebars) - The "Subtle Depth" Layer */
+[data-theme="dark"] .bg-base-200,
+[data-theme="dark"] .bg-base-300 {
+  background-color: oklch(var(--b2) / 0.82) !important;
+  backdrop-filter: blur(1.5px);
+  -webkit-backdrop-filter: blur(1.5px);
+  border: 1px solid rgba(0, 255, 65, 0.05);
+}
+
+/* Inner bodies (tree view, file view): Even more transparent within the glass wrapper */
+[data-theme="dark"] .bg-base-200 ul.menu.bg-base-100,
+[data-theme="dark"] .bg-base-200 .card.bg-base-100 {
+  background-color: oklch(var(--b1) / 0.3) !important;
+}
+
+[data-theme="dark"] .card:hover {
+  border-color: rgba(0, 255, 65, 0.45); /* Brighter border on hover */
+  box-shadow:
+    inset 0 0 20px rgba(0, 255, 65, 0.06),
+    0 0 15px rgba(0, 255, 65, 0.12); /* Brighter glow */
+}
+
+/* ──────────────────────────────────────────────
+   Scaffold-ETH Specific Overrides (Debug Page)
+   ────────────────────────────────────────────── */
+
+/* Main Contract Information Cards (Parent Containers) */
+[data-theme="dark"] .bg-base-100.rounded-3xl {
+  background-color: rgba(12, 12, 20, 0.96) !important; /* #0c0c14 */
+  backdrop-filter: blur(8px) !important;
+  -webkit-backdrop-filter: blur(8px) !important;
+  border: 1px solid rgba(0, 255, 65, 0.35) !important;
+  box-shadow: inset 0 0 20px rgba(0, 255, 65, 0.02) !important;
+}
+
+/* Nested Info Cards and Read/Write Tabs (Child Containers) */
+[data-theme="dark"] .bg-base-300.rounded-3xl,
+[data-theme="dark"] .bg-base-300.rounded-\[22px\] {
+  background-color: rgba(26, 26, 40, 0.94) !important; /* #1a1a28 */
+  backdrop-filter: blur(4px) !important;
+  -webkit-backdrop-filter: blur(4px) !important;
+  border: 1px solid rgba(0, 255, 65, 0.2) !important;
+}
+
+/* Function Blocks (Read/Write inputs - Child) */
+[data-theme="dark"] .collapse.bg-base-200 {
+  background-color: rgba(18, 18, 28, 0.94) !important; /* #12121c */
+  backdrop-filter: blur(4px) !important;
+  -webkit-backdrop-filter: blur(4px) !important;
+  border-color: rgba(0, 255, 65, 0.2) !important;
+}
+
+/* Inactive Contract Tabs */
+[data-theme="dark"] button.btn.bg-base-100 {
+  background-color: rgba(12, 12, 20, 0.96) !important; /* #0c0c14 */
+  backdrop-filter: blur(4px) !important;
+  -webkit-backdrop-filter: blur(4px) !important;
+  border-color: rgba(0, 255, 65, 0.25) !important;
+  color: rgba(0, 255, 65, 0.6) !important;
+}
+
+[data-theme="dark"] button.btn.bg-base-100:hover {
+  border-color: rgba(0, 255, 65, 0.5) !important;
+  color: rgba(0, 255, 65, 0.9) !important;
+}
+
+/* Active Contract Tabs */
+[data-theme="dark"] button.btn.bg-base-300 {
+  background-color: rgba(0, 255, 65, 0.15) !important; /* Neon green tint */
+  backdrop-filter: blur(8px) !important;
+  -webkit-backdrop-filter: blur(8px) !important;
+  border-color: rgba(0, 255, 65, 1) !important; /* Maximum brightness border */
+  color: rgba(0, 255, 65, 1) !important; /* Maximum brightness text */
+  box-shadow: 0 0 12px rgba(0, 255, 65, 0.35) !important; /* Distinct glow */
+}
+
+[data-theme="light"] .card {
+  border: 1px solid #0f766e !important; /* Consistent teal border for light mode cards */
+}
+
+[data-theme="light"] .card:hover {
+  border-color: #cbd5e1;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.06);
+}
+
+/* ──────────────────────────────────────────────
+   Inputs
+   ────────────────────────────────────────────── */
+
+[data-theme="dark"] .input,
+[data-theme="dark"] .textarea,
+[data-theme="dark"] .select {
+  border-color: rgba(0, 255, 65, 0.12);
+  background: rgba(0, 255, 65, 0.02);
+}
+
+[data-theme="dark"] .input:focus,
+[data-theme="dark"] .textarea:focus,
+[data-theme="dark"] .select:focus {
+  border-color: rgba(0, 255, 65, 0.35);
+  box-shadow: 0 0 10px rgba(0, 255, 65, 0.1);
+  outline: none;
+}
+
+/* ──────────────────────────────────────────────
+   Links — subtle glow on hover in dark mode
+   ────────────────────────────────────────────── */
+
+[data-theme="dark"] a.link:hover {
+  text-shadow: 0 0 6px rgba(0, 255, 65, 0.35);
+}
+
+/* ──────────────────────────────────────────────
+   Scrollbar — themed for dark mode
+   ────────────────────────────────────────────── */
+
+[data-theme="dark"] ::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+[data-theme="dark"] ::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+[data-theme="dark"] ::-webkit-scrollbar-thumb {
+  background: rgba(0, 255, 65, 0.12);
+  border-radius: 3px;
+}
+
+[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 255, 65, 0.25);
+}
+
+/* ──────────────────────────────────────────────
+   Code blocks
+   ────────────────────────────────────────────── */
+
+[data-theme="dark"] code {
+  background: rgba(0, 255, 65, 0.05);
+  border: 1px solid rgba(0, 255, 65, 0.08);
+  padding: 0.1em 0.4em;
+  border-radius: 2px;
+}
+
+[data-theme="light"] code {
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  padding: 0.1em 0.4em;
+  border-radius: 2px;
+}
+
+/* ──────────────────────────────────────────────
+   Content Stacking context
+   Ensure UI content is on top of background animations (z-index: 1)
+   but below scanlines (z-index: 100)
+   ────────────────────────────────────────────── */
+header,
+footer,
+main,
+.scaffold-eth-app {
+  position: relative;
+  z-index: 5;
+}
+
+[data-theme="dark"] body::after {
+  z-index: 2; /* Scanlines behind UI content */
 }

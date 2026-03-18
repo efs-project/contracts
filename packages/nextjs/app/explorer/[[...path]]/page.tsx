@@ -174,7 +174,7 @@ export default function ExplorerPage() {
       <h1 className="text-3xl font-bold">EFS Explorer</h1>
 
       <div
-        className={`flex flex-col gap-2 rounded-xl bg-base-200 p-4 shadow-lg flex-grow ${isResolving || isResolvingEditions ? "opacity-50 pointer-events-none" : ""}`}
+        className={`flex flex-col gap-2 rounded-xl bg-base-200 p-4 shadow-lg flex-grow terminal-panel ${isResolving || isResolvingEditions ? "opacity-50 pointer-events-none" : ""}`}
       >
         <Toolbar
           currentPath={currentPath}
@@ -209,9 +209,9 @@ export default function ExplorerPage() {
           </div>
         )}
 
-        <div className="flex flex-row gap-4 h-full overflow-hidden">
+        <div className="flex flex-row gap-4 h-full overflow-hidden mt-1">
           {/* Left Pane - Tree */}
-          <div className="w-1/4 min-w-[200px] border-r border-base-300 pr-2 overflow-y-auto">
+          <div className="w-1/4 min-w-[200px] border-r border-primary/10 pr-2 overflow-y-auto">
             <div className="h-full overflow-y-auto pr-2">
               <TopicTree
                 rootUID={rootUID}
