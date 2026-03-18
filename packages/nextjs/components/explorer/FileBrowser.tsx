@@ -185,12 +185,19 @@ export const FileBrowser = ({
 
     const resolve = async () => {
       try {
+        // Fetch each unique tag name exactly once, even if it appears in both lists.
+        const allNames = [...new Set([...includeNames, ...drawerExcludeNames])];
+        const resolvedEntries = await Promise.all(
+          allNames.map(async name => [name, await resolveTagSet(name)] as const),
+        );
+        if (cancelled) return;
+        const cache = new Map<string, Set<string>>(resolvedEntries);
+
         if (includeNames.length > 0) {
-          const includeSets = await Promise.all(includeNames.map(resolveTagSet));
-          if (cancelled) return;
-          let intersection = includeSets[0];
-          for (let i = 1; i < includeSets.length; i++) {
-            intersection = new Set([...intersection].filter(uid => includeSets[i].has(uid)));
+          let intersection = cache.get(includeNames[0])!;
+          for (let i = 1; i < includeNames.length; i++) {
+            const s = cache.get(includeNames[i])!;
+            intersection = new Set([...intersection].filter(uid => s.has(uid)));
           }
           setTagFilteredUIDs(intersection);
         } else {
@@ -198,9 +205,7 @@ export const FileBrowser = ({
         }
 
         if (drawerExcludeNames.length > 0) {
-          const excludeSets = await Promise.all(drawerExcludeNames.map(resolveTagSet));
-          if (cancelled) return;
-          setTagExcludedUIDs(new Set(excludeSets.flatMap(s => [...s])));
+          setTagExcludedUIDs(new Set(drawerExcludeNames.flatMap(name => [...(cache.get(name) ?? [])])));
         } else {
           setTagExcludedUIDs(new Set());
         }
@@ -503,7 +508,16 @@ export const FileBrowser = ({
     return () => {
       cancelled = true;
     };
-  }, [tagFilteredUIDs, tagExcludedUIDs, rawItems, publicClient, indexerInfo, dataSchemaUID, connectedAddress, editionAddresses]); // connectedAddress kept for own-files fallback re-trigger
+  }, [
+    tagFilteredUIDs,
+    tagExcludedUIDs,
+    rawItems,
+    publicClient,
+    indexerInfo,
+    dataSchemaUID,
+    connectedAddress,
+    editionAddresses,
+  ]); // connectedAddress kept for own-files fallback re-trigger
 
   // Apply tag filters. Include filter (tagFilteredUIDs): item must be in set (null = no filter).
   // Exclude filter (tagExcludedUIDs): item must NOT be in set (empty = no exclusions).
