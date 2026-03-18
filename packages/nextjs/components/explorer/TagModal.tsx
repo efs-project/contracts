@@ -489,11 +489,7 @@ const TagDefinitionItem = ({
         {isActive && <span className="text-xs text-success">active</span>}
       </div>
       {isActive && activeTagUID && (
-        <button
-          className="btn btn-error btn-xs"
-          onClick={() => onRemove(activeTagUID)}
-          disabled={disabled}
-        >
+        <button className="btn btn-error btn-xs" onClick={() => onRemove(activeTagUID)} disabled={disabled}>
           <XMarkIcon className="w-3 h-3" />
           Remove
         </button>

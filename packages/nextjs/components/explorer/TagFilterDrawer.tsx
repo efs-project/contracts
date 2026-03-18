@@ -1,8 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { MinusIcon, PlusIcon, XMarkIcon } from "@heroicons/react/24/outline";
 import { DrawerTagFilterState } from "./FileBrowser";
+import { MinusIcon, PlusIcon, XMarkIcon } from "@heroicons/react/24/outline";
 
 interface TagFilterDrawerProps {
   tagFilters: Record<string, DrawerTagFilterState>;
