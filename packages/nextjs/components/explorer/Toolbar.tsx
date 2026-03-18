@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { ethers } from "ethers";
 import { decodeEventLog, encodeDeployData, parseAbiItem, toHex } from "viem";
 import { usePublicClient, useWalletClient } from "wagmi";
+import { FunnelIcon } from "@heroicons/react/24/outline";
 import { useDeployedContractInfo, useScaffoldWriteContract } from "~~/hooks/scaffold-eth";
 import { useTargetNetwork } from "~~/hooks/scaffold-eth/useTargetNetwork";
 import { notification } from "~~/utils/scaffold-eth";
@@ -45,12 +46,16 @@ export const Toolbar = ({
   anchorSchemaUID,
   dataSchemaUID,
   onNavigate,
+  isFilterDrawerOpen = false,
+  onToggleFilterDrawer,
 }: {
   currentPath: PathItem[];
   currentAnchorUID: string | null;
   anchorSchemaUID: string;
   dataSchemaUID: string;
   onNavigate: (uid: string) => void;
+  isFilterDrawerOpen?: boolean;
+  onToggleFilterDrawer?: () => void;
 }) => {
   const { writeContractAsync: attest } = useScaffoldWriteContract({ contractName: "EAS" });
   const { data: indexer } = useDeployedContractInfo({ contractName: "Indexer" });
@@ -71,8 +76,6 @@ export const Toolbar = ({
 
   // Editions Input State
   const [editionsInput, setEditionsInput] = useState(searchParams.get("editions") || "");
-  // Tag Filter Input State
-  const [tagFilterInput, setTagFilterInput] = useState(searchParams.get("tags") || "");
 
   useEffect(() => {
     if (creationType && modalRef.current) {
@@ -298,26 +301,6 @@ export const Toolbar = ({
   };
 
   const handleUpdateEditions = () => updateQueryParam("editions", editionsInput);
-  const handleUpdateTagFilter = () => updateQueryParam("tags", tagFilterInput);
-
-  // Apply both editions and tags in a single router.push — two separate calls would
-  // each read the same original searchParams and the second push would overwrite the first.
-  const handleApplyBoth = () => {
-    const currentQuery = new URLSearchParams(searchParams.toString());
-    if (editionsInput.trim() === "") {
-      currentQuery.delete("editions");
-    } else {
-      currentQuery.set("editions", editionsInput.trim());
-    }
-    if (tagFilterInput.trim() === "") {
-      currentQuery.delete("tags");
-    } else {
-      currentQuery.set("tags", tagFilterInput.trim());
-    }
-    const urlSegments = currentPath.slice(1).map(p => encodeURIComponent(p.name));
-    const queryPart = currentQuery.toString() ? `?${currentQuery.toString()}` : "";
-    router.push(`/explorer/${urlSegments.join("/")}${queryPart}`);
-  };
 
   return (
     <div className="flex flex-wrap items-center p-2 bg-base-100 rounded-lg gap-2">
@@ -354,28 +337,21 @@ export const Toolbar = ({
             }}
           />
         </label>
-        <label
-          className="input input-bordered input-sm flex items-center gap-2 flex-grow min-w-[160px]"
-          title="Filter by tag names (comma-separated). Only items with matching tags are shown."
-        >
-          Tags:
-          <input
-            type="text"
-            className="grow min-w-0"
-            placeholder="favorites, nsfw"
-            value={tagFilterInput}
-            onChange={e => setTagFilterInput(e.target.value)}
-            onKeyDown={e => {
-              if (e.key === "Enter") handleUpdateTagFilter();
-            }}
-          />
-        </label>
-        <button className="btn btn-sm btn-outline flex-shrink-0" onClick={handleApplyBoth}>
+        <button className="btn btn-sm btn-outline flex-shrink-0" onClick={handleUpdateEditions}>
           Apply
         </button>
       </div>
 
       <div className="flex gap-2 flex-shrink-0">
+        {onToggleFilterDrawer && (
+          <button
+            className={`btn btn-sm btn-square ${isFilterDrawerOpen ? "btn-primary" : "btn-ghost"}`}
+            onClick={onToggleFilterDrawer}
+            title="Toggle tag filter drawer"
+          >
+            <FunnelIcon className="w-4 h-4" />
+          </button>
+        )}
         <button className="btn btn-sm btn-ghost" onClick={() => handleOpenModal("Folder")} disabled={!currentAnchorUID}>
           New Folder
         </button>

@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useAccount, usePublicClient } from "wagmi";
-import { FileBrowser } from "~~/components/explorer/FileBrowser";
+import { DrawerTagFilterState, FileBrowser } from "~~/components/explorer/FileBrowser";
+import { TagFilterDrawer } from "~~/components/explorer/TagFilterDrawer";
 import { PathItem, Toolbar } from "~~/components/explorer/Toolbar";
 import { TopicTree } from "~~/components/explorer/TopicTree";
 import deployedContracts from "~~/contracts/deployedContracts";
@@ -18,6 +19,10 @@ export default function ExplorerPage() {
   // Editions: resolved addresses from explicit ?editions= param (ENS resolution is async)
   const [resolvedEditionAddresses, setResolvedEditionAddresses] = useState<string[]>([]);
   const [isResolvingEditions, setIsResolvingEditions] = useState(false);
+
+  // Tag filter drawer
+  const [isFilterDrawerOpen, setIsFilterDrawerOpen] = useState(false);
+  const [drawerTagFilters, setDrawerTagFilters] = useState<Record<string, DrawerTagFilterState>>({});
 
   const router = useRouter();
   const params = useParams();
@@ -181,6 +186,8 @@ export default function ExplorerPage() {
           currentAnchorUID={currentAnchorUID}
           anchorSchemaUID={anchorSchemaUID}
           dataSchemaUID={dataSchemaUID}
+          isFilterDrawerOpen={isFilterDrawerOpen}
+          onToggleFilterDrawer={() => setIsFilterDrawerOpen(prev => !prev)}
           onNavigate={uid => {
             // Find path up to this UID
             const index = currentPath.findIndex(p => p.uid === uid);
@@ -235,19 +242,35 @@ export default function ExplorerPage() {
             </div>
           </div>
 
-          {/* Right Pane - Browser */}
-          <div className="flex-grow overflow-y-auto">
-            {!pathError && (
-              <FileBrowser
-                currentAnchorUID={currentAnchorUID}
-                dataSchemaUID={dataSchemaUID}
-                editionAddresses={editionAddresses}
-                tagFilter={searchParams.get("tags") || ""}
-                currentPathNames={currentPath.slice(1).map(p => p.name)}
-                onNavigate={(uid, name) => {
-                  // Append to current path
-                  navigateToPath([...currentPath, { uid, name }]);
-                }}
+          {/* Right Pane - Browser + Tag Filter Drawer */}
+          <div className="flex-grow flex flex-row overflow-hidden">
+            <div className="flex-grow overflow-y-auto">
+              {!pathError && (
+                <FileBrowser
+                  currentAnchorUID={currentAnchorUID}
+                  dataSchemaUID={dataSchemaUID}
+                  editionAddresses={editionAddresses}
+                  tagFilter={searchParams.get("tags") || ""}
+                  drawerTagFilters={drawerTagFilters}
+                  currentPathNames={currentPath.slice(1).map(p => p.name)}
+                  onNavigate={(uid, name) => {
+                    navigateToPath([...currentPath, { uid, name }]);
+                  }}
+                />
+              )}
+            </div>
+            {isFilterDrawerOpen && (
+              <TagFilterDrawer
+                tagFilters={drawerTagFilters}
+                onUpdateFilter={(name, state) => setDrawerTagFilters(prev => ({ ...prev, [name]: state }))}
+                onAddTag={name => setDrawerTagFilters(prev => ({ ...prev, [name]: "neutral" }))}
+                onRemoveTag={name =>
+                  setDrawerTagFilters(prev => {
+                    const next = { ...prev };
+                    delete next[name];
+                    return next;
+                  })
+                }
               />
             )}
           </div>

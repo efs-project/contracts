@@ -22,6 +22,8 @@ import { isFile, isTopic } from "~~/utils/efs/efsTypes";
 import { TAG_RESOLVER_ABI, getTagResolverAddress } from "~~/utils/efs/tagResolver";
 import { notification } from "~~/utils/scaffold-eth";
 
+export type DrawerTagFilterState = "neutral" | "include" | "exclude";
+
 export const FileBrowser = ({
   currentAnchorUID,
   dataSchemaUID,
@@ -29,6 +31,7 @@ export const FileBrowser = ({
   editionAddresses,
   onNavigate,
   tagFilter = "",
+  drawerTagFilters = {},
 }: {
   currentAnchorUID: string | null;
   dataSchemaUID: string;
@@ -36,6 +39,7 @@ export const FileBrowser = ({
   editionAddresses: string[];
   onNavigate: (uid: string, name: string) => void;
   tagFilter?: string;
+  drawerTagFilters?: Record<string, DrawerTagFilterState>;
 }) => {
   const [selectedDebugItem, setSelectedDebugItem] = useState<any | null>(null);
   const [propertiesModalUID, setPropertiesModalUID] = useState<string | null>(null);
@@ -50,7 +54,12 @@ export const FileBrowser = ({
 
   // Tag filter state: null = no filter active; Set<string> = allowed DATA/anchor UIDs
   const [tagFilteredUIDs, setTagFilteredUIDs] = useState<Set<string> | null>(null);
+  // Excluded UIDs from the drawer's "exclude" filters — empty = no exclusions
+  const [tagExcludedUIDs, setTagExcludedUIDs] = useState<Set<string>>(new Set());
   const [isTagFilterLoading, setIsTagFilterLoading] = useState(false);
+  // True while the dataUIDMap is being populated asynchronously.
+  // Prevents showing unfiltered results during the brief window between tag resolution and map build.
+  const [isDataUIDMapLoading, setIsDataUIDMapLoading] = useState(false);
   // Incremented whenever the user adds or removes a tag so the filter effect re-runs immediately.
   const [tagFilterVersion, setTagFilterVersion] = useState(0);
   const [tagResolverAddress, setTagResolverAddress] = useState<`0x${string}` | null>(null);
@@ -98,15 +107,25 @@ export const FileBrowser = ({
     });
   }, [publicClient, indexerInfo]);
 
-  // Resolve tag filter names → definition UIDs → tagged target sets → intersection
+  // Resolve tag filter names → definition UIDs → tagged target sets.
+  // Sources: tagFilter (URL, include), drawerTagFilters include entries, drawerTagFilters exclude entries.
   useEffect(() => {
-    const tagNames = tagFilter
+    const urlIncludeNames = tagFilter
       .split(",")
       .map(t => t.trim().toLowerCase())
       .filter(Boolean);
+    const drawerIncludeNames = Object.entries(drawerTagFilters)
+      .filter(([, s]) => s === "include")
+      .map(([name]) => name.toLowerCase());
+    const drawerExcludeNames = Object.entries(drawerTagFilters)
+      .filter(([, s]) => s === "exclude")
+      .map(([name]) => name.toLowerCase());
 
-    if (tagNames.length === 0) {
+    const includeNames = [...new Set([...urlIncludeNames, ...drawerIncludeNames])];
+
+    if (includeNames.length === 0 && drawerExcludeNames.length === 0) {
       setTagFilteredUIDs(null);
+      setTagExcludedUIDs(new Set());
       setIsTagFilterLoading(false);
       return;
     }
@@ -119,87 +138,78 @@ export const FileBrowser = ({
     let cancelled = false;
     setIsTagFilterLoading(true);
 
-    const resolve = async () => {
-      try {
-        const tagSets: Set<string>[] = [];
+    const resolveTagSet = async (tagName: string): Promise<Set<string>> => {
+      const definitionUID = (await publicClient.readContract({
+        address: indexerInfo.address as `0x${string}`,
+        abi: indexerInfo.abi,
+        functionName: "resolvePath",
+        args: [tagsRoot as `0x${string}`, tagName],
+      })) as `0x${string}`;
 
-        for (const tagName of tagNames) {
-          // Step 1: resolve tag name → definition anchor UID under _tags.
-          const definitionUID = (await publicClient.readContract({
-            address: indexerInfo.address as `0x${string}`,
-            abi: indexerInfo.abi,
-            functionName: "resolvePath",
-            args: [tagsRoot as `0x${string}`, tagName],
-          })) as `0x${string}`;
+      if (!definitionUID || definitionUID === zeroHash) return new Set();
 
-          if (!definitionUID || definitionUID === zeroHash) {
-            // Tag definition doesn't exist → AND intersection will be empty
-            tagSets.push(new Set());
-            continue;
-          }
+      const count = (await publicClient.readContract({
+        address: tagResolverAddress,
+        abi: TAG_RESOLVER_ABI,
+        functionName: "getTaggedTargetCount",
+        args: [definitionUID],
+      })) as bigint;
 
-          // Step 2: get count of targets with this tag
-          const count = (await publicClient.readContract({
+      if (count === 0n) return new Set();
+
+      const PAGE_SIZE = 500n;
+      const allTargets: `0x${string}`[] = [];
+      for (let cursor = 0n; cursor < count; cursor += PAGE_SIZE) {
+        const page = (await publicClient.readContract({
+          address: tagResolverAddress,
+          abi: TAG_RESOLVER_ABI,
+          functionName: "getTaggedTargets",
+          args: [definitionUID, cursor, PAGE_SIZE],
+        })) as `0x${string}`[];
+        allTargets.push(...page);
+      }
+
+      const activeChecks = await Promise.all(
+        allTargets.map(async target => {
+          const isActive = (await publicClient.readContract({
             address: tagResolverAddress,
             abi: TAG_RESOLVER_ABI,
-            functionName: "getTaggedTargetCount",
-            args: [definitionUID],
-          })) as bigint;
+            functionName: "isActivelyTagged",
+            args: [target, definitionUID],
+          })) as boolean;
+          return isActive ? target.toLowerCase() : null;
+        }),
+      );
+      return new Set(activeChecks.filter((t): t is string => t !== null));
+    };
 
-          if (count === 0n) {
-            tagSets.push(new Set());
-            continue;
+    const resolve = async () => {
+      try {
+        if (includeNames.length > 0) {
+          const includeSets = await Promise.all(includeNames.map(resolveTagSet));
+          if (cancelled) return;
+          let intersection = includeSets[0];
+          for (let i = 1; i < includeSets.length; i++) {
+            intersection = new Set([...intersection].filter(uid => includeSets[i].has(uid)));
           }
-
-          // Step 3: paginate through ALL tagged targets in the append-only discovery list.
-          // Fetching in pages of 500 avoids a single huge call while ensuring no targets
-          // beyond the first page are silently dropped (which would cause false negatives).
-          const PAGE_SIZE = 500n;
-          const allTargets: `0x${string}`[] = [];
-          for (let cursor = 0n; cursor < count; cursor += PAGE_SIZE) {
-            const page = (await publicClient.readContract({
-              address: tagResolverAddress,
-              abi: TAG_RESOLVER_ABI,
-              functionName: "getTaggedTargets",
-              args: [definitionUID, cursor, PAGE_SIZE],
-            })) as `0x${string}`[];
-            allTargets.push(...page);
-          }
-
-          // Step 4: filter to only currently-active tags via isActivelyTagged.
-          // getTaggedTargets is append-only and retains revoked entries; isActivelyTagged
-          // uses an on-chain counter maintained by onAttest/onRevoke so this is O(1) per target.
-          const activeChecks = await Promise.all(
-            allTargets.map(async target => {
-              const isActive = (await publicClient.readContract({
-                address: tagResolverAddress,
-                abi: TAG_RESOLVER_ABI,
-                functionName: "isActivelyTagged",
-                args: [target, definitionUID],
-              })) as boolean;
-              return isActive ? target.toLowerCase() : null;
-            }),
-          );
-          tagSets.push(new Set(activeChecks.filter((t): t is string => t !== null)));
-        }
-
-        if (cancelled) return;
-
-        // AND logic: intersection of all tag sets
-        if (tagSets.length === 0) {
+          setTagFilteredUIDs(intersection);
+        } else {
           setTagFilteredUIDs(null);
-          return;
         }
 
-        let intersection = tagSets[0];
-        for (let i = 1; i < tagSets.length; i++) {
-          intersection = new Set([...intersection].filter(uid => tagSets[i].has(uid)));
+        if (drawerExcludeNames.length > 0) {
+          const excludeSets = await Promise.all(drawerExcludeNames.map(resolveTagSet));
+          if (cancelled) return;
+          setTagExcludedUIDs(new Set(excludeSets.flatMap(s => [...s])));
+        } else {
+          setTagExcludedUIDs(new Set());
         }
-
-        setTagFilteredUIDs(intersection);
       } catch (e) {
         console.error("Tag filter resolution failed", e);
-        if (!cancelled) setTagFilteredUIDs(null);
+        if (!cancelled) {
+          setTagFilteredUIDs(null);
+          setTagExcludedUIDs(new Set());
+        }
       } finally {
         if (!cancelled) setIsTagFilterLoading(false);
       }
@@ -209,7 +219,7 @@ export const FileBrowser = ({
     return () => {
       cancelled = true;
     };
-  }, [tagFilter, tagFilterVersion, publicClient, indexerInfo, tagResolverAddress, tagsRoot]);
+  }, [tagFilter, drawerTagFilters, tagFilterVersion, publicClient, indexerInfo, tagResolverAddress, tagsRoot]);
 
   const fetchFileContent = async (item: any) => {
     if (!efsRouter) {
@@ -433,10 +443,14 @@ export const FileBrowser = ({
   useEffect(() => {
     // connectedAddress is only needed as the own-files fallback; if editionAddresses is
     // already provided (e.g. shared ?editions= link), we can build the map without a wallet.
-    if (!tagFilteredUIDs || !rawItems || !publicClient || !indexerInfo) {
+    // Build the map whenever either an include filter OR an exclude filter is active.
+    if ((!tagFilteredUIDs && tagExcludedUIDs.size === 0) || !rawItems || !publicClient || !indexerInfo) {
       setDataUIDMap(new Map());
+      setIsDataUIDMapLoading(false);
       return;
     }
+
+    setIsDataUIDMapLoading(true);
 
     // Which attesters' data are we looking at?
     // editionAddresses takes precedence; fall back to connected wallet for own-files mode.
@@ -479,36 +493,38 @@ export const FileBrowser = ({
             }
           }),
       );
-      if (!cancelled) setDataUIDMap(map);
+      if (!cancelled) {
+        setDataUIDMap(map);
+        setIsDataUIDMapLoading(false);
+      }
     };
 
     resolve();
     return () => {
       cancelled = true;
     };
-  }, [tagFilteredUIDs, rawItems, publicClient, indexerInfo, dataSchemaUID, connectedAddress, editionAddresses]); // connectedAddress kept for own-files fallback re-trigger
+  }, [tagFilteredUIDs, tagExcludedUIDs, rawItems, publicClient, indexerInfo, dataSchemaUID, connectedAddress, editionAddresses]); // connectedAddress kept for own-files fallback re-trigger
 
-  // Apply tag filter if active. For file items, an item passes if ANY of the viewed
-  // edition's DATA UIDs for that anchor appears in the tag filter set, OR if the anchor
-  // UID itself is tagged directly (TagModal falls back to the anchor when no DATA exists).
-  const items =
-    tagFilteredUIDs !== null
-      ? rawItems?.filter((item: any) => {
-          if (isFile(item, dataSchemaUID)) {
-            const anchorUID = item.uid.toLowerCase();
-            // Primary: check per-edition DATA UIDs (correct edition-specific match)
-            const dataUIDs = dataUIDMap.get(anchorUID);
-            if (dataUIDs && [...dataUIDs].some(uid => tagFilteredUIDs.has(uid))) return true;
-            // Fallback: check anchor UID directly (TagModal tags anchor when no DATA found)
-            return tagFilteredUIDs.has(anchorUID);
-          }
-          // Folders: match by anchor UID directly
-          return tagFilteredUIDs.has(item.uid.toLowerCase());
-        })
-      : rawItems;
+  // Apply tag filters. Include filter (tagFilteredUIDs): item must be in set (null = no filter).
+  // Exclude filter (tagExcludedUIDs): item must NOT be in set (empty = no exclusions).
+  const matchesUID = (item: any, uidSet: Set<string>): boolean => {
+    if (isFile(item, dataSchemaUID)) {
+      const anchorUID = item.uid.toLowerCase();
+      const dataUIDs = dataUIDMap.get(anchorUID);
+      if (dataUIDs && [...dataUIDs].some(uid => uidSet.has(uid))) return true;
+      return uidSet.has(anchorUID);
+    }
+    return uidSet.has(item.uid.toLowerCase());
+  };
+
+  const items = rawItems?.filter((item: any) => {
+    if (tagFilteredUIDs !== null && !matchesUID(item, tagFilteredUIDs)) return false;
+    if (tagExcludedUIDs.size > 0 && matchesUID(item, tagExcludedUIDs)) return false;
+    return true;
+  });
 
   if (!currentAnchorUID) return <div>Select a topic</div>;
-  if (isLoading || isTagFilterLoading) return <div>Loading items...</div>;
+  if (isLoading || isTagFilterLoading || isDataUIDMapLoading) return <div>Loading items...</div>;
 
   const DebugField = ({ label, value, type = "uid" }: { label: string; value: string; type?: "uid" | "address" }) => (
     <div>

@@ -446,67 +446,26 @@ const TagDefinitionItem = ({
 
     const check = async () => {
       try {
-        const activeUID = (await publicClient.readContract({
+        // Get the connected user's active tag UID for this (target, definition) pair.
+        const userTagUID = (await publicClient.readContract({
           address: tagResolverAddress,
           abi: TAG_RESOLVER_ABI,
           functionName: "getActiveTagUID",
           args: [connectedAddress as `0x${string}`, targetUID as `0x${string}`, definitionUID],
         })) as `0x${string}`;
 
-        if (!activeUID || activeUID === zeroHash) {
-          if (!cancelled) {
-            setIsActive(false);
-            setActiveTagUID(null);
-          }
-          return;
-        }
+        // Check if the tag is currently active for anyone (for badge display).
+        const anyActive = (await publicClient.readContract({
+          address: tagResolverAddress,
+          abi: TAG_RESOLVER_ABI,
+          functionName: "isActivelyTagged",
+          args: [targetUID as `0x${string}`, definitionUID],
+        })) as boolean;
 
-        // Fetch the active attestation to check applies boolean
-        const activeAttestation = (await publicClient.readContract({
-          address: (await import("~~/contracts/deployedContracts").then(m => {
-            const chainId = publicClient.chain.id;
-            return (m.default as any)[chainId]?.EAS?.address;
-          })) as `0x${string}`,
-          abi: [
-            {
-              inputs: [{ internalType: "bytes32", name: "uid", type: "bytes32" }],
-              name: "getAttestation",
-              outputs: [
-                {
-                  components: [
-                    { internalType: "bytes32", name: "uid", type: "bytes32" },
-                    { internalType: "bytes32", name: "schema", type: "bytes32" },
-                    { internalType: "uint64", name: "time", type: "uint64" },
-                    { internalType: "uint64", name: "expirationTime", type: "uint64" },
-                    { internalType: "uint64", name: "revocationTime", type: "uint64" },
-                    { internalType: "bytes32", name: "refUID", type: "bytes32" },
-                    { internalType: "address", name: "recipient", type: "address" },
-                    { internalType: "address", name: "attester", type: "address" },
-                    { internalType: "bool", name: "revocable", type: "bool" },
-                    { internalType: "bytes", name: "data", type: "bytes" },
-                  ],
-                  internalType: "struct Attestation",
-                  name: "",
-                  type: "tuple",
-                },
-              ],
-              stateMutability: "view",
-              type: "function",
-            },
-          ] as const,
-          functionName: "getAttestation",
-          args: [activeUID],
-        })) as any;
-
-        if (activeAttestation?.data) {
-          const [, appliesVal] = decodeAbiParameters(
-            parseAbiParameters("bytes32 definition, bool applies"),
-            activeAttestation.data as `0x${string}`,
-          );
-          if (!cancelled) {
-            setIsActive(appliesVal);
-            setActiveTagUID(appliesVal ? activeUID : null);
-          }
+        if (!cancelled) {
+          const hasUserTag = userTagUID && userTagUID !== zeroHash;
+          setIsActive(anyActive);
+          setActiveTagUID(hasUserTag ? userTagUID : null);
         }
       } catch (e) {
         console.error("Failed to check active tag", e);
@@ -531,12 +490,12 @@ const TagDefinitionItem = ({
       </div>
       {isActive && activeTagUID && (
         <button
-          className="btn btn-ghost btn-xs text-error"
+          className="btn btn-error btn-xs"
           onClick={() => onRemove(activeTagUID)}
           disabled={disabled}
-          title="Remove tag"
         >
           <XMarkIcon className="w-3 h-3" />
+          Remove
         </button>
       )}
     </li>
