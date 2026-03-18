@@ -476,7 +476,9 @@ function EASExplorerContent() {
                 Raw Data
               </a>
             </div>
-            <div className="bg-base-100 border-base-300 rounded-b-box border p-6 terminal-panel">{renderDataDisplay()}</div>
+            <div className="bg-base-100 border-base-300 rounded-b-box border p-6 terminal-panel">
+              {renderDataDisplay()}
+            </div>
 
             {/* Referenced By ... (Dynamic) */}
             {referencingSchemas &&
