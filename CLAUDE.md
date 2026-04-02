@@ -60,14 +60,16 @@ cd packages/hardhat && npx hardhat test test/EFSIndexer.test.ts --network hardha
 
 ### EFS Data Model
 
-Four EAS schema types (all registered on-chain, UIDs stored in `Indexer` contract):
+Six EAS schema types:
 
-| Schema | Fields | Purpose |
-|--------|--------|---------|
-| `ANCHOR` | `string name, bytes32 schemaUID` | Folders (permanent, non-revocable) |
-| `DATA` | `string uri, string contentType, string fileMode` | Files (uri = `web3://...` pointing to SSTORE2 chunks) |
-| `PROPERTY` | `string value` | Key-value metadata attached to anchors |
-| `TAG` | `bytes32 labelUID, int256 weight` | Labels/tags |
+| Schema | Fields | Resolver | Purpose |
+|--------|--------|----------|---------|
+| `ANCHOR` | `string name, bytes32 schemaUID` | EFSIndexer | Folders (permanent, non-revocable) |
+| `DATA` | `string uri, string contentType, string fileMode` | EFSIndexer | Files (uri = `web3://...` pointing to SSTORE2 chunks) |
+| `PROPERTY` | `string value` | EFSIndexer | Key-value metadata attached to anchors |
+| `TAG` | `bytes32 definition, bool applies` | TagResolver | Labels/tags (singleton per attester+target+definition) |
+| `LIST_INFO` | `uint8 listType, bytes32 targetSchemaUID` | EFSListManager | List root configuration (refUID → EFS Anchor as naming Schelling point) |
+| `LIST_ITEM` | `bytes32 itemUID, string fractionalIndex, bytes32 tags` | EFSListManager | Individual list entry (refUID → LIST_INFO) |
 
 Files are stored via SSTORE2 chunking: content is split into 24KB chunks deployed as raw bytecode contracts, then a chunk manager contract is deployed and attested as a `DATA` attestation with a `web3://` URI.
 
@@ -76,7 +78,9 @@ Files are stored via SSTORE2 chunking: content is split into 24KB chunks deploye
 - **`Indexer` (EFSIndexer)** — Core contract. Manages schemas, resolver hooks, path resolution (`resolvePath`, `rootAnchorUID`), and directory pagination (`getDirectoryPage`, `getDirectoryPageByAddressList`).
 - **`EFSRouter`** — Implements `IDecentralizedApp` for `web3://` URI resolution (ERC-5219 mode). Takes path segments and returns file content.
 - **`EFSFileView`** — Renders directory listings as HTML for browser access.
-- Deploy scripts: `01_indexer.ts` → `02_fileview.ts` → `03_router.ts`
+- **`TagResolver`** — Singleton tagging pattern: one active tag per (attester, target, definition).
+- **`EFSListManager`** — Per-attester doubly linked lists for LIST_INFO/LIST_ITEM schemas. `getSortedChunk(listInfoUID, attester, startNode, limit)` for O(1) cursor-based pagination.
+- Deploy scripts: `01_indexer.ts` → `02_fileview.ts` → `03_router.ts` → `04_listmanager.ts`
 
 EAS contracts (Sepolia addresses used in fork):
 - EAS: `0xC2679fBD37d54388Ce493F1DB75320D236e1815e`
