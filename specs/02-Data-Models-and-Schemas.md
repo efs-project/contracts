@@ -61,26 +61,17 @@ Tags can be removed through two mechanisms:
 1. **Revocation**: Calling `eas.revoke()` on the active tag attestation UID. The `EFSTagResolver` clears the active mapping if the revoked UID matches the currently active one. This is the preferred removal method.
 2. **Superseding with `applies=false`**: Creating a new Tag attestation with the same `(attester, target, definition)` triple but `applies=false`. The new attestation logically supersedes the old one. The active UID is updated to the negation attestation. This leaves an on-chain record of the explicit removal.
 
-## 5. List Info Schema
-**Purpose**: Root configuration for a dynamic, user-orderable list (social graph, curated collection, ordered directory).
+## 5. Sort Info Schema
+**Purpose**: Declares a named sort overlay attached to a directory or list.
 **Structure**:
-`refUID = Parent EFS Anchor UID (the naming Schelling point — like DATA attestations)`
-- `listType` (uint8) — Ordering behavior: `0` = Manual (client-side fractional sort), `1` = Chronological.
-- `targetSchemaUID` (bytes32) — If non-zero, restricts items to a specific EAS schema type. `bytes32(0)` = unrestricted.
+`refUID = Naming Anchor UID — the Anchor is a child of the directory being sorted (anchorSchema = SORT_INFO_SCHEMA)`
+- `sortFunc` (address) — `ISortFunc` comparator contract. Implements `isLessThan(a, b, sortInfoUID)` and `getSortKey(uid, sortInfoUID)`.
+- `targetSchema` (bytes32) — Which Anchor schema to sort. `bytes32(0)` = all children. `DATA_SCHEMA` = file anchors only.
+- Revocable: `true` — revoking signals "I'm done maintaining this sort; hide from menu"
 
-**Details**: A LIST_INFO attestation is the sovereign identity of the list. Its `refUID` points to a named EFS Anchor (e.g. the "top3" Anchor under `/memes/`), exactly as DATA attestations do. The Anchor is the shared naming Schelling point: multiple users can each create their own LIST_INFO under the same Anchor, giving each user their own edition of "top3". The `EFSListManager` maintains a `_listsByAnchor` discovery index so the SPA can enumerate all LIST_INFOs under a given Anchor without relying on `eth_getLogs`.
+**Details**: A SORT_INFO attestation names a sort by creating a naming Anchor as a child of the directory. The naming Anchor's `anchorSchema = SORT_INFO_SCHEMA` distinguishes it from file Anchors. The `EFSSortOverlay` contract is the resolver — it validates the `sortFunc` address and caches the sort config. The actual sorted data lives in the sort overlay's per-attester linked lists, populated lazily by `processItems` calls.
 
-Revoking a LIST_INFO deactivates the list; its items remain on-chain as orphaned attestations.
-
-## 6. List Item Schema
-**Purpose**: An individual entry inside a list.
-**Structure**:
-`refUID = Parent LIST_INFO attestation UID`
-- `itemUID` (bytes32) — Points to the target data (file, BLOB, Anchor). Set to `bytes32(0)` for address-based lists (EFP-style social graphs) — in that case the EAS `recipient` field carries the target address.
-- `fractionalIndex` (string) — Client-side ordering key (e.g. `"a0V"`). Sorted lexicographically with a deterministic address salt for collision resistance. The on-chain linked list maintains insertion order; this field is a client UX concern only.
-- `tags` (bytes32) — Optional Anchor UID for semantic categorisation of this specific list entry.
-
-**Details**: Each LIST_ITEM's `refUID` points upward to its LIST_INFO — never the reverse. This vertical reverse-pointer architecture means adding or deleting items has zero impact on the parent LIST_INFO state. The `EFSListManager` resolver maintains a per-attester doubly linked list for each LIST_INFO, enabling O(1) insert, remove, and cursor-based pagination.
+Multiple attesters can each call `processItems` for the same sort, building their own independent sorted views. The `getSortStaleness(sortInfoUID, attester)` function reports how many kernel items are unprocessed.
 
 See [Lists and Collections](./06-Lists-and-Collections.md) for the full architecture.
 

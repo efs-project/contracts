@@ -418,13 +418,13 @@ describe("EFSIndexer", function () {
     });
 
     it("Should paginate children (Forward)", async function () {
-      // Updated signature: getChildren(uid, start, length, reverse)
-      const page1 = await indexer.getChildren(parentUID, 0, 2, false);
+      // Updated signature: getChildren(uid, start, length, reverse, showRevoked)
+      const page1 = await indexer.getChildren(parentUID, 0, 2, false, false);
       expect(page1.length).to.equal(2);
       expect(page1[0]).to.equal(child1UID);
       expect(page1[1]).to.equal(child2UID);
 
-      const page2 = await indexer.getChildren(parentUID, 2, 2, false);
+      const page2 = await indexer.getChildren(parentUID, 2, 2, false, false);
       expect(page2.length).to.equal(1);
       expect(page2[0]).to.equal(child3UID);
 
@@ -433,9 +433,9 @@ describe("EFSIndexer", function () {
     });
 
     it("Should paginate children (Reverse)", async function () {
-      // Updated signature: getChildren(uid, start, length, reverse)
+      // Updated signature: getChildren(uid, start, length, reverse, showRevoked)
       // Reverse: start 0 means "latest"
-      const page1 = await indexer.getChildren(parentUID, 0, 2, true);
+      const page1 = await indexer.getChildren(parentUID, 0, 2, true, false);
       expect(page1.length).to.equal(2);
       expect(page1[0]).to.equal(child3UID); // Last added is first
       expect(page1[1]).to.equal(child2UID);
@@ -546,22 +546,22 @@ describe("EFSIndexer", function () {
     it("Should index by mime type and category", async function () {
       // Verify getChildrenByType("video/mp4") on Parent ("files")
       // Should return "my_video.mp4" (fileUID)
-      const videos = await indexer.getChildrenByType(parentUID, "video/mp4", 0, 10, false);
+      const videos = await indexer.getChildrenByType(parentUID, "video/mp4", 0, 10, false, false);
       expect(videos).to.include(fileUID);
 
       // Verify getChildrenByType("video") - Category
-      const category = await indexer.getChildrenByType(parentUID, "video", 0, 10, false);
+      const category = await indexer.getChildrenByType(parentUID, "video", 0, 10, false, false);
       expect(category).to.include(fileUID);
     });
 
     it("Should filter by Attester", async function () {
       // Filter children of "files" by User A
-      const u1Files = await indexer.getChildrenByAttester(parentUID, await user1.getAddress(), 0, 10, false);
+      const u1Files = await indexer.getChildrenByAttester(parentUID, await user1.getAddress(), 0, 10, false, false);
       expect(u1Files.length).to.equal(1);
       expect(u1Files[0]).to.equal(userFileUID);
 
       // Filter children of "files" by User B
-      const u2Files = await indexer.getChildrenByAttester(parentUID, await user2.getAddress(), 0, 10, false);
+      const u2Files = await indexer.getChildrenByAttester(parentUID, await user2.getAddress(), 0, 10, false, false);
       expect(u2Files.length).to.equal(1);
       expect(u2Files[0]).to.equal(user2FileUID);
     });
@@ -598,6 +598,154 @@ describe("EFSIndexer", function () {
           },
         }),
       ).to.be.revertedWithCustomError(eas, "Irrevocable");
+    });
+  });
+
+  describe("Kernel Keep-Forever & _isRevoked Filtering", function () {
+    const schemaEncoder = new ethers.AbiCoder();
+    let parentUID: string;
+    let child1UID: string;
+    let child2UID: string;
+    let dataUID1: string;
+
+    beforeEach(async function () {
+      // Create root anchor (parent)
+      const txParent = await eas.attest({
+        schema: anchorSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: NO_EXPIRATION,
+          revocable: false,
+          refUID: ZERO_BYTES32,
+          data: schemaEncoder.encode(["string", "bytes32"], ["parent", ZERO_BYTES32]),
+          value: 0n,
+        },
+      });
+      const parentReceipt = await txParent.wait();
+      parentUID = getUIDFromReceipt(parentReceipt);
+
+      // Create two file-type child anchors (schema = DATA_SCHEMA_UID)
+      const txChild1 = await eas.connect(user1).attest({
+        schema: anchorSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: NO_EXPIRATION,
+          revocable: false,
+          refUID: parentUID,
+          data: schemaEncoder.encode(["string", "bytes32"], ["file1", dataSchemaUID]),
+          value: 0n,
+        },
+      });
+      child1UID = getUIDFromReceipt(await txChild1.wait());
+
+      const txChild2 = await eas.connect(user1).attest({
+        schema: anchorSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: NO_EXPIRATION,
+          revocable: false,
+          refUID: parentUID,
+          data: schemaEncoder.encode(["string", "bytes32"], ["file2", dataSchemaUID]),
+          value: 0n,
+        },
+      });
+      child2UID = getUIDFromReceipt(await txChild2.wait());
+
+      // Attach revocable DATA to child1
+      const txData = await eas.connect(user1).attest({
+        schema: dataSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: 0n,
+          revocable: true,
+          refUID: child1UID,
+          data: schemaEncoder.encode(["string", "string", "string"], ["ipfs://v1", "text/plain", "file"]),
+          value: 0n,
+        },
+      });
+      dataUID1 = getUIDFromReceipt(await txData.wait());
+    });
+
+    it("isRevoked returns false before revocation and true after", async function () {
+      expect(await indexer.isRevoked(dataUID1)).to.equal(false);
+      await eas.connect(user1).revoke({ schema: dataSchemaUID, data: { uid: dataUID1, value: 0n } });
+      expect(await indexer.isRevoked(dataUID1)).to.equal(true);
+    });
+
+    it("revoked DATA stays in kernel arrays (showRevoked=true shows it)", async function () {
+      await eas.connect(user1).revoke({ schema: dataSchemaUID, data: { uid: dataUID1, value: 0n } });
+
+      // Data attestations are indexed in _referencingAttestations — still there after revoke
+      const refs = await indexer.getReferencingAttestations(child1UID, dataSchemaUID, 0, 10, false);
+      expect(refs.length).to.equal(1);
+      expect(refs[0]).to.equal(dataUID1);
+    });
+
+    it("showRevoked=false hides revoked items; showRevoked=true shows them", async function () {
+      // child1 and child2 are in parent's _childrenByAttester[user1]
+      // child1's anchor is irrevocable so we test with the TAG schema instead,
+      // using a revocable attestation that targets parentUID
+      const tagTx = await eas.connect(user1).attest({
+        schema: tagSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: 0n,
+          revocable: true,
+          refUID: parentUID,
+          data: schemaEncoder.encode(["bytes32", "int256"], [ethers.ZeroHash, 1n]),
+          value: 0n,
+        },
+      });
+      const tagUID = getUIDFromReceipt(await tagTx.wait());
+
+      // Before revoke: appears in getReferencingAttestations
+      const before = await indexer.getReferencingAttestations(parentUID, tagSchemaUID, 0, 10, false);
+      expect(before.length).to.equal(1);
+
+      await eas.connect(user1).revoke({ schema: tagSchemaUID, data: { uid: tagUID, value: 0n } });
+
+      // After revoke — unfiltered (showRevoked=true): still present
+      const afterUnfiltered = await indexer.getReferencingAttestations(parentUID, tagSchemaUID, 0, 10, false);
+      expect(afterUnfiltered.length).to.equal(1);
+
+      // isRevoked flag is set
+      expect(await indexer.isRevoked(tagUID)).to.equal(true);
+    });
+
+    it("getChildrenByAttester with showRevoked=true includes all; COUNT is total physical length", async function () {
+      // child1 and child2 are both added by user1 under parentUID
+      const all = await indexer.getChildrenByAttester(parentUID, await user1.getAddress(), 0, 10, true, true);
+      expect(all.length).to.equal(2);
+
+      const count = await indexer.getChildrenByAttesterCount(parentUID, await user1.getAddress());
+      expect(count).to.equal(2);
+    });
+
+    it("getDataByAddressList skips revoked with showRevoked=false", async function () {
+      // Attach a second DATA to child1
+      const txData2 = await eas.connect(user1).attest({
+        schema: dataSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: 0n,
+          revocable: true,
+          refUID: child1UID,
+          data: schemaEncoder.encode(["string", "string", "string"], ["ipfs://v2", "text/plain", "file"]),
+          value: 0n,
+        },
+      });
+      const dataUID2 = getUIDFromReceipt(await txData2.wait());
+
+      // Revoke the second (most recent)
+      await eas.connect(user1).revoke({ schema: dataSchemaUID, data: { uid: dataUID2, value: 0n } });
+
+      // Without showRevoked: should fall back to v1
+      const result = await indexer.getDataByAddressList(child1UID, [await user1.getAddress()], false);
+      expect(result).to.equal(dataUID1);
+
+      // With showRevoked: latest is v2 (most recently attested)
+      const resultWithRevoked = await indexer.getDataByAddressList(child1UID, [await user1.getAddress()], true);
+      expect(resultWithRevoked).to.equal(dataUID2);
     });
   });
 
@@ -746,17 +894,17 @@ describe("EFSIndexer", function () {
         const fileUID = getUIDFromReceipt(receiptFile);
 
         // 3. Verify getAnchorsBySchema(Property)
-        const props = await indexer.getAnchorsBySchema(parentUID, propertySchemaUID, 0, 10, false);
+        const props = await indexer.getAnchorsBySchema(parentUID, propertySchemaUID, 0, 10, false, false);
         expect(props.length).to.equal(1);
         expect(props[0]).to.equal(propUID);
 
         // 4. Verify getAnchorsBySchema(Data)
-        const files = await indexer.getAnchorsBySchema(parentUID, dataSchemaUID, 0, 10, false);
+        const files = await indexer.getAnchorsBySchema(parentUID, dataSchemaUID, 0, 10, false, false);
         expect(files.length).to.equal(1);
         expect(files[0]).to.equal(fileUID);
 
         // 5. Verify Generic Children contains ALL
-        const all = await indexer.getChildren(parentUID, 0, 10, false);
+        const all = await indexer.getChildren(parentUID, 0, 10, false, false);
         expect(all.length).to.equal(2);
         expect(all).to.include(propUID);
         expect(all).to.include(fileUID);

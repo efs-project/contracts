@@ -8,7 +8,8 @@ interface IEFSIndexer {
         bytes32 anchorUID,
         uint256 start,
         uint256 length,
-        bool reverseOrder
+        bool reverseOrder,
+        bool showRevoked
     ) external view returns (bytes32[] memory);
     function getChildrenByAddressList(
         bytes32 parentUID,
@@ -61,7 +62,7 @@ contract EFSFileView {
         bytes32 propertySchemaUID
     ) external view returns (FileSystemItem[] memory) {
         // 1. Get UIDs from Indexer (Newest First = true)
-        bytes32[] memory uids = indexer.getChildren(parentAnchor, start, length, true);
+        bytes32[] memory uids = indexer.getChildren(parentAnchor, start, length, true, false);
 
         return _buildFileSystemItems(uids, parentAnchor, dataSchemaUID, propertySchemaUID);
     }

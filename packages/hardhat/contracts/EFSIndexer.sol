@@ -20,20 +20,8 @@ contract EFSIndexer is SchemaResolver {
     bytes32 public immutable DATA_SCHEMA_UID;
     bytes32 public immutable BLOB_SCHEMA_UID;
 
-    // O(1) Indexing Helpers
-    struct IndexData {
-        uint32 child;
-        uint32 childSchema; // Index in _childrenBySchema
-        uint32 ref;
-        uint32 sent;
-        uint32 rec;
-        uint32 attester; // For _childrenByAttester
-        uint32 typeFull;
-        uint32 typeCat;
-        uint32 schema; // For _schemaAttestations
-        uint32 schemaAttester; // For _schemaAttesterAttestations
-    }
-    mapping(bytes32 => IndexData) private _uidIndices;
+    // Revocation tracking (set in onRevoke, never cleared)
+    mapping(bytes32 => bool) private _isRevoked;
 
     bytes32 private constant TOMBSTONE_HASH = keccak256("tombstone");
 
@@ -123,24 +111,15 @@ contract EFSIndexer is SchemaResolver {
 
         // 1. GLOBAL INDEXING (ALL ATTESTATIONS)
         _schemaAttestations[schema].push(attestation.uid);
-        _uidIndices[attestation.uid].schema = uint32(_schemaAttestations[schema].length);
-
         _schemaAttesterAttestations[schema][attestation.attester].push(attestation.uid);
-        _uidIndices[attestation.uid].schemaAttester = uint32(
-            _schemaAttesterAttestations[schema][attestation.attester].length
-        );
-
         _sentAttestations[attestation.attester][schema].push(attestation.uid);
-        _uidIndices[attestation.uid].sent = uint32(_sentAttestations[attestation.attester][schema].length);
 
         if (attestation.recipient != address(0)) {
             _receivedAttestations[attestation.recipient][schema].push(attestation.uid);
-            _uidIndices[attestation.uid].rec = uint32(_receivedAttestations[attestation.recipient][schema].length);
         }
 
         if (attestation.refUID != EMPTY_UID) {
             _referencingAttestations[attestation.refUID][schema].push(attestation.uid);
-            _uidIndices[attestation.uid].ref = uint32(_referencingAttestations[attestation.refUID][schema].length);
             _addReferencingSchema(attestation.refUID, schema);
 
             // Perspective Mappings (Append-only history, no swap-and-pop)
@@ -222,11 +201,9 @@ contract EFSIndexer is SchemaResolver {
 
             // Hierarchy Index (All Children)
             _children[parentUID].push(attestation.uid);
-            _uidIndices[attestation.uid].child = uint32(_children[parentUID].length);
 
             // Hierarchy Index (By Schema)
             _childrenBySchema[parentUID][anchorSchema].push(attestation.uid);
-            _uidIndices[attestation.uid].childSchema = uint32(_childrenBySchema[parentUID][anchorSchema].length);
 
             _parents[attestation.uid] = parentUID;
 
@@ -237,9 +214,6 @@ contract EFSIndexer is SchemaResolver {
                 _containsAttestations[attestation.uid][attestation.attester] = true;
                 if (parentUID != bytes32(0)) {
                     _childrenByAttester[parentUID][attestation.attester].push(attestation.uid);
-                    _uidIndices[attestation.uid].attester = uint32(
-                        _childrenByAttester[parentUID][attestation.attester].length
-                    );
                 }
             }
 
@@ -298,69 +272,9 @@ contract EFSIndexer is SchemaResolver {
     }
 
     function onRevoke(Attestation calldata attestation, uint256 /*value*/) internal override returns (bool) {
-        bytes32 schema = attestation.schema;
-
-        // 1. CLEANUP GLOBAL INDICES
-        _removeSchemaAttestation(_schemaAttestations[schema], attestation.uid);
-        _removeSchemaAttesterAttestation(_schemaAttesterAttestations[schema][attestation.attester], attestation.uid);
-        _removeSent(_sentAttestations[attestation.attester][schema], attestation.uid);
-
-        if (attestation.recipient != address(0)) {
-            _removeReceived(_receivedAttestations[attestation.recipient][schema], attestation.uid);
-        }
-
-        if (attestation.refUID != EMPTY_UID) {
-            _removeRef(_referencingAttestations[attestation.refUID][schema], attestation.uid);
-            _removeReferencingSchema(attestation.refUID, schema);
-        }
-
-        // 2. CLEANUP EFS SPECIFIC
-        if (schema == ANCHOR_SCHEMA_UID) {
-            (string memory name, bytes32 anchorSchema) = abi.decode(attestation.data, (string, bytes32));
-
-            bytes32 parentUID = attestation.refUID;
-            if (parentUID == EMPTY_UID && attestation.recipient != address(0)) {
-                parentUID = bytes32(uint256(uint160(attestation.recipient)));
-            }
-
-            if (parentUID != EMPTY_UID) {
-                _removeChild(_children[parentUID], attestation.uid);
-                _removeChildSchema(_childrenBySchema[parentUID][anchorSchema], attestation.uid);
-            }
-
-            if (_nameToAnchor[parentUID][name][anchorSchema] == attestation.uid) {
-                delete _nameToAnchor[parentUID][name][anchorSchema];
-            }
-
-            _removeAttester(_childrenByAttester[parentUID][attestation.attester], attestation.uid);
-        } else if (schema == DATA_SCHEMA_UID) {
-            bytes32 anchorUID = attestation.refUID;
-            if (anchorUID != EMPTY_UID) {
-                bytes32 parentUID = _parents[anchorUID];
-                if (parentUID != bytes32(0)) {
-                    (, string memory contentType, ) = abi.decode(attestation.data, (string, string, string));
-
-                    if (bytes(contentType).length > 0) {
-                        bytes32 fullHash = keccak256(abi.encodePacked(contentType));
-                        _removeType(_childrenByType[parentUID][fullHash], anchorUID, true);
-
-                        bytes memory mimeBytes = bytes(contentType);
-                        for (uint i = 0; i < mimeBytes.length; i++) {
-                            if (mimeBytes[i] == 0x2f) {
-                                bytes memory category = new bytes(i);
-                                for (uint j = 0; j < i; j++) {
-                                    category[j] = mimeBytes[j];
-                                }
-                                bytes32 catHash = keccak256(category);
-                                _removeType(_childrenByType[parentUID][catHash], anchorUID, false);
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
+        // Kernel keeps all items forever. Revocation is just a flag.
+        // Read functions use _isRevoked to filter when showRevoked=false.
+        _isRevoked[attestation.uid] = true;
         return true;
     }
 
@@ -382,9 +296,10 @@ contract EFSIndexer is SchemaResolver {
         bytes32 anchorUID,
         uint256 start,
         uint256 length,
-        bool reverseOrder
+        bool reverseOrder,
+        bool showRevoked
     ) external view returns (bytes32[] memory) {
-        return _sliceUIDs(_children[anchorUID], start, length, reverseOrder);
+        return _sliceUIDsFiltered(_children[anchorUID], start, length, reverseOrder, showRevoked);
     }
 
     function getChildrenCount(bytes32 anchorUID) external view returns (uint256) {
@@ -396,10 +311,17 @@ contract EFSIndexer is SchemaResolver {
         string memory mimeType,
         uint256 start,
         uint256 length,
-        bool reverseOrder
+        bool reverseOrder,
+        bool showRevoked
     ) external view returns (bytes32[] memory) {
         return
-            _sliceUIDs(_childrenByType[anchorUID][keccak256(abi.encodePacked(mimeType))], start, length, reverseOrder);
+            _sliceUIDsFiltered(
+                _childrenByType[anchorUID][keccak256(abi.encodePacked(mimeType))],
+                start,
+                length,
+                reverseOrder,
+                showRevoked
+            );
     }
 
     function getChildrenByAttester(
@@ -407,9 +329,14 @@ contract EFSIndexer is SchemaResolver {
         address attester,
         uint256 start,
         uint256 length,
-        bool reverseOrder
+        bool reverseOrder,
+        bool showRevoked
     ) external view returns (bytes32[] memory) {
-        return _sliceUIDs(_childrenByAttester[anchorUID][attester], start, length, reverseOrder);
+        return _sliceUIDsFiltered(_childrenByAttester[anchorUID][attester], start, length, reverseOrder, showRevoked);
+    }
+
+    function getChildrenByAttesterCount(bytes32 anchorUID, address attester) external view returns (uint256) {
+        return _childrenByAttester[anchorUID][attester].length;
     }
 
     function getAnchorsBySchema(
@@ -417,9 +344,10 @@ contract EFSIndexer is SchemaResolver {
         bytes32 schema,
         uint256 start,
         uint256 length,
-        bool reverseOrder
+        bool reverseOrder,
+        bool showRevoked
     ) external view returns (bytes32[] memory) {
-        return _sliceUIDs(_childrenBySchema[anchorUID][schema], start, length, reverseOrder);
+        return _sliceUIDsFiltered(_childrenBySchema[anchorUID][schema], start, length, reverseOrder, showRevoked);
     }
 
     // Generic Explorer
@@ -551,7 +479,7 @@ contract EFSIndexer is SchemaResolver {
             uint256 actualIdx = reverseOrder ? totalLen - 1 - currentIndex : currentIndex;
             bytes32 uid = allEdits[actualIdx];
 
-            if (showRevoked || _eas.getAttestation(uid).revocationTime == 0) {
+            if (showRevoked || !_isRevoked[uid]) {
                 tempResults[count++] = uid;
             }
             currentIndex++;
@@ -582,7 +510,7 @@ contract EFSIndexer is SchemaResolver {
                 // Loop backwards to find the most recent valid one
                 for (uint256 j = userHistory.length; j > 0; j--) {
                     bytes32 uid = userHistory[j - 1];
-                    if (showRevoked || _eas.getAttestation(uid).revocationTime == 0) {
+                    if (showRevoked || !_isRevoked[uid]) {
                         return uid; // Win condition
                     }
                 }
@@ -660,7 +588,7 @@ contract EFSIndexer is SchemaResolver {
                     uint256 actualIdx = reverseOrder ? listLen - 1 - relIdx : relIdx;
                     bytes32 candidateUID = userList[actualIdx];
 
-                    if (showRevoked || _eas.getAttestation(candidateUID).revocationTime == 0) {
+                    if (showRevoked || !_isRevoked[candidateUID]) {
                         tempResults[resultCount++] = candidateUID;
                         // Pack cursor as (userIndex << 128) | relIdx
                         finalCursor = (currentUser << 128) | relIdx;
@@ -737,6 +665,7 @@ contract EFSIndexer is SchemaResolver {
     // INTERNAL HELPERS
     // ============================================================================================
 
+    /// @notice Unfiltered slice — used by generic explorer functions that don't need revocation filtering.
     function _sliceUIDs(
         bytes32[] storage uids,
         uint256 start,
@@ -768,147 +697,49 @@ contract EFSIndexer is SchemaResolver {
         }
     }
 
-    // O(1) REMOVAL HELPERS
-
-    // Note: The _swapPop method was removed as it was unused dead code.
-
-    function _removeChild(bytes32[] storage array, bytes32 uid) private {
-        uint32 index = _uidIndices[uid].child;
-        if (index == 0) return;
-
-        uint256 idx = uint256(index) - 1;
-        bytes32 lastUID = array[array.length - 1];
-
-        array[idx] = lastUID;
-        array.pop();
-
-        if (lastUID != uid) {
-            _uidIndices[lastUID].child = index;
+    /// @notice Filtered slice — skips revoked items when showRevoked=false.
+    ///         `start` is the physical array index to begin scanning from.
+    ///         Returns up to `length` non-revoked items (or all items if showRevoked=true).
+    function _sliceUIDsFiltered(
+        bytes32[] storage uids,
+        uint256 start,
+        uint256 length,
+        bool reverseOrder,
+        bool showRevoked
+    ) private view returns (bytes32[] memory) {
+        uint256 totalLen = uids.length;
+        if (totalLen == 0 || length == 0) {
+            return new bytes32[](0);
         }
-        delete _uidIndices[uid].child;
-    }
 
-    function _removeChildSchema(bytes32[] storage array, bytes32 uid) private {
-        uint32 index = _uidIndices[uid].childSchema;
-        if (index == 0) return;
-
-        uint256 idx = uint256(index) - 1;
-        bytes32 lastUID = array[array.length - 1];
-
-        array[idx] = lastUID;
-        array.pop();
-
-        if (lastUID != uid) {
-            _uidIndices[lastUID].childSchema = index;
+        if (start >= totalLen) {
+            revert InvalidOffset();
         }
-        delete _uidIndices[uid].childSchema;
-    }
 
-    function _removeSchemaAttestation(bytes32[] storage array, bytes32 uid) private {
-        uint32 index = _uidIndices[uid].schema;
-        if (index == 0) return;
-
-        uint256 idx = uint256(index) - 1;
-        bytes32 lastUID = array[array.length - 1];
-        array[idx] = lastUID;
-        array.pop();
-
-        if (lastUID != uid) {
-            _uidIndices[lastUID].schema = index;
+        // Fast path: if showRevoked, behave exactly like _sliceUIDs
+        if (showRevoked) {
+            return _sliceUIDs(uids, start, length, reverseOrder);
         }
-        delete _uidIndices[uid].schema;
-    }
 
-    function _removeSchemaAttesterAttestation(bytes32[] storage array, bytes32 uid) private {
-        uint32 index = _uidIndices[uid].schemaAttester;
-        if (index == 0) return;
+        bytes32[] memory temp = new bytes32[](length);
+        uint256 count = 0;
+        uint256 currentIndex = start;
 
-        uint256 idx = uint256(index) - 1;
-        bytes32 lastUID = array[array.length - 1];
-        array[idx] = lastUID;
-        array.pop();
+        while (count < length && currentIndex < totalLen) {
+            uint256 actualIdx = reverseOrder ? totalLen - 1 - currentIndex : currentIndex;
+            bytes32 uid = uids[actualIdx];
 
-        if (lastUID != uid) {
-            _uidIndices[lastUID].schemaAttester = index;
+            if (!_isRevoked[uid]) {
+                temp[count++] = uid;
+            }
+            currentIndex++;
         }
-        delete _uidIndices[uid].schemaAttester;
-    }
 
-    function _removeRef(bytes32[] storage array, bytes32 uid) private {
-        uint32 index = _uidIndices[uid].ref;
-        if (index == 0) return;
-
-        uint256 idx = uint256(index) - 1;
-        bytes32 lastUID = array[array.length - 1];
-        array[idx] = lastUID;
-        array.pop();
-
-        if (lastUID != uid) {
-            _uidIndices[lastUID].ref = index;
+        bytes32[] memory res = new bytes32[](count);
+        for (uint256 i = 0; i < count; i++) {
+            res[i] = temp[i];
         }
-        delete _uidIndices[uid].ref;
-    }
-
-    function _removeSent(bytes32[] storage array, bytes32 uid) private {
-        uint32 index = _uidIndices[uid].sent;
-        if (index == 0) return;
-
-        uint256 idx = uint256(index) - 1;
-        bytes32 lastUID = array[array.length - 1];
-        array[idx] = lastUID;
-        array.pop();
-
-        if (lastUID != uid) {
-            _uidIndices[lastUID].sent = index;
-        }
-        delete _uidIndices[uid].sent;
-    }
-
-    function _removeReceived(bytes32[] storage array, bytes32 uid) private {
-        uint32 index = _uidIndices[uid].rec;
-        if (index == 0) return;
-
-        uint256 idx = uint256(index) - 1;
-        bytes32 lastUID = array[array.length - 1];
-        array[idx] = lastUID;
-        array.pop();
-
-        if (lastUID != uid) {
-            _uidIndices[lastUID].rec = index;
-        }
-        delete _uidIndices[uid].rec;
-    }
-
-    function _removeAttester(bytes32[] storage array, bytes32 uid) private {
-        uint32 index = _uidIndices[uid].attester;
-        if (index == 0) return;
-
-        uint256 idx = uint256(index) - 1;
-        bytes32 lastUID = array[array.length - 1];
-        array[idx] = lastUID;
-        array.pop();
-
-        if (lastUID != uid) {
-            _uidIndices[lastUID].attester = index;
-        }
-        delete _uidIndices[uid].attester;
-    }
-
-    function _removeType(bytes32[] storage array, bytes32 uid, bool isFull) private {
-        uint32 index = isFull ? _uidIndices[uid].typeFull : _uidIndices[uid].typeCat;
-        if (index == 0) return;
-
-        uint256 idx = uint256(index) - 1;
-        bytes32 lastUID = array[array.length - 1];
-        array[idx] = lastUID;
-        array.pop();
-
-        if (lastUID != uid) {
-            if (isFull) _uidIndices[lastUID].typeFull = index;
-            else _uidIndices[lastUID].typeCat = index;
-        }
-        if (isFull) delete _uidIndices[uid].typeFull;
-        else delete _uidIndices[uid].typeCat;
+        return res;
     }
 
     function _indexMimeType(bytes32 parentUID, bytes32 attestationUID, bytes memory data) private {
@@ -920,19 +751,16 @@ contract EFSIndexer is SchemaResolver {
         if (bytes(contentType).length > 0) {
             bytes32 fullHash = keccak256(abi.encodePacked(contentType));
             _childrenByType[parentUID][fullHash].push(attestationUID);
-            _uidIndices[attestationUID].typeFull = uint32(_childrenByType[parentUID][fullHash].length);
 
             bytes memory mimeBytes = bytes(contentType);
             for (uint i = 0; i < mimeBytes.length; i++) {
                 if (mimeBytes[i] == 0x2f) {
-                    // "/"
                     bytes memory category = new bytes(i);
                     for (uint j = 0; j < i; j++) {
                         category[j] = mimeBytes[j];
                     }
                     bytes32 catHash = keccak256(category);
                     _childrenByType[parentUID][catHash].push(attestationUID);
-                    _uidIndices[attestationUID].typeCat = uint32(_childrenByType[parentUID][catHash].length);
                     break;
                 }
             }
@@ -946,17 +774,15 @@ contract EFSIndexer is SchemaResolver {
         }
     }
 
-    function _removeReferencingSchema(bytes32 targetUID, bytes32 schemaUID) private {
-        if (_referencingAttestations[targetUID][schemaUID].length == 0) {
-            bytes32[] storage array = _referencingSchemas[targetUID];
-            for (uint256 i = 0; i < array.length; i++) {
-                if (array[i] == schemaUID) {
-                    array[i] = array[array.length - 1];
-                    array.pop();
-                    break;
-                }
-            }
-            _hasReferencingSchema[targetUID][schemaUID] = false;
-        }
+    // ============================================================================================
+    // PUBLIC GETTERS FOR KERNEL STATE
+    // ============================================================================================
+
+    function isRevoked(bytes32 uid) external view returns (bool) {
+        return _isRevoked[uid];
+    }
+
+    function getParent(bytes32 anchorUID) external view returns (bytes32) {
+        return _parents[anchorUID];
     }
 }

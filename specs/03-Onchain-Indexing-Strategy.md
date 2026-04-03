@@ -93,54 +93,48 @@ For a responsive web UI, off-chain indexers should expose these additional query
 3. **Tags for Target**: `getTagsForTarget(targetID)` — All active tags applied to a specific file, folder, or address.
 4. **Boolean State Check**: `checkIfTargetHasTag(targetID, definitionUID)` — Optimized boolean check for tag membership.
 
-## List Indexing via EFSListManager
+## Sort Overlay Indexing via EFSSortOverlay
 
-LIST_INFO and LIST_ITEM schemas are handled by a dedicated `EFSListManager` contract (separate from `EFSIndexer` and `EFSTagResolver`). Both schemas are registered in EAS with `EFSListManager` as their resolver.
+The SORT_INFO schema is handled by `EFSSortOverlay`. It is registered in EAS with `EFSSortOverlay` as its resolver.
 
-### Per-Attester Doubly Linked Lists
+Sort overlays are **not populated in the resolver hook** — they are populated lazily off-hook by `processItems` calls. The resolver hook only validates and caches the sort config.
 
-The `EFSListManager` maintains a doubly linked list **per `(listInfoUID, attester)` pair**:
+### Per-Attester Sorted Linked Lists
+
+The `EFSSortOverlay` maintains a doubly linked list **per `(sortInfoUID, attester)` pair**:
 
 ```
-_listNodes[listInfoUID][attester][itemAttUID]  → Node { prev, next }
-_listHeads[listInfoUID][attester]              → head UID (bytes32(0) = empty)
-_listTails[listInfoUID][attester]              → tail UID (bytes32(0) = empty)
-_listLengths[listInfoUID][attester]            → item count
+_sortNodes[sortInfoUID][attester][itemUID]  → Node { prev, next }
+_sortHeads[sortInfoUID][attester]           → head UID (bytes32(0) = empty)
+_sortTails[sortInfoUID][attester]           → tail UID (bytes32(0) = empty)
+_sortLengths[sortInfoUID][attester]         → item count
+_lastProcessedIndex[sortInfoUID][attester]  → kernel items acknowledged
 ```
 
-This mirrors the `_childrenByAttester` pattern in `EFSIndexer`. Each attester's list is independently ordered; the SPA merges them via the Four-Tier Resolution Engine.
-
-### Discovery Indices (Append-Only)
-
-To avoid requiring `eth_getLogs` for common UI queries, the `EFSListManager` maintains two append-only discovery indices:
-
-- **Lists by Anchor**: `_listsByAnchor[anchorUID]` — all LIST_INFO UIDs whose `refUID` points to a given Anchor. Populated on LIST_INFO `onAttest` when `refUID != bytes32(0)`. Enables "show all editions of this list" without event scanning.
-- **Attesters by List**: `_listAttesters[listInfoUID]` — ordered list of unique attester addresses who have ever added items to a given LIST_INFO. Populated on LIST_ITEM `onAttest` with a dedup guard (`_hasAttested` flag). Enables "who has touched this list" without event scanning.
-
-Both indices only grow; revocations do not remove entries.
+The kernel (EFSIndexer) remains the source of truth. The sort overlay is a secondary index providing a different ordering.
 
 ### Resolver Hook Behaviour
 
-- **LIST_INFO `onAttest`**: Caches `listType` and `targetSchemaUID`. Sets a validity flag (`_isValidListInfo`) used by LIST_ITEM hooks to avoid calling back into EAS from within a resolver. If `refUID != bytes32(0)`, records the LIST_INFO in `_listsByAnchor[refUID]`.
-- **LIST_INFO `onRevoke`**: Sets `_isRevokedListInfo` flag. Does not delete nodes (too expensive); `getSortedChunk` returns empty for revoked lists.
-- **LIST_ITEM `onAttest`**: Validates `refUID` points to a valid non-revoked LIST_INFO using internal flags. If `targetSchemaUID` is set and `itemUID != bytes32(0)`, validates the item's schema via `_eas.getAttestation(itemUID).schema`. Records the attester in `_listAttesters` (once per attester per list). Appends to the attester's linked list tail.
-- **LIST_ITEM `onRevoke`**: Unlinks the node in O(1) — bridges prev/next neighbours, updates head/tail if needed, decrements length. Does **not** remove the attester from `_listAttesters` (append-only).
+- **SORT_INFO `onAttest`**: Validates `refUID != bytes32(0)` (naming Anchor required) and `sortFunc != address(0)`. Caches `SortConfig { sortFunc, targetSchema, valid, revoked }`.
+- **SORT_INFO `onRevoke`**: Sets `config.revoked = true`. `processItems` will revert for revoked sorts; `getSortStaleness` returns 0.
 
 ### On-Chain Query Functions
 
-**Pagination:**
-- `getSortedChunk(listInfoUID, attester, startNode, limit)` — Cursor-based pagination. `startNode = bytes32(0)` starts at head; otherwise starts FROM `startNode` (inclusive). Returns `(items[], nextCursor)`. Hard cap: `limit ≤ 100`.
-- `getListLength(listInfoUID, attester)` — Item count for an attester's list.
-- `getListHead(listInfoUID, attester)` — First LIST_ITEM UID.
-- `getListTail(listInfoUID, attester)` — Last LIST_ITEM UID.
-- `getNode(listInfoUID, attester, nodeUID)` — Raw `Node { prev, next }` for a specific item.
-- `getListType(listInfoUID)` — Cached `listType` (0=Manual, 1=Chronological).
-- `getTargetSchema(listInfoUID)` — Cached `targetSchemaUID` constraint.
+**Sorted pagination:**
+- `getSortedChunk(sortInfoUID, attester, startNode, limit)` — Cursor-based pagination. `startNode = bytes32(0)` starts at head. Returns `(items[], nextCursor)`. Hard cap: `limit ≤ 100`.
+- `getSortLength(sortInfoUID, attester)` — Sorted item count.
+- `getSortHead(sortInfoUID, attester)` — First (smallest) item UID.
+- `getSortTail(sortInfoUID, attester)` — Last (largest) item UID.
+- `getSortNode(sortInfoUID, attester, itemUID)` — Raw `Node { prev, next }` for a specific item.
 
-**Discovery:**
-- `getListsByAnchorCount(anchorUID)` — Number of LIST_INFOs pinned to a given Anchor.
-- `getListsByAnchor(anchorUID, start, length)` — Paginated LIST_INFO UIDs under an Anchor.
-- `getListAttesterCount(listInfoUID)` — Number of unique attesters who have ever added items.
-- `getListAttesters(listInfoUID, start, length)` — Paginated attester addresses for a list.
+**Staleness and progress:**
+- `getSortStaleness(sortInfoUID, attester)` — `kernelCount - lastProcessedIndex`. How many kernel items are unprocessed.
+- `getLastProcessedIndex(sortInfoUID, attester)` — Physical kernel index to resume from.
 
-See [Lists and Collections](./06-Lists-and-Collections.md) for full architecture including the Four-Tier Resolution Engine and fractional index ordering.
+**Sort config:**
+- `getSortConfig(sortInfoUID)` — Cached `SortConfig { sortFunc, targetSchema, valid, revoked }`.
+
+**Kernel discovery** (used by clients to find sorts under a directory):
+- `EFSIndexer.getAnchorsBySchema(parentUID, SORT_INFO_SCHEMA, 0, 100, false, false)` — returns all sort Anchors under a directory. Sorts are regular children of the kernel; no separate discovery index needed.
+
+See [Lists and Collections](./06-Lists-and-Collections.md) for the full architecture.

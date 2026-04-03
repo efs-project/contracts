@@ -60,27 +60,31 @@ cd packages/hardhat && npx hardhat test test/EFSIndexer.test.ts --network hardha
 
 ### EFS Data Model
 
-Six EAS schema types:
+Five EAS schema types:
 
 | Schema | Fields | Resolver | Purpose |
 |--------|--------|----------|---------|
-| `ANCHOR` | `string name, bytes32 schemaUID` | EFSIndexer | Folders (permanent, non-revocable) |
-| `DATA` | `string uri, string contentType, string fileMode` | EFSIndexer | Files (uri = `web3://...` pointing to SSTORE2 chunks) |
-| `PROPERTY` | `string value` | EFSIndexer | Key-value metadata attached to anchors |
+| `ANCHOR` | `string name, bytes32 schemaUID` | EFSIndexer | Folders/positions (permanent, non-revocable). `schemaUID` differentiates file anchors, sort anchors, etc. |
+| `DATA` | `string uri, string contentType, string fileMode` | EFSIndexer | File content (uri = `web3://...` pointing to SSTORE2 chunks) |
+| `PROPERTY` | `string key, string value` | EFSIndexer | Key-value metadata attached to anchors |
 | `TAG` | `bytes32 definition, bool applies` | TagResolver | Labels/tags (singleton per attester+target+definition) |
-| `LIST_INFO` | `uint8 listType, bytes32 targetSchemaUID` | EFSListManager | List root configuration (refUID → EFS Anchor as naming Schelling point) |
-| `LIST_ITEM` | `bytes32 itemUID, string fractionalIndex, bytes32 tags` | EFSListManager | Individual list entry (refUID → LIST_INFO) |
+| `SORT_INFO` | `address sortFunc, bytes32 targetSchema` | EFSSortOverlay | Sort overlay declaration. `refUID` → naming Anchor (child of directory being sorted). `sortFunc` implements `ISortFunc`. |
 
 Files are stored via SSTORE2 chunking: content is split into 24KB chunks deployed as raw bytecode contracts, then a chunk manager contract is deployed and attested as a `DATA` attestation with a `web3://` URI.
 
+**Kernel/overlay architecture**: EFSIndexer is the append-only kernel — revocations set `_isRevoked[uid]` but never remove from arrays. EFSSortOverlay maintains per-attester sorted linked lists over kernel arrays, populated lazily via `processItems` calls validated by pluggable `ISortFunc` comparators.
+
+**Curated lists** use positional Anchors: create a directory of child Anchors (named "a0", "a1", etc.), attach a SORT_INFO child with `sortFunc = FractionalSort`, and set a `defaultSort` PROPERTY. Each position Anchor can have per-attester DATA — enabling Editions-style overrides per position.
+
 ### Smart Contracts (deployed to Sepolia fork)
 
-- **`Indexer` (EFSIndexer)** — Core contract. Manages schemas, resolver hooks, path resolution (`resolvePath`, `rootAnchorUID`), and directory pagination (`getDirectoryPage`, `getDirectoryPageByAddressList`).
+- **`Indexer` (EFSIndexer)** — Core kernel. Manages schemas, resolver hooks, path resolution (`resolvePath`, `rootAnchorUID`), directory pagination, and revocation tracking (`isRevoked`). Read functions include `showRevoked` param for filtering.
 - **`EFSRouter`** — Implements `IDecentralizedApp` for `web3://` URI resolution (ERC-5219 mode). Takes path segments and returns file content.
 - **`EFSFileView`** — Renders directory listings as HTML for browser access.
 - **`TagResolver`** — Singleton tagging pattern: one active tag per (attester, target, definition).
-- **`EFSListManager`** — Per-attester doubly linked lists for LIST_INFO/LIST_ITEM schemas. `getSortedChunk(listInfoUID, attester, startNode, limit)` for O(1) cursor-based pagination.
-- Deploy scripts: `01_indexer.ts` → `02_fileview.ts` → `03_router.ts` → `04_listmanager.ts`
+- **`EFSSortOverlay`** — Per-attester sorted linked lists for SORT_INFO schemas. `processItems(sortInfoUID, items, leftHints, rightHints)` lazily processes kernel items. `getSortedChunk(sortInfoUID, attester, startNode, limit)` for cursor-based pagination. `getSortStaleness(sortInfoUID, attester)` shows unprocessed count.
+- **`AlphabeticalSort`** / **`TimestampSort`** — Reference `ISortFunc` implementations.
+- Deploy scripts: `01_indexer.ts` → `02_fileview.ts` → `03_router.ts` → `04_sortoverlay.ts`
 
 EAS contracts (Sepolia addresses used in fork):
 - EAS: `0xC2679fBD37d54388Ce493F1DB75320D236e1815e`
