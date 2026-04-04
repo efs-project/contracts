@@ -234,10 +234,22 @@ async function main() {
 
   // ── Test 6: Filter by MIME Type ──
   console.log("\n[6] MIME Type Filtering");
-  const imagesInPets = await indexer["getChildrenByType(bytes32,string,uint256,uint256,bool)"](petsUID, "image", 0, 10, false);
+  const imagesInPets = await indexer["getChildrenByType(bytes32,string,uint256,uint256,bool)"](
+    petsUID,
+    "image",
+    0,
+    10,
+    false,
+  );
   assert("image/* in /pets/", imagesInPets.length > 0, `found ${imagesInPets.length}`);
 
-  const jpegInPets = await indexer["getChildrenByType(bytes32,string,uint256,uint256,bool)"](petsUID, "image/jpeg", 0, 10, false);
+  const jpegInPets = await indexer["getChildrenByType(bytes32,string,uint256,uint256,bool)"](
+    petsUID,
+    "image/jpeg",
+    0,
+    10,
+    false,
+  );
   assert("image/jpeg in /pets/", jpegInPets.length > 0, `found ${jpegInPets.length}`);
 
   // ── Test 7: Revoke + Fallback ──

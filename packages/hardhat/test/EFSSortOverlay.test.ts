@@ -296,12 +296,14 @@ describe("EFSSortOverlay", function () {
       //   hamster: L=dog, R=0 → after dog
       //   naming ("alpha-sort"): L=0 (before cat), R=cat → goes to head
 
-      await sortOverlay.connect(alice).processItems(
-        sortInfoUID,
-        [catUID, dogUID, hamsterUID, namingUID],
-        [ZERO_BYTES32, catUID, dogUID, ZERO_BYTES32],
-        [ZERO_BYTES32, ZERO_BYTES32, ZERO_BYTES32, catUID],
-      );
+      await sortOverlay
+        .connect(alice)
+        .processItems(
+          sortInfoUID,
+          [catUID, dogUID, hamsterUID, namingUID],
+          [ZERO_BYTES32, catUID, dogUID, ZERO_BYTES32],
+          [ZERO_BYTES32, ZERO_BYTES32, ZERO_BYTES32, catUID],
+        );
 
       // After processing all 4, sorted list: naming → cat → dog → hamster
       const [items, next] = await sortOverlay.getSortedChunk(sortInfoUID, aliceAddr, ZERO_BYTES32, 10);
@@ -315,12 +317,14 @@ describe("EFSSortOverlay", function () {
 
     it("getSortStaleness is 0 after all items processed", async function () {
       const aliceAddr = await alice.getAddress();
-      await sortOverlay.connect(alice).processItems(
-        sortInfoUID,
-        [catUID, dogUID, hamsterUID, namingUID],
-        [ZERO_BYTES32, catUID, dogUID, ZERO_BYTES32],
-        [ZERO_BYTES32, ZERO_BYTES32, ZERO_BYTES32, catUID],
-      );
+      await sortOverlay
+        .connect(alice)
+        .processItems(
+          sortInfoUID,
+          [catUID, dogUID, hamsterUID, namingUID],
+          [ZERO_BYTES32, catUID, dogUID, ZERO_BYTES32],
+          [ZERO_BYTES32, ZERO_BYTES32, ZERO_BYTES32, catUID],
+        );
       expect(await sortOverlay.getSortStaleness(sortInfoUID, aliceAddr)).to.equal(0n);
     });
 
@@ -328,12 +332,14 @@ describe("EFSSortOverlay", function () {
       const aliceAddr = await alice.getAddress();
 
       // Process all current items
-      await sortOverlay.connect(alice).processItems(
-        sortInfoUID,
-        [catUID, dogUID, hamsterUID, namingUID],
-        [ZERO_BYTES32, catUID, dogUID, ZERO_BYTES32],
-        [ZERO_BYTES32, ZERO_BYTES32, ZERO_BYTES32, catUID],
-      );
+      await sortOverlay
+        .connect(alice)
+        .processItems(
+          sortInfoUID,
+          [catUID, dogUID, hamsterUID, namingUID],
+          [ZERO_BYTES32, catUID, dogUID, ZERO_BYTES32],
+          [ZERO_BYTES32, ZERO_BYTES32, ZERO_BYTES32, catUID],
+        );
       expect(await sortOverlay.getSortStaleness(sortInfoUID, aliceAddr)).to.equal(0n);
 
       // Add a new file to the kernel
@@ -346,23 +352,17 @@ describe("EFSSortOverlay", function () {
       const aliceAddr = await alice.getAddress();
       expect(await sortOverlay.getLastProcessedIndex(sortInfoUID, aliceAddr)).to.equal(0n);
 
-      await sortOverlay.connect(alice).processItems(
-        sortInfoUID,
-        [catUID, dogUID],
-        [ZERO_BYTES32, catUID],
-        [ZERO_BYTES32, ZERO_BYTES32],
-      );
+      await sortOverlay
+        .connect(alice)
+        .processItems(sortInfoUID, [catUID, dogUID], [ZERO_BYTES32, catUID], [ZERO_BYTES32, ZERO_BYTES32]);
       expect(await sortOverlay.getLastProcessedIndex(sortInfoUID, aliceAddr)).to.equal(2n);
     });
 
     it("rejects processItems with mismatched array lengths", async function () {
       await expect(
-        sortOverlay.connect(alice).processItems(
-          sortInfoUID,
-          [catUID, dogUID],
-          [ZERO_BYTES32],
-          [ZERO_BYTES32, ZERO_BYTES32],
-        ),
+        sortOverlay
+          .connect(alice)
+          .processItems(sortInfoUID, [catUID, dogUID], [ZERO_BYTES32], [ZERO_BYTES32, ZERO_BYTES32]),
       ).to.be.revertedWithCustomError(sortOverlay, "ArrayLengthMismatch");
     });
 
@@ -385,7 +385,7 @@ describe("EFSSortOverlay", function () {
 
   describe("processItems skips revoked kernel items", function () {
     it("revoked DATA attestations advance _lastProcessedIndex without being inserted", async function () {
-      const aliceAddr = await alice.getAddress();
+      const _aliceAddr = await alice.getAddress();
 
       // Create a file anchor and attach a revocable DATA to it
       const dirUID = await createAnchor(alice, "dir");
@@ -409,7 +409,7 @@ describe("EFSSortOverlay", function () {
 
       // Create a sort over dirUID
       const namingUID = await createAnchor(alice, "alpha", dirUID, sortInfoSchemaUID);
-      const sortInfoUID = await createSortInfo(alice, namingUID, await alphSort.getAddress());
+      const _sortInfoUID = await createSortInfo(alice, namingUID, await alphSort.getAddress());
 
       // Kernel for alice under dirUID: fileAnchor, namingAnchor (both irrevocable)
       // dataUID is revocable but is NOT a direct child of dirUID — it refs fileAnchor
@@ -448,17 +448,19 @@ describe("EFSSortOverlay", function () {
       //   c (cat):      after b — left=b, right=0
       //   d (dog):      after c — left=c, right=0
       //   naming(alpha): between a and b — left=a, right=b
-      await sortOverlay.connect(alice).processItems(
-        sortInfoUID,
-        [aUID, bUID, cUID, dUID, namingUID],
-        [ZERO_BYTES32, aUID, bUID, cUID, aUID],
-        [ZERO_BYTES32, ZERO_BYTES32, ZERO_BYTES32, ZERO_BYTES32, bUID],
-      );
+      await sortOverlay
+        .connect(alice)
+        .processItems(
+          sortInfoUID,
+          [aUID, bUID, cUID, dUID, namingUID],
+          [ZERO_BYTES32, aUID, bUID, cUID, aUID],
+          [ZERO_BYTES32, ZERO_BYTES32, ZERO_BYTES32, ZERO_BYTES32, bUID],
+        );
 
       // Page 1: limit=2 — aardvark, alpha(naming)
       const [page1, cursor1] = await sortOverlay.getSortedChunk(sortInfoUID, aliceAddr, ZERO_BYTES32, 2);
       expect(page1.length).to.equal(2);
-      expect(page1[0]).to.equal(aUID);      // "aardvark"
+      expect(page1[0]).to.equal(aUID); // "aardvark"
       expect(page1[1]).to.equal(namingUID); // "alpha"
 
       // Page 2: limit=2 — bear, cat
@@ -503,20 +505,17 @@ describe("EFSSortOverlay", function () {
       //   zebra:  left=0, right=0 (first item)
       //   apple:  left=0, right=zebra (apple < zebra alphabetically)
       //   naming: left=0, right=apple (alpha < apple alphabetically)
-      await sortOverlay.connect(alice).processItems(
-        sortInfoUID,
-        [zebraUID, appleUID, namingUID],
-        [ZERO_BYTES32, ZERO_BYTES32, ZERO_BYTES32],
-        [ZERO_BYTES32, zebraUID, appleUID],
-      );
+      await sortOverlay
+        .connect(alice)
+        .processItems(
+          sortInfoUID,
+          [zebraUID, appleUID, namingUID],
+          [ZERO_BYTES32, ZERO_BYTES32, ZERO_BYTES32],
+          [ZERO_BYTES32, zebraUID, appleUID],
+        );
 
       // Bob processes his kernel: [mango]
-      await sortOverlay.connect(bob).processItems(
-        sortInfoUID,
-        [mangoUID],
-        [ZERO_BYTES32],
-        [ZERO_BYTES32],
-      );
+      await sortOverlay.connect(bob).processItems(sortInfoUID, [mangoUID], [ZERO_BYTES32], [ZERO_BYTES32]);
 
       // Alice's sorted view: naming(alpha) → apple → zebra
       const [aliceItems] = await sortOverlay.getSortedChunk(sortInfoUID, aliceAddr, ZERO_BYTES32, 10);
@@ -553,12 +552,14 @@ describe("EFSSortOverlay", function () {
 
       // Kernel order: a1, a2, a3, naming
       // Timestamp order: a1 < a2 < a3 < naming (naming was attested last)
-      await sortOverlay.connect(alice).processItems(
-        sortInfoUID,
-        [a1, a2, a3, namingUID],
-        [ZERO_BYTES32, a1, a2, a3],
-        [ZERO_BYTES32, ZERO_BYTES32, ZERO_BYTES32, ZERO_BYTES32],
-      );
+      await sortOverlay
+        .connect(alice)
+        .processItems(
+          sortInfoUID,
+          [a1, a2, a3, namingUID],
+          [ZERO_BYTES32, a1, a2, a3],
+          [ZERO_BYTES32, ZERO_BYTES32, ZERO_BYTES32, ZERO_BYTES32],
+        );
 
       const [items] = await sortOverlay.getSortedChunk(sortInfoUID, aliceAddr, ZERO_BYTES32, 10);
       expect(items.length).to.equal(4);
@@ -601,7 +602,7 @@ describe("EFSSortOverlay", function () {
   describe("processItems item membership validation", function () {
     it("reverts with InvalidItem when item does not match expected kernel position", async function () {
       const dirUID = await createAnchor(alice, "integrity-dir");
-      const f1 = await createAnchor(alice, "file1", dirUID);
+      const _f1 = await createAnchor(alice, "file1", dirUID);
       const namingUID = await createAnchor(alice, "alpha", dirUID, sortInfoSchemaUID);
       const sortInfoUID = await createSortInfo(alice, namingUID, await alphSort.getAddress());
 
@@ -613,7 +614,7 @@ describe("EFSSortOverlay", function () {
 
     it("reverts with InvalidItem when a fabricated UID not in kernel is submitted", async function () {
       const dirUID = await createAnchor(alice, "integrity-dir2");
-      const f1 = await createAnchor(alice, "real-file", dirUID);
+      const _f1 = await createAnchor(alice, "real-file", dirUID);
       const namingUID = await createAnchor(alice, "alpha", dirUID, sortInfoSchemaUID);
       const sortInfoUID = await createSortInfo(alice, namingUID, await alphSort.getAddress());
 
@@ -732,7 +733,14 @@ describe("EFSSortOverlay", function () {
       const tsInfoUID = await createSortInfo(owner, tsNameUID, await tsSort.getAddress());
 
       // Step 1: discover naming anchors
-      const namingAnchors = await indexer["getAnchorsBySchema(bytes32,bytes32,uint256,uint256,bool,bool)"](dirUID, sortInfoSchemaUID, 0, 10, false, false);
+      const namingAnchors = await indexer["getAnchorsBySchema(bytes32,bytes32,uint256,uint256,bool,bool)"](
+        dirUID,
+        sortInfoSchemaUID,
+        0,
+        10,
+        false,
+        false,
+      );
       expect(namingAnchors.length).to.equal(2);
       expect(namingAnchors).to.include(alphaNameUID);
       expect(namingAnchors).to.include(tsNameUID);

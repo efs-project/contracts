@@ -546,22 +546,50 @@ describe("EFSIndexer", function () {
     it("Should index by mime type and category", async function () {
       // Verify getChildrenByType("video/mp4") on Parent ("files")
       // Should return "my_video.mp4" (fileUID)
-      const videos = await indexer["getChildrenByType(bytes32,string,uint256,uint256,bool,bool)"](parentUID, "video/mp4", 0, 10, false, false);
+      const videos = await indexer["getChildrenByType(bytes32,string,uint256,uint256,bool,bool)"](
+        parentUID,
+        "video/mp4",
+        0,
+        10,
+        false,
+        false,
+      );
       expect(videos).to.include(fileUID);
 
       // Verify getChildrenByType("video") - Category
-      const category = await indexer["getChildrenByType(bytes32,string,uint256,uint256,bool,bool)"](parentUID, "video", 0, 10, false, false);
+      const category = await indexer["getChildrenByType(bytes32,string,uint256,uint256,bool,bool)"](
+        parentUID,
+        "video",
+        0,
+        10,
+        false,
+        false,
+      );
       expect(category).to.include(fileUID);
     });
 
     it("Should filter by Attester", async function () {
       // Filter children of "files" by User A
-      const u1Files = await indexer["getChildrenByAttester(bytes32,address,uint256,uint256,bool,bool)"](parentUID, await user1.getAddress(), 0, 10, false, false);
+      const u1Files = await indexer["getChildrenByAttester(bytes32,address,uint256,uint256,bool,bool)"](
+        parentUID,
+        await user1.getAddress(),
+        0,
+        10,
+        false,
+        false,
+      );
       expect(u1Files.length).to.equal(1);
       expect(u1Files[0]).to.equal(userFileUID);
 
       // Filter children of "files" by User B
-      const u2Files = await indexer["getChildrenByAttester(bytes32,address,uint256,uint256,bool,bool)"](parentUID, await user2.getAddress(), 0, 10, false, false);
+      const u2Files = await indexer["getChildrenByAttester(bytes32,address,uint256,uint256,bool,bool)"](
+        parentUID,
+        await user2.getAddress(),
+        0,
+        10,
+        false,
+        false,
+      );
       expect(u2Files.length).to.equal(1);
       expect(u2Files[0]).to.equal(user2FileUID);
     });
@@ -605,7 +633,7 @@ describe("EFSIndexer", function () {
     const schemaEncoder = new ethers.AbiCoder();
     let parentUID: string;
     let child1UID: string;
-    let child2UID: string;
+    let _child2UID: string;
     let dataUID1: string;
 
     beforeEach(async function () {
@@ -649,7 +677,7 @@ describe("EFSIndexer", function () {
           value: 0n,
         },
       });
-      child2UID = getUIDFromReceipt(await txChild2.wait());
+      _child2UID = getUIDFromReceipt(await txChild2.wait());
 
       // Attach revocable DATA to child1
       const txData = await eas.connect(user1).attest({
@@ -714,7 +742,14 @@ describe("EFSIndexer", function () {
 
     it("getChildrenByAttester with showRevoked=true includes all; COUNT is total physical length", async function () {
       // child1 and child2 are both added by user1 under parentUID
-      const all = await indexer["getChildrenByAttester(bytes32,address,uint256,uint256,bool,bool)"](parentUID, await user1.getAddress(), 0, 10, true, true);
+      const all = await indexer["getChildrenByAttester(bytes32,address,uint256,uint256,bool,bool)"](
+        parentUID,
+        await user1.getAddress(),
+        0,
+        10,
+        true,
+        true,
+      );
       expect(all.length).to.equal(2);
 
       const count = await indexer.getChildrenByAttesterCount(parentUID, await user1.getAddress());
@@ -894,12 +929,26 @@ describe("EFSIndexer", function () {
         const fileUID = getUIDFromReceipt(receiptFile);
 
         // 3. Verify getAnchorsBySchema(Property)
-        const props = await indexer["getAnchorsBySchema(bytes32,bytes32,uint256,uint256,bool,bool)"](parentUID, propertySchemaUID, 0, 10, false, false);
+        const props = await indexer["getAnchorsBySchema(bytes32,bytes32,uint256,uint256,bool,bool)"](
+          parentUID,
+          propertySchemaUID,
+          0,
+          10,
+          false,
+          false,
+        );
         expect(props.length).to.equal(1);
         expect(props[0]).to.equal(propUID);
 
         // 4. Verify getAnchorsBySchema(Data)
-        const files = await indexer["getAnchorsBySchema(bytes32,bytes32,uint256,uint256,bool,bool)"](parentUID, dataSchemaUID, 0, 10, false, false);
+        const files = await indexer["getAnchorsBySchema(bytes32,bytes32,uint256,uint256,bool,bool)"](
+          parentUID,
+          dataSchemaUID,
+          0,
+          10,
+          false,
+          false,
+        );
         expect(files.length).to.equal(1);
         expect(files[0]).to.equal(fileUID);
 
@@ -1500,7 +1549,6 @@ describe("EFSIndexer", function () {
     });
 
     it("getChildrenByAddressList: no duplicates when multiple attesters contribute to same anchor", async function () {
-      const schemaEncoder = new ethers.AbiCoder();
       const u1Addr = await user1.getAddress();
       const u2Addr = await user2.getAddress();
 
@@ -1601,22 +1649,8 @@ describe("EFSIndexer", function () {
       })();
 
       const ownerAddr = await owner.getAddress();
-      const [fwd] = await indexer.getChildrenByAddressList(
-        parentUID,
-        [ownerAddr, u1Addr],
-        0n,
-        10,
-        false,
-        false,
-      );
-      const [rev] = await indexer.getChildrenByAddressList(
-        parentUID,
-        [ownerAddr, u1Addr],
-        0n,
-        10,
-        true,
-        false,
-      );
+      const [fwd] = await indexer.getChildrenByAddressList(parentUID, [ownerAddr, u1Addr], 0n, 10, false, false);
+      const [rev] = await indexer.getChildrenByAddressList(parentUID, [ownerAddr, u1Addr], 0n, 10, true, false);
 
       expect(fwd[0]).to.equal(fileAnchorUID); // oldest first
       expect(rev[0]).to.equal(newAnchor); // newest first
@@ -1808,9 +1842,7 @@ describe("EFSIndexer", function () {
       });
       const childUID = getUIDFromReceipt(await tx.wait());
 
-      await expect(tx)
-        .to.emit(indexer, "AnchorCreated")
-        .withArgs(parentUID, childUID, ownerAddr, ZERO_BYTES32);
+      await expect(tx).to.emit(indexer, "AnchorCreated").withArgs(parentUID, childUID, ownerAddr, ZERO_BYTES32);
     });
 
     it("emits DataCreated when DATA is attached to a file Anchor", async function () {
@@ -1843,9 +1875,7 @@ describe("EFSIndexer", function () {
       });
       const dataUID = getUIDFromReceipt(await dataTx.wait());
 
-      await expect(dataTx)
-        .to.emit(indexer, "DataCreated")
-        .withArgs(anchorUID, dataUID, ownerAddr);
+      await expect(dataTx).to.emit(indexer, "DataCreated").withArgs(anchorUID, dataUID, ownerAddr);
     });
 
     it("emits AttestationRevoked when a DATA attestation is revoked", async function () {
@@ -1882,9 +1912,7 @@ describe("EFSIndexer", function () {
         data: { uid: dataUID, value: 0n },
       });
 
-      await expect(revokeTx)
-        .to.emit(indexer, "AttestationRevoked")
-        .withArgs(dataUID, ownerAddr);
+      await expect(revokeTx).to.emit(indexer, "AttestationRevoked").withArgs(dataUID, ownerAddr);
     });
   });
 
@@ -1941,9 +1969,9 @@ describe("EFSIndexer", function () {
 
     it("reverts on out-of-bounds index", async function () {
       const ownerAddr = await owner.getAddress();
-      await expect(
-        indexer.getChildrenByAttesterAt(parentUID, ownerAddr, 99),
-      ).to.be.revertedWith("EFSIndexer: index out of bounds");
+      await expect(indexer.getChildrenByAttesterAt(parentUID, ownerAddr, 99)).to.be.revertedWith(
+        "EFSIndexer: index out of bounds",
+      );
     });
   });
 });

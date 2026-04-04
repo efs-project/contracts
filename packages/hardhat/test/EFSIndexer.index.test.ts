@@ -419,10 +419,7 @@ describe("EFSIndexer — public index() API", function () {
     it("reverts on non-existent UID in batch", async function () {
       const uid = await attestThirdParty(alice, "real");
       const fakeUID = ethers.keccak256(ethers.toUtf8Bytes("fake"));
-      await expect(indexer.indexBatch([uid, fakeUID])).to.be.revertedWithCustomError(
-        indexer,
-        "InvalidAttestation",
-      );
+      await expect(indexer.indexBatch([uid, fakeUID])).to.be.revertedWithCustomError(indexer, "InvalidAttestation");
     });
 
     it("emits AttestationIndexed for each newly indexed UID", async function () {
@@ -432,12 +429,8 @@ describe("EFSIndexer — public index() API", function () {
       const uid2 = await attestThirdParty(bob, "msg2");
 
       const tx = await indexer.indexBatch([uid1, uid2]);
-      await expect(tx)
-        .to.emit(indexer, "AttestationIndexed")
-        .withArgs(uid1, thirdPartySchemaUID, aliceAddr);
-      await expect(tx)
-        .to.emit(indexer, "AttestationIndexed")
-        .withArgs(uid2, thirdPartySchemaUID, bobAddr);
+      await expect(tx).to.emit(indexer, "AttestationIndexed").withArgs(uid1, thirdPartySchemaUID, aliceAddr);
+      await expect(tx).to.emit(indexer, "AttestationIndexed").withArgs(uid2, thirdPartySchemaUID, bobAddr);
     });
   });
 
@@ -493,10 +486,7 @@ describe("EFSIndexer — public index() API", function () {
 
     it("reverts on non-existent attestation", async function () {
       const fakeUID = ethers.keccak256(ethers.toUtf8Bytes("nonexistent"));
-      await expect(indexer.indexRevocation(fakeUID)).to.be.revertedWithCustomError(
-        indexer,
-        "InvalidAttestation",
-      );
+      await expect(indexer.indexRevocation(fakeUID)).to.be.revertedWithCustomError(indexer, "InvalidAttestation");
     });
 
     it("works for EFS-native schema (DATA) revocations too", async function () {

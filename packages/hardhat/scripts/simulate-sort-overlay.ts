@@ -294,10 +294,7 @@ async function main() {
   await anchor(bob, "apex.mp3", musicUID, dataSchemaUID);
   console.log("  Bob   added: waterfall.mp3, echo.mp3, apex.mp3");
 
-  assert(
-    "Alice has 4 items in kernel",
-    (await indexer.getChildrenByAttesterCount(musicUID, aliceAddr)) === 4n,
-  );
+  assert("Alice has 4 items in kernel", (await indexer.getChildrenByAttesterCount(musicUID, aliceAddr)) === 4n);
   assert("Bob has 3 items in kernel", (await indexer.getChildrenByAttesterCount(musicUID, bobAddr)) === 3n);
 
   // ════════════════════════════════════════════════════════════════════════════════
@@ -317,23 +314,31 @@ async function main() {
   // ════════════════════════════════════════════════════════════════════════════════
   console.log("\n── Phase 3: Alice processes her 4 items ──\n");
 
-  assert(
-    "Alice staleness = 4 before processing",
-    (await overlay.getSortStaleness(alphaInfoUID, aliceAddr)) === 4n,
-  );
+  assert("Alice staleness = 4 before processing", (await overlay.getSortStaleness(alphaInfoUID, aliceAddr)) === 4n);
 
   const aliceLastIdx = Number(await overlay.getLastProcessedIndex(alphaInfoUID, aliceAddr));
-  const aliceItems = await indexer["getChildrenByAttester(bytes32,address,uint256,uint256,bool)"](musicUID, aliceAddr, aliceLastIdx, 50, false);
+  const aliceItems = await indexer["getChildrenByAttester(bytes32,address,uint256,uint256,bool)"](
+    musicUID,
+    aliceAddr,
+    aliceLastIdx,
+    50,
+    false,
+  );
   // Use overlay.computeHints() — free eth_call, no client-side sort logic needed
   const [aliceLeft, aliceRight] = await overlay.computeHints(alphaInfoUID, aliceAddr, [...aliceItems]);
-  await (await overlay.connect(alice).processItems(alphaInfoUID, [...aliceItems], [...aliceLeft], [...aliceRight])).wait();
+  await (
+    await overlay.connect(alice).processItems(alphaInfoUID, [...aliceItems], [...aliceLeft], [...aliceRight])
+  ).wait();
 
   const aliceSorted = await readSortedAll(alphaInfoUID, aliceAddr);
   const aliceSortedNames = await Promise.all(aliceSorted.map(getName));
   console.log("  Alice sorted:", aliceSortedNames);
 
   assert("Alice sorted length = 4", aliceSorted.length === 4);
-  assert("Alice order: apple < banana < mango < zebra", aliceSortedNames.join(",") === "apple.mp3,banana.mp3,mango.mp3,zebra.mp3");
+  assert(
+    "Alice order: apple < banana < mango < zebra",
+    aliceSortedNames.join(",") === "apple.mp3,banana.mp3,mango.mp3,zebra.mp3",
+  );
   assert("Alice staleness = 0", (await overlay.getSortStaleness(alphaInfoUID, aliceAddr)) === 0n);
 
   // ── Membership integrity: processItems rejects fabricated UIDs ───────────────
@@ -342,7 +347,9 @@ async function main() {
   const fakeUID = ethers.keccak256(ethers.toUtf8Bytes("not-a-real-kernel-item"));
   let rejectedFake = false;
   try {
-    await (await overlay.connect(alice).processItems(alphaInfoUID, [fakeUID], [ethers.ZeroHash], [ethers.ZeroHash])).wait();
+    await (
+      await overlay.connect(alice).processItems(alphaInfoUID, [fakeUID], [ethers.ZeroHash], [ethers.ZeroHash])
+    ).wait();
   } catch {
     rejectedFake = true;
   }
@@ -352,9 +359,13 @@ async function main() {
   // Verify the contract-side computeHints produces the same results as the TS helper.
   // Use Bob's unprocessed items (empty sorted list) so the expected result is deterministic.
   // NOTE: Overloaded Solidity functions require bracket notation in TypeScript + typechain.
-  const bobItemsForHintCheck = await indexer[
-    "getChildrenByAttester(bytes32,address,uint256,uint256,bool)"
-  ](musicUID, bobAddr, 0, 50, false);
+  const bobItemsForHintCheck = await indexer["getChildrenByAttester(bytes32,address,uint256,uint256,bool)"](
+    musicUID,
+    bobAddr,
+    0,
+    50,
+    false,
+  );
   const [contractLeft, contractRight] = await overlay.computeHints(alphaInfoUID, bobAddr, [...bobItemsForHintCheck]);
   const { leftHints: hintCheckLeft, rightHints: hintCheckRight } = await computeHints(
     [...bobItemsForHintCheck],
@@ -374,7 +385,13 @@ async function main() {
   console.log("\n── Phase 4: Bob processes his 3 items ──\n");
 
   const bobLastIdx = Number(await overlay.getLastProcessedIndex(alphaInfoUID, bobAddr));
-  const bobItems = await indexer["getChildrenByAttester(bytes32,address,uint256,uint256,bool)"](musicUID, bobAddr, bobLastIdx, 50, false);
+  const bobItems = await indexer["getChildrenByAttester(bytes32,address,uint256,uint256,bool)"](
+    musicUID,
+    bobAddr,
+    bobLastIdx,
+    50,
+    false,
+  );
   const [bobLeft, bobRight] = await overlay.computeHints(alphaInfoUID, bobAddr, [...bobItems]);
   await (await overlay.connect(bob).processItems(alphaInfoUID, [...bobItems], [...bobLeft], [...bobRight])).wait();
 
@@ -393,13 +410,16 @@ async function main() {
   const aliceCarrot = await anchor(alice, "carrot.mp3", musicUID, dataSchemaUID);
   const aliceAardvark = await anchor(alice, "aardvark.mp3", musicUID, dataSchemaUID);
 
-  assert(
-    "Alice staleness = 2 after adding items",
-    (await overlay.getSortStaleness(alphaInfoUID, aliceAddr)) === 2n,
-  );
+  assert("Alice staleness = 2 after adding items", (await overlay.getSortStaleness(alphaInfoUID, aliceAddr)) === 2n);
 
   const aliceLastIdx2 = Number(await overlay.getLastProcessedIndex(alphaInfoUID, aliceAddr));
-  const aliceNewItems = await indexer["getChildrenByAttester(bytes32,address,uint256,uint256,bool)"](musicUID, aliceAddr, aliceLastIdx2, 50, false);
+  const aliceNewItems = await indexer["getChildrenByAttester(bytes32,address,uint256,uint256,bool)"](
+    musicUID,
+    aliceAddr,
+    aliceLastIdx2,
+    50,
+    false,
+  );
   const [aliceLeft2, aliceRight2] = await overlay.computeHints(alphaInfoUID, aliceAddr, [...aliceNewItems]);
   await (
     await overlay.connect(alice).processItems(alphaInfoUID, [...aliceNewItems], [...aliceLeft2], [...aliceRight2])
@@ -534,10 +554,7 @@ async function main() {
     "banana.mp3 → alice's uri (alice first)",
     resolved.find(r => r.name === "banana.mp3")?.uri === "ipfs://alice-banana-v1",
   );
-  assert(
-    "mango.mp3 → alice's uri",
-    resolved.find(r => r.name === "mango.mp3")?.uri === "ipfs://alice-mango-v1",
-  );
+  assert("mango.mp3 → alice's uri", resolved.find(r => r.name === "mango.mp3")?.uri === "ipfs://alice-mango-v1");
   assert("zebra.mp3 → null (both editions revoked)", resolved.find(r => r.name === "zebra.mp3")?.uri === null);
 
   // Same list but bob-first: apple and banana should now resolve to bob's uri
@@ -587,7 +604,11 @@ async function main() {
     dedupCursor = next;
   } while (dedupCursor > 0n);
 
-  assert("Dedup [alice,bob] = 9 unique anchors (no duplicates)", dedupResults.length === 9, `got ${dedupResults.length}`);
+  assert(
+    "Dedup [alice,bob] = 9 unique anchors (no duplicates)",
+    dedupResults.length === 9,
+    `got ${dedupResults.length}`,
+  );
   assert("Dedup results have no duplicates", new Set(dedupResults).size === dedupResults.length);
   // First item = global insertion order: zebra was created first
   assert("Dedup first item = aliceZebra (insertion order)", dedupResults[0] === aliceZebra);
@@ -609,14 +630,22 @@ async function main() {
     interleavedCursor = next;
   } while (interleavedCursor > 0n);
 
-  console.log(`  dedup: ${dedupResults.length} unique, interleaved: ${interleavedResults.length} (${interleavedResults.length - new Set(interleavedResults).size} duplicates)`);
+  console.log(
+    `  dedup: ${dedupResults.length} unique, interleaved: ${interleavedResults.length} (${interleavedResults.length - new Set(interleavedResults).size} duplicates)`,
+  );
   assert(
     "Interleaved [alice,bob] = 12 items (alice×6 + bob×6 perspective arrays)",
     interleavedResults.length === 12,
     `got ${interleavedResults.length}`,
   );
-  assert("Interleaved first item = alice's first (round-robin starts with alice)", interleavedResults[0] === aliceZebra);
-  assert("Interleaved second item = bob's first (round-robin gives bob equal turn)", interleavedResults[1] === bobWaterfall);
+  assert(
+    "Interleaved first item = alice's first (round-robin starts with alice)",
+    interleavedResults[0] === aliceZebra,
+  );
+  assert(
+    "Interleaved second item = bob's first (round-robin gives bob equal turn)",
+    interleavedResults[1] === bobWaterfall,
+  );
 
   // ════════════════════════════════════════════════════════════════════════════════
   // PHASE 11: Data history — multiple versions per user
@@ -637,7 +666,11 @@ async function main() {
 
   // getDataByAddressList returns most recent (v2)
   const appleLatest = await resolveEdition(aliceApple, [aliceAddr]);
-  assert("getDataByAddressList returns latest version (v2)", appleLatest?.uri === "ipfs://alice-apple-v2", appleLatest?.uri);
+  assert(
+    "getDataByAddressList returns latest version (v2)",
+    appleLatest?.uri === "ipfs://alice-apple-v2",
+    appleLatest?.uri,
+  );
 
   // Revoke v1 — active history drops to 1
   await revokeData(alice, aliceAppleData);
@@ -646,7 +679,11 @@ async function main() {
 
   // Latest is still v2
   const appleAfterRevokeV1 = await resolveEdition(aliceApple, [aliceAddr]);
-  assert("After revoking v1, v2 still served", appleAfterRevokeV1?.uri === "ipfs://alice-apple-v2", appleAfterRevokeV1?.uri);
+  assert(
+    "After revoking v1, v2 still served",
+    appleAfterRevokeV1?.uri === "ipfs://alice-apple-v2",
+    appleAfterRevokeV1?.uri,
+  );
 
   // Reverse order: most recent first
   const [histReverse] = await indexer.getDataHistoryByAddress(aliceApple, aliceAddr, 0, 10, true, true);
@@ -678,22 +715,10 @@ async function main() {
   console.log("  Alice: favorite(apple, banana); Bob: favorite(apple), classic(mango)");
 
   // isActivelyTagged: O(1) counter
-  assert(
-    "apple.mp3 is actively tagged as favorite",
-    await tagResolver.isActivelyTagged(aliceApple, favoriteDefUID),
-  );
-  assert(
-    "banana.mp3 is actively tagged as favorite",
-    await tagResolver.isActivelyTagged(aliceBanana, favoriteDefUID),
-  );
-  assert(
-    "mango.mp3 is actively tagged as classic",
-    await tagResolver.isActivelyTagged(aliceMango, classicDefUID),
-  );
-  assert(
-    "carrot.mp3 is NOT tagged as favorite",
-    !(await tagResolver.isActivelyTagged(aliceCarrot, favoriteDefUID)),
-  );
+  assert("apple.mp3 is actively tagged as favorite", await tagResolver.isActivelyTagged(aliceApple, favoriteDefUID));
+  assert("banana.mp3 is actively tagged as favorite", await tagResolver.isActivelyTagged(aliceBanana, favoriteDefUID));
+  assert("mango.mp3 is actively tagged as classic", await tagResolver.isActivelyTagged(aliceMango, classicDefUID));
+  assert("carrot.mp3 is NOT tagged as favorite", !(await tagResolver.isActivelyTagged(aliceCarrot, favoriteDefUID)));
 
   // getActiveTagUID: specific attester's active tag
   const aliceAppleTagUID = await tagResolver.getActiveTagUID(aliceAddr, aliceApple, favoriteDefUID);
@@ -705,11 +730,7 @@ async function main() {
 
   // getTaggedTargets: what items have been tagged with "favorite"
   const favoriteTargets = await tagResolver.getTaggedTargets(favoriteDefUID, 0, 10);
-  assert(
-    "2 items tagged as favorite (apple, banana)",
-    favoriteTargets.length === 2,
-    `got ${favoriteTargets.length}`,
-  );
+  assert("2 items tagged as favorite (apple, banana)", favoriteTargets.length === 2, `got ${favoriteTargets.length}`);
 
   // Negate a tag: Alice un-favorites banana
   await tag(alice, aliceBanana, favoriteDefUID, false);
@@ -729,7 +750,13 @@ async function main() {
   //
   // Step 1 (on-chain): getAnchorsBySchema finds naming anchors with anchorSchema == SORT_INFO_SCHEMA_UID.
   //   These are regular ANCHOR attestations indexed by EFSIndexer.
-  const sortNamingAnchors = await indexer["getAnchorsBySchema(bytes32,bytes32,uint256,uint256,bool)"](musicUID, sortInfoSchemaUID, 0, 10, false);
+  const sortNamingAnchors = await indexer["getAnchorsBySchema(bytes32,bytes32,uint256,uint256,bool)"](
+    musicUID,
+    sortInfoSchemaUID,
+    0,
+    10,
+    false,
+  );
   assert(
     "getAnchorsBySchema finds 1 sort naming anchor in /music/",
     sortNamingAnchors.length === 1 && sortNamingAnchors[0] === alphaNameUID,
@@ -738,7 +765,13 @@ async function main() {
 
   // Step 2 (fully on-chain): EFSSortOverlay.onAttest calls indexer.index(uid), so SORT_INFO
   //   attestations are registered into EFSIndexer's generic referencing indices. No eth_getLogs needed.
-  const sortInfoRefsFromIndexer = await indexer.getReferencingAttestations(alphaNameUID, sortInfoSchemaUID, 0, 10, false);
+  const sortInfoRefsFromIndexer = await indexer.getReferencingAttestations(
+    alphaNameUID,
+    sortInfoSchemaUID,
+    0,
+    10,
+    false,
+  );
   assert(
     "EFSIndexer has 1 SORT_INFO ref via index() wiring (fully on-chain discovery)",
     sortInfoRefsFromIndexer.length === 1,
@@ -778,7 +811,13 @@ async function main() {
   const tsNameUID = await anchor(deployer, "by-date", vidDirUID, sortInfoSchemaUID);
   const tsInfoUID = await sortInfo(deployer, tsNameUID, (timestampSort as any).target);
 
-  const vidItems = await indexer["getChildrenByAttester(bytes32,address,uint256,uint256,bool)"](vidDirUID, aliceAddr, 0, 50, false);
+  const vidItems = await indexer["getChildrenByAttester(bytes32,address,uint256,uint256,bool)"](
+    vidDirUID,
+    aliceAddr,
+    0,
+    50,
+    false,
+  );
   const [tsLeft, tsRight] = await overlay.computeHints(tsInfoUID, aliceAddr, [...vidItems]);
   await (await overlay.connect(alice).processItems(tsInfoUID, [...vidItems], [...tsLeft], [...tsRight])).wait();
 
@@ -818,7 +857,11 @@ async function main() {
 
   // Existing sorted data is still readable after revoke
   const aliceAfterRevoke = await readSortedAll(alphaInfoUID, aliceAddr);
-  assert("Sorted data still readable after sort revoke", aliceAfterRevoke.length === 6, `got ${aliceAfterRevoke.length}`);
+  assert(
+    "Sorted data still readable after sort revoke",
+    aliceAfterRevoke.length === 6,
+    `got ${aliceAfterRevoke.length}`,
+  );
 
   // Editions still resolve correctly after sort is revoked (sort ≠ content)
   const appleEditionAfterSortRevoke = await resolveEdition(aliceApple, [aliceAddr]);

@@ -58,7 +58,11 @@ describe("TagResolver", function () {
     );
 
     const TagResolverFactory = await ethers.getContractFactory("TagResolver");
-    tagResolver = await TagResolverFactory.deploy(await eas.getAddress(), precomputedTagSchemaUID, futureIndexerAddress);
+    tagResolver = await TagResolverFactory.deploy(
+      await eas.getAddress(),
+      precomputedTagSchemaUID,
+      futureIndexerAddress,
+    );
     await tagResolver.waitForDeployment();
 
     // TAG schema: registered with TagResolver
