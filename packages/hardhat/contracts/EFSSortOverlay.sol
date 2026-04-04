@@ -33,6 +33,7 @@ contract EFSSortOverlay is SchemaResolver {
     error InvalidSortInfo();
     error ArrayLengthMismatch();
     error InvalidPosition();
+    error InvalidItem();
 
     event ItemSorted(
         bytes32 indexed sortInfoUID,
@@ -58,6 +59,10 @@ contract EFSSortOverlay is SchemaResolver {
     struct SortConfig {
         address sortFunc;
         bytes32 targetSchema;
+        /// @dev Cached at onAttest time: the directory UID being sorted.
+        ///      Derived from: getParent(sortInfo.refUID) where refUID is the naming Anchor.
+        ///      Saves walking the EAS ref chain on every processItems / getSortStaleness call.
+        bytes32 parentUID;
         bool valid;
         bool revoked;
     }
@@ -117,9 +122,15 @@ contract EFSSortOverlay is SchemaResolver {
         // sortFunc must be a non-zero address
         if (sortFunc == address(0)) return false;
 
+        // Resolve parent directory: refUID is the naming Anchor, its parent is the sorted directory.
+        // Cache here so processItems and getSortStaleness avoid walking the EAS ref chain at call time.
+        bytes32 parentUID = indexer.getParent(attestation.refUID);
+        if (parentUID == bytes32(0)) return false; // naming Anchor must be a directory child
+
         _sortConfigs[attestation.uid] = SortConfig({
             sortFunc: sortFunc,
             targetSchema: targetSchema,
+            parentUID: parentUID,
             valid: true,
             revoked: false
         });
@@ -174,10 +185,18 @@ contract EFSSortOverlay is SchemaResolver {
         address attester = msg.sender;
         ISortFunc sortFunc = ISortFunc(config.sortFunc);
 
+        bytes32 parentUID = config.parentUID;
+
         for (uint256 i = 0; i < items.length; i++) {
             bytes32 item = items[i];
             bytes32 left = leftHints[i];
             bytes32 right = rightHints[i];
+
+            // Validate item is the expected kernel element at this position.
+            // Prevents callers from inserting arbitrary UIDs into their sorted list.
+            uint256 kernelIdx = _lastProcessedIndex[sortInfoUID][attester];
+            bytes32 expected = indexer.getChildrenByAttesterAt(parentUID, attester, kernelIdx);
+            if (item != expected) revert InvalidItem();
 
             // Skip revoked kernel items (still advance progress counter)
             if (indexer.isRevoked(item)) {
@@ -260,14 +279,20 @@ contract EFSSortOverlay is SchemaResolver {
             bytes memory key = sortFunc.getSortKey(item, sortInfoUID);
             if (key.length == 0) continue;
 
-            // Linear scan: find first position where item < sim[j]
-            uint256 pos = simLen;
-            for (uint256 j = 0; j < simLen; j++) {
-                if (sortFunc.isLessThan(item, sim[j], sortInfoUID)) {
-                    pos = j;
-                    break;
+            // Binary search: find the leftmost position where isLessThan(item, sim[pos]) is true.
+            // O(log N) isLessThan calls instead of O(N) — critical for large sorted lists.
+            // Equal-key items are inserted after existing equal items (stable ordering).
+            uint256 lo = 0;
+            uint256 hi = simLen;
+            while (lo < hi) {
+                uint256 mid = (lo + hi) >> 1;
+                if (sortFunc.isLessThan(item, sim[mid], sortInfoUID)) {
+                    hi = mid;
+                } else {
+                    lo = mid + 1;
                 }
             }
+            uint256 pos = lo;
 
             leftHints[i] = pos == 0 ? bytes32(0) : sim[pos - 1];
             rightHints[i] = pos == simLen ? bytes32(0) : sim[pos];
@@ -369,14 +394,12 @@ contract EFSSortOverlay is SchemaResolver {
         SortConfig storage config = _sortConfigs[sortInfoUID];
         if (!config.valid || config.revoked) return 0;
 
-        Attestation memory sortInfo = _eas.getAttestation(sortInfoUID);
-        if (sortInfo.uid == bytes32(0)) return 0;
-
-        // namingAnchorUID is sortInfo.refUID; its parent is the directory being sorted
-        bytes32 parentUID = indexer.getParent(sortInfo.refUID);
-        if (parentUID == bytes32(0)) return 0;
-
-        uint256 kernelCount = indexer.getChildrenByAttesterCount(parentUID, attester);
+        // parentUID is cached in SortConfig at onAttest time — no EAS call needed.
+        // Note: if targetSchema != bytes32(0), some unprocessed items may be ineligible
+        // (e.g. sort naming anchors or folders) and will be silently skipped by processItems.
+        // The stale count may therefore be slightly inflated; fixing this would require
+        // per-item schema checks which are prohibitively expensive on-chain.
+        uint256 kernelCount = indexer.getChildrenByAttesterCount(config.parentUID, attester);
         uint256 processed = _lastProcessedIndex[sortInfoUID][attester];
 
         return kernelCount > processed ? kernelCount - processed : 0;

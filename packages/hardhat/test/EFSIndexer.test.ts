@@ -1768,4 +1768,182 @@ describe("EFSIndexer", function () {
       expect(await indexer.containsSchemaAttestations(fileUID, u2Address, dataSchemaUID)).to.equal(true);
     });
   });
+
+  // ============================================================================================
+  // KERNEL EVENTS
+  // ============================================================================================
+
+  describe("Kernel events", function () {
+    const enc = new ethers.AbiCoder();
+    let parentUID: string;
+
+    beforeEach(async function () {
+      // Each test gets a fresh deployment — create root anchor first
+      const tx = await eas.connect(owner).attest({
+        schema: anchorSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: NO_EXPIRATION,
+          revocable: false,
+          refUID: ZERO_BYTES32,
+          data: enc.encode(["string", "bytes32"], ["root", ZERO_BYTES32]),
+          value: 0n,
+        },
+      });
+      parentUID = getUIDFromReceipt(await tx.wait());
+    });
+
+    it("emits AnchorCreated when a child Anchor is attested", async function () {
+      const ownerAddr = await owner.getAddress();
+      const tx = await eas.connect(owner).attest({
+        schema: anchorSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: NO_EXPIRATION,
+          revocable: false,
+          refUID: parentUID,
+          data: enc.encode(["string", "bytes32"], ["event-anchor", ZERO_BYTES32]),
+          value: 0n,
+        },
+      });
+      const childUID = getUIDFromReceipt(await tx.wait());
+
+      await expect(tx)
+        .to.emit(indexer, "AnchorCreated")
+        .withArgs(parentUID, childUID, ownerAddr, ZERO_BYTES32);
+    });
+
+    it("emits DataCreated when DATA is attached to a file Anchor", async function () {
+      const ownerAddr = await owner.getAddress();
+
+      // Create file anchor (anchorSchema = DATA_SCHEMA_UID marks it as a file slot)
+      const anchorTx = await eas.connect(owner).attest({
+        schema: anchorSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: NO_EXPIRATION,
+          revocable: false,
+          refUID: parentUID,
+          data: enc.encode(["string", "bytes32"], ["event-file", dataSchemaUID]),
+          value: 0n,
+        },
+      });
+      const anchorUID = getUIDFromReceipt(await anchorTx.wait());
+
+      const dataTx = await eas.connect(owner).attest({
+        schema: dataSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: NO_EXPIRATION,
+          revocable: true,
+          refUID: anchorUID,
+          data: enc.encode(["string", "string", "string"], ["ipfs://test", "text/plain", "file"]),
+          value: 0n,
+        },
+      });
+      const dataUID = getUIDFromReceipt(await dataTx.wait());
+
+      await expect(dataTx)
+        .to.emit(indexer, "DataCreated")
+        .withArgs(anchorUID, dataUID, ownerAddr);
+    });
+
+    it("emits AttestationRevoked when a DATA attestation is revoked", async function () {
+      const ownerAddr = await owner.getAddress();
+
+      const anchorTx = await eas.connect(owner).attest({
+        schema: anchorSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: NO_EXPIRATION,
+          revocable: false,
+          refUID: parentUID,
+          data: enc.encode(["string", "bytes32"], ["event-revoke-file", dataSchemaUID]),
+          value: 0n,
+        },
+      });
+      const anchorUID = getUIDFromReceipt(await anchorTx.wait());
+
+      const dataTx = await eas.connect(owner).attest({
+        schema: dataSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: NO_EXPIRATION,
+          revocable: true,
+          refUID: anchorUID,
+          data: enc.encode(["string", "string", "string"], ["ipfs://test", "text/plain", "file"]),
+          value: 0n,
+        },
+      });
+      const dataUID = getUIDFromReceipt(await dataTx.wait());
+
+      const revokeTx = await eas.connect(owner).revoke({
+        schema: dataSchemaUID,
+        data: { uid: dataUID, value: 0n },
+      });
+
+      await expect(revokeTx)
+        .to.emit(indexer, "AttestationRevoked")
+        .withArgs(dataUID, ownerAddr);
+    });
+  });
+
+  // ============================================================================================
+  // getChildrenByAttesterAt
+  // ============================================================================================
+
+  describe("getChildrenByAttesterAt", function () {
+    const enc = new ethers.AbiCoder();
+    let parentUID: string;
+    let f1: string, f2: string, f3: string;
+
+    beforeEach(async function () {
+      // Each test gets a fresh deployment — create root anchor first
+      const rootTx = await eas.connect(owner).attest({
+        schema: anchorSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: NO_EXPIRATION,
+          revocable: false,
+          refUID: ZERO_BYTES32,
+          data: enc.encode(["string", "bytes32"], ["root", ZERO_BYTES32]),
+          value: 0n,
+        },
+      });
+      parentUID = getUIDFromReceipt(await rootTx.wait());
+
+      const attest = async (name: string) => {
+        const tx = await eas.connect(owner).attest({
+          schema: anchorSchemaUID,
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: NO_EXPIRATION,
+            revocable: false,
+            refUID: parentUID,
+            data: enc.encode(["string", "bytes32"], [name, ZERO_BYTES32]),
+            value: 0n,
+          },
+        });
+        return getUIDFromReceipt(await tx.wait());
+      };
+
+      f1 = await attest("at-file-1");
+      f2 = await attest("at-file-2");
+      f3 = await attest("at-file-3");
+    });
+
+    it("returns the correct item at each index", async function () {
+      const ownerAddr = await owner.getAddress();
+      expect(await indexer.getChildrenByAttesterAt(parentUID, ownerAddr, 0)).to.equal(f1);
+      expect(await indexer.getChildrenByAttesterAt(parentUID, ownerAddr, 1)).to.equal(f2);
+      expect(await indexer.getChildrenByAttesterAt(parentUID, ownerAddr, 2)).to.equal(f3);
+    });
+
+    it("reverts on out-of-bounds index", async function () {
+      const ownerAddr = await owner.getAddress();
+      await expect(
+        indexer.getChildrenByAttesterAt(parentUID, ownerAddr, 99),
+      ).to.be.revertedWith("EFSIndexer: index out of bounds");
+    });
+  });
 });

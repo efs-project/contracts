@@ -7,7 +7,7 @@ import { GenericContractsDeclaration } from "~~/utils/scaffold-eth/contract";
 const deployedContracts = {
   31337: {
     EFSFileView: {
-      address: "0x79C518397be16A52A48834D36776033007bF1D30",
+      address: "0xCCC07C0c81D58627Acfad304143D3526DE3C4135",
       abi: [
         {
           inputs: [
@@ -251,7 +251,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     EFSRouter: {
-      address: "0x018033320e608d68FdF3548537B54c488C50E1d0",
+      address: "0x668D1D671Fceb4475EdA7C744B593B3b321db2ad",
       abi: [
         {
           inputs: [
@@ -388,7 +388,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     EFSSortOverlay: {
-      address: "0x4EBcBE4b79eF51E5B5616a5F7A2D9fbb7bA7D281",
+      address: "0x7B9FE123FC7eF4Bd01D5660c68474c7C90F95888",
       abi: [
         {
           inputs: [
@@ -429,6 +429,11 @@ const deployedContracts = {
         {
           inputs: [],
           name: "InvalidEAS",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "InvalidItem",
           type: "error",
         },
         {
@@ -668,6 +673,11 @@ const deployedContracts = {
                 {
                   internalType: "bytes32",
                   name: "targetSchema",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "bytes32",
+                  name: "parentUID",
                   type: "bytes32",
                 },
                 {
@@ -1176,7 +1186,7 @@ const deployedContracts = {
       },
     },
     Indexer: {
-      address: "0x2964cd229290C59B1Ed508D910fA167D4f89209c",
+      address: "0xCF4b5E9391a40caaC2ecDE28F9A001efEd63cd1B",
       abi: [
         {
           inputs: [
@@ -1265,6 +1275,37 @@ const deployedContracts = {
             {
               indexed: true,
               internalType: "bytes32",
+              name: "parentUID",
+              type: "bytes32",
+            },
+            {
+              indexed: true,
+              internalType: "bytes32",
+              name: "anchorUID",
+              type: "bytes32",
+            },
+            {
+              indexed: true,
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+            {
+              indexed: false,
+              internalType: "bytes32",
+              name: "anchorSchema",
+              type: "bytes32",
+            },
+          ],
+          name: "AnchorCreated",
+          type: "event",
+        },
+        {
+          anonymous: false,
+          inputs: [
+            {
+              indexed: true,
+              internalType: "bytes32",
               name: "uid",
               type: "bytes32",
             },
@@ -1282,6 +1323,75 @@ const deployedContracts = {
             },
           ],
           name: "AttestationIndexed",
+          type: "event",
+        },
+        {
+          anonymous: false,
+          inputs: [
+            {
+              indexed: true,
+              internalType: "bytes32",
+              name: "uid",
+              type: "bytes32",
+            },
+            {
+              indexed: true,
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+          ],
+          name: "AttestationRevoked",
+          type: "event",
+        },
+        {
+          anonymous: false,
+          inputs: [
+            {
+              indexed: true,
+              internalType: "bytes32",
+              name: "anchorUID",
+              type: "bytes32",
+            },
+            {
+              indexed: true,
+              internalType: "bytes32",
+              name: "dataUID",
+              type: "bytes32",
+            },
+            {
+              indexed: true,
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+          ],
+          name: "DataCreated",
+          type: "event",
+        },
+        {
+          anonymous: false,
+          inputs: [
+            {
+              indexed: true,
+              internalType: "bytes32",
+              name: "anchorUID",
+              type: "bytes32",
+            },
+            {
+              indexed: true,
+              internalType: "bytes32",
+              name: "propertyUID",
+              type: "bytes32",
+            },
+            {
+              indexed: true,
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+          ],
+          name: "PropertyCreated",
           type: "event",
         },
         {
@@ -2013,6 +2123,35 @@ const deployedContracts = {
               internalType: "bytes32[]",
               name: "",
               type: "bytes32[]",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "anchorUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+            {
+              internalType: "uint256",
+              name: "idx",
+              type: "uint256",
+            },
+          ],
+          name: "getChildrenByAttesterAt",
+          outputs: [
+            {
+              internalType: "bytes32",
+              name: "",
+              type: "bytes32",
             },
           ],
           stateMutability: "view",
@@ -3163,7 +3302,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     TagResolver: {
-      address: "0xAC0cd00e3B79781F9209a79F393ba4dDF4DdA1D7",
+      address: "0xd66eD298351D78E7771F5bB7AC3bdEE6272A96aA",
       abi: [
         {
           inputs: [

@@ -28,6 +28,23 @@ Because EAS is permissionless, anyone can attest files to a folder. To prevent O
 - **Append-Only Kernel**: EFSIndexer is the append-only kernel. Arrays are never modified after a write. When an attestation is revoked, `onRevoke` sets `_isRevoked[uid] = true` but leaves all arrays intact. This eliminates O(N) removal overhead and makes the storage model simpler and cheaper to write (deploy gas: ~2.35M vs ~3.8M for the old swap-and-pop design; revoke gas: ~90k vs ~200k).
 - **`showRevoked` filtering**: Every read function accepts a `bool showRevoked` parameter. When `false` (the default), the function scans forward and skips revoked UIDs, returning only active items. When `true`, revoked items are included — useful for history views and admin tooling.
 
+### Kernel Events (Off-Chain Indexing)
+EFSIndexer emits structured events from its native schema resolver hooks, enabling efficient off-chain indexing without scanning all EAS `Attested` events:
+
+```solidity
+event AnchorCreated(bytes32 indexed parentUID, bytes32 indexed anchorUID, address indexed attester, bytes32 anchorSchema);
+event DataCreated(bytes32 indexed anchorUID, bytes32 indexed dataUID, address indexed attester);
+event PropertyCreated(bytes32 indexed anchorUID, bytes32 indexed propertyUID, address indexed attester);
+event AttestationRevoked(bytes32 indexed uid, address indexed attester);
+```
+
+All four events are indexed on the most useful lookup fields. A Graph subgraph subscribing to these events can reconstruct full directory state without any additional contract reads during sync.
+
+`EFSSortOverlay` emits `ItemSorted(sortInfoUID, attester, itemUID, leftNeighbour, rightNeighbour)` for each item inserted into a sorted list — enabling The Graph to reconstruct sorted order off-chain.
+
+### Single-Element Kernel Access
+`getChildrenByAttesterAt(parentUID, attester, idx)` exposes direct index-based access into the `_childrenByAttester` array. Used internally by `EFSSortOverlay.processItems` to validate submitted items against the kernel — callers cannot inject arbitrary UIDs into their sorted view.
+
 ## Editions (Address-Based Namespaces)
 To support subjective file resolution natively onchain, the Indexer maintains additional append-only mappings:
 - **Core Referencing History**: `_allReferencing` and `_referencingByAttester` track immutable history, ensuring revocations do not break the chain of edits.

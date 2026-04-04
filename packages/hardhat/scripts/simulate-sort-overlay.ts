@@ -324,13 +324,9 @@ async function main() {
 
   const aliceLastIdx = Number(await overlay.getLastProcessedIndex(alphaInfoUID, aliceAddr));
   const aliceItems = await indexer["getChildrenByAttester(bytes32,address,uint256,uint256,bool)"](musicUID, aliceAddr, aliceLastIdx, 50, false);
-  const { leftHints: aliceLeft, rightHints: aliceRight } = await computeHints(
-    [...aliceItems],
-    [],
-    (alphabeticalSort as any).target,
-    alphaInfoUID,
-  );
-  await (await overlay.connect(alice).processItems(alphaInfoUID, [...aliceItems], aliceLeft, aliceRight)).wait();
+  // Use overlay.computeHints() — free eth_call, no client-side sort logic needed
+  const [aliceLeft, aliceRight] = await overlay.computeHints(alphaInfoUID, aliceAddr, [...aliceItems]);
+  await (await overlay.connect(alice).processItems(alphaInfoUID, [...aliceItems], [...aliceLeft], [...aliceRight])).wait();
 
   const aliceSorted = await readSortedAll(alphaInfoUID, aliceAddr);
   const aliceSortedNames = await Promise.all(aliceSorted.map(getName));
@@ -339,6 +335,18 @@ async function main() {
   assert("Alice sorted length = 4", aliceSorted.length === 4);
   assert("Alice order: apple < banana < mango < zebra", aliceSortedNames.join(",") === "apple.mp3,banana.mp3,mango.mp3,zebra.mp3");
   assert("Alice staleness = 0", (await overlay.getSortStaleness(alphaInfoUID, aliceAddr)) === 0n);
+
+  // ── Membership integrity: processItems rejects fabricated UIDs ───────────────
+  // Alice's sorted list is fully processed. Any attempt to submit an item that
+  // isn't next in her kernel array should revert with InvalidItem.
+  const fakeUID = ethers.keccak256(ethers.toUtf8Bytes("not-a-real-kernel-item"));
+  let rejectedFake = false;
+  try {
+    await (await overlay.connect(alice).processItems(alphaInfoUID, [fakeUID], [ethers.ZeroHash], [ethers.ZeroHash])).wait();
+  } catch {
+    rejectedFake = true;
+  }
+  assert("processItems rejects fabricated UIDs (InvalidItem)", rejectedFake);
 
   // ── overlay.computeHints cross-check ────────────────────────────────────────
   // Verify the contract-side computeHints produces the same results as the TS helper.
@@ -367,13 +375,8 @@ async function main() {
 
   const bobLastIdx = Number(await overlay.getLastProcessedIndex(alphaInfoUID, bobAddr));
   const bobItems = await indexer["getChildrenByAttester(bytes32,address,uint256,uint256,bool)"](musicUID, bobAddr, bobLastIdx, 50, false);
-  const { leftHints: bobLeft, rightHints: bobRight } = await computeHints(
-    [...bobItems],
-    [],
-    (alphabeticalSort as any).target,
-    alphaInfoUID,
-  );
-  await (await overlay.connect(bob).processItems(alphaInfoUID, [...bobItems], bobLeft, bobRight)).wait();
+  const [bobLeft, bobRight] = await overlay.computeHints(alphaInfoUID, bobAddr, [...bobItems]);
+  await (await overlay.connect(bob).processItems(alphaInfoUID, [...bobItems], [...bobLeft], [...bobRight])).wait();
 
   const bobSorted = await readSortedAll(alphaInfoUID, bobAddr);
   const bobSortedNames = await Promise.all(bobSorted.map(getName));
@@ -397,15 +400,9 @@ async function main() {
 
   const aliceLastIdx2 = Number(await overlay.getLastProcessedIndex(alphaInfoUID, aliceAddr));
   const aliceNewItems = await indexer["getChildrenByAttester(bytes32,address,uint256,uint256,bool)"](musicUID, aliceAddr, aliceLastIdx2, 50, false);
-  const aliceCurrentSorted = await readSortedAll(alphaInfoUID, aliceAddr);
-  const { leftHints: aliceLeft2, rightHints: aliceRight2 } = await computeHints(
-    [...aliceNewItems],
-    aliceCurrentSorted,
-    (alphabeticalSort as any).target,
-    alphaInfoUID,
-  );
+  const [aliceLeft2, aliceRight2] = await overlay.computeHints(alphaInfoUID, aliceAddr, [...aliceNewItems]);
   await (
-    await overlay.connect(alice).processItems(alphaInfoUID, [...aliceNewItems], aliceLeft2, aliceRight2)
+    await overlay.connect(alice).processItems(alphaInfoUID, [...aliceNewItems], [...aliceLeft2], [...aliceRight2])
   ).wait();
 
   const aliceFinalSorted = await readSortedAll(alphaInfoUID, aliceAddr);
@@ -767,7 +764,6 @@ async function main() {
   assert("getSortStaleness = 0 for Alice", sortStaleness === 0n, `got ${sortStaleness}`);
 
   console.log(`  Sort: "${namingAnchorName}" → sortFunc ${discoveredConfig.sortFunc}`);
-  console.log(`  NOTE: SORT_INFO UID discovery requires EAS Attested events (eth_getLogs), not EFSIndexer`);
 
   // ════════════════════════════════════════════════════════════════════════════════
   // PHASE 14: TimestampSort on a separate directory
@@ -783,13 +779,8 @@ async function main() {
   const tsInfoUID = await sortInfo(deployer, tsNameUID, (timestampSort as any).target);
 
   const vidItems = await indexer["getChildrenByAttester(bytes32,address,uint256,uint256,bool)"](vidDirUID, aliceAddr, 0, 50, false);
-  const { leftHints: tsLeft, rightHints: tsRight } = await computeHints(
-    [...vidItems],
-    [],
-    (timestampSort as any).target,
-    tsInfoUID,
-  );
-  await (await overlay.connect(alice).processItems(tsInfoUID, [...vidItems], tsLeft, tsRight)).wait();
+  const [tsLeft, tsRight] = await overlay.computeHints(tsInfoUID, aliceAddr, [...vidItems]);
+  await (await overlay.connect(alice).processItems(tsInfoUID, [...vidItems], [...tsLeft], [...tsRight])).wait();
 
   const tsSorted = await readSortedAll(tsInfoUID, aliceAddr);
   assert(

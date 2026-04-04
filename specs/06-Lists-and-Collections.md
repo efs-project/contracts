@@ -75,11 +75,12 @@ function processItems(
 ```
 
 **Flow per item:**
-1. Skip revoked items (`EFSIndexer.isRevoked(item) == true`) — still advance `_lastProcessedIndex`
-2. Skip ineligible items (`sortFunc.getSortKey(item, sortInfoUID)` returns empty) — still advance
-3. Validate position: `isLessThan(leftHint, item)` and `isLessThan(item, rightHint)` (sentinels skipped)
-4. Insert into sorted linked list between hints
-5. Emit `ItemSorted` event (for The Graph / off-chain indexers)
+1. **Validate membership**: `getChildrenByAttesterAt(parentUID, attester, lastProcessedIndex) == item` — reverts with `InvalidItem` if the submitted UID does not match the expected kernel position. This prevents callers from injecting arbitrary UIDs into their sorted list.
+2. Skip revoked items (`EFSIndexer.isRevoked(item) == true`) — still advance `_lastProcessedIndex`
+3. Skip ineligible items (`sortFunc.getSortKey(item, sortInfoUID)` returns empty) — still advance
+4. Validate position: `isLessThan(leftHint, item)` and `isLessThan(item, rightHint)` (sentinels skipped)
+5. Insert into sorted linked list between hints
+6. Emit `ItemSorted` event (for The Graph / off-chain indexers)
 
 Anyone can call `processItems` — gas is paid by the caller. The overlay is maintained lazily by whoever wants the sort maintained.
 

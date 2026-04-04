@@ -12,6 +12,20 @@ contract EFSIndexer is SchemaResolver {
     error InvalidAttestation();
     error AlreadyIndexed();
 
+    /// @notice Emitted when a new Anchor is created under a parent directory.
+    ///         Enables off-chain indexers (The Graph) to track directory structure changes
+    ///         without scanning all EAS Attested events.
+    event AnchorCreated(bytes32 indexed parentUID, bytes32 indexed anchorUID, address indexed attester, bytes32 anchorSchema);
+
+    /// @notice Emitted when a DATA attestation is attached to an Anchor (new file edition).
+    event DataCreated(bytes32 indexed anchorUID, bytes32 indexed dataUID, address indexed attester);
+
+    /// @notice Emitted when a PROPERTY attestation is attached to an Anchor.
+    event PropertyCreated(bytes32 indexed anchorUID, bytes32 indexed propertyUID, address indexed attester);
+
+    /// @notice Emitted when any EFS-native attestation (ANCHOR, DATA, PROPERTY, BLOB) is revoked.
+    event AttestationRevoked(bytes32 indexed uid, address indexed attester);
+
     /// @notice Emitted when an external attestation is indexed via the public index() API.
     event AttestationIndexed(bytes32 indexed uid, bytes32 indexed schema, address indexed attester);
 
@@ -209,6 +223,7 @@ contract EFSIndexer is SchemaResolver {
                 }
             }
 
+            emit AnchorCreated(parentUID, attestation.uid, attestation.attester, anchorSchema);
             return true;
         } else if (schema == DATA_SCHEMA_UID) {
             // VALIDATION: Check refUID is a valid Anchor AND matches DATA_SCHEMA constraint
@@ -236,6 +251,7 @@ contract EFSIndexer is SchemaResolver {
             // Index File Content Perspectives (Append-only by design, not deleted in onRevoke)
             _dataAttestationsByAddress[attestation.refUID][attestation.attester].push(attestation.uid);
 
+            emit DataCreated(attestation.refUID, attestation.uid, attestation.attester);
             return true;
         } else if (schema == PROPERTY_SCHEMA_UID) {
             // VALIDATION: Check refUID is a valid Anchor AND matches PROPERTY_SCHEMA constraint
@@ -257,6 +273,7 @@ contract EFSIndexer is SchemaResolver {
                 return false; // Floating anchor
             }
 
+            emit PropertyCreated(attestation.refUID, attestation.uid, attestation.attester);
             return true;
         }
 
@@ -267,6 +284,7 @@ contract EFSIndexer is SchemaResolver {
         // Kernel keeps all items forever. Revocation is just a flag.
         // Read functions use _isRevoked to filter when showRevoked=false.
         _isRevoked[attestation.uid] = true;
+        emit AttestationRevoked(attestation.uid, attestation.attester);
         return true;
     }
 
@@ -368,6 +386,19 @@ contract EFSIndexer is SchemaResolver {
 
     function getChildrenByAttesterCount(bytes32 anchorUID, address attester) external view returns (uint256) {
         return _childrenByAttester[anchorUID][attester].length;
+    }
+
+    /// @notice Read a single item from an attester's kernel array by physical index.
+    ///         Used by EFSSortOverlay.processItems to validate submitted items against the
+    ///         kernel before inserting them into the sorted linked list.
+    function getChildrenByAttesterAt(
+        bytes32 anchorUID,
+        address attester,
+        uint256 idx
+    ) external view returns (bytes32) {
+        bytes32[] storage arr = _childrenByAttester[anchorUID][attester];
+        require(idx < arr.length, "EFSIndexer: index out of bounds");
+        return arr[idx];
     }
 
     function getAnchorsBySchema(

@@ -208,6 +208,8 @@ describe("EFSSortOverlay", function () {
       expect(config.valid).to.equal(true);
       expect(config.revoked).to.equal(false);
       expect(config.sortFunc).to.equal(await alphSort.getAddress());
+      // parentUID is cached at onAttest time — no EAS call needed at read time
+      expect(config.parentUID).to.equal(parentUID);
     });
 
     it("should mark sort config revoked when SORT_INFO is revoked", async function () {
@@ -593,6 +595,80 @@ describe("EFSSortOverlay", function () {
   });
 
   // ============================================================================================
+  // processItems — ITEM MEMBERSHIP VALIDATION
+  // ============================================================================================
+
+  describe("processItems item membership validation", function () {
+    it("reverts with InvalidItem when item does not match expected kernel position", async function () {
+      const dirUID = await createAnchor(alice, "integrity-dir");
+      const f1 = await createAnchor(alice, "file1", dirUID);
+      const namingUID = await createAnchor(alice, "alpha", dirUID, sortInfoSchemaUID);
+      const sortInfoUID = await createSortInfo(alice, namingUID, await alphSort.getAddress());
+
+      // f1 is at kernel index 0. Passing namingUID (index 2) instead of f1 (index 0) should revert.
+      await expect(
+        sortOverlay.connect(alice).processItems(sortInfoUID, [namingUID], [ZERO_BYTES32], [ZERO_BYTES32]),
+      ).to.be.revertedWithCustomError(sortOverlay, "InvalidItem");
+    });
+
+    it("reverts with InvalidItem when a fabricated UID not in kernel is submitted", async function () {
+      const dirUID = await createAnchor(alice, "integrity-dir2");
+      const f1 = await createAnchor(alice, "real-file", dirUID);
+      const namingUID = await createAnchor(alice, "alpha", dirUID, sortInfoSchemaUID);
+      const sortInfoUID = await createSortInfo(alice, namingUID, await alphSort.getAddress());
+
+      const fakeUID = ethers.keccak256(ethers.toUtf8Bytes("not-a-real-kernel-item"));
+      await expect(
+        sortOverlay.connect(alice).processItems(sortInfoUID, [fakeUID], [ZERO_BYTES32], [ZERO_BYTES32]),
+      ).to.be.revertedWithCustomError(sortOverlay, "InvalidItem");
+    });
+
+    it("processes items correctly when submitted in exact kernel order", async function () {
+      const aliceAddr = await alice.getAddress();
+      const dirUID = await createAnchor(alice, "integrity-dir3");
+      const f1 = await createAnchor(alice, "zebra", dirUID);
+      const f2 = await createAnchor(alice, "apple", dirUID);
+      const namingUID = await createAnchor(alice, "alpha", dirUID, sortInfoSchemaUID);
+      const sortInfoUID = await createSortInfo(alice, namingUID, await alphSort.getAddress());
+
+      // Compute correct hints and process in kernel order [f1(zebra), f2(apple), namingUID(alpha)]
+      const [lefts, rights] = await sortOverlay.computeHints(sortInfoUID, aliceAddr, [f1, f2, namingUID]);
+      await sortOverlay.connect(alice).processItems(sortInfoUID, [f1, f2, namingUID], [...lefts], [...rights]);
+
+      const [sorted] = await sortOverlay.getSortedChunk(sortInfoUID, aliceAddr, ZERO_BYTES32, 10);
+      // Alphabetical: alpha(naming) < apple(f2) < zebra(f1)
+      expect(sorted[0]).to.equal(namingUID);
+      expect(sorted[1]).to.equal(f2);
+      expect(sorted[2]).to.equal(f1);
+    });
+
+    it("second batch starts from correct kernel position after first batch", async function () {
+      const aliceAddr = await alice.getAddress();
+      const dirUID = await createAnchor(alice, "integrity-dir4");
+      const f1 = await createAnchor(alice, "mango", dirUID);
+      const f2 = await createAnchor(alice, "banana", dirUID);
+      const f3 = await createAnchor(alice, "cherry", dirUID);
+      const namingUID = await createAnchor(alice, "alpha", dirUID, sortInfoSchemaUID);
+      const sortInfoUID = await createSortInfo(alice, namingUID, await alphSort.getAddress());
+
+      // Process first two items
+      const [lefts1, rights1] = await sortOverlay.computeHints(sortInfoUID, aliceAddr, [f1, f2]);
+      await sortOverlay.connect(alice).processItems(sortInfoUID, [f1, f2], [...lefts1], [...rights1]);
+      expect(await sortOverlay.getLastProcessedIndex(sortInfoUID, aliceAddr)).to.equal(2n);
+
+      // Trying to re-submit f1 (index 0) should revert — kernel position is now 2
+      await expect(
+        sortOverlay.connect(alice).processItems(sortInfoUID, [f1], [ZERO_BYTES32], [ZERO_BYTES32]),
+      ).to.be.revertedWithCustomError(sortOverlay, "InvalidItem");
+
+      // Processing the correct next items (f3, naming) succeeds
+      const [lefts2, rights2] = await sortOverlay.computeHints(sortInfoUID, aliceAddr, [f3, namingUID]);
+      await sortOverlay.connect(alice).processItems(sortInfoUID, [f3, namingUID], [...lefts2], [...rights2]);
+      expect(await sortOverlay.getSortLength(sortInfoUID, aliceAddr)).to.equal(4n);
+    });
+  });
+
+  // ============================================================================================
   // ON-CHAIN SORT_INFO DISCOVERY (via EFSIndexer.index())
   // ============================================================================================
 
@@ -656,7 +732,7 @@ describe("EFSSortOverlay", function () {
       const tsInfoUID = await createSortInfo(owner, tsNameUID, await tsSort.getAddress());
 
       // Step 1: discover naming anchors
-      const namingAnchors = await indexer.getAnchorsBySchema(dirUID, sortInfoSchemaUID, 0, 10, false, false);
+      const namingAnchors = await indexer["getAnchorsBySchema(bytes32,bytes32,uint256,uint256,bool,bool)"](dirUID, sortInfoSchemaUID, 0, 10, false, false);
       expect(namingAnchors.length).to.equal(2);
       expect(namingAnchors).to.include(alphaNameUID);
       expect(namingAnchors).to.include(tsNameUID);
