@@ -211,9 +211,12 @@ contract EFSSortOverlay is SchemaResolver {
                 continue;
             }
 
-            // Validate position: left < item and item < right (sentinels are unchecked)
-            if (left != bytes32(0) && !sortFunc.isLessThan(left, item, sortInfoUID)) revert InvalidPosition();
-            if (right != bytes32(0) && !sortFunc.isLessThan(item, right, sortInfoUID)) revert InvalidPosition();
+            // Validate position: left ≤ item ≤ right (equal keys are allowed; sentinels are unchecked).
+            // Uses negated comparisons so that equal sort keys don't reject valid inserts:
+            //   reject if item < left  (item sorts before its claimed left neighbour)
+            //   reject if right < item (item sorts after its claimed right neighbour)
+            if (left != bytes32(0) && sortFunc.isLessThan(item, left, sortInfoUID)) revert InvalidPosition();
+            if (right != bytes32(0) && sortFunc.isLessThan(right, item, sortInfoUID)) revert InvalidPosition();
 
             // Insert item between left and right in the sorted linked list
             _insertBetween(sortInfoUID, attester, item, left, right);
@@ -313,6 +316,9 @@ contract EFSSortOverlay is SchemaResolver {
     /// @dev Insert `item` between `leftNeighbour` and `rightNeighbour`. O(1).
     ///      leftNeighbour = bytes32(0) → item becomes the new head.
     ///      rightNeighbour = bytes32(0) → item becomes the new tail.
+    ///      Reverts with InvalidPosition if the two neighbours are not actually adjacent
+    ///      (catches concurrent processItems calls with stale hints that would otherwise
+    ///      overwrite list pointers and orphan a previously inserted node).
     function _insertBetween(
         bytes32 sortInfoUID,
         address attester,
@@ -320,6 +326,12 @@ contract EFSSortOverlay is SchemaResolver {
         bytes32 leftNeighbour,
         bytes32 rightNeighbour
     ) private {
+        // Verify adjacency: the node immediately after leftNeighbour must be rightNeighbour.
+        bytes32 expectedRight = leftNeighbour == bytes32(0)
+            ? _sortHeads[sortInfoUID][attester]
+            : _sortNodes[sortInfoUID][attester][leftNeighbour].next;
+        if (expectedRight != rightNeighbour) revert InvalidPosition();
+
         _sortNodes[sortInfoUID][attester][item] = Node({ prev: leftNeighbour, next: rightNeighbour });
 
         if (leftNeighbour != bytes32(0)) {

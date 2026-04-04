@@ -1074,6 +1074,12 @@ contract EFSIndexer is SchemaResolver {
         _indexed[uid] = true;
         _indexGlobal(att);
 
+        // Mirror revocation state: if the attestation was already revoked in EAS when indexed,
+        // mark it revoked now so callers don't need a separate indexRevocation() call.
+        if (att.revocationTime != 0) {
+            _isRevoked[uid] = true;
+        }
+
         emit AttestationIndexed(uid, schema, att.attester);
         return true;
     }
