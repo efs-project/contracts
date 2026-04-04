@@ -79,10 +79,10 @@ Files are stored via SSTORE2 chunking: content is split into 24KB chunks deploye
 
 ### Smart Contracts (deployed to Sepolia fork)
 
-- **`Indexer` (EFSIndexer)** — Core kernel. Manages schemas, resolver hooks, path resolution (`resolvePath`, `rootAnchorUID`), directory pagination, and revocation tracking (`isRevoked`). Read functions include `showRevoked` param for filtering. Public index API: `index(uid)`, `indexBatch(uids)`, `indexRevocation(uid)`, `isIndexed(uid)` — allows any EAS attestation from an external resolver to opt into EFSIndexer's discovery layer. Partner contract addresses and schema UIDs are set once after full deployment via `wireContracts()` (deployer-only, one-time) and queryable as public state: `TAG_SCHEMA_UID`, `SORT_INFO_SCHEMA_UID`, `tagResolver`, `sortOverlay`, `schemaRegistry` — single entry point for all schema/contract discovery. Emits `AnchorCreated`, `DataCreated`, `PropertyCreated`, `AttestationRevoked` events from native schema hooks — enables efficient off-chain indexing (The Graph) without scanning all EAS events. `getChildrenByAttesterAt(parentUID, attester, idx)` exposes single-element kernel array access by physical index.
+- **`Indexer` (EFSIndexer)** — Core kernel. Manages schemas, resolver hooks, path resolution (`resolvePath`, `rootAnchorUID`), directory pagination, and revocation tracking (`isRevoked`). Read functions include `showRevoked` param for filtering. Public index API: `index(uid)`, `indexBatch(uids)`, `indexRevocation(uid)`, `isIndexed(uid)` — allows any EAS attestation from an external resolver to opt into EFSIndexer's discovery layer. Partner contract addresses and schema UIDs are set once after full deployment via `wireContracts()` (deployer-only, one-time) and queryable as public state: `TAG_SCHEMA_UID`, `SORT_INFO_SCHEMA_UID`, `tagResolver`, `sortOverlay`, `schemaRegistry` — single entry point for all schema/contract discovery. Emits `AnchorCreated`, `DataCreated`, `PropertyCreated`, `AttestationRevoked` events from native schema hooks — enables efficient off-chain indexing (The Graph) without scanning all EAS events. `getChildrenByAttesterAt(parentUID, attester, idx)` exposes single-element kernel array access by physical index. `getAnchorsBySchemaAndAddressList(parentUID, anchorSchema, attesters, startCursor, pageSize, reverseOrder, showRevoked)` — schema + attester filtered pagination: intersects `_childrenBySchema[anchorSchema]` with `_containsAttestations` per attester — use to fetch only file Anchors (DATA_SCHEMA), only sort Anchors (SORT_INFO_SCHEMA), etc. from a multi-attester directory without mixing unrelated anchor types.
 - **`EFSRouter`** — Implements `IDecentralizedApp` for `web3://` URI resolution (ERC-5219 mode). Takes path segments and returns file content.
-- **`EFSFileView`** — Renders directory listings as HTML for browser access.
-- **`TagResolver`** — Singleton tagging pattern: one active tag per (attester, target, definition).
+- **`EFSFileView`** — Enriched directory listing views over EFSIndexer. `getDirectoryPage` (simple), `getDirectoryPageByAddressList` (attester-filtered), and `getDirectoryPageBySchemaAndAddressList(parentAnchor, anchorSchema, attesters, startingCursor, pageSize)` (schema + attester filtered — use this to fetch only file Anchors, only sort Anchors, etc. without mixing types). Returns `FileSystemItem[]` structs with metadata resolved from EAS.
+- **`TagResolver`** — Singleton tagging pattern: one active tag per (attester, target, definition). Wired to EFSIndexer: `onAttest` calls `indexer.index(uid)` and `onRevoke` calls `indexer.indexRevocation(uid)` — TAG attestations are discoverable via EFSIndexer's generic indices (`getReferencingAttestations`, `getOutgoingAttestations`, etc.) just like any other schema.
 - **`EFSSortOverlay`** — Per-attester sorted linked lists for SORT_INFO schemas. `processItems(sortInfoUID, items, leftHints, rightHints)` lazily processes kernel items — validates each item against the kernel via `getChildrenByAttesterAt` before inserting (integrity guarantee: callers cannot inject arbitrary UIDs). `getSortedChunk(sortInfoUID, attester, startNode, limit)` for cursor-based pagination. `getSortStaleness(sortInfoUID, attester)` shows unprocessed count. `computeHints(sortInfoUID, attester, newItems)` is a view function (free `eth_call`) that computes correct `leftHints`/`rightHints` using binary search — no client-side sort logic needed. `SortConfig` caches `parentUID` at attest time (no EAS call chain needed at read time). Calls `indexer.index()` and `indexer.indexRevocation()` from its resolver hooks so SORT_INFO attestations are fully discoverable on-chain via `getReferencingAttestations`.
 - **`AlphabeticalSort`** / **`TimestampSort`** — Reference `ISortFunc` implementations.
 - Deploy scripts: `01_indexer.ts` → `02_fileview.ts` → `03_router.ts` → `04_sortoverlay.ts`
@@ -118,11 +118,18 @@ EAS contracts (Sepolia addresses used in fork):
 - `useDeployedContractInfo` — gets ABI + address for a contract name
 - `useTargetNetwork` — returns the configured chain from `scaffold.config.ts`
 
-**`getDirectoryPageByAddressList` signature** (important — only 4 args):
+**`EFSFileView` API signatures** (important — arg counts vary per function):
 ```ts
-getDirectoryPageByAddressList(parentAnchor: bytes32, attesters: address[], startingCursor: uint256, pageSize: uint256)
+// All children, insertion order (basic paging)
+getDirectoryPage(parentAnchor, start, length, dataSchemaUID, propertySchemaUID)
+
+// All children filtered by attester set (4 args — no schema UIDs)
+getDirectoryPageByAddressList(parentAnchor, attesters, startingCursor, pageSize)
+
+// Children of a specific anchorSchema filtered by attester set (5 args)
+getDirectoryPageBySchemaAndAddressList(parentAnchor, anchorSchema, attesters, startingCursor, pageSize)
 ```
-Do NOT pass `dataSchemaUID` or `propertySchemaUID` — those are only on `getDirectoryPage`.
+`getDirectoryPage` is the only variant that takes `dataSchemaUID`/`propertySchemaUID` explicitly — the others read them from the indexer. Use `getDirectoryPageBySchemaAndAddressList` to fetch only file Anchors, only sort Anchors, etc.
 
 ### Dev Wallet Switcher
 

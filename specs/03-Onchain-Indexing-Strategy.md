@@ -51,6 +51,7 @@ To support subjective file resolution natively onchain, the Indexer maintains ad
 - **Subjective File Content**: `_dataAttestationsByAddress` tracks user iterations of a file payload. Clients use `getDataByAddressList` with a list of trusted addresses to auto-fallback and resolve the highest-trusted active file version in fast time.
 - **Deduplicated Directory Listings**: `getChildrenByAddressList` walks the global `_children` array (unique, insertion order) and includes only items where any of the provided attesters has contributed — no duplicates possible. Use this for rendering a flat directory view filtered to a set of trusted addresses.
 - **Round-Robin Directory Listings**: `getChildrenByAddressListInterleaved` implements fair round-robin pagination across per-attester arrays — gives each attester equal representation. May return the same anchor more than once when multiple attesters contributed to it. Use this for "whose work appears most" views or balanced multi-attester feeds.
+- **Schema + Attester Filtered Listings**: `getAnchorsBySchemaAndAddressList(parentUID, anchorSchema, attesters, startCursor, pageSize, reverseOrder, showRevoked)` intersects `_childrenBySchema[anchorSchema]` with `_containsAttestations` per attester. Use this when the caller wants a specific anchor type (e.g. `DATA_SCHEMA_UID` for file anchors, `SORT_INFO_SCHEMA_UID` for sort anchors) from a multi-attester directory without interleaving unrelated anchor types. This is the correct API for schema-aware directory browsing — EAS schemas are the fundamental unit of data classification, and directories can contain mixed Anchor types (files, sorts, metadata) that should be queried independently.
 
 ### `_childrenByAttester` Propagation Behaviour
 `_childrenByAttester[parentUID][attester]` is not limited to items the attester *created*. When an attester submits **any** attestation whose `refUID` chains up to a directory, the attester is considered "active" in that directory and the relevant ancestor anchors are pushed into their perspective arrays. In practice this means:
@@ -89,6 +90,19 @@ The resolver maintains append-only discovery indices:
 - **Targets by Definition**: Which targets have ever been tagged with a given definition (`_taggedTargets[definition]`).
 
 These indices only grow; revoked or negated tags are **not** removed from them. Consumers must cross-reference `getActiveTagUID` to determine whether a discovered entry is still active.
+
+### EFSIndexer Integration
+`TagResolver` is wired to EFSIndexer: `onAttest` calls `indexer.index(uid)` and `onRevoke` calls `indexer.indexRevocation(uid)`. This means TAG attestations are fully registered in EFSIndexer's generic discovery indices alongside all other schemas:
+
+```
+indexer.getReferencingAttestations(targetUID, TAG_SCHEMA_UID, 0, 100, false)
+  → all TAG attestations targeting a given anchor or address
+
+indexer.getOutgoingAttestations(attester, TAG_SCHEMA_UID, 0, 100, false)
+  → all TAG attestations made by a specific user
+```
+
+**Schema-aware queries are the correct pattern**: Because tags now share the EFSIndexer discovery layer with other schemas, callers must specify `schemaUID` when they want schema-specific results. A call for file Anchors in a directory should pass `DATA_SCHEMA_UID`; a call for tags on a target should pass `TAG_SCHEMA_UID`. Mixing schemas in a single query is intentional only when building a generic history view.
 
 ### On-Chain Query Functions
 - `getActiveTagUID(attester, targetID, definition)` — Returns the active tag attestation UID for a specific triple. Returns zero if no active tag exists (never set, revoked, or the active attestation was for a different triple).
@@ -176,9 +190,14 @@ EFSIndexer exposes a permissionless indexing API for any EAS attestation whose s
 - **`indexRevocation(bytes32 uid)`** — mirrors a revocation from EAS into `_isRevoked`. Call after `eas.revoke()` to make `isRevoked()` return true for externally-resolved schemas. Requires the attestation to already be revoked in EAS. Idempotent. Emits `RevocationIndexed`.
 - **`isIndexed(bytes32 uid) → bool`** — returns true if a UID was indexed via the public API (not via `onAttest`).
 
-**How EFSSortOverlay uses this:**
+**How EFSSortOverlay and TagResolver use this:**
 ```
-onAttest → indexer.index(attestation.uid)        // makes SORT_INFO discoverable
+// EFSSortOverlay
+onAttest → indexer.index(attestation.uid)           // makes SORT_INFO discoverable
+onRevoke → indexer.indexRevocation(attestation.uid) // syncs revocation state
+
+// TagResolver
+onAttest → indexer.index(attestation.uid)           // makes TAG attestations discoverable
 onRevoke → indexer.indexRevocation(attestation.uid) // syncs revocation state
 ```
 

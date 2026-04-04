@@ -92,6 +92,8 @@ function getSortStaleness(bytes32 sortInfoUID, address attester) external view r
 
 `staleness = kernelCount - lastProcessedIndex`. UI shows: "Alphabetical: 3 items behind".
 
+**Note — conservative upper bound**: Staleness counts all unprocessed kernel items, including items that `ISortFunc.getSortKey` would deem ineligible (wrong schema, corrupted data, etc.). Ineligible items advance `_lastProcessedIndex` without entering the sorted list. So staleness may be slightly higher than the number of items that will actually be inserted. This is by design — checking eligibility on-chain for every unprocessed item would be prohibitively expensive as a read call. The UI should show staleness as "up to N items behind" rather than an exact count.
+
 ### getSortedChunk (cursor pagination)
 
 ```solidity
@@ -132,12 +134,16 @@ When browsing `/memes/` (Anchor uid=0xAAA, attester = alice):
    getAnchorsBySchema(0xAAA, SORT_INFO_SCHEMA_UID, 0, 50, false, false)
    → [alphabetical-namingUID, newest-first-namingUID]
 
-   Fetch file children (attester-filtered for alice's files):
-   getChildrenByAttester(0xAAA, alice, 0, 50, false, false)
-   → [cat.jpg, dog.jpg, hamster.gif]
+   Fetch file children from multiple attesters (schema-filtered):
+   getAnchorsBySchemaAndAddressList(0xAAA, DATA_SCHEMA_UID, [alice, bob], 0, 50, true, false)
+   → [cat.jpg, dog.jpg, hamster.gif]  (only DATA-schema anchors, deduped)
 
-   Note: sort naming anchors do NOT appear in getChildrenByAttester because
-   they were created by the directory owner, not alice.
+   Or for a single attester:
+   getChildrenByAttester(0xAAA, alice, 0, 50, false, false)
+   → [cat.jpg, dog.jpg, hamster.gif]  (alice's items; sort anchors she didn't create won't appear)
+
+   Note: sort naming anchors have anchorSchema = SORT_INFO_SCHEMA_UID.
+   Schema-filtered queries keep them out of file listings automatically.
 
 2. Resolve SORT_INFO UID for each naming anchor (fully on-chain):
    getReferencingAttestations(namingAnchorUID, SORT_INFO_SCHEMA_UID, 0, 10, false)
