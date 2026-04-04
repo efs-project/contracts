@@ -419,12 +419,12 @@ describe("EFSIndexer", function () {
 
     it("Should paginate children (Forward)", async function () {
       // Updated signature: getChildren(uid, start, length, reverse, showRevoked)
-      const page1 = await indexer.getChildren(parentUID, 0, 2, false, false);
+      const page1 = await indexer["getChildren(bytes32,uint256,uint256,bool,bool)"](parentUID, 0, 2, false, false);
       expect(page1.length).to.equal(2);
       expect(page1[0]).to.equal(child1UID);
       expect(page1[1]).to.equal(child2UID);
 
-      const page2 = await indexer.getChildren(parentUID, 2, 2, false, false);
+      const page2 = await indexer["getChildren(bytes32,uint256,uint256,bool,bool)"](parentUID, 2, 2, false, false);
       expect(page2.length).to.equal(1);
       expect(page2[0]).to.equal(child3UID);
 
@@ -435,7 +435,7 @@ describe("EFSIndexer", function () {
     it("Should paginate children (Reverse)", async function () {
       // Updated signature: getChildren(uid, start, length, reverse, showRevoked)
       // Reverse: start 0 means "latest"
-      const page1 = await indexer.getChildren(parentUID, 0, 2, true, false);
+      const page1 = await indexer["getChildren(bytes32,uint256,uint256,bool,bool)"](parentUID, 0, 2, true, false);
       expect(page1.length).to.equal(2);
       expect(page1[0]).to.equal(child3UID); // Last added is first
       expect(page1[1]).to.equal(child2UID);
@@ -546,22 +546,22 @@ describe("EFSIndexer", function () {
     it("Should index by mime type and category", async function () {
       // Verify getChildrenByType("video/mp4") on Parent ("files")
       // Should return "my_video.mp4" (fileUID)
-      const videos = await indexer.getChildrenByType(parentUID, "video/mp4", 0, 10, false, false);
+      const videos = await indexer["getChildrenByType(bytes32,string,uint256,uint256,bool,bool)"](parentUID, "video/mp4", 0, 10, false, false);
       expect(videos).to.include(fileUID);
 
       // Verify getChildrenByType("video") - Category
-      const category = await indexer.getChildrenByType(parentUID, "video", 0, 10, false, false);
+      const category = await indexer["getChildrenByType(bytes32,string,uint256,uint256,bool,bool)"](parentUID, "video", 0, 10, false, false);
       expect(category).to.include(fileUID);
     });
 
     it("Should filter by Attester", async function () {
       // Filter children of "files" by User A
-      const u1Files = await indexer.getChildrenByAttester(parentUID, await user1.getAddress(), 0, 10, false, false);
+      const u1Files = await indexer["getChildrenByAttester(bytes32,address,uint256,uint256,bool,bool)"](parentUID, await user1.getAddress(), 0, 10, false, false);
       expect(u1Files.length).to.equal(1);
       expect(u1Files[0]).to.equal(userFileUID);
 
       // Filter children of "files" by User B
-      const u2Files = await indexer.getChildrenByAttester(parentUID, await user2.getAddress(), 0, 10, false, false);
+      const u2Files = await indexer["getChildrenByAttester(bytes32,address,uint256,uint256,bool,bool)"](parentUID, await user2.getAddress(), 0, 10, false, false);
       expect(u2Files.length).to.equal(1);
       expect(u2Files[0]).to.equal(user2FileUID);
     });
@@ -714,7 +714,7 @@ describe("EFSIndexer", function () {
 
     it("getChildrenByAttester with showRevoked=true includes all; COUNT is total physical length", async function () {
       // child1 and child2 are both added by user1 under parentUID
-      const all = await indexer.getChildrenByAttester(parentUID, await user1.getAddress(), 0, 10, true, true);
+      const all = await indexer["getChildrenByAttester(bytes32,address,uint256,uint256,bool,bool)"](parentUID, await user1.getAddress(), 0, 10, true, true);
       expect(all.length).to.equal(2);
 
       const count = await indexer.getChildrenByAttesterCount(parentUID, await user1.getAddress());
@@ -894,17 +894,17 @@ describe("EFSIndexer", function () {
         const fileUID = getUIDFromReceipt(receiptFile);
 
         // 3. Verify getAnchorsBySchema(Property)
-        const props = await indexer.getAnchorsBySchema(parentUID, propertySchemaUID, 0, 10, false, false);
+        const props = await indexer["getAnchorsBySchema(bytes32,bytes32,uint256,uint256,bool,bool)"](parentUID, propertySchemaUID, 0, 10, false, false);
         expect(props.length).to.equal(1);
         expect(props[0]).to.equal(propUID);
 
         // 4. Verify getAnchorsBySchema(Data)
-        const files = await indexer.getAnchorsBySchema(parentUID, dataSchemaUID, 0, 10, false, false);
+        const files = await indexer["getAnchorsBySchema(bytes32,bytes32,uint256,uint256,bool,bool)"](parentUID, dataSchemaUID, 0, 10, false, false);
         expect(files.length).to.equal(1);
         expect(files[0]).to.equal(fileUID);
 
         // 5. Verify Generic Children contains ALL
-        const all = await indexer.getChildren(parentUID, 0, 10, false, false);
+        const all = await indexer["getChildren(bytes32,uint256,uint256,bool,bool)"](parentUID, 0, 10, false, false);
         expect(all.length).to.equal(2);
         expect(all).to.include(propUID);
         expect(all).to.include(fileUID);
@@ -1315,7 +1315,7 @@ describe("EFSIndexer", function () {
 
       // Page 1: pageSize = 4, reverseOrder = false. Should grab 2 from U1, 2 from U2.
       // Order: u1_1, u2_1, u1_2, u2_2
-      const [page1Results, page1Cursor] = await indexer.getChildrenByAddressList(
+      const [page1Results, page1Cursor] = await indexer.getChildrenByAddressListInterleaved(
         parentUID,
         [u1Address, u2Address],
         0n,
@@ -1333,7 +1333,7 @@ describe("EFSIndexer", function () {
 
       // Page 2: use page1Cursor. Should pick up where it left off.
       // Order: u1_3, u2_3
-      const [page2Results, _page2Cursor] = await indexer.getChildrenByAddressList(
+      const [page2Results, _page2Cursor] = await indexer.getChildrenByAddressListInterleaved(
         parentUID,
         [u1Address, u2Address],
         page1Cursor,
@@ -1397,7 +1397,7 @@ describe("EFSIndexer", function () {
       const u2Address = await user2.getAddress();
 
       // Page 1: pageSize = 4
-      const [page1Results, page1Cursor] = await indexer.getChildrenByAddressList(
+      const [page1Results, page1Cursor] = await indexer.getChildrenByAddressListInterleaved(
         parentUID,
         [u1Address, u2Address],
         0n,
@@ -1413,7 +1413,7 @@ describe("EFSIndexer", function () {
       expect(page1Results[3]).to.equal(u1Files[2]); // u2 is exhausted
 
       // Page 2: pageSize = 4
-      const [page2Results, _page2Cursor] = await indexer.getChildrenByAddressList(
+      const [page2Results, _page2Cursor] = await indexer.getChildrenByAddressListInterleaved(
         parentUID,
         [u1Address, u2Address],
         page1Cursor,
@@ -1447,7 +1447,7 @@ describe("EFSIndexer", function () {
       const u1File = await createFile(user1, "u1_1");
       const u2File = await createFile(user2, "u2_1");
 
-      const [res, _cursor] = await indexer.getChildrenByAddressList(
+      const [res, _cursor] = await indexer.getChildrenByAddressListInterleaved(
         parentUID,
         [await owner.getAddress(), await user1.getAddress(), await user2.getAddress()],
         0n,
@@ -1460,6 +1460,167 @@ describe("EFSIndexer", function () {
       expect(res[0]).to.equal(fileAnchorUID); // Owner's first file created in beforeEach
       expect(res[1]).to.equal(u1File);
       expect(res[2]).to.equal(u2File);
+    });
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // getChildrenByAddressList — deduplicated, global insertion order
+    // ──────────────────────────────────────────────────────────────────────────
+
+    it("getChildrenByAddressList: returns unique items in insertion order", async function () {
+      const schemaEncoder = new ethers.AbiCoder();
+      const createAnchor = async (signer: Signer, name: string) => {
+        const tx = await eas.connect(signer).attest({
+          schema: anchorSchemaUID,
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: 0n,
+            revocable: false,
+            refUID: parentUID,
+            data: schemaEncoder.encode(["string", "bytes32"], [name, ZERO_BYTES32]),
+            value: 0n,
+          },
+        });
+        return getUIDFromReceipt(await tx.wait());
+      };
+
+      const u1Addr = await user1.getAddress();
+      const u2Addr = await user2.getAddress();
+
+      const f1 = await createAnchor(user1, "alpha");
+      const f2 = await createAnchor(user2, "beta");
+      const f3 = await createAnchor(user1, "gamma");
+
+      const [results] = await indexer.getChildrenByAddressList(parentUID, [u1Addr, u2Addr], 0n, 10, false, false);
+
+      // Returns the 3 items created by user1/user2 (beforeEach item was created by owner, not filtered in)
+      expect(results.length).to.equal(3);
+      expect(results[0]).to.equal(f1);
+      expect(results[1]).to.equal(f2);
+      expect(results[2]).to.equal(f3);
+    });
+
+    it("getChildrenByAddressList: no duplicates when multiple attesters contribute to same anchor", async function () {
+      const schemaEncoder = new ethers.AbiCoder();
+      const u1Addr = await user1.getAddress();
+      const u2Addr = await user2.getAddress();
+
+      // user2 attests DATA to the anchor user1 created (fileAnchorUID from beforeEach)
+      await eas.connect(user2).attest({
+        schema: dataSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: 0n,
+          revocable: true,
+          refUID: fileAnchorUID,
+          data: new ethers.AbiCoder().encode(["string", "string", "string"], ["ipfs://u2", "text/plain", "file"]),
+          value: 0n,
+        },
+      });
+
+      // Both user1 and user2 now have _containsAttestations[fileAnchorUID] = true.
+      // getChildrenByAddressList must return the anchor exactly once.
+      const [results] = await indexer.getChildrenByAddressList(parentUID, [u1Addr, u2Addr], 0n, 10, false, false);
+      expect(results.length).to.equal(1);
+      expect(results[0]).to.equal(fileAnchorUID);
+    });
+
+    it("getChildrenByAddressList: cursor pagination returns all items exactly once", async function () {
+      const schemaEncoder = new ethers.AbiCoder();
+      const u1Addr = await user1.getAddress();
+
+      for (let i = 0; i < 9; i++) {
+        await eas.connect(user1).attest({
+          schema: anchorSchemaUID,
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: 0n,
+            revocable: false,
+            refUID: parentUID,
+            data: schemaEncoder.encode(["string", "bytes32"], [`file_${i}`, ZERO_BYTES32]),
+            value: 0n,
+          },
+        });
+      }
+      // beforeEach item was created by owner (not user1), so only 9 items match the [u1Addr] filter
+
+      const all: string[] = [];
+      let cursor = 0n;
+      do {
+        const [page, next] = await indexer.getChildrenByAddressList(parentUID, [u1Addr], cursor, 3, false, false);
+        all.push(...page);
+        cursor = next;
+      } while (cursor !== 0n);
+
+      expect(all.length).to.equal(9);
+      expect(new Set(all).size).to.equal(9); // no duplicates
+    });
+
+    it("getChildrenByAddressList: attester filter — only items ANY attester contributed to", async function () {
+      const schemaEncoder = new ethers.AbiCoder();
+      const ownerAddr = await owner.getAddress();
+      const u1Addr = await user1.getAddress();
+
+      await eas.connect(user1).attest({
+        schema: anchorSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: 0n,
+          revocable: false,
+          refUID: parentUID,
+          data: schemaEncoder.encode(["string", "bytes32"], ["user1only", ZERO_BYTES32]),
+          value: 0n,
+        },
+      });
+
+      // Only include user1's item, not owner's (fileAnchorUID from beforeEach)
+      const [onlyU1] = await indexer.getChildrenByAddressList(parentUID, [u1Addr], 0n, 10, false, false);
+      expect(onlyU1.length).to.equal(1);
+
+      // Include both
+      const [both] = await indexer.getChildrenByAddressList(parentUID, [ownerAddr, u1Addr], 0n, 10, false, false);
+      expect(both.length).to.equal(2);
+    });
+
+    it("getChildrenByAddressList: reverseOrder returns items newest-first", async function () {
+      const schemaEncoder = new ethers.AbiCoder();
+      const u1Addr = await user1.getAddress();
+
+      const newAnchor = await (async () => {
+        const tx = await eas.connect(user1).attest({
+          schema: anchorSchemaUID,
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: 0n,
+            revocable: false,
+            refUID: parentUID,
+            data: schemaEncoder.encode(["string", "bytes32"], ["newest", ZERO_BYTES32]),
+            value: 0n,
+          },
+        });
+        return getUIDFromReceipt(await tx.wait());
+      })();
+
+      const ownerAddr = await owner.getAddress();
+      const [fwd] = await indexer.getChildrenByAddressList(
+        parentUID,
+        [ownerAddr, u1Addr],
+        0n,
+        10,
+        false,
+        false,
+      );
+      const [rev] = await indexer.getChildrenByAddressList(
+        parentUID,
+        [ownerAddr, u1Addr],
+        0n,
+        10,
+        true,
+        false,
+      );
+
+      expect(fwd[0]).to.equal(fileAnchorUID); // oldest first
+      expect(rev[0]).to.equal(newAnchor); // newest first
+      expect(fwd.length).to.equal(rev.length);
     });
   });
 

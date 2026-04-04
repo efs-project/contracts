@@ -14,7 +14,7 @@ interface IEFSIndexer {
     function getChildrenByAddressList(
         bytes32 parentUID,
         address[] calldata attesters,
-        uint256 startingCursor,
+        uint256 startCursor,
         uint256 pageSize,
         bool reverseOrder,
         bool showRevoked

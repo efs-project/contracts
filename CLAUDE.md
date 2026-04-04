@@ -38,8 +38,9 @@ yarn lint              # Lint both packages
 yarn format            # Format both packages
 
 # Hardhat package directly
-yarn hardhat:test      # Run contract tests with gas reporting
-yarn hardhat:simulate  # Run simulate-file-browser.ts script against localhost
+yarn hardhat:test           # Run contract tests with gas reporting
+yarn hardhat:simulate       # Run simulate-file-browser.ts script against localhost
+yarn hardhat:simulate:sort  # Run simulate-sort-overlay.ts script against localhost
 
 # Next.js package directly
 yarn next:build        # Production build
@@ -78,11 +79,11 @@ Files are stored via SSTORE2 chunking: content is split into 24KB chunks deploye
 
 ### Smart Contracts (deployed to Sepolia fork)
 
-- **`Indexer` (EFSIndexer)** — Core kernel. Manages schemas, resolver hooks, path resolution (`resolvePath`, `rootAnchorUID`), directory pagination, and revocation tracking (`isRevoked`). Read functions include `showRevoked` param for filtering.
+- **`Indexer` (EFSIndexer)** — Core kernel. Manages schemas, resolver hooks, path resolution (`resolvePath`, `rootAnchorUID`), directory pagination, and revocation tracking (`isRevoked`). Read functions include `showRevoked` param for filtering. Public index API: `index(uid)`, `indexBatch(uids)`, `indexRevocation(uid)`, `isIndexed(uid)` — allows any EAS attestation from an external resolver to opt into EFSIndexer's discovery layer. Partner contract addresses and schema UIDs are set once after full deployment via `wireContracts()` (deployer-only, one-time) and queryable as public state: `TAG_SCHEMA_UID`, `SORT_INFO_SCHEMA_UID`, `tagResolver`, `sortOverlay`, `schemaRegistry` — single entry point for all schema/contract discovery.
 - **`EFSRouter`** — Implements `IDecentralizedApp` for `web3://` URI resolution (ERC-5219 mode). Takes path segments and returns file content.
 - **`EFSFileView`** — Renders directory listings as HTML for browser access.
 - **`TagResolver`** — Singleton tagging pattern: one active tag per (attester, target, definition).
-- **`EFSSortOverlay`** — Per-attester sorted linked lists for SORT_INFO schemas. `processItems(sortInfoUID, items, leftHints, rightHints)` lazily processes kernel items. `getSortedChunk(sortInfoUID, attester, startNode, limit)` for cursor-based pagination. `getSortStaleness(sortInfoUID, attester)` shows unprocessed count.
+- **`EFSSortOverlay`** — Per-attester sorted linked lists for SORT_INFO schemas. `processItems(sortInfoUID, items, leftHints, rightHints)` lazily processes kernel items. `getSortedChunk(sortInfoUID, attester, startNode, limit)` for cursor-based pagination. `getSortStaleness(sortInfoUID, attester)` shows unprocessed count. `computeHints(sortInfoUID, attester, newItems)` is a view function (free `eth_call`) that computes correct `leftHints`/`rightHints` for a `processItems` batch — no client-side sort logic needed. Calls `indexer.index()` and `indexer.indexRevocation()` from its resolver hooks so SORT_INFO attestations are fully discoverable on-chain via `getReferencingAttestations`.
 - **`AlphabeticalSort`** / **`TimestampSort`** — Reference `ISortFunc` implementations.
 - Deploy scripts: `01_indexer.ts` → `02_fileview.ts` → `03_router.ts` → `04_sortoverlay.ts`
 

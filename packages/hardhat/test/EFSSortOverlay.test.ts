@@ -591,4 +591,107 @@ describe("EFSSortOverlay", function () {
       ).to.be.revertedWithCustomError(sortOverlay, "InvalidSortInfo");
     });
   });
+
+  // ============================================================================================
+  // ON-CHAIN SORT_INFO DISCOVERY (via EFSIndexer.index())
+  // ============================================================================================
+
+  describe("on-chain SORT_INFO discovery via EFSIndexer.index()", function () {
+    it("SORT_INFO UID is discoverable via getReferencingAttestations after attestation", async function () {
+      const dirUID = await createAnchor(owner, "dir");
+      const namingUID = await createAnchor(owner, "alpha", dirUID, sortInfoSchemaUID);
+      const sortInfoUID = await createSortInfo(owner, namingUID, await alphSort.getAddress());
+
+      // EFSSortOverlay.onAttest calls indexer.index() — so this should now work on-chain
+      const refs = await indexer.getReferencingAttestations(namingUID, sortInfoSchemaUID, 0, 10, false);
+      expect(refs.length).to.equal(1);
+      expect(refs[0]).to.equal(sortInfoUID);
+    });
+
+    it("SORT_INFO UID is in getAttestationsBySchema after attestation", async function () {
+      const dirUID = await createAnchor(owner, "dir2");
+      const namingUID = await createAnchor(owner, "ts", dirUID, sortInfoSchemaUID);
+      const sortInfoUID = await createSortInfo(owner, namingUID, await tsSort.getAddress());
+
+      const all = await indexer.getAttestationsBySchema(sortInfoSchemaUID, 0, 10, false);
+      expect(all).to.include(sortInfoUID);
+    });
+
+    it("SORT_INFO UID is in getOutgoingAttestations for the attester", async function () {
+      const dirUID = await createAnchor(alice, "dir3");
+      const namingUID = await createAnchor(alice, "by-date", dirUID, sortInfoSchemaUID);
+      const sortInfoUID = await createSortInfo(alice, namingUID, await tsSort.getAddress());
+
+      const aliceAddr = await alice.getAddress();
+      const outgoing = await indexer.getOutgoingAttestations(aliceAddr, sortInfoSchemaUID, 0, 10, false);
+      expect(outgoing).to.include(sortInfoUID);
+    });
+
+    it("isIndexed returns true for SORT_INFO after attestation", async function () {
+      const dirUID = await createAnchor(owner, "dir4");
+      const namingUID = await createAnchor(owner, "alpha2", dirUID, sortInfoSchemaUID);
+      const sortInfoUID = await createSortInfo(owner, namingUID, await alphSort.getAddress());
+
+      expect(await indexer.isIndexed(sortInfoUID)).to.be.true;
+    });
+
+    it("revoked SORT_INFO is reflected in isRevoked after revocation", async function () {
+      const dirUID = await createAnchor(owner, "dir5");
+      const namingUID = await createAnchor(owner, "alpha3", dirUID, sortInfoSchemaUID);
+      const sortInfoUID = await createSortInfo(owner, namingUID, await alphSort.getAddress());
+
+      expect(await indexer.isRevoked(sortInfoUID)).to.be.false;
+
+      await eas.connect(owner).revoke({ schema: sortInfoSchemaUID, data: { uid: sortInfoUID, value: 0n } });
+
+      expect(await indexer.isRevoked(sortInfoUID)).to.be.true;
+    });
+
+    it("full discovery chain: getAnchorsBySchema → getReferencingAttestations → getSortConfig", async function () {
+      const dirUID = await createAnchor(owner, "dir6");
+      // Create two sorts under the directory
+      const alphaNameUID = await createAnchor(owner, "alphabetical", dirUID, sortInfoSchemaUID);
+      const tsNameUID = await createAnchor(owner, "by-date", dirUID, sortInfoSchemaUID);
+      const alphaInfoUID = await createSortInfo(owner, alphaNameUID, await alphSort.getAddress());
+      const tsInfoUID = await createSortInfo(owner, tsNameUID, await tsSort.getAddress());
+
+      // Step 1: discover naming anchors
+      const namingAnchors = await indexer.getAnchorsBySchema(dirUID, sortInfoSchemaUID, 0, 10, false, false);
+      expect(namingAnchors.length).to.equal(2);
+      expect(namingAnchors).to.include(alphaNameUID);
+      expect(namingAnchors).to.include(tsNameUID);
+
+      // Step 2: for each naming anchor, find SORT_INFO UIDs — fully on-chain
+      const alphaRefs = await indexer.getReferencingAttestations(alphaNameUID, sortInfoSchemaUID, 0, 10, false);
+      expect(alphaRefs.length).to.equal(1);
+      expect(alphaRefs[0]).to.equal(alphaInfoUID);
+
+      const tsRefs = await indexer.getReferencingAttestations(tsNameUID, sortInfoSchemaUID, 0, 10, false);
+      expect(tsRefs.length).to.equal(1);
+      expect(tsRefs[0]).to.equal(tsInfoUID);
+
+      // Step 3: read sort config
+      const alphaConfig = await sortOverlay.getSortConfig(alphaInfoUID);
+      expect(alphaConfig.valid).to.be.true;
+      expect(alphaConfig.sortFunc.toLowerCase()).to.equal((await alphSort.getAddress()).toLowerCase());
+
+      const tsConfig = await sortOverlay.getSortConfig(tsInfoUID);
+      expect(tsConfig.valid).to.be.true;
+      expect(tsConfig.sortFunc.toLowerCase()).to.equal((await tsSort.getAddress()).toLowerCase());
+    });
+
+    it("multiple SORT_INFO attesters on same naming anchor are all discoverable", async function () {
+      const dirUID = await createAnchor(owner, "dir7");
+      const namingUID = await createAnchor(owner, "shared-sort", dirUID, sortInfoSchemaUID);
+
+      // Both alice and bob create their own SORT_INFO pointing at the same naming anchor
+      const aliceSortUID = await createSortInfo(alice, namingUID, await alphSort.getAddress());
+      const bobSortUID = await createSortInfo(bob, namingUID, await tsSort.getAddress());
+
+      const refs = await indexer.getReferencingAttestations(namingUID, sortInfoSchemaUID, 0, 10, false);
+      expect(refs.length).to.equal(2);
+      expect(refs).to.include(aliceSortUID);
+      expect(refs).to.include(bobSortUID);
+    });
+  });
 });

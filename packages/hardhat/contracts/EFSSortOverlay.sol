@@ -124,12 +124,19 @@ contract EFSSortOverlay is SchemaResolver {
             revoked: false
         });
 
+        // Register in EFSIndexer so SORT_INFO attestations are discoverable via
+        // getReferencingAttestations(namingAnchorUID, SORT_INFO_SCHEMA_UID).
+        // index() is idempotent and skips EFS-native schemas, so this is always safe.
+        indexer.index(attestation.uid);
+
         return true;
     }
 
     function onRevoke(Attestation calldata attestation, uint256 /*value*/) internal override returns (bool) {
         if (attestation.schema == SORT_INFO_SCHEMA_UID) {
             _sortConfigs[attestation.uid].revoked = true;
+            // Mirror the revocation into EFSIndexer so isRevoked() returns true for SORT_INFO UIDs.
+            indexer.indexRevocation(attestation.uid);
         }
         return true;
     }
@@ -194,6 +201,83 @@ contract EFSSortOverlay is SchemaResolver {
             _lastProcessedIndex[sortInfoUID][attester]++;
 
             emit ItemSorted(sortInfoUID, attester, item, left, right);
+        }
+    }
+
+    // ============================================================================================
+    // CLIENT HINT COMPUTATION (VIEW — free to call, no gas cost)
+    // ============================================================================================
+
+    /**
+     * @notice Compute the leftHint / rightHint arrays needed to call processItems.
+     *         This is a pure view function — call it off-chain (eth_call) to avoid implementing
+     *         the binary-search simulation in your client.
+     *
+     * @param sortInfoUID  The SORT_INFO attestation UID.
+     * @param attester     The attester whose sorted list will receive the new items.
+     * @param newItems     Item UIDs in kernel order, starting from getLastProcessedIndex().
+     * @return leftHints   Left neighbour for each item (bytes32(0) = insert at head / ineligible).
+     * @return rightHints  Right neighbour for each item (bytes32(0) = insert at tail / ineligible).
+     *
+     * @dev Uses linear scan with ISortFunc.isLessThan. Simulates batch insertions so each item's
+     *      position accounts for items inserted earlier in the same batch.
+     *      Ineligible (empty sort key) and revoked items get (bytes32(0), bytes32(0)) sentinels —
+     *      processItems will skip them regardless of hint values.
+     */
+    function computeHints(
+        bytes32 sortInfoUID,
+        address attester,
+        bytes32[] calldata newItems
+    ) external view returns (bytes32[] memory leftHints, bytes32[] memory rightHints) {
+        SortConfig storage config = _sortConfigs[sortInfoUID];
+        if (!config.valid || config.revoked) revert InvalidSortInfo();
+
+        ISortFunc sortFunc = ISortFunc(config.sortFunc);
+        uint256 n = newItems.length;
+        leftHints = new bytes32[](n);
+        rightHints = new bytes32[](n);
+
+        if (n == 0) return (leftHints, rightHints);
+
+        // Load current sorted list into a mutable simulation array.
+        // Size = existing + new (worst case all new items are eligible and inserted).
+        uint256 existingLen = _sortLengths[sortInfoUID][attester];
+        bytes32[] memory sim = new bytes32[](existingLen + n);
+        uint256 simLen = 0;
+
+        bytes32 cur = _sortHeads[sortInfoUID][attester];
+        while (cur != bytes32(0)) {
+            sim[simLen++] = cur;
+            cur = _sortNodes[sortInfoUID][attester][cur].next;
+        }
+
+        // Process each new item, updating the simulation as we go.
+        for (uint256 i = 0; i < n; i++) {
+            bytes32 item = newItems[i];
+
+            // Ineligible: revoked or empty sort key → zero sentinels, skip simulation update
+            if (indexer.isRevoked(item)) continue;
+            bytes memory key = sortFunc.getSortKey(item, sortInfoUID);
+            if (key.length == 0) continue;
+
+            // Linear scan: find first position where item < sim[j]
+            uint256 pos = simLen;
+            for (uint256 j = 0; j < simLen; j++) {
+                if (sortFunc.isLessThan(item, sim[j], sortInfoUID)) {
+                    pos = j;
+                    break;
+                }
+            }
+
+            leftHints[i] = pos == 0 ? bytes32(0) : sim[pos - 1];
+            rightHints[i] = pos == simLen ? bytes32(0) : sim[pos];
+
+            // Shift right to insert item into simulation
+            for (uint256 j = simLen; j > pos; j--) {
+                sim[j] = sim[j - 1];
+            }
+            sim[pos] = item;
+            simLen++;
         }
     }
 

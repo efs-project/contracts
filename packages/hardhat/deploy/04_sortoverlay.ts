@@ -81,6 +81,37 @@ const deployEFSSortOverlay: DeployFunction = async function (hre: HardhatRuntime
 
   console.log("EFSSortOverlay deployment complete.");
   console.log("  SORT_INFO schema UID:", sortInfoSchemaUID);
+
+  // 6. Wire partner contracts into EFSIndexer so TAG_SCHEMA_UID, SORT_INFO_SCHEMA_UID,
+  //    tagResolver, sortOverlay, and schemaRegistry are all queryable from a single entry point.
+  const indexer = await hre.ethers.getContract<Contract>("Indexer", deployer);
+  const tagResolverDeployment = await hre.deployments.get("TagResolver");
+  const tagResolver = await hre.ethers.getContractAt("TagResolver", tagResolverDeployment.address);
+  const tagSchemaUID = await tagResolver.TAG_SCHEMA_UID();
+
+  try {
+    await (
+      await indexer.wireContracts(
+        tagResolverDeployment.address,
+        tagSchemaUID,
+        sortOverlay.target,
+        sortInfoSchemaUID,
+        schemaRegistryAddress,
+      )
+    ).wait();
+    console.log("EFSIndexer wired:");
+    console.log("  tagResolver:       ", tagResolverDeployment.address);
+    console.log("  TAG_SCHEMA_UID:    ", tagSchemaUID);
+    console.log("  sortOverlay:       ", sortOverlay.target);
+    console.log("  SORT_INFO_SCHEMA_UID:", sortInfoSchemaUID);
+    console.log("  schemaRegistry:    ", schemaRegistryAddress);
+  } catch (e: any) {
+    if (e?.message?.includes("already wired")) {
+      console.log("EFSIndexer already wired — skipping.");
+    } else {
+      throw e;
+    }
+  }
 };
 
 export default deployEFSSortOverlay;

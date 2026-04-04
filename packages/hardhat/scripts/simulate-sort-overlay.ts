@@ -36,14 +36,13 @@ async function main() {
   console.log("════════════════════════════════════════════════════════════\n");
 
   const [deployer, alice, bob] = await ethers.getSigners();
-  const deployerAddr = await deployer.getAddress();
+
   const aliceAddr = await alice.getAddress();
   const bobAddr = await bob.getAddress();
 
   // ── Connect to deployed contracts ────────────────────────────────────────────
   const indexer = (await ethers.getContract("Indexer", deployer)) as unknown as EFSIndexer;
   const overlay = (await ethers.getContract("EFSSortOverlay", deployer)) as unknown as EFSSortOverlay;
-  const tagResolver = (await ethers.getContract("TagResolver", deployer)) as unknown as TagResolver;
 
   const easAddress = await indexer.getEAS();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -52,15 +51,18 @@ async function main() {
     easAddress,
   )) as any;
 
+  // All schema UIDs and partner contract addresses are available on a single entry point: EFSIndexer
   const anchorSchemaUID = await indexer.ANCHOR_SCHEMA_UID();
   const dataSchemaUID = await indexer.DATA_SCHEMA_UID();
-  const sortInfoSchemaUID = await overlay.SORT_INFO_SCHEMA_UID();
-  const tagSchemaUID = await tagResolver.TAG_SCHEMA_UID();
+  const sortInfoSchemaUID = await indexer.SORT_INFO_SCHEMA_UID();
+  const tagSchemaUID = await indexer.TAG_SCHEMA_UID();
+  const tagResolverAddr = await indexer.tagResolver();
+  const tagResolver = (await ethers.getContractAt("TagResolver", tagResolverAddr)) as unknown as TagResolver;
   const rootUID = await indexer.rootAnchorUID();
 
   console.log(`Indexer:     ${indexer.target}`);
   console.log(`Overlay:     ${overlay.target}`);
-  console.log(`TagResolver: ${tagResolver.target}`);
+  console.log(`TagResolver: ${tagResolverAddr}`);
   console.log(`EAS:         ${easAddress}`);
   console.log(`Root:        ${rootUID}\n`);
 
@@ -288,8 +290,8 @@ async function main() {
 
   // Bob adds 3 tracks
   const bobWaterfall = await anchor(bob, "waterfall.mp3", musicUID, dataSchemaUID);
-  const bobEcho = await anchor(bob, "echo.mp3", musicUID, dataSchemaUID);
-  const bobApex = await anchor(bob, "apex.mp3", musicUID, dataSchemaUID);
+  await anchor(bob, "echo.mp3", musicUID, dataSchemaUID);
+  await anchor(bob, "apex.mp3", musicUID, dataSchemaUID);
   console.log("  Bob   added: waterfall.mp3, echo.mp3, apex.mp3");
 
   assert(
@@ -321,7 +323,7 @@ async function main() {
   );
 
   const aliceLastIdx = Number(await overlay.getLastProcessedIndex(alphaInfoUID, aliceAddr));
-  const aliceItems = await indexer.getChildrenByAttester(musicUID, aliceAddr, aliceLastIdx, 50, false, false);
+  const aliceItems = await indexer["getChildrenByAttester(bytes32,address,uint256,uint256,bool)"](musicUID, aliceAddr, aliceLastIdx, 50, false);
   const { leftHints: aliceLeft, rightHints: aliceRight } = await computeHints(
     [...aliceItems],
     [],
@@ -338,13 +340,33 @@ async function main() {
   assert("Alice order: apple < banana < mango < zebra", aliceSortedNames.join(",") === "apple.mp3,banana.mp3,mango.mp3,zebra.mp3");
   assert("Alice staleness = 0", (await overlay.getSortStaleness(alphaInfoUID, aliceAddr)) === 0n);
 
+  // ── overlay.computeHints cross-check ────────────────────────────────────────
+  // Verify the contract-side computeHints produces the same results as the TS helper.
+  // Use Bob's unprocessed items (empty sorted list) so the expected result is deterministic.
+  // NOTE: Overloaded Solidity functions require bracket notation in TypeScript + typechain.
+  const bobItemsForHintCheck = await indexer[
+    "getChildrenByAttester(bytes32,address,uint256,uint256,bool)"
+  ](musicUID, bobAddr, 0, 50, false);
+  const [contractLeft, contractRight] = await overlay.computeHints(alphaInfoUID, bobAddr, [...bobItemsForHintCheck]);
+  const { leftHints: hintCheckLeft, rightHints: hintCheckRight } = await computeHints(
+    [...bobItemsForHintCheck],
+    [],
+    (alphabeticalSort as any).target,
+    alphaInfoUID,
+  );
+  const hintsMatch =
+    contractLeft.length === hintCheckLeft.length &&
+    contractLeft.every((v: string, i: number) => v === hintCheckLeft[i]) &&
+    contractRight.every((v: string, i: number) => v === hintCheckRight[i]);
+  assert("overlay.computeHints matches TypeScript helper", hintsMatch);
+
   // ════════════════════════════════════════════════════════════════════════════════
   // PHASE 4: Bob builds his sorted view (independent from Alice)
   // ════════════════════════════════════════════════════════════════════════════════
   console.log("\n── Phase 4: Bob processes his 3 items ──\n");
 
   const bobLastIdx = Number(await overlay.getLastProcessedIndex(alphaInfoUID, bobAddr));
-  const bobItems = await indexer.getChildrenByAttester(musicUID, bobAddr, bobLastIdx, 50, false, false);
+  const bobItems = await indexer["getChildrenByAttester(bytes32,address,uint256,uint256,bool)"](musicUID, bobAddr, bobLastIdx, 50, false);
   const { leftHints: bobLeft, rightHints: bobRight } = await computeHints(
     [...bobItems],
     [],
@@ -374,7 +396,7 @@ async function main() {
   );
 
   const aliceLastIdx2 = Number(await overlay.getLastProcessedIndex(alphaInfoUID, aliceAddr));
-  const aliceNewItems = await indexer.getChildrenByAttester(musicUID, aliceAddr, aliceLastIdx2, 50, false, false);
+  const aliceNewItems = await indexer["getChildrenByAttester(bytes32,address,uint256,uint256,bool)"](musicUID, aliceAddr, aliceLastIdx2, 50, false);
   const aliceCurrentSorted = await readSortedAll(alphaInfoUID, aliceAddr);
   const { leftHints: aliceLeft2, rightHints: aliceRight2 } = await computeHints(
     [...aliceNewItems],
@@ -422,16 +444,16 @@ async function main() {
 
   // Alice uploads her editions for all 6 of her anchors
   const aliceAppleData = await data(alice, aliceApple, "ipfs://alice-apple-v1");
-  const aliceBananaData = await data(alice, aliceBanana, "ipfs://alice-banana-v1");
-  const aliceMangoData = await data(alice, aliceMango, "ipfs://alice-mango-v1");
+  await data(alice, aliceBanana, "ipfs://alice-banana-v1");
+  await data(alice, aliceMango, "ipfs://alice-mango-v1");
   const aliceZebraData = await data(alice, aliceZebra, "ipfs://alice-zebra-v1");
   await data(alice, aliceCarrot, "ipfs://alice-carrot-v1");
   await data(alice, aliceAardvark, "ipfs://alice-aardvark-v1");
   console.log("  Alice uploaded editions for all 6 anchors");
 
   // Bob uploads editions for 3 of Alice's anchors (covering, remixing)
-  const bobAppleData = await data(bob, aliceApple, "ipfs://bob-apple-v1");
-  const bobBananaData = await data(bob, aliceBanana, "ipfs://bob-banana-v1");
+  await data(bob, aliceApple, "ipfs://bob-apple-v1");
+  await data(bob, aliceBanana, "ipfs://bob-banana-v1");
   const bobZebraData = await data(bob, aliceZebra, "ipfs://bob-zebra-v1");
   console.log("  Bob uploaded editions for apple.mp3, banana.mp3, zebra.mp3");
 
@@ -538,54 +560,66 @@ async function main() {
   );
 
   // ════════════════════════════════════════════════════════════════════════════════
-  // PHASE 10: getChildrenByAddressList — edition directory listing
+  // PHASE 10: Directory listing — dedup vs interleaved
   // ════════════════════════════════════════════════════════════════════════════════
-  console.log("\n── Phase 10: getChildrenByAddressList (edition directory listing) ──\n");
+  console.log("\n── Phase 10: Directory listing (dedup and interleaved) ──\n");
 
-  // Round-robin merge of alice's and bob's anchors in the music directory
-  // Alice's perspective only: 6 items (her 6 anchors)
+  // getChildrenByAddressList — unique items only, global insertion order
+  // Alice-only: 6 anchors alice created (zebra, banana, mango, apple, carrot, aardvark)
   const [aliceOnly] = await indexer.getChildrenByAddressList(musicUID, [aliceAddr], 0n, 50, false, false);
-  assert("Alice-only view = 6 anchors", aliceOnly.length === 6, `got ${aliceOnly.length}`);
+  assert("Alice-only dedup = 6 unique anchors", aliceOnly.length === 6, `got ${aliceOnly.length}`);
 
-  // Bob's perspective only: 6 items — 3 he created + 3 he attached DATA to (apple, banana, zebra).
-  // When Bob attested DATA on Alice's anchors, EFSIndexer's propagation loop added those anchors to
-  // _childrenByAttester[musicUID][bob] too. This is by design: Bob's view includes items he
-  // has content for, enabling the UI to show "everything Bob is involved with in this directory".
+  // Bob-only: 3 he created + 3 he added DATA to (apple, banana, zebra) = 6
   const [bobOnly] = await indexer.getChildrenByAddressList(musicUID, [bobAddr], 0n, 50, false, false);
-  assert(
-    "Bob-only view = 6 anchors (3 created + 3 he added DATA to)",
-    bobOnly.length === 6,
-    `got ${bobOnly.length}`,
-  );
+  assert("Bob-only dedup = 6 unique anchors (3 created + 3 with DATA)", bobOnly.length === 6, `got ${bobOnly.length}`);
 
-  // Combined [alice, bob] round-robin: alice×6 + bob×6 = 12 (duplicates expected — same anchor
-  // appears in both users' perspective arrays; UI deduplicates if needed)
-  let editionCursor = 0n;
-  const editionResults: string[] = [];
-  let editionPages = 0;
+  // Combined [alice, bob]: 9 unique anchors (all in /music/ except the SORT_INFO naming anchor
+  // which was created by deployer, not alice or bob)
+  let dedupCursor = 0n;
+  const dedupResults: string[] = [];
   do {
     const [page, next] = await indexer.getChildrenByAddressList(
       musicUID,
       [aliceAddr, bobAddr],
-      editionCursor,
+      dedupCursor,
       4,
       false,
       false,
     );
-    editionResults.push(...page);
-    editionCursor = next;
-    editionPages++;
-  } while (editionCursor > 0n);
+    dedupResults.push(...page);
+    dedupCursor = next;
+  } while (dedupCursor > 0n);
 
-  console.log(`  alice-only: ${aliceOnly.length}, bob-only: ${bobOnly.length}, combined: ${editionResults.length} across ${editionPages} pages`);
+  assert("Dedup [alice,bob] = 9 unique anchors (no duplicates)", dedupResults.length === 9, `got ${dedupResults.length}`);
+  assert("Dedup results have no duplicates", new Set(dedupResults).size === dedupResults.length);
+  // First item = global insertion order: zebra was created first
+  assert("Dedup first item = aliceZebra (insertion order)", dedupResults[0] === aliceZebra);
+
+  // getChildrenByAddressListInterleaved — fair round-robin, may include duplicates
+  // alice×6 + bob×6 = 12 (3 shared anchors appear twice — different perspective arrays)
+  let interleavedCursor = 0n;
+  const interleavedResults: string[] = [];
+  do {
+    const [page, next] = await indexer.getChildrenByAddressListInterleaved(
+      musicUID,
+      [aliceAddr, bobAddr],
+      interleavedCursor,
+      4,
+      false,
+      false,
+    );
+    interleavedResults.push(...page);
+    interleavedCursor = next;
+  } while (interleavedCursor > 0n);
+
+  console.log(`  dedup: ${dedupResults.length} unique, interleaved: ${interleavedResults.length} (${interleavedResults.length - new Set(interleavedResults).size} duplicates)`);
   assert(
-    "Combined [alice,bob] = 12 items (each has 6-item perspective)",
-    editionResults.length === 12,
-    `got ${editionResults.length}`,
+    "Interleaved [alice,bob] = 12 items (alice×6 + bob×6 perspective arrays)",
+    interleavedResults.length === 12,
+    `got ${interleavedResults.length}`,
   );
-  // First item is alice's first anchor, second is bob's (round-robin order)
-  assert("First item is Alice's first anchor", editionResults[0] === aliceZebra);
-  assert("Second item is Bob's first anchor", editionResults[1] === bobWaterfall);
+  assert("Interleaved first item = alice's first (round-robin starts with alice)", interleavedResults[0] === aliceZebra);
+  assert("Interleaved second item = bob's first (round-robin gives bob equal turn)", interleavedResults[1] === bobWaterfall);
 
   // ════════════════════════════════════════════════════════════════════════════════
   // PHASE 11: Data history — multiple versions per user
@@ -593,7 +627,7 @@ async function main() {
   console.log("\n── Phase 11: Data history (multiple editions per user) ──\n");
 
   // Alice uploads a v2 of apple.mp3
-  const aliceAppleDataV2 = await data(alice, aliceApple, "ipfs://alice-apple-v2");
+  await data(alice, aliceApple, "ipfs://alice-apple-v2");
   console.log("  Alice uploaded apple.mp3 v2");
 
   // Full history (showRevoked=true) → 2 entries
@@ -698,27 +732,24 @@ async function main() {
   //
   // Step 1 (on-chain): getAnchorsBySchema finds naming anchors with anchorSchema == SORT_INFO_SCHEMA_UID.
   //   These are regular ANCHOR attestations indexed by EFSIndexer.
-  const sortNamingAnchors = await indexer.getAnchorsBySchema(musicUID, sortInfoSchemaUID, 0, 10, false, false);
+  const sortNamingAnchors = await indexer["getAnchorsBySchema(bytes32,bytes32,uint256,uint256,bool)"](musicUID, sortInfoSchemaUID, 0, 10, false);
   assert(
     "getAnchorsBySchema finds 1 sort naming anchor in /music/",
     sortNamingAnchors.length === 1 && sortNamingAnchors[0] === alphaNameUID,
     `got ${sortNamingAnchors.length}`,
   );
 
-  // Step 2 (event-based): SORT_INFO attestations are indexed by EFSSortOverlay (not EFSIndexer),
-  //   so getReferencingAttestations(namingAnchorUID, sortInfoSchemaUID) returns 0 — EFSIndexer
-  //   never saw the SORT_INFO attestation. The UI must query EAS Attested events filtered by
-  //   refUID = namingAnchorUID and schema = sortInfoSchemaUID to find SORT_INFO UIDs.
+  // Step 2 (fully on-chain): EFSSortOverlay.onAttest calls indexer.index(uid), so SORT_INFO
+  //   attestations are registered into EFSIndexer's generic referencing indices. No eth_getLogs needed.
   const sortInfoRefsFromIndexer = await indexer.getReferencingAttestations(alphaNameUID, sortInfoSchemaUID, 0, 10, false);
   assert(
-    "EFSIndexer has 0 SORT_INFO refs (SORT_INFO goes through EFSSortOverlay, not EFSIndexer)",
-    sortInfoRefsFromIndexer.length === 0,
+    "EFSIndexer has 1 SORT_INFO ref via index() wiring (fully on-chain discovery)",
+    sortInfoRefsFromIndexer.length === 1,
     `got ${sortInfoRefsFromIndexer.length}`,
   );
+  assert("Discovered SORT_INFO UID matches known alphaInfoUID", sortInfoRefsFromIndexer[0] === alphaInfoUID);
 
-  // Simulate event-based discovery: query EAS Attested events for refUID = alphaNameUID
-  // In the UI this is an eth_getLogs call; here we use the UID we already have from Phase 2.
-  // Once the SORT_INFO UID is known, the rest is fully on-chain:
+  // The SORT_INFO UID is now discoverable purely on-chain:
   const discoveredConfig = await overlay.getSortConfig(alphaInfoUID);
   assert("getSortConfig returns valid config for known sortInfoUID", discoveredConfig.valid);
   assert(
@@ -751,7 +782,7 @@ async function main() {
   const tsNameUID = await anchor(deployer, "by-date", vidDirUID, sortInfoSchemaUID);
   const tsInfoUID = await sortInfo(deployer, tsNameUID, (timestampSort as any).target);
 
-  const vidItems = await indexer.getChildrenByAttester(vidDirUID, aliceAddr, 0, 50, false, false);
+  const vidItems = await indexer["getChildrenByAttester(bytes32,address,uint256,uint256,bool)"](vidDirUID, aliceAddr, 0, 50, false);
   const { leftHints: tsLeft, rightHints: tsRight } = await computeHints(
     [...vidItems],
     [],

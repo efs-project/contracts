@@ -22,16 +22,28 @@ When a user creates a new file (a `Data` attestation pointing to an `Anchor` poi
 
 Essentially, the contract maintains a real-time tracking list for any given Folder. This allows a client to query a single function to fetch the directory contents.
 
-### Gas Limits, Spam, and O(1) Operations
+### Gas Limits, Spam, and Append-Only Storage
 Because EAS is permissionless, anyone can attest files to a folder. To prevent Out-Of-Gas (OOG) errors:
-- **Read Pagination**: The indexer’s read functions (like `getChildren`) require `start` and `length` offset parameters, allowing frontends to paginate through massive directories without hitting block limits.
-- **O(1) Data Removals**: When an attestation is revoked (`onRevoke`), the indexer must remove it from the arrays. To prevent O(N) array scanning, the contract maintains a `_uidIndices` struct that tracks the exact array index of every UID across all relationship sets. Removals use an O(1) "swap-and-pop" mechanism.
+- **Read Pagination**: All indexer read functions accept `start` and `length` parameters for cursor-based pagination through large directories.
+- **Append-Only Kernel**: EFSIndexer is the append-only kernel. Arrays are never modified after a write. When an attestation is revoked, `onRevoke` sets `_isRevoked[uid] = true` but leaves all arrays intact. This eliminates O(N) removal overhead and makes the storage model simpler and cheaper to write (deploy gas: ~2.35M vs ~3.8M for the old swap-and-pop design; revoke gas: ~90k vs ~200k).
+- **`showRevoked` filtering**: Every read function accepts a `bool showRevoked` parameter. When `false` (the default), the function scans forward and skips revoked UIDs, returning only active items. When `true`, revoked items are included — useful for history views and admin tooling.
 
 ## Editions (Address-Based Namespaces)
 To support subjective file resolution natively onchain, the Indexer maintains additional append-only mappings:
 - **Core Referencing History**: `_allReferencing` and `_referencingByAttester` track immutable history, ensuring revocations do not break the chain of edits.
 - **Subjective File Content**: `_dataAttestationsByAddress` tracks user iterations of a file payload. Clients use `getDataByAddressList` with a list of trusted addresses to auto-fallback and resolve the highest-trusted active file version in fast time.
-- **Round-Robin Directory Listings**: To merge an unbiased directory listing curated by multiple users, the `getChildrenByAddressList` API implements a gas-safe round-robin cursor pagination, scanning across existing user-specific arrays rather than iterating over global spam-filled lists.
+- **Deduplicated Directory Listings**: `getChildrenByAddressList` walks the global `_children` array (unique, insertion order) and includes only items where any of the provided attesters has contributed — no duplicates possible. Use this for rendering a flat directory view filtered to a set of trusted addresses.
+- **Round-Robin Directory Listings**: `getChildrenByAddressListInterleaved` implements fair round-robin pagination across per-attester arrays — gives each attester equal representation. May return the same anchor more than once when multiple attesters contributed to it. Use this for "whose work appears most" views or balanced multi-attester feeds.
+
+### `_childrenByAttester` Propagation Behaviour
+`_childrenByAttester[parentUID][attester]` is not limited to items the attester *created*. When an attester submits **any** attestation whose `refUID` chains up to a directory, the attester is considered "active" in that directory and the relevant ancestor anchors are pushed into their perspective arrays. In practice this means:
+
+- Alice creates `apple.mp3` (Anchor) under `/music/`. `_childrenByAttester[musicUID][alice]` gets `apple.mp3`. ✓ Expected.
+- Bob attests DATA to Alice’s `apple.mp3`. `_childrenByAttester[musicUID][bob]` also gets `apple.mp3` — because Bob is now active in `/music/` via his DATA contribution.
+
+**UI implication**: The two directory listing APIs handle this differently:
+- `getChildrenByAddressList(musicUID, [alice, bob])` — dedup version. Walks the global `_children` array and O(1)-checks `_containsAttestations`. If alice has 6 anchors and bob contributed DATA to 3 of alice’s, the result is exactly 9 unique anchors. No client-side deduplication needed.
+- `getChildrenByAddressListInterleaved(musicUID, [alice, bob])` — round-robin version. Returns 12 items (alice×6 + bob×6), with the 3 shared anchors appearing twice. Use when fair per-attester representation matters more than uniqueness. The UI must deduplicate if a flat unique list is needed.
 
 ## Efficient Client Traversal
 When a web client needs to load a directory:
@@ -135,6 +147,32 @@ The kernel (EFSIndexer) remains the source of truth. The sort overlay is a secon
 - `getSortConfig(sortInfoUID)` — Cached `SortConfig { sortFunc, targetSchema, valid, revoked }`.
 
 **Kernel discovery** (used by clients to find sorts under a directory):
-- `EFSIndexer.getAnchorsBySchema(parentUID, SORT_INFO_SCHEMA, 0, 100, false, false)` — returns all sort Anchors under a directory. Sorts are regular children of the kernel; no separate discovery index needed.
+- `EFSIndexer.getAnchorsBySchema(parentUID, SORT_INFO_SCHEMA_UID, 0, 100, false, false)` — returns all sort naming Anchor UIDs under a directory. Sort naming Anchors are regular kernel children; no separate discovery index needed.
+- `EFSIndexer.getReferencingAttestations(namingAnchorUID, SORT_INFO_SCHEMA_UID, 0, 10, false)` — returns SORT_INFO UIDs pointing at a naming anchor. Works because `EFSSortOverlay.onAttest` calls `indexer.index(attestation.uid)` after caching the sort config, registering every SORT_INFO attestation into EFSIndexer's generic referencing indices.
+
+### Public Index API
+
+EFSIndexer exposes a permissionless indexing API for any EAS attestation whose schema is resolved by a contract other than EFSIndexer:
+
+- **`index(bytes32 uid) → bool wasIndexed`** — reads the attestation from EAS and runs the same global indexing logic as `onAttest` (schema, attester, sent, received, referencing, upward propagation). Idempotent — guarded by `mapping(bytes32 => bool) _indexed`. Returns `false` for EFS-native schemas (already indexed via `onAttest`) and for already-indexed UIDs. Emits `AttestationIndexed`.
+- **`indexBatch(bytes32[] uids) → uint256 count`** — batch version; skips already-indexed and EFS-native UIDs without reverting. Returns count of newly indexed UIDs.
+- **`indexRevocation(bytes32 uid)`** — mirrors a revocation from EAS into `_isRevoked`. Call after `eas.revoke()` to make `isRevoked()` return true for externally-resolved schemas. Requires the attestation to already be revoked in EAS. Idempotent. Emits `RevocationIndexed`.
+- **`isIndexed(bytes32 uid) → bool`** — returns true if a UID was indexed via the public API (not via `onAttest`).
+
+**How EFSSortOverlay uses this:**
+```
+onAttest → indexer.index(attestation.uid)        // makes SORT_INFO discoverable
+onRevoke → indexer.indexRevocation(attestation.uid) // syncs revocation state
+```
+
+**Third-party developer usage:**
+```
+// After attesting with your own resolver:
+indexer.index(myAttestationUID);
+// Now discoverable via:
+indexer.getReferencingAttestations(refUID, mySchemaUID, ...)
+indexer.getAttestationsBySchema(mySchemaUID, ...)
+indexer.getOutgoingAttestations(attester, mySchemaUID, ...)
+```
 
 See [Lists and Collections](./06-Lists-and-Collections.md) for the full architecture.
