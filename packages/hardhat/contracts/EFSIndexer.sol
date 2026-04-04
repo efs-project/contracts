@@ -1113,6 +1113,9 @@ contract EFSIndexer is SchemaResolver {
 
             _indexed[uid] = true;
             _indexGlobal(att);
+            if (att.revocationTime != 0) {
+                _isRevoked[uid] = true;
+            }
 
             emit AttestationIndexed(uid, schema, att.attester);
             count++;
