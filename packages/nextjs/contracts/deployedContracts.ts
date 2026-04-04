@@ -7,7 +7,7 @@ import { GenericContractsDeclaration } from "~~/utils/scaffold-eth/contract";
 const deployedContracts = {
   31337: {
     EFSFileView: {
-      address: "0xCCC07C0c81D58627Acfad304143D3526DE3C4135",
+      address: "0x3391B40E0993F5939ed8D9eFe6165303AAe0C307",
       abi: [
         {
           inputs: [
@@ -235,6 +235,102 @@ const deployedContracts = {
           type: "function",
         },
         {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "parentAnchor",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "anchorSchema",
+              type: "bytes32",
+            },
+            {
+              internalType: "address[]",
+              name: "attesters",
+              type: "address[]",
+            },
+            {
+              internalType: "uint256",
+              name: "startingCursor",
+              type: "uint256",
+            },
+            {
+              internalType: "uint256",
+              name: "pageSize",
+              type: "uint256",
+            },
+          ],
+          name: "getDirectoryPageBySchemaAndAddressList",
+          outputs: [
+            {
+              components: [
+                {
+                  internalType: "bytes32",
+                  name: "uid",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "string",
+                  name: "name",
+                  type: "string",
+                },
+                {
+                  internalType: "bytes32",
+                  name: "parentUID",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "bool",
+                  name: "isFolder",
+                  type: "bool",
+                },
+                {
+                  internalType: "bool",
+                  name: "hasData",
+                  type: "bool",
+                },
+                {
+                  internalType: "uint256",
+                  name: "childCount",
+                  type: "uint256",
+                },
+                {
+                  internalType: "uint256",
+                  name: "propertyCount",
+                  type: "uint256",
+                },
+                {
+                  internalType: "uint64",
+                  name: "timestamp",
+                  type: "uint64",
+                },
+                {
+                  internalType: "address",
+                  name: "attester",
+                  type: "address",
+                },
+                {
+                  internalType: "bytes32",
+                  name: "schema",
+                  type: "bytes32",
+                },
+              ],
+              internalType: "struct EFSFileView.FileSystemItem[]",
+              name: "items",
+              type: "tuple[]",
+            },
+            {
+              internalType: "uint256",
+              name: "nextCursor",
+              type: "uint256",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
           inputs: [],
           name: "indexer",
           outputs: [
@@ -251,7 +347,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     EFSRouter: {
-      address: "0x668D1D671Fceb4475EdA7C744B593B3b321db2ad",
+      address: "0xc3C05009ac3D62745F4766136a7c68D334D0377E",
       abi: [
         {
           inputs: [
@@ -388,7 +484,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     EFSSortOverlay: {
-      address: "0x7B9FE123FC7eF4Bd01D5660c68474c7C90F95888",
+      address: "0xa4D65644614de0441F8bDD2f6Cf43629db861725",
       abi: [
         {
           inputs: [
@@ -1186,7 +1282,7 @@ const deployedContracts = {
       },
     },
     Indexer: {
-      address: "0xCF4b5E9391a40caaC2ecDE28F9A001efEd63cd1B",
+      address: "0xD8064E2FacCFcEEa46CB3E825D29e62c14315D6E",
       abi: [
         {
           inputs: [
@@ -1753,6 +1849,60 @@ const deployedContracts = {
               internalType: "bytes32[]",
               name: "",
               type: "bytes32[]",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "parentUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "anchorSchema",
+              type: "bytes32",
+            },
+            {
+              internalType: "address[]",
+              name: "attesters",
+              type: "address[]",
+            },
+            {
+              internalType: "uint256",
+              name: "startCursor",
+              type: "uint256",
+            },
+            {
+              internalType: "uint256",
+              name: "pageSize",
+              type: "uint256",
+            },
+            {
+              internalType: "bool",
+              name: "reverseOrder",
+              type: "bool",
+            },
+            {
+              internalType: "bool",
+              name: "showRevoked",
+              type: "bool",
+            },
+          ],
+          name: "getAnchorsBySchemaAndAddressList",
+          outputs: [
+            {
+              internalType: "bytes32[]",
+              name: "results",
+              type: "bytes32[]",
+            },
+            {
+              internalType: "uint256",
+              name: "nextCursor",
+              type: "uint256",
             },
           ],
           stateMutability: "view",
@@ -3302,7 +3452,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     TagResolver: {
-      address: "0xd66eD298351D78E7771F5bB7AC3bdEE6272A96aA",
+      address: "0x64CD379945B4b553d9b245Ec0E83861b5A33c9Dd",
       abi: [
         {
           inputs: [
@@ -3315,6 +3465,11 @@ const deployedContracts = {
               internalType: "bytes32",
               name: "tagSchemaUID",
               type: "bytes32",
+            },
+            {
+              internalType: "contract IEFSIndexerForTag",
+              name: "_indexer",
+              type: "address",
             },
           ],
           stateMutability: "nonpayable",
@@ -3554,6 +3709,19 @@ const deployedContracts = {
               internalType: "bytes32[]",
               name: "",
               type: "bytes32[]",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "indexer",
+          outputs: [
+            {
+              internalType: "contract IEFSIndexerForTag",
+              name: "",
+              type: "address",
             },
           ],
           stateMutability: "view",

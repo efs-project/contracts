@@ -74,7 +74,7 @@ const deployEFSIndexer: DeployFunction = async function (hre: HardhatRuntimeEnvi
   await deploy("TagResolver", {
     contract: "TagResolver",
     from: deployer,
-    args: [EAS_ADDRESS, tagSchemaUID],
+    args: [EAS_ADDRESS, tagSchemaUID, futureIndexerAddress],
     log: true,
     autoMine: true,
   });

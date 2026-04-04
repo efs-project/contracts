@@ -423,6 +423,68 @@ contract EFSIndexer is SchemaResolver {
         return _sliceUIDsFiltered(_childrenBySchema[anchorUID][schema], start, length, reverseOrder, false);
     }
 
+    /**
+     * @notice Paginated list of a directory's Anchors filtered by BOTH anchorSchema AND
+     *         attester list. Walks the schema-indexed array (smaller than the global children
+     *         array) and applies the same O(1) `_containsAttestations` attester check.
+     *
+     *         Use this when you want, e.g., "all file-slot Anchors from [alice, bob]" without
+     *         mixing in sort declarations, property slots, or generic folders:
+     *           getAnchorsBySchemaAndAddressList(dirUID, DATA_SCHEMA_UID, [alice, bob], ...)
+     *
+     * @param parentUID    Directory Anchor UID.
+     * @param anchorSchema The anchorSchema value to filter on (bytes32(0) = generic folders).
+     * @param attesters    Addresses to filter by. An anchor qualifies if ANY attester contributed.
+     * @param startCursor  Raw index into the schema-indexed array to resume from (0 = start).
+     * @param pageSize     Maximum items to return.
+     * @param reverseOrder If true, scan newest-first.
+     * @param showRevoked  If false, revoked anchors are skipped.
+     * @return results     Qualifying anchor UIDs.
+     * @return nextCursor  Resume cursor. 0 = end of results.
+     */
+    function getAnchorsBySchemaAndAddressList(
+        bytes32 parentUID,
+        bytes32 anchorSchema,
+        address[] calldata attesters,
+        uint256 startCursor,
+        uint256 pageSize,
+        bool reverseOrder,
+        bool showRevoked
+    ) external view returns (bytes32[] memory results, uint256 nextCursor) {
+        require(attesters.length > 0, "Attesters list cannot be empty");
+
+        bytes32[] storage schemaChildren = _childrenBySchema[parentUID][anchorSchema];
+        uint256 total = schemaChildren.length;
+
+        bytes32[] memory temp = new bytes32[](pageSize > 0 ? pageSize : 0);
+        uint256 count = 0;
+        uint256 i = startCursor;
+
+        while (count < pageSize && i < total) {
+            uint256 actualIdx = reverseOrder ? total - 1 - i : i;
+            bytes32 uid = schemaChildren[actualIdx];
+            i++;
+
+            if (!showRevoked && _isRevoked[uid]) continue;
+
+            bool qualifies = false;
+            for (uint256 j = 0; j < attesters.length; j++) {
+                if (_containsAttestations[uid][attesters[j]]) {
+                    qualifies = true;
+                    break;
+                }
+            }
+            if (!qualifies) continue;
+
+            temp[count++] = uid;
+        }
+
+        assembly {
+            mstore(temp, count)
+        }
+        return (temp, i >= total ? 0 : i);
+    }
+
     // Generic Explorer
 
     function getAttestationsBySchema(

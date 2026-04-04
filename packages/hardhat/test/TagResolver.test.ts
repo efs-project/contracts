@@ -1,6 +1,6 @@
 import { expect } from "chai";
 import { ethers } from "hardhat";
-import { TagResolver, EAS, SchemaRegistry } from "../typechain-types";
+import { TagResolver, EFSIndexer, EAS, SchemaRegistry } from "../typechain-types";
 import { Signer, ZeroAddress } from "ethers";
 
 const ZERO_BYTES32 = "0x0000000000000000000000000000000000000000000000000000000000000000";
@@ -17,6 +17,7 @@ const NO_EXPIRATION = 0n;
  */
 describe("TagResolver", function () {
   let tagResolver: TagResolver;
+  let indexer: EFSIndexer;
   let eas: EAS;
   let registry: SchemaRegistry;
   let owner: Signer;
@@ -42,17 +43,22 @@ describe("TagResolver", function () {
     eas = await EASFactory.deploy(await registry.getAddress());
     await eas.waitForDeployment();
 
-    // Pre-compute TagResolver address and TAG schema UID before deploying
+    // Pre-compute addresses. Deploy order:
+    //   resolverNonce+0: TagResolver
+    //   resolverNonce+1: TAG schema registration
+    //   resolverNonce+2: DUMMY schema registration
+    //   resolverNonce+3: EFSIndexer (placeholder schema UIDs — only index() is exercised)
     const ownerAddr = await owner.getAddress();
     const resolverNonce = await ethers.provider.getTransactionCount(ownerAddr);
     const futureTagResolverAddress = ethers.getCreateAddress({ from: ownerAddr, nonce: resolverNonce });
+    const futureIndexerAddress = ethers.getCreateAddress({ from: ownerAddr, nonce: resolverNonce + 3 });
     const precomputedTagSchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
       ["bytes32 definition, bool applies", futureTagResolverAddress, true],
     );
 
     const TagResolverFactory = await ethers.getContractFactory("TagResolver");
-    tagResolver = await TagResolverFactory.deploy(await eas.getAddress(), precomputedTagSchemaUID);
+    tagResolver = await TagResolverFactory.deploy(await eas.getAddress(), precomputedTagSchemaUID, futureIndexerAddress);
     await tagResolver.waitForDeployment();
 
     // TAG schema: registered with TagResolver
@@ -66,6 +72,19 @@ describe("TagResolver", function () {
     // Dummy schema: no resolver, used to create target attestations with real UIDs
     const dummySchemaTx = await registry.register("string label", ZeroAddress, false);
     dummySchemaUID = (await dummySchemaTx.wait())!.logs[0].topics[1];
+
+    // EFSIndexer: placeholder schema UIDs (only index() is called by TagResolver, which
+    // handles any schema generically without relying on the EFS-native schema constants)
+    const IndexerFactory = await ethers.getContractFactory("EFSIndexer");
+    indexer = await IndexerFactory.deploy(
+      await eas.getAddress(),
+      ZERO_BYTES32, // anchorSchemaUID (placeholder)
+      ZERO_BYTES32, // propertySchemaUID (placeholder)
+      ZERO_BYTES32, // dataSchemaUID (placeholder)
+      ZERO_BYTES32, // blobSchemaUID (placeholder)
+    );
+    await indexer.waitForDeployment();
+    expect(await indexer.getAddress()).to.equal(futureIndexerAddress);
   });
 
   // ─── Helpers ───────────────────────────────────────────────────────────────

@@ -53,29 +53,27 @@ describe("Tags with Editions (Integration)", function () {
     eas = await EASFactory.deploy(await registry.getAddress());
     await eas.waitForDeployment();
 
-    // Deploy TagResolver — pre-compute its address to derive TAG schema UID before deployment
+    // Deploy TagResolver — pre-compute both addresses before deployment.
+    // Deploy order from resolverNonce:
+    //   +0: TagResolver
+    //   +1: ANCHOR schema  (resolver = futureIndexer)
+    //   +2: PROPERTY schema (resolver = futureIndexer)
+    //   +3: DATA schema     (resolver = futureIndexer)
+    //   +4: BLOB schema     (resolver = ZeroAddress)
+    //   +5: TAG schema      (resolver = tagResolver)
+    //   +6: Deploy EFSIndexer
     const ownerAddr = await owner.getAddress();
     const resolverNonce = await ethers.provider.getTransactionCount(ownerAddr);
     const futureTagResolverAddress = ethers.getCreateAddress({ from: ownerAddr, nonce: resolverNonce });
+    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: resolverNonce + 6 });
     const precomputedTagSchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
       ["bytes32 definition, bool applies", futureTagResolverAddress, true],
     );
 
     const TagResolverFactory = await ethers.getContractFactory("TagResolver");
-    tagResolver = await TagResolverFactory.deploy(await eas.getAddress(), precomputedTagSchemaUID);
+    tagResolver = await TagResolverFactory.deploy(await eas.getAddress(), precomputedTagSchemaUID, futureIndexerAddr);
     await tagResolver.waitForDeployment();
-
-    // Calculate future EFSIndexer address
-    // After deploying SchemaRegistry + EAS + TagResolver, the next nonce is:
-    const nonce = await ethers.provider.getTransactionCount(ownerAddr);
-    // nonce+0: ANCHOR schema  (resolver = futureIndexer)
-    // nonce+1: PROPERTY schema (resolver = futureIndexer)
-    // nonce+2: DATA schema     (resolver = futureIndexer)
-    // nonce+3: BLOB schema     (resolver = ZeroAddress)
-    // nonce+4: TAG schema      (resolver = tagResolver)
-    // nonce+5: Deploy EFSIndexer
-    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: nonce + 5 });
 
     // Register schemas
     const tx1 = await registry.register("string name, bytes32 schemaUID", futureIndexerAddr, true);
