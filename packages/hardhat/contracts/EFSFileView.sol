@@ -8,12 +8,22 @@ interface IEFSIndexer {
         bytes32 anchorUID,
         uint256 start,
         uint256 length,
-        bool reverseOrder
+        bool reverseOrder,
+        bool showRevoked
     ) external view returns (bytes32[] memory);
     function getChildrenByAddressList(
         bytes32 parentUID,
         address[] calldata attesters,
-        uint256 startingCursor,
+        uint256 startCursor,
+        uint256 pageSize,
+        bool reverseOrder,
+        bool showRevoked
+    ) external view returns (bytes32[] memory results, uint256 nextCursor);
+    function getAnchorsBySchemaAndAddressList(
+        bytes32 parentUID,
+        bytes32 anchorSchema,
+        address[] calldata attesters,
+        uint256 startCursor,
         uint256 pageSize,
         bool reverseOrder,
         bool showRevoked
@@ -61,7 +71,7 @@ contract EFSFileView {
         bytes32 propertySchemaUID
     ) external view returns (FileSystemItem[] memory) {
         // 1. Get UIDs from Indexer (Newest First = true)
-        bytes32[] memory uids = indexer.getChildren(parentAnchor, start, length, true);
+        bytes32[] memory uids = indexer.getChildren(parentAnchor, start, length, true, false);
 
         return _buildFileSystemItems(uids, parentAnchor, dataSchemaUID, propertySchemaUID);
     }
@@ -84,6 +94,45 @@ contract EFSFileView {
         );
 
         // 2. Build the output FileSystemItems array containing full Metadata
+        items = _buildFileSystemItems(
+            resolvedUIDs,
+            parentAnchor,
+            indexer.DATA_SCHEMA_UID(),
+            indexer.PROPERTY_SCHEMA_UID()
+        );
+
+        return (items, nextCur);
+    }
+
+    /**
+     * @notice Like getDirectoryPageByAddressList but restricted to a specific anchorSchema.
+     *         Use this to fetch only file-slot Anchors (DATA_SCHEMA_UID), only sort declarations
+     *         (SORT_INFO_SCHEMA_UID), or any other anchor type — without interleaving unrelated
+     *         anchor types in the result set.
+     *
+     * @param parentAnchor   Directory Anchor UID.
+     * @param anchorSchema   Filter to this anchorSchema value. bytes32(0) = generic folders only.
+     * @param attesters      Edition addresses to filter by.
+     * @param startingCursor Pagination cursor (0 = start, pass returned nextCursor to continue).
+     * @param pageSize       Max items per page.
+     */
+    function getDirectoryPageBySchemaAndAddressList(
+        bytes32 parentAnchor,
+        bytes32 anchorSchema,
+        address[] memory attesters,
+        uint256 startingCursor,
+        uint256 pageSize
+    ) external view returns (FileSystemItem[] memory items, uint256 nextCursor) {
+        (bytes32[] memory resolvedUIDs, uint256 nextCur) = indexer.getAnchorsBySchemaAndAddressList(
+            parentAnchor,
+            anchorSchema,
+            attesters,
+            startingCursor,
+            pageSize,
+            true,  // newest first
+            false  // hide revoked
+        );
+
         items = _buildFileSystemItems(
             resolvedUIDs,
             parentAnchor,

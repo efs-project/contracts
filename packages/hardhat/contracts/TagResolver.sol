@@ -5,6 +5,12 @@ import { SchemaResolver } from "@ethereum-attestation-service/eas-contracts/cont
 import { IEAS, Attestation } from "@ethereum-attestation-service/eas-contracts/contracts/IEAS.sol";
 import { EMPTY_UID } from "@ethereum-attestation-service/eas-contracts/contracts/Common.sol";
 
+/// @dev Minimal interface for the EFSIndexer functions TagResolver needs.
+interface IEFSIndexerForTag {
+    function index(bytes32 uid) external returns (bool);
+    function indexRevocation(bytes32 uid) external;
+}
+
 /**
  * @title EFSTagResolver
  * @dev SchemaResolver for the EFS Tag schema. Enforces a singleton tagging pattern:
@@ -25,6 +31,10 @@ contract TagResolver is SchemaResolver {
     /// @notice The EAS schema UID for the Tag schema registered with this resolver
     bytes32 public immutable TAG_SCHEMA_UID;
 
+    /// @notice EFSIndexer reference — tag attestations are indexed so they are
+    ///         discoverable via getReferencingAttestations like any other schema.
+    IEFSIndexerForTag public immutable indexer;
+
     // Singleton map: keccak256(attester, targetID, definition) => active attestation UID
     mapping(bytes32 => bytes32) private _activeTag;
 
@@ -44,8 +54,9 @@ contract TagResolver is SchemaResolver {
     mapping(bytes32 => bytes32[]) private _taggedTargets;
     mapping(bytes32 => mapping(bytes32 => bool)) private _hasTarget;
 
-    constructor(IEAS eas, bytes32 tagSchemaUID) SchemaResolver(eas) {
+    constructor(IEAS eas, bytes32 tagSchemaUID, IEFSIndexerForTag _indexer) SchemaResolver(eas) {
         TAG_SCHEMA_UID = tagSchemaUID;
+        indexer = _indexer;
     }
 
     function onAttest(Attestation calldata attestation, uint256 /*value*/) internal override returns (bool) {
@@ -81,6 +92,10 @@ contract TagResolver is SchemaResolver {
             }
         }
 
+        // Register in EFSIndexer so tags are discoverable via getReferencingAttestations,
+        // getAttestationsBySchema, and getOutgoingAttestations — same as SORT_INFO.
+        indexer.index(attestation.uid);
+
         return true;
     }
 
@@ -100,6 +115,9 @@ contract TagResolver is SchemaResolver {
             delete _activeTag[compositeHash];
             delete _isApplied[compositeHash];
         }
+
+        // Mirror revocation into EFSIndexer so isRevoked() stays in sync.
+        indexer.indexRevocation(attestation.uid);
 
         return true;
     }
