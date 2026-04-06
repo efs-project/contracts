@@ -61,6 +61,20 @@ Tags can be removed through two mechanisms:
 1. **Revocation**: Calling `eas.revoke()` on the active tag attestation UID. The `EFSTagResolver` clears the active mapping if the revoked UID matches the currently active one. This is the preferred removal method.
 2. **Superseding with `applies=false`**: Creating a new Tag attestation with the same `(attester, target, definition)` triple but `applies=false`. The new attestation logically supersedes the old one. The active UID is updated to the negation attestation. This leaves an on-chain record of the explicit removal.
 
+## 5. Sort Info Schema
+**Purpose**: Declares a named sort overlay attached to a directory or list.
+**Structure**:
+`refUID = Naming Anchor UID — the Anchor is a child of the directory being sorted (anchorSchema = SORT_INFO_SCHEMA)`
+- `sortFunc` (address) — `ISortFunc` comparator contract. Implements `isLessThan(a, b, sortInfoUID)` and `getSortKey(uid, sortInfoUID)`.
+- `targetSchema` (bytes32) — Which Anchor schema to sort. `bytes32(0)` = all children. `DATA_SCHEMA` = file anchors only.
+- Revocable: `true` — revoking signals "I'm done maintaining this sort; hide from menu"
+
+**Details**: A SORT_INFO attestation names a sort by creating a naming Anchor as a child of the directory. The naming Anchor's `anchorSchema = SORT_INFO_SCHEMA` distinguishes it from file Anchors. The `EFSSortOverlay` contract is the resolver — it validates the `sortFunc` address and caches the sort config. The actual sorted data lives in the sort overlay's per-attester linked lists, populated lazily by `processItems` calls.
+
+Multiple attesters can each call `processItems` for the same sort, building their own independent sorted views. The `getSortStaleness(sortInfoUID, attester)` function reports how many kernel items are unprocessed.
+
+See [Lists and Collections](./06-Lists-and-Collections.md) for the full architecture.
+
 ## Schema Hierarchy
 To represent a standard filesystem interaction where a file has a name within a folder:
 1. **Parent Topic** (e.g., Folder "memes") ->

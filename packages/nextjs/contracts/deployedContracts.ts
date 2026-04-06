@@ -7,7 +7,7 @@ import { GenericContractsDeclaration } from "~~/utils/scaffold-eth/contract";
 const deployedContracts = {
   31337: {
     EFSFileView: {
-      address: "0x6bC3217Cc933c55EFf5951f4022c8a9dDB4F4023",
+      address: "0x3391B40E0993F5939ed8D9eFe6165303AAe0C307",
       abi: [
         {
           inputs: [
@@ -235,6 +235,102 @@ const deployedContracts = {
           type: "function",
         },
         {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "parentAnchor",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "anchorSchema",
+              type: "bytes32",
+            },
+            {
+              internalType: "address[]",
+              name: "attesters",
+              type: "address[]",
+            },
+            {
+              internalType: "uint256",
+              name: "startingCursor",
+              type: "uint256",
+            },
+            {
+              internalType: "uint256",
+              name: "pageSize",
+              type: "uint256",
+            },
+          ],
+          name: "getDirectoryPageBySchemaAndAddressList",
+          outputs: [
+            {
+              components: [
+                {
+                  internalType: "bytes32",
+                  name: "uid",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "string",
+                  name: "name",
+                  type: "string",
+                },
+                {
+                  internalType: "bytes32",
+                  name: "parentUID",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "bool",
+                  name: "isFolder",
+                  type: "bool",
+                },
+                {
+                  internalType: "bool",
+                  name: "hasData",
+                  type: "bool",
+                },
+                {
+                  internalType: "uint256",
+                  name: "childCount",
+                  type: "uint256",
+                },
+                {
+                  internalType: "uint256",
+                  name: "propertyCount",
+                  type: "uint256",
+                },
+                {
+                  internalType: "uint64",
+                  name: "timestamp",
+                  type: "uint64",
+                },
+                {
+                  internalType: "address",
+                  name: "attester",
+                  type: "address",
+                },
+                {
+                  internalType: "bytes32",
+                  name: "schema",
+                  type: "bytes32",
+                },
+              ],
+              internalType: "struct EFSFileView.FileSystemItem[]",
+              name: "items",
+              type: "tuple[]",
+            },
+            {
+              internalType: "uint256",
+              name: "nextCursor",
+              type: "uint256",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
           inputs: [],
           name: "indexer",
           outputs: [
@@ -251,7 +347,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     EFSRouter: {
-      address: "0xD4aA8Dc4B38673142C9b082b57c193eBB3690C37",
+      address: "0xc3C05009ac3D62745F4766136a7c68D334D0377E",
       abi: [
         {
           inputs: [
@@ -387,8 +483,806 @@ const deployedContracts = {
       ],
       inheritedFunctions: {},
     },
+    EFSSortOverlay: {
+      address: "0xa4D65644614de0441F8bDD2f6Cf43629db861725",
+      abi: [
+        {
+          inputs: [
+            {
+              internalType: "contract IEAS",
+              name: "eas",
+              type: "address",
+            },
+            {
+              internalType: "bytes32",
+              name: "sortInfoSchemaUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "contract EFSIndexer",
+              name: "_indexer",
+              type: "address",
+            },
+          ],
+          stateMutability: "nonpayable",
+          type: "constructor",
+        },
+        {
+          inputs: [],
+          name: "AccessDenied",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "ArrayLengthMismatch",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "InsufficientValue",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "InvalidEAS",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "InvalidItem",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "InvalidLength",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "InvalidPosition",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "InvalidSortInfo",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "LimitTooLarge",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "NotPayable",
+          type: "error",
+        },
+        {
+          anonymous: false,
+          inputs: [
+            {
+              indexed: true,
+              internalType: "bytes32",
+              name: "sortInfoUID",
+              type: "bytes32",
+            },
+            {
+              indexed: true,
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+            {
+              indexed: true,
+              internalType: "bytes32",
+              name: "itemUID",
+              type: "bytes32",
+            },
+            {
+              indexed: false,
+              internalType: "bytes32",
+              name: "leftNeighbour",
+              type: "bytes32",
+            },
+            {
+              indexed: false,
+              internalType: "bytes32",
+              name: "rightNeighbour",
+              type: "bytes32",
+            },
+          ],
+          name: "ItemSorted",
+          type: "event",
+        },
+        {
+          inputs: [],
+          name: "MAX_PAGE_SIZE",
+          outputs: [
+            {
+              internalType: "uint256",
+              name: "",
+              type: "uint256",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "SORT_INFO_SCHEMA_UID",
+          outputs: [
+            {
+              internalType: "bytes32",
+              name: "",
+              type: "bytes32",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              components: [
+                {
+                  internalType: "bytes32",
+                  name: "uid",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "bytes32",
+                  name: "schema",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "uint64",
+                  name: "time",
+                  type: "uint64",
+                },
+                {
+                  internalType: "uint64",
+                  name: "expirationTime",
+                  type: "uint64",
+                },
+                {
+                  internalType: "uint64",
+                  name: "revocationTime",
+                  type: "uint64",
+                },
+                {
+                  internalType: "bytes32",
+                  name: "refUID",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "address",
+                  name: "recipient",
+                  type: "address",
+                },
+                {
+                  internalType: "address",
+                  name: "attester",
+                  type: "address",
+                },
+                {
+                  internalType: "bool",
+                  name: "revocable",
+                  type: "bool",
+                },
+                {
+                  internalType: "bytes",
+                  name: "data",
+                  type: "bytes",
+                },
+              ],
+              internalType: "struct Attestation",
+              name: "attestation",
+              type: "tuple",
+            },
+          ],
+          name: "attest",
+          outputs: [
+            {
+              internalType: "bool",
+              name: "",
+              type: "bool",
+            },
+          ],
+          stateMutability: "payable",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "sortInfoUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+            {
+              internalType: "bytes32[]",
+              name: "newItems",
+              type: "bytes32[]",
+            },
+          ],
+          name: "computeHints",
+          outputs: [
+            {
+              internalType: "bytes32[]",
+              name: "leftHints",
+              type: "bytes32[]",
+            },
+            {
+              internalType: "bytes32[]",
+              name: "rightHints",
+              type: "bytes32[]",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "sortInfoUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+          ],
+          name: "getLastProcessedIndex",
+          outputs: [
+            {
+              internalType: "uint256",
+              name: "",
+              type: "uint256",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "sortInfoUID",
+              type: "bytes32",
+            },
+          ],
+          name: "getSortConfig",
+          outputs: [
+            {
+              components: [
+                {
+                  internalType: "address",
+                  name: "sortFunc",
+                  type: "address",
+                },
+                {
+                  internalType: "bytes32",
+                  name: "targetSchema",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "bytes32",
+                  name: "parentUID",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "bool",
+                  name: "valid",
+                  type: "bool",
+                },
+                {
+                  internalType: "bool",
+                  name: "revoked",
+                  type: "bool",
+                },
+              ],
+              internalType: "struct EFSSortOverlay.SortConfig",
+              name: "",
+              type: "tuple",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "sortInfoUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+          ],
+          name: "getSortHead",
+          outputs: [
+            {
+              internalType: "bytes32",
+              name: "",
+              type: "bytes32",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "sortInfoUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+          ],
+          name: "getSortLength",
+          outputs: [
+            {
+              internalType: "uint256",
+              name: "",
+              type: "uint256",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "sortInfoUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+            {
+              internalType: "bytes32",
+              name: "itemUID",
+              type: "bytes32",
+            },
+          ],
+          name: "getSortNode",
+          outputs: [
+            {
+              components: [
+                {
+                  internalType: "bytes32",
+                  name: "prev",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "bytes32",
+                  name: "next",
+                  type: "bytes32",
+                },
+              ],
+              internalType: "struct EFSSortOverlay.Node",
+              name: "",
+              type: "tuple",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "sortInfoUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+          ],
+          name: "getSortStaleness",
+          outputs: [
+            {
+              internalType: "uint256",
+              name: "",
+              type: "uint256",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "sortInfoUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+          ],
+          name: "getSortTail",
+          outputs: [
+            {
+              internalType: "bytes32",
+              name: "",
+              type: "bytes32",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "sortInfoUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+            {
+              internalType: "bytes32",
+              name: "startNode",
+              type: "bytes32",
+            },
+            {
+              internalType: "uint256",
+              name: "limit",
+              type: "uint256",
+            },
+          ],
+          name: "getSortedChunk",
+          outputs: [
+            {
+              internalType: "bytes32[]",
+              name: "items",
+              type: "bytes32[]",
+            },
+            {
+              internalType: "bytes32",
+              name: "nextCursor",
+              type: "bytes32",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "indexer",
+          outputs: [
+            {
+              internalType: "contract EFSIndexer",
+              name: "",
+              type: "address",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "isPayable",
+          outputs: [
+            {
+              internalType: "bool",
+              name: "",
+              type: "bool",
+            },
+          ],
+          stateMutability: "pure",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              components: [
+                {
+                  internalType: "bytes32",
+                  name: "uid",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "bytes32",
+                  name: "schema",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "uint64",
+                  name: "time",
+                  type: "uint64",
+                },
+                {
+                  internalType: "uint64",
+                  name: "expirationTime",
+                  type: "uint64",
+                },
+                {
+                  internalType: "uint64",
+                  name: "revocationTime",
+                  type: "uint64",
+                },
+                {
+                  internalType: "bytes32",
+                  name: "refUID",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "address",
+                  name: "recipient",
+                  type: "address",
+                },
+                {
+                  internalType: "address",
+                  name: "attester",
+                  type: "address",
+                },
+                {
+                  internalType: "bool",
+                  name: "revocable",
+                  type: "bool",
+                },
+                {
+                  internalType: "bytes",
+                  name: "data",
+                  type: "bytes",
+                },
+              ],
+              internalType: "struct Attestation[]",
+              name: "attestations",
+              type: "tuple[]",
+            },
+            {
+              internalType: "uint256[]",
+              name: "values",
+              type: "uint256[]",
+            },
+          ],
+          name: "multiAttest",
+          outputs: [
+            {
+              internalType: "bool",
+              name: "",
+              type: "bool",
+            },
+          ],
+          stateMutability: "payable",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              components: [
+                {
+                  internalType: "bytes32",
+                  name: "uid",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "bytes32",
+                  name: "schema",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "uint64",
+                  name: "time",
+                  type: "uint64",
+                },
+                {
+                  internalType: "uint64",
+                  name: "expirationTime",
+                  type: "uint64",
+                },
+                {
+                  internalType: "uint64",
+                  name: "revocationTime",
+                  type: "uint64",
+                },
+                {
+                  internalType: "bytes32",
+                  name: "refUID",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "address",
+                  name: "recipient",
+                  type: "address",
+                },
+                {
+                  internalType: "address",
+                  name: "attester",
+                  type: "address",
+                },
+                {
+                  internalType: "bool",
+                  name: "revocable",
+                  type: "bool",
+                },
+                {
+                  internalType: "bytes",
+                  name: "data",
+                  type: "bytes",
+                },
+              ],
+              internalType: "struct Attestation[]",
+              name: "attestations",
+              type: "tuple[]",
+            },
+            {
+              internalType: "uint256[]",
+              name: "values",
+              type: "uint256[]",
+            },
+          ],
+          name: "multiRevoke",
+          outputs: [
+            {
+              internalType: "bool",
+              name: "",
+              type: "bool",
+            },
+          ],
+          stateMutability: "payable",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "sortInfoUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32[]",
+              name: "items",
+              type: "bytes32[]",
+            },
+            {
+              internalType: "bytes32[]",
+              name: "leftHints",
+              type: "bytes32[]",
+            },
+            {
+              internalType: "bytes32[]",
+              name: "rightHints",
+              type: "bytes32[]",
+            },
+          ],
+          name: "processItems",
+          outputs: [],
+          stateMutability: "nonpayable",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              components: [
+                {
+                  internalType: "bytes32",
+                  name: "uid",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "bytes32",
+                  name: "schema",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "uint64",
+                  name: "time",
+                  type: "uint64",
+                },
+                {
+                  internalType: "uint64",
+                  name: "expirationTime",
+                  type: "uint64",
+                },
+                {
+                  internalType: "uint64",
+                  name: "revocationTime",
+                  type: "uint64",
+                },
+                {
+                  internalType: "bytes32",
+                  name: "refUID",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "address",
+                  name: "recipient",
+                  type: "address",
+                },
+                {
+                  internalType: "address",
+                  name: "attester",
+                  type: "address",
+                },
+                {
+                  internalType: "bool",
+                  name: "revocable",
+                  type: "bool",
+                },
+                {
+                  internalType: "bytes",
+                  name: "data",
+                  type: "bytes",
+                },
+              ],
+              internalType: "struct Attestation",
+              name: "attestation",
+              type: "tuple",
+            },
+          ],
+          name: "revoke",
+          outputs: [
+            {
+              internalType: "bool",
+              name: "",
+              type: "bool",
+            },
+          ],
+          stateMutability: "payable",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "version",
+          outputs: [
+            {
+              internalType: "string",
+              name: "",
+              type: "string",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          stateMutability: "payable",
+          type: "receive",
+        },
+      ],
+      inheritedFunctions: {
+        attest:
+          "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
+        isPayable:
+          "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
+        multiAttest:
+          "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
+        multiRevoke:
+          "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
+        revoke:
+          "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
+        version:
+          "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
+      },
+    },
     Indexer: {
-      address: "0x7BE9b851DE26831D2917FA23D4DC7DF45b74573e",
+      address: "0xD8064E2FacCFcEEa46CB3E825D29e62c14315D6E",
       abi: [
         {
           inputs: [
@@ -424,6 +1318,11 @@ const deployedContracts = {
         {
           inputs: [],
           name: "AccessDenied",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "AlreadyIndexed",
           type: "error",
         },
         {
@@ -467,6 +1366,144 @@ const deployedContracts = {
           type: "error",
         },
         {
+          anonymous: false,
+          inputs: [
+            {
+              indexed: true,
+              internalType: "bytes32",
+              name: "parentUID",
+              type: "bytes32",
+            },
+            {
+              indexed: true,
+              internalType: "bytes32",
+              name: "anchorUID",
+              type: "bytes32",
+            },
+            {
+              indexed: true,
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+            {
+              indexed: false,
+              internalType: "bytes32",
+              name: "anchorSchema",
+              type: "bytes32",
+            },
+          ],
+          name: "AnchorCreated",
+          type: "event",
+        },
+        {
+          anonymous: false,
+          inputs: [
+            {
+              indexed: true,
+              internalType: "bytes32",
+              name: "uid",
+              type: "bytes32",
+            },
+            {
+              indexed: true,
+              internalType: "bytes32",
+              name: "schema",
+              type: "bytes32",
+            },
+            {
+              indexed: true,
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+          ],
+          name: "AttestationIndexed",
+          type: "event",
+        },
+        {
+          anonymous: false,
+          inputs: [
+            {
+              indexed: true,
+              internalType: "bytes32",
+              name: "uid",
+              type: "bytes32",
+            },
+            {
+              indexed: true,
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+          ],
+          name: "AttestationRevoked",
+          type: "event",
+        },
+        {
+          anonymous: false,
+          inputs: [
+            {
+              indexed: true,
+              internalType: "bytes32",
+              name: "anchorUID",
+              type: "bytes32",
+            },
+            {
+              indexed: true,
+              internalType: "bytes32",
+              name: "dataUID",
+              type: "bytes32",
+            },
+            {
+              indexed: true,
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+          ],
+          name: "DataCreated",
+          type: "event",
+        },
+        {
+          anonymous: false,
+          inputs: [
+            {
+              indexed: true,
+              internalType: "bytes32",
+              name: "anchorUID",
+              type: "bytes32",
+            },
+            {
+              indexed: true,
+              internalType: "bytes32",
+              name: "propertyUID",
+              type: "bytes32",
+            },
+            {
+              indexed: true,
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+          ],
+          name: "PropertyCreated",
+          type: "event",
+        },
+        {
+          anonymous: false,
+          inputs: [
+            {
+              indexed: true,
+              internalType: "bytes32",
+              name: "uid",
+              type: "bytes32",
+            },
+          ],
+          name: "RevocationIndexed",
+          type: "event",
+        },
+        {
           inputs: [],
           name: "ANCHOR_SCHEMA_UID",
           outputs: [
@@ -507,7 +1544,46 @@ const deployedContracts = {
         },
         {
           inputs: [],
+          name: "DEPLOYER",
+          outputs: [
+            {
+              internalType: "address",
+              name: "",
+              type: "address",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [],
           name: "PROPERTY_SCHEMA_UID",
+          outputs: [
+            {
+              internalType: "bytes32",
+              name: "",
+              type: "bytes32",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "SORT_INFO_SCHEMA_UID",
+          outputs: [
+            {
+              internalType: "bytes32",
+              name: "",
+              type: "bytes32",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "TAG_SCHEMA_UID",
           outputs: [
             {
               internalType: "bytes32",
@@ -722,6 +1798,11 @@ const deployedContracts = {
               name: "reverseOrder",
               type: "bool",
             },
+            {
+              internalType: "bool",
+              name: "showRevoked",
+              type: "bool",
+            },
           ],
           name: "getAnchorsBySchema",
           outputs: [
@@ -729,6 +1810,99 @@ const deployedContracts = {
               internalType: "bytes32[]",
               name: "",
               type: "bytes32[]",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "anchorUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "schema",
+              type: "bytes32",
+            },
+            {
+              internalType: "uint256",
+              name: "start",
+              type: "uint256",
+            },
+            {
+              internalType: "uint256",
+              name: "length",
+              type: "uint256",
+            },
+            {
+              internalType: "bool",
+              name: "reverseOrder",
+              type: "bool",
+            },
+          ],
+          name: "getAnchorsBySchema",
+          outputs: [
+            {
+              internalType: "bytes32[]",
+              name: "",
+              type: "bytes32[]",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "parentUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "anchorSchema",
+              type: "bytes32",
+            },
+            {
+              internalType: "address[]",
+              name: "attesters",
+              type: "address[]",
+            },
+            {
+              internalType: "uint256",
+              name: "startCursor",
+              type: "uint256",
+            },
+            {
+              internalType: "uint256",
+              name: "pageSize",
+              type: "uint256",
+            },
+            {
+              internalType: "bool",
+              name: "reverseOrder",
+              type: "bool",
+            },
+            {
+              internalType: "bool",
+              name: "showRevoked",
+              type: "bool",
+            },
+          ],
+          name: "getAnchorsBySchemaAndAddressList",
+          outputs: [
+            {
+              internalType: "bytes32[]",
+              name: "results",
+              type: "bytes32[]",
+            },
+            {
+              internalType: "uint256",
+              name: "nextCursor",
+              type: "uint256",
             },
           ],
           stateMutability: "view",
@@ -872,6 +2046,11 @@ const deployedContracts = {
               name: "reverseOrder",
               type: "bool",
             },
+            {
+              internalType: "bool",
+              name: "showRevoked",
+              type: "bool",
+            },
           ],
           name: "getChildren",
           outputs: [
@@ -879,6 +2058,89 @@ const deployedContracts = {
               internalType: "bytes32[]",
               name: "",
               type: "bytes32[]",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "anchorUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "uint256",
+              name: "start",
+              type: "uint256",
+            },
+            {
+              internalType: "uint256",
+              name: "length",
+              type: "uint256",
+            },
+            {
+              internalType: "bool",
+              name: "reverseOrder",
+              type: "bool",
+            },
+          ],
+          name: "getChildren",
+          outputs: [
+            {
+              internalType: "bytes32[]",
+              name: "",
+              type: "bytes32[]",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "parentUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "address[]",
+              name: "attesters",
+              type: "address[]",
+            },
+            {
+              internalType: "uint256",
+              name: "startCursor",
+              type: "uint256",
+            },
+            {
+              internalType: "uint256",
+              name: "pageSize",
+              type: "uint256",
+            },
+            {
+              internalType: "bool",
+              name: "reverseOrder",
+              type: "bool",
+            },
+            {
+              internalType: "bool",
+              name: "showRevoked",
+              type: "bool",
+            },
+          ],
+          name: "getChildrenByAddressList",
+          outputs: [
+            {
+              internalType: "bytes32[]",
+              name: "results",
+              type: "bytes32[]",
+            },
+            {
+              internalType: "uint256",
+              name: "nextCursor",
+              type: "uint256",
             },
           ],
           stateMutability: "view",
@@ -917,7 +2179,7 @@ const deployedContracts = {
               type: "bool",
             },
           ],
-          name: "getChildrenByAddressList",
+          name: "getChildrenByAddressListInterleaved",
           outputs: [
             {
               internalType: "bytes32[]",
@@ -928,6 +2190,50 @@ const deployedContracts = {
               internalType: "uint256",
               name: "nextCursor",
               type: "uint256",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "anchorUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+            {
+              internalType: "uint256",
+              name: "start",
+              type: "uint256",
+            },
+            {
+              internalType: "uint256",
+              name: "length",
+              type: "uint256",
+            },
+            {
+              internalType: "bool",
+              name: "reverseOrder",
+              type: "bool",
+            },
+            {
+              internalType: "bool",
+              name: "showRevoked",
+              type: "bool",
+            },
+          ],
+          name: "getChildrenByAttester",
+          outputs: [
+            {
+              internalType: "bytes32[]",
+              name: "",
+              type: "bytes32[]",
             },
           ],
           stateMutability: "view",
@@ -980,6 +2286,59 @@ const deployedContracts = {
               type: "bytes32",
             },
             {
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+            {
+              internalType: "uint256",
+              name: "idx",
+              type: "uint256",
+            },
+          ],
+          name: "getChildrenByAttesterAt",
+          outputs: [
+            {
+              internalType: "bytes32",
+              name: "",
+              type: "bytes32",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "anchorUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+          ],
+          name: "getChildrenByAttesterCount",
+          outputs: [
+            {
+              internalType: "uint256",
+              name: "",
+              type: "uint256",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "anchorUID",
+              type: "bytes32",
+            },
+            {
               internalType: "string",
               name: "mimeType",
               type: "string",
@@ -997,6 +2356,50 @@ const deployedContracts = {
             {
               internalType: "bool",
               name: "reverseOrder",
+              type: "bool",
+            },
+          ],
+          name: "getChildrenByType",
+          outputs: [
+            {
+              internalType: "bytes32[]",
+              name: "",
+              type: "bytes32[]",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "anchorUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "string",
+              name: "mimeType",
+              type: "string",
+            },
+            {
+              internalType: "uint256",
+              name: "start",
+              type: "uint256",
+            },
+            {
+              internalType: "uint256",
+              name: "length",
+              type: "uint256",
+            },
+            {
+              internalType: "bool",
+              name: "reverseOrder",
+              type: "bool",
+            },
+            {
+              internalType: "bool",
+              name: "showRevoked",
               type: "bool",
             },
           ],
@@ -1227,6 +2630,25 @@ const deployedContracts = {
           inputs: [
             {
               internalType: "bytes32",
+              name: "anchorUID",
+              type: "bytes32",
+            },
+          ],
+          name: "getParent",
+          outputs: [
+            {
+              internalType: "bytes32",
+              name: "",
+              type: "bytes32",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
               name: "targetUID",
               type: "bytes32",
             },
@@ -1442,6 +2864,76 @@ const deployedContracts = {
           type: "function",
         },
         {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "uid",
+              type: "bytes32",
+            },
+          ],
+          name: "index",
+          outputs: [
+            {
+              internalType: "bool",
+              name: "wasIndexed",
+              type: "bool",
+            },
+          ],
+          stateMutability: "nonpayable",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32[]",
+              name: "uids",
+              type: "bytes32[]",
+            },
+          ],
+          name: "indexBatch",
+          outputs: [
+            {
+              internalType: "uint256",
+              name: "count",
+              type: "uint256",
+            },
+          ],
+          stateMutability: "nonpayable",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "uid",
+              type: "bytes32",
+            },
+          ],
+          name: "indexRevocation",
+          outputs: [],
+          stateMutability: "nonpayable",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "uid",
+              type: "bytes32",
+            },
+          ],
+          name: "isIndexed",
+          outputs: [
+            {
+              internalType: "bool",
+              name: "",
+              type: "bool",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
           inputs: [],
           name: "isPayable",
           outputs: [
@@ -1452,6 +2944,25 @@ const deployedContracts = {
             },
           ],
           stateMutability: "pure",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "uid",
+              type: "bytes32",
+            },
+          ],
+          name: "isRevoked",
+          outputs: [
+            {
+              internalType: "bool",
+              name: "",
+              type: "bool",
+            },
+          ],
+          stateMutability: "view",
           type: "function",
         },
         {
@@ -1745,6 +3256,45 @@ const deployedContracts = {
         },
         {
           inputs: [],
+          name: "schemaRegistry",
+          outputs: [
+            {
+              internalType: "address",
+              name: "",
+              type: "address",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "sortOverlay",
+          outputs: [
+            {
+              internalType: "address",
+              name: "",
+              type: "address",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "tagResolver",
+          outputs: [
+            {
+              internalType: "address",
+              name: "",
+              type: "address",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [],
           name: "version",
           outputs: [
             {
@@ -1757,6 +3307,39 @@ const deployedContracts = {
           type: "function",
         },
         {
+          inputs: [
+            {
+              internalType: "address",
+              name: "_tagResolver",
+              type: "address",
+            },
+            {
+              internalType: "bytes32",
+              name: "_tagSchemaUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "address",
+              name: "_sortOverlay",
+              type: "address",
+            },
+            {
+              internalType: "bytes32",
+              name: "_sortInfoSchemaUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "address",
+              name: "_schemaRegistry",
+              type: "address",
+            },
+          ],
+          name: "wireContracts",
+          outputs: [],
+          stateMutability: "nonpayable",
+          type: "function",
+        },
+        {
           stateMutability: "payable",
           type: "receive",
         },
@@ -1764,7 +3347,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     SchemaNameIndex: {
-      address: "0x71694abF0428b5c6C21e62471621E725404ca2F2",
+      address: "0x133e572aAdac7979E9A48Ac10312b6A3dd7514d3",
       abi: [
         {
           inputs: [
@@ -1869,7 +3452,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     TagResolver: {
-      address: "0x6c63039d1DC5eE2bBa2dBF7B09f7201909E9f2c1",
+      address: "0x64CD379945B4b553d9b245Ec0E83861b5A33c9Dd",
       abi: [
         {
           inputs: [
@@ -1882,6 +3465,11 @@ const deployedContracts = {
               internalType: "bytes32",
               name: "tagSchemaUID",
               type: "bytes32",
+            },
+            {
+              internalType: "contract IEFSIndexerForTag",
+              name: "_indexer",
+              type: "address",
             },
           ],
           stateMutability: "nonpayable",
@@ -2121,6 +3709,19 @@ const deployedContracts = {
               internalType: "bytes32[]",
               name: "",
               type: "bytes32[]",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "indexer",
+          outputs: [
+            {
+              internalType: "contract IEFSIndexerForTag",
+              name: "",
+              type: "address",
             },
           ],
           stateMutability: "view",

@@ -31,6 +31,7 @@
     "hardhat:lint-staged": "yarn workspace @se-2/hardhat lint-staged",
     "hardhat:test": "yarn workspace @se-2/hardhat test",
     "hardhat:simulate": "yarn workspace @se-2/hardhat simulate",
+    "hardhat:simulate:sort": "yarn workspace @se-2/hardhat simulate:sort",
     "hardhat:verify": "yarn workspace @se-2/hardhat verify",
     "postinstall": "husky install",
     "lint": "yarn next:lint && yarn hardhat:lint",

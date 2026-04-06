@@ -1,5 +1,5 @@
 import { ethers } from "hardhat";
-import { EFSIndexer } from "../typechain-types";
+import { EFSIndexer, TagResolver } from "../typechain-types";
 
 /**
  * EFS File Browser Simulation
@@ -44,9 +44,12 @@ async function main() {
     easAddress,
   );
 
+  // All schema UIDs and partner contract addresses are available on EFSIndexer
   const anchorSchemaUID = await indexer.ANCHOR_SCHEMA_UID();
   const dataSchemaUID = await indexer.DATA_SCHEMA_UID();
   const tagSchemaUID = await indexer.TAG_SCHEMA_UID();
+  const tagResolverAddr = await indexer.tagResolver();
+  const tagResolver = (await ethers.getContractAt("TagResolver", tagResolverAddr)) as unknown as TagResolver;
   const rootUID = await indexer.rootAnchorUID();
 
   console.log(`Indexer: ${indexer.target}`);
@@ -101,15 +104,15 @@ async function main() {
     return getUID(tx);
   };
 
-  const tag = async (signer: any, target: string, label: string, weight: bigint) => {
+  const tag = async (signer: any, targetUID: string, definition: string, applies: boolean) => {
     const tx = await eas.connect(signer).attest({
       schema: tagSchemaUID,
       data: {
         recipient: ethers.ZeroAddress,
         expirationTime: 0n,
         revocable: true,
-        refUID: target,
-        data: encode.encode(["bytes32", "int256"], [label, weight]),
+        refUID: targetUID,
+        data: encode.encode(["bytes32", "bool"], [definition, applies]),
         value: 0n,
       },
     });
@@ -175,7 +178,7 @@ async function main() {
 
   // ── Test 2: List Children (global) ──
   console.log("\n[2] Children Listing");
-  const petsChildren = await indexer.getChildren(petsUID, 0n, 10, false);
+  const petsChildren = await indexer["getChildren(bytes32,uint256,uint256,bool)"](petsUID, 0n, 10, false);
   assert(
     "getChildren(/pets/) returns 3 (best.jpg, cats, dogs)",
     petsChildren.length === 3,
@@ -185,8 +188,10 @@ async function main() {
   const petsCount = await indexer.getChildrenCount(petsUID);
   assert("getChildrenCount matches", petsCount === 3n);
 
-  // ── Test 3: Edition List (getChildrenByAddressList) ──
+  // ── Test 3: Edition Directory Listing (getChildrenByAddressList — dedup) ──
   console.log("\n[3] Edition Directory Listing");
+  // /pets/ has: best.jpg (owner, user1, user2 all have DATA), cats/ (owner), dogs/ (owner)
+  // All 3 unique anchors qualify for [u1, u2, owner]. Should return exactly 3 with no duplicates.
   const [editionList] = await indexer.getChildrenByAddressList(
     petsUID,
     [u1Addr, u2Addr, ownerAddr],
@@ -196,10 +201,12 @@ async function main() {
     false,
   );
   assert(
-    "getChildrenByAddressList returns items from all 3 users",
-    editionList.length > 0,
+    "getChildrenByAddressList returns 3 unique items (best.jpg, cats, dogs)",
+    editionList.length === 3,
     `got ${editionList.length} items`,
   );
+  // First item = first in global insertion order (best.jpg was created first)
+  assert("First item is best.jpg (insertion order)", editionList[0] === bestUID);
 
   // ── Test 4: Open File (getDataByAddressList) ──
   console.log("\n[4] Open File — Edition Fallback");
@@ -219,18 +226,30 @@ async function main() {
 
   // ── Test 5: Subdirectory Navigation ──
   console.log("\n[5] Subdirectory Navigation");
-  const catsChildren = await indexer.getChildren(catsUID, 0, 10, false);
+  const catsChildren = await indexer["getChildren(bytes32,uint256,uint256,bool)"](catsUID, 0, 10, false);
   assert("/pets/cats/ has 2 files", catsChildren.length === 2);
 
-  const dogsChildren = await indexer.getChildren(dogsUID, 0, 10, false);
+  const dogsChildren = await indexer["getChildren(bytes32,uint256,uint256,bool)"](dogsUID, 0, 10, false);
   assert("/pets/dogs/ has 1 file", dogsChildren.length === 1);
 
   // ── Test 6: Filter by MIME Type ──
   console.log("\n[6] MIME Type Filtering");
-  const imagesInPets = await indexer.getChildrenByType(petsUID, "image", 0, 10, false);
+  const imagesInPets = await indexer["getChildrenByType(bytes32,string,uint256,uint256,bool)"](
+    petsUID,
+    "image",
+    0,
+    10,
+    false,
+  );
   assert("image/* in /pets/", imagesInPets.length > 0, `found ${imagesInPets.length}`);
 
-  const jpegInPets = await indexer.getChildrenByType(petsUID, "image/jpeg", 0, 10, false);
+  const jpegInPets = await indexer["getChildrenByType(bytes32,string,uint256,uint256,bool)"](
+    petsUID,
+    "image/jpeg",
+    0,
+    10,
+    false,
+  );
   assert("image/jpeg in /pets/", jpegInPets.length > 0, `found ${jpegInPets.length}`);
 
   // ── Test 7: Revoke + Fallback ──
@@ -263,8 +282,8 @@ async function main() {
   const u1HistCount = await indexer.getDataHistoryCountByAddress(bestUID, u1Addr);
   assert("getDataHistoryCountByAddress = 1", u1HistCount === 1n);
 
-  // ── Test 9: Large Pagination with Duplicate Detection ──
-  console.log("\n[9] Large Pagination (30 files × 3 users)");
+  // ── Test 9: getChildrenByAddressList — dedup pagination ──
+  console.log("\n[9] Dedup Pagination (30 files × 3 users, getChildrenByAddressList)");
   const spamParent = await anchor(owner, `spam_${S}`, rootUID);
   const signers = [owner, user1, user2];
   for (let i = 0; i < 30; i++) {
@@ -289,16 +308,14 @@ async function main() {
   } while (cursor > 0n);
 
   assert(`Collected all 30 files across ${pages} pages`, allResults.length === 30, `got ${allResults.length}`);
-
-  // Check for duplicates
   const uniqueUIDs = new Set(allResults);
   assert(
-    "No duplicates in pagination",
+    "Guaranteed no duplicates (dedup version)",
     uniqueUIDs.size === allResults.length,
     `${uniqueUIDs.size} unique / ${allResults.length} total`,
   );
 
-  // ── Test 10: Reverse Order ──
+  // ── Test 10: Reverse order (dedup) ──
   console.log("\n[10] Reverse Order");
   const [fwd] = await indexer.getChildrenByAddressList(spamParent, [ownerAddr, u1Addr, u2Addr], 0n, 5, false, false);
   const [rev] = await indexer.getChildrenByAddressList(spamParent, [ownerAddr, u1Addr, u2Addr], 0n, 5, true, false);
@@ -308,8 +325,8 @@ async function main() {
     `fwd[0]=${fwd[0].slice(0, 10)}… rev[0]=${rev[0].slice(0, 10)}…`,
   );
 
-  // ── Test 11: Unequal List Lengths ──
-  console.log("\n[11] Unequal List Lengths");
+  // ── Test 11: getChildrenByAddressListInterleaved — round-robin fair distribution ──
+  console.log("\n[11] Interleaved Round-Robin (getChildrenByAddressListInterleaved)");
   const unequalParent = await anchor(owner, `unequal_${S}`, rootUID);
   const bigUserFiles: string[] = [];
   for (let i = 0; i < 8; i++) {
@@ -317,7 +334,8 @@ async function main() {
   }
   const smallUserFile = await anchor(user2, `small0`, unequalParent);
 
-  const [uneqPage1, uneqCursor1] = await indexer.getChildrenByAddressList(
+  // Round-robin: user1[0], user2[0], user1[1], user1[2], ... (user2 exhausted after small0)
+  const [uneqPage1, uneqCursor1] = await indexer.getChildrenByAddressListInterleaved(
     unequalParent,
     [u1Addr, u2Addr],
     0n,
@@ -325,12 +343,11 @@ async function main() {
     false,
     false,
   );
-  assert("Page 1: 5 items", uneqPage1.length === 5, `got ${uneqPage1.length}`);
-  // Should round-robin: big0, small0, big1, big2, big3 (user2 exhausted after small0)
-  assert("Page 1 item 0 = User1's first", uneqPage1[0] === bigUserFiles[0]);
-  assert("Page 1 item 1 = User2's only file", uneqPage1[1] === smallUserFile);
+  assert("Interleaved page 1: 5 items", uneqPage1.length === 5, `got ${uneqPage1.length}`);
+  assert("Interleaved: item 0 = User1's first (round-robin start)", uneqPage1[0] === bigUserFiles[0]);
+  assert("Interleaved: item 1 = User2's only file (fair distribution)", uneqPage1[1] === smallUserFile);
 
-  const [uneqPage2, _uneqCursor2] = await indexer.getChildrenByAddressList(
+  const [uneqPage2, _uneqCursor2] = await indexer.getChildrenByAddressListInterleaved(
     unequalParent,
     [u1Addr, u2Addr],
     uneqCursor1,
@@ -338,21 +355,32 @@ async function main() {
     false,
     false,
   );
-  assert("Page 2: remaining 4 items", uneqPage2.length === 4, `got ${uneqPage2.length}`);
+  assert("Interleaved page 2: remaining 4 items", uneqPage2.length === 4, `got ${uneqPage2.length}`);
   assert(
-    "All 9 items returned across pages",
+    "Interleaved: all 9 items across both pages",
     uneqPage1.length + uneqPage2.length === 9,
     `${uneqPage1.length} + ${uneqPage2.length}`,
   );
 
   // ── Test 12: Tagging ──
   console.log("\n[12] Tagging");
-  const funnyLabel = await anchor(owner, `funny_${S}`, rootUID);
-  await tag(user1, vitalikUID, funnyLabel, 100n);
-  await tag(user2, vitalikUID, funnyLabel, -30n);
+  // Tag definitions live as Anchors under /tags/ — for simplicity, create one under root
+  const funnyDef = await anchor(owner, `funny_${S}`, rootUID);
 
-  const weight = await indexer.getTagWeight(vitalikUID, funnyLabel);
-  assert("Tag weight = 70 (100 - 30)", weight === 70n, `got ${weight}`);
+  // User1 applies tag (applies=true), user2 negates it (applies=false)
+  const tagUID1 = await tag(user1, vitalikUID, funnyDef, true);
+  const tagUID2 = await tag(user2, vitalikUID, funnyDef, false);
+
+  // isActivelyTagged checks if any attester has applied this tag with applies=true
+  const activeUID1 = await tagResolver.getActiveTagUID(u1Addr, vitalikUID, funnyDef);
+  assert("User1's active tag UID matches", activeUID1 === tagUID1, `got ${activeUID1}`);
+
+  const activeUID2 = await tagResolver.getActiveTagUID(u2Addr, vitalikUID, funnyDef);
+  assert("User2's active tag UID matches (negation)", activeUID2 === tagUID2, `got ${activeUID2}`);
+
+  // isActivelyTagged checks if ANYONE has tagged this target with this definition (applies=true)
+  const tagged = await tagResolver.isActivelyTagged(vitalikUID, funnyDef);
+  assert("isActivelyTagged true (user1 applied it)", tagged === true, `got ${tagged}`);
 
   // ── Test 13: Deep Nesting (> 5 levels) ──
   console.log("\n[13] Deep Navigational Nesting");

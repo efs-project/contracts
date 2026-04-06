@@ -47,7 +47,7 @@ EFS files are modified by issuing new attestations over existing paths.
 ### 8. List Merged Directory by Trusted Addresses
 - **Action**: User opens `/pets/` and wants to see files uploaded by both "Vitalik" and "Self".
 - **Execution**: The client calls `getChildrenByAddressList` with the `parentUID`, passing `[Self, Vitalik]` and a target `pageSize`.
-- **Result**: The Indexer performs round-robin pagination, returning a mixed list of files from both users and a cursor to fetch the next page safely.
+- **Result**: The Indexer walks the global children array and returns only items where Self or Vitalik contributed — in insertion order, no duplicates. Pass the returned cursor to get the next page. For a fair round-robin view (giving each attester equal representation), use `getChildrenByAddressListInterleaved` instead.
 
 ### 9. Tag a File (Edition-Specific)
 - **Action**: User wants to tag their edition of `/memes/vitalik.jpg` as "funny".
@@ -76,3 +76,97 @@ EFS files are modified by issuing new attestations over existing paths.
 - **Action**: User B wants to mark User A's edition of `/memes/cat.gif` as "nsfw".
 - **Execution**: User B creates a Tag attestation with `refUID = dataA_UID` (User A's DATA UID), `definition = nsfwDefUID`, `applies = true`.
 - **Result**: The tag is stored under `keccak256(userB, dataA_UID, nsfwDefUID)`. User A's DATA UID now appears in `getTaggedTargets(nsfwDefUID)`. When anyone views User A's edition and filters by "nsfw", the file matches. User B's own edition is unaffected. Multiple users can independently tag the same DATA UID; each tag is stored under a separate attester key.
+
+---
+
+## List Workflows
+
+EFS lists use the kernel/overlay architecture: the kernel (EFSIndexer) tracks items in insertion order; the sort overlay (EFSSortOverlay) maintains per-attester sorted linked lists on top. There is no separate list contract. See [Lists and Collections](./06-Lists-and-Collections.md) for the full design.
+
+### 13. Create a New Sort and Add Items
+
+- **Step 1 — Create the directory**: The list is a normal EFS directory (Anchor). If it doesn't exist yet, attest an Anchor for it under the desired parent.
+- **Step 2 — Add items**: For each item, attest an Anchor as a child of the list directory. Set `anchorSchema = DATA_SCHEMA_UID` for file items. Items accumulate in the kernel in insertion order.
+- **Step 3 — Create a sort**: Attest an Anchor for the sort name (e.g. "alphabetical") under the list directory with `anchorSchema = SORT_INFO_SCHEMA_UID` as the naming anchor. Then attest a SORT_INFO attestation with `refUID = namingAnchorUID`, `sortFunc = <ISortFunc address>`, `targetSchema = bytes32(0)` (or restrict to a specific schema).
+- **Step 4 — Populate the sort**: Call `EFSSortOverlay.processItems(sortInfoUID, items, leftHints, rightHints)`. See workflow 14 for the hint computation algorithm.
+- **Result**: Items are pageable via `getSortedChunk(sortInfoUID, attester, bytes32(0), 10)`.
+
+### 14. Populate a Sort (processItems Client Algorithm)
+
+`processItems` requires the client to supply position hints for each new item. The full algorithm:
+
+**Inputs:**
+- `sortInfoUID` — the SORT_INFO attestation UID
+- `attester` — the address whose sorted view to update (msg.sender)
+
+**Step 1 — Determine what to process:**
+```
+lastIdx = overlay.getLastProcessedIndex(sortInfoUID, attester)
+newItems = indexer.getChildrenByAttester(dirUID, attester, lastIdx, pageSize, false, false)
+// newItems are in kernel insertion order starting from lastIdx
+```
+
+**Step 2 — Fetch the current sorted state:**
+```
+alreadySorted = readSortedAll(sortInfoUID, attester)  // via getSortedChunk pagination
+```
+
+**Step 3 — Compute sort keys for all items:**
+```
+// Call ISortFunc.getSortKey(uid, sortInfoUID) for each item in newItems and alreadySorted
+// Empty bytes = ineligible item (will be skipped by overlay; pass ZeroHash hints)
+```
+
+**Step 4 — Binary-search insert simulation (client-side):**
+For each new item (in kernel order), simulate inserting it into the current sorted list:
+1. Binary search `alreadySorted` by sort key to find the insertion position `pos`
+2. `leftHint = pos == 0 ? ZeroHash : alreadySorted[pos - 1]`
+3. `rightHint = pos == alreadySorted.length ? ZeroHash : alreadySorted[pos]`
+4. Insert the item into `alreadySorted` at `pos` so subsequent items in the batch see the updated state
+
+**Step 5 — Submit:**
+```
+overlay.processItems(sortInfoUID, newItems, leftHints, rightHints)
+```
+
+The overlay validates each position with `ISortFunc.isLessThan` on-chain and reverts with `InvalidPosition` if hints are wrong.
+
+### 15. Paginate Through a Sorted List
+
+- **Action**: SPA renders a sorted list.
+- **Step 1**: Call `getSortedChunk(sortInfoUID, attester, bytes32(0), 20)` → returns `items[0..19]` and `nextCursor`.
+- **Step 2**: On scroll, call `getSortedChunk(sortInfoUID, attester, nextCursor, 20)` → next page.
+- **Step 3**: For each item UID, resolve content via `getDataByAddressList(itemUID, editionAddresses, false)`.
+- **Staleness check**: Call `getSortStaleness(sortInfoUID, attester)` before rendering. If `> 0`, prompt the user: "N items unprocessed — pay gas to update sort?".
+- **Key rule**: Pin `blockNumber` in `eth_call` across all pages in a session to prevent cursor drift from concurrent `processItems` calls.
+
+### 16. Remove a List Item (Revoke)
+
+- **Action**: Revoke the item's Anchor or DATA attestation.
+- **Anchor revoke**: `eas.revoke(anchorSchemaUID, anchorUID)` — EFSIndexer sets `_isRevoked[uid] = true`. The item stays in the kernel array but `getChildren(..., showRevoked=false)` skips it. Future `processItems` calls also skip it automatically (`indexer.isRevoked(item)` check).
+- **DATA revoke**: `eas.revoke(dataSchemaUID, dataUID)` — EFSIndexer marks the DATA UID revoked. `getDataByAddressList` falls back to the next attester in the priority list.
+- **Sort overlay**: Revoked items already processed into a sorted linked list remain there — the overlay is a snapshot. The UI should resolve content via `getDataByAddressList` and treat a null result (all editions revoked) as a tombstone.
+
+### 17. View a Merged Sorted List from Multiple Attesters
+
+- **Action**: SPA displays a sorted list merging Alice's curation with Bob's additions.
+- **Step 1**: Read Alice's sorted view: `getSortedChunk(sortInfoUID, alice, bytes32(0), 20)`.
+- **Step 2**: Read Bob's sorted view: `getSortedChunk(sortInfoUID, bob, bytes32(0), 20)`.
+- **Step 3 (client)**: Each attester's sorted view is independent. Merge strategies:
+  - **Union**: combine and deduplicate by anchor UID, re-sort client-side by sort key.
+  - **Interleave**: display Alice's list first (or Bob's), then items the other has that aren't in the first.
+  - **Edition-aware**: for each position in Alice's sorted list, call `getDataByAddressList(itemUID, [alice, bob], false)` — content comes from the priority list regardless of who sorted it.
+- **Result**: No on-chain coupling between attesters' lists. Each is independently maintained.
+
+### 18. Apply a User Override (Tombstone an Item)
+
+- **Action**: User B views User A's sorted list and wants to hide one item from their own view.
+- **Execution**: User B creates a DATA attestation with `fileMode = "tombstone"` and `refUID` pointing to the item's Anchor UID.
+- **Client-side**: When rendering, resolve each item's content via `getDataByAddressList(itemUID, [userB, userA], false)`. User B's tombstone DATA wins (it's first in the priority list and has `fileMode = "tombstone"`). The UI hides the item. User A's sorted list and content are untouched.
+
+### 19. Restrict a Sort to a Specific Schema
+
+- **Action**: Create a sort that only orders file anchors (ignoring sort naming anchors, property anchors, etc.).
+- **Step 1**: When creating the SORT_INFO, set `targetSchema = DATA_SCHEMA_UID`.
+- **Enforcement**: `ISortFunc.getSortKey` returns empty bytes for items whose schema doesn't match `targetSchema`. The overlay skips them automatically (empty key = ineligible), so they never appear in the sorted list.
+- **Result**: Only Anchors with `anchorSchema == DATA_SCHEMA_UID` appear in the sorted view. Sort naming Anchors and other meta-anchors are automatically excluded.
