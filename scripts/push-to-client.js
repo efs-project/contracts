@@ -21,7 +21,8 @@ try {
   if (!fs.existsSync(genDir)) {
     fs.mkdirSync(genDir, { recursive: true });
   }
-  fs.copyFileSync(sourceFile, destFile);
+  const sourceContent = fs.readFileSync(sourceFile, 'utf8');
+  fs.writeFileSync(destFile, '// @ts-nocheck\n' + sourceContent);
   const stats = fs.statSync(sourceFile);
   console.log(`\n✅ Automatically pushed ABIs to EFS Client`);
   console.log(`   TO: ${destFile}`);
