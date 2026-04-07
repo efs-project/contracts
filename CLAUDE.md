@@ -91,7 +91,9 @@ EAS contracts (Sepolia addresses used in fork):
 - EAS: `0xC2679fBD37d54388Ce493F1DB75320D236e1815e`
 - SchemaRegistry: `0x0a7E2Ff54e76B8E6659aedc9103FB21c038050D0`
 
-### Frontend Architecture
+### Internal DevTools Architecture
+
+> **Note:** These pages apply only to the Scaffold-ETH internal debugging UI (`packages/nextjs`). The true **EFS Client UI** (Vite/Lit) lives in a completely separate external repository.
 
 **Pages** (`packages/nextjs/app/`):
 - `/` — Landing page

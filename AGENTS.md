@@ -28,12 +28,20 @@ When using the Browser you must also click the money icon in the top right as th
    ```
 
 ### UI Initialization
-1. **Start Frontend**:
+1. **Start Debug UI / DevTools**:
    ```bash
-   # From /contracts/ (will run packages/nextjs dev)
+   # From /contracts/ (will run packages/nextjs schema testing app)
    yarn start
    ```
-   *Note the local URL provided in the output (typically `http://localhost:3000`).*
+   *Note the local URL provided in the output (typically `http://localhost:3000`). This is NOT the EFS Web Client.*
+
+2. **Starting the EFS Web Client**:
+   If your task involves the actual web explorer, you must switch into the isolated EFS Client repository (a separate codebase). The path varies by machine.
+   Once inside the client repo, you must sync your recently deployed local contracts:
+   ```bash
+   npm run sync-abis
+   npm run dev
+   ```
 
 2. **Fund Wallet**: 
    - In the top right of the UI, click the **Local Faucet** (cash icon) to send test funds to your burner wallet. Attestations require gas!
