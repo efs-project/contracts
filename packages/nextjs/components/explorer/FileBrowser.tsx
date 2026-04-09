@@ -16,6 +16,7 @@ import {
   TagIcon,
   XMarkIcon,
 } from "@heroicons/react/24/outline";
+import { useSortedData } from "~~/hooks/efs/useSortedData";
 import { useDeployedContractInfo, useScaffoldReadContract } from "~~/hooks/scaffold-eth";
 import { useTargetNetwork } from "~~/hooks/scaffold-eth/useTargetNetwork";
 import { isFile, isTopic } from "~~/utils/efs/efsTypes";
@@ -32,6 +33,10 @@ export const FileBrowser = ({
   onNavigate,
   tagFilter = "",
   drawerTagFilters = {},
+  activeSortInfoUID = null,
+  sortOverlayAddress,
+  sortRefreshKey = 0,
+  reverseOrder = false,
 }: {
   currentAnchorUID: string | null;
   dataSchemaUID: string;
@@ -40,6 +45,10 @@ export const FileBrowser = ({
   onNavigate: (uid: string, name: string) => void;
   tagFilter?: string;
   drawerTagFilters?: Record<string, DrawerTagFilterState>;
+  activeSortInfoUID?: string | null;
+  sortOverlayAddress?: `0x${string}`;
+  sortRefreshKey?: number;
+  reverseOrder?: boolean;
 }) => {
   const [selectedDebugItem, setSelectedDebugItem] = useState<any | null>(null);
   const [propertiesModalUID, setPropertiesModalUID] = useState<string | null>(null);
@@ -397,6 +406,20 @@ export const FileBrowser = ({
     functionName: "PROPERTY_SCHEMA_UID",
   });
 
+  const { data: sortsAnchorUID } = useScaffoldReadContract({
+    contractName: "Indexer",
+    functionName: "sortsAnchorUID",
+  });
+
+  // ── Sort overlay integration ─────────────────────────────────────────────────
+  const { sortedUIDs, isLoading: isSortLoading, hasMore: hasSortMore, loadMore: loadMoreSorted } = useSortedData({
+    sortInfoUID: activeSortInfoUID,
+    parentAnchor: currentAnchorUID ?? undefined,
+    sortOverlayAddress,
+    editionAddresses,
+    refreshKey: sortRefreshKey,
+  });
+
   const hasEditions = editionAddresses && editionAddresses.length > 0;
 
   // Once we've ever been in editions mode, stay there — prevents the standard (show-all) query
@@ -423,15 +446,16 @@ export const FileBrowser = ({
 
   const { data: editionItemsRaw, isLoading: isEditionLoading } = useScaffoldReadContract({
     contractName: "EFSFileView",
-    functionName: "getDirectoryPageByAddressList",
+    functionName: "getDirectoryPageBySchemaAndAddressList",
     args: [
       (currentAnchorUID ? currentAnchorUID : undefined) as `0x${string}` | undefined,
+      dataSchemaUID as `0x${string}`,
       editionAddresses as string[],
       0n,
       pageSize,
     ],
     query: {
-      enabled: useEditionsQuery,
+      enabled: useEditionsQuery && editionAddresses.length > 0,
     },
   });
 
@@ -538,7 +562,23 @@ export const FileBrowser = ({
   });
 
   if (!currentAnchorUID) return <div>Select a topic</div>;
-  if (isLoading || isTagFilterLoading || isDataUIDMapLoading) return <div>Loading items...</div>;
+  if (isLoading || isTagFilterLoading || isDataUIDMapLoading || isSortLoading) return <div>Loading items...</div>;
+
+  // When a sort is active, reorder rawItems by the sorted UIDs.
+  // Items not yet in the sorted list appear at the end in their original order.
+  const sortedItems: any[] | undefined = (() => {
+    if (!items || !sortedUIDs) return items;
+    const sortIndexMap = new Map(sortedUIDs.map((uid, idx) => [uid.toLowerCase(), idx]));
+    const dir = reverseOrder ? -1 : 1;
+    return [...items].sort((a: any, b: any) => {
+      const ai = sortIndexMap.get(a.uid?.toLowerCase() ?? "");
+      const bi = sortIndexMap.get(b.uid?.toLowerCase() ?? "");
+      if (ai !== undefined && bi !== undefined) return (ai - bi) * dir;
+      if (ai !== undefined) return -1; // a is sorted, b is not → a first
+      if (bi !== undefined) return 1;  // b is sorted, a is not → b first
+      return 0; // both unsorted → keep relative order
+    });
+  })();
 
   const DebugField = ({ label, value, type = "uid" }: { label: string; value: string; type?: "uid" | "address" }) => (
     <div>
@@ -565,8 +605,8 @@ export const FileBrowser = ({
   return (
     <div className="relative h-full">
       <div className="grid grid-cols-4 gap-4 p-4">
-        {items
-          ?.filter((item: any) => (isTopic(item) || isFile(item, dataSchemaUID)) && item.uid !== tagsRoot)
+        {(sortedItems ?? items)
+          ?.filter((item: any) => (isTopic(item) || isFile(item, dataSchemaUID)) && item.uid !== tagsRoot && item.uid !== sortsAnchorUID)
           .map((item: any) => {
             // isTopic = Generic Anchor (Schema 0 or undefined legacy)
             // isFile = Data Anchor (Schema DATA_SCHEMA_UID)
@@ -642,15 +682,22 @@ export const FileBrowser = ({
               </div>
             );
           })}
-        {items?.length === 0 && (
+        {(sortedItems ?? items)?.length === 0 && (
           <div className="col-span-4 text-center text-gray-500">
             {tagFilteredUIDs !== null ? `No items match tag filter: "${tagFilter}"` : "Topic is empty"}
           </div>
         )}
       </div>
-      {items && items.length > 0 && items.length >= Number(pageSize) && (
+      {/* Load more: kernel items when page is full, or sorted pages when more exist */}
+      {(items && items.length > 0 && items.length >= Number(pageSize)) && (
         <div className="flex justify-center py-4">
-          <button className="btn btn-sm btn-outline" onClick={() => setPageSize(prev => prev + 50n)}>
+          <button
+            className="btn btn-sm btn-outline"
+            onClick={() => {
+              setPageSize(prev => prev + 50n);
+              if (hasSortMore) loadMoreSorted();
+            }}
+          >
             Load more
           </button>
         </div>

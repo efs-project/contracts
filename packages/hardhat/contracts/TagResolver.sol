@@ -182,11 +182,7 @@ contract TagResolver is SchemaResolver {
         revert MustTargetSomething();
     }
 
-    function _sliceUIDs(
-        bytes32[] storage uids,
-        uint256 start,
-        uint256 length
-    ) private view returns (bytes32[] memory) {
+    function _sliceUIDs(bytes32[] storage uids, uint256 start, uint256 length) private view returns (bytes32[] memory) {
         uint256 total = uids.length;
         if (total == 0 || start >= total) {
             return new bytes32[](0);

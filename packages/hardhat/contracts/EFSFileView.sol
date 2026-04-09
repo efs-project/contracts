@@ -11,6 +11,7 @@ interface IEFSIndexer {
         bool reverseOrder,
         bool showRevoked
     ) external view returns (bytes32[] memory);
+    function getChildAt(bytes32 parentAnchor, uint256 idx) external view returns (bytes32);
     function getChildrenByAddressList(
         bytes32 parentUID,
         address[] calldata attesters,
@@ -29,6 +30,7 @@ interface IEFSIndexer {
         bool showRevoked
     ) external view returns (bytes32[] memory results, uint256 nextCursor);
     function getChildrenCount(bytes32 anchorUID) external view returns (uint256);
+    function getChildCountBySchema(bytes32 parentAnchor, bytes32 schema) external view returns (uint256);
     function getDataByAddressList(
         bytes32 anchorUID,
         address[] calldata attesters,
@@ -36,6 +38,7 @@ interface IEFSIndexer {
     ) external view returns (bytes32);
     function getReferencingAttestationCount(bytes32 targetUID, bytes32 schemaUID) external view returns (uint256);
     function containsAttestations(bytes32 targetUID, address attester) external view returns (bool);
+    function isRevoked(bytes32 uid) external view returns (bool);
     function getEAS() external view returns (IEAS);
     function DATA_SCHEMA_UID() external view returns (bytes32);
     function PROPERTY_SCHEMA_UID() external view returns (bytes32);
@@ -70,9 +73,7 @@ contract EFSFileView {
         bytes32 dataSchemaUID,
         bytes32 propertySchemaUID
     ) external view returns (FileSystemItem[] memory) {
-        // 1. Get UIDs from Indexer (Newest First = true)
         bytes32[] memory uids = indexer.getChildren(parentAnchor, start, length, true, false);
-
         return _buildFileSystemItems(uids, parentAnchor, dataSchemaUID, propertySchemaUID);
     }
 
@@ -82,8 +83,6 @@ contract EFSFileView {
         uint256 startingCursor,
         uint256 pageSize
     ) external view returns (FileSystemItem[] memory items, uint256 nextCursor) {
-        // 1. Delegate directly to the Indexer's highly optimized, paginated Edition array
-        // (Reverse = true for newest first, showRevoked = false)
         (bytes32[] memory resolvedUIDs, uint256 nextCur) = indexer.getChildrenByAddressList(
             parentAnchor,
             attesters,
@@ -93,7 +92,6 @@ contract EFSFileView {
             false
         );
 
-        // 2. Build the output FileSystemItems array containing full Metadata
         items = _buildFileSystemItems(
             resolvedUIDs,
             parentAnchor,
@@ -105,15 +103,22 @@ contract EFSFileView {
     }
 
     /**
-     * @notice Like getDirectoryPageByAddressList but restricted to a specific anchorSchema.
-     *         Use this to fetch only file-slot Anchors (DATA_SCHEMA_UID), only sort declarations
-     *         (SORT_INFO_SCHEMA_UID), or any other anchor type — without interleaving unrelated
-     *         anchor types in the result set.
+     * @notice Schema-aware directory listing with folder inclusion.
+     *         Returns:
+     *           1. Child anchors with `anchorSchema == requestedSchema` (matching attesters)
+     *           2. Generic child anchors (anchorSchema == bytes32(0)) that contain at least one
+     *              child of `requestedSchema` — enabling "folders of chess games" when browsing
+     *              chess-game-schema anchors.
+     *
+     *         Cursor tracks position in the global _children[parentAnchor] array so both item
+     *         types can be mixed in a single paginated scan.
      *
      * @param parentAnchor   Directory Anchor UID.
-     * @param anchorSchema   Filter to this anchorSchema value. bytes32(0) = generic folders only.
-     * @param attesters      Edition addresses to filter by.
-     * @param startingCursor Pagination cursor (0 = start, pass returned nextCursor to continue).
+     * @param anchorSchema   Schema to filter on. Generic folders containing this schema are
+     *                       also included (schema-aware folder inclusion).
+     * @param attesters      Edition addresses to filter by. An anchor qualifies if ANY attester
+     *                       contributed (checked via containsAttestations).
+     * @param startingCursor Raw index into _children[parentAnchor] to resume from (0 = start).
      * @param pageSize       Max items per page.
      */
     function getDirectoryPageBySchemaAndAddressList(
@@ -123,24 +128,63 @@ contract EFSFileView {
         uint256 startingCursor,
         uint256 pageSize
     ) external view returns (FileSystemItem[] memory items, uint256 nextCursor) {
-        (bytes32[] memory resolvedUIDs, uint256 nextCur) = indexer.getAnchorsBySchemaAndAddressList(
-            parentAnchor,
-            anchorSchema,
-            attesters,
-            startingCursor,
-            pageSize,
-            true,  // newest first
-            false  // hide revoked
-        );
+        require(attesters.length > 0, "Attesters list cannot be empty");
+        require(pageSize > 0, "Page size must be > 0");
 
-        items = _buildFileSystemItems(
-            resolvedUIDs,
-            parentAnchor,
-            indexer.DATA_SCHEMA_UID(),
-            indexer.PROPERTY_SCHEMA_UID()
-        );
+        uint256 totalChildren = indexer.getChildrenCount(parentAnchor);
 
-        return (items, nextCur);
+        bytes32[] memory temp = new bytes32[](pageSize);
+        uint256 count = 0;
+        uint256 i = startingCursor;
+
+        while (count < pageSize && i < totalChildren) {
+            // Scan newest-first: reverse the physical index
+            uint256 actualIdx = totalChildren - 1 - i;
+            bytes32 uid = indexer.getChildAt(parentAnchor, actualIdx);
+            i++;
+
+            if (indexer.isRevoked(uid)) continue;
+
+            // Determine anchor schema from EAS attestation data
+            Attestation memory att = eas.getAttestation(uid);
+            if (att.uid == bytes32(0)) continue;
+
+            bytes32 childAnchorSchema;
+            if (att.data.length >= 64) {
+                (, childAnchorSchema) = abi.decode(att.data, (string, bytes32));
+            }
+
+            bool schemaMatch;
+            if (childAnchorSchema == anchorSchema) {
+                // Direct match — this is a content item of the requested schema
+                schemaMatch = true;
+            } else if (childAnchorSchema == bytes32(0)) {
+                // Generic folder — include only if it contains items of the requested schema
+                schemaMatch = indexer.getChildCountBySchema(uid, anchorSchema) > 0;
+            }
+
+            if (!schemaMatch) continue;
+
+            // Check attester contribution
+            bool qualifies = false;
+            for (uint256 j = 0; j < attesters.length; j++) {
+                if (indexer.containsAttestations(uid, attesters[j])) {
+                    qualifies = true;
+                    break;
+                }
+            }
+            if (!qualifies) continue;
+
+            temp[count++] = uid;
+        }
+
+        assembly {
+            mstore(temp, count)
+        }
+
+        items = _buildFileSystemItems(temp, parentAnchor, indexer.DATA_SCHEMA_UID(), indexer.PROPERTY_SCHEMA_UID());
+
+        return (items, i >= totalChildren ? 0 : i);
     }
 
     function _buildFileSystemItems(
@@ -149,7 +193,7 @@ contract EFSFileView {
         bytes32 dataSchemaUID,
         bytes32 propertySchemaUID
     ) internal view returns (FileSystemItem[] memory) {
-        FileSystemItem[] memory items = new FileSystemItem[](uids.length);
+        FileSystemItem[] memory result = new FileSystemItem[](uids.length);
 
         for (uint256 i = 0; i < uids.length; i++) {
             bytes32 uid = uids[i];
@@ -165,7 +209,7 @@ contract EFSFileView {
             uint256 dataCount = indexer.getReferencingAttestationCount(uid, dataSchemaUID);
             uint256 propertyCount = indexer.getReferencingAttestationCount(uid, propertySchemaUID);
 
-            items[i] = FileSystemItem({
+            result[i] = FileSystemItem({
                 uid: uid,
                 name: name,
                 parentUID: parentAnchor,
@@ -179,7 +223,7 @@ contract EFSFileView {
             });
         }
 
-        return items;
+        return result;
     }
 
     function decodeName(bytes memory data) external pure returns (string memory) {

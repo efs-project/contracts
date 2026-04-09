@@ -30,6 +30,7 @@
     "hardhat:lint": "yarn workspace @se-2/hardhat lint",
     "hardhat:lint-staged": "yarn workspace @se-2/hardhat lint-staged",
     "hardhat:test": "yarn workspace @se-2/hardhat test",
+    "hardhat:seed": "yarn workspace @se-2/hardhat seed",
     "hardhat:simulate": "yarn workspace @se-2/hardhat simulate",
     "hardhat:simulate:sort": "yarn workspace @se-2/hardhat simulate:sort",
     "hardhat:verify": "yarn workspace @se-2/hardhat verify",

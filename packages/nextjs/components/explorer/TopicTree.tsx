@@ -17,6 +17,7 @@ const TreeNode = ({
   expandedUIDs,
   editionAddresses,
   systemTagsUID,
+  systemSortsUID,
 }: {
   uid: string;
   name: string;
@@ -29,6 +30,8 @@ const TreeNode = ({
   editionAddresses: string[];
   /** UID of the system-managed "tags" anchor under root. Hidden from the sidebar. */
   systemTagsUID?: string;
+  /** UID of the system-managed "sorts" anchor under root. Hidden from the sidebar. */
+  systemSortsUID?: string;
 }) => {
   // Fetch children for this node
   // Note: This fetches purely to check for sub-topics.
@@ -52,10 +55,10 @@ const TreeNode = ({
 
   const { data: editionChildrenRaw, isLoading: isEditionLoading } = useScaffoldReadContract({
     contractName: "EFSFileView",
-    functionName: "getDirectoryPageByAddressList",
-    args: [uid as `0x${string}`, editionAddresses as string[], 0n, 50n],
+    functionName: "getDirectoryPageBySchemaAndAddressList",
+    args: [uid as `0x${string}`, dataSchemaUID as `0x${string}`, editionAddresses as string[], 0n, 50n],
     query: {
-      enabled: useEditionsQuery,
+      enabled: useEditionsQuery && editionAddresses.length > 0,
     },
   });
 
@@ -66,9 +69,11 @@ const TreeNode = ({
       : undefined
     : standardChildren;
 
-  // Hide the system "tags" anchor by its UID (not by name) so that user-created
-  // folders also named "tags" deeper in the hierarchy are still navigable.
-  const topics = children?.filter((item: any) => isTopic(item) && item.uid !== systemTagsUID);
+  // Hide system anchors by UID (not by name) so user-created folders with the same
+  // names deeper in the hierarchy are still navigable.
+  const topics = children?.filter(
+    (item: any) => isTopic(item) && item.uid !== systemTagsUID && item.uid !== systemSortsUID,
+  );
 
   if (isLoading) {
     return (
@@ -128,6 +133,7 @@ const TreeNode = ({
                 expandedUIDs={expandedUIDs}
                 editionAddresses={editionAddresses}
                 systemTagsUID={systemTagsUID}
+                systemSortsUID={systemSortsUID}
               />
             ))}
           </ul>
@@ -169,6 +175,11 @@ export const TopicTree = ({
     args: [rootUID as `0x${string}`, "tags"],
   });
 
+  const { data: systemSortsUID } = useScaffoldReadContract({
+    contractName: "Indexer",
+    functionName: "sortsAnchorUID",
+  });
+
   if (!dataSchemaUID || !propertySchemaUID) return <span className="loading loading-dots loading-xs"></span>;
 
   return (
@@ -184,6 +195,7 @@ export const TopicTree = ({
         expandedUIDs={expandedUIDs}
         editionAddresses={editionAddresses}
         systemTagsUID={systemTagsUID as string | undefined}
+        systemSortsUID={systemSortsUID as string | undefined}
       />
     </ul>
   );

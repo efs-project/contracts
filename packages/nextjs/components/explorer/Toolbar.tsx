@@ -6,6 +6,7 @@ import { ethers } from "ethers";
 import { decodeEventLog, encodeDeployData, parseAbiItem, toHex } from "viem";
 import { usePublicClient, useWalletClient } from "wagmi";
 import { FunnelIcon } from "@heroicons/react/24/outline";
+import { SortDropdown } from "./SortDropdown";
 import { useDeployedContractInfo, useScaffoldWriteContract } from "~~/hooks/scaffold-eth";
 import { useTargetNetwork } from "~~/hooks/scaffold-eth/useTargetNetwork";
 import { notification } from "~~/utils/scaffold-eth";
@@ -45,17 +46,41 @@ export const Toolbar = ({
   currentAnchorUID,
   anchorSchemaUID,
   dataSchemaUID,
+  indexerAddress,
+  easAddress,
+  sortOverlayAddress,
+  editionAddresses,
+  activeSortInfoUID,
+  onSortChange,
+  onSortProcessed,
   onNavigate,
+  onFolderCreated,
+  onFileCreated,
   isFilterDrawerOpen = false,
   onToggleFilterDrawer,
+  reverseOrder = false,
+  onReverseOrderChange,
+  autoProcessKey = 0,
 }: {
   currentPath: PathItem[];
   currentAnchorUID: string | null;
   anchorSchemaUID: string;
   dataSchemaUID: string;
+  indexerAddress?: `0x${string}`;
+  easAddress?: `0x${string}`;
+  sortOverlayAddress?: `0x${string}`;
+  editionAddresses?: string[];
+  activeSortInfoUID?: string | null;
+  onSortChange?: (uid: string | null) => void;
+  onSortProcessed?: () => void;
   onNavigate: (uid: string) => void;
+  onFolderCreated?: (uid: string, name: string) => void;
+  onFileCreated?: () => void;
   isFilterDrawerOpen?: boolean;
   onToggleFilterDrawer?: () => void;
+  reverseOrder?: boolean;
+  onReverseOrderChange?: (reverse: boolean) => void;
+  autoProcessKey?: number;
 }) => {
   const { writeContractAsync: attest } = useScaffoldWriteContract({ contractName: "EAS" });
   const { data: indexer } = useDeployedContractInfo({ contractName: "Indexer" });
@@ -273,8 +298,15 @@ export const Toolbar = ({
         }
 
         notification.success("File uploaded and data attested successfully.");
+        onFileCreated?.();
       } else {
         notification.success("Folder created successfully.");
+        handleCloseModal();
+        // Auto-navigate into the new folder so the user can add files immediately
+        if (newAnchorUID) {
+          onFolderCreated?.(newAnchorUID, newName);
+        }
+        return;
       }
       handleCloseModal();
     } catch (e) {
@@ -342,7 +374,22 @@ export const Toolbar = ({
         </button>
       </div>
 
-      <div className="flex gap-2 flex-shrink-0">
+      <div className="flex gap-2 flex-shrink-0 items-center">
+        {onSortChange && sortOverlayAddress && (
+          <SortDropdown
+            parentAnchor={currentAnchorUID ?? undefined}
+            indexerAddress={indexerAddress}
+            easAddress={easAddress}
+            sortOverlayAddress={sortOverlayAddress}
+            editionAddresses={editionAddresses ?? []}
+            activeSortInfoUID={activeSortInfoUID ?? null}
+            onSortChange={onSortChange}
+            onProcessComplete={onSortProcessed}
+            reverseOrder={reverseOrder}
+            onReverseOrderChange={onReverseOrderChange}
+            autoProcessKey={autoProcessKey}
+          />
+        )}
         {onToggleFilterDrawer && (
           <button
             className={`btn btn-sm btn-square ${isFilterDrawerOpen ? "btn-primary" : "btn-ghost"}`}

@@ -15,7 +15,12 @@ contract EFSIndexer is SchemaResolver {
     /// @notice Emitted when a new Anchor is created under a parent directory.
     ///         Enables off-chain indexers (The Graph) to track directory structure changes
     ///         without scanning all EAS Attested events.
-    event AnchorCreated(bytes32 indexed parentUID, bytes32 indexed anchorUID, address indexed attester, bytes32 anchorSchema);
+    event AnchorCreated(
+        bytes32 indexed parentUID,
+        bytes32 indexed anchorUID,
+        address indexed attester,
+        bytes32 anchorSchema
+    );
 
     /// @notice Emitted when a DATA attestation is attached to an Anchor (new file edition).
     event DataCreated(bytes32 indexed anchorUID, bytes32 indexed dataUID, address indexed attester);
@@ -48,6 +53,9 @@ contract EFSIndexer is SchemaResolver {
     address public tagResolver;
     address public sortOverlay;
     address public schemaRegistry;
+
+    // Well-known /sorts/ anchor — set once via setSortsAnchor() after deployment
+    bytes32 public sortsAnchorUID;
 
     // Deployer — authorized to call wireContracts()
     address public immutable DEPLOYER;
@@ -163,6 +171,17 @@ contract EFSIndexer is SchemaResolver {
         sortOverlay = _sortOverlay;
         SORT_INFO_SCHEMA_UID = _sortInfoSchemaUID;
         schemaRegistry = _schemaRegistry;
+    }
+
+    /**
+     * @notice Set the well-known /sorts/ anchor UID.
+     *         Called once from the deploy script after the sorts anchor is created.
+     * @dev Can only be called by DEPLOYER and only once.
+     */
+    function setSortsAnchor(bytes32 _sortsAnchorUID) external {
+        require(msg.sender == DEPLOYER, "EFSIndexer: not deployer");
+        require(sortsAnchorUID == bytes32(0), "EFSIndexer: sorts anchor already set");
+        sortsAnchorUID = _sortsAnchorUID;
     }
 
     function onAttest(Attestation calldata attestation, uint256 /*value*/) internal override returns (bool) {
@@ -391,14 +410,46 @@ contract EFSIndexer is SchemaResolver {
     /// @notice Read a single item from an attester's kernel array by physical index.
     ///         Used by EFSSortOverlay.processItems to validate submitted items against the
     ///         kernel before inserting them into the sorted linked list.
-    function getChildrenByAttesterAt(
-        bytes32 anchorUID,
-        address attester,
-        uint256 idx
-    ) external view returns (bytes32) {
+    function getChildrenByAttesterAt(bytes32 anchorUID, address attester, uint256 idx) external view returns (bytes32) {
         bytes32[] storage arr = _childrenByAttester[anchorUID][attester];
         require(idx < arr.length, "EFSIndexer: index out of bounds");
         return arr[idx];
+    }
+
+    // ============================================================================================
+    // O(1) INDEX ACCESS — used by EFSSortOverlay.processItems for validation
+    // ============================================================================================
+
+    /// @notice Read a single item from the global children array by physical index.
+    function getChildAt(bytes32 parentAnchor, uint256 idx) external view returns (bytes32) {
+        bytes32[] storage arr = _children[parentAnchor];
+        require(idx < arr.length, "EFSIndexer: index out of bounds");
+        return arr[idx];
+    }
+
+    /// @notice Read a single item from the schema-filtered children array by physical index.
+    function getChildBySchemaAt(bytes32 parentAnchor, bytes32 schema, uint256 idx) external view returns (bytes32) {
+        bytes32[] storage arr = _childrenBySchema[parentAnchor][schema];
+        require(idx < arr.length, "EFSIndexer: index out of bounds");
+        return arr[idx];
+    }
+
+    /// @notice Read a single item from the referencing attestations array by physical index.
+    function getReferencingAt(bytes32 targetUID, bytes32 schema, uint256 idx) external view returns (bytes32) {
+        bytes32[] storage arr = _referencingAttestations[targetUID][schema];
+        require(idx < arr.length, "EFSIndexer: index out of bounds");
+        return arr[idx];
+    }
+
+    /// @notice Count of children matching a specific anchor schema.
+    function getChildCountBySchema(bytes32 parentAnchor, bytes32 schema) external view returns (uint256) {
+        return _childrenBySchema[parentAnchor][schema].length;
+    }
+
+    /// @notice Count of referencing attestations for a target UID and schema.
+    ///         Alias for getReferencingAttestationCount — named for sort overlay consistency.
+    function getReferencingCount(bytes32 targetUID, bytes32 schema) external view returns (uint256) {
+        return _referencingAttestations[targetUID][schema].length;
     }
 
     function getAnchorsBySchema(

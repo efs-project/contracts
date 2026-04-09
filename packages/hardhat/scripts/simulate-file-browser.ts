@@ -39,10 +39,11 @@ async function main() {
   // Connect to deployed contracts
   const indexer = (await ethers.getContract("Indexer", owner)) as unknown as EFSIndexer;
   const easAddress = await indexer.getEAS();
-  const eas = await ethers.getContractAt(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const eas = (await ethers.getContractAt(
     "@ethereum-attestation-service/eas-contracts/contracts/IEAS.sol:IEAS",
     easAddress,
-  );
+  )) as any;
 
   // All schema UIDs and partner contract addresses are available on EFSIndexer
   const anchorSchemaUID = await indexer.ANCHOR_SCHEMA_UID();
@@ -119,7 +120,9 @@ async function main() {
     return getUID(tx);
   };
 
-  const decodeData = (raw: string) => encode.decode(["string", "string", "string"], raw) as [string, string, string];
+  const decodeData = (raw: string) =>
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    encode.decode(["string", "string", "string"], raw) as unknown as [string, string, string];
 
   // ══════════════════════════════════════════════════════════════
   // PHASE 1: Build realistic file tree

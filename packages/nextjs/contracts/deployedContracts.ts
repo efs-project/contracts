@@ -7,7 +7,7 @@ import { GenericContractsDeclaration } from "~~/utils/scaffold-eth/contract";
 const deployedContracts = {
   31337: {
     EFSFileView: {
-      address: "0x3391B40E0993F5939ed8D9eFe6165303AAe0C307",
+      address: "0x29e8a042ea34B7EE720C12b52720027b5E9049C6",
       abi: [
         {
           inputs: [
@@ -347,7 +347,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     EFSRouter: {
-      address: "0xc3C05009ac3D62745F4766136a7c68D334D0377E",
+      address: "0xa498a50aADa7790F5d3EFD594365E797c947eece",
       abi: [
         {
           inputs: [
@@ -484,7 +484,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     EFSSortOverlay: {
-      address: "0xa4D65644614de0441F8bDD2f6Cf43629db861725",
+      address: "0x04fD5Ee60B015B6EfD21a54D1E662D68868683c5",
       abi: [
         {
           inputs: [
@@ -558,6 +558,21 @@ const deployedContracts = {
           type: "error",
         },
         {
+          inputs: [],
+          name: "StaleStartIndex",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "UnnecessaryReposition",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "UnsupportedSourceType",
+          type: "error",
+        },
+        {
           anonymous: false,
           inputs: [
             {
@@ -568,9 +583,46 @@ const deployedContracts = {
             },
             {
               indexed: true,
-              internalType: "address",
-              name: "attester",
-              type: "address",
+              internalType: "bytes32",
+              name: "parentAnchor",
+              type: "bytes32",
+            },
+            {
+              indexed: true,
+              internalType: "bytes32",
+              name: "itemUID",
+              type: "bytes32",
+            },
+            {
+              indexed: false,
+              internalType: "bytes32",
+              name: "newLeftNeighbour",
+              type: "bytes32",
+            },
+            {
+              indexed: false,
+              internalType: "bytes32",
+              name: "newRightNeighbour",
+              type: "bytes32",
+            },
+          ],
+          name: "ItemRepositioned",
+          type: "event",
+        },
+        {
+          anonymous: false,
+          inputs: [
+            {
+              indexed: true,
+              internalType: "bytes32",
+              name: "sortInfoUID",
+              type: "bytes32",
+            },
+            {
+              indexed: true,
+              internalType: "bytes32",
+              name: "parentAnchor",
+              type: "bytes32",
             },
             {
               indexed: true,
@@ -593,6 +645,19 @@ const deployedContracts = {
           ],
           name: "ItemSorted",
           type: "event",
+        },
+        {
+          inputs: [],
+          name: "DEFAULT_MAX_TRAVERSAL",
+          outputs: [
+            {
+              internalType: "uint256",
+              name: "",
+              type: "uint256",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
         },
         {
           inputs: [],
@@ -699,9 +764,9 @@ const deployedContracts = {
               type: "bytes32",
             },
             {
-              internalType: "address",
-              name: "attester",
-              type: "address",
+              internalType: "bytes32",
+              name: "parentAnchor",
+              type: "bytes32",
             },
             {
               internalType: "bytes32[]",
@@ -733,9 +798,9 @@ const deployedContracts = {
               type: "bytes32",
             },
             {
-              internalType: "address",
-              name: "attester",
-              type: "address",
+              internalType: "bytes32",
+              name: "parentAnchor",
+              type: "bytes32",
             },
           ],
           name: "getLastProcessedIndex",
@@ -772,19 +837,9 @@ const deployedContracts = {
                   type: "bytes32",
                 },
                 {
-                  internalType: "bytes32",
-                  name: "parentUID",
-                  type: "bytes32",
-                },
-                {
-                  internalType: "bool",
-                  name: "valid",
-                  type: "bool",
-                },
-                {
-                  internalType: "bool",
-                  name: "revoked",
-                  type: "bool",
+                  internalType: "uint8",
+                  name: "sourceType",
+                  type: "uint8",
                 },
               ],
               internalType: "struct EFSSortOverlay.SortConfig",
@@ -803,9 +858,9 @@ const deployedContracts = {
               type: "bytes32",
             },
             {
-              internalType: "address",
-              name: "attester",
-              type: "address",
+              internalType: "bytes32",
+              name: "parentAnchor",
+              type: "bytes32",
             },
           ],
           name: "getSortHead",
@@ -827,9 +882,9 @@ const deployedContracts = {
               type: "bytes32",
             },
             {
-              internalType: "address",
-              name: "attester",
-              type: "address",
+              internalType: "bytes32",
+              name: "parentAnchor",
+              type: "bytes32",
             },
           ],
           name: "getSortLength",
@@ -851,9 +906,9 @@ const deployedContracts = {
               type: "bytes32",
             },
             {
-              internalType: "address",
-              name: "attester",
-              type: "address",
+              internalType: "bytes32",
+              name: "parentAnchor",
+              type: "bytes32",
             },
             {
               internalType: "bytes32",
@@ -892,9 +947,9 @@ const deployedContracts = {
               type: "bytes32",
             },
             {
-              internalType: "address",
-              name: "attester",
-              type: "address",
+              internalType: "bytes32",
+              name: "parentAnchor",
+              type: "bytes32",
             },
           ],
           name: "getSortStaleness",
@@ -916,9 +971,9 @@ const deployedContracts = {
               type: "bytes32",
             },
             {
-              internalType: "address",
-              name: "attester",
-              type: "address",
+              internalType: "bytes32",
+              name: "parentAnchor",
+              type: "bytes32",
             },
           ],
           name: "getSortTail",
@@ -940,9 +995,9 @@ const deployedContracts = {
               type: "bytes32",
             },
             {
-              internalType: "address",
-              name: "attester",
-              type: "address",
+              internalType: "bytes32",
+              name: "parentAnchor",
+              type: "bytes32",
             },
             {
               internalType: "bytes32",
@@ -954,8 +1009,67 @@ const deployedContracts = {
               name: "limit",
               type: "uint256",
             },
+            {
+              internalType: "bool",
+              name: "showRevoked",
+              type: "bool",
+            },
           ],
           name: "getSortedChunk",
+          outputs: [
+            {
+              internalType: "bytes32[]",
+              name: "items",
+              type: "bytes32[]",
+            },
+            {
+              internalType: "bytes32",
+              name: "nextCursor",
+              type: "bytes32",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "sortInfoUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "parentAnchor",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "startNode",
+              type: "bytes32",
+            },
+            {
+              internalType: "uint256",
+              name: "limit",
+              type: "uint256",
+            },
+            {
+              internalType: "uint256",
+              name: "maxTraversal",
+              type: "uint256",
+            },
+            {
+              internalType: "address[]",
+              name: "attesters",
+              type: "address[]",
+            },
+            {
+              internalType: "bool",
+              name: "showRevoked",
+              type: "bool",
+            },
+          ],
+          name: "getSortedChunkByAddressList",
           outputs: [
             {
               internalType: "bytes32[]",
@@ -995,6 +1109,25 @@ const deployedContracts = {
             },
           ],
           stateMutability: "pure",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "sortInfoUID",
+              type: "bytes32",
+            },
+          ],
+          name: "isSortRegistered",
+          outputs: [
+            {
+              internalType: "bool",
+              name: "",
+              type: "bool",
+            },
+          ],
+          stateMutability: "view",
           type: "function",
         },
         {
@@ -1157,6 +1290,16 @@ const deployedContracts = {
               type: "bytes32",
             },
             {
+              internalType: "bytes32",
+              name: "parentAnchor",
+              type: "bytes32",
+            },
+            {
+              internalType: "uint256",
+              name: "expectedStartIndex",
+              type: "uint256",
+            },
+            {
               internalType: "bytes32[]",
               name: "items",
               type: "bytes32[]",
@@ -1173,6 +1316,39 @@ const deployedContracts = {
             },
           ],
           name: "processItems",
+          outputs: [],
+          stateMutability: "nonpayable",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "sortInfoUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "parentAnchor",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "itemUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "newLeftHint",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "newRightHint",
+              type: "bytes32",
+            },
+          ],
+          name: "repositionItem",
           outputs: [],
           stateMutability: "nonpayable",
           type: "function",
@@ -1282,7 +1458,7 @@ const deployedContracts = {
       },
     },
     Indexer: {
-      address: "0xD8064E2FacCFcEEa46CB3E825D29e62c14315D6E",
+      address: "0x85554083b691219C1F2556bA52D4fDEe5d76a01f",
       abi: [
         {
           inputs: [
@@ -2028,6 +2204,83 @@ const deployedContracts = {
           inputs: [
             {
               internalType: "bytes32",
+              name: "parentAnchor",
+              type: "bytes32",
+            },
+            {
+              internalType: "uint256",
+              name: "idx",
+              type: "uint256",
+            },
+          ],
+          name: "getChildAt",
+          outputs: [
+            {
+              internalType: "bytes32",
+              name: "",
+              type: "bytes32",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "parentAnchor",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "schema",
+              type: "bytes32",
+            },
+            {
+              internalType: "uint256",
+              name: "idx",
+              type: "uint256",
+            },
+          ],
+          name: "getChildBySchemaAt",
+          outputs: [
+            {
+              internalType: "bytes32",
+              name: "",
+              type: "bytes32",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "parentAnchor",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "schema",
+              type: "bytes32",
+            },
+          ],
+          name: "getChildCountBySchema",
+          outputs: [
+            {
+              internalType: "uint256",
+              name: "",
+              type: "uint256",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
               name: "anchorUID",
               type: "bytes32",
             },
@@ -2654,6 +2907,35 @@ const deployedContracts = {
             },
             {
               internalType: "bytes32",
+              name: "schema",
+              type: "bytes32",
+            },
+            {
+              internalType: "uint256",
+              name: "idx",
+              type: "uint256",
+            },
+          ],
+          name: "getReferencingAt",
+          outputs: [
+            {
+              internalType: "bytes32",
+              name: "",
+              type: "bytes32",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "targetUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
               name: "schemaUID",
               type: "bytes32",
             },
@@ -2834,6 +3116,30 @@ const deployedContracts = {
             },
           ],
           name: "getReferencingBySchemaAndAttesterCount",
+          outputs: [
+            {
+              internalType: "uint256",
+              name: "",
+              type: "uint256",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "targetUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "schema",
+              type: "bytes32",
+            },
+          ],
+          name: "getReferencingCount",
           outputs: [
             {
               internalType: "uint256",
@@ -3268,6 +3574,19 @@ const deployedContracts = {
           type: "function",
         },
         {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "_sortsAnchorUID",
+              type: "bytes32",
+            },
+          ],
+          name: "setSortsAnchor",
+          outputs: [],
+          stateMutability: "nonpayable",
+          type: "function",
+        },
+        {
           inputs: [],
           name: "sortOverlay",
           outputs: [
@@ -3275,6 +3594,19 @@ const deployedContracts = {
               internalType: "address",
               name: "",
               type: "address",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "sortsAnchorUID",
+          outputs: [
+            {
+              internalType: "bytes32",
+              name: "",
+              type: "bytes32",
             },
           ],
           stateMutability: "view",
@@ -3346,8 +3678,94 @@ const deployedContracts = {
       ],
       inheritedFunctions: {},
     },
+    NameSort: {
+      address: "0x58A2755C4d6afdF9a8717008A05F687c3a8cb494",
+      abi: [
+        {
+          inputs: [
+            {
+              internalType: "contract IEAS",
+              name: "_eas",
+              type: "address",
+            },
+          ],
+          stateMutability: "nonpayable",
+          type: "constructor",
+        },
+        {
+          inputs: [],
+          name: "eas",
+          outputs: [
+            {
+              internalType: "contract IEAS",
+              name: "",
+              type: "address",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "uid",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "",
+              type: "bytes32",
+            },
+          ],
+          name: "getSortKey",
+          outputs: [
+            {
+              internalType: "bytes",
+              name: "",
+              type: "bytes",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "a",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "b",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "",
+              type: "bytes32",
+            },
+          ],
+          name: "isLessThan",
+          outputs: [
+            {
+              internalType: "bool",
+              name: "",
+              type: "bool",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+      ],
+      inheritedFunctions: {
+        getSortKey: "contracts/interfaces/ISortFunc.sol",
+        isLessThan: "contracts/interfaces/ISortFunc.sol",
+      },
+    },
     SchemaNameIndex: {
-      address: "0x133e572aAdac7979E9A48Ac10312b6A3dd7514d3",
+      address: "0x2a88C3373cD7D7CAc90420515614d5C43777A00c",
       abi: [
         {
           inputs: [
@@ -3452,7 +3870,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     TagResolver: {
-      address: "0x64CD379945B4b553d9b245Ec0E83861b5A33c9Dd",
+      address: "0xC64700624b2129C81288e7Bd4d5Ec9DD006eb2D0",
       abi: [
         {
           inputs: [
@@ -4018,6 +4436,92 @@ const deployedContracts = {
           "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
         version:
           "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
+      },
+    },
+    TimestampSort: {
+      address: "0x806c44f027a6f6ee75aDe3F6DBf1c6DB496FfC67",
+      abi: [
+        {
+          inputs: [
+            {
+              internalType: "contract IEAS",
+              name: "_eas",
+              type: "address",
+            },
+          ],
+          stateMutability: "nonpayable",
+          type: "constructor",
+        },
+        {
+          inputs: [],
+          name: "eas",
+          outputs: [
+            {
+              internalType: "contract IEAS",
+              name: "",
+              type: "address",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "uid",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "",
+              type: "bytes32",
+            },
+          ],
+          name: "getSortKey",
+          outputs: [
+            {
+              internalType: "bytes",
+              name: "",
+              type: "bytes",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "a",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "b",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "",
+              type: "bytes32",
+            },
+          ],
+          name: "isLessThan",
+          outputs: [
+            {
+              internalType: "bool",
+              name: "",
+              type: "bool",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+      ],
+      inheritedFunctions: {
+        getSortKey: "contracts/interfaces/ISortFunc.sol",
+        isLessThan: "contracts/interfaces/ISortFunc.sol",
       },
     },
   },
