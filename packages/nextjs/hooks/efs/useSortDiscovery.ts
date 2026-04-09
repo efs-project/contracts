@@ -12,11 +12,10 @@
  *
  * Returns: { availableSorts, isLoading, refetch }
  */
-
 import { useCallback, useEffect, useState } from "react";
 import { zeroAddress, zeroHash } from "viem";
 import { usePublicClient } from "wagmi";
-import { getSortOverlayAddress, SortOverlayInfo } from "~~/utils/efs/sortOverlay";
+import { SortOverlayInfo, getSortOverlayAddress } from "~~/utils/efs/sortOverlay";
 
 // ── Minimal ABI fragments needed for discovery ────────────────────────────────
 

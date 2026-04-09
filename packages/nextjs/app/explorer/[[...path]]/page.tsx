@@ -22,7 +22,7 @@ export default function ExplorerPage() {
 
   // Tag filter drawer
   const [isFilterDrawerOpen, setIsFilterDrawerOpen] = useState(false);
-  const [drawerTagFilters, setDrawerTagFilters] = useState<Record<string, DrawerTagFilterState>>({});
+  const [drawerTagFilters, setDrawerTagFilters] = useState<Record<string, DrawerTagFilterState>>({ nsfw: "exclude" });
 
   // Incremented after processItems completes — causes FileBrowser to re-fetch sorted data
   const [sortRefreshKey, setSortRefreshKey] = useState(0);

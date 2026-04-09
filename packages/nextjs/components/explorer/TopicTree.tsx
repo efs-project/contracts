@@ -71,9 +71,10 @@ const TreeNode = ({
 
   // Hide system anchors by UID (not by name) so user-created folders with the same
   // names deeper in the hierarchy are still navigable.
-  const topics = children?.filter(
-    (item: any) => isTopic(item) && item.uid !== systemTagsUID && item.uid !== systemSortsUID,
-  );
+  // Sort alphabetically by name for consistent navigation.
+  const topics = children
+    ?.filter((item: any) => isTopic(item) && item.uid !== systemTagsUID && item.uid !== systemSortsUID)
+    ?.sort((a: any, b: any) => (a.name ?? "").localeCompare(b.name ?? ""));
 
   if (isLoading) {
     return (

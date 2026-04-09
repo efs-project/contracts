@@ -5,10 +5,14 @@ import Link from "next/link";
 import { PropertiesModal } from "./PropertiesModal";
 import { TagModal } from "./TagModal";
 import { ethers } from "ethers";
+import { createPortal } from "react-dom";
 import { zeroHash } from "viem";
 import { useAccount, usePublicClient } from "wagmi";
 import {
   AdjustmentsHorizontalIcon,
+  ArrowsPointingOutIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
   DocumentIcon,
   FolderIcon,
   InformationCircleIcon,
@@ -20,10 +24,47 @@ import { useSortedData } from "~~/hooks/efs/useSortedData";
 import { useDeployedContractInfo, useScaffoldReadContract } from "~~/hooks/scaffold-eth";
 import { useTargetNetwork } from "~~/hooks/scaffold-eth/useTargetNetwork";
 import { isFile, isTopic } from "~~/utils/efs/efsTypes";
+import { SORT_OVERLAY_ABI } from "~~/utils/efs/sortOverlay";
 import { TAG_RESOLVER_ABI, getTagResolverAddress } from "~~/utils/efs/tagResolver";
 import { notification } from "~~/utils/scaffold-eth";
 
 export type DrawerTagFilterState = "neutral" | "include" | "exclude";
+
+const SORT_FUNC_ABI = [
+  {
+    inputs: [
+      { internalType: "bytes32", name: "uid", type: "bytes32" },
+      { internalType: "bytes32", name: "sortInfoUID", type: "bytes32" },
+    ],
+    name: "getSortKey",
+    outputs: [{ internalType: "bytes", name: "", type: "bytes" }],
+    stateMutability: "view",
+    type: "function",
+  },
+] as const;
+
+const CHILDREN_COUNT_ABI = [
+  {
+    inputs: [{ internalType: "bytes32", name: "anchorUID", type: "bytes32" }],
+    name: "getChildrenCount",
+    outputs: [{ internalType: "uint256", name: "", type: "uint256" }],
+    stateMutability: "view",
+    type: "function",
+  },
+] as const;
+
+const CHILD_AT_ABI = [
+  {
+    inputs: [
+      { internalType: "bytes32", name: "parentUID", type: "bytes32" },
+      { internalType: "uint256", name: "index", type: "uint256" },
+    ],
+    name: "getChildAt",
+    outputs: [{ internalType: "bytes32", name: "", type: "bytes32" }],
+    stateMutability: "view",
+    type: "function",
+  },
+] as const;
 
 export const FileBrowser = ({
   currentAnchorUID,
@@ -59,6 +100,7 @@ export const FileBrowser = ({
   const [fileContentType, setFileContentType] = useState<string | null>(null);
   const [isFileLoading, setIsFileLoading] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  const [previewFullscreen, setPreviewFullscreen] = useState(false);
   const [pageSize, setPageSize] = useState<bigint>(50n);
 
   // Tag filter state: null = no filter active; Set<string> = allowed DATA/anchor UIDs
@@ -412,13 +454,124 @@ export const FileBrowser = ({
   });
 
   // ── Sort overlay integration ─────────────────────────────────────────────────
-  const { sortedUIDs, isLoading: isSortLoading, hasMore: hasSortMore, loadMore: loadMoreSorted } = useSortedData({
+  const {
+    sortedUIDs,
+    isLoading: isSortLoading,
+    hasMore: hasSortMore,
+    loadMore: loadMoreSorted,
+  } = useSortedData({
     sortInfoUID: activeSortInfoUID,
     parentAnchor: currentAnchorUID ?? undefined,
     sortOverlayAddress,
     editionAddresses,
     refreshKey: sortRefreshKey,
   });
+
+  // ── Client-side preview sort (when on-chain sort is 0% processed) ──────────
+  // Fetches sort keys locally and sorts items in browser memory.
+  const [previewSortKeys, setPreviewSortKeys] = useState<Map<string, string>>(new Map());
+  const [isPreviewSort, setIsPreviewSort] = useState(false);
+  const previewFetchRef = useRef<string | null>(null); // track which sort we fetched for
+
+  // Client-side preview sort: fetch sort keys locally when on-chain sort is 0% processed
+  useEffect(() => {
+    if (
+      !activeSortInfoUID ||
+      !sortOverlayAddress ||
+      !publicClient ||
+      !currentAnchorUID ||
+      (sortedUIDs && sortedUIDs.length > 0)
+    ) {
+      // Clear preview state when sort changes or on-chain data arrives
+      if (previewFetchRef.current !== activeSortInfoUID) {
+        setPreviewSortKeys(new Map());
+        setIsPreviewSort(false);
+        previewFetchRef.current = null;
+      }
+      return;
+    }
+    if (previewFetchRef.current === activeSortInfoUID) return;
+
+    // rawItems is set by this point from the directory query hooks (it's a state dependency below)
+    // We read it indirectly — can't add it here without a cycle, so use a dedicated rawItems state ref
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const config = await publicClient.readContract({
+          address: sortOverlayAddress,
+          abi: SORT_OVERLAY_ABI,
+          functionName: "getSortConfig",
+          args: [activeSortInfoUID as `0x${string}`],
+        });
+        if (cancelled) return;
+
+        const sortFuncAddr = (config as any).sortFunc as `0x${string}`;
+        if (!sortFuncAddr || sortFuncAddr === "0x0000000000000000000000000000000000000000") return;
+
+        // Fetch sort keys for all children using getChildAt + getSortKey
+        const indexerAddr = indexerInfo?.address as `0x${string}`;
+        if (!indexerAddr) return;
+
+        const count = (await publicClient.readContract({
+          address: indexerAddr,
+          abi: CHILDREN_COUNT_ABI,
+          functionName: "getChildrenCount",
+          args: [currentAnchorUID as `0x${string}`],
+        })) as bigint;
+
+        if (cancelled || count === 0n) return;
+
+        const keyMap = new Map<string, string>();
+        const batchSize = 50;
+        for (let i = 0n; i < count && i < 200n; i += BigInt(batchSize)) {
+          const end = i + BigInt(batchSize) > count ? count : i + BigInt(batchSize);
+          const promises: Promise<void>[] = [];
+          for (let j = i; j < end; j++) {
+            promises.push(
+              (async () => {
+                const childUID = (await publicClient.readContract({
+                  address: indexerAddr,
+                  abi: CHILD_AT_ABI,
+                  functionName: "getChildAt",
+                  args: [currentAnchorUID as `0x${string}`, j],
+                })) as `0x${string}`;
+
+                try {
+                  const sortKey = (await publicClient.readContract({
+                    address: sortFuncAddr,
+                    abi: SORT_FUNC_ABI,
+                    functionName: "getSortKey",
+                    args: [childUID, activeSortInfoUID as `0x${string}`],
+                  })) as `0x${string}`;
+                  if (sortKey && sortKey !== "0x") {
+                    keyMap.set(childUID.toLowerCase(), sortKey);
+                  }
+                } catch {
+                  // Ineligible item
+                }
+              })(),
+            );
+          }
+          await Promise.all(promises);
+          if (cancelled) return;
+        }
+
+        if (!cancelled && keyMap.size > 0) {
+          previewFetchRef.current = activeSortInfoUID;
+          setPreviewSortKeys(keyMap);
+          setIsPreviewSort(true);
+        }
+      } catch (e) {
+        console.error("Preview sort key fetch failed:", e);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSortInfoUID, sortOverlayAddress, publicClient, currentAnchorUID, sortedUIDs, indexerInfo]);
 
   const hasEditions = editionAddresses && editionAddresses.length > 0;
 
@@ -561,13 +714,43 @@ export const FileBrowser = ({
     return true;
   });
 
+  // Keyboard handler ref — lets the useEffect stay above early returns while
+  // the actual handler logic (which depends on computed values) is set later.
+  const keyHandlerRef = useRef<((e: KeyboardEvent) => void) | null>(null);
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => keyHandlerRef.current?.(e);
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
+
   if (!currentAnchorUID) return <div>Select a topic</div>;
   if (isLoading || isTagFilterLoading || isDataUIDMapLoading || isSortLoading) return <div>Loading items...</div>;
 
   // When a sort is active, reorder rawItems by the sorted UIDs.
   // Items not yet in the sorted list appear at the end in their original order.
+  // Falls back to client-side preview sort when on-chain sort has no data.
   const sortedItems: any[] | undefined = (() => {
-    if (!items || !sortedUIDs) return items;
+    if (!items) return items;
+
+    // Client-side preview sort: use locally-fetched sort keys
+    if (isPreviewSort && previewSortKeys.size > 0 && (!sortedUIDs || sortedUIDs.length === 0)) {
+      const dir = reverseOrder ? -1 : 1;
+      return [...items].sort((a: any, b: any) => {
+        const aKey = previewSortKeys.get(a.uid?.toLowerCase() ?? "");
+        const bKey = previewSortKeys.get(b.uid?.toLowerCase() ?? "");
+        if (aKey && bKey) {
+          if (aKey < bKey) return -1 * dir;
+          if (aKey > bKey) return 1 * dir;
+          return 0;
+        }
+        if (aKey) return -1;
+        if (bKey) return 1;
+        return 0;
+      });
+    }
+
+    // On-chain sorted data
+    if (!sortedUIDs) return items;
     const sortIndexMap = new Map(sortedUIDs.map((uid, idx) => [uid.toLowerCase(), idx]));
     const dir = reverseOrder ? -1 : 1;
     return [...items].sort((a: any, b: any) => {
@@ -575,7 +758,7 @@ export const FileBrowser = ({
       const bi = sortIndexMap.get(b.uid?.toLowerCase() ?? "");
       if (ai !== undefined && bi !== undefined) return (ai - bi) * dir;
       if (ai !== undefined) return -1; // a is sorted, b is not → a first
-      if (bi !== undefined) return 1;  // b is sorted, a is not → b first
+      if (bi !== undefined) return 1; // b is sorted, a is not → b first
       return 0; // both unsorted → keep relative order
     });
   })();
@@ -602,176 +785,322 @@ export const FileBrowser = ({
     </div>
   );
 
+  const closePreview = () => {
+    setSelectedFile(null);
+    setFileContent(null);
+    setFileContentType(null);
+    setFetchError(null);
+    setPreviewFullscreen(false);
+  };
+
+  // File-only items for gallery navigation
+  const fileItems =
+    (sortedItems ?? items)?.filter(
+      (item: any) => isFile(item, dataSchemaUID) && item.uid !== tagsRoot && item.uid !== sortsAnchorUID,
+    ) ?? [];
+
+  const navigateGallery = (direction: 1 | -1) => {
+    if (!selectedFile || fileItems.length === 0) return;
+    const currentIdx = fileItems.findIndex((item: any) => item.uid === selectedFile.uid);
+    if (currentIdx === -1) return;
+    const nextIdx = (currentIdx + direction + fileItems.length) % fileItems.length;
+    const nextItem = fileItems[nextIdx];
+    setSelectedFile(nextItem);
+    fetchFileContent(nextItem);
+  };
+
+  // Update the keyboard handler ref each render with fresh closure
+  keyHandlerRef.current = (e: KeyboardEvent) => {
+    if (!selectedFile) return;
+    if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      navigateGallery(-1);
+    } else if (e.key === "ArrowRight") {
+      e.preventDefault();
+      navigateGallery(1);
+    } else if (e.key === "Escape") {
+      if (previewFullscreen) {
+        setPreviewFullscreen(false);
+      } else {
+        closePreview();
+      }
+    }
+  };
+
   return (
-    <div className="relative h-full">
-      <div className="grid grid-cols-4 gap-4 p-4">
-        {(sortedItems ?? items)
-          ?.filter((item: any) => (isTopic(item) || isFile(item, dataSchemaUID)) && item.uid !== tagsRoot && item.uid !== sortsAnchorUID)
-          .map((item: any) => {
-            // isTopic = Generic Anchor (Schema 0 or undefined legacy)
-            // isFile = Data Anchor (Schema DATA_SCHEMA_UID)
-            const isItemTopic = isTopic(item);
-            const isItemFile = isFile(item, dataSchemaUID);
+    <div className="relative h-full flex flex-row">
+      <div className={`${selectedFile ? "flex-1 min-w-0" : "w-full"} overflow-y-auto`}>
+        {/* Preview sort banner */}
+        {isPreviewSort && previewSortKeys.size > 0 && (!sortedUIDs || sortedUIDs.length === 0) && (
+          <div className="mx-4 mt-2 px-3 py-2 rounded-lg bg-info/10 border border-info/20 flex items-center justify-between text-sm">
+            <span className="text-info-content/70">Preview sort — not yet saved on-chain</span>
+            <span className="text-xs text-base-content/40">Use the Process button in the sort dropdown to persist</span>
+          </div>
+        )}
+        <div className="grid grid-cols-4 gap-4 p-4">
+          {(sortedItems ?? items)
+            ?.filter(
+              (item: any) =>
+                (isTopic(item) || isFile(item, dataSchemaUID)) && item.uid !== tagsRoot && item.uid !== sortsAnchorUID,
+            )
+            .map((item: any) => {
+              // isTopic = Generic Anchor (Schema 0 or undefined legacy)
+              // isFile = Data Anchor (Schema DATA_SCHEMA_UID)
+              const isItemTopic = isTopic(item);
+              const isItemFile = isFile(item, dataSchemaUID);
 
-            return (
-              <div
-                key={item.uid}
-                className="card bg-base-100 shadow-xl group relative hover:bg-base-200 transition-colors"
-                onClick={() => {
-                  if (isItemTopic) {
-                    onNavigate(item.uid, item.name);
-                  } else if (isItemFile) {
-                    setSelectedFile(item);
-                    fetchFileContent(item);
-                  }
-                }}
-              >
-                {/* Actions Group */}
-                <div className="absolute top-2 right-2 flex gap-1 z-10">
-                  {/* Tags Button */}
-                  <button
-                    className="p-1 rounded-full bg-base-100 shadow-sm hover:bg-base-300 transition-colors"
-                    onClick={e => {
-                      e.stopPropagation();
-                      setTagModalUID(item.uid);
-                      setTagModalIsFile(isItemFile);
-                    }}
-                    title="Tags"
-                  >
-                    <TagIcon className="w-5 h-5 text-gray-400 hover:text-accent" />
-                  </button>
-
-                  {/* Properties Button */}
-                  <button
-                    className="p-1 rounded-full bg-base-100 shadow-sm hover:bg-base-300 transition-colors"
-                    onClick={e => {
-                      e.stopPropagation();
-                      setPropertiesModalUID(item.uid);
-                    }}
-                    title="Properties"
-                  >
-                    <AdjustmentsHorizontalIcon className="w-5 h-5 text-gray-400 hover:text-secondary" />
-                  </button>
-
-                  {/* Debug Info Button */}
-                  <button
-                    className="p-1 rounded-full bg-base-100 shadow-sm hover:bg-base-300 transition-colors"
-                    onClick={e => {
-                      e.stopPropagation();
-                      setSelectedDebugItem(item);
-                    }}
-                    title="Debug Info"
-                  >
-                    <InformationCircleIcon className="w-5 h-5 text-gray-400 hover:text-primary" />
-                  </button>
-                </div>
-
-                <div className="card-body items-center text-center p-4 cursor-pointer">
-                  <div className="text-4xl">
-                    {isItemTopic ? (
-                      <FolderIcon className="w-12 h-12 text-yellow-500" />
-                    ) : (
-                      <DocumentIcon className="w-12 h-12 text-blue-500" />
-                    )}
+              return (
+                <div
+                  key={item.uid}
+                  className={`card bg-base-100 shadow-xl group relative hover:bg-base-200 transition-all duration-200 ${selectedFile?.uid === item.uid ? "ring-2 ring-primary bg-primary/10" : ""}`}
+                  onClick={() => {
+                    if (isItemTopic) {
+                      onNavigate(item.uid, item.name);
+                    } else if (isItemFile) {
+                      setSelectedFile(item);
+                      fetchFileContent(item);
+                    }
+                  }}
+                >
+                  {/* Actions — visible on hover */}
+                  <div className="absolute top-1.5 right-1.5 flex gap-0.5 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button
+                      className="p-0.5 rounded bg-base-300/80 hover:bg-base-300 transition-colors"
+                      onClick={e => {
+                        e.stopPropagation();
+                        setTagModalUID(item.uid);
+                        setTagModalIsFile(isItemFile);
+                      }}
+                      title="Tags"
+                    >
+                      <TagIcon className="w-3.5 h-3.5 text-base-content/50 hover:text-accent" />
+                    </button>
+                    <button
+                      className="p-0.5 rounded bg-base-300/80 hover:bg-base-300 transition-colors"
+                      onClick={e => {
+                        e.stopPropagation();
+                        setPropertiesModalUID(item.uid);
+                      }}
+                      title="Properties"
+                    >
+                      <AdjustmentsHorizontalIcon className="w-3.5 h-3.5 text-base-content/50 hover:text-secondary" />
+                    </button>
+                    <button
+                      className="p-0.5 rounded bg-base-300/80 hover:bg-base-300 transition-colors"
+                      onClick={e => {
+                        e.stopPropagation();
+                        setSelectedDebugItem(item);
+                      }}
+                      title="Debug Info"
+                    >
+                      <InformationCircleIcon className="w-3.5 h-3.5 text-base-content/50 hover:text-primary" />
+                    </button>
                   </div>
-                  <h2 className="card-title text-sm break-all text-center">{item.name || "Unnamed"}</h2>
-                  <div className="text-xs text-gray-400">
-                    {isItemTopic ? (item.childCount > 0 ? `${item.childCount} items` : "Empty") : "File"}
+
+                  <div className="card-body items-center text-center p-4 pt-6 cursor-pointer">
+                    <div>
+                      {isItemTopic ? (
+                        <FolderIcon className="w-10 h-10 text-yellow-500" />
+                      ) : (
+                        <DocumentIcon className="w-10 h-10 text-blue-500" />
+                      )}
+                    </div>
+                    <h2 className="card-title text-sm break-all text-center leading-tight">{item.name || "Unnamed"}</h2>
+                    <div className="text-xs text-base-content/40">
+                      {isItemTopic ? (item.childCount > 0 ? `${item.childCount} items` : "Empty") : "File"}
+                    </div>
                   </div>
                 </div>
-              </div>
-            );
-          })}
-        {(sortedItems ?? items)?.length === 0 && (
-          <div className="col-span-4 text-center text-gray-500">
-            {tagFilteredUIDs !== null ? `No items match tag filter: "${tagFilter}"` : "Topic is empty"}
+              );
+            })}
+          {(sortedItems ?? items)?.length === 0 && (
+            <div className="col-span-4 text-center text-gray-500">
+              {tagFilteredUIDs !== null ? `No items match tag filter: "${tagFilter}"` : "Topic is empty"}
+            </div>
+          )}
+        </div>
+        {/* Load more: kernel items when page is full, or sorted pages when more exist */}
+        {items && items.length > 0 && items.length >= Number(pageSize) && (
+          <div className="flex justify-center py-4">
+            <button
+              className="btn btn-sm btn-outline"
+              onClick={() => {
+                setPageSize(prev => prev + 50n);
+                if (hasSortMore) loadMoreSorted();
+              }}
+            >
+              Load more
+            </button>
           </div>
         )}
       </div>
-      {/* Load more: kernel items when page is full, or sorted pages when more exist */}
-      {(items && items.length > 0 && items.length >= Number(pageSize)) && (
-        <div className="flex justify-center py-4">
-          <button
-            className="btn btn-sm btn-outline"
-            onClick={() => {
-              setPageSize(prev => prev + 50n);
-              if (hasSortMore) loadMoreSorted();
-            }}
-          >
-            Load more
-          </button>
-        </div>
-      )}
+      {/* end scrollable grid wrapper */}
 
-      {/* File Preview Modal */}
-      {selectedFile && (
-        <div
-          className="fixed inset-0 bg-black/20 z-20 flex items-center justify-center p-8 transition-all"
-          onClick={() => {
-            setSelectedFile(null);
-            setFileContent(null);
-            setFileContentType(null);
-            setFetchError(null);
-          }}
-        >
-          <div
-            className="card w-full max-w-4xl max-h-[90vh] bg-base-100 shadow-2xl border border-base-300 flex flex-col"
-            onClick={e => e.stopPropagation()}
-          >
-            <div className="card-body overflow-hidden flex flex-col">
-              <div className="flex justify-between items-start shrink-0">
-                <h3 className="card-title text-lg font-bold">File Preview: {selectedFile.name}</h3>
-                <button
-                  className="btn btn-ghost btn-sm btn-circle"
-                  onClick={() => {
-                    setSelectedFile(null);
-                    setFileContent(null);
-                    setFileContentType(null);
-                    setFetchError(null);
-                  }}
-                >
-                  <XMarkIcon className="w-6 h-6" />
-                </button>
-              </div>
-
-              <div className="flex-1 overflow-auto mt-4 bg-base-200 rounded p-4 relative">
-                {isFileLoading ? (
-                  <div className="flex items-center justify-center h-full">
-                    <span className="loading loading-spinner loading-lg text-primary"></span>
-                  </div>
-                ) : fetchError ? (
-                  <div className="text-center text-error">
-                    <p className="font-semibold mb-1">Failed to load file</p>
-                    <p className="text-xs opacity-70">{fetchError}</p>
-                  </div>
-                ) : fileContent ? (
-                  fileContentType?.includes("image/svg") ? (
-                    <div className="flex justify-center" dangerouslySetInnerHTML={{ __html: fileContent }} />
-                  ) : fileContentType?.startsWith("image/") ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={
-                        fileContent.startsWith("blob:") ? fileContent : `data:${fileContentType};base64,${fileContent}`
-                      }
-                      alt={selectedFile.name}
-                      className="max-w-full h-auto"
-                    />
-                  ) : fileContentType && !fileContentType.startsWith("text/") ? (
-                    <div className="text-center text-gray-500">
-                      <p className="font-semibold mb-1">Binary file — cannot preview</p>
-                      <p className="text-xs opacity-60">{fileContentType}</p>
-                    </div>
-                  ) : (
-                    <pre className="whitespace-pre-wrap text-sm">{fileContent}</pre>
-                  )
-                ) : (
-                  <div className="text-center text-gray-500">No content found.</div>
-                )}
-              </div>
+      {/* File Preview Side Pane */}
+      {selectedFile && !previewFullscreen && (
+        <div className="w-[400px] flex-shrink-0 border-l border-base-300 bg-base-100 flex flex-col overflow-hidden">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-base-300 shrink-0">
+            <div className="flex items-center gap-2 min-w-0">
+              {fileItems.length > 1 && (
+                <div className="flex items-center gap-0.5 flex-shrink-0">
+                  <button
+                    className="btn btn-ghost btn-xs btn-circle"
+                    onClick={() => navigateGallery(-1)}
+                    title="Previous file"
+                  >
+                    <ChevronLeftIcon className="w-4 h-4" />
+                  </button>
+                  <button
+                    className="btn btn-ghost btn-xs btn-circle"
+                    onClick={() => navigateGallery(1)}
+                    title="Next file"
+                  >
+                    <ChevronRightIcon className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
+              <h3 className="font-bold text-sm truncate">{selectedFile.name}</h3>
             </div>
+            <div className="flex items-center gap-1 flex-shrink-0">
+              <button
+                className="btn btn-ghost btn-sm btn-circle"
+                onClick={() => setPreviewFullscreen(true)}
+                title="Fullscreen"
+              >
+                <ArrowsPointingOutIcon className="w-4 h-4" />
+              </button>
+              <button className="btn btn-ghost btn-sm btn-circle" onClick={closePreview} title="Close">
+                <XMarkIcon className="w-5 h-5" />
+              </button>
+            </div>
+          </div>
+
+          <div className="flex-1 overflow-auto p-4">
+            {isFileLoading ? (
+              <div className="flex items-center justify-center h-32">
+                <span className="loading loading-spinner loading-lg text-primary"></span>
+              </div>
+            ) : fetchError ? (
+              <div className="text-center text-error">
+                <p className="font-semibold mb-1">Failed to load file</p>
+                <p className="text-xs opacity-70">{fetchError}</p>
+              </div>
+            ) : fileContent ? (
+              fileContentType?.includes("image/svg") ? (
+                <div
+                  className="flex justify-center cursor-pointer"
+                  onClick={() => setPreviewFullscreen(true)}
+                  dangerouslySetInnerHTML={{ __html: fileContent }}
+                />
+              ) : fileContentType?.startsWith("image/") ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={fileContent.startsWith("blob:") ? fileContent : `data:${fileContentType};base64,${fileContent}`}
+                  alt={selectedFile.name}
+                  className="max-w-full h-auto rounded cursor-pointer"
+                  onClick={() => setPreviewFullscreen(true)}
+                />
+              ) : fileContentType && !fileContentType.startsWith("text/") ? (
+                <div className="text-center text-gray-500">
+                  <p className="font-semibold mb-1">Binary file — cannot preview</p>
+                  <p className="text-xs opacity-60">{fileContentType}</p>
+                </div>
+              ) : (
+                <pre className="whitespace-pre-wrap text-sm cursor-pointer" onClick={() => setPreviewFullscreen(true)}>
+                  {fileContent}
+                </pre>
+              )
+            ) : (
+              <div className="text-center text-gray-500">No content found.</div>
+            )}
           </div>
         </div>
       )}
+
+      {/* Fullscreen overlay — portaled to body to escape stacking contexts */}
+      {selectedFile &&
+        previewFullscreen &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[9999] bg-black/90 flex items-center justify-center"
+            onClick={() => setPreviewFullscreen(false)}
+          >
+            {/* Close button */}
+            <button
+              className="absolute top-4 right-4 btn btn-ghost btn-circle text-white/70 hover:text-white hover:bg-white/10"
+              onClick={e => {
+                e.stopPropagation();
+                setPreviewFullscreen(false);
+              }}
+            >
+              <XMarkIcon className="w-6 h-6" />
+            </button>
+
+            {/* File name */}
+            <div className="absolute top-4 left-1/2 -translate-x-1/2 text-white/70 text-sm font-medium">
+              {selectedFile.name}
+            </div>
+
+            {/* Gallery nav arrows */}
+            {fileItems.length > 1 && (
+              <>
+                <button
+                  className="absolute left-4 top-1/2 -translate-y-1/2 btn btn-circle btn-ghost text-white/70 hover:text-white hover:bg-white/10"
+                  onClick={e => {
+                    e.stopPropagation();
+                    navigateGallery(-1);
+                  }}
+                >
+                  <ChevronLeftIcon className="w-6 h-6" />
+                </button>
+                <button
+                  className="absolute right-4 top-1/2 -translate-y-1/2 btn btn-circle btn-ghost text-white/70 hover:text-white hover:bg-white/10"
+                  onClick={e => {
+                    e.stopPropagation();
+                    navigateGallery(1);
+                  }}
+                >
+                  <ChevronRightIcon className="w-6 h-6" />
+                </button>
+              </>
+            )}
+
+            {/* Content */}
+            <div className="max-w-[90vw] max-h-[85vh] overflow-auto" onClick={e => e.stopPropagation()}>
+              {isFileLoading ? (
+                <span className="loading loading-spinner loading-lg text-white"></span>
+              ) : fetchError ? (
+                <div className="text-center text-error">
+                  <p className="font-semibold mb-1">Failed to load file</p>
+                  <p className="text-xs opacity-70">{fetchError}</p>
+                </div>
+              ) : fileContent ? (
+                fileContentType?.includes("image/svg") ? (
+                  <div dangerouslySetInnerHTML={{ __html: fileContent }} />
+                ) : fileContentType?.startsWith("image/") ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={
+                      fileContent.startsWith("blob:") ? fileContent : `data:${fileContentType};base64,${fileContent}`
+                    }
+                    alt={selectedFile.name}
+                    className="max-w-[90vw] max-h-[85vh] object-contain"
+                  />
+                ) : fileContentType && !fileContentType.startsWith("text/") ? (
+                  <div className="text-center text-white/50">
+                    <p className="font-semibold mb-1">Binary file — cannot preview</p>
+                    <p className="text-xs opacity-60">{fileContentType}</p>
+                  </div>
+                ) : (
+                  <pre className="whitespace-pre-wrap text-sm text-white bg-black/50 rounded-lg p-6">{fileContent}</pre>
+                )
+              ) : (
+                <div className="text-center text-white/50">No content found.</div>
+              )}
+            </div>
+          </div>,
+          document.body,
+        )}
 
       {/* Debug Overlay */}
       {selectedDebugItem && (

@@ -17,7 +17,6 @@
  * When sortInfoUID is null, sortedUIDs is null — the caller should use the
  * standard getDirectoryPage / getDirectoryPageByAddressList APIs instead.
  */
-
 import { useCallback, useEffect, useRef, useState } from "react";
 import { zeroHash } from "viem";
 import { usePublicClient } from "wagmi";
@@ -168,7 +167,17 @@ export function useSortedData({
     return () => {
       cancelled = true;
     };
-  }, [sortInfoUID, parentAnchor, sortOverlayAddress, publicClient, editionAddresses, showRevoked, pageSize, cursor, loadTrigger]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [
+    sortInfoUID,
+    parentAnchor,
+    sortOverlayAddress,
+    publicClient,
+    editionAddresses,
+    showRevoked,
+    pageSize,
+    cursor,
+    loadTrigger,
+  ]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return { sortedUIDs, isLoading, hasMore, loadMore, reset };
 }

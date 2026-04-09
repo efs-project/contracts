@@ -850,6 +850,184 @@ describe("EFSSortOverlay", function () {
   });
 
   // ============================================================================================
+  // repositionItem — PROPERTY / FUZZ TESTS
+  // ============================================================================================
+
+  describe("repositionItem property tests — invariants after operations", function () {
+    /** Walk the sorted list head→tail and return visited UIDs. Detects cycles. */
+    async function walkList(overlay: EFSSortOverlay, sortInfoUID: string, parentUID: string): Promise<string[]> {
+      const visited: string[] = [];
+      const maxSteps = 100;
+      let current = await overlay.getSortHead(sortInfoUID, parentUID);
+      for (let i = 0; i < maxSteps; i++) {
+        if (current === ZERO_BYTES32) break;
+        if (visited.includes(current)) throw new Error("Cycle detected in linked list!");
+        visited.push(current);
+        const node = await overlay.getSortNode(sortInfoUID, parentUID, current);
+        current = node.next;
+      }
+      return visited;
+    }
+
+    /** Assert all linked list invariants hold. */
+    async function assertListInvariants(
+      overlay: EFSSortOverlay,
+      sortInfoUID: string,
+      parentUID: string,
+      expectedLength: number,
+    ) {
+      const visited = await walkList(overlay, sortInfoUID, parentUID);
+
+      // 1. Length matches
+      const onChainLength = await overlay.getSortLength(sortInfoUID, parentUID);
+      expect(onChainLength).to.equal(BigInt(expectedLength), "on-chain length mismatch");
+      expect(visited.length).to.equal(expectedLength, "walk length mismatch");
+
+      // 2. No cycles (walkList would throw)
+
+      // 3. Head.prev == 0
+      if (visited.length > 0) {
+        const headNode = await overlay.getSortNode(sortInfoUID, parentUID, visited[0]);
+        expect(headNode.prev).to.equal(ZERO_BYTES32, "head.prev should be zero");
+      }
+
+      // 4. Tail.next == 0
+      if (visited.length > 0) {
+        const tailUID = visited[visited.length - 1];
+        const tailNode = await overlay.getSortNode(sortInfoUID, parentUID, tailUID);
+        expect(tailNode.next).to.equal(ZERO_BYTES32, "tail.next should be zero");
+        expect(await overlay.getSortTail(sortInfoUID, parentUID)).to.equal(tailUID, "tail pointer mismatch");
+      }
+
+      // 5. Doubly-linked consistency: each node's prev.next == node and next.prev == node
+      for (let i = 0; i < visited.length; i++) {
+        const node = await overlay.getSortNode(sortInfoUID, parentUID, visited[i]);
+        if (i > 0) {
+          expect(node.prev).to.equal(visited[i - 1], `node ${i} prev mismatch`);
+        }
+        if (i < visited.length - 1) {
+          expect(node.next).to.equal(visited[i + 1], `node ${i} next mismatch`);
+        }
+      }
+    }
+
+    it("invariants hold after processing items in multiple batches", async function () {
+      const dirUID = await createAnchor(alice, "fuzz-dir-1");
+      const items: string[] = [];
+      const names = ["mango", "cherry", "apple", "fig", "banana", "elderberry", "date"];
+      for (const name of names) {
+        items.push(await createAnchor(alice, name, dirUID));
+      }
+      const namingUID = await createAnchor(alice, "alpha", dirUID, sortInfoSchemaUID);
+      const sortInfoUID = await createSortInfo(alice, namingUID, await nameSort.getAddress());
+
+      // Process in batches of 2
+      const allKernel = [...items, namingUID];
+      for (let i = 0; i < allKernel.length; i += 2) {
+        const batch = allKernel.slice(i, i + 2);
+        const [lefts, rights] = await sortOverlay.computeHints(sortInfoUID, dirUID, batch);
+        await sortOverlay.connect(alice).processItems(sortInfoUID, dirUID, BigInt(i), batch, [...lefts], [...rights]);
+        await assertListInvariants(sortOverlay, sortInfoUID, dirUID, i + batch.length);
+      }
+
+      // Final sorted order should be alphabetical
+      const visited = await walkList(sortOverlay, sortInfoUID, dirUID);
+      expect(visited.length).to.equal(8); // 7 items + naming anchor
+    });
+
+    it("invariants hold with single-item list", async function () {
+      const dirUID = await createAnchor(alice, "fuzz-dir-2");
+      const f1 = await createAnchor(alice, "only-child", dirUID);
+      const namingUID = await createAnchor(alice, "alpha", dirUID, sortInfoSchemaUID);
+      const sortInfoUID = await createSortInfo(alice, namingUID, await nameSort.getAddress());
+
+      const [lefts, rights] = await sortOverlay.computeHints(sortInfoUID, dirUID, [f1]);
+      await sortOverlay.connect(alice).processItems(sortInfoUID, dirUID, 0n, [f1], [...lefts], [...rights]);
+
+      await assertListInvariants(sortOverlay, sortInfoUID, dirUID, 1);
+    });
+
+    it("invariants hold after processing reverse-sorted input", async function () {
+      const dirUID = await createAnchor(alice, "fuzz-dir-3");
+      // Items in reverse alphabetical order
+      const z = await createAnchor(alice, "zoo", dirUID);
+      const y = await createAnchor(alice, "yak", dirUID);
+      const x = await createAnchor(alice, "xray", dirUID);
+      const w = await createAnchor(alice, "walrus", dirUID);
+      const namingUID = await createAnchor(alice, "alpha", dirUID, sortInfoSchemaUID);
+      const sortInfoUID = await createSortInfo(alice, namingUID, await nameSort.getAddress());
+
+      const allItems = [z, y, x, w, namingUID];
+      const [lefts, rights] = await sortOverlay.computeHints(sortInfoUID, dirUID, allItems);
+      await sortOverlay.connect(alice).processItems(sortInfoUID, dirUID, 0n, allItems, [...lefts], [...rights]);
+
+      await assertListInvariants(sortOverlay, sortInfoUID, dirUID, 5);
+
+      // Verify sorted order: alpha < walrus < xray < yak < zoo
+      const visited = await walkList(sortOverlay, sortInfoUID, dirUID);
+      expect(visited[0]).to.equal(namingUID); // "alpha"
+      expect(visited[1]).to.equal(w); // "walrus"
+      expect(visited[2]).to.equal(x); // "xray"
+      expect(visited[3]).to.equal(y); // "yak"
+      expect(visited[4]).to.equal(z); // "zoo"
+    });
+
+    it("repositionItem reverts for every item when list is already sorted (no-op protection)", async function () {
+      const dirUID = await createAnchor(alice, "fuzz-dir-4");
+      const a = await createAnchor(alice, "alpha", dirUID);
+      const b = await createAnchor(alice, "beta", dirUID);
+      const c = await createAnchor(alice, "gamma", dirUID);
+      const namingUID = await createAnchor(alice, "sort", dirUID, sortInfoSchemaUID);
+      const sortInfoUID = await createSortInfo(alice, namingUID, await nameSort.getAddress());
+
+      const allItems = [a, b, c, namingUID];
+      const [lefts, rights] = await sortOverlay.computeHints(sortInfoUID, dirUID, allItems);
+      await sortOverlay.connect(alice).processItems(sortInfoUID, dirUID, 0n, allItems, [...lefts], [...rights]);
+
+      // Every item is correctly positioned — repositionItem should revert UnnecessaryReposition for each
+      const visited = await walkList(sortOverlay, sortInfoUID, dirUID);
+      for (let i = 0; i < visited.length; i++) {
+        const leftHint = i > 0 ? visited[i - 1] : ZERO_BYTES32;
+        const rightHint = i < visited.length - 1 ? visited[i + 1] : ZERO_BYTES32;
+        await expect(
+          sortOverlay.connect(alice).repositionItem(sortInfoUID, dirUID, visited[i], leftHint, rightHint),
+        ).to.be.revertedWithCustomError(sortOverlay, "UnnecessaryReposition");
+      }
+
+      // Invariants still hold
+      await assertListInvariants(sortOverlay, sortInfoUID, dirUID, 4);
+    });
+
+    it("multiple contributors processing different batches maintains invariants", async function () {
+      const dirUID = await createAnchor(alice, "fuzz-dir-5");
+      const f1 = await createAnchor(alice, "fig", dirUID);
+      const f2 = await createAnchor(bob, "elderberry", dirUID);
+      const f3 = await createAnchor(alice, "date", dirUID);
+      const f4 = await createAnchor(bob, "cherry", dirUID);
+      const namingUID = await createAnchor(alice, "alpha", dirUID, sortInfoSchemaUID);
+      const sortInfoUID = await createSortInfo(alice, namingUID, await nameSort.getAddress());
+
+      // Alice processes first 2
+      const [l1, r1] = await sortOverlay.computeHints(sortInfoUID, dirUID, [f1, f2]);
+      await sortOverlay.connect(alice).processItems(sortInfoUID, dirUID, 0n, [f1, f2], [...l1], [...r1]);
+      await assertListInvariants(sortOverlay, sortInfoUID, dirUID, 2);
+
+      // Bob processes next 3
+      const [l2, r2] = await sortOverlay.computeHints(sortInfoUID, dirUID, [f3, f4, namingUID]);
+      await sortOverlay.connect(bob).processItems(sortInfoUID, dirUID, 2n, [f3, f4, namingUID], [...l2], [...r2]);
+      await assertListInvariants(sortOverlay, sortInfoUID, dirUID, 5);
+
+      // Verify alphabetical: alpha < cherry < date < elderberry < fig
+      const visited = await walkList(sortOverlay, sortInfoUID, dirUID);
+      expect(visited[0]).to.equal(namingUID); // "alpha"
+      expect(visited[1]).to.equal(f4); // "cherry"
+      expect(visited[2]).to.equal(f3); // "date"
+      expect(visited[3]).to.equal(f2); // "elderberry"
+      expect(visited[4]).to.equal(f1); // "fig"
+    });
+  });
+
+  // ============================================================================================
   // NEW EFSIndexer FUNCTIONS (getChildAt, getChildBySchemaAt, getChildCountBySchema)
   // ============================================================================================
 

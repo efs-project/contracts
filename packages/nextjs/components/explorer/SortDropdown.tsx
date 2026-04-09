@@ -1,11 +1,19 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { CreateSortModal } from "./CreateSortModal";
 import { zeroHash } from "viem";
 import { usePublicClient, useWalletClient } from "wagmi";
-import { ArrowsUpDownIcon, BarsArrowDownIcon, BarsArrowUpIcon, ChevronDownIcon } from "@heroicons/react/24/outline";
+import {
+  ArrowsUpDownIcon,
+  BarsArrowDownIcon,
+  BarsArrowUpIcon,
+  ChevronDownIcon,
+  PlusIcon,
+} from "@heroicons/react/24/outline";
 import { useSortDiscovery } from "~~/hooks/efs/useSortDiscovery";
-import { SortOverlayInfo, SORT_OVERLAY_ABI, formatSyncPercent } from "~~/utils/efs/sortOverlay";
+import { useDeployedContractInfo, useScaffoldReadContract } from "~~/hooks/scaffold-eth";
+import { SORT_OVERLAY_ABI, SortOverlayInfo, formatSyncPercent } from "~~/utils/efs/sortOverlay";
 import { notification } from "~~/utils/scaffold-eth";
 
 // ABI for getChildAt / getChildrenCount — used during processItems batching
@@ -45,6 +53,7 @@ interface SortDropdownProps {
   onReverseOrderChange?: (reverse: boolean) => void;
   /** Increment to auto-process the active sort (e.g. after file upload) */
   autoProcessKey?: number;
+  anchorSchemaUID?: string;
 }
 
 export const SortDropdown = ({
@@ -60,23 +69,46 @@ export const SortDropdown = ({
   reverseOrder = false,
   onReverseOrderChange,
   autoProcessKey = 0,
+  anchorSchemaUID,
 }: SortDropdownProps) => {
   const publicClient = usePublicClient();
   const { data: walletClient } = useWalletClient();
   const [isOpen, setIsOpen] = useState(false);
+  const [isCreateSortOpen, setIsCreateSortOpen] = useState(false);
   // Lazily-fetched staleness: sortInfoUID → fraction (0–1) or null
   const [stalenessMap, setStalenessMap] = useState<Map<string, number | null>>(new Map());
   const [isFetchingStaleness, setIsFetchingStaleness] = useState(false);
   // Which sort is currently being processed (null = none)
   const [processingUID, setProcessingUID] = useState<string | null>(null);
 
-  const { availableSorts, isLoading } = useSortDiscovery({
+  const {
+    availableSorts,
+    isLoading,
+    refetch: refetchSorts,
+  } = useSortDiscovery({
     parentAnchor,
     indexerAddress,
     easAddress,
     editionAddresses,
     filterBySchema,
   });
+
+  // Sort function contracts for CreateSortModal
+  const { data: nameSortInfo } = useDeployedContractInfo({ contractName: "NameSort" });
+  const { data: timestampSortInfo } = useDeployedContractInfo({ contractName: "TimestampSort" });
+  const { data: sortInfoSchemaUID } = useScaffoldReadContract({
+    contractName: "EFSSortOverlay",
+    functionName: "SORT_INFO_SCHEMA_UID",
+  });
+  const { data: sortsAnchorUID } = useScaffoldReadContract({
+    contractName: "Indexer",
+    functionName: "sortsAnchorUID",
+  });
+
+  const sortFunctions = [
+    ...(nameSortInfo ? [{ name: "NameSort (alphabetical)", address: nameSortInfo.address }] : []),
+    ...(timestampSortInfo ? [{ name: "TimestampSort (by date)", address: timestampSortInfo.address }] : []),
+  ];
 
   // Fetch staleness for all available sorts when dropdown opens
   const fetchStaleness = useCallback(async () => {
@@ -175,7 +207,14 @@ export const SortDropdown = ({
           address: sortOverlayAddress,
           abi: SORT_OVERLAY_ABI,
           functionName: "processItems",
-          args: [sortInfoUID as `0x${string}`, parentAnchor as `0x${string}`, expectedStartIndex, items, leftHints, rightHints],
+          args: [
+            sortInfoUID as `0x${string}`,
+            parentAnchor as `0x${string}`,
+            expectedStartIndex,
+            items,
+            leftHints,
+            rightHints,
+          ],
           account: walletClient.account,
         });
 
@@ -267,9 +306,7 @@ export const SortDropdown = ({
 
             {availableSorts.length > 0 && <div className="border-t border-base-300 my-1" />}
 
-            {isLoading && (
-              <div className="px-4 py-2.5 text-sm text-base-content/50">Loading sorts...</div>
-            )}
+            {isLoading && <div className="px-4 py-2.5 text-sm text-base-content/50">Loading sorts...</div>}
 
             {availableSorts.map(sort => {
               const isActive = sort.sortInfoUID === activeSortInfoUID;
@@ -296,7 +333,11 @@ export const SortDropdown = ({
                   >
                     <span className="flex items-center gap-1.5">
                       {sort.name}
-                      {!sort.isLocal && <span className="text-xs text-base-content/40" title="Global sort">&#9678;</span>}
+                      {!sort.isLocal && (
+                        <span className="text-xs text-base-content/40" title="Global sort">
+                          &#9678;
+                        </span>
+                      )}
                     </span>
                     {isActive && <span className="text-primary ml-1">&#10003;</span>}
                   </button>
@@ -320,11 +361,7 @@ export const SortDropdown = ({
                         processSort(sort.sortInfoUID);
                       }}
                     >
-                      {isProcessing ? (
-                        <span className="loading loading-spinner loading-xs" />
-                      ) : (
-                        "Process"
-                      )}
+                      {isProcessing ? <span className="loading loading-spinner loading-xs" /> : "Process"}
                     </button>
                   )}
                 </div>
@@ -334,9 +371,37 @@ export const SortDropdown = ({
             {!isLoading && availableSorts.length === 0 && parentAnchor && parentAnchor !== zeroHash && (
               <div className="px-4 py-2.5 text-sm text-base-content/50">No sorts configured</div>
             )}
+
+            {/* New Sort button */}
+            {parentAnchor && parentAnchor !== zeroHash && (
+              <>
+                <div className="border-t border-base-300 my-1" />
+                <button
+                  className="w-full text-left px-4 py-2.5 hover:bg-base-300 flex items-center gap-2 text-sm text-base-content/60"
+                  onClick={() => {
+                    setIsOpen(false);
+                    setIsCreateSortOpen(true);
+                  }}
+                >
+                  <PlusIcon className="w-4 h-4" />
+                  New Sort...
+                </button>
+              </>
+            )}
           </div>
         </>
       )}
+
+      <CreateSortModal
+        isOpen={isCreateSortOpen}
+        parentAnchorUID={parentAnchor ?? null}
+        sortsAnchorUID={sortsAnchorUID as string | undefined}
+        anchorSchemaUID={anchorSchemaUID ?? ""}
+        sortInfoSchemaUID={sortInfoSchemaUID as string | undefined}
+        sortFunctions={sortFunctions}
+        onCreated={() => refetchSorts()}
+        onClose={() => setIsCreateSortOpen(false)}
+      />
     </div>
   );
 };

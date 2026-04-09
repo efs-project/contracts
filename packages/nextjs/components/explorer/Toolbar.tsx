@@ -2,11 +2,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { SortDropdown } from "./SortDropdown";
 import { ethers } from "ethers";
 import { decodeEventLog, encodeDeployData, parseAbiItem, toHex } from "viem";
 import { usePublicClient, useWalletClient } from "wagmi";
 import { FunnelIcon } from "@heroicons/react/24/outline";
-import { SortDropdown } from "./SortDropdown";
 import { useDeployedContractInfo, useScaffoldWriteContract } from "~~/hooks/scaffold-eth";
 import { useTargetNetwork } from "~~/hooks/scaffold-eth/useTargetNetwork";
 import { notification } from "~~/utils/scaffold-eth";
@@ -388,6 +388,7 @@ export const Toolbar = ({
             reverseOrder={reverseOrder}
             onReverseOrderChange={onReverseOrderChange}
             autoProcessKey={autoProcessKey}
+            anchorSchemaUID={anchorSchemaUID}
           />
         )}
         {onToggleFilterDrawer && (
