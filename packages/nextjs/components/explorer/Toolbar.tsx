@@ -6,9 +6,11 @@ import { SortDropdown } from "./SortDropdown";
 import { ethers } from "ethers";
 import { decodeEventLog, encodeDeployData, parseAbiItem, toHex } from "viem";
 import { usePublicClient, useWalletClient } from "wagmi";
-import { FunnelIcon } from "@heroicons/react/24/outline";
+import { Cog6ToothIcon, FunnelIcon } from "@heroicons/react/24/outline";
+import { useSortDiscovery } from "~~/hooks/efs/useSortDiscovery";
 import { useDeployedContractInfo, useScaffoldWriteContract } from "~~/hooks/scaffold-eth";
 import { useTargetNetwork } from "~~/hooks/scaffold-eth/useTargetNetwork";
+import { SORT_OVERLAY_ABI } from "~~/utils/efs/sortOverlay";
 import { notification } from "~~/utils/scaffold-eth";
 
 const MOCK_CHUNKED_FILE_ABI = [
@@ -36,6 +38,26 @@ const MOCK_CHUNKED_FILE_ABI = [
 const MOCK_CHUNKED_FILE_BYTECODE =
   "0x60806040523461013f57610274803803806100198161015a565b92833981019060208183031261013f578051906001600160401b03821161013f570181601f8201121561013f578051916001600160401b038311610144578260051b9160208061006a81860161015a565b80968152019382010191821161013f57602001915b81831061011f576000845b80518210156101115760009160018060a01b0360208260051b84010151168354680100000000000000008110156100fd57600181018086558110156100e957602085806001969752200190838060a01b0319825416179055019061008a565b634e487b7160e01b85526032600452602485fd5b634e487b7160e01b85526041600452602485fd5b60405160f490816101808239f35b82516001600160a01b038116810361013f5781526020928301920161007f565b600080fd5b634e487b7160e01b600052604160045260246000fd5b6040519190601f01601f191682016001600160401b038111838210176101445760405256fe6080806040526004361015601257600080fd5b60003560e01c9081632bfedae0146053575063f91f093714603257600080fd5b34604e576000366003190112604e576020600054604051908152f35b600080fd5b34604e576020366003190112604e576004359060005482101560a857600080527f290decd9548b62a8d60345a988386fc84ba6bc95484008f6362f93160ef3e563909101546001600160a01b03168152602090f35b634e487b7160e01b600052603260045260246000fdfea26469706673582212206ea2dc51d432b7722a3857f0e86c67aaa8fa760e9dee9a8bbd7f8fac66eade7f64736f6c634300081c0033";
 
+const INDEXER_CHILDREN_ABI = [
+  {
+    inputs: [
+      { internalType: "bytes32", name: "parentUID", type: "bytes32" },
+      { internalType: "uint256", name: "index", type: "uint256" },
+    ],
+    name: "getChildAt",
+    outputs: [{ internalType: "bytes32", name: "", type: "bytes32" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [{ internalType: "bytes32", name: "anchorUID", type: "bytes32" }],
+    name: "getChildrenCount",
+    outputs: [{ internalType: "uint256", name: "", type: "uint256" }],
+    stateMutability: "view",
+    type: "function",
+  },
+] as const;
+
 export type PathItem = {
   uid: string;
   name: string;
@@ -61,6 +83,7 @@ export const Toolbar = ({
   reverseOrder = false,
   onReverseOrderChange,
   autoProcessKey = 0,
+  autoProcessSortUIDs,
 }: {
   currentPath: PathItem[];
   currentAnchorUID: string | null;
@@ -75,12 +98,14 @@ export const Toolbar = ({
   onSortProcessed?: () => void;
   onNavigate: (uid: string) => void;
   onFolderCreated?: (uid: string, name: string) => void;
-  onFileCreated?: () => void;
+  /** Called after upload. Receives the sort UIDs the user wants auto-processed. */
+  onFileCreated?: (enabledSortUIDs: string[]) => void;
   isFilterDrawerOpen?: boolean;
   onToggleFilterDrawer?: () => void;
   reverseOrder?: boolean;
   onReverseOrderChange?: (reverse: boolean) => void;
   autoProcessKey?: number;
+  autoProcessSortUIDs?: string[];
 }) => {
   const { writeContractAsync: attest } = useScaffoldWriteContract({ contractName: "EAS" });
   const { data: indexer } = useDeployedContractInfo({ contractName: "Indexer" });
@@ -91,6 +116,18 @@ export const Toolbar = ({
   const [newName, setNewName] = useState("");
   const [fileToUpload, setFileToUpload] = useState<File | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Sort auto-update config: discover available sorts, let user opt specific ones out
+  const { availableSorts } = useSortDiscovery({
+    parentAnchor: currentAnchorUID ?? undefined,
+    indexerAddress,
+    easAddress,
+    editionAddresses: editionAddresses ?? [],
+  });
+  const [disabledAutoSorts, setDisabledAutoSorts] = useState<Set<string>>(new Set());
+  const [showSortConfig, setShowSortConfig] = useState(false);
+
+  const enabledSortUIDs = availableSorts.filter(s => !disabledAutoSorts.has(s.sortInfoUID)).map(s => s.sortInfoUID);
 
   // Dialog Ref for DaisyUI
   const modalRef = useRef<HTMLDialogElement>(null);
@@ -298,11 +335,75 @@ export const Toolbar = ({
         }
 
         notification.success("File uploaded and data attested successfully.");
-        onFileCreated?.();
+        onFileCreated?.(enabledSortUIDs);
       } else {
         notification.success("Folder created successfully.");
         handleCloseModal();
-        // Auto-navigate into the new folder so the user can add files immediately
+
+        // Process parent directory sorts before navigating away.
+        // The new folder anchor is immediately in the parent's kernel array (staleness +1).
+        // Once we navigate into the child, SortDropdown's parentAnchor changes, so we must
+        // process the parent's sorts here while we still have the correct context.
+        if (sortOverlayAddress && indexerAddress && currentAnchorUID && walletClient?.account && publicClient) {
+          for (const sortInfoUID of enabledSortUIDs) {
+            try {
+              const [currentIndex, totalCount] = await Promise.all([
+                publicClient.readContract({
+                  address: sortOverlayAddress,
+                  abi: SORT_OVERLAY_ABI,
+                  functionName: "getLastProcessedIndex",
+                  args: [sortInfoUID as `0x${string}`, currentAnchorUID as `0x${string}`],
+                }) as Promise<bigint>,
+                publicClient.readContract({
+                  address: indexerAddress,
+                  abi: INDEXER_CHILDREN_ABI,
+                  functionName: "getChildrenCount",
+                  args: [currentAnchorUID as `0x${string}`],
+                }) as Promise<bigint>,
+              ]);
+
+              if (totalCount <= currentIndex) continue;
+
+              const items: `0x${string}`[] = [];
+              for (let i = currentIndex; i < totalCount; i++) {
+                const uid = (await publicClient.readContract({
+                  address: indexerAddress,
+                  abi: INDEXER_CHILDREN_ABI,
+                  functionName: "getChildAt",
+                  args: [currentAnchorUID as `0x${string}`, i],
+                })) as `0x${string}`;
+                items.push(uid);
+              }
+
+              const [leftHints, rightHints] = (await publicClient.readContract({
+                address: sortOverlayAddress,
+                abi: SORT_OVERLAY_ABI,
+                functionName: "computeHints",
+                args: [sortInfoUID as `0x${string}`, currentAnchorUID as `0x${string}`, items],
+              })) as [`0x${string}`[], `0x${string}`[]];
+
+              const { request } = await publicClient.simulateContract({
+                address: sortOverlayAddress,
+                abi: SORT_OVERLAY_ABI,
+                functionName: "processItems",
+                args: [
+                  sortInfoUID as `0x${string}`,
+                  currentAnchorUID as `0x${string}`,
+                  currentIndex,
+                  items,
+                  leftHints,
+                  rightHints,
+                ],
+                account: walletClient.account,
+              });
+              const txHash = await walletClient.writeContract(request);
+              await publicClient.waitForTransactionReceipt({ hash: txHash });
+            } catch (e) {
+              console.error("Auto-process sort after folder creation failed:", e);
+            }
+          }
+        }
+
         if (newAnchorUID) {
           onFolderCreated?.(newAnchorUID, newName);
         }
@@ -388,6 +489,7 @@ export const Toolbar = ({
             reverseOrder={reverseOrder}
             onReverseOrderChange={onReverseOrderChange}
             autoProcessKey={autoProcessKey}
+            autoProcessSortUIDs={autoProcessSortUIDs}
             anchorSchemaUID={anchorSchemaUID}
           />
         )}
@@ -449,7 +551,51 @@ export const Toolbar = ({
               />
             </div>
           )}
-          <div className="modal-action">
+
+          <div className="modal-action items-center">
+            {/* Sort auto-update config — bottom left, only for file uploads when sorts exist */}
+            {creationType === "File" && availableSorts.length > 0 ? (
+              <div className="flex-1">
+                <button
+                  type="button"
+                  className="flex items-center gap-1.5 text-xs text-base-content/50 hover:text-base-content transition-colors"
+                  onClick={() => setShowSortConfig(v => !v)}
+                >
+                  <Cog6ToothIcon className="w-3.5 h-3.5" />
+                  Auto-update {enabledSortUIDs.length}/{availableSorts.length} sort
+                  {availableSorts.length !== 1 ? "s" : ""}
+                  <span className="text-base-content/30">{showSortConfig ? "▴" : "▾"}</span>
+                </button>
+                {showSortConfig && (
+                  <div className="mt-2 flex flex-col gap-1.5">
+                    {availableSorts.map(sort => (
+                      <label
+                        key={sort.sortInfoUID}
+                        className="flex items-center gap-2 text-sm cursor-pointer select-none"
+                      >
+                        <input
+                          type="checkbox"
+                          className="checkbox checkbox-xs"
+                          checked={!disabledAutoSorts.has(sort.sortInfoUID)}
+                          onChange={e => {
+                            setDisabledAutoSorts(prev => {
+                              const next = new Set(prev);
+                              if (e.target.checked) next.delete(sort.sortInfoUID);
+                              else next.add(sort.sortInfoUID);
+                              return next;
+                            });
+                          }}
+                        />
+                        <span className="text-base-content/70">{sort.name}</span>
+                        {!sort.isLocal && <span className="text-xs text-base-content/30">global</span>}
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="flex-1" />
+            )}
             <button className="btn btn-ghost" onClick={handleCloseModal} disabled={isSubmitting}>
               Cancel
             </button>

@@ -28,6 +28,8 @@ export default function ExplorerPage() {
   const [sortRefreshKey, setSortRefreshKey] = useState(0);
   const [reverseOrder, setReverseOrder] = useState(false);
   const [autoProcessKey, setAutoProcessKey] = useState(0);
+  // Sort UIDs to auto-process on the next autoProcessKey tick (set by Toolbar after upload)
+  const [autoProcessSortUIDs, setAutoProcessSortUIDs] = useState<string[]>([]);
 
   const router = useRouter();
   const params = useParams();
@@ -239,7 +241,11 @@ export default function ExplorerPage() {
           reverseOrder={reverseOrder}
           onReverseOrderChange={setReverseOrder}
           autoProcessKey={autoProcessKey}
-          onFileCreated={() => setAutoProcessKey(k => k + 1)}
+          autoProcessSortUIDs={autoProcessSortUIDs}
+          onFileCreated={sortUIDs => {
+            setAutoProcessSortUIDs(sortUIDs);
+            setAutoProcessKey(k => k + 1);
+          }}
           onFolderCreated={(uid, name) => {
             navigateToPath([...currentPath, { uid, name }]);
           }}

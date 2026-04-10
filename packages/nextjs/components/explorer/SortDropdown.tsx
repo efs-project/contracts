@@ -51,8 +51,10 @@ interface SortDropdownProps {
   filterBySchema?: string;
   reverseOrder?: boolean;
   onReverseOrderChange?: (reverse: boolean) => void;
-  /** Increment to auto-process the active sort (e.g. after file upload) */
+  /** Increment to trigger auto-processing (e.g. after file upload) */
   autoProcessKey?: number;
+  /** UIDs to auto-process when autoProcessKey fires. Defaults to active sort only. */
+  autoProcessSortUIDs?: string[];
   anchorSchemaUID?: string;
 }
 
@@ -69,6 +71,7 @@ export const SortDropdown = ({
   reverseOrder = false,
   onReverseOrderChange,
   autoProcessKey = 0,
+  autoProcessSortUIDs,
   anchorSchemaUID,
 }: SortDropdownProps) => {
   const publicClient = usePublicClient();
@@ -357,14 +360,26 @@ export const SortDropdown = ({
     ],
   );
 
-  // Auto-process only the ACTIVE sort when autoProcessKey increments (e.g. after file upload).
-  // Deliberately NOT processing all available sorts — a hostile directory could register many
-  // troll sorts and cause a flood of wallet prompts after every file upload.
+  // Auto-process sorts when autoProcessKey increments (e.g. after file upload).
+  // Processes the UIDs listed in autoProcessSortUIDs (user-configured in upload modal),
+  // falling back to just the active sort if none are specified.
   const autoProcessKeyRef = useRef(autoProcessKey);
+  const autoProcessSortUIDsRef = useRef(autoProcessSortUIDs);
+  autoProcessSortUIDsRef.current = autoProcessSortUIDs;
   useEffect(() => {
-    if (autoProcessKey > autoProcessKeyRef.current && activeSortInfoUID) {
+    if (autoProcessKey > autoProcessKeyRef.current) {
       autoProcessKeyRef.current = autoProcessKey;
-      processSort(activeSortInfoUID, { silent: true });
+      const uids = autoProcessSortUIDsRef.current;
+      if (uids && uids.length > 0) {
+        // Process each user-selected sort sequentially (each needs a wallet signature)
+        (async () => {
+          for (const uid of uids) {
+            await processSort(uid, { silent: true });
+          }
+        })();
+      } else if (activeSortInfoUID) {
+        processSort(activeSortInfoUID, { silent: true });
+      }
     }
   }, [autoProcessKey, activeSortInfoUID, processSort]);
 
