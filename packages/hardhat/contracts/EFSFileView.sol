@@ -223,7 +223,7 @@ contract EFSFileView {
                 uid: uid,
                 name: name,
                 parentUID: parentAnchor,
-                isFolder: childCount > 0,
+                isFolder: anchorType == bytes32(0), // generic anchor = folder regardless of children
                 hasData: dataCount > 0,
                 childCount: childCount,
                 propertyCount: propertyCount,

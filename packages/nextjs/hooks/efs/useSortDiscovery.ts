@@ -152,6 +152,9 @@ export function useSortDiscovery({
 
   const refetch = useCallback(() => setRefreshKey(k => k + 1), []);
 
+  // Serialize to a stable string so array reference churn doesn't retrigger discovery
+  const editionsKey = editionAddresses.join(",");
+
   useEffect(() => {
     if (!parentAnchor || !indexerAddress || !easAddress || !publicClient) return;
     if (parentAnchor === zeroHash) return;
@@ -354,7 +357,9 @@ export function useSortDiscovery({
     return () => {
       cancelled = true;
     };
-  }, [parentAnchor, indexerAddress, easAddress, publicClient, editionAddresses, filterBySchema, refreshKey]);
+  // editionsKey: serialize array so array reference changes don't retrigger the effect
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [parentAnchor, indexerAddress, easAddress, publicClient, editionsKey, filterBySchema, refreshKey]);
 
   return { availableSorts, isLoading, refetch };
 }

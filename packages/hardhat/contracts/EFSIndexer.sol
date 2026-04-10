@@ -191,6 +191,9 @@ contract EFSIndexer is SchemaResolver {
         // 2. EFS CORE LOGIC (ANCHORS)
         bytes32 schema = attestation.schema;
         if (schema == ANCHOR_SCHEMA_UID) {
+            // Anchors are permanent structural nodes — revocable anchors are rejected.
+            if (attestation.revocable) return false;
+
             (string memory name, bytes32 anchorSchema) = abi.decode(attestation.data, (string, bytes32));
 
             // Resolve Parent (Use refUID, else recipient cast to bytes32, else generic root if 0)
@@ -209,10 +212,7 @@ contract EFSIndexer is SchemaResolver {
                 }
             } else {
                 if (parentUID == bytes32(0)) {
-                    // If no parent, it must be the root itself (already handled by rootAnchorUID logic mostly, but let's be strict)
-                    if (attestation.uid != rootAnchorUID) {
-                        revert MissingParent();
-                    }
+                    revert MissingParent();
                 }
             }
 
@@ -908,7 +908,7 @@ contract EFSIndexer is SchemaResolver {
         }
 
         if (start >= attestationsLength) {
-            revert InvalidOffset();
+            return new bytes32[](0);
         }
 
         unchecked {
