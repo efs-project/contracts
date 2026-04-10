@@ -7,13 +7,18 @@ import { GenericContractsDeclaration } from "~~/utils/scaffold-eth/contract";
 const deployedContracts = {
   31337: {
     EFSFileView: {
-      address: "0x29e8a042ea34B7EE720C12b52720027b5E9049C6",
+      address: "0xe8E059acB08A9eD742E2B2fa428B4bC9DDB6a633",
       abi: [
         {
           inputs: [
             {
               internalType: "contract IEFSIndexer",
               name: "_indexer",
+              type: "address",
+            },
+            {
+              internalType: "contract ITagResolverForFileView",
+              name: "_tagResolver",
               type: "address",
             },
           ],
@@ -343,11 +348,24 @@ const deployedContracts = {
           stateMutability: "view",
           type: "function",
         },
+        {
+          inputs: [],
+          name: "tagResolver",
+          outputs: [
+            {
+              internalType: "contract ITagResolverForFileView",
+              name: "",
+              type: "address",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
       ],
       inheritedFunctions: {},
     },
     EFSRouter: {
-      address: "0xa498a50aADa7790F5d3EFD594365E797c947eece",
+      address: "0xB41c87A2606B1468DfaEd3C7ff3989DcF011db57",
       abi: [
         {
           inputs: [
@@ -484,7 +502,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     EFSSortOverlay: {
-      address: "0x04fD5Ee60B015B6EfD21a54D1E662D68868683c5",
+      address: "0x0eD4796Fd5f0E8f87Dc12D048E90B04FC112b214",
       abi: [
         {
           inputs: [
@@ -1458,7 +1476,7 @@ const deployedContracts = {
       },
     },
     Indexer: {
-      address: "0x85554083b691219C1F2556bA52D4fDEe5d76a01f",
+      address: "0x9BEd9d5C7eEbff05b40f0749706296DEfBFBc50D",
       abi: [
         {
           inputs: [
@@ -3870,7 +3888,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     TagResolver: {
-      address: "0xC64700624b2129C81288e7Bd4d5Ec9DD006eb2D0",
+      address: "0xA16F720204Aa80596b42e73c8B9a4a88f0443052",
       abi: [
         {
           inputs: [
@@ -3889,6 +3907,11 @@ const deployedContracts = {
               name: "_indexer",
               type: "address",
             },
+            {
+              internalType: "contract ISchemaRegistry",
+              name: "_schemaRegistry",
+              type: "address",
+            },
           ],
           stateMutability: "nonpayable",
           type: "constructor",
@@ -3901,6 +3924,11 @@ const deployedContracts = {
         {
           inputs: [],
           name: "InsufficientValue",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "InvalidDefinition",
           type: "error",
         },
         {
@@ -4031,6 +4059,64 @@ const deployedContracts = {
               internalType: "bytes32",
               name: "",
               type: "bytes32",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "parentUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "definition",
+              type: "bytes32",
+            },
+            {
+              internalType: "uint256",
+              name: "start",
+              type: "uint256",
+            },
+            {
+              internalType: "uint256",
+              name: "length",
+              type: "uint256",
+            },
+          ],
+          name: "getChildrenTaggedWith",
+          outputs: [
+            {
+              internalType: "bytes32[]",
+              name: "",
+              type: "bytes32[]",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "parentUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "definition",
+              type: "bytes32",
+            },
+          ],
+          name: "getChildrenTaggedWithCount",
+          outputs: [
+            {
+              internalType: "uint256",
+              name: "",
+              type: "uint256",
             },
           ],
           stateMutability: "view",
@@ -4403,6 +4489,19 @@ const deployedContracts = {
             },
           ],
           stateMutability: "payable",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "schemaRegistry",
+          outputs: [
+            {
+              internalType: "contract ISchemaRegistry",
+              name: "",
+              type: "address",
+            },
+          ],
+          stateMutability: "view",
           type: "function",
         },
         {

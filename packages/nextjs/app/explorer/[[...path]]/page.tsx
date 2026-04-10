@@ -246,8 +246,8 @@ export default function ExplorerPage() {
             setAutoProcessSortUIDs(sortUIDs);
             setAutoProcessKey(k => k + 1);
           }}
-          onFolderCreated={(uid, name) => {
-            navigateToPath([...currentPath, { uid, name }]);
+          onFolderCreated={() => {
+            setSortRefreshKey(k => k + 1);
           }}
         />
 

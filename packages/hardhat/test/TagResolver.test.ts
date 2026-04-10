@@ -14,6 +14,10 @@ const NO_EXPIRATION = 0n;
  * Therefore, tests that need a "target" must either:
  *   a) Use a real attestation UID (created with the dummy schema), OR
  *   b) Target via `recipient` address (refUID=0, recipient=someAddress).
+ *
+ * Tag definitions must be valid: an existing attestation UID, registered schema UID,
+ * or an address (fits in uint160). Tests use createTarget() to mint valid attestation
+ * UIDs for use as definitions.
  */
 describe("TagResolver", function () {
   let tagResolver: TagResolver;
@@ -25,7 +29,7 @@ describe("TagResolver", function () {
   let user2: Signer;
 
   let tagSchemaUID: string;
-  let dummySchemaUID: string; // schema with no resolver, used to mint target attestations
+  let dummySchemaUID: string; // schema with no resolver, used to mint target/definition attestations
 
   const enc = new ethers.AbiCoder();
   const encodeTag = (definition: string, applies: boolean) => enc.encode(["bytes32", "bool"], [definition, applies]);
@@ -62,6 +66,7 @@ describe("TagResolver", function () {
       await eas.getAddress(),
       precomputedTagSchemaUID,
       futureIndexerAddress,
+      await registry.getAddress(),
     );
     await tagResolver.waitForDeployment();
 
@@ -107,7 +112,7 @@ describe("TagResolver", function () {
 
   /**
    * Create a real EAS attestation using the dummy schema.
-   * Returns its UID, which can be used as a valid refUID.
+   * Returns its UID, which can be used as a valid refUID or definition.
    */
   const createTarget = async (label = "target"): Promise<string> => {
     const tx = await eas.attest({
@@ -123,6 +128,9 @@ describe("TagResolver", function () {
     });
     return getUID(await tx.wait());
   };
+
+  /** Create a valid definition UID (same as createTarget — returns a valid attestation UID). */
+  const createDefinition = async (label = "def"): Promise<string> => createTarget(label);
 
   /** Attest a TAG (via refUID) from a specific signer. */
   const tagByRef = async (signer: Signer, targetUID: string, definition: string, applies: boolean): Promise<string> => {
@@ -171,7 +179,7 @@ describe("TagResolver", function () {
 
   describe("Basic attesting", function () {
     it("Should accept a tag with applies=true targeting a real refUID", async function () {
-      const definition = ethers.id("favs");
+      const definition = await createDefinition("favs");
       const target = await createTarget("file-1");
 
       const tagUID = await tagByRef(user1, target, definition, true);
@@ -182,7 +190,7 @@ describe("TagResolver", function () {
     });
 
     it("Should accept a tag with applies=false (negation)", async function () {
-      const definition = ethers.id("nsfw");
+      const definition = await createDefinition("nsfw");
       const target = await createTarget("file-neg");
 
       const tagUID = await tagByRef(user1, target, definition, false);
@@ -192,7 +200,25 @@ describe("TagResolver", function () {
       expect(active).to.equal(tagUID);
     });
 
+    it("Should revert InvalidDefinition when definition is bytes32(0)", async function () {
+      const target = await createTarget("zero-def-target");
+      await expect(
+        eas.attest({
+          schema: tagSchemaUID,
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: NO_EXPIRATION,
+            revocable: true,
+            refUID: target,
+            data: encodeTag(ethers.ZeroHash, true),
+            value: 0n,
+          },
+        }),
+      ).to.be.revertedWithCustomError(tagResolver, "InvalidDefinition");
+    });
+
     it("Should revert MustTargetSomething when both refUID and recipient are zero", async function () {
+      const definition = await createDefinition("must-target");
       await expect(
         eas.attest({
           schema: tagSchemaUID,
@@ -201,7 +227,7 @@ describe("TagResolver", function () {
             expirationTime: NO_EXPIRATION,
             revocable: true,
             refUID: ZERO_BYTES32,
-            data: encodeTag(ethers.ZeroHash, true),
+            data: encodeTag(definition, true),
             value: 0n,
           },
         }),
@@ -209,11 +235,49 @@ describe("TagResolver", function () {
     });
   });
 
+  // ─── Definition validation ────────────────────────────────────────────────
+
+  describe("Definition validation", function () {
+    it("Should accept attestation UIDs as definitions", async function () {
+      const definition = await createDefinition("valid-attestation");
+      const target = await createTarget("att-def-target");
+
+      const tagUID = await tagByRef(user1, target, definition, true);
+      expect(tagUID).to.not.equal(ZERO_BYTES32);
+    });
+
+    it("Should accept registered schema UIDs as definitions", async function () {
+      const target = await createTarget("schema-def-target");
+
+      // dummySchemaUID is a registered schema
+      const tagUID = await tagByRef(user1, target, dummySchemaUID, true);
+      expect(tagUID).to.not.equal(ZERO_BYTES32);
+    });
+
+    it("Should accept address-sized values as definitions", async function () {
+      const target = await createTarget("addr-def-target");
+      const addrDef = ethers.zeroPadValue(await user1.getAddress(), 32);
+
+      const tagUID = await tagByRef(user1, target, addrDef, true);
+      expect(tagUID).to.not.equal(ZERO_BYTES32);
+    });
+
+    it("Should reject arbitrary bytes32 that is not an attestation, schema, or address", async function () {
+      const target = await createTarget("invalid-def-target");
+      const invalidDef = ethers.id("not-a-valid-definition"); // keccak256 hash — not registered anywhere
+
+      await expect(tagByRef(user1, target, invalidDef, true)).to.be.revertedWithCustomError(
+        tagResolver,
+        "InvalidDefinition",
+      );
+    });
+  });
+
   // ─── Targeting ─────────────────────────────────────────────────────────────
 
   describe("Targeting", function () {
     it("Should resolve target via refUID", async function () {
-      const definition = ethers.id("def-ref");
+      const definition = await createDefinition("def-ref");
       const target = await createTarget("ref-target");
 
       const tagUID = await tagByRef(user1, target, definition, true);
@@ -222,7 +286,7 @@ describe("TagResolver", function () {
     });
 
     it("Should resolve target via recipient address when refUID is zero", async function () {
-      const definition = ethers.id("def-addr");
+      const definition = await createDefinition("def-addr");
       const recipientAddr = await user2.getAddress();
       // targetID in TagResolver = bytes32(uint256(uint160(recipient)))
       const targetID = ethers.zeroPadValue(recipientAddr, 32);
@@ -233,7 +297,7 @@ describe("TagResolver", function () {
     });
 
     it("Should prefer refUID over recipient when both are non-zero", async function () {
-      const definition = ethers.id("def-prefer-ref");
+      const definition = await createDefinition("def-prefer-ref");
       const refTarget = await createTarget("prefer-ref");
       const recipientAddr = await user2.getAddress();
       const recipientTargetID = ethers.zeroPadValue(recipientAddr, 32);
@@ -265,7 +329,7 @@ describe("TagResolver", function () {
   describe("Singleton (logical superseding)", function () {
     it("Should overwrite active UID when same (attester, target, definition) attests again", async function () {
       const target = await createTarget("singleton-target");
-      const definition = ethers.id("def-singleton");
+      const definition = await createDefinition("def-singleton");
 
       const uid1 = await tagByRef(user1, target, definition, true);
       const uid2 = await tagByRef(user1, target, definition, true);
@@ -276,7 +340,7 @@ describe("TagResolver", function () {
 
     it("Should keep superseded UID on-chain (just no longer active)", async function () {
       const target = await createTarget("supersede-persist");
-      const definition = ethers.id("def-persist");
+      const definition = await createDefinition("def-persist");
 
       const uid1 = await tagByRef(user1, target, definition, true);
       await tagByRef(user1, target, definition, true); // uid2 supersedes
@@ -288,7 +352,7 @@ describe("TagResolver", function () {
 
     it("Should allow different attesters to independently tag the same target", async function () {
       const target = await createTarget("shared-target");
-      const definition = ethers.id("shared-def");
+      const definition = await createDefinition("shared-def");
 
       const uid1 = await tagByRef(user1, target, definition, true);
       const uid2 = await tagByRef(user2, target, definition, true);
@@ -301,7 +365,7 @@ describe("TagResolver", function () {
     it("Should allow same attester to tag different targets with the same definition independently", async function () {
       const target1 = await createTarget("multi-A");
       const target2 = await createTarget("multi-B");
-      const definition = ethers.id("def-multi-target");
+      const definition = await createDefinition("def-multi-target");
 
       const uid1 = await tagByRef(user1, target1, definition, true);
       const uid2 = await tagByRef(user1, target2, definition, true);
@@ -312,8 +376,8 @@ describe("TagResolver", function () {
 
     it("Should allow same attester+target pair with different definitions independently", async function () {
       const target = await createTarget("multi-def-target");
-      const def1 = ethers.id("def-X");
-      const def2 = ethers.id("def-Y");
+      const def1 = await createDefinition("def-X");
+      const def2 = await createDefinition("def-Y");
 
       const uid1 = await tagByRef(user1, target, def1, true);
       const uid2 = await tagByRef(user1, target, def2, true);
@@ -328,7 +392,7 @@ describe("TagResolver", function () {
   describe("Revocation", function () {
     it("Should clear active UID when the active attestation is revoked", async function () {
       const target = await createTarget("revoke-target");
-      const definition = ethers.id("def-revoke");
+      const definition = await createDefinition("def-revoke");
 
       const uid = await tagByRef(user1, target, definition, true);
       expect(await tagResolver.getActiveTagUID(await user1.getAddress(), target, definition)).to.equal(uid);
@@ -339,7 +403,7 @@ describe("TagResolver", function () {
 
     it("Should NOT clear active UID when a superseded (old) UID is revoked", async function () {
       const target = await createTarget("old-revoke-target");
-      const definition = ethers.id("def-old-revoke");
+      const definition = await createDefinition("def-old-revoke");
 
       const uid1 = await tagByRef(user1, target, definition, true);
       const uid2 = await tagByRef(user1, target, definition, true); // supersedes uid1
@@ -352,7 +416,7 @@ describe("TagResolver", function () {
 
     it("Should clear correctly after multiple superseding rounds", async function () {
       const target = await createTarget("multi-round-target");
-      const definition = ethers.id("def-multi-round");
+      const definition = await createDefinition("def-multi-round");
 
       await tagByRef(user1, target, definition, true); // uid1 (will be superseded)
       await tagByRef(user1, target, definition, true); // uid2 (will be superseded)
@@ -368,7 +432,7 @@ describe("TagResolver", function () {
   describe("Discovery: getTagDefinitions / getTagDefinitionCount", function () {
     it("Should record a definition when first applied with applies=true", async function () {
       const target = await createTarget("disc-target-1");
-      const def = ethers.id("def-disc-1");
+      const def = await createDefinition("def-disc-1");
 
       await tagByRef(user1, target, def, true);
 
@@ -380,7 +444,7 @@ describe("TagResolver", function () {
 
     it("Should NOT duplicate a definition when the same one is applied again (superseding)", async function () {
       const target = await createTarget("disc-target-2");
-      const def = ethers.id("def-disc-2");
+      const def = await createDefinition("def-disc-2");
 
       await tagByRef(user1, target, def, true);
       await tagByRef(user1, target, def, true); // same triple again
@@ -390,7 +454,7 @@ describe("TagResolver", function () {
 
     it("Should NOT duplicate when two different attesters apply the same definition", async function () {
       const target = await createTarget("disc-target-2b");
-      const def = ethers.id("def-disc-2b");
+      const def = await createDefinition("def-disc-2b");
 
       await tagByRef(user1, target, def, true);
       await tagByRef(user2, target, def, true); // different attester, same def
@@ -400,9 +464,9 @@ describe("TagResolver", function () {
 
     it("Should record multiple distinct definitions for the same target", async function () {
       const target = await createTarget("disc-target-3");
-      const def1 = ethers.id("def-disc-3a");
-      const def2 = ethers.id("def-disc-3b");
-      const def3 = ethers.id("def-disc-3c");
+      const def1 = await createDefinition("def-disc-3a");
+      const def2 = await createDefinition("def-disc-3b");
+      const def3 = await createDefinition("def-disc-3c");
 
       await tagByRef(user1, target, def1, true);
       await tagByRef(user2, target, def2, true);
@@ -415,7 +479,7 @@ describe("TagResolver", function () {
 
     it("Should NOT record a definition when applies=false on first attestation", async function () {
       const target = await createTarget("disc-target-4");
-      const def = ethers.id("def-disc-4");
+      const def = await createDefinition("def-disc-4");
 
       await tagByRef(user1, target, def, false); // negation before any positive
 
@@ -424,7 +488,7 @@ describe("TagResolver", function () {
 
     it("Should keep definition in discovery list even after the tag is revoked (append-only)", async function () {
       const target = await createTarget("disc-target-5");
-      const def = ethers.id("def-disc-5");
+      const def = await createDefinition("def-disc-5");
 
       const uid = await tagByRef(user1, target, def, true);
       await revoke(user1, uid);
@@ -434,12 +498,12 @@ describe("TagResolver", function () {
 
     it("Should paginate getTagDefinitions correctly", async function () {
       const target = await createTarget("disc-paginate");
-      const defs = await Promise.all(
-        Array.from({ length: 5 }, (_, i) =>
-          tagByRef(user1, target, ethers.id(`def-pg-${i}`), true).then(() => ethers.id(`def-pg-${i}`)),
-        ),
-      );
-      void defs; // just to avoid lint warning
+      const defs: string[] = [];
+      for (let i = 0; i < 5; i++) {
+        const def = await createDefinition(`def-pg-${i}`);
+        defs.push(def);
+        await tagByRef(user1, target, def, true);
+      }
 
       expect(await tagResolver.getTagDefinitionCount(target)).to.equal(5n);
 
@@ -458,7 +522,7 @@ describe("TagResolver", function () {
 
   describe("Discovery: getTaggedTargets / getTaggedTargetCount", function () {
     it("Should record a target when first tagged with a definition", async function () {
-      const def = ethers.id("def-targets-1");
+      const def = await createDefinition("def-targets-1");
       const target = await createTarget("tagged-1");
 
       await tagByRef(user1, target, def, true);
@@ -470,7 +534,7 @@ describe("TagResolver", function () {
     });
 
     it("Should NOT duplicate a target when multiple attesters tag the same target with the same definition", async function () {
-      const def = ethers.id("def-targets-2");
+      const def = await createDefinition("def-targets-2");
       const target = await createTarget("tagged-2");
 
       await tagByRef(user1, target, def, true);
@@ -480,7 +544,7 @@ describe("TagResolver", function () {
     });
 
     it("Should record multiple distinct targets for the same definition", async function () {
-      const def = ethers.id("def-targets-3");
+      const def = await createDefinition("def-targets-3");
       const t1 = await createTarget("multi-t1");
       const t2 = await createTarget("multi-t2");
       const t3 = await createTarget("multi-t3");
@@ -495,7 +559,7 @@ describe("TagResolver", function () {
     });
 
     it("Should NOT record a target when applies=false on first attestation", async function () {
-      const def = ethers.id("def-targets-4");
+      const def = await createDefinition("def-targets-4");
       const target = await createTarget("tagged-4");
 
       await tagByRef(user1, target, def, false);
@@ -504,7 +568,7 @@ describe("TagResolver", function () {
     });
 
     it("Should keep target in discovery list even after tag is revoked (append-only)", async function () {
-      const def = ethers.id("def-targets-5");
+      const def = await createDefinition("def-targets-5");
       const target = await createTarget("tagged-5");
 
       const uid = await tagByRef(user1, target, def, true);
@@ -514,8 +578,11 @@ describe("TagResolver", function () {
     });
 
     it("Should paginate getTaggedTargets correctly", async function () {
-      const def = ethers.id("def-paginate-targets");
-      const targets = await Promise.all(Array.from({ length: 5 }, (_, i) => createTarget(`pg-target-${i}`)));
+      const def = await createDefinition("def-paginate-targets");
+      const targets: string[] = [];
+      for (let i = 0; i < 5; i++) {
+        targets.push(await createTarget(`pg-target-${i}`));
+      }
       for (const t of targets) {
         await tagByRef(user1, t, def, true);
       }
@@ -538,7 +605,7 @@ describe("TagResolver", function () {
   describe("Superseding with applies=false", function () {
     it("Should update active UID to applies=false attestation after superseding", async function () {
       const target = await createTarget("neg-supersede");
-      const def = ethers.id("def-neg-supersede");
+      const def = await createDefinition("def-neg-supersede");
 
       await tagByRef(user1, target, def, true); // initial apply
       const uid2 = await tagByRef(user1, target, def, false); // negation supersedes
@@ -552,7 +619,7 @@ describe("TagResolver", function () {
 
     it("Should keep discovery lists intact after superseding with applies=false (append-only)", async function () {
       const target = await createTarget("neg-disc-persist");
-      const def = ethers.id("def-neg-disc");
+      const def = await createDefinition("def-neg-disc");
 
       await tagByRef(user1, target, def, true);
       await tagByRef(user1, target, def, false); // supersede with negation
@@ -564,7 +631,7 @@ describe("TagResolver", function () {
 
     it("Should NOT add to discovery when applies=false on a first-time definition", async function () {
       const target = await createTarget("neg-first");
-      const def = ethers.id("def-neg-first");
+      const def = await createDefinition("def-neg-first");
 
       // Negation before any positive: discovery lists remain empty
       await tagByRef(user1, target, def, false);
@@ -579,13 +646,14 @@ describe("TagResolver", function () {
   describe("getActiveTagUID edge cases", function () {
     it("Should return zero for an unknown (attester, target, definition) triple", async function () {
       const target = await createTarget("unknown-target");
-      const active = await tagResolver.getActiveTagUID(await user1.getAddress(), target, ethers.id("no-such-def"));
+      const unknownDef = await createDefinition("no-such-def");
+      const active = await tagResolver.getActiveTagUID(await user1.getAddress(), target, unknownDef);
       expect(active).to.equal(ZERO_BYTES32);
     });
 
     it("Should return zero after the active attestation is revoked", async function () {
       const target = await createTarget("revoke-check");
-      const def = ethers.id("def-revoke-check");
+      const def = await createDefinition("def-revoke-check");
 
       const uid = await tagByRef(user1, target, def, true);
       await revoke(user1, uid);
@@ -596,8 +664,8 @@ describe("TagResolver", function () {
     it("Should correctly track independent state for different (attester, target, definition) combinations", async function () {
       const t1 = await createTarget("combo-t1");
       const t2 = await createTarget("combo-t2");
-      const def1 = ethers.id("combo-def1");
-      const def2 = ethers.id("combo-def2");
+      const def1 = await createDefinition("combo-def1");
+      const def2 = await createDefinition("combo-def2");
 
       const u1t1d1 = await tagByRef(user1, t1, def1, true);
       const u1t1d2 = await tagByRef(user1, t1, def2, true);
@@ -608,6 +676,42 @@ describe("TagResolver", function () {
       expect(await tagResolver.getActiveTagUID(await user1.getAddress(), t1, def2)).to.equal(u1t1d2);
       expect(await tagResolver.getActiveTagUID(await user1.getAddress(), t2, def1)).to.equal(u1t2d1);
       expect(await tagResolver.getActiveTagUID(await user2.getAddress(), t1, def1)).to.equal(u2t1d1);
+    });
+  });
+
+  // ─── isActivelyTagged ─────────────────────────────────────────────────────
+
+  describe("isActivelyTagged", function () {
+    it("Should return true when at least one attester has applies=true", async function () {
+      const target = await createTarget("active-target");
+      const def = await createDefinition("active-def");
+
+      await tagByRef(user1, target, def, true);
+      expect(await tagResolver.isActivelyTagged(target, def)).to.be.true;
+    });
+
+    it("Should return false after all attesters revoke", async function () {
+      const target = await createTarget("all-revoked");
+      const def = await createDefinition("all-revoked-def");
+
+      const uid1 = await tagByRef(user1, target, def, true);
+      const uid2 = await tagByRef(user2, target, def, true);
+
+      await revoke(user1, uid1);
+      expect(await tagResolver.isActivelyTagged(target, def)).to.be.true; // user2 still active
+
+      await revoke(user2, uid2);
+      expect(await tagResolver.isActivelyTagged(target, def)).to.be.false;
+    });
+
+    it("Should return false when superseded with applies=false", async function () {
+      const target = await createTarget("supersede-false");
+      const def = await createDefinition("supersede-false-def");
+
+      await tagByRef(user1, target, def, true);
+      await tagByRef(user1, target, def, false); // supersede with negation
+
+      expect(await tagResolver.isActivelyTagged(target, def)).to.be.false;
     });
   });
 });

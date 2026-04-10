@@ -3,6 +3,12 @@ pragma solidity 0.8.26;
 
 import { IEAS, Attestation } from "@ethereum-attestation-service/eas-contracts/contracts/IEAS.sol";
 
+interface ITagResolverForFileView {
+    function isActivelyTagged(bytes32 targetID, bytes32 definition) external view returns (bool);
+    function getChildrenTaggedWith(bytes32 parentUID, bytes32 definition, uint256 start, uint256 length) external view returns (bytes32[] memory);
+    function getChildrenTaggedWithCount(bytes32 parentUID, bytes32 definition) external view returns (uint256);
+}
+
 interface IEFSIndexer {
     function getChildren(
         bytes32 anchorUID,
@@ -60,10 +66,12 @@ contract EFSFileView {
 
     IEFSIndexer public immutable indexer;
     IEAS public immutable eas;
+    ITagResolverForFileView public immutable tagResolver;
 
-    constructor(IEFSIndexer _indexer) {
+    constructor(IEFSIndexer _indexer, ITagResolverForFileView _tagResolver) {
         indexer = _indexer;
         eas = _indexer.getEAS();
+        tagResolver = _tagResolver;
     }
 
     function getDirectoryPage(
@@ -159,8 +167,10 @@ contract EFSFileView {
                 // Direct match — this is a content item of the requested schema
                 schemaMatch = true;
             } else if (childAnchorSchema == bytes32(0)) {
-                // Generic folder — include only if it contains items of the requested schema
-                schemaMatch = indexer.getChildCountBySchema(uid, anchorSchema) > 0;
+                // Generic folder — include if it contains items of the requested schema
+                // OR if it has been tagged with the requested schema (empty folder visibility)
+                schemaMatch = indexer.getChildCountBySchema(uid, anchorSchema) > 0
+                    || tagResolver.isActivelyTagged(uid, anchorSchema);
             }
 
             if (!schemaMatch) continue;

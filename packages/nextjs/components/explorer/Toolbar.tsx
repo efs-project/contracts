@@ -109,6 +109,7 @@ export const Toolbar = ({
 }) => {
   const { writeContractAsync: attest } = useScaffoldWriteContract({ contractName: "EAS" });
   const { data: indexer } = useDeployedContractInfo({ contractName: "Indexer" });
+  const { data: tagResolverInfo } = useDeployedContractInfo({ contractName: "TagResolver" });
   const { targetNetwork } = useTargetNetwork();
 
   // Modal State
@@ -337,6 +338,39 @@ export const Toolbar = ({
         notification.success("File uploaded and data attested successfully.");
         onFileCreated?.(enabledSortUIDs);
       } else {
+        // Tag the new folder with dataSchemaUID so it appears in schema-filtered views
+        // even before it has any children of that schema.
+        if (tagResolverInfo && newAnchorUID) {
+          try {
+            const tagSchemaUID = ethers.solidityPackedKeccak256(
+              ["string", "address", "bool"],
+              ["bytes32 definition, bool applies", tagResolverInfo.address, true],
+            );
+            const encodedTagData = ethers.AbiCoder.defaultAbiCoder().encode(["bytes32", "bool"], [dataSchemaUID, true]);
+            const tagTxHash = await attest({
+              functionName: "attest",
+              args: [
+                {
+                  schema: tagSchemaUID as `0x${string}`,
+                  data: {
+                    recipient: ethers.ZeroAddress,
+                    expirationTime: 0n,
+                    revocable: true,
+                    refUID: newAnchorUID,
+                    data: encodedTagData as `0x${string}`,
+                    value: 0n,
+                  },
+                },
+              ],
+            });
+            if (tagTxHash) {
+              await publicClient.waitForTransactionReceipt({ hash: tagTxHash });
+            }
+          } catch (e) {
+            console.error("Auto-tag folder failed:", e);
+          }
+        }
+
         notification.success("Folder created successfully.");
         handleCloseModal();
 

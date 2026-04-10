@@ -9,15 +9,20 @@ const deployEFSFileView: DeployFunction = async function (hre: HardhatRuntimeEnv
 
   console.log("Deploying EFSFileView with account:", deployer);
 
-  // Get Deployed Indexer
+  // Get Deployed Indexer and TagResolver
   const indexer = await ethers.getContract<Contract>("Indexer", deployer);
   if (!indexer) {
     throw new Error("EFSIndexer not found! Make sure 01_indexer.ts ran.");
   }
 
+  const tagResolver = await ethers.getContract<Contract>("TagResolver", deployer);
+  if (!tagResolver) {
+    throw new Error("TagResolver not found! Make sure 01_indexer.ts ran.");
+  }
+
   await deploy("EFSFileView", {
     from: deployer,
-    args: [indexer.target],
+    args: [indexer.target, tagResolver.target],
     log: true,
     autoMine: true,
   });

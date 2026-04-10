@@ -72,7 +72,12 @@ describe("Tags with Editions (Integration)", function () {
     );
 
     const TagResolverFactory = await ethers.getContractFactory("TagResolver");
-    tagResolver = await TagResolverFactory.deploy(await eas.getAddress(), precomputedTagSchemaUID, futureIndexerAddr);
+    tagResolver = await TagResolverFactory.deploy(
+      await eas.getAddress(),
+      precomputedTagSchemaUID,
+      futureIndexerAddr,
+      await registry.getAddress(),
+    );
     await tagResolver.waitForDeployment();
 
     // Register schemas
@@ -982,14 +987,15 @@ describe("Tags with Editions (Integration)", function () {
       expect(await simulateTagFilter(anchorY, [addrA], targets)).to.be.false;
     });
 
-    it("Empty definition UID still works (though not recommended)", async function () {
+    it("Empty definition UID is rejected by validation", async function () {
       const fileAnchor = await createFileAnchor(userA, rootUID, "empty-def.txt");
       const dataA = await createData(userA, fileAnchor, "A");
-      const addrA = await userA.getAddress();
 
-      // Use zero bytes32 as definition (weird but valid at contract level)
-      const tagUID = await tagTarget(userA, dataA, ZERO_BYTES32, true);
-      expect(await tagResolver.getActiveTagUID(addrA, dataA, ZERO_BYTES32)).to.equal(tagUID);
+      // bytes32(0) is explicitly rejected by _validateDefinition
+      await expect(tagTarget(userA, dataA, ZERO_BYTES32, true)).to.be.revertedWithCustomError(
+        tagResolver,
+        "InvalidDefinition",
+      );
     });
   });
 
