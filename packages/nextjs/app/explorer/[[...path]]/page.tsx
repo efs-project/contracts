@@ -272,17 +272,9 @@ export default function ExplorerPage() {
                 rootUID={rootUID}
                 selectedUID={currentAnchorUID}
                 editionAddresses={editionAddresses}
+                activeSortInfoUID={activeSortInfoUID}
+                sortOverlayAddress={sortOverlayAddress}
                 onSelect={(uid, path) => {
-                  // Path needs to be constructed from tree logic.
-                  // For now, let's just use the tree as navigation and update URL.
-                  // But tree node sends us [Root, Child, Leaf]
-                  // We want [Child, Leaf] for the URL if Root is hidden from URL or is empty path.
-                  // Assuming rootUID corresponds to "Root" name in tree but "/" in URL logic.
-
-                  // Simplified: Just take the path provided by Tree, map UIDs?
-                  // Actually, Explorer page handles path resolution.
-                  // Let's just trust path provided by `onSelect` from Tree?
-                  // Tree provides `path` array of objects {uid, name}.
                   navigateToPath(path);
                 }}
                 expandedUIDs={new Set(currentPath.map(p => p.uid))}

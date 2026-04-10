@@ -19,14 +19,20 @@ contract NameSort is ISortFunc {
     }
 
     /// @inheritdoc ISortFunc
-    /// @dev Returns abi.encodePacked(bytes(name), uid) for deterministic tie-breaking.
+    /// @dev Returns abi.encodePacked(bytes(name), bytes1(0x00), uid) for deterministic tie-breaking.
+    ///      The null byte (0x00) acts as a length terminator between the variable-length name and
+    ///      the fixed 32-byte uid. This ensures that raw byte comparison of sort keys is consistent
+    ///      with isLessThan name comparison: if name A is a prefix of name B, then
+    ///      sortKey(A) < sortKey(B) lexicographically regardless of uid values (since 0x00 <
+    ///      any printable ASCII character). Names must not contain null bytes (standard constraint
+    ///      for EFS anchor names).
     ///      Empty bytes for non-Anchor UIDs (makes them ineligible for this sort).
     function getSortKey(bytes32 uid, bytes32 /*sortInfoUID*/) external view returns (bytes memory) {
         Attestation memory att = eas.getAttestation(uid);
         if (att.uid == bytes32(0)) return bytes("");
         (string memory name, ) = abi.decode(att.data, (string, bytes32));
         if (bytes(name).length == 0) return bytes("");
-        return abi.encodePacked(bytes(name), uid);
+        return abi.encodePacked(bytes(name), bytes1(0x00), uid);
     }
 
     /// @inheritdoc ISortFunc

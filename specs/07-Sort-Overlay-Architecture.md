@@ -192,7 +192,7 @@ function computeHints(
 ) external view returns (bytes32[] memory leftHints, bytes32[] memory rightHints)
 ```
 
-Binary search over the current linked list. O(N × log N) gas. Use for lists < ~1000 items.
+Binary search over the current linked list. For N existing items and M new items: O(N) to load existing list into a simulation array, then O(M × log(N+M)) for binary search insertions plus O(M × N) for simulation array shifts. Practical for lists up to ~1000 items. For larger lists, use client-side hint computation.
 
 ### Client-side (large lists, primary path)
 
@@ -223,9 +223,29 @@ return abi.encodePacked(uint256(att.time), uid);
 return abi.encodePacked(bytes(name), uid);
 ```
 
+### Sort Key Format Requirements
+
+For `computeHintsLocally` (client-side hint computation) to produce correct results, ISortFunc implementations must follow one of these two conventions:
+
+**Fixed-length keys** — All keys are the same byte width. Raw hex string comparison is unambiguous.
+```solidity
+// TimestampSort: 64 bytes (uint256 left-pads timestamp to 32 bytes + 32-byte uid)
+return abi.encodePacked(uint256(att.time), uid);
+```
+
+**Variable-length keys with null terminator** — A `bytes1(0x00)` separates the variable-length prefix from the fixed 32-byte uid. The null byte ensures that if name A is a prefix of name B, sortKey(A) < sortKey(B) in raw byte order (since 0x00 < any printable ASCII character).
+```solidity
+// NameSort: variable length (name bytes + 0x00 + 32-byte uid)
+return abi.encodePacked(bytes(name), bytes1(0x00), uid);
+```
+
+**Why the null terminator is required:** Without it, a sort key for name `"a"` (`0x61 + uid`) could sort AFTER `"ab"` (`0x61 0x62 + uid`) when `uid[0] > 0x62`. The `isLessThan` function (which compares names directly) correctly returns `"a" < "ab"`, but a raw byte comparison of the keys could disagree. The null terminator eliminates this discrepancy: `0x61 0x00 uid` is always less than `0x61 0x62 0x00 uid` regardless of uid values.
+
+ISortFunc implementations that don't follow these conventions should rely on the on-chain `computeHints()` (which calls `isLessThan` directly) rather than `computeHintsLocally`. The on-chain variant is always correct.
+
 ### Reference Implementations
 
-- **`NameSort`** — ASCII byte-by-byte comparison of anchor names; appends uid for tie-breaking
+- **`NameSort`** — ASCII byte-by-byte comparison of anchor names; appends null terminator + uid for tie-breaking and key consistency
 - **`TimestampSort`** — EAS attestation timestamp ordering (oldest first); appends uid for tie-breaking
 
 ---
@@ -254,6 +274,16 @@ EFSSortOverlay aligns with EFSIndexer kernel semantics:
 
 ---
 
+## Auto-Processing on Item Add
+
+When a user adds a file to a directory, the UI optionally auto-processes the new item into an existing sort without requiring the user to manually click "Process". This keeps the active sort up-to-date after uploads.
+
+**Scope: only the active sort.** Auto-processing is deliberately limited to the sort the user currently has selected (`activeSortInfoUID`). It does **not** process all discovered sorts for the directory. In a hostile directory, an attacker could register many troll sorts; processing all of them after every file upload would spam the user's wallet with confirmation prompts.
+
+Processing system sorts (ByName, ByDate) is left to the user's explicit action via the "Process" button in the sort dropdown.
+
+---
+
 ## Griefing Resistance
 
 - **Fabricated UIDs** rejected — `processItems` validates each item against the kernel via `getChildAt`; arbitrary UIDs cannot be injected
@@ -261,6 +291,7 @@ EFSSortOverlay aligns with EFSIndexer kernel semantics:
 - **Name squatting** — naming anchors are not the SORT_INFO; any attester can create a competing SORT_INFO on the same naming anchor, and editions resolution picks the trusted one
 - **No-op repositionItem** — `UnnecessaryReposition()` prevents griefing via no-op calls
 - **Sort/anchor mismatch** — callers can sort any anchor's children with any sort (wrong combos waste the caller's own gas, no harm to others)
+- **Auto-process scope** — UI auto-processes only the active sort on item add, never all sorts (prevents wallet prompt flooding in hostile directories)
 
 ---
 

@@ -148,7 +148,154 @@ export const SortDropdown = ({
     if (isOpen) fetchStaleness();
   }, [isOpen, fetchStaleness]);
 
-  // ── Process a batch of items into the sorted list ──────────────────────────
+  // ── Shared helper: fetch and submit a single processItems batch ─────────────
+  // Returns the number of items in the batch, or 0 if already fully processed.
+  // Throws StaleStartIndex (let callers handle retry) and other errors.
+  const _processBatch = useCallback(
+    async (sortInfoUID: string, expectedStartIndex: bigint, totalCount: bigint): Promise<number> => {
+      if (!sortOverlayAddress || !indexerAddress || !parentAnchor || !publicClient || !walletClient?.account)
+        throw new Error("Missing addresses or wallet.");
+
+      const remaining = totalCount - expectedStartIndex;
+      if (remaining <= 0n) return 0;
+
+      const batchCount = remaining < BigInt(BATCH_SIZE) ? Number(remaining) : BATCH_SIZE;
+
+      // Fetch items from kernel (sequential; use multicall for very large dirs)
+      const items: `0x${string}`[] = [];
+      for (let i = 0; i < batchCount; i++) {
+        const uid = (await publicClient.readContract({
+          address: indexerAddress,
+          abi: INDEXER_PROCESS_ABI,
+          functionName: "getChildAt",
+          args: [parentAnchor as `0x${string}`, expectedStartIndex + BigInt(i)],
+        })) as `0x${string}`;
+        items.push(uid);
+      }
+
+      // Compute insertion hints (free view call — on-chain binary search)
+      const [leftHints, rightHints] = (await publicClient.readContract({
+        address: sortOverlayAddress,
+        abi: SORT_OVERLAY_ABI,
+        functionName: "computeHints",
+        args: [sortInfoUID as `0x${string}`, parentAnchor as `0x${string}`, items],
+      })) as [`0x${string}`[], `0x${string}`[]];
+
+      // Simulate + send transaction
+      const { request } = await publicClient.simulateContract({
+        address: sortOverlayAddress,
+        abi: SORT_OVERLAY_ABI,
+        functionName: "processItems",
+        args: [
+          sortInfoUID as `0x${string}`,
+          parentAnchor as `0x${string}`,
+          expectedStartIndex,
+          items,
+          leftHints,
+          rightHints,
+        ],
+        account: walletClient.account,
+      });
+      const txHash = await walletClient.writeContract(request);
+      await publicClient.waitForTransactionReceipt({ hash: txHash });
+
+      return batchCount;
+    },
+    [sortOverlayAddress, indexerAddress, parentAnchor, publicClient, walletClient],
+  );
+
+  // ── Process ALL remaining batches — loops until fully synced ─────────────────
+  // Shows progress toasts. Handles StaleStartIndex (another caller raced us) by
+  // refreshing the index and retrying — no user action needed.
+  const processSortAll = useCallback(
+    async (sortInfoUID: string, sortName?: string) => {
+      if (!sortOverlayAddress || !indexerAddress || !parentAnchor || !publicClient || !walletClient?.account) {
+        notification.error("Wallet not connected or missing addresses.");
+        return;
+      }
+      setProcessingUID(sortInfoUID);
+      let toastId: string | undefined;
+      let batchNum = 0;
+
+      try {
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          // Re-read index each iteration (handles StaleStartIndex retries + multi-batch progress)
+          const [currentIndex, totalCount] = await Promise.all([
+            publicClient.readContract({
+              address: sortOverlayAddress,
+              abi: SORT_OVERLAY_ABI,
+              functionName: "getLastProcessedIndex",
+              args: [sortInfoUID as `0x${string}`, parentAnchor as `0x${string}`],
+            }) as Promise<bigint>,
+            publicClient.readContract({
+              address: indexerAddress,
+              abi: INDEXER_PROCESS_ABI,
+              functionName: "getChildrenCount",
+              args: [parentAnchor as `0x${string}`],
+            }) as Promise<bigint>,
+          ]);
+
+          const remaining = totalCount - currentIndex;
+          if (remaining <= 0n) {
+            if (toastId) notification.remove(toastId);
+            if (batchNum === 0) {
+              notification.info("Sort is already fully processed.");
+            } else {
+              notification.success(`"${sortName ?? "Sort"}" fully processed!`);
+              onProcessComplete?.();
+            }
+            break;
+          }
+
+          batchNum++;
+          const estimatedBatches = Math.ceil(Number(totalCount) / BATCH_SIZE);
+          const label = sortName ? `"${sortName}"` : "Sort";
+          if (toastId) notification.remove(toastId);
+          toastId = notification.loading(
+            `Processing ${label}: batch ${batchNum} of ~${estimatedBatches} — approve in wallet...`,
+          );
+
+          try {
+            await _processBatch(sortInfoUID, currentIndex, totalCount);
+          } catch (batchErr: any) {
+            // StaleStartIndex: another caller raced us — refresh index and retry this iteration
+            const msg: string = batchErr?.shortMessage ?? batchErr?.message ?? "";
+            if (msg.includes("StaleStartIndex")) {
+              if (toastId) notification.remove(toastId);
+              toastId = notification.loading(`${label}: refreshing after concurrent update...`);
+              continue;
+            }
+            throw batchErr;
+          }
+
+          // Refresh staleness display after each successful batch
+          await fetchStaleness();
+          onProcessComplete?.();
+        }
+      } catch (e: any) {
+        console.error("processSortAll failed:", e);
+        if (toastId) notification.remove(toastId);
+        notification.error(e?.shortMessage ?? e?.message ?? "Processing failed. See console.");
+      } finally {
+        setProcessingUID(null);
+      }
+    },
+    [
+      sortOverlayAddress,
+      indexerAddress,
+      parentAnchor,
+      publicClient,
+      walletClient,
+      _processBatch,
+      fetchStaleness,
+      onProcessComplete,
+    ],
+  );
+
+  // ── Single-batch silent process — used for auto-process after file upload ───
+  // Processes exactly one batch of newly-added items without toasts.
+  // The loop variant (processSortAll) is used for user-triggered "Process All".
   const processSort = useCallback(
     async (sortInfoUID: string, { silent = false }: { silent?: boolean } = {}) => {
       if (!sortOverlayAddress || !indexerAddress || !parentAnchor || !publicClient || !walletClient?.account) {
@@ -157,8 +304,7 @@ export const SortDropdown = ({
       }
       setProcessingUID(sortInfoUID);
       try {
-        // 1. Get current position and total kernel count
-        const [expectedStartIndex, totalCount] = await Promise.all([
+        const [currentIndex, totalCount] = await Promise.all([
           publicClient.readContract({
             address: sortOverlayAddress,
             abi: SORT_OVERLAY_ABI,
@@ -173,91 +319,54 @@ export const SortDropdown = ({
           }) as Promise<bigint>,
         ]);
 
-        const remaining = totalCount - expectedStartIndex;
+        const remaining = totalCount - currentIndex;
         if (remaining <= 0n) {
           if (!silent) notification.info("Sort is already fully processed.");
-          setProcessingUID(null);
           return;
         }
 
-        // 2. Fetch the next batch of items from the kernel
-        const batchCount = remaining < BigInt(BATCH_SIZE) ? Number(remaining) : BATCH_SIZE;
-        // NOTE: fetching one-by-one is fine for small dirs; use multicall for large dirs
-        const items: `0x${string}`[] = [];
-        for (let i = 0; i < batchCount; i++) {
-          const uid = (await publicClient.readContract({
-            address: indexerAddress,
-            abi: INDEXER_PROCESS_ABI,
-            functionName: "getChildAt",
-            args: [parentAnchor as `0x${string}`, expectedStartIndex + BigInt(i)],
-          })) as `0x${string}`;
-          items.push(uid);
-        }
-
-        // 3. Compute insertion hints (free view call — uses binary search on-chain)
-        const [leftHints, rightHints] = (await publicClient.readContract({
-          address: sortOverlayAddress,
-          abi: SORT_OVERLAY_ABI,
-          functionName: "computeHints",
-          args: [sortInfoUID as `0x${string}`, parentAnchor as `0x${string}`, items],
-        })) as [`0x${string}`[], `0x${string}`[]];
-
-        // 4. Send processItems transaction
-        const { request } = await publicClient.simulateContract({
-          address: sortOverlayAddress,
-          abi: SORT_OVERLAY_ABI,
-          functionName: "processItems",
-          args: [
-            sortInfoUID as `0x${string}`,
-            parentAnchor as `0x${string}`,
-            expectedStartIndex,
-            items,
-            leftHints,
-            rightHints,
-          ],
-          account: walletClient.account,
-        });
-
-        let toastId: string | undefined;
-        if (!silent) toastId = notification.loading(`Processing ${batchCount} item${batchCount !== 1 ? "s" : ""}...`);
-        const txHash = await walletClient.writeContract(request);
-        await publicClient.waitForTransactionReceipt({ hash: txHash });
-        if (toastId) notification.remove(toastId);
-
+        const batchCount = await _processBatch(sortInfoUID, currentIndex, totalCount);
         if (!silent) {
-          const stillRemaining = remaining - BigInt(batchCount);
+          const stillRemaining = totalCount - currentIndex - BigInt(batchCount);
           if (stillRemaining > 0n) {
-            notification.success(`Processed ${batchCount}. ${stillRemaining} remaining.`);
+            notification.success(
+              `Processed ${batchCount}. ${stillRemaining} item${stillRemaining !== 1n ? "s" : ""} remaining.`,
+            );
           } else {
             notification.success("Sort fully processed!");
           }
         }
-
-        // Refresh staleness display and notify FileBrowser to re-fetch sorted data
         await fetchStaleness();
         onProcessComplete?.();
       } catch (e: any) {
-        console.error("processItems failed:", e);
-        notification.error(e?.shortMessage ?? e?.message ?? "Processing failed. See console.");
+        console.error("processSort failed:", e);
+        if (!silent) notification.error(e?.shortMessage ?? e?.message ?? "Processing failed. See console.");
       } finally {
         setProcessingUID(null);
       }
     },
-    [sortOverlayAddress, indexerAddress, parentAnchor, publicClient, walletClient, fetchStaleness, onProcessComplete],
+    [
+      sortOverlayAddress,
+      indexerAddress,
+      parentAnchor,
+      publicClient,
+      walletClient,
+      _processBatch,
+      fetchStaleness,
+      onProcessComplete,
+    ],
   );
 
-  // Auto-process all sorts when autoProcessKey increments (e.g. after file upload)
+  // Auto-process only the ACTIVE sort when autoProcessKey increments (e.g. after file upload).
+  // Deliberately NOT processing all available sorts — a hostile directory could register many
+  // troll sorts and cause a flood of wallet prompts after every file upload.
   const autoProcessKeyRef = useRef(autoProcessKey);
   useEffect(() => {
-    if (autoProcessKey > autoProcessKeyRef.current && availableSorts.length > 0) {
+    if (autoProcessKey > autoProcessKeyRef.current && activeSortInfoUID) {
       autoProcessKeyRef.current = autoProcessKey;
-      (async () => {
-        for (const sort of availableSorts) {
-          await processSort(sort.sortInfoUID, { silent: true });
-        }
-      })();
+      processSort(activeSortInfoUID, { silent: true });
     }
-  }, [autoProcessKey, availableSorts, processSort]);
+  }, [autoProcessKey, activeSortInfoUID, processSort]);
 
   // Compute the label for the active sort
   const activeSortName = activeSortInfoUID
@@ -350,18 +459,20 @@ export const SortDropdown = ({
                     {syncLabel}
                   </span>
 
-                  {/* Process button — shown when sort is not fully synced */}
+                  {/* Process All button — shown when sort is not fully synced.
+                      Loops through all remaining batches sequentially with toast progress. */}
                   {(isStale || hasNoData) && !isFetchingStaleness && (
                     <button
                       className="btn btn-xs btn-primary btn-outline flex-shrink-0"
-                      title={`Process next ${BATCH_SIZE} items into sorted list`}
-                      disabled={isProcessing || !walletClient?.account}
+                      title="Process all remaining items into sorted list (loops all batches)"
+                      disabled={isProcessing || !!processingUID || !walletClient?.account}
                       onClick={e => {
                         e.stopPropagation();
-                        processSort(sort.sortInfoUID);
+                        setIsOpen(false);
+                        processSortAll(sort.sortInfoUID, sort.name);
                       }}
                     >
-                      {isProcessing ? <span className="loading loading-spinner loading-xs" /> : "Process"}
+                      {isProcessing ? <span className="loading loading-spinner loading-xs" /> : "Process All"}
                     </button>
                   )}
                 </div>

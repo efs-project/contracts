@@ -268,73 +268,79 @@ export function useSortDiscovery({
           if (name && !localSet.has(name)) globalSet.set(name, globalNamingAnchors[i]);
         }
 
-        // 6. For each naming anchor, resolve best SORT_INFO via editions
-        const resolvedSorts: SortOverlayInfo[] = [];
+        // 6. For each naming anchor, resolve best SORT_INFO via editions.
+        //    Parallelize across naming anchors — each still resolves editions in priority order
+        //    (sequential within the anchor to respect first-match-wins semantics).
+        const resolvedSorts: SortOverlayInfo[] = (
+          await Promise.all(
+            [...localSet.entries(), ...globalSet.entries()].map(async ([name, namingUID]) => {
+              const isLocal = localSet.has(name);
+              // Local sorts use user editions only. Global sorts also fall back to the system deployer.
+              const resolutionChain = isLocal ? editionAddresses : globalResolutionChain;
 
-        for (const [name, namingUID] of [...localSet.entries(), ...globalSet.entries()]) {
-          const isLocal = localSet.has(name);
-          // Local sorts use user editions only. Global sorts also fall back to the system deployer.
-          const resolutionChain = isLocal ? editionAddresses : globalResolutionChain;
-
-          // Try each editions address in order; first non-revoked SORT_INFO wins
-          let sortInfoUID: `0x${string}` | null = null;
-          for (const attester of resolutionChain) {
-            try {
-              const uids = (await publicClient.readContract({
-                address: indexerAddress,
-                abi: INDEXER_SORT_ABI,
-                functionName: "getReferencingBySchemaAndAttester",
-                args: [namingUID, sortInfoSchemaUID, attester as `0x${string}`, 0n, 1n, false],
-              })) as readonly `0x${string}`[];
-              if (!uids || uids.length === 0) continue;
-              const uid = uids[0];
-              if (uid === zeroHash) continue;
-              const revoked = await publicClient.readContract({
-                address: indexerAddress,
-                abi: INDEXER_SORT_ABI,
-                functionName: "isRevoked",
-                args: [uid],
-              });
-              if (!revoked) {
-                sortInfoUID = uid;
-                break;
+              // Try each editions address in order; first non-revoked SORT_INFO wins
+              let sortInfoUID: `0x${string}` | null = null;
+              for (const attester of resolutionChain) {
+                try {
+                  const uids = (await publicClient!.readContract({
+                    address: indexerAddress!,
+                    abi: INDEXER_SORT_ABI,
+                    functionName: "getReferencingBySchemaAndAttester",
+                    args: [namingUID, sortInfoSchemaUID, attester as `0x${string}`, 0n, 1n, false],
+                  })) as readonly `0x${string}`[];
+                  if (!uids || uids.length === 0) continue;
+                  const uid = uids[0];
+                  if (uid === zeroHash) continue;
+                  const revoked = await publicClient!.readContract({
+                    address: indexerAddress!,
+                    abi: INDEXER_SORT_ABI,
+                    functionName: "isRevoked",
+                    args: [uid],
+                  });
+                  if (!revoked) {
+                    sortInfoUID = uid;
+                    break;
+                  }
+                } catch {
+                  // Attester has no SORT_INFO for this naming anchor
+                }
               }
-            } catch {
-              // Attester has no SORT_INFO for this naming anchor
-            }
-          }
 
-          if (!sortInfoUID) continue;
+              if (!sortInfoUID) return null;
 
-          // Fetch sort config
-          try {
-            const config = await publicClient.readContract({
-              address: sortOverlayAddress,
-              abi: SORT_CONFIG_ABI,
-              functionName: "getSortConfig",
-              args: [sortInfoUID],
-            });
+              // Fetch sort config
+              try {
+                const config = await publicClient!.readContract({
+                  address: sortOverlayAddress,
+                  abi: SORT_CONFIG_ABI,
+                  functionName: "getSortConfig",
+                  args: [sortInfoUID],
+                });
 
-            // Filter by targetSchema if requested (bytes32(0) means "all schemas")
-            if (filterBySchema && filterBySchema !== zeroHash) {
-              if (config.targetSchema !== zeroHash && config.targetSchema !== filterBySchema) continue;
-            }
+                // Filter by targetSchema if requested (bytes32(0) means "all schemas")
+                if (filterBySchema && filterBySchema !== zeroHash) {
+                  if (config.targetSchema !== zeroHash && config.targetSchema !== filterBySchema) return null;
+                }
 
-            resolvedSorts.push({
-              namingAnchorUID: namingUID,
-              name,
-              sortInfoUID,
-              config: {
-                sortFunc: config.sortFunc as `0x${string}`,
-                targetSchema: config.targetSchema as `0x${string}`,
-                sourceType: config.sourceType,
-              },
-              isLocal,
-            });
-          } catch {
-            // Sort config unavailable — skip
-          }
-        }
+                const sort: SortOverlayInfo = {
+                  namingAnchorUID: namingUID as string,
+                  name,
+                  sortInfoUID: sortInfoUID as string,
+                  config: {
+                    sortFunc: config.sortFunc as `0x${string}`,
+                    targetSchema: config.targetSchema as `0x${string}`,
+                    sourceType: config.sourceType,
+                  },
+                  isLocal,
+                };
+                return sort;
+              } catch {
+                // Sort config unavailable — skip
+                return null;
+              }
+            }),
+          )
+        ).filter((s): s is SortOverlayInfo => s !== null);
 
         if (!cancelled) {
           setAvailableSorts(resolvedSorts);

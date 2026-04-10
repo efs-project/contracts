@@ -453,6 +453,17 @@ export const FileBrowser = ({
     functionName: "sortsAnchorUID",
   });
 
+  // Staleness for the active sort on this anchor — drives the preview banner count
+  const { data: activeSortStaleness } = useScaffoldReadContract({
+    contractName: "EFSSortOverlay",
+    functionName: "getSortStaleness",
+    args: [
+      activeSortInfoUID as `0x${string}` | undefined,
+      (currentAnchorUID ?? undefined) as `0x${string}` | undefined,
+    ],
+    query: { enabled: !!activeSortInfoUID && !!currentAnchorUID },
+  });
+
   // ── Sort overlay integration ─────────────────────────────────────────────────
   const {
     sortedUIDs,
@@ -473,7 +484,16 @@ export const FileBrowser = ({
   const [isPreviewSort, setIsPreviewSort] = useState(false);
   const previewFetchRef = useRef<string | null>(null); // track which sort we fetched for
 
-  // Client-side preview sort: fetch sort keys locally when on-chain sort is 0% processed
+  // sessionStorage key for preview sort cache: includes anchor + sort + staleness count
+  // so the cache is automatically invalidated when new items are added (staleness changes).
+  const previewCacheKey =
+    activeSortInfoUID && currentAnchorUID
+      ? `efs-preview:${currentAnchorUID}:${activeSortInfoUID}:${activeSortStaleness?.toString() ?? "0"}`
+      : null;
+
+  // Client-side preview sort: fetch sort keys locally when on-chain sort is 0% processed.
+  // Caches results in sessionStorage keyed by (anchor, sort, staleness) — invalidates
+  // automatically when new items are added (staleness count changes).
   useEffect(() => {
     if (
       !activeSortInfoUID ||
@@ -492,13 +512,29 @@ export const FileBrowser = ({
     }
     if (previewFetchRef.current === activeSortInfoUID) return;
 
-    // rawItems is set by this point from the directory query hooks (it's a state dependency below)
-    // We read it indirectly — can't add it here without a cycle, so use a dedicated rawItems state ref
-
     let cancelled = false;
 
     (async () => {
       try {
+        // Check sessionStorage cache first
+        if (previewCacheKey) {
+          try {
+            const cached = sessionStorage.getItem(previewCacheKey);
+            if (cached) {
+              const parsed: [string, string][] = JSON.parse(cached);
+              const keyMap = new Map<string, string>(parsed);
+              if (keyMap.size > 0) {
+                previewFetchRef.current = activeSortInfoUID;
+                setPreviewSortKeys(keyMap);
+                setIsPreviewSort(true);
+                return;
+              }
+            }
+          } catch {
+            // sessionStorage unavailable or corrupted — proceed with fresh fetch
+          }
+        }
+
         const config = await publicClient.readContract({
           address: sortOverlayAddress,
           abi: SORT_OVERLAY_ABI,
@@ -562,6 +598,14 @@ export const FileBrowser = ({
           previewFetchRef.current = activeSortInfoUID;
           setPreviewSortKeys(keyMap);
           setIsPreviewSort(true);
+          // Persist to sessionStorage for instant load on re-navigation
+          if (previewCacheKey) {
+            try {
+              sessionStorage.setItem(previewCacheKey, JSON.stringify([...keyMap.entries()]));
+            } catch {
+              // sessionStorage quota exceeded — not critical
+            }
+          }
         }
       } catch (e) {
         console.error("Preview sort key fetch failed:", e);
@@ -571,7 +615,7 @@ export const FileBrowser = ({
     return () => {
       cancelled = true;
     };
-  }, [activeSortInfoUID, sortOverlayAddress, publicClient, currentAnchorUID, sortedUIDs, indexerInfo]);
+  }, [activeSortInfoUID, sortOverlayAddress, publicClient, currentAnchorUID, sortedUIDs, indexerInfo, previewCacheKey]);
 
   const hasEditions = editionAddresses && editionAddresses.length > 0;
 
@@ -830,11 +874,20 @@ export const FileBrowser = ({
   return (
     <div className="relative h-full flex flex-row">
       <div className={`${selectedFile ? "flex-1 min-w-0" : "w-full"} overflow-y-auto`}>
-        {/* Preview sort banner */}
+        {/* Preview sort banner — shown when no on-chain sorted data exists yet */}
         {isPreviewSort && previewSortKeys.size > 0 && (!sortedUIDs || sortedUIDs.length === 0) && (
-          <div className="mx-4 mt-2 px-3 py-2 rounded-lg bg-info/10 border border-info/20 flex items-center justify-between text-sm">
-            <span className="text-info-content/70">Preview sort — not yet saved on-chain</span>
-            <span className="text-xs text-base-content/40">Use the Process button in the sort dropdown to persist</span>
+          <div className="mx-4 mt-2 px-3 py-2 rounded-lg bg-info/10 border border-info/20 flex items-center justify-between text-sm gap-3">
+            <span className="text-info-content/70 flex items-center gap-1.5">
+              Preview sort
+              {activeSortStaleness != null && activeSortStaleness > 0n && (
+                <span className="text-xs font-mono text-warning">
+                  — {activeSortStaleness.toString()} item{activeSortStaleness !== 1n ? "s" : ""} unprocessed
+                </span>
+              )}
+            </span>
+            <span className="text-xs text-base-content/40 flex-shrink-0">
+              Use &ldquo;Process All&rdquo; in the sort menu to save on-chain
+            </span>
           </div>
         )}
         <div className="grid grid-cols-4 gap-4 p-4">

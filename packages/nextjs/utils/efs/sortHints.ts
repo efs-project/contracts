@@ -10,12 +10,25 @@
  *   2. Fetch sort keys for new items to insert
  *   3. Call computeHintsLocally() to get leftHints + rightHints for processItems
  *
- * Hex comparison note:
- *   Sort keys are returned as hex strings ("0x1a2b..."). For numeric keys (timestamps),
- *   sort functions MUST left-pad to fixed 32 bytes (abi.encodePacked(uint256)) so that
- *   lexicographic hex string comparison matches on-chain byte-by-byte evaluation.
- *   NameSort produces variable-length bytes where lexicographic comparison is correct
- *   by nature (name bytes + uid suffix).
+ * ISortFunc sort key format requirements for correct client-side comparison:
+ *
+ *   computeHintsLocally compares sort keys as raw hex strings (lexicographic byte order).
+ *   This matches on-chain behaviour only if the sort key bytes uniquely determine order.
+ *   Two conventions are required:
+ *
+ *   1. Fixed-length keys (e.g. TimestampSort):
+ *      Use abi.encodePacked(uint256(value), uid) — 64 bytes total. All keys are the same
+ *      length, so raw hex string comparison is correct.
+ *
+ *   2. Variable-length keys with a string prefix (e.g. NameSort):
+ *      Use abi.encodePacked(bytes(name), bytes1(0x00), uid). The null byte terminates the
+ *      variable-length name section. Without it, a sort key for name "a" could sort AFTER
+ *      "ab" if the uid of "a" starts with a byte > 0x62 ('b'). The null byte guarantees
+ *      that "a\x00uid" < "ab\x00uid" regardless of uid values (since 0x00 < any printable
+ *      ASCII character). Anchor names must not contain null bytes — which is true by convention.
+ *
+ *   ISortFunc implementations that don't follow these conventions should use on-chain
+ *   computeHints() (which calls isLessThan directly) rather than computeHintsLocally.
  */
 
 const ZERO_BYTES32 = "0x0000000000000000000000000000000000000000000000000000000000000000";
@@ -34,16 +47,22 @@ export interface HintResult {
  * Compare two hex-encoded sort keys lexicographically.
  * Returns negative if a < b, 0 if equal, positive if a > b.
  *
- * This mirrors the on-chain byte-by-byte comparison in ISortFunc.isLessThan.
- * Works correctly for both fixed-length (timestamp) and variable-length (name)
- * sort keys, as long as timestamp keys are left-padded to 32 bytes.
+ * Assumes sort keys follow the ISortFunc format conventions documented above:
+ *   - Fixed-length keys (TimestampSort): all keys same width, no padding needed.
+ *   - Variable-length keys (NameSort): null-byte terminated before uid, so raw
+ *     lexicographic comparison correctly reflects name ordering.
+ *
+ * Keys of different lengths are compared by padding the shorter key on the RIGHT
+ * with zeros. For null-terminated variable-length keys this is harmless (both the
+ * null terminator and uid are already present). For fixed-length keys the lengths
+ * are always equal so padding never fires.
  */
 function compareSortKeys(a: string, b: string): number {
   // Remove "0x" prefix, compare as hex strings
   const aHex = a.startsWith("0x") ? a.slice(2) : a;
   const bHex = b.startsWith("0x") ? b.slice(2) : b;
 
-  // Pad to equal length for comparison (shorter = smaller lexicographically)
+  // Pad to equal length for comparison
   const maxLen = Math.max(aHex.length, bHex.length);
   const aPadded = aHex.padEnd(maxLen, "0");
   const bPadded = bHex.padEnd(maxLen, "0");
