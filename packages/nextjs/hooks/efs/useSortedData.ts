@@ -56,7 +56,7 @@ export function useSortedData({
 }: UseSortedDataOptions): UseSortedDataResult {
   const publicClient = usePublicClient();
   const [sortedUIDs, setSortedUIDs] = useState<string[] | null>(null);
-  const [cursor, setCursor] = useState<string>(zeroHash);
+  const cursorRef = useRef<string>(zeroHash);
   const [isLoading, setIsLoading] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [loadTrigger, setLoadTrigger] = useState(0);
@@ -84,17 +84,18 @@ export function useSortedData({
       currentRefreshKeyRef.current = refreshKey;
 
       setSortedUIDs(sortInfoUID ? [] : null);
-      setCursor(zeroHash);
+      cursorRef.current = zeroHash;
       setHasMore(!!sortInfoUID);
-      setLoadTrigger(0);
+      // Trigger initial page load (0 → 1)
+      setLoadTrigger(1);
     }
   }, [sortInfoUID, parentAnchor, editionsKey, refreshKey]);
 
   const reset = useCallback(() => {
     setSortedUIDs(sortInfoUID ? [] : null);
-    setCursor(zeroHash);
+    cursorRef.current = zeroHash;
     setHasMore(!!sortInfoUID);
-    setLoadTrigger(0);
+    setLoadTrigger(t => t + 1);
   }, [sortInfoUID]);
 
   const loadMore = useCallback(() => {
@@ -105,8 +106,9 @@ export function useSortedData({
   useEffect(() => {
     if (!sortInfoUID || !parentAnchor || !sortOverlayAddress || !publicClient) return;
     if (parentAnchor === zeroHash) return;
-    // Don't re-fetch if we're at the end (cursor = zeroHash and we already loaded something)
-    if (loadTrigger > 0 && cursor === zeroHash) return;
+    if (loadTrigger === 0) return;
+    // Don't re-fetch if we've already reached the end
+    if (!hasMore) return;
 
     let cancelled = false;
 
@@ -117,6 +119,8 @@ export function useSortedData({
       try {
         let result: readonly [readonly `0x${string}`[], `0x${string}`];
 
+        const currentCursor = cursorRef.current;
+
         if (editionAddresses.length > 0) {
           result = await publicClient.readContract({
             address: sortOverlayAddress,
@@ -125,7 +129,7 @@ export function useSortedData({
             args: [
               sortInfoUID as `0x${string}`,
               parentAnchor as `0x${string}`,
-              cursor as `0x${string}`,
+              currentCursor as `0x${string}`,
               BigInt(pageSize),
               DEFAULT_MAX_TRAVERSAL,
               editionAddresses as `0x${string}`[],
@@ -140,7 +144,7 @@ export function useSortedData({
             args: [
               sortInfoUID as `0x${string}`,
               parentAnchor as `0x${string}`,
-              cursor as `0x${string}`,
+              currentCursor as `0x${string}`,
               BigInt(pageSize),
               showRevoked,
             ],
@@ -153,7 +157,7 @@ export function useSortedData({
         const newUIDs = items.map(uid => uid as string);
 
         setSortedUIDs(prev => [...(prev ?? []), ...newUIDs]);
-        setCursor(nextCursor as string);
+        cursorRef.current = nextCursor as string;
         setHasMore(nextCursor !== zeroHash);
       } catch (err) {
         console.error("useSortedData: fetch failed", err);
@@ -167,17 +171,11 @@ export function useSortedData({
     return () => {
       cancelled = true;
     };
-  }, [
-    sortInfoUID,
-    parentAnchor,
-    sortOverlayAddress,
-    publicClient,
-    editionAddresses,
-    showRevoked,
-    pageSize,
-    cursor,
-    loadTrigger,
-  ]); // eslint-disable-line react-hooks/exhaustive-deps
+  // loadTrigger drives fetching — cursor is a ref so it doesn't retrigger the effect.
+  // hasMore is read inside the guard above, but we intentionally exclude it from deps
+  // so setting hasMore=false doesn't cause a re-run.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sortInfoUID, parentAnchor, sortOverlayAddress, publicClient, editionAddresses, showRevoked, pageSize, loadTrigger]);
 
   return { sortedUIDs, isLoading, hasMore, loadMore, reset };
 }

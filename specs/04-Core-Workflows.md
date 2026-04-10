@@ -47,7 +47,7 @@ EFS files are modified by issuing new attestations over existing paths.
 ### 8. List Merged Directory by Trusted Addresses
 - **Action**: User opens `/pets/` and wants to see files uploaded by both "Vitalik" and "Self".
 - **Execution**: The client calls `getChildrenByAddressList` with the `parentUID`, passing `[Self, Vitalik]` and a target `pageSize`.
-- **Result**: The Indexer walks the global children array and returns only items where Self or Vitalik contributed — in insertion order, no duplicates. Pass the returned cursor to get the next page. For a fair round-robin view (giving each attester equal representation), use `getChildrenByAddressListInterleaved` instead.
+- **Result**: The Indexer walks the global children array and returns only items where Self or Vitalik contributed — in insertion order, no duplicates. Pass the returned cursor to get the next page.
 
 ### 9. Tag a File (Edition-Specific)
 - **Action**: User wants to tag their edition of `/memes/vitalik.jpg` as "funny".

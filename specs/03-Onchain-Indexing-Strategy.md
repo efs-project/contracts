@@ -50,7 +50,6 @@ To support subjective file resolution natively onchain, the Indexer maintains ad
 - **Core Referencing History**: `_allReferencing` and `_referencingByAttester` track immutable history, ensuring revocations do not break the chain of edits.
 - **Subjective File Content**: `_dataAttestationsByAddress` tracks user iterations of a file payload. Clients use `getDataByAddressList` with a list of trusted addresses to auto-fallback and resolve the highest-trusted active file version in fast time.
 - **Deduplicated Directory Listings**: `getChildrenByAddressList` walks the global `_children` array (unique, insertion order) and includes only items where any of the provided attesters has contributed — no duplicates possible. Use this for rendering a flat directory view filtered to a set of trusted addresses.
-- **Round-Robin Directory Listings**: `getChildrenByAddressListInterleaved` implements fair round-robin pagination across per-attester arrays — gives each attester equal representation. May return the same anchor more than once when multiple attesters contributed to it. Use this for "whose work appears most" views or balanced multi-attester feeds.
 - **Schema + Attester Filtered Listings**: `getAnchorsBySchemaAndAddressList(parentUID, anchorSchema, attesters, startCursor, pageSize, reverseOrder, showRevoked)` intersects `_childrenBySchema[anchorSchema]` with `_containsAttestations` per attester. Use this when the caller wants a specific anchor type (e.g. `DATA_SCHEMA_UID` for file anchors, `SORT_INFO_SCHEMA_UID` for sort anchors) from a multi-attester directory without interleaving unrelated anchor types. This is the correct API for schema-aware directory browsing — EAS schemas are the fundamental unit of data classification, and directories can contain mixed Anchor types (files, sorts, metadata) that should be queried independently.
 
 ### `_childrenByAttester` Propagation Behaviour
@@ -59,9 +58,7 @@ To support subjective file resolution natively onchain, the Indexer maintains ad
 - Alice creates `apple.mp3` (Anchor) under `/music/`. `_childrenByAttester[musicUID][alice]` gets `apple.mp3`. ✓ Expected.
 - Bob attests DATA to Alice’s `apple.mp3`. `_childrenByAttester[musicUID][bob]` also gets `apple.mp3` — because Bob is now active in `/music/` via his DATA contribution.
 
-**UI implication**: The two directory listing APIs handle this differently:
-- `getChildrenByAddressList(musicUID, [alice, bob])` — dedup version. Walks the global `_children` array and O(1)-checks `_containsAttestations`. If alice has 6 anchors and bob contributed DATA to 3 of alice’s, the result is exactly 9 unique anchors. No client-side deduplication needed.
-- `getChildrenByAddressListInterleaved(musicUID, [alice, bob])` — round-robin version. Returns 12 items (alice×6 + bob×6), with the 3 shared anchors appearing twice. Use when fair per-attester representation matters more than uniqueness. The UI must deduplicate if a flat unique list is needed.
+**UI implication**: `getChildrenByAddressList(musicUID, [alice, bob])` walks the global `_children` array and O(1)-checks `_containsAttestations`. If alice has 6 anchors and bob contributed DATA to 3 of alice’s, the result is exactly 9 unique anchors. No client-side deduplication needed. For fair per-attester representation, fetch `getChildrenByAttester` per attester and merge client-side.
 
 ## Efficient Client Traversal
 When a web client needs to load a directory:

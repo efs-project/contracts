@@ -714,4 +714,57 @@ describe("TagResolver", function () {
       expect(await tagResolver.isActivelyTagged(target, def)).to.be.false;
     });
   });
+
+  // ─── isActivelyTaggedByAny ──────────────────────────────────────────────
+
+  describe("isActivelyTaggedByAny", function () {
+    it("Should return true when a listed attester has active tag", async function () {
+      const target = await createTarget("byany-target");
+      const def = await createDefinition("byany-def");
+
+      await tagByRef(user1, target, def, true);
+
+      const u1Addr = await user1.getAddress();
+      const u2Addr = await user2.getAddress();
+
+      expect(await tagResolver.isActivelyTaggedByAny(target, def, [u1Addr])).to.be.true;
+      expect(await tagResolver.isActivelyTaggedByAny(target, def, [u2Addr])).to.be.false;
+      expect(await tagResolver.isActivelyTaggedByAny(target, def, [u1Addr, u2Addr])).to.be.true;
+    });
+
+    it("Should return false when listed attester revoked", async function () {
+      const target = await createTarget("byany-revoked");
+      const def = await createDefinition("byany-revoked-def");
+
+      const uid1 = await tagByRef(user1, target, def, true);
+      await tagByRef(user2, target, def, true);
+
+      const u1Addr = await user1.getAddress();
+      const u2Addr = await user2.getAddress();
+
+      // Both active
+      expect(await tagResolver.isActivelyTaggedByAny(target, def, [u1Addr, u2Addr])).to.be.true;
+
+      // Revoke user1 — scoped query for [user1] only should be false
+      await revoke(user1, uid1);
+      expect(await tagResolver.isActivelyTaggedByAny(target, def, [u1Addr])).to.be.false;
+      expect(await tagResolver.isActivelyTaggedByAny(target, def, [u2Addr])).to.be.true;
+      expect(await tagResolver.isActivelyTaggedByAny(target, def, [u1Addr, u2Addr])).to.be.true;
+    });
+
+    it("Should scope visibility — untrusted attester tag is invisible", async function () {
+      const target = await createTarget("byany-scoped");
+      const def = await createDefinition("byany-scoped-def");
+
+      // user1 tags it (untrusted from user2's perspective)
+      await tagByRef(user1, target, def, true);
+
+      // Permissionless isActivelyTagged sees it
+      expect(await tagResolver.isActivelyTagged(target, def)).to.be.true;
+
+      // But scoped to user2 only — invisible
+      const u2Addr = await user2.getAddress();
+      expect(await tagResolver.isActivelyTaggedByAny(target, def, [u2Addr])).to.be.false;
+    });
+  });
 });

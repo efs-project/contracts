@@ -166,6 +166,21 @@ contract TagResolver is SchemaResolver {
         return _activeCount[targetDefHash] > 0;
     }
 
+    /// @notice Editions-aware variant: returns true if ANY of the given attesters currently has
+    ///         an active applies=true tag on this (targetID, definition) pair.
+    ///         Use this in edition-filtered views to scope tag visibility to trusted attesters.
+    function isActivelyTaggedByAny(
+        bytes32 targetID,
+        bytes32 definition,
+        address[] calldata attesters
+    ) external view returns (bool) {
+        for (uint256 i = 0; i < attesters.length; i++) {
+            bytes32 compositeHash = keccak256(abi.encodePacked(attesters[i], targetID, definition));
+            if (_isApplied[compositeHash]) return true;
+        }
+        return false;
+    }
+
     /// @notice Get paginated list of tag definitions ever applied to a target
     function getTagDefinitions(
         bytes32 targetID,

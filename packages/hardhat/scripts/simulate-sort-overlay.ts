@@ -290,7 +290,7 @@ async function main() {
   console.log("  Alice added: zebra.mp3, apple.mp3, mango.mp3, banana.mp3");
 
   // Bob adds 3 tracks
-  const bobWaterfall = await anchor(bob, "waterfall.mp3", musicUID, dataSchemaUID);
+  const _bobWaterfall = await anchor(bob, "waterfall.mp3", musicUID, dataSchemaUID);
   await anchor(bob, "echo.mp3", musicUID, dataSchemaUID);
   await anchor(bob, "apex.mp3", musicUID, dataSchemaUID);
   console.log("  Bob   added: waterfall.mp3, echo.mp3, apex.mp3");
@@ -622,39 +622,7 @@ async function main() {
   // First item = global insertion order: zebra was created first
   assert("Dedup first item = aliceZebra (insertion order)", dedupResults[0] === aliceZebra);
 
-  // getChildrenByAddressListInterleaved — fair round-robin, may include duplicates
-  // alice×6 + bob×6 = 12 (3 shared anchors appear twice — different perspective arrays)
-  let interleavedCursor = 0n;
-  const interleavedResults: string[] = [];
-  do {
-    const [page, next] = await indexer.getChildrenByAddressListInterleaved(
-      musicUID,
-      [aliceAddr, bobAddr],
-      interleavedCursor,
-      4,
-      false,
-      false,
-    );
-    interleavedResults.push(...page);
-    interleavedCursor = next;
-  } while (interleavedCursor > 0n);
-
-  console.log(
-    `  dedup: ${dedupResults.length} unique, interleaved: ${interleavedResults.length} (${interleavedResults.length - new Set(interleavedResults).size} duplicates)`,
-  );
-  assert(
-    "Interleaved [alice,bob] = 12 items (alice×6 + bob×6 perspective arrays)",
-    interleavedResults.length === 12,
-    `got ${interleavedResults.length}`,
-  );
-  assert(
-    "Interleaved first item = alice's first (round-robin starts with alice)",
-    interleavedResults[0] === aliceZebra,
-  );
-  assert(
-    "Interleaved second item = bob's first (round-robin gives bob equal turn)",
-    interleavedResults[1] === bobWaterfall,
-  );
+  console.log(`  dedup: ${dedupResults.length} unique items`);
 
   // ════════════════════════════════════════════════════════════════════════════════
   // PHASE 11: Data history — multiple versions per user

@@ -7,7 +7,7 @@ import { GenericContractsDeclaration } from "~~/utils/scaffold-eth/contract";
 const deployedContracts = {
   31337: {
     EFSFileView: {
-      address: "0xe8E059acB08A9eD742E2B2fa428B4bC9DDB6a633",
+      address: "0x363f5C22687aef05937DC5b48988442F9Df2aABf",
       abi: [
         {
           inputs: [
@@ -365,7 +365,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     EFSRouter: {
-      address: "0xB41c87A2606B1468DfaEd3C7ff3989DcF011db57",
+      address: "0xea2C96A20FBF641c1312EC842D43aED8697d3cc0",
       abi: [
         {
           inputs: [
@@ -502,7 +502,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     EFSSortOverlay: {
-      address: "0x0eD4796Fd5f0E8f87Dc12D048E90B04FC112b214",
+      address: "0x7DdB78141dEFc9523cf4DA6ee526E6E1D635f4CA",
       abi: [
         {
           inputs: [
@@ -1476,7 +1476,7 @@ const deployedContracts = {
       },
     },
     Indexer: {
-      address: "0x9BEd9d5C7eEbff05b40f0749706296DEfBFBc50D",
+      address: "0xbF0d615Fc0F976A0cca91E24d0a26452f34B0261",
       abi: [
         {
           inputs: [
@@ -2402,55 +2402,6 @@ const deployedContracts = {
             },
           ],
           name: "getChildrenByAddressList",
-          outputs: [
-            {
-              internalType: "bytes32[]",
-              name: "results",
-              type: "bytes32[]",
-            },
-            {
-              internalType: "uint256",
-              name: "nextCursor",
-              type: "uint256",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              internalType: "bytes32",
-              name: "parentUID",
-              type: "bytes32",
-            },
-            {
-              internalType: "address[]",
-              name: "attesters",
-              type: "address[]",
-            },
-            {
-              internalType: "uint256",
-              name: "startingCursor",
-              type: "uint256",
-            },
-            {
-              internalType: "uint256",
-              name: "pageSize",
-              type: "uint256",
-            },
-            {
-              internalType: "bool",
-              name: "reverseOrder",
-              type: "bool",
-            },
-            {
-              internalType: "bool",
-              name: "showRevoked",
-              type: "bool",
-            },
-          ],
-          name: "getChildrenByAddressListInterleaved",
           outputs: [
             {
               internalType: "bytes32[]",
@@ -3888,7 +3839,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     TagResolver: {
-      address: "0xA16F720204Aa80596b42e73c8B9a4a88f0443052",
+      address: "0xd0C20CdE85aC96Ede2755F1d675F9487BE62EbF1",
       abi: [
         {
           inputs: [
@@ -4245,6 +4196,35 @@ const deployedContracts = {
             },
           ],
           name: "isActivelyTagged",
+          outputs: [
+            {
+              internalType: "bool",
+              name: "",
+              type: "bool",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "targetID",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "definition",
+              type: "bytes32",
+            },
+            {
+              internalType: "address[]",
+              name: "attesters",
+              type: "address[]",
+            },
+          ],
+          name: "isActivelyTaggedByAny",
           outputs: [
             {
               internalType: "bool",
