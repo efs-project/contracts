@@ -220,14 +220,26 @@ export const FileBrowser = ({
         allTargets.push(...page);
       }
 
+      // Only consider tags applied by the currently viewed attesters (connected user + editions).
+      // This prevents strangers from affecting your view by tagging your files.
+      const tagAttesters: `0x${string}`[] = [
+        ...(connectedAddress ? [connectedAddress as `0x${string}`] : []),
+        ...editionAddresses
+          .filter(a => a.toLowerCase() !== connectedAddress?.toLowerCase())
+          .map(a => a as `0x${string}`),
+      ];
+
       const activeChecks = await Promise.all(
         allTargets.map(async target => {
-          const isActive = (await publicClient.readContract({
-            address: tagResolverAddress,
-            abi: TAG_RESOLVER_ABI,
-            functionName: "isActivelyTagged",
-            args: [target, definitionUID],
-          })) as boolean;
+          const isActive =
+            tagAttesters.length > 0
+              ? ((await publicClient.readContract({
+                  address: tagResolverAddress,
+                  abi: TAG_RESOLVER_ABI,
+                  functionName: "isActivelyTaggedByAny",
+                  args: [target, definitionUID, tagAttesters],
+                })) as boolean)
+              : false;
           return isActive ? target.toLowerCase() : null;
         }),
       );
@@ -275,7 +287,17 @@ export const FileBrowser = ({
     return () => {
       cancelled = true;
     };
-  }, [tagFilter, drawerTagFilters, tagFilterVersion, publicClient, indexerInfo, tagResolverAddress, tagsRoot]);
+  }, [
+    tagFilter,
+    drawerTagFilters,
+    tagFilterVersion,
+    publicClient,
+    indexerInfo,
+    tagResolverAddress,
+    tagsRoot,
+    connectedAddress,
+    editionAddresses,
+  ]);
 
   const fetchFileContent = async (item: any) => {
     if (!efsRouter) {
@@ -744,10 +766,14 @@ export const FileBrowser = ({
   // Exclude filter (tagExcludedUIDs): item must NOT be in set (empty = no exclusions).
   const matchesUID = (item: any, uidSet: Set<string>): boolean => {
     if (isFile(item, dataSchemaUID)) {
+      // For files, tags target DATA UIDs (per-edition), not the shared anchor UID.
+      // Only check DATA UIDs — anchor UID fallback would match stale/wrong-level tags.
       const anchorUID = item.uid.toLowerCase();
       const dataUIDs = dataUIDMap.get(anchorUID);
-      if (dataUIDs && [...dataUIDs].some(uid => uidSet.has(uid))) return true;
-      return uidSet.has(anchorUID);
+      if (dataUIDs && dataUIDs.size > 0) {
+        return [...dataUIDs].some(uid => uidSet.has(uid));
+      }
+      return false;
     }
     return uidSet.has(item.uid.toLowerCase());
   };
@@ -1204,6 +1230,7 @@ export const FileBrowser = ({
         <TagModal
           uid={tagModalUID}
           isFile={tagModalIsFile}
+          editionAddresses={editionAddresses}
           onClose={() => {
             setTagModalUID(null);
             setTagModalIsFile(false);

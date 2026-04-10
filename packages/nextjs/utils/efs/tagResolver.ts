@@ -64,6 +64,17 @@ export const TAG_RESOLVER_ABI = [
     stateMutability: "view",
     type: "function",
   },
+  {
+    inputs: [
+      { internalType: "bytes32", name: "targetID", type: "bytes32" },
+      { internalType: "bytes32", name: "definition", type: "bytes32" },
+      { internalType: "address[]", name: "attesters", type: "address[]" },
+    ],
+    name: "isActivelyTaggedByAny",
+    outputs: [{ internalType: "bool", name: "", type: "bool" }],
+    stateMutability: "view",
+    type: "function",
+  },
 ] as const;
 
 /**
