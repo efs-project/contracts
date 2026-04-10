@@ -107,14 +107,16 @@ contract EFSRouter is IDecentralizedApp {
         if (resource.length == 0) return (404, bytes("Not Found: Empty path"), new KeyValue[](0));
 
         for (uint i = 0; i < resource.length; i++) {
-            // Traverse down the hierarchy
-            // For folders, we assume schema is 0 (generic). For the file (last element), it could be dataSchemaUID.
-            // Let's try resolvePath first (generic schema 0)
-            targetAnchor = indexer.resolvePath(currentParent, resource[i]);
-
-            // If it's the last element and nothing was found, try the specific dataSchemaUID
-            if (targetAnchor == bytes32(0) && i == resource.length - 1) {
+            // Traverse down the hierarchy.
+            // Intermediate segments must be folders (generic schema).
+            // Last segment: try data-schema anchor first (file), fall back to generic (folder).
+            if (i == resource.length - 1) {
                 targetAnchor = indexer.resolveAnchor(currentParent, resource[i], dataSchemaUID);
+                if (targetAnchor == bytes32(0)) {
+                    targetAnchor = indexer.resolvePath(currentParent, resource[i]);
+                }
+            } else {
+                targetAnchor = indexer.resolvePath(currentParent, resource[i]);
             }
 
             if (targetAnchor == bytes32(0)) {
