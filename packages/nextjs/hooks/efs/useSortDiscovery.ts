@@ -259,57 +259,84 @@ export function useSortDiscovery({
 
         if (cancelled) return;
 
-        // 5. Merge: local overrides global (same-name match)
-        const localSet = new Map<string, `0x${string}`>();
+        // 5. Build name → naming anchor maps (local and global kept separate).
+        //    Do NOT pre-strip globals that also exist locally — the local name may
+        //    fail to resolve to a usable SORT_INFO for the current editions chain,
+        //    in which case we fall back to the global entry rather than lose the name.
+        const localMap = new Map<string, `0x${string}`>();
         for (let i = 0; i < localNamingAnchors.length; i++) {
           const name = names[i];
-          if (name) localSet.set(name, localNamingAnchors[i]);
+          if (name) localMap.set(name, localNamingAnchors[i]);
         }
-        const globalSet = new Map<string, `0x${string}`>();
+        const globalMap = new Map<string, `0x${string}`>();
         for (let i = 0; i < globalNamingAnchors.length; i++) {
           const name = names[localNamingAnchors.length + i];
-          if (name && !localSet.has(name)) globalSet.set(name, globalNamingAnchors[i]);
+          if (name && !globalMap.has(name)) globalMap.set(name, globalNamingAnchors[i]);
         }
 
-        // 6. For each naming anchor, resolve best SORT_INFO via editions.
-        //    Parallelize across naming anchors — each still resolves editions in priority order
-        //    (sequential within the anchor to respect first-match-wins semantics).
+        // Resolve a single naming anchor's best SORT_INFO by walking an editions chain.
+        // Returns null if no non-revoked SORT_INFO is found.
+        async function resolveSortInfo(
+          namingUID: `0x${string}`,
+          chain: string[],
+        ): Promise<`0x${string}` | null> {
+          for (const attester of chain) {
+            try {
+              const uids = (await publicClient!.readContract({
+                address: indexerAddress!,
+                abi: INDEXER_SORT_ABI,
+                functionName: "getReferencingBySchemaAndAttester",
+                args: [namingUID, sortInfoSchemaUID, attester as `0x${string}`, 0n, 1n, false],
+              })) as readonly `0x${string}`[];
+              if (!uids || uids.length === 0) continue;
+              const uid = uids[0];
+              if (uid === zeroHash) continue;
+              const revoked = await publicClient!.readContract({
+                address: indexerAddress!,
+                abi: INDEXER_SORT_ABI,
+                functionName: "isRevoked",
+                args: [uid],
+              });
+              if (!revoked) return uid;
+            } catch {
+              // Attester has no SORT_INFO for this naming anchor — keep walking
+            }
+          }
+          return null;
+        }
+
+        // 6. For each unique sort name, prefer a resolvable local SORT_INFO; if the
+        //    local naming anchor has no resolvable attester match, fall back to the
+        //    global naming anchor (if any) so users don't lose valid global sorts.
+        const uniqueNames = new Set<string>([...localMap.keys(), ...globalMap.keys()]);
         const resolvedSorts: SortOverlayInfo[] = (
           await Promise.all(
-            [...localSet.entries(), ...globalSet.entries()].map(async ([name, namingUID]) => {
-              const isLocal = localSet.has(name);
-              // Local sorts use user editions only. Global sorts also fall back to the system deployer.
-              const resolutionChain = isLocal ? editionAddresses : globalResolutionChain;
+            Array.from(uniqueNames).map(async name => {
+              const localUID = localMap.get(name);
+              const globalUID = globalMap.get(name);
 
-              // Try each editions address in order; first non-revoked SORT_INFO wins
+              let namingUID: `0x${string}` | null = null;
               let sortInfoUID: `0x${string}` | null = null;
-              for (const attester of resolutionChain) {
-                try {
-                  const uids = (await publicClient!.readContract({
-                    address: indexerAddress!,
-                    abi: INDEXER_SORT_ABI,
-                    functionName: "getReferencingBySchemaAndAttester",
-                    args: [namingUID, sortInfoSchemaUID, attester as `0x${string}`, 0n, 1n, false],
-                  })) as readonly `0x${string}`[];
-                  if (!uids || uids.length === 0) continue;
-                  const uid = uids[0];
-                  if (uid === zeroHash) continue;
-                  const revoked = await publicClient!.readContract({
-                    address: indexerAddress!,
-                    abi: INDEXER_SORT_ABI,
-                    functionName: "isRevoked",
-                    args: [uid],
-                  });
-                  if (!revoked) {
-                    sortInfoUID = uid;
-                    break;
-                  }
-                } catch {
-                  // Attester has no SORT_INFO for this naming anchor
+              let isLocal = false;
+
+              if (localUID) {
+                const resolved = await resolveSortInfo(localUID, editionAddresses);
+                if (resolved) {
+                  namingUID = localUID;
+                  sortInfoUID = resolved;
+                  isLocal = true;
+                }
+              }
+              if (!sortInfoUID && globalUID) {
+                const resolved = await resolveSortInfo(globalUID, globalResolutionChain);
+                if (resolved) {
+                  namingUID = globalUID;
+                  sortInfoUID = resolved;
+                  isLocal = false;
                 }
               }
 
-              if (!sortInfoUID) return null;
+              if (!sortInfoUID || !namingUID) return null;
 
               // Fetch sort config
               try {
