@@ -313,4 +313,87 @@ describe("EFSFileView", function () {
     expect(emptyFolderItem).to.not.be.undefined;
     expect(emptyFolderItem!.schema).to.equal(ZERO_BYTES32); // generic anchor
   });
+
+  it("Should return all qualifying generic folders even when count exceeds prior 200-item cap", async function () {
+    // Regression test: _getQualifyingTaggedFolders previously hard-capped both the
+    // tagged and generic scans at 200. Since the helper is only invoked on page 1 of
+    // getDirectoryPageBySchemaAndAddressList, folders past the cap were permanently
+    // unreachable. This test creates >200 qualifying generic folders and asserts all
+    // of them are returned.
+
+    const schemaEncoder = new ethers.AbiCoder();
+    const ownerAddr = await owner.getAddress();
+
+    // 1. Create root
+    const rootData = schemaEncoder.encode(["string", "bytes32"], ["root", ZERO_BYTES32]);
+    const txRoot = await eas.attest({
+      schema: anchorSchemaUID,
+      data: {
+        recipient: ZeroAddress,
+        expirationTime: NO_EXPIRATION,
+        revocable: false,
+        refUID: ZERO_BYTES32,
+        data: rootData,
+        value: 0n,
+      },
+    });
+    const rootUID = getUIDFromReceipt(await txRoot.wait());
+
+    // 2. Create 205 generic folders, each containing a file anchor whose `schemaUID`
+    //    field is dataSchemaUID. That makes each folder qualify via source A
+    //    (`getChildCountBySchema(folder, dataSchemaUID) > 0`), so the scan must return
+    //    all of them even though the count exceeds the old cap.
+    const FOLDER_COUNT = 205;
+    const folderNames: string[] = [];
+    for (let i = 0; i < FOLDER_COUNT; i++) {
+      const name = `folder-${i.toString().padStart(3, "0")}`;
+      folderNames.push(name);
+
+      const folderData = schemaEncoder.encode(["string", "bytes32"], [name, ZERO_BYTES32]);
+      const txFolder = await eas.attest({
+        schema: anchorSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: NO_EXPIRATION,
+          revocable: false,
+          refUID: rootUID,
+          data: folderData,
+          value: 0n,
+        },
+      });
+      const folderUID = getUIDFromReceipt(await txFolder.wait());
+
+      // Child file anchor with anchorSchema = dataSchemaUID so the folder qualifies
+      const childData = schemaEncoder.encode(["string", "bytes32"], [`f-${i}.txt`, dataSchemaUID]);
+      await eas.attest({
+        schema: anchorSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: NO_EXPIRATION,
+          revocable: false,
+          refUID: folderUID,
+          data: childData,
+          value: 0n,
+        },
+      });
+    }
+
+    // 3. Page 1 with a small pageSize — folders are prepended regardless of pageSize,
+    //    so every qualifying folder must be present on the first page.
+    const [items] = await fileView.getDirectoryPageBySchemaAndAddressList(
+      rootUID,
+      dataSchemaUID,
+      [ownerAddr],
+      0,
+      10,
+    );
+
+    // All folders qualify, no direct content items under root → items.length == FOLDER_COUNT
+    expect(items.length).to.equal(FOLDER_COUNT);
+
+    const returnedNames = new Set(items.map((i: any) => i.name));
+    for (const name of folderNames) {
+      expect(returnedNames.has(name), `missing folder ${name}`).to.equal(true);
+    }
+  });
 });
