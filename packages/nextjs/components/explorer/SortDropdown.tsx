@@ -760,6 +760,7 @@ export const SortDropdown = ({
         anchorSchemaUID={anchorSchemaUID ?? ""}
         sortInfoSchemaUID={sortInfoSchemaUID as string | undefined}
         sortFunctions={sortFunctions}
+        filterBySchema={filterBySchema}
         onCreated={() => refetchSorts()}
         onClose={() => setIsCreateSortOpen(false)}
       />

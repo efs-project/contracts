@@ -16,6 +16,13 @@ interface CreateSortModalProps {
   sortInfoSchemaUID: string | undefined;
   /** Available ISortFunc contracts: [{name, address}] */
   sortFunctions: { name: string; address: string }[];
+  /**
+   * Active schema context from the parent view. When the user selects
+   * sourceType = "Children by schema", this schema is used as SORT_INFO.targetSchema
+   * so the sort processes the correct kernel (e.g. DATA_SCHEMA_UID for a file view).
+   * Falls back to ZeroHash ("all schemas") when unset or sourceType = 0.
+   */
+  filterBySchema?: string;
   onCreated?: () => void;
   onClose: () => void;
   isOpen: boolean;
@@ -27,6 +34,7 @@ export const CreateSortModal = ({
   anchorSchemaUID,
   sortInfoSchemaUID,
   sortFunctions,
+  filterBySchema,
   onCreated,
   onClose,
   isOpen,
@@ -113,7 +121,12 @@ export const CreateSortModal = ({
       if (!namingAnchorUID) throw new Error("Could not extract naming anchor UID.");
 
       // Step 2: Create the SORT_INFO attestation referencing the naming anchor
-      const targetSchema = ethers.ZeroHash; // sort all anchor types
+      // sourceType 0 ("all children") ignores targetSchema, so we emit ZeroHash.
+      // sourceType 1 ("children by schema") needs the active schema context —
+      // falling back to ZeroHash here would silently create a sort keyed on the
+      // generic-folder schema and process the wrong kernel.
+      const targetSchema =
+        sourceType === 1 && filterBySchema && filterBySchema !== ethers.ZeroHash ? filterBySchema : ethers.ZeroHash;
       const encodedSortInfo = ethers.AbiCoder.defaultAbiCoder().encode(
         ["address", "bytes32", "uint8"],
         [selectedSortFunc, targetSchema, sourceType],
@@ -204,7 +217,9 @@ export const CreateSortModal = ({
               onChange={e => setSourceType(Number(e.target.value))}
             >
               <option value={0}>All children</option>
-              <option value={1}>Children by schema</option>
+              <option value={1} disabled={!filterBySchema || filterBySchema === ethers.ZeroHash}>
+                Children by schema{!filterBySchema || filterBySchema === ethers.ZeroHash ? " (no schema context)" : ""}
+              </option>
             </select>
           </div>
 

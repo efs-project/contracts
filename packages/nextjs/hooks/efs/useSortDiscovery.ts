@@ -276,28 +276,35 @@ export function useSortDiscovery({
 
         // Resolve a single naming anchor's best SORT_INFO by walking an editions chain.
         // Returns null if no non-revoked SORT_INFO is found.
+        //
+        // For each attester we request the LATEST SORT_INFO (reverseOrder=true) so
+        // republishing a new config supersedes the oldest attestation. We fetch a small
+        // window rather than a single result so that a revoked latest attestation
+        // doesn't mask a still-valid older one from the same attester.
         async function resolveSortInfo(
           namingUID: `0x${string}`,
           chain: string[],
         ): Promise<`0x${string}` | null> {
+          const LOOKBACK = 10n;
           for (const attester of chain) {
             try {
               const uids = (await publicClient!.readContract({
                 address: indexerAddress!,
                 abi: INDEXER_SORT_ABI,
                 functionName: "getReferencingBySchemaAndAttester",
-                args: [namingUID, sortInfoSchemaUID, attester as `0x${string}`, 0n, 1n, false],
+                args: [namingUID, sortInfoSchemaUID, attester as `0x${string}`, 0n, LOOKBACK, true],
               })) as readonly `0x${string}`[];
               if (!uids || uids.length === 0) continue;
-              const uid = uids[0];
-              if (uid === zeroHash) continue;
-              const revoked = await publicClient!.readContract({
-                address: indexerAddress!,
-                abi: INDEXER_SORT_ABI,
-                functionName: "isRevoked",
-                args: [uid],
-              });
-              if (!revoked) return uid;
+              for (const uid of uids) {
+                if (uid === zeroHash) continue;
+                const revoked = await publicClient!.readContract({
+                  address: indexerAddress!,
+                  abi: INDEXER_SORT_ABI,
+                  functionName: "isRevoked",
+                  args: [uid],
+                });
+                if (!revoked) return uid;
+              }
             } catch {
               // Attester has no SORT_INFO for this naming anchor — keep walking
             }
