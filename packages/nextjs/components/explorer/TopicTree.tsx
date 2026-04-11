@@ -3,7 +3,8 @@
 import { useRef } from "react";
 import type { PathItem } from "./Toolbar";
 import { FolderIcon } from "@heroicons/react/24/outline";
-import { useScaffoldReadContract } from "~~/hooks/scaffold-eth";
+import { useSortedData } from "~~/hooks/efs/useSortedData";
+import { useDeployedContractInfo, useScaffoldReadContract } from "~~/hooks/scaffold-eth";
 import { isTopic } from "~~/utils/efs/efsTypes";
 
 const TreeNode = ({
@@ -17,6 +18,10 @@ const TreeNode = ({
   expandedUIDs,
   editionAddresses,
   systemTagsUID,
+  systemSortsUID,
+  activeSortInfoUID,
+  sortOverlayAddress,
+  sortRefreshKey,
 }: {
   uid: string;
   name: string;
@@ -29,17 +34,25 @@ const TreeNode = ({
   editionAddresses: string[];
   /** UID of the system-managed "tags" anchor under root. Hidden from the sidebar. */
   systemTagsUID?: string;
+  /** UID of the system-managed "sorts" anchor under root. Hidden from the sidebar. */
+  systemSortsUID?: string;
+  /** Active sort overlay UID (from ?sort= URL param). When set, tree nodes use sorted order. */
+  activeSortInfoUID?: string | null;
+  /** EFSSortOverlay contract address. Required when activeSortInfoUID is set. */
+  sortOverlayAddress?: `0x${string}`;
+  /** Incremented after processItems completes so useSortedData re-fetches. */
+  sortRefreshKey?: number;
 }) => {
-  // Fetch children for this node
-  // Note: This fetches purely to check for sub-topics.
   const hasEditions = editionAddresses && editionAddresses.length > 0;
 
   // Once we've ever had editions, stay locked to the editions query so that
   // the brief moment connectedAddress is undefined during account switch
   // doesn't flash the unfiltered standard query results.
+  // BUT: when editionAddresses is empty (wallet disconnect, unresolved ENS), fall through
+  // to the standard query rather than leaving both queries disabled and collapsing the tree.
   const lockedToEditions = useRef(false);
   if (hasEditions) lockedToEditions.current = true;
-  const useEditionsQuery = hasEditions || lockedToEditions.current;
+  const useEditionsQuery = (hasEditions || lockedToEditions.current) && editionAddresses.length > 0;
 
   const { data: standardChildren, isLoading: isStandardLoading } = useScaffoldReadContract({
     contractName: "EFSFileView",
@@ -52,10 +65,10 @@ const TreeNode = ({
 
   const { data: editionChildrenRaw, isLoading: isEditionLoading } = useScaffoldReadContract({
     contractName: "EFSFileView",
-    functionName: "getDirectoryPageByAddressList",
-    args: [uid as `0x${string}`, editionAddresses as string[], 0n, 50n],
+    functionName: "getDirectoryPageBySchemaAndAddressList",
+    args: [uid as `0x${string}`, dataSchemaUID as `0x${string}`, editionAddresses as string[], 0n, 50n],
     query: {
-      enabled: useEditionsQuery,
+      enabled: useEditionsQuery && editionAddresses.length > 0,
     },
   });
 
@@ -66,9 +79,38 @@ const TreeNode = ({
       : undefined
     : standardChildren;
 
-  // Hide the system "tags" anchor by its UID (not by name) so that user-created
-  // folders also named "tags" deeper in the hierarchy are still navigable.
-  const topics = children?.filter((item: any) => isTopic(item) && item.uid !== systemTagsUID);
+  // Sorted UIDs from the sort overlay — only fetched when a sort is active
+  const { sortedUIDs } = useSortedData({
+    sortInfoUID: activeSortInfoUID ?? null,
+    parentAnchor: uid,
+    sortOverlayAddress,
+    editionAddresses,
+    refreshKey: sortRefreshKey,
+  });
+
+  // Hide system anchors by UID (not by name) so user-created folders with the same
+  // names deeper in the hierarchy are still navigable.
+  let topics = children?.filter(
+    (item: any) => isTopic(item) && item.uid !== systemTagsUID && item.uid !== systemSortsUID,
+  );
+
+  if (topics) {
+    if (activeSortInfoUID && sortedUIDs && sortedUIDs.length > 0) {
+      // Sort overlay active: reorder topics by sorted UIDs, unsorted items at end
+      const sortIndexMap = new Map(sortedUIDs.map((uid, idx) => [uid.toLowerCase(), idx]));
+      topics = [...topics].sort((a: any, b: any) => {
+        const ai = sortIndexMap.get(a.uid?.toLowerCase() ?? "");
+        const bi = sortIndexMap.get(b.uid?.toLowerCase() ?? "");
+        if (ai !== undefined && bi !== undefined) return ai - bi;
+        if (ai !== undefined) return -1;
+        if (bi !== undefined) return 1;
+        return (a.name ?? "").localeCompare(b.name ?? "");
+      });
+    } else {
+      // No sort active or not yet processed: alphabetical
+      topics = [...topics].sort((a: any, b: any) => (a.name ?? "").localeCompare(b.name ?? ""));
+    }
+  }
 
   if (isLoading) {
     return (
@@ -90,7 +132,6 @@ const TreeNode = ({
           }`}
           onClick={() => onSelect(uid, [{ uid, name }])}
         >
-          {/* Spacer for alignment with details marker if needed, or just standard icon */}
           <FolderIcon className="w-4 h-4" />
           <span className="truncate text-sm">{name}</span>
         </div>
@@ -106,9 +147,6 @@ const TreeNode = ({
             selectedUID === uid ? "text-base-content bg-base-300 font-bold" : "text-base-content font-medium"
           }`}
           onClick={() => {
-            // Do NOT preventDefault, otherwise details won't toggle.
-            // But we might want to manually manage it if we want separate select vs expand logic.
-            // For now, let's allow both.
             onSelect(uid, [{ uid, name }]);
           }}
         >
@@ -128,6 +166,10 @@ const TreeNode = ({
                 expandedUIDs={expandedUIDs}
                 editionAddresses={editionAddresses}
                 systemTagsUID={systemTagsUID}
+                systemSortsUID={systemSortsUID}
+                activeSortInfoUID={activeSortInfoUID}
+                sortOverlayAddress={sortOverlayAddress}
+                sortRefreshKey={sortRefreshKey}
               />
             ))}
           </ul>
@@ -143,12 +185,21 @@ export const TopicTree = ({
   onSelect,
   expandedUIDs,
   editionAddresses,
+  activeSortInfoUID,
+  sortOverlayAddress,
+  sortRefreshKey,
 }: {
   rootUID: string;
   selectedUID: string | null;
   onSelect: (uid: string, path: PathItem[]) => void;
   expandedUIDs?: Set<string>;
   editionAddresses: string[];
+  /** Active sort overlay UID (from ?sort= URL param). When set, tree nodes use sorted order. */
+  activeSortInfoUID?: string | null;
+  /** EFSSortOverlay contract address. Required when activeSortInfoUID is set. */
+  sortOverlayAddress?: `0x${string}`;
+  /** Incremented after processItems completes so the tree's sorted data re-fetches. */
+  sortRefreshKey?: number;
 }) => {
   const { data: dataSchemaUID } = useScaffoldReadContract({
     contractName: "Indexer",
@@ -169,6 +220,14 @@ export const TopicTree = ({
     args: [rootUID as `0x${string}`, "tags"],
   });
 
+  const { data: systemSortsUID } = useScaffoldReadContract({
+    contractName: "Indexer",
+    functionName: "sortsAnchorUID",
+  });
+
+  const { data: sortOverlayInfo } = useDeployedContractInfo({ contractName: "EFSSortOverlay" });
+  const resolvedSortOverlayAddress = (sortOverlayAddress ?? sortOverlayInfo?.address) as `0x${string}` | undefined;
+
   if (!dataSchemaUID || !propertySchemaUID) return <span className="loading loading-dots loading-xs"></span>;
 
   return (
@@ -184,6 +243,10 @@ export const TopicTree = ({
         expandedUIDs={expandedUIDs}
         editionAddresses={editionAddresses}
         systemTagsUID={systemTagsUID as string | undefined}
+        systemSortsUID={systemSortsUID as string | undefined}
+        activeSortInfoUID={activeSortInfoUID}
+        sortOverlayAddress={resolvedSortOverlayAddress}
+        sortRefreshKey={sortRefreshKey}
       />
     </ul>
   );

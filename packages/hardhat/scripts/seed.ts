@@ -1,129 +1,143 @@
-import { ethers, getNamedAccounts } from "hardhat";
+/**
+ * EFS Seed Script
+ *
+ * Creates a small realistic file tree for manual UI testing:
+ *
+ *   /docs/
+ *     readme.txt  (owner DATA: "Hello from EFS!")
+ *     notes.txt   (owner DATA: "Some notes")
+ *   /images/
+ *     cat.jpg     (owner DATA)
+ *     dog.jpg     (owner DATA)
+ *   /shared/
+ *     photo.png   (owner + user1 DATA — editions demo)
+ *
+ * Run: npx hardhat run scripts/seed.ts --network localhost
+ *      (or: yarn hardhat:seed)
+ */
 
+import { ethers, getNamedAccounts } from "hardhat";
 import { EFSIndexer } from "../typechain-types";
 
 async function main() {
   const { deployer } = await getNamedAccounts();
-  const signer = await ethers.getSigner(deployer);
-  console.log("Seeding data with account:", deployer);
+  const deployerSigner = await ethers.getSigner(deployer);
+  const [, user1] = await ethers.getSigners();
 
-  // Get Contracts
-  const indexer = (await ethers.getContract("Indexer", signer)) as unknown as EFSIndexer;
+  console.log("═══════════════════════════════════════");
+  console.log("  EFS Seed Script");
+  console.log("═══════════════════════════════════════\n");
+  console.log(`Deployer: ${deployer}`);
+  console.log(`User1:    ${await user1.getAddress()}\n`);
+
+  // ── Connect to contracts ─────────────────────────────────────────────────────
+
+  const indexer = (await ethers.getContract("Indexer", deployerSigner)) as unknown as EFSIndexer;
   const easAddr = await indexer.getEAS();
-  const eas = await ethers.getContractAt("IEAS", easAddr, signer);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const eas = (await ethers.getContractAt(
+    "@ethereum-attestation-service/eas-contracts/contracts/IEAS.sol:IEAS",
+    easAddr,
+  )) as any;
 
-  // Get Schema UIDs values from Indexer
-  // We can't get them directly if they are immutable private/internal?
-  // They are public immutable? Step 63: "bytes32 public immutable ANCHOR_SCHEMA_UID;"
-  // Yes, they are public.
-
-  const anchorSchema = await indexer.ANCHOR_SCHEMA_UID();
-  const dataSchema = await indexer.DATA_SCHEMA_UID();
-  // const propertySchema = await indexer.PROPERTY_SCHEMA_UID();
-
-  // 1. Get Root
+  const anchorSchemaUID = await indexer.ANCHOR_SCHEMA_UID();
+  const dataSchemaUID = await indexer.DATA_SCHEMA_UID();
   const rootUID = await indexer.rootAnchorUID();
-  console.log("Root UID:", rootUID);
+  const encode = ethers.AbiCoder.defaultAbiCoder();
 
-  // 2. Create "Documents" Folder
-  console.log("Creating 'Documents' folder...");
-  const folderData = ethers.AbiCoder.defaultAbiCoder().encode(["string"], ["Documents"]);
-  const txFolder = await eas.attest({
-    schema: anchorSchema,
-    data: {
-      recipient: ethers.ZeroAddress,
-      expirationTime: 0,
-      revocable: false,
-      refUID: rootUID,
-      data: folderData,
-      value: 0,
-    },
-  });
-  await txFolder.wait();
-  // Get UID from events? Or Indexer?
-  // EAS emits Attested(recipient, attester, uid, schemaUID)
-  // We can just fetch children of Root.
+  console.log(`Indexer:  ${indexer.target}`);
+  console.log(`Root:     ${rootUID}\n`);
 
-  // Helper to get UID from receipt
-  /*
-    const getUID = (rc: any) => {
-        const event = rc.logs.find((log: any) => log.fragment && log.fragment.name === 'Attested');
-        return event ? event.args.uid : null;
-    };
-    */
-  // Assuming last child of root is our folder
-  const children1 = await indexer.getChildren(rootUID, 0, 10, true);
-  const docsUID = children1[0];
-  console.log("Documents Folder UID:", docsUID);
+  // ── Helpers ──────────────────────────────────────────────────────────────────
 
-  // 3. Create "Notes.txt" File in Documents
-  console.log("Creating 'Notes.txt'...");
-  const fileData = ethers.AbiCoder.defaultAbiCoder().encode(["string"], ["Notes.txt"]);
-  const txFile = await eas.attest({
-    schema: anchorSchema,
-    data: {
-      recipient: ethers.ZeroAddress,
-      expirationTime: 0,
-      revocable: false,
-      refUID: docsUID,
-      data: fileData,
-      value: 0,
-    },
-  });
-  await txFile.wait();
+  const getUID = async (tx: any): Promise<string> => {
+    const receipt = await tx.wait();
+    for (const log of receipt.logs) {
+      try {
+        const parsed = eas.interface.parseLog(log);
+        if (parsed?.name === "Attested") return parsed.args.uid as string;
+      } catch {}
+    }
+    throw new Error("Attested event not found in receipt");
+  };
 
-  const children2 = await indexer.getChildren(docsUID, 0, 10, true);
-  const notesUID = children2[0];
-  console.log("Notes.txt UID:", notesUID);
+  // Create an ANCHOR attestation. schema=ZeroHash → generic folder.
+  // schema=dataSchemaUID → file slot (will hold DATA attestations).
+  const makeAnchor = async (
+    signer: any,
+    name: string,
+    parentUID: string,
+    schema: string = ethers.ZeroHash,
+  ): Promise<string> => {
+    const tx = await eas.connect(signer).attest({
+      schema: anchorSchemaUID,
+      data: {
+        recipient: ethers.ZeroAddress,
+        expirationTime: 0n,
+        revocable: false,
+        refUID: parentUID,
+        data: encode.encode(["string", "bytes32"], [name, schema]),
+        value: 0n,
+      },
+    });
+    const uid = await getUID(tx);
+    console.log(`  Anchor  "${name}"  ${uid.slice(0, 10)}…`);
+    return uid;
+  };
 
-  // 4. Add Content to Notes.txt
-  console.log("Adding content to Notes.txt...");
-  // const content = "Hello World! This is a seeded file.";
-  const contentEncoded = ethers.AbiCoder.defaultAbiCoder().encode(
-    ["bytes32", "string"],
-    [ethers.ZeroHash, "text/plain"],
-  );
-  // Wait, DATA schema is: "bytes32 blobUID, string fileMode" (based on 01_indexer.ts)
-  // In 01_indexer.ts line 40: { name: "DATA", definition: "bytes32 blobUID, string fileMode" ... }
+  // Attach a DATA attestation to an anchor (file content pointer).
+  const makeData = async (signer: any, anchorUID: string, uri: string, contentType: string): Promise<string> => {
+    const tx = await eas.connect(signer).attest({
+      schema: dataSchemaUID,
+      data: {
+        recipient: ethers.ZeroAddress,
+        expirationTime: 0n,
+        revocable: true,
+        refUID: anchorUID,
+        data: encode.encode(["string", "string", "string"], [uri, contentType, "file"]),
+        value: 0n,
+      },
+    });
+    const uid = await getUID(tx);
+    console.log(`  Data    ${uid.slice(0, 10)}…  →  ${uri}`);
+    return uid;
+  };
 
-  // Wait. My tests used "bytes32 blobUID, string fileMode" in EFSIndexer.test.ts?
-  // In EFSFileView.test.ts I used:
-  // const contentData = schemaEncoder.encode(["bytes32", "string"], [ZERO_BYTES32, "0644"]);
+  // ── Build tree ────────────────────────────────────────────────────────────────
 
-  // Ah, logic:
-  // BLOB schema has content? "string mimeType, uint8 storageType, bytes location"
+  console.log("── /docs/ ──");
+  const docsUID = await makeAnchor(deployerSigner, "docs", rootUID);
+  const readmeUID = await makeAnchor(deployerSigner, "readme.txt", docsUID, dataSchemaUID);
+  await makeData(deployerSigner, readmeUID, "data:text/plain,Hello%20from%20EFS!", "text/plain");
+  const notesUID = await makeAnchor(deployerSigner, "notes.txt", docsUID, dataSchemaUID);
+  await makeData(deployerSigner, notesUID, "data:text/plain,Some%20notes", "text/plain");
 
-  // If I want "Hello World", I should create a BLOB attestation First?
-  // Or just store it in Data?
-  // The design seems to be:
-  // - BLOB attestation holds location/content metadata.
-  // - DATA attestation links Anchor -> Blob + properties?
+  console.log("\n── /images/ ──");
+  const imagesUID = await makeAnchor(deployerSigner, "images", rootUID);
+  const catUID = await makeAnchor(deployerSigner, "cat.jpg", imagesUID, dataSchemaUID);
+  await makeData(deployerSigner, catUID, "https://placecats.com/300/200", "image/jpeg");
+  const dogUID = await makeAnchor(deployerSigner, "dog.jpg", imagesUID, dataSchemaUID);
+  await makeData(deployerSigner, dogUID, "https://placedog.net/300/200", "image/jpeg");
 
-  // But for a simple file, maybe I want the content?
-  // User plan said: "EFSFileView... Hydrates with EAS data"
-  // "Interpret this data as a file system."
+  console.log("\n── /shared/ (editions demo) ──");
+  const sharedUID = await makeAnchor(deployerSigner, "shared", rootUID);
+  const photoUID = await makeAnchor(deployerSigner, "photo.png", sharedUID, dataSchemaUID);
+  await makeData(deployerSigner, photoUID, "ipfs://owner-version-of-photo", "image/png");
+  await makeData(user1, photoUID, "ipfs://user1-version-of-photo", "image/png");
 
-  // For now, I will use a placeholder Blob UID (ZeroHash) and "text/plain" as fileMode/mimeType?
-  // 01_indexer definition: blobUID, fileMode.
+  // ── Summary ───────────────────────────────────────────────────────────────────
 
-  const dataTx = await eas.attest({
-    schema: dataSchema,
-    data: {
-      recipient: ethers.ZeroAddress,
-      expirationTime: 0,
-      revocable: true,
-      refUID: notesUID,
-      data: contentEncoded,
-      value: 0,
-    },
-  });
-  await dataTx.wait();
-  console.log("Added Data to Notes.txt");
-
-  console.log("Seeding Complete!");
+  console.log("\n═══════════════════════════════════════");
+  console.log("  Seeding complete!");
+  console.log(`  docs/     ${docsUID.slice(0, 14)}…`);
+  console.log(`  images/   ${imagesUID.slice(0, 14)}…`);
+  console.log(`  shared/   ${sharedUID.slice(0, 14)}…`);
+  console.log("═══════════════════════════════════════\n");
+  console.log("Tip: open the explorer at http://localhost:3000/explorer");
+  console.log("     to browse the seeded data.\n");
 }
 
-main().catch(error => {
-  console.error(error);
-  process.exitCode = 1;
+main().catch(err => {
+  console.error(err);
+  process.exit(1);
 });

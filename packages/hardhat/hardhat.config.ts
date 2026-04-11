@@ -73,6 +73,10 @@ const config: HardhatUserConfig = {
       //   enabled: process.env.MAINNET_FORKING_ENABLED === "true",
       // },
     },
+    localhost: {
+      url: "http://127.0.0.1:8545",
+      gasPrice: 2_000_000_000, // 2 gwei — comfortably above any forked baseFee
+    },
     mainnet: {
       url: `https://eth-mainnet.alchemyapi.io/v2/${providerApiKey}`,
       accounts: [deployerPrivateKey],

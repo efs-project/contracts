@@ -8,7 +8,7 @@ import { TagFilterDrawer } from "~~/components/explorer/TagFilterDrawer";
 import { PathItem, Toolbar } from "~~/components/explorer/Toolbar";
 import { TopicTree } from "~~/components/explorer/TopicTree";
 import deployedContracts from "~~/contracts/deployedContracts";
-import { useScaffoldReadContract } from "~~/hooks/scaffold-eth";
+import { useDeployedContractInfo, useScaffoldReadContract } from "~~/hooks/scaffold-eth";
 
 export default function ExplorerPage() {
   const [currentPath, setCurrentPath] = useState<PathItem[]>([]);
@@ -22,11 +22,22 @@ export default function ExplorerPage() {
 
   // Tag filter drawer
   const [isFilterDrawerOpen, setIsFilterDrawerOpen] = useState(false);
-  const [drawerTagFilters, setDrawerTagFilters] = useState<Record<string, DrawerTagFilterState>>({});
+  const [drawerTagFilters, setDrawerTagFilters] = useState<Record<string, DrawerTagFilterState>>({ nsfw: "exclude" });
+
+  // Incremented after processItems completes — causes FileBrowser to re-fetch sorted data
+  const [sortRefreshKey, setSortRefreshKey] = useState(0);
+  const [reverseOrder, setReverseOrder] = useState(false);
+  const [autoProcessKey, setAutoProcessKey] = useState(0);
+  // Sort UIDs to auto-process on the next autoProcessKey tick (set by Toolbar after upload)
+  const [autoProcessSortUIDs, setAutoProcessSortUIDs] = useState<string[]>([]);
 
   const router = useRouter();
   const params = useParams();
   const searchParams = useSearchParams();
+
+  // Active sort (from ?sort= URL param)
+  const sortParam = searchParams.get("sort");
+  const activeSortInfoUID = sortParam || null;
   const publicClient = usePublicClient();
   const { address: connectedAddress } = useAccount();
 
@@ -56,6 +67,19 @@ export default function ExplorerPage() {
     contractName: "Indexer",
     functionName: "ANCHOR_SCHEMA_UID",
   });
+
+  // Sort overlay addresses
+  const { data: indexerInfo } = useDeployedContractInfo({ contractName: "Indexer" });
+  const { data: sortOverlayInfo } = useDeployedContractInfo({ contractName: "EFSSortOverlay" });
+  // EAS is an external contract — read its address from the Indexer rather than deployedContracts
+  const { data: easAddressRaw } = useScaffoldReadContract({
+    contractName: "Indexer",
+    functionName: "getEAS",
+  });
+
+  const indexerAddress = indexerInfo?.address as `0x${string}` | undefined;
+  const sortOverlayAddress = sortOverlayInfo?.address as `0x${string}` | undefined;
+  const easAddress = easAddressRaw as `0x${string}` | undefined;
 
   // Editions Resolution Effect — only needed for ENS name resolution in explicit ?editions= param.
   // Plain address filtering is handled synchronously via useMemo above.
@@ -162,12 +186,24 @@ export default function ExplorerPage() {
     // Skip Root ("Root") when building URL
     const urlSegments = newPathItems.slice(1).map(p => encodeURIComponent(p.name));
 
-    // Preserve URL parameters (especially editions)
+    // Preserve URL parameters (especially editions and sort)
     const currentQuery = searchParams.toString();
     const queryPart = currentQuery ? `?${currentQuery}` : "";
     const url = `/explorer/${urlSegments.join("/")}${queryPart}`;
 
     router.push(url);
+  };
+
+  const handleSortChange = (sortInfoUID: string | null) => {
+    const currentQuery = new URLSearchParams(searchParams.toString());
+    if (sortInfoUID) {
+      currentQuery.set("sort", sortInfoUID);
+    } else {
+      currentQuery.delete("sort");
+    }
+    const urlSegments = currentPath.slice(1).map(p => encodeURIComponent(p.name));
+    const queryPart = currentQuery.toString() ? `?${currentQuery.toString()}` : "";
+    router.push(`/explorer/${urlSegments.join("/")}${queryPart}`);
   };
 
   if (!rootUID || !dataSchemaUID || !anchorSchemaUID) return <div>Loading System...</div>;
@@ -186,6 +222,13 @@ export default function ExplorerPage() {
           currentAnchorUID={currentAnchorUID}
           anchorSchemaUID={anchorSchemaUID}
           dataSchemaUID={dataSchemaUID}
+          indexerAddress={indexerAddress}
+          easAddress={easAddress}
+          sortOverlayAddress={sortOverlayAddress}
+          editionAddresses={editionAddresses}
+          activeSortInfoUID={activeSortInfoUID}
+          onSortChange={handleSortChange}
+          onSortProcessed={() => setSortRefreshKey(k => k + 1)}
           isFilterDrawerOpen={isFilterDrawerOpen}
           onToggleFilterDrawer={() => setIsFilterDrawerOpen(prev => !prev)}
           onNavigate={uid => {
@@ -194,6 +237,17 @@ export default function ExplorerPage() {
             if (index !== -1) {
               navigateToPath(currentPath.slice(0, index + 1));
             }
+          }}
+          reverseOrder={reverseOrder}
+          onReverseOrderChange={setReverseOrder}
+          autoProcessKey={autoProcessKey}
+          autoProcessSortUIDs={autoProcessSortUIDs}
+          onFileCreated={sortUIDs => {
+            setAutoProcessSortUIDs(sortUIDs);
+            setAutoProcessKey(k => k + 1);
+          }}
+          onFolderCreated={() => {
+            setSortRefreshKey(k => k + 1);
           }}
         />
 
@@ -224,17 +278,10 @@ export default function ExplorerPage() {
                 rootUID={rootUID}
                 selectedUID={currentAnchorUID}
                 editionAddresses={editionAddresses}
+                activeSortInfoUID={activeSortInfoUID}
+                sortOverlayAddress={sortOverlayAddress}
+                sortRefreshKey={sortRefreshKey}
                 onSelect={(uid, path) => {
-                  // Path needs to be constructed from tree logic.
-                  // For now, let's just use the tree as navigation and update URL.
-                  // But tree node sends us [Root, Child, Leaf]
-                  // We want [Child, Leaf] for the URL if Root is hidden from URL or is empty path.
-                  // Assuming rootUID corresponds to "Root" name in tree but "/" in URL logic.
-
-                  // Simplified: Just take the path provided by Tree, map UIDs?
-                  // Actually, Explorer page handles path resolution.
-                  // Let's just trust path provided by `onSelect` from Tree?
-                  // Tree provides `path` array of objects {uid, name}.
                   navigateToPath(path);
                 }}
                 expandedUIDs={new Set(currentPath.map(p => p.uid))}
@@ -253,6 +300,10 @@ export default function ExplorerPage() {
                   tagFilter={searchParams.get("tags") || ""}
                   drawerTagFilters={drawerTagFilters}
                   currentPathNames={currentPath.slice(1).map(p => p.name)}
+                  activeSortInfoUID={activeSortInfoUID}
+                  sortOverlayAddress={sortOverlayAddress}
+                  sortRefreshKey={sortRefreshKey}
+                  reverseOrder={reverseOrder}
                   onNavigate={(uid, name) => {
                     navigateToPath([...currentPath, { uid, name }]);
                   }}

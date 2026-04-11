@@ -3,12 +3,14 @@ pragma solidity 0.8.26;
 
 import { SchemaResolver } from "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol";
 import { IEAS, Attestation } from "@ethereum-attestation-service/eas-contracts/contracts/IEAS.sol";
+import { ISchemaRegistry, SchemaRecord } from "@ethereum-attestation-service/eas-contracts/contracts/ISchemaRegistry.sol";
 import { EMPTY_UID } from "@ethereum-attestation-service/eas-contracts/contracts/Common.sol";
 
 /// @dev Minimal interface for the EFSIndexer functions TagResolver needs.
 interface IEFSIndexerForTag {
     function index(bytes32 uid) external returns (bool);
     function indexRevocation(bytes32 uid) external;
+    function getParent(bytes32 anchorUID) external view returns (bytes32);
 }
 
 /**
@@ -27,6 +29,7 @@ interface IEFSIndexerForTag {
  */
 contract TagResolver is SchemaResolver {
     error MustTargetSomething();
+    error InvalidDefinition();
 
     /// @notice The EAS schema UID for the Tag schema registered with this resolver
     bytes32 public immutable TAG_SCHEMA_UID;
@@ -34,6 +37,9 @@ contract TagResolver is SchemaResolver {
     /// @notice EFSIndexer reference — tag attestations are indexed so they are
     ///         discoverable via getReferencingAttestations like any other schema.
     IEFSIndexerForTag public immutable indexer;
+
+    /// @notice SchemaRegistry reference — used to validate schema UID definitions.
+    ISchemaRegistry public immutable schemaRegistry;
 
     // Singleton map: keccak256(attester, targetID, definition) => active attestation UID
     mapping(bytes32 => bytes32) private _activeTag;
@@ -54,13 +60,23 @@ contract TagResolver is SchemaResolver {
     mapping(bytes32 => bytes32[]) private _taggedTargets;
     mapping(bytes32 => mapping(bytes32 => bool)) private _hasTarget;
 
-    constructor(IEAS eas, bytes32 tagSchemaUID, IEFSIndexerForTag _indexer) SchemaResolver(eas) {
+    // Discovery: child anchors tagged with a definition, scoped by parent anchor.
+    // Enables efficient "folder list" queries: e.g. "which children of /memes/ are tagged as DATA folders?"
+    // Append-only — consumers check isActivelyTagged() to filter inactive entries.
+    mapping(bytes32 => mapping(bytes32 => bytes32[])) private _childrenTaggedWith;
+    mapping(bytes32 => mapping(bytes32 => mapping(bytes32 => bool))) private _isChildTaggedWith;
+
+    constructor(IEAS eas, bytes32 tagSchemaUID, IEFSIndexerForTag _indexer, ISchemaRegistry _schemaRegistry) SchemaResolver(eas) {
         TAG_SCHEMA_UID = tagSchemaUID;
         indexer = _indexer;
+        schemaRegistry = _schemaRegistry;
     }
 
     function onAttest(Attestation calldata attestation, uint256 /*value*/) internal override returns (bool) {
         (bytes32 definition, bool applies) = abi.decode(attestation.data, (bytes32, bool));
+
+        // Validate definition: must be a valid attestation, registered schema, or address
+        _validateDefinition(definition);
 
         bytes32 targetID = _resolveTargetID(attestation.refUID, attestation.recipient);
 
@@ -89,6 +105,16 @@ contract TagResolver is SchemaResolver {
             if (!_hasTarget[definition][targetID]) {
                 _taggedTargets[definition].push(targetID);
                 _hasTarget[definition][targetID] = true;
+            }
+        }
+
+        // Build children-tagged-with index: when an attestation (anchor) that is a child
+        // of some parent is tagged, record it under that parent for efficient folder queries.
+        if (attestation.refUID != EMPTY_UID && applies) {
+            bytes32 parent = indexer.getParent(attestation.refUID);
+            if (parent != bytes32(0) && !_isChildTaggedWith[parent][definition][attestation.refUID]) {
+                _childrenTaggedWith[parent][definition].push(attestation.refUID);
+                _isChildTaggedWith[parent][definition][attestation.refUID] = true;
             }
         }
 
@@ -140,6 +166,21 @@ contract TagResolver is SchemaResolver {
         return _activeCount[targetDefHash] > 0;
     }
 
+    /// @notice Editions-aware variant: returns true if ANY of the given attesters currently has
+    ///         an active applies=true tag on this (targetID, definition) pair.
+    ///         Use this in edition-filtered views to scope tag visibility to trusted attesters.
+    function isActivelyTaggedByAny(
+        bytes32 targetID,
+        bytes32 definition,
+        address[] calldata attesters
+    ) external view returns (bool) {
+        for (uint256 i = 0; i < attesters.length; i++) {
+            bytes32 compositeHash = keccak256(abi.encodePacked(attesters[i], targetID, definition));
+            if (_isApplied[compositeHash]) return true;
+        }
+        return false;
+    }
+
     /// @notice Get paginated list of tag definitions ever applied to a target
     function getTagDefinitions(
         bytes32 targetID,
@@ -168,9 +209,43 @@ contract TagResolver is SchemaResolver {
         return _taggedTargets[definition].length;
     }
 
+    /// @notice Get paginated list of child anchors tagged with a definition under a parent.
+    ///         Append-only — use isActivelyTagged() to check which entries are still active.
+    function getChildrenTaggedWith(
+        bytes32 parentUID,
+        bytes32 definition,
+        uint256 start,
+        uint256 length
+    ) external view returns (bytes32[] memory) {
+        return _sliceUIDs(_childrenTaggedWith[parentUID][definition], start, length);
+    }
+
+    /// @notice Get count of child anchors ever tagged with a definition under a parent.
+    function getChildrenTaggedWithCount(bytes32 parentUID, bytes32 definition) external view returns (uint256) {
+        return _childrenTaggedWith[parentUID][definition].length;
+    }
+
     // ============================================================================================
     // INTERNAL HELPERS
     // ============================================================================================
+
+    /// @dev Validate that definition is a valid attestation UID, registered schema UID, or address.
+    function _validateDefinition(bytes32 definition) private view {
+        if (definition == bytes32(0)) revert InvalidDefinition();
+
+        // 1. Address? (cheapest — no external call; upper 12 bytes must be zero)
+        if (uint256(definition) <= type(uint160).max) return;
+
+        // 2. Registered schema? (fewer schemas than attestations; schemas win on conflict)
+        SchemaRecord memory sr = schemaRegistry.getSchema(definition);
+        if (sr.uid != bytes32(0)) return;
+
+        // 3. Existing attestation?
+        Attestation memory att = _eas.getAttestation(definition);
+        if (att.uid != bytes32(0)) return;
+
+        revert InvalidDefinition();
+    }
 
     function _resolveTargetID(bytes32 refUID, address recipient) private pure returns (bytes32) {
         if (refUID != EMPTY_UID) {
@@ -182,11 +257,7 @@ contract TagResolver is SchemaResolver {
         revert MustTargetSomething();
     }
 
-    function _sliceUIDs(
-        bytes32[] storage uids,
-        uint256 start,
-        uint256 length
-    ) private view returns (bytes32[] memory) {
+    function _sliceUIDs(bytes32[] storage uids, uint256 start, uint256 length) private view returns (bytes32[] memory) {
         uint256 total = uids.length;
         if (total == 0 || start >= total) {
             return new bytes32[](0);

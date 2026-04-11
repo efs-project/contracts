@@ -39,10 +39,11 @@ async function main() {
   // Connect to deployed contracts
   const indexer = (await ethers.getContract("Indexer", owner)) as unknown as EFSIndexer;
   const easAddress = await indexer.getEAS();
-  const eas = await ethers.getContractAt(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const eas = (await ethers.getContractAt(
     "@ethereum-attestation-service/eas-contracts/contracts/IEAS.sol:IEAS",
     easAddress,
-  );
+  )) as any;
 
   // All schema UIDs and partner contract addresses are available on EFSIndexer
   const anchorSchemaUID = await indexer.ANCHOR_SCHEMA_UID();
@@ -119,7 +120,9 @@ async function main() {
     return getUID(tx);
   };
 
-  const decodeData = (raw: string) => encode.decode(["string", "string", "string"], raw) as [string, string, string];
+  const decodeData = (raw: string) =>
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    encode.decode(["string", "string", "string"], raw) as unknown as [string, string, string];
 
   // ══════════════════════════════════════════════════════════════
   // PHASE 1: Build realistic file tree
@@ -325,44 +328,7 @@ async function main() {
     `fwd[0]=${fwd[0].slice(0, 10)}… rev[0]=${rev[0].slice(0, 10)}…`,
   );
 
-  // ── Test 11: getChildrenByAddressListInterleaved — round-robin fair distribution ──
-  console.log("\n[11] Interleaved Round-Robin (getChildrenByAddressListInterleaved)");
-  const unequalParent = await anchor(owner, `unequal_${S}`, rootUID);
-  const bigUserFiles: string[] = [];
-  for (let i = 0; i < 8; i++) {
-    bigUserFiles.push(await anchor(user1, `big${i}`, unequalParent));
-  }
-  const smallUserFile = await anchor(user2, `small0`, unequalParent);
-
-  // Round-robin: user1[0], user2[0], user1[1], user1[2], ... (user2 exhausted after small0)
-  const [uneqPage1, uneqCursor1] = await indexer.getChildrenByAddressListInterleaved(
-    unequalParent,
-    [u1Addr, u2Addr],
-    0n,
-    5,
-    false,
-    false,
-  );
-  assert("Interleaved page 1: 5 items", uneqPage1.length === 5, `got ${uneqPage1.length}`);
-  assert("Interleaved: item 0 = User1's first (round-robin start)", uneqPage1[0] === bigUserFiles[0]);
-  assert("Interleaved: item 1 = User2's only file (fair distribution)", uneqPage1[1] === smallUserFile);
-
-  const [uneqPage2, _uneqCursor2] = await indexer.getChildrenByAddressListInterleaved(
-    unequalParent,
-    [u1Addr, u2Addr],
-    uneqCursor1,
-    10,
-    false,
-    false,
-  );
-  assert("Interleaved page 2: remaining 4 items", uneqPage2.length === 4, `got ${uneqPage2.length}`);
-  assert(
-    "Interleaved: all 9 items across both pages",
-    uneqPage1.length + uneqPage2.length === 9,
-    `${uneqPage1.length} + ${uneqPage2.length}`,
-  );
-
-  // ── Test 12: Tagging ──
+  // ── Test 11: Tagging ──
   console.log("\n[12] Tagging");
   // Tag definitions live as Anchors under /tags/ — for simplicity, create one under root
   const funnyDef = await anchor(owner, `funny_${S}`, rootUID);

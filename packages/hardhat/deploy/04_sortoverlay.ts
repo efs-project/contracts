@@ -45,7 +45,7 @@ const deployEFSSortOverlay: DeployFunction = async function (hre: HardhatRuntime
   console.log("Predicted EFSSortOverlay Address:", futureSortOverlayAddress);
 
   // 4. Register SORT_INFO schema
-  const sortInfoDefinition = "address sortFunc, bytes32 targetSchema";
+  const sortInfoDefinition = "address sortFunc, bytes32 targetSchema, uint8 sourceType";
   const sortInfoRevocable = true;
 
   const sortInfoSchemaUID = ethers.solidityPackedKeccak256(
