@@ -16,7 +16,10 @@ import { useDeployedContractInfo, useScaffoldReadContract } from "~~/hooks/scaff
 import { SORT_OVERLAY_ABI, SortOverlayInfo, formatSyncPercent } from "~~/utils/efs/sortOverlay";
 import { notification } from "~~/utils/scaffold-eth";
 
-// ABI for getChildAt / getChildrenCount — used during processItems batching
+// ABI for the sourceType-aware kernel accessors used during processItems batching.
+// EFSSortOverlay.processItems validates each item against the kernel accessor that
+// corresponds to the SortConfig's sourceType — so the batch loader must use the
+// same accessor or the call reverts with InvalidItem.
 const INDEXER_PROCESS_ABI = [
   {
     inputs: [
@@ -29,9 +32,13 @@ const INDEXER_PROCESS_ABI = [
     type: "function",
   },
   {
-    inputs: [{ internalType: "bytes32", name: "anchorUID", type: "bytes32" }],
-    name: "getChildrenCount",
-    outputs: [{ internalType: "uint256", name: "", type: "uint256" }],
+    inputs: [
+      { internalType: "bytes32", name: "parentUID", type: "bytes32" },
+      { internalType: "bytes32", name: "schema", type: "bytes32" },
+      { internalType: "uint256", name: "index", type: "uint256" },
+    ],
+    name: "getChildBySchemaAt",
+    outputs: [{ internalType: "bytes32", name: "", type: "bytes32" }],
     stateMutability: "view",
     type: "function",
   },
@@ -151,6 +158,52 @@ export const SortDropdown = ({
     if (isOpen) fetchStaleness();
   }, [isOpen, fetchStaleness]);
 
+  // Cache SortConfig lookups — each config is immutable once attested.
+  const sortConfigCacheRef = useRef<Map<string, { sortFunc: string; targetSchema: string; sourceType: number }>>(
+    new Map(),
+  );
+
+  const getSortConfig = useCallback(
+    async (sortInfoUID: string) => {
+      const cached = sortConfigCacheRef.current.get(sortInfoUID);
+      if (cached) return cached;
+      if (!sortOverlayAddress || !publicClient) throw new Error("SortOverlay not available");
+      const cfg = (await publicClient.readContract({
+        address: sortOverlayAddress,
+        abi: SORT_OVERLAY_ABI,
+        functionName: "getSortConfig",
+        args: [sortInfoUID as `0x${string}`],
+      })) as { sortFunc: string; targetSchema: string; sourceType: number };
+      sortConfigCacheRef.current.set(sortInfoUID, cfg);
+      return cfg;
+    },
+    [sortOverlayAddress, publicClient],
+  );
+
+  // Kernel total = lastProcessed + staleness. Universal across sourceTypes (0/1/2),
+  // so callers don't need a sourceType-specific count query.
+  const getKernelTotal = useCallback(
+    async (sortInfoUID: string): Promise<{ lastProcessed: bigint; totalCount: bigint }> => {
+      if (!sortOverlayAddress || !parentAnchor || !publicClient) throw new Error("Missing addresses");
+      const [lastProcessed, staleness] = (await Promise.all([
+        publicClient.readContract({
+          address: sortOverlayAddress,
+          abi: SORT_OVERLAY_ABI,
+          functionName: "getLastProcessedIndex",
+          args: [sortInfoUID as `0x${string}`, parentAnchor as `0x${string}`],
+        }),
+        publicClient.readContract({
+          address: sortOverlayAddress,
+          abi: SORT_OVERLAY_ABI,
+          functionName: "getSortStaleness",
+          args: [sortInfoUID as `0x${string}`, parentAnchor as `0x${string}`],
+        }),
+      ])) as [bigint, bigint];
+      return { lastProcessed, totalCount: lastProcessed + staleness };
+    },
+    [sortOverlayAddress, parentAnchor, publicClient],
+  );
+
   // ── Shared helper: fetch and submit a single processItems batch ─────────────
   // Returns the number of items in the batch, or 0 if already fully processed.
   // Throws StaleStartIndex (let callers handle retry) and other errors.
@@ -164,15 +217,33 @@ export const SortDropdown = ({
 
       const batchCount = remaining < BigInt(BATCH_SIZE) ? Number(remaining) : BATCH_SIZE;
 
-      // Fetch items from kernel (sequential; use multicall for very large dirs)
+      // Route kernel reads by sourceType. processItems on the contract validates each item
+      // against the same accessor, so mismatches revert InvalidItem.
+      //   0 → getChildAt(parentAnchor, idx)
+      //   1 → getChildBySchemaAt(parentAnchor, targetSchema, idx)
+      //   2+ → unsupported in this client yet (contract also reverts)
+      const config = await getSortConfig(sortInfoUID);
       const items: `0x${string}`[] = [];
       for (let i = 0; i < batchCount; i++) {
-        const uid = (await publicClient.readContract({
-          address: indexerAddress,
-          abi: INDEXER_PROCESS_ABI,
-          functionName: "getChildAt",
-          args: [parentAnchor as `0x${string}`, expectedStartIndex + BigInt(i)],
-        })) as `0x${string}`;
+        const idx = expectedStartIndex + BigInt(i);
+        let uid: `0x${string}`;
+        if (config.sourceType === 0) {
+          uid = (await publicClient.readContract({
+            address: indexerAddress,
+            abi: INDEXER_PROCESS_ABI,
+            functionName: "getChildAt",
+            args: [parentAnchor as `0x${string}`, idx],
+          })) as `0x${string}`;
+        } else if (config.sourceType === 1) {
+          uid = (await publicClient.readContract({
+            address: indexerAddress,
+            abi: INDEXER_PROCESS_ABI,
+            functionName: "getChildBySchemaAt",
+            args: [parentAnchor as `0x${string}`, config.targetSchema as `0x${string}`, idx],
+          })) as `0x${string}`;
+        } else {
+          throw new Error(`Unsupported sort sourceType ${config.sourceType}`);
+        }
         items.push(uid);
       }
 
@@ -204,7 +275,7 @@ export const SortDropdown = ({
 
       return batchCount;
     },
-    [sortOverlayAddress, indexerAddress, parentAnchor, publicClient, walletClient],
+    [sortOverlayAddress, indexerAddress, parentAnchor, publicClient, walletClient, getSortConfig],
   );
 
   // ── Process ALL remaining batches — loops until fully synced ─────────────────
@@ -223,21 +294,9 @@ export const SortDropdown = ({
       try {
         // eslint-disable-next-line no-constant-condition
         while (true) {
-          // Re-read index each iteration (handles StaleStartIndex retries + multi-batch progress)
-          const [currentIndex, totalCount] = await Promise.all([
-            publicClient.readContract({
-              address: sortOverlayAddress,
-              abi: SORT_OVERLAY_ABI,
-              functionName: "getLastProcessedIndex",
-              args: [sortInfoUID as `0x${string}`, parentAnchor as `0x${string}`],
-            }) as Promise<bigint>,
-            publicClient.readContract({
-              address: indexerAddress,
-              abi: INDEXER_PROCESS_ABI,
-              functionName: "getChildrenCount",
-              args: [parentAnchor as `0x${string}`],
-            }) as Promise<bigint>,
-          ]);
+          // Re-read index each iteration (handles StaleStartIndex retries + multi-batch progress).
+          // getKernelTotal routes through getSortStaleness, so it is sourceType-agnostic.
+          const { lastProcessed: currentIndex, totalCount } = await getKernelTotal(sortInfoUID);
 
           const remaining = totalCount - currentIndex;
           if (remaining <= 0n) {
@@ -291,6 +350,7 @@ export const SortDropdown = ({
       publicClient,
       walletClient,
       _processBatch,
+      getKernelTotal,
       fetchStaleness,
       onProcessComplete,
     ],
@@ -307,20 +367,8 @@ export const SortDropdown = ({
       }
       setProcessingUID(sortInfoUID);
       try {
-        const [currentIndex, totalCount] = await Promise.all([
-          publicClient.readContract({
-            address: sortOverlayAddress,
-            abi: SORT_OVERLAY_ABI,
-            functionName: "getLastProcessedIndex",
-            args: [sortInfoUID as `0x${string}`, parentAnchor as `0x${string}`],
-          }) as Promise<bigint>,
-          publicClient.readContract({
-            address: indexerAddress,
-            abi: INDEXER_PROCESS_ABI,
-            functionName: "getChildrenCount",
-            args: [parentAnchor as `0x${string}`],
-          }) as Promise<bigint>,
-        ]);
+        // sourceType-agnostic: getKernelTotal derives totalCount from staleness.
+        const { lastProcessed: currentIndex, totalCount } = await getKernelTotal(sortInfoUID);
 
         const remaining = totalCount - currentIndex;
         if (remaining <= 0n) {
@@ -355,6 +403,7 @@ export const SortDropdown = ({
       publicClient,
       walletClient,
       _processBatch,
+      getKernelTotal,
       fetchStaleness,
       onProcessComplete,
     ],

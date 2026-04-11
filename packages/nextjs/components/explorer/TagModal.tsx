@@ -58,10 +58,15 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
   const { data: easInfo } = useDeployedContractInfo({ contractName: "EAS" });
 
   // For file items: resolve the DATA attestation UID to tag.
-  // First tries the connected user's own DATA. If not found, tries the edition addresses
-  // (so tagging someone else's file via editions targets their DATA UID, not the anchor).
+  // The TagModal targets the DATA that the user is actually *viewing* — i.e. the same
+  // attester list FileBrowser uses when building its view. This matters because tags
+  // stored against DATA UIDs that don't appear in the view won't affect the tag filter
+  // (filter walks viewed DATA UIDs, not anchors). Rules:
+  //   - editions set → resolve via editionAddresses (what's on screen)
+  //   - no editions → resolve via connectedAddress (own-files default view)
+  //   - neither resolves → fall back to anchor UID (folder-level semantics)
   useEffect(() => {
-    if (!isFile || !publicClient || !connectedAddress) {
+    if (!isFile || !publicClient) {
       setEffectiveUID(uid);
       setIsResolvingDataUID(false);
       return;
@@ -83,40 +88,30 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
           return;
         }
 
-        // Try connected user's own DATA first
-        const ownDataUID = (await publicClient.readContract({
+        const viewAttesters: `0x${string}`[] =
+          editionAddresses.length > 0
+            ? (editionAddresses.map(a => a as `0x${string}`) as `0x${string}`[])
+            : connectedAddress
+              ? [connectedAddress as `0x${string}`]
+              : [];
+
+        if (viewAttesters.length === 0) {
+          if (!cancelled) {
+            setEffectiveUID(uid);
+            setIsResolvingDataUID(false);
+          }
+          return;
+        }
+
+        const viewDataUID = (await publicClient.readContract({
           address: indexer.address as `0x${string}`,
           abi: indexer.abi,
           functionName: "getDataByAddressList",
-          args: [uid as `0x${string}`, [connectedAddress], false],
+          args: [uid as `0x${string}`, viewAttesters, false],
         })) as `0x${string}`;
 
-        if (ownDataUID && ownDataUID !== zeroHash) {
-          if (!cancelled) {
-            setEffectiveUID(ownDataUID);
-            setIsResolvingDataUID(false);
-          }
-          return;
-        }
-
-        // No own DATA — try edition addresses to find the DATA UID being viewed
-        if (editionAddresses.length > 0) {
-          const editionDataUID = (await publicClient.readContract({
-            address: indexer.address as `0x${string}`,
-            abi: indexer.abi,
-            functionName: "getDataByAddressList",
-            args: [uid as `0x${string}`, editionAddresses.map(a => a as `0x${string}`), false],
-          })) as `0x${string}`;
-
-          if (!cancelled) {
-            setEffectiveUID(editionDataUID && editionDataUID !== zeroHash ? editionDataUID : uid);
-            setIsResolvingDataUID(false);
-          }
-          return;
-        }
-
         if (!cancelled) {
-          setEffectiveUID(uid);
+          setEffectiveUID(viewDataUID && viewDataUID !== zeroHash ? viewDataUID : uid);
           setIsResolvingDataUID(false);
         }
       } catch {

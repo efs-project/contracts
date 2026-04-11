@@ -372,6 +372,36 @@ describe("EFSSortOverlay", function () {
         ),
       ).to.be.revertedWithCustomError(sortOverlay, "InvalidPosition");
     });
+
+    it("rejects left neighbour that is not a member of the list", async function () {
+      // Seed the list with cat alone.
+      await sortOverlay
+        .connect(alice)
+        .processItems(sortInfoUID, parentUID, 0n, [catUID], [ZERO_BYTES32], [ZERO_BYTES32]);
+
+      // Fabricated (never-attested) left neighbour with rightNeighbour = 0.
+      // Without the membership guard, default-zero pointers on the fabricated slot would satisfy
+      // the adjacency check and corrupt the shared list by stashing pointers into orphan storage.
+      const fakeLeft = "0x" + "ab".repeat(32);
+      await expect(
+        sortOverlay
+          .connect(alice)
+          .processItems(sortInfoUID, parentUID, 1n, [dogUID], [fakeLeft as `0x${string}`], [ZERO_BYTES32]),
+      ).to.be.revertedWithCustomError(sortOverlay, "InvalidPosition");
+    });
+
+    it("rejects right neighbour that is not a member of the list", async function () {
+      await sortOverlay
+        .connect(alice)
+        .processItems(sortInfoUID, parentUID, 0n, [catUID], [ZERO_BYTES32], [ZERO_BYTES32]);
+
+      const fakeRight = "0x" + "cd".repeat(32);
+      await expect(
+        sortOverlay
+          .connect(alice)
+          .processItems(sortInfoUID, parentUID, 1n, [dogUID], [ZERO_BYTES32], [fakeRight as `0x${string}`]),
+      ).to.be.revertedWithCustomError(sortOverlay, "InvalidPosition");
+    });
   });
 
   // ============================================================================================

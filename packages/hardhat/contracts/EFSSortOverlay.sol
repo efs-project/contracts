@@ -37,6 +37,22 @@ contract EFSSortOverlay is SchemaResolver {
     error StaleStartIndex();
     error UnnecessaryReposition();
     error UnsupportedSourceType();
+    error Reentrant();
+
+    // ── Reentrancy guard ────────────────────────────────────────────────────────
+    // processItems and repositionItem make external calls into user-supplied
+    // ISortFunc contracts. A malicious sort function could re-enter these
+    // functions and corrupt the linked list (outer frame uses a cached local
+    // currentIndex while the re-entrant frame mutates storage, causing duplicate
+    // insertions and clobbered _lastProcessedIndex writes). Guard all state-
+    // mutating entry points.
+    uint256 private _locked;
+    modifier nonReentrant() {
+        if (_locked != 0) revert Reentrant();
+        _locked = 1;
+        _;
+        _locked = 0;
+    }
 
     event ItemSorted(
         bytes32 indexed sortInfoUID,
@@ -194,7 +210,7 @@ contract EFSSortOverlay is SchemaResolver {
         bytes32[] calldata items,
         bytes32[] calldata leftHints,
         bytes32[] calldata rightHints
-    ) external {
+    ) external nonReentrant {
         if (items.length == 0) return;
         if (items.length != leftHints.length || items.length != rightHints.length) revert ArrayLengthMismatch();
 
@@ -261,7 +277,7 @@ contract EFSSortOverlay is SchemaResolver {
         bytes32 itemUID,
         bytes32 newLeftHint,
         bytes32 newRightHint
-    ) external {
+    ) external nonReentrant {
         if (!_sortConfigExists[sortInfoUID]) revert InvalidSortInfo();
         if (indexer.isRevoked(sortInfoUID)) revert InvalidSortInfo();
 
@@ -408,7 +424,12 @@ contract EFSSortOverlay is SchemaResolver {
     /// @dev Insert `item` between `leftNeighbour` and `rightNeighbour`. O(1).
     ///      leftNeighbour = bytes32(0) → item becomes the new head.
     ///      rightNeighbour = bytes32(0) → item becomes the new tail.
-    ///      Reverts InvalidPosition if the two neighbours are not actually adjacent.
+    ///      Reverts InvalidPosition if:
+    ///        - a non-zero neighbour is not actually a member of this list, or
+    ///        - the two neighbours are not adjacent.
+    ///      Membership validation prevents a caller from passing unmapped UIDs that would
+    ///      otherwise satisfy the adjacency check (default-zero pointers) and corrupt the
+    ///      shared sort order by stashing pointers into orphan storage slots.
     function _insertBetween(
         bytes32 sortInfoUID,
         bytes32 parentAnchor,
@@ -416,8 +437,28 @@ contract EFSSortOverlay is SchemaResolver {
         bytes32 leftNeighbour,
         bytes32 rightNeighbour
     ) private {
+        bytes32 head = _sortHeads[sortInfoUID][parentAnchor];
+        bytes32 tail = _sortTails[sortInfoUID][parentAnchor];
+
+        // Membership check for leftNeighbour. A node is in the list iff it is the head,
+        // OR its prev pointer is non-zero (meaning something links to it), OR it is the
+        // tail (covers the single-element list case where prev and next are both zero).
+        if (leftNeighbour != bytes32(0)) {
+            Node storage leftNode = _sortNodes[sortInfoUID][parentAnchor][leftNeighbour];
+            bool leftInList = leftNeighbour == head || leftNeighbour == tail || leftNode.prev != bytes32(0);
+            if (!leftInList) revert InvalidPosition();
+        }
+
+        // Membership check for rightNeighbour. Symmetric: head, tail, or has a non-zero next.
+        if (rightNeighbour != bytes32(0)) {
+            Node storage rightNode = _sortNodes[sortInfoUID][parentAnchor][rightNeighbour];
+            bool rightInList = rightNeighbour == head || rightNeighbour == tail || rightNode.next != bytes32(0);
+            if (!rightInList) revert InvalidPosition();
+        }
+
+        // Adjacency check: the node immediately after leftNeighbour must be rightNeighbour.
         bytes32 expectedRight = leftNeighbour == bytes32(0)
-            ? _sortHeads[sortInfoUID][parentAnchor]
+            ? head
             : _sortNodes[sortInfoUID][parentAnchor][leftNeighbour].next;
         if (expectedRight != rightNeighbour) revert InvalidPosition();
 

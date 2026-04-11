@@ -51,6 +51,16 @@ const CHILDREN_COUNT_ABI = [
     stateMutability: "view",
     type: "function",
   },
+  {
+    inputs: [
+      { internalType: "bytes32", name: "parentUID", type: "bytes32" },
+      { internalType: "bytes32", name: "schema", type: "bytes32" },
+    ],
+    name: "getChildCountBySchema",
+    outputs: [{ internalType: "uint256", name: "", type: "uint256" }],
+    stateMutability: "view",
+    type: "function",
+  },
 ] as const;
 
 const CHILD_AT_ABI = [
@@ -60,6 +70,17 @@ const CHILD_AT_ABI = [
       { internalType: "uint256", name: "index", type: "uint256" },
     ],
     name: "getChildAt",
+    outputs: [{ internalType: "bytes32", name: "", type: "bytes32" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [
+      { internalType: "bytes32", name: "parentUID", type: "bytes32" },
+      { internalType: "bytes32", name: "schema", type: "bytes32" },
+      { internalType: "uint256", name: "index", type: "uint256" },
+    ],
+    name: "getChildBySchemaAt",
     outputs: [{ internalType: "bytes32", name: "", type: "bytes32" }],
     stateMutability: "view",
     type: "function",
@@ -568,16 +589,29 @@ export const FileBrowser = ({
         const sortFuncAddr = (config as any).sortFunc as `0x${string}`;
         if (!sortFuncAddr || sortFuncAddr === "0x0000000000000000000000000000000000000000") return;
 
-        // Fetch sort keys for all children using getChildAt + getSortKey
+        // Match the contract's sourceType routing so preview fetches the same items
+        // that processItems would validate against.
+        const sourceType = Number((config as any).sourceType ?? 0);
+        const targetSchema = (config as any).targetSchema as `0x${string}`;
+        if (sourceType !== 0 && sourceType !== 1) return; // unsupported sourceTypes bail out of preview
+
         const indexerAddr = indexerInfo?.address as `0x${string}`;
         if (!indexerAddr) return;
 
-        const count = (await publicClient.readContract({
-          address: indexerAddr,
-          abi: CHILDREN_COUNT_ABI,
-          functionName: "getChildrenCount",
-          args: [currentAnchorUID as `0x${string}`],
-        })) as bigint;
+        const count =
+          sourceType === 0
+            ? ((await publicClient.readContract({
+                address: indexerAddr,
+                abi: CHILDREN_COUNT_ABI,
+                functionName: "getChildrenCount",
+                args: [currentAnchorUID as `0x${string}`],
+              })) as bigint)
+            : ((await publicClient.readContract({
+                address: indexerAddr,
+                abi: CHILDREN_COUNT_ABI,
+                functionName: "getChildCountBySchema",
+                args: [currentAnchorUID as `0x${string}`, targetSchema],
+              })) as bigint);
 
         if (cancelled || count === 0n) return;
 
@@ -589,12 +623,20 @@ export const FileBrowser = ({
           for (let j = i; j < end; j++) {
             promises.push(
               (async () => {
-                const childUID = (await publicClient.readContract({
-                  address: indexerAddr,
-                  abi: CHILD_AT_ABI,
-                  functionName: "getChildAt",
-                  args: [currentAnchorUID as `0x${string}`, j],
-                })) as `0x${string}`;
+                const childUID =
+                  sourceType === 0
+                    ? ((await publicClient.readContract({
+                        address: indexerAddr,
+                        abi: CHILD_AT_ABI,
+                        functionName: "getChildAt",
+                        args: [currentAnchorUID as `0x${string}`, j],
+                      })) as `0x${string}`)
+                    : ((await publicClient.readContract({
+                        address: indexerAddr,
+                        abi: CHILD_AT_ABI,
+                        functionName: "getChildBySchemaAt",
+                        args: [currentAnchorUID as `0x${string}`, targetSchema, j],
+                      })) as `0x${string}`);
 
                 try {
                   const sortKey = (await publicClient.readContract({

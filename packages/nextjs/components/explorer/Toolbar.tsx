@@ -50,9 +50,13 @@ const INDEXER_CHILDREN_ABI = [
     type: "function",
   },
   {
-    inputs: [{ internalType: "bytes32", name: "anchorUID", type: "bytes32" }],
-    name: "getChildrenCount",
-    outputs: [{ internalType: "uint256", name: "", type: "uint256" }],
+    inputs: [
+      { internalType: "bytes32", name: "parentUID", type: "bytes32" },
+      { internalType: "bytes32", name: "schema", type: "bytes32" },
+      { internalType: "uint256", name: "index", type: "uint256" },
+    ],
+    name: "getChildBySchemaAt",
+    outputs: [{ internalType: "bytes32", name: "", type: "bytes32" }],
     stateMutability: "view",
     type: "function",
   },
@@ -381,31 +385,56 @@ export const Toolbar = ({
         if (sortOverlayAddress && indexerAddress && currentAnchorUID && walletClient?.account && publicClient) {
           for (const sortInfoUID of enabledSortUIDs) {
             try {
-              const [currentIndex, totalCount] = await Promise.all([
+              // Fetch SortConfig so we can route reads through the correct kernel accessor.
+              // processItems validates items against sourceType-specific kernel lists,
+              // so using the wrong accessor reverts InvalidItem.
+              const config = (await publicClient.readContract({
+                address: sortOverlayAddress,
+                abi: SORT_OVERLAY_ABI,
+                functionName: "getSortConfig",
+                args: [sortInfoUID as `0x${string}`],
+              })) as { sortFunc: string; targetSchema: `0x${string}`; sourceType: number };
+
+              if (config.sourceType !== 0 && config.sourceType !== 1) {
+                console.warn(`Skipping sort ${sortInfoUID}: unsupported sourceType ${config.sourceType}`);
+                continue;
+              }
+
+              // Use staleness as a sourceType-agnostic count source.
+              const [currentIndex, staleness] = (await Promise.all([
                 publicClient.readContract({
                   address: sortOverlayAddress,
                   abi: SORT_OVERLAY_ABI,
                   functionName: "getLastProcessedIndex",
                   args: [sortInfoUID as `0x${string}`, currentAnchorUID as `0x${string}`],
-                }) as Promise<bigint>,
+                }),
                 publicClient.readContract({
-                  address: indexerAddress,
-                  abi: INDEXER_CHILDREN_ABI,
-                  functionName: "getChildrenCount",
-                  args: [currentAnchorUID as `0x${string}`],
-                }) as Promise<bigint>,
-              ]);
+                  address: sortOverlayAddress,
+                  abi: SORT_OVERLAY_ABI,
+                  functionName: "getSortStaleness",
+                  args: [sortInfoUID as `0x${string}`, currentAnchorUID as `0x${string}`],
+                }),
+              ])) as [bigint, bigint];
+              const totalCount = currentIndex + staleness;
 
               if (totalCount <= currentIndex) continue;
 
               const items: `0x${string}`[] = [];
               for (let i = currentIndex; i < totalCount; i++) {
-                const uid = (await publicClient.readContract({
-                  address: indexerAddress,
-                  abi: INDEXER_CHILDREN_ABI,
-                  functionName: "getChildAt",
-                  args: [currentAnchorUID as `0x${string}`, i],
-                })) as `0x${string}`;
+                const uid =
+                  config.sourceType === 0
+                    ? ((await publicClient.readContract({
+                        address: indexerAddress,
+                        abi: INDEXER_CHILDREN_ABI,
+                        functionName: "getChildAt",
+                        args: [currentAnchorUID as `0x${string}`, i],
+                      })) as `0x${string}`)
+                    : ((await publicClient.readContract({
+                        address: indexerAddress,
+                        abi: INDEXER_CHILDREN_ABI,
+                        functionName: "getChildBySchemaAt",
+                        args: [currentAnchorUID as `0x${string}`, config.targetSchema, i],
+                      })) as `0x${string}`);
                 items.push(uid);
               }
 
