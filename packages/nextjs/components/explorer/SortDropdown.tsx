@@ -13,6 +13,7 @@ import {
 } from "@heroicons/react/24/outline";
 import { useSortDiscovery } from "~~/hooks/efs/useSortDiscovery";
 import { useDeployedContractInfo, useScaffoldReadContract } from "~~/hooks/scaffold-eth";
+import { computeHintsLocally } from "~~/utils/efs/sortHints";
 import { SORT_OVERLAY_ABI, SortOverlayInfo, formatSyncPercent } from "~~/utils/efs/sortOverlay";
 import { notification } from "~~/utils/scaffold-eth";
 
@@ -44,7 +45,30 @@ const INDEXER_PROCESS_ABI = [
   },
 ] as const;
 
+// ISortFunc.getSortKey — read-only, used to fetch sort keys for client-side hint computation.
+const ISORT_FUNC_ABI = [
+  {
+    inputs: [
+      { internalType: "bytes32", name: "uid", type: "bytes32" },
+      { internalType: "bytes32", name: "sortInfoUID", type: "bytes32" },
+    ],
+    name: "getSortKey",
+    outputs: [{ internalType: "bytes", name: "", type: "bytes" }],
+    stateMutability: "view",
+    type: "function",
+  },
+] as const;
+
 const BATCH_SIZE = 100;
+
+// Lists larger than this switch to client-side hint computation. The on-chain
+// computeHints() simulates binary search over the linked list and allocates O(N)
+// memory for the walk — beyond ~500 items on typical RPCs the eth_call will
+// exceed the gas limit and reject. Below this threshold the on-chain path is
+// simpler (no sort key multicall) and strictly cheaper in round-trips.
+const LOCAL_HINT_THRESHOLD = 500;
+// Matches EFSSortOverlay.MAX_PAGE_SIZE.
+const SORTED_CHUNK_PAGE = 100;
 
 interface SortDropdownProps {
   parentAnchor: string | undefined;
@@ -247,13 +271,77 @@ export const SortDropdown = ({
         items.push(uid);
       }
 
-      // Compute insertion hints (free view call — on-chain binary search)
-      const [leftHints, rightHints] = (await publicClient.readContract({
+      // Compute insertion hints. For small lists (< LOCAL_HINT_THRESHOLD) the on-chain
+      // computeHints() view call is simpler and strictly cheaper in round-trips. For
+      // larger lists the on-chain binary search allocates O(N) memory per eth_call and
+      // will exceed the RPC gas cap (~50M on mainnet, much lower on some L2s / public
+      // providers) — so we fetch the sorted linked list + sort keys via multicall and
+      // run the same binary search in JS.
+      const currentLength = (await publicClient.readContract({
         address: sortOverlayAddress,
         abi: SORT_OVERLAY_ABI,
-        functionName: "computeHints",
-        args: [sortInfoUID as `0x${string}`, parentAnchor as `0x${string}`, items],
-      })) as [`0x${string}`[], `0x${string}`[]];
+        functionName: "getSortLength",
+        args: [sortInfoUID as `0x${string}`, parentAnchor as `0x${string}`],
+      })) as bigint;
+
+      let leftHints: `0x${string}`[];
+      let rightHints: `0x${string}`[];
+
+      if (currentLength > BigInt(LOCAL_HINT_THRESHOLD)) {
+        // 1. Walk the full linked list (showRevoked=true so we see every node — the
+        //    membership structure is what hints reference, not the visibility filter).
+        const sortedUIDs: `0x${string}`[] = [];
+        let cursor: `0x${string}` = zeroHash as `0x${string}`;
+        // Safety bound: cap pagination at 2x the reported length to avoid an infinite
+        // loop if the list grows mid-iteration (another caller inserts while we page).
+        const maxPages = Math.ceil((Number(currentLength) * 2) / SORTED_CHUNK_PAGE) + 1;
+        for (let page = 0; page < maxPages; page++) {
+          const [chunk, nextCursor] = (await publicClient.readContract({
+            address: sortOverlayAddress,
+            abi: SORT_OVERLAY_ABI,
+            functionName: "getSortedChunk",
+            args: [
+              sortInfoUID as `0x${string}`,
+              parentAnchor as `0x${string}`,
+              cursor,
+              BigInt(SORTED_CHUNK_PAGE),
+              true,
+            ],
+          })) as [`0x${string}`[], `0x${string}`];
+          sortedUIDs.push(...chunk);
+          if (nextCursor === zeroHash || chunk.length === 0) break;
+          cursor = nextCursor;
+        }
+
+        // 2. Fetch sort keys for the existing list + the new items in a single multicall.
+        const allUIDs = [...sortedUIDs, ...items];
+        const sortKeyResults = await publicClient.multicall({
+          contracts: allUIDs.map(uid => ({
+            address: config.sortFunc as `0x${string}`,
+            abi: ISORT_FUNC_ABI,
+            functionName: "getSortKey" as const,
+            args: [uid, sortInfoUID as `0x${string}`] as const,
+          })),
+          allowFailure: false,
+        });
+        const sortKeys = sortKeyResults as unknown as `0x${string}`[];
+
+        const currentList = sortedUIDs.map((uid, i) => ({ uid, sortKey: sortKeys[i] }));
+        const newList = items.map((uid, i) => ({ uid, sortKey: sortKeys[sortedUIDs.length + i] }));
+
+        // 3. Run the binary search locally.
+        const local = computeHintsLocally(currentList, newList);
+        leftHints = local.leftHints as `0x${string}`[];
+        rightHints = local.rightHints as `0x${string}`[];
+      } else {
+        // Small list — on-chain computeHints is cheap and avoids the multicall round-trip.
+        [leftHints, rightHints] = (await publicClient.readContract({
+          address: sortOverlayAddress,
+          abi: SORT_OVERLAY_ABI,
+          functionName: "computeHints",
+          args: [sortInfoUID as `0x${string}`, parentAnchor as `0x${string}`, items],
+        })) as [`0x${string}`[], `0x${string}`[]];
+      }
 
       // Simulate + send transaction
       const { request } = await publicClient.simulateContract({
