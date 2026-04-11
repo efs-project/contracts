@@ -83,12 +83,13 @@ function compareSortKeys(a: string, b: string): number {
  * @returns leftHints and rightHints arrays for processItems, one entry per new item.
  *
  * Time complexity: O(N + M log N) where N = currentList.length, M = newItems.length.
+ *
+ * NOTE: currentList is MUTATED in place — inserted items are spliced into it so
+ * callers running multiple batches in a row can reuse the same list instance as
+ * a cache across calls without re-fetching the sorted list between batches.
+ * Ineligible items (empty sort key) are NOT inserted.
  */
 export function computeHintsLocally(currentList: SortedListItem[], newItems: SortedListItem[]): HintResult {
-  // Working copy of the list — we splice new items in as we go so subsequent
-  // items can find their correct position relative to already-inserted new items.
-  const simList: SortedListItem[] = [...currentList];
-
   const leftHints: string[] = [];
   const rightHints: string[] = [];
 
@@ -102,10 +103,10 @@ export function computeHintsLocally(currentList: SortedListItem[], newItems: Sor
 
     // Binary search: find insertion position (first element > item.sortKey)
     let lo = 0;
-    let hi = simList.length;
+    let hi = currentList.length;
     while (lo < hi) {
       const mid = (lo + hi) >>> 1;
-      if (compareSortKeys(simList[mid].sortKey, item.sortKey) <= 0) {
+      if (compareSortKeys(currentList[mid].sortKey, item.sortKey) <= 0) {
         lo = mid + 1;
       } else {
         hi = mid;
@@ -113,11 +114,12 @@ export function computeHintsLocally(currentList: SortedListItem[], newItems: Sor
     }
     const pos = lo;
 
-    leftHints.push(pos === 0 ? ZERO_BYTES32 : simList[pos - 1].uid);
-    rightHints.push(pos === simList.length ? ZERO_BYTES32 : simList[pos].uid);
+    leftHints.push(pos === 0 ? ZERO_BYTES32 : currentList[pos - 1].uid);
+    rightHints.push(pos === currentList.length ? ZERO_BYTES32 : currentList[pos].uid);
 
-    // Insert into simulation list so subsequent items find correct positions
-    simList.splice(pos, 0, item);
+    // Insert into the live list so subsequent items in this batch — and any
+    // subsequent batches that reuse this list — find correct positions.
+    currentList.splice(pos, 0, item);
   }
 
   return { leftHints, rightHints };
