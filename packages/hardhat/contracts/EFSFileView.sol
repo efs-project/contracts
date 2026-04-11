@@ -201,19 +201,20 @@ contract EFSFileView {
         // For completeness, we also scan generic folders (capped) to catch untagged folders
         // that organically acquired children of the target schema.
 
-        // Collect from tag index (source B) — always small
+        // Collect from tag index (source B). Scan the full index — truncating would
+        // permanently hide folders past the cap since this function is only invoked on
+        // page 1 of getDirectoryPageBySchemaAndAddressList. This is a view function, so
+        // the only bound is the caller's eth_call gas limit.
         uint256 taggedCount = tagResolver.getChildrenTaggedWithCount(parentAnchor, anchorSchema);
-        // Cap to prevent gas abuse from griefed tag indices
-        uint256 maxTagged = taggedCount > 200 ? 200 : taggedCount;
-        bytes32[] memory taggedCandidates = tagResolver.getChildrenTaggedWith(parentAnchor, anchorSchema, 0, maxTagged);
+        bytes32[] memory taggedCandidates = tagResolver.getChildrenTaggedWith(parentAnchor, anchorSchema, 0, taggedCount);
 
-        // Also scan generic folders (source A) — capped scan of _childrenBySchema[parent][0]
+        // Also scan generic folders (source A) — full scan of _childrenBySchema[parent][0]
+        // for the same reason. Folders discovered through the tag index still get merged/deduped.
         uint256 genericCount = indexer.getChildCountBySchema(parentAnchor, bytes32(0));
-        uint256 maxGeneric = genericCount > 200 ? 200 : genericCount;
         bytes32[] memory genericFolders;
-        if (maxGeneric > 0) {
+        if (genericCount > 0) {
             (genericFolders, ) = indexer.getAnchorsBySchemaAndAddressList(
-                parentAnchor, bytes32(0), attesters, 0, maxGeneric, true, false
+                parentAnchor, bytes32(0), attesters, 0, genericCount, true, false
             );
         } else {
             genericFolders = new bytes32[](0);

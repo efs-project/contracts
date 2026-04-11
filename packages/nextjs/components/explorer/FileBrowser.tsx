@@ -619,9 +619,12 @@ export const FileBrowser = ({
 
         if (cancelled || count === 0n) return;
 
+        // Paginate over the full kernel count — no hard cap. Preview mode has to key every
+        // candidate so the resulting order is correct; truncating would push out-of-window
+        // items to an unsorted tail and show an incorrect preview.
         const keyMap = new Map<string, string>();
         const batchSize = 50;
-        for (let i = 0n; i < count && i < 200n; i += BigInt(batchSize)) {
+        for (let i = 0n; i < count; i += BigInt(batchSize)) {
           const end = i + BigInt(batchSize) > count ? count : i + BigInt(batchSize);
           const promises: Promise<void>[] = [];
           for (let j = i; j < end; j++) {
@@ -699,9 +702,12 @@ export const FileBrowser = ({
   // Once we've ever been in editions mode, stay there — prevents the standard (show-all) query
   // from firing its cached result during the brief window when editionAddresses is transitioning
   // to a new address (e.g. wallet account switch causes a momentary empty array).
+  // BUT: if editionAddresses is empty (wallet disconnect, unresolved ENS), fall through to the
+  // standard query rather than leaving both queries disabled — showing unfiltered data is better
+  // than an indefinitely blank directory.
   const lockedToEditions = useRef(false);
   if (hasEditions) lockedToEditions.current = true;
-  const useEditionsQuery = hasEditions || lockedToEditions.current;
+  const useEditionsQuery = (hasEditions || lockedToEditions.current) && editionAddresses.length > 0;
 
   const { data: standardItems, isLoading: isStandardLoading } = useScaffoldReadContract({
     contractName: "EFSFileView",

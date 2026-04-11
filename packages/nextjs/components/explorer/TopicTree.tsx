@@ -48,9 +48,11 @@ const TreeNode = ({
   // Once we've ever had editions, stay locked to the editions query so that
   // the brief moment connectedAddress is undefined during account switch
   // doesn't flash the unfiltered standard query results.
+  // BUT: when editionAddresses is empty (wallet disconnect, unresolved ENS), fall through
+  // to the standard query rather than leaving both queries disabled and collapsing the tree.
   const lockedToEditions = useRef(false);
   if (hasEditions) lockedToEditions.current = true;
-  const useEditionsQuery = hasEditions || lockedToEditions.current;
+  const useEditionsQuery = (hasEditions || lockedToEditions.current) && editionAddresses.length > 0;
 
   const { data: standardChildren, isLoading: isStandardLoading } = useScaffoldReadContract({
     contractName: "EFSFileView",
