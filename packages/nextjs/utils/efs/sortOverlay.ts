@@ -198,6 +198,18 @@ export const SORT_OVERLAY_ABI = [
     stateMutability: "nonpayable",
     type: "function",
   },
+  // Custom errors — included so viem can decode revert data into named errors
+  // during writeContract/simulateContract calls. Required for reliable retry
+  // logic that branches on specific error names (e.g., StaleStartIndex).
+  { inputs: [], name: "LimitTooLarge", type: "error" },
+  { inputs: [], name: "InvalidSortInfo", type: "error" },
+  { inputs: [], name: "ArrayLengthMismatch", type: "error" },
+  { inputs: [], name: "InvalidPosition", type: "error" },
+  { inputs: [], name: "InvalidItem", type: "error" },
+  { inputs: [], name: "StaleStartIndex", type: "error" },
+  { inputs: [], name: "UnnecessaryReposition", type: "error" },
+  { inputs: [], name: "UnsupportedSourceType", type: "error" },
+  { inputs: [], name: "Reentrant", type: "error" },
 ] as const;
 
 // ── Staleness helpers ─────────────────────────────────────────────────────────

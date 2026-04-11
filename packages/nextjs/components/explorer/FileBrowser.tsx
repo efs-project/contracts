@@ -529,7 +529,13 @@ export const FileBrowser = ({
   // navigating to a different anchor while keeping the same sort selected still triggers
   // a fresh fetch instead of reusing the prior anchor's keys.
   const previewFetchRef = useRef<string | null>(null);
-  const previewFetchKey = activeSortInfoUID && currentAnchorUID ? `${currentAnchorUID}:${activeSortInfoUID}` : null;
+  // Include staleness in the guard key so the preview refetches when new items are
+  // added under the same (anchor, sort). Without this, the effect returns early and
+  // keeps serving stale keys even though previewCacheKey (below) has rotated.
+  const previewFetchKey =
+    activeSortInfoUID && currentAnchorUID
+      ? `${currentAnchorUID}:${activeSortInfoUID}:${activeSortStaleness?.toString() ?? "0"}`
+      : null;
 
   // sessionStorage key for preview sort cache: includes anchor + sort + staleness count
   // so the cache is automatically invalidated when new items are added (staleness changes).

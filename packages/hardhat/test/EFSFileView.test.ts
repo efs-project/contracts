@@ -380,13 +380,7 @@ describe("EFSFileView", function () {
 
     // 3. Page 1 with a small pageSize — folders are prepended regardless of pageSize,
     //    so every qualifying folder must be present on the first page.
-    const [items] = await fileView.getDirectoryPageBySchemaAndAddressList(
-      rootUID,
-      dataSchemaUID,
-      [ownerAddr],
-      0,
-      10,
-    );
+    const [items] = await fileView.getDirectoryPageBySchemaAndAddressList(rootUID, dataSchemaUID, [ownerAddr], 0, 10);
 
     // All folders qualify, no direct content items under root → items.length == FOLDER_COUNT
     expect(items.length).to.equal(FOLDER_COUNT);

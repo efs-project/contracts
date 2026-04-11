@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CreateSortModal } from "./CreateSortModal";
-import { zeroHash } from "viem";
+import { BaseError, ContractFunctionRevertedError, zeroHash } from "viem";
 import { usePublicClient, useWalletClient } from "wagmi";
 import {
   ArrowsUpDownIcon,
@@ -507,8 +507,20 @@ export const SortDropdown = ({
             // StaleStartIndex: another caller raced us — our cached list is now stale
             // (someone else inserted into it), so clear the cache and re-initialize
             // from chain on the next iteration.
-            const msg: string = batchErr?.shortMessage ?? batchErr?.message ?? "";
-            if (msg.includes("StaleStartIndex")) {
+            //
+            // Decode the custom error via viem's BaseError.walk rather than string
+            // matching: SORT_OVERLAY_ABI now includes error entries so viem surfaces
+            // a ContractFunctionRevertedError with errorName === "StaleStartIndex".
+            // String-matching on .message is unreliable — viem's default message for
+            // undecoded reverts doesn't contain the selector name.
+            let isStale = false;
+            if (batchErr instanceof BaseError) {
+              const revert = batchErr.walk(e => e instanceof ContractFunctionRevertedError);
+              if (revert instanceof ContractFunctionRevertedError && revert.data?.errorName === "StaleStartIndex") {
+                isStale = true;
+              }
+            }
+            if (isStale) {
               hintCache.sortedList = [];
               if (toastId) notification.remove(toastId);
               toastId = notification.loading(`${label}: refreshing after concurrent update...`);
