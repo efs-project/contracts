@@ -21,6 +21,7 @@ const TreeNode = ({
   systemSortsUID,
   activeSortInfoUID,
   sortOverlayAddress,
+  sortRefreshKey,
 }: {
   uid: string;
   name: string;
@@ -39,6 +40,8 @@ const TreeNode = ({
   activeSortInfoUID?: string | null;
   /** EFSSortOverlay contract address. Required when activeSortInfoUID is set. */
   sortOverlayAddress?: `0x${string}`;
+  /** Incremented after processItems completes so useSortedData re-fetches. */
+  sortRefreshKey?: number;
 }) => {
   const hasEditions = editionAddresses && editionAddresses.length > 0;
 
@@ -80,6 +83,7 @@ const TreeNode = ({
     parentAnchor: uid,
     sortOverlayAddress,
     editionAddresses,
+    refreshKey: sortRefreshKey,
   });
 
   // Hide system anchors by UID (not by name) so user-created folders with the same
@@ -163,6 +167,7 @@ const TreeNode = ({
                 systemSortsUID={systemSortsUID}
                 activeSortInfoUID={activeSortInfoUID}
                 sortOverlayAddress={sortOverlayAddress}
+                sortRefreshKey={sortRefreshKey}
               />
             ))}
           </ul>
@@ -180,6 +185,7 @@ export const TopicTree = ({
   editionAddresses,
   activeSortInfoUID,
   sortOverlayAddress,
+  sortRefreshKey,
 }: {
   rootUID: string;
   selectedUID: string | null;
@@ -190,6 +196,8 @@ export const TopicTree = ({
   activeSortInfoUID?: string | null;
   /** EFSSortOverlay contract address. Required when activeSortInfoUID is set. */
   sortOverlayAddress?: `0x${string}`;
+  /** Incremented after processItems completes so the tree's sorted data re-fetches. */
+  sortRefreshKey?: number;
 }) => {
   const { data: dataSchemaUID } = useScaffoldReadContract({
     contractName: "Indexer",
@@ -236,6 +244,7 @@ export const TopicTree = ({
         systemSortsUID={systemSortsUID as string | undefined}
         activeSortInfoUID={activeSortInfoUID}
         sortOverlayAddress={resolvedSortOverlayAddress}
+        sortRefreshKey={sortRefreshKey}
       />
     </ul>
   );

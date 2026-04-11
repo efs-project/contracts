@@ -525,7 +525,11 @@ export const FileBrowser = ({
   // Fetches sort keys locally and sorts items in browser memory.
   const [previewSortKeys, setPreviewSortKeys] = useState<Map<string, string>>(new Map());
   const [isPreviewSort, setIsPreviewSort] = useState(false);
-  const previewFetchRef = useRef<string | null>(null); // track which sort we fetched for
+  // Track which (anchor, sort) pair we fetched preview keys for. Keyed by both so that
+  // navigating to a different anchor while keeping the same sort selected still triggers
+  // a fresh fetch instead of reusing the prior anchor's keys.
+  const previewFetchRef = useRef<string | null>(null);
+  const previewFetchKey = activeSortInfoUID && currentAnchorUID ? `${currentAnchorUID}:${activeSortInfoUID}` : null;
 
   // sessionStorage key for preview sort cache: includes anchor + sort + staleness count
   // so the cache is automatically invalidated when new items are added (staleness changes).
@@ -545,15 +549,15 @@ export const FileBrowser = ({
       !currentAnchorUID ||
       (sortedUIDs && sortedUIDs.length > 0)
     ) {
-      // Clear preview state when sort changes or on-chain data arrives
-      if (previewFetchRef.current !== activeSortInfoUID) {
+      // Clear preview state when sort/anchor changes or on-chain data arrives
+      if (previewFetchRef.current !== previewFetchKey) {
         setPreviewSortKeys(new Map());
         setIsPreviewSort(false);
         previewFetchRef.current = null;
       }
       return;
     }
-    if (previewFetchRef.current === activeSortInfoUID) return;
+    if (previewFetchRef.current === previewFetchKey) return;
 
     let cancelled = false;
 
@@ -567,7 +571,7 @@ export const FileBrowser = ({
               const parsed: [string, string][] = JSON.parse(cached);
               const keyMap = new Map<string, string>(parsed);
               if (keyMap.size > 0) {
-                previewFetchRef.current = activeSortInfoUID;
+                previewFetchRef.current = previewFetchKey;
                 setPreviewSortKeys(keyMap);
                 setIsPreviewSort(true);
                 return;
@@ -659,7 +663,7 @@ export const FileBrowser = ({
         }
 
         if (!cancelled && keyMap.size > 0) {
-          previewFetchRef.current = activeSortInfoUID;
+          previewFetchRef.current = previewFetchKey;
           setPreviewSortKeys(keyMap);
           setIsPreviewSort(true);
           // Persist to sessionStorage for instant load on re-navigation
@@ -679,7 +683,16 @@ export const FileBrowser = ({
     return () => {
       cancelled = true;
     };
-  }, [activeSortInfoUID, sortOverlayAddress, publicClient, currentAnchorUID, sortedUIDs, indexerInfo, previewCacheKey]);
+  }, [
+    activeSortInfoUID,
+    sortOverlayAddress,
+    publicClient,
+    currentAnchorUID,
+    sortedUIDs,
+    indexerInfo,
+    previewCacheKey,
+    previewFetchKey,
+  ]);
 
   const hasEditions = editionAddresses && editionAddresses.length > 0;
 

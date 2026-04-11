@@ -280,6 +280,7 @@ export default function ExplorerPage() {
                 editionAddresses={editionAddresses}
                 activeSortInfoUID={activeSortInfoUID}
                 sortOverlayAddress={sortOverlayAddress}
+                sortRefreshKey={sortRefreshKey}
                 onSelect={(uid, path) => {
                   navigateToPath(path);
                 }}
