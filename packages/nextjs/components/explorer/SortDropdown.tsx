@@ -528,7 +528,7 @@ export const SortDropdown = ({
                   {(isStale || hasNoData) && !isFetchingStaleness && (
                     <button
                       className="btn btn-xs btn-primary btn-outline flex-shrink-0"
-                      title="Process all remaining items into sorted list (loops all batches)"
+                      title="Save this sort on-chain as a public good. You already see the order locally for free — processing persists it so every other viewer loads the sorted list instantly without recomputing. Gas is paid once, shared by all."
                       disabled={isProcessing || !!processingUID || !walletClient?.account}
                       onClick={e => {
                         e.stopPropagation();

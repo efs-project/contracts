@@ -749,6 +749,7 @@ export const FileBrowser = ({
 
     if (attesters.length === 0) {
       setDataUIDMap(new Map());
+      setIsDataUIDMapLoading(false);
       return;
     }
 
