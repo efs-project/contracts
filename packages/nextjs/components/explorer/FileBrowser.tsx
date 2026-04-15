@@ -151,6 +151,7 @@ export const FileBrowser = ({
   const [tagModalIsFile, setTagModalIsFile] = useState(false);
   const [selectedFile, setSelectedFile] = useState<any | null>(null);
   const [fileContent, setFileContent] = useState<string | null>(null);
+  const fetchIdRef = useRef(0);
   const [fileContentType, setFileContentType] = useState<string | null>(null);
   const [fileTransportType, setFileTransportType] = useState<string>("onchain");
   const [isFileLoading, setIsFileLoading] = useState(false);
@@ -368,6 +369,8 @@ export const FileBrowser = ({
       notification.error("EFSRouter not found. Please deploy.");
       return;
     }
+    // Increment fetch ID so any in-flight fetch from a previous file click becomes stale
+    const fetchId = ++fetchIdRef.current;
     setIsFileLoading(true);
     setFileContent(null);
     setFileContentType(null);
@@ -539,6 +542,9 @@ export const FileBrowser = ({
         }
       }
 
+      // Discard results from a superseded fetch (user clicked a different file)
+      if (fetchId !== fetchIdRef.current) return;
+
       setFileContentType(contentTypeStr);
 
       const useBlobUrl =
@@ -558,6 +564,7 @@ export const FileBrowser = ({
         setFileContent(text);
       }
     } catch (e: unknown) {
+      if (fetchId !== fetchIdRef.current) return;
       const err = e as Error;
       console.error("Failed to fetch file content", err);
       setFileContent(null);
@@ -1248,7 +1255,7 @@ export const FileBrowser = ({
                 // Render SVG as <img> data URI to prevent XSS from untrusted content
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
-                  src={`data:image/svg+xml;base64,${btoa(fileContent)}`}
+                  src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(fileContent)}`}
                   alt={selectedFile.name}
                   className="max-w-full h-auto rounded cursor-pointer"
                   onClick={() => setPreviewFullscreen(true)}
@@ -1365,7 +1372,7 @@ export const FileBrowser = ({
                   // Render SVG as <img> data URI to prevent XSS from untrusted content
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
-                    src={`data:image/svg+xml;base64,${btoa(fileContent)}`}
+                    src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(fileContent)}`}
                     alt={selectedFile.name}
                     className="max-w-[90vw] max-h-[85vh] object-contain"
                   />

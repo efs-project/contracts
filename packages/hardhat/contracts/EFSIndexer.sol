@@ -999,6 +999,9 @@ contract EFSIndexer is SchemaResolver {
                 _isRevoked[uid] = true;
             }
 
+            if (schema == MIRROR_SCHEMA_UID && !_isRevoked[uid]) {
+                emit MirrorCreated(att.refUID, uid, att.attester);
+            }
             emit AttestationIndexed(uid, schema, att.attester);
             count++;
         }

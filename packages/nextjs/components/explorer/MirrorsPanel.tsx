@@ -30,6 +30,34 @@ interface MirrorItem {
   timestamp: bigint;
 }
 
+const EAS_GET_ATTESTATION_ABI = [
+  {
+    inputs: [{ internalType: "bytes32", name: "uid", type: "bytes32" }],
+    name: "getAttestation",
+    outputs: [
+      {
+        components: [
+          { internalType: "bytes32", name: "uid", type: "bytes32" },
+          { internalType: "bytes32", name: "schema", type: "bytes32" },
+          { internalType: "uint64", name: "time", type: "uint64" },
+          { internalType: "uint64", name: "expirationTime", type: "uint64" },
+          { internalType: "uint64", name: "revocationTime", type: "uint64" },
+          { internalType: "bytes32", name: "refUID", type: "bytes32" },
+          { internalType: "address", name: "recipient", type: "address" },
+          { internalType: "address", name: "attester", type: "address" },
+          { internalType: "bool", name: "revocable", type: "bool" },
+          { internalType: "bytes", name: "data", type: "bytes" },
+        ],
+        internalType: "struct Attestation",
+        name: "",
+        type: "tuple",
+      },
+    ],
+    stateMutability: "view",
+    type: "function",
+  },
+] as const;
+
 const FILE_VIEW_MIRRORS_ABI = [
   {
     inputs: [
@@ -91,10 +119,13 @@ export const MirrorsPanel = ({
     contractName: "Indexer",
     functionName: "MIRROR_SCHEMA_UID",
   });
+  const { data: easInfo } = useDeployedContractInfo({ contractName: "EAS" });
 
-  // Resolve DATA UID from file anchor via TAG query
+  // Resolve DATA UID from file anchor via TAG query.
+  // Scans all active targets and picks the one with the highest attestation timestamp
+  // because the swap-and-pop array is not chronologically ordered.
   const resolveDataUID = useCallback(async () => {
-    if (!publicClient || !tagResolverInfo || !dataSchemaUID || !fileAnchorUID) return;
+    if (!publicClient || !tagResolverInfo || !easInfo || !dataSchemaUID || !fileAnchorUID) return;
 
     const attesters = editionAddresses.length > 0 ? editionAddresses : connectedAddress ? [connectedAddress] : [];
     if (attesters.length === 0) return;
@@ -109,6 +140,7 @@ export const MirrorsPanel = ({
         })) as bigint;
 
         if (count > 0n) {
+          const scanCount = count > 50n ? 50n : count;
           const targets = (await publicClient.readContract({
             address: tagResolverInfo.address as `0x${string}`,
             abi: TAG_RESOLVER_ABI,
@@ -117,13 +149,32 @@ export const MirrorsPanel = ({
               fileAnchorUID as `0x${string}`,
               attester as `0x${string}`,
               dataSchemaUID as `0x${string}`,
-              count - 1n,
-              1n,
+              0n,
+              scanCount,
             ],
           })) as `0x${string}`[];
 
-          if (targets.length > 0 && targets[0] !== zeroHash) {
-            setDataUID(targets[0]);
+          if (targets.length === 0) continue;
+
+          // Pick the most recent DATA by attestation timestamp
+          let best = targets[0];
+          let bestTime = 0n;
+          for (const uid of targets) {
+            if (!uid || uid === zeroHash) continue;
+            const att = (await publicClient.readContract({
+              address: easInfo.address as `0x${string}`,
+              abi: EAS_GET_ATTESTATION_ABI,
+              functionName: "getAttestation",
+              args: [uid],
+            })) as { time: bigint };
+            if (att.time > bestTime) {
+              bestTime = att.time;
+              best = uid;
+            }
+          }
+
+          if (best && best !== zeroHash) {
+            setDataUID(best);
             return;
           }
         }
@@ -131,7 +182,7 @@ export const MirrorsPanel = ({
         console.warn("Failed to resolve DATA for attester", attester, e);
       }
     }
-  }, [publicClient, tagResolverInfo, dataSchemaUID, fileAnchorUID, editionAddresses, connectedAddress]);
+  }, [publicClient, tagResolverInfo, easInfo, dataSchemaUID, fileAnchorUID, editionAddresses, connectedAddress]);
 
   // Fetch mirrors for the resolved DATA UID
   const fetchMirrors = useCallback(async () => {
@@ -188,22 +239,23 @@ export const MirrorsPanel = ({
       if (!transportsUID || transportsUID === zeroHash) return;
 
       const names = ["onchain", "ipfs", "arweave", "https", "magnet"];
-      const anchors: Record<string, string> = {};
-      for (const name of names) {
-        try {
-          const uid = (await publicClient.readContract({
+      const results = await Promise.allSettled(
+        names.map(name =>
+          publicClient.readContract({
             address: indexerInfo.address as `0x${string}`,
             abi: indexerInfo.abi,
             functionName: "resolvePath",
             args: [transportsUID, name],
-          })) as `0x${string}`;
-          if (uid && uid !== zeroHash) {
-            anchors[uid.toLowerCase()] = name;
-          }
-        } catch {
-          // Transport not created yet
+          }),
+        ),
+      );
+      const anchors: Record<string, string> = {};
+      results.forEach((result, i) => {
+        if (result.status === "fulfilled") {
+          const uid = result.value as `0x${string}`;
+          if (uid && uid !== zeroHash) anchors[uid.toLowerCase()] = names[i];
         }
-      }
+      });
       setTransportAnchors(anchors);
     } catch (e) {
       console.warn("Failed to resolve transport anchors:", e);
