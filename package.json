@@ -33,6 +33,7 @@
     "hardhat:seed": "yarn workspace @se-2/hardhat seed",
     "hardhat:simulate": "yarn workspace @se-2/hardhat simulate",
     "hardhat:simulate:sort": "yarn workspace @se-2/hardhat simulate:sort",
+    "hardhat:simulate:transports": "yarn workspace @se-2/hardhat simulate:transports",
     "hardhat:verify": "yarn workspace @se-2/hardhat verify",
     "postinstall": "husky install",
     "lint": "yarn next:lint && yarn hardhat:lint",

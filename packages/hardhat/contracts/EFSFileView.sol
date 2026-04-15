@@ -59,11 +59,6 @@ interface IEFSIndexer {
     ) external view returns (bytes32[] memory results, uint256 nextCursor);
     function getChildrenCount(bytes32 anchorUID) external view returns (uint256);
     function getChildCountBySchema(bytes32 parentAnchor, bytes32 schema) external view returns (uint256);
-    function getDataByAddressList(
-        bytes32 anchorUID,
-        address[] calldata attesters,
-        bool showRevoked
-    ) external view returns (bytes32);
     function getReferencingAttestationCount(bytes32 targetUID, bytes32 schemaUID) external view returns (uint256);
     function containsAttestations(bytes32 targetUID, address attester) external view returns (bool);
     function isRevoked(bytes32 uid) external view returns (bool);

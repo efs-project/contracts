@@ -19,6 +19,7 @@
     "seed": "hardhat run scripts/seed.ts --network localhost",
     "simulate": "hardhat run scripts/simulate-file-browser.ts --network localhost",
     "simulate:sort": "hardhat run scripts/simulate-sort-overlay.ts --network localhost",
+    "simulate:transports": "hardhat run scripts/simulate-transports.ts --network localhost",
     "test": "REPORT_GAS=true hardhat test --network hardhat",
     "verify": "hardhat etherscan-verify"
   },

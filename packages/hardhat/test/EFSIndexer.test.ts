@@ -559,31 +559,6 @@ describe("EFSIndexer", function () {
       user2FileUID = getUIDFromReceipt(receiptUser2File);
     });
 
-    it.skip("Should index by mime type and category [SKIPPED: contentType moved from DATA to PROPERTY in transport redesign]", async function () {
-      // Verify getChildrenByType("video/mp4") on Parent ("files")
-      // Should return "my_video.mp4" (fileUID)
-      const videos = await indexer["getChildrenByType(bytes32,string,uint256,uint256,bool,bool)"](
-        parentUID,
-        "video/mp4",
-        0,
-        10,
-        false,
-        false,
-      );
-      expect(videos).to.include(fileUID);
-
-      // Verify getChildrenByType("video") - Category
-      const category = await indexer["getChildrenByType(bytes32,string,uint256,uint256,bool,bool)"](
-        parentUID,
-        "video",
-        0,
-        10,
-        false,
-        false,
-      );
-      expect(category).to.include(fileUID);
-    });
-
     it("Should filter by Attester", async function () {
       // Filter children of "files" by User A
       const u1Files = await indexer["getChildrenByAttester(bytes32,address,uint256,uint256,bool,bool)"](
@@ -770,12 +745,6 @@ describe("EFSIndexer", function () {
       expect(count).to.equal(2);
     });
 
-    it("standalone DATA is not indexed in _dataAttestationsByAddress (new model uses TAGs)", async function () {
-      // In the new model, DATA is standalone (refUID=0x0). getDataByAddressList is a legacy
-      // function for the old model. Standalone DATAs are discovered via TAG queries instead.
-      const result = await indexer.getDataByAddressList(child1UID, [await user1.getAddress()], false);
-      expect(result).to.equal(ZERO_BYTES32);
-    });
   });
 
   describe("Tags (Generic Referencing via tagSchemaUID)", function () {
@@ -1197,156 +1166,6 @@ describe("EFSIndexer", function () {
       // Verify the revoked item is NOT removed from these arrays
       const allRefAfter = await indexer.getAllReferencing(fileAnchorUID, 0, 10, false);
       expect(allRefAfter.length).to.equal(1);
-    });
-
-    it.skip("Should return Single Address History [SKIPPED: DATA is standalone in new model, getDataHistoryByAddress requires refUID]", async function () {
-      // In the new model, DATA is standalone. getDataHistoryByAddress tracks DATA
-      // by [refUID][attester], so standalone DATA (refUID=0x0) won't appear there.
-      const contentHash1 = ethers.keccak256(ethers.toUtf8Bytes("v1"));
-      const dataTx1 = await eas.connect(user1).attest({
-        schema: dataSchemaUID,
-        data: {
-          recipient: ZeroAddress,
-          expirationTime: 0n,
-          revocable: false,
-          refUID: ZERO_BYTES32,
-          data: schemaEncoder.encode(["bytes32", "uint64"], [contentHash1, 100n]),
-          value: 0n,
-        },
-      });
-      const r1 = await dataTx1.wait();
-      const uid1 = getUIDFromReceipt(r1);
-
-      const contentHash2 = ethers.keccak256(ethers.toUtf8Bytes("v2"));
-      const dataTx2 = await eas.connect(user1).attest({
-        schema: dataSchemaUID,
-        data: {
-          recipient: ZeroAddress,
-          expirationTime: 0n,
-          revocable: false,
-          refUID: ZERO_BYTES32,
-          data: schemaEncoder.encode(["bytes32", "uint64"], [contentHash2, 200n]),
-          value: 0n,
-        },
-      });
-      const r2 = await dataTx2.wait();
-      const uid2 = getUIDFromReceipt(r2);
-
-      // Test active history (should return both)
-      const [historyActive] = await indexer.getDataHistoryByAddress(
-        fileAnchorUID,
-        await user1.getAddress(),
-        0,
-        10,
-        false,
-        false,
-      );
-      expect(historyActive.length).to.equal(2);
-
-      // Revoke the first edit
-      await eas.connect(user1).revoke({
-        schema: dataSchemaUID,
-        data: { uid: uid1, value: 0n },
-      });
-
-      // Test history without revoked
-      const [historyFiltered] = await indexer.getDataHistoryByAddress(
-        fileAnchorUID,
-        await user1.getAddress(),
-        0,
-        10,
-        false,
-        false,
-      );
-      expect(historyFiltered.length).to.equal(1);
-      expect(historyFiltered[0]).to.equal(uid2);
-
-      // Test history with revoked (showRevoked = true)
-      const [historyAll] = await indexer.getDataHistoryByAddress(
-        fileAnchorUID,
-        await user1.getAddress(),
-        0,
-        10,
-        false,
-        true,
-      );
-      expect(historyAll.length).to.equal(2);
-    });
-
-    it.skip("Should fallback correctly via getDataByAddressList [SKIPPED: DATA is standalone in new model]", async function () {
-      // User 1 edit
-      const dataTx1 = await eas.connect(user1).attest({
-        schema: dataSchemaUID,
-        data: {
-          recipient: ZeroAddress,
-          expirationTime: 0n,
-          revocable: true,
-          refUID: fileAnchorUID,
-          data: schemaEncoder.encode(["string", "string", "string"], ["ipfs://user1", "application/json", "file"]),
-          value: 0n,
-        },
-      });
-      const r1 = await dataTx1.wait();
-      const uid1 = getUIDFromReceipt(r1);
-
-      // User 2 edit
-      const dataTx2 = await eas.connect(user2).attest({
-        schema: dataSchemaUID,
-        data: {
-          recipient: ZeroAddress,
-          expirationTime: 0n,
-          revocable: true,
-          refUID: fileAnchorUID,
-          data: schemaEncoder.encode(["string", "string", "string"], ["ipfs://user2", "application/json", "file"]),
-          value: 0n,
-        },
-      });
-      const r2 = await dataTx2.wait();
-      const uid2 = getUIDFromReceipt(r2);
-
-      // Pass [User2, User1]. Should prefer User2.
-      const u1Address = await user1.getAddress();
-      const u2Address = await user2.getAddress();
-      const result1 = await indexer.getDataByAddressList(fileAnchorUID, [u2Address, u1Address], false);
-      expect(result1).to.equal(uid2);
-
-      // Pass [Unrelated, User1]. Should fallback to User1.
-      const ownerAddress = await owner.getAddress();
-      const result2 = await indexer.getDataByAddressList(fileAnchorUID, [ownerAddress, u1Address], false);
-      expect(result2).to.equal(uid1);
-
-      // Revoke User 2's edit
-      await eas.connect(user2).revoke({ schema: dataSchemaUID, data: { uid: uid2, value: 0n } });
-
-      // Pass [User2, User1] again. User 2 is revoked so it should fallback to User 1.
-      const result3 = await indexer.getDataByAddressList(fileAnchorUID, [u2Address, u1Address], false);
-      expect(result3).to.equal(uid1);
-
-      // Pass with showRevoked = true. Should grab User2 again.
-      const result4 = await indexer.getDataByAddressList(fileAnchorUID, [u2Address, u1Address], true);
-      expect(result4).to.equal(uid2);
-    });
-
-    it.skip("Should return bytes32(0) from getDataByAddressList when all data is revoked [SKIPPED: DATA is non-revocable and standalone in new model]", async function () {
-      const dataTx1 = await eas.connect(user1).attest({
-        schema: dataSchemaUID,
-        data: {
-          recipient: ZeroAddress,
-          expirationTime: 0n,
-          revocable: true,
-          refUID: fileAnchorUID,
-          data: schemaEncoder.encode(["string", "string", "string"], ["ipfs://user1", "application/json", "file"]),
-          value: 0n,
-        },
-      });
-      const r1 = await dataTx1.wait();
-      const uid1 = getUIDFromReceipt(r1);
-
-      await eas.connect(user1).revoke({ schema: dataSchemaUID, data: { uid: uid1, value: 0n } });
-
-      const u1Address = await user1.getAddress();
-      const result = await indexer.getDataByAddressList(fileAnchorUID, [u1Address], false);
-      expect(result).to.equal(ZERO_BYTES32);
     });
 
     // ──────────────────────────────────────────────────────────────────────────

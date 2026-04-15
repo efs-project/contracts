@@ -79,8 +79,6 @@ contract EFSIndexer is SchemaResolver {
     // External index tracking — UIDs indexed via the public index() API (not via onAttest)
     mapping(bytes32 => bool) private _indexed;
 
-    bytes32 private constant TOMBSTONE_HASH = keccak256("tombstone");
-
     // ============================================================================================
     // STORAGE: FILE SYSTEM INDICES (EFS CORE)
     // ============================================================================================
@@ -96,9 +94,6 @@ contract EFSIndexer is SchemaResolver {
 
     // Parent Lookups: childAnchorUID => parentAnchorUID
     mapping(bytes32 => bytes32) private _parents;
-
-    // Type Index: parentAnchorUID => mimeHash => childAnchorUIDs
-    mapping(bytes32 => mapping(bytes32 => bytes32[])) private _childrenByType;
 
     // Attester Index: parentAnchorUID => attester => childAnchorUIDs
     mapping(bytes32 => mapping(address => bytes32[])) private _childrenByAttester;
@@ -136,15 +131,12 @@ contract EFSIndexer is SchemaResolver {
     mapping(bytes32 => mapping(address => bytes32[])) private _referencingByAttester;
     mapping(bytes32 => mapping(bytes32 => mapping(address => bytes32[]))) private _referencingBySchemaAndAttester;
 
-    // Specific mapping for fast lookups of Data payloads per user for subjective File content
-    mapping(bytes32 => mapping(address => bytes32[])) private _dataAttestationsByAddress;
-
     // Edition Activity Trackers
     // NOTE: These flags are SET-ONLY and never cleared on revocation.
     // `_containsAttestations[uid][attester]` means "attester has EVER contributed under this anchor",
     // not "attester currently has active/unrevoked data here". This is intentional:
     //   - Clearing on revoke would require expensive decrement logic on every revocation
-    //   - The UI handles revoked content correctly via getDataByAddressList filtering
+    //   - The UI filters active content via TagResolver's _activeByAAS compact index
     //   - The early-break optimization in the recursive loop depends on monotonic set-only behavior
     mapping(bytes32 => mapping(address => bool)) private _containsAttestations;
     mapping(bytes32 => mapping(address => mapping(bytes32 => bool))) private _containsSchemaAttestations;
@@ -391,42 +383,6 @@ contract EFSIndexer is SchemaResolver {
 
     function getChildrenCount(bytes32 anchorUID) external view returns (uint256) {
         return _children[anchorUID].length;
-    }
-
-    function getChildrenByType(
-        bytes32 anchorUID,
-        string memory mimeType,
-        uint256 start,
-        uint256 length,
-        bool reverseOrder,
-        bool showRevoked
-    ) external view returns (bytes32[] memory) {
-        return
-            _sliceUIDsFiltered(
-                _childrenByType[anchorUID][keccak256(abi.encodePacked(mimeType))],
-                start,
-                length,
-                reverseOrder,
-                showRevoked
-            );
-    }
-
-    /// @notice Convenience overload — showRevoked defaults to false.
-    function getChildrenByType(
-        bytes32 anchorUID,
-        string memory mimeType,
-        uint256 start,
-        uint256 length,
-        bool reverseOrder
-    ) external view returns (bytes32[] memory) {
-        return
-            _sliceUIDsFiltered(
-                _childrenByType[anchorUID][keccak256(abi.encodePacked(mimeType))],
-                start,
-                length,
-                reverseOrder,
-                false
-            );
     }
 
     function getChildrenByAttester(
@@ -686,74 +642,6 @@ contract EFSIndexer is SchemaResolver {
         return _sliceUIDs(_referencingBySchemaAndAttester[targetUID][schemaUID][attester], start, length, reverseOrder);
     }
 
-    // --- File Content Perspectives (DATA Schema) ---
-
-    // Standard pagination for a single user's edits
-    // Returns results and the nextStart cursor for subsequent pages. If nextStart is 0, the end is reached.
-    function getDataHistoryByAddress(
-        bytes32 anchorUID,
-        address attester,
-        uint256 start,
-        uint256 length,
-        bool reverseOrder,
-        bool showRevoked
-    ) external view returns (bytes32[] memory results, uint256 nextStart) {
-        bytes32[] storage allEdits = _dataAttestationsByAddress[anchorUID][attester];
-        uint256 totalLen = allEdits.length;
-
-        if (start >= totalLen || length == 0) {
-            return (new bytes32[](0), 0);
-        }
-
-        bytes32[] memory tempResults = new bytes32[](length);
-        uint256 count = 0;
-        uint256 currentIndex = start;
-
-        while (count < length && currentIndex < totalLen) {
-            uint256 actualIdx = reverseOrder ? totalLen - 1 - currentIndex : currentIndex;
-            bytes32 uid = allEdits[actualIdx];
-
-            if (showRevoked || !_isRevoked[uid]) {
-                tempResults[count++] = uid;
-            }
-            currentIndex++;
-        }
-
-        bytes32[] memory finalResults = new bytes32[](count);
-        for (uint256 i = 0; i < count; i++) {
-            finalResults[i] = tempResults[i];
-        }
-
-        // If we hit the end of the array, return 0 for nextStart
-        uint256 next = currentIndex >= totalLen ? 0 : currentIndex;
-        return (finalResults, next);
-    }
-
-    // Subjective lookup combining multiple trusted addresses into a final single data UID return value
-    function getDataByAddressList(
-        bytes32 anchorUID,
-        address[] calldata attesters,
-        bool showRevoked
-    ) external view returns (bytes32) {
-        require(attesters.length > 0, "Attesters list cannot be empty");
-        address[] memory addressesToCheck = attesters;
-
-        for (uint256 i = 0; i < addressesToCheck.length; i++) {
-            bytes32[] storage userHistory = _dataAttestationsByAddress[anchorUID][addressesToCheck[i]];
-            if (userHistory.length > 0) {
-                // Loop backwards to find the most recent valid one
-                for (uint256 j = userHistory.length; j > 0; j--) {
-                    bytes32 uid = userHistory[j - 1];
-                    if (showRevoked || !_isRevoked[uid]) {
-                        return uid; // Win condition
-                    }
-                }
-            }
-        }
-
-        return bytes32(0);
-    }
-
     // --- Directory Perspectives (ANCHOR Schema) ---
 
     /**
@@ -823,9 +711,6 @@ contract EFSIndexer is SchemaResolver {
         return _eas;
     }
 
-    function getDataHistoryCountByAddress(bytes32 anchorUID, address attester) external view returns (uint256) {
-        return _dataAttestationsByAddress[anchorUID][attester].length;
-    }
 
     function getAllReferencingCount(bytes32 targetUID) external view returns (uint256) {
         return _allReferencing[targetUID].length;
@@ -934,31 +819,6 @@ contract EFSIndexer is SchemaResolver {
             res[i] = temp[i];
         }
         return res;
-    }
-
-    function _indexMimeType(bytes32 parentUID, bytes32 attestationUID, bytes memory data) private {
-        (, string memory contentType, string memory fileMode) = abi.decode(data, (string, string, string));
-        if (keccak256(bytes(fileMode)) == TOMBSTONE_HASH) {
-            return;
-        }
-
-        if (bytes(contentType).length > 0) {
-            bytes32 fullHash = keccak256(abi.encodePacked(contentType));
-            _childrenByType[parentUID][fullHash].push(attestationUID);
-
-            bytes memory mimeBytes = bytes(contentType);
-            for (uint i = 0; i < mimeBytes.length; i++) {
-                if (mimeBytes[i] == 0x2f) {
-                    bytes memory category = new bytes(i);
-                    for (uint j = 0; j < i; j++) {
-                        category[j] = mimeBytes[j];
-                    }
-                    bytes32 catHash = keccak256(category);
-                    _childrenByType[parentUID][catHash].push(attestationUID);
-                    break;
-                }
-            }
-        }
     }
 
     /// @dev Core indexing logic shared by onAttest and the public index() API.

@@ -29,12 +29,6 @@ interface IEFSIndexer {
 
     function rootAnchorUID() external view returns (bytes32);
 
-    function getDataByAddressList(
-        bytes32 anchorUID,
-        address[] calldata attesters,
-        bool showRevoked
-    ) external view returns (bytes32);
-
     function getReferencingAttestations(
         bytes32 targetUID,
         bytes32 schemaUID,
@@ -164,15 +158,7 @@ contract EFSRouter is IDecentralizedApp {
             }
         }
 
-        // 2. Fetch the appropriate Data Attestation
-        // In EFS, multiple 'Data' schemas can point to the same file Anchor.
-        // Real logic would require iterating Indexer.getAttestationsBySchemaAndAttester or similar,
-        // or retrieving the 'live' state from the Edition resolving layer.
-        // For simplicity in this router V1, we will trust a method that returns the *active*
-        // Data attestation UID for this anchor by this edition.
-        // Since `EFSRouter` runs natively on the EVM, we use `getDataByAddressList`.
-
-        // 2. Find DATA via TAG query (new model) or legacy direct reference
+        // 2. Find DATA via TAG query: resolve editions → TAG → DATA → MIRROR
         bytes32 dataUID = _findDataAtPath(targetAnchor, editions);
         if (dataUID == bytes32(0)) {
             return (404, "Not Found: No data attached or curator unset", new KeyValue[](0));
@@ -462,11 +448,8 @@ contract EFSRouter is IDecentralizedApp {
             }
         }
 
-        // Fallback: legacy direct DATA reference on anchor
-        if (editions.length > 0) {
-            bytes32 legacy = indexer.getDataByAddressList(targetAnchor, editions, false);
-            if (legacy != bytes32(0)) return legacy;
-        } else {
+        // Fallback: no editions specified — try any DATA referencing this anchor
+        if (editions.length == 0) {
             bytes32[] memory records = indexer.getReferencingAttestations(targetAnchor, dataSchema, 0, 1, true);
             if (records.length > 0) return records[0];
         }
@@ -501,8 +484,8 @@ contract EFSRouter is IDecentralizedApp {
         for (uint256 i = 0; i < props.length; i++) {
             if (indexer.isRevoked(props[i])) continue;
             IEAS.Attestation memory propAtt = eas.getAttestation(props[i]);
-            string memory value = abi.decode(propAtt.data, (string));
-            if (bytes(value).length > 0) return value;
+            (string memory key, string memory value) = abi.decode(propAtt.data, (string, string));
+            if (keccak256(bytes(key)) == keccak256("contentType") && bytes(value).length > 0) return value;
         }
         return "application/octet-stream";
     }

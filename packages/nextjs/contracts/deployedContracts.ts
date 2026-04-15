@@ -7,7 +7,7 @@ import { GenericContractsDeclaration } from "~~/utils/scaffold-eth/contract";
 const deployedContracts = {
   31337: {
     EFSFileView: {
-      address: "0x12C80173d8aF7d36C963d276C44BC7A714079d52",
+      address: "0x72796FDEAc581612ad4C83651Db2C7c285Cd11b7",
       abi: [
         {
           inputs: [
@@ -551,7 +551,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     EFSRouter: {
-      address: "0x40E86010d591cc549408d54a1fdb7025dCC20bf4",
+      address: "0x243D417FD0C5A61c576e4A7dC3Ed012E80a48158",
       abi: [
         {
           inputs: [
@@ -706,7 +706,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     EFSSortOverlay: {
-      address: "0x5b36289e66C59412c6c2cE1442E561291Ff0BE63",
+      address: "0x963236AD045681Aa06372Eef7593c5A367Bc0A61",
       abi: [
         {
           inputs: [
@@ -1685,7 +1685,7 @@ const deployedContracts = {
       },
     },
     Indexer: {
-      address: "0xea2C96A20FBF641c1312EC842D43aED8697d3cc0",
+      address: "0xfD54b8EF2941E6D723722417F3555f703146EaaA",
       abi: [
         {
           inputs: [
@@ -2849,193 +2849,8 @@ const deployedContracts = {
               name: "anchorUID",
               type: "bytes32",
             },
-            {
-              internalType: "string",
-              name: "mimeType",
-              type: "string",
-            },
-            {
-              internalType: "uint256",
-              name: "start",
-              type: "uint256",
-            },
-            {
-              internalType: "uint256",
-              name: "length",
-              type: "uint256",
-            },
-            {
-              internalType: "bool",
-              name: "reverseOrder",
-              type: "bool",
-            },
-          ],
-          name: "getChildrenByType",
-          outputs: [
-            {
-              internalType: "bytes32[]",
-              name: "",
-              type: "bytes32[]",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              internalType: "bytes32",
-              name: "anchorUID",
-              type: "bytes32",
-            },
-            {
-              internalType: "string",
-              name: "mimeType",
-              type: "string",
-            },
-            {
-              internalType: "uint256",
-              name: "start",
-              type: "uint256",
-            },
-            {
-              internalType: "uint256",
-              name: "length",
-              type: "uint256",
-            },
-            {
-              internalType: "bool",
-              name: "reverseOrder",
-              type: "bool",
-            },
-            {
-              internalType: "bool",
-              name: "showRevoked",
-              type: "bool",
-            },
-          ],
-          name: "getChildrenByType",
-          outputs: [
-            {
-              internalType: "bytes32[]",
-              name: "",
-              type: "bytes32[]",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              internalType: "bytes32",
-              name: "anchorUID",
-              type: "bytes32",
-            },
           ],
           name: "getChildrenCount",
-          outputs: [
-            {
-              internalType: "uint256",
-              name: "",
-              type: "uint256",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              internalType: "bytes32",
-              name: "anchorUID",
-              type: "bytes32",
-            },
-            {
-              internalType: "address[]",
-              name: "attesters",
-              type: "address[]",
-            },
-            {
-              internalType: "bool",
-              name: "showRevoked",
-              type: "bool",
-            },
-          ],
-          name: "getDataByAddressList",
-          outputs: [
-            {
-              internalType: "bytes32",
-              name: "",
-              type: "bytes32",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              internalType: "bytes32",
-              name: "anchorUID",
-              type: "bytes32",
-            },
-            {
-              internalType: "address",
-              name: "attester",
-              type: "address",
-            },
-            {
-              internalType: "uint256",
-              name: "start",
-              type: "uint256",
-            },
-            {
-              internalType: "uint256",
-              name: "length",
-              type: "uint256",
-            },
-            {
-              internalType: "bool",
-              name: "reverseOrder",
-              type: "bool",
-            },
-            {
-              internalType: "bool",
-              name: "showRevoked",
-              type: "bool",
-            },
-          ],
-          name: "getDataHistoryByAddress",
-          outputs: [
-            {
-              internalType: "bytes32[]",
-              name: "results",
-              type: "bytes32[]",
-            },
-            {
-              internalType: "uint256",
-              name: "nextStart",
-              type: "uint256",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              internalType: "bytes32",
-              name: "anchorUID",
-              type: "bytes32",
-            },
-            {
-              internalType: "address",
-              name: "attester",
-              type: "address",
-            },
-          ],
-          name: "getDataHistoryCountByAddress",
           outputs: [
             {
               internalType: "uint256",
@@ -3978,7 +3793,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     MirrorResolver: {
-      address: "0xB9257C530eFBE7a0Ee058FAa9f5062c6074ba61F",
+      address: "0x8618D39C6004a926CE2e16a14d579F797e35FC53",
       abi: [
         {
           inputs: [
@@ -4576,7 +4391,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     TagResolver: {
-      address: "0xdf452D1D33Cc8200dc877024f5d81422449C245e",
+      address: "0x854aF23a86Be244aC7BbDe397054eF0b5a28798D",
       abi: [
         {
           inputs: [
