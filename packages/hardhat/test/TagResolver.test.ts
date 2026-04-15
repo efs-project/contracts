@@ -777,5 +777,123 @@ describe("TagResolver", function () {
       const u2Addr = await user2.getAddress();
       expect(await tagResolver.isActivelyTaggedByAny(target, def, [u2Addr])).to.be.false;
     });
+
+    it("Should return false when attesters array is empty", async function () {
+      const target = await createTarget("byany-empty");
+      const def = await createDefinition("byany-empty-def");
+
+      await tagByRef(user1, target, def, true);
+
+      expect(await tagResolver.isActivelyTaggedByAny(target, def, [])).to.be.false;
+    });
+  });
+
+  // ─── Compact index (_activeByAAS) swap-and-pop correctness ────────────────
+
+  describe("Compact index: swap-and-pop correctness", function () {
+    it("Should maintain correct indices after multiple non-sequential removals", async function () {
+      const def = await createDefinition("sap-def");
+      const t1 = await createTarget("sap-1");
+      const t2 = await createTarget("sap-2");
+      const t3 = await createTarget("sap-3");
+      const t4 = await createTarget("sap-4");
+      const t5 = await createTarget("sap-5");
+      const u1Addr = await user1.getAddress();
+
+      // Add 5 items: [t1, t2, t3, t4, t5]
+      await tagByRef(user1, t1, def, true);
+      await tagByRef(user1, t2, def, true);
+      await tagByRef(user1, t3, def, true);
+      await tagByRef(user1, t4, def, true);
+      await tagByRef(user1, t5, def, true);
+
+      expect(await tagResolver.getActiveTargetsByAttesterAndSchemaCount(def, u1Addr, dummySchemaUID)).to.equal(5n);
+
+      // Remove t1 (position 0) — t5 should swap into position 0: [t5, t2, t3, t4]
+      await tagByRef(user1, t1, def, false);
+      let list = await tagResolver.getActiveTargetsByAttesterAndSchema(def, u1Addr, dummySchemaUID, 0n, 10n);
+      expect(list.length).to.equal(4);
+      expect(list).to.not.include(t1);
+      expect(list).to.include(t2).and.include(t3).and.include(t4).and.include(t5);
+
+      // Remove t3 (now somewhere in the middle) — last item swaps in: [t5, t2, t4]
+      await tagByRef(user1, t3, def, false);
+      list = await tagResolver.getActiveTargetsByAttesterAndSchema(def, u1Addr, dummySchemaUID, 0n, 10n);
+      expect(list.length).to.equal(3);
+      expect(list).to.include(t2).and.include(t4).and.include(t5);
+
+      // Remove t5 (was swapped to position 0) — tests that swapped items track correctly
+      await tagByRef(user1, t5, def, false);
+      list = await tagResolver.getActiveTargetsByAttesterAndSchema(def, u1Addr, dummySchemaUID, 0n, 10n);
+      expect(list.length).to.equal(2);
+      expect(list).to.include(t2).and.include(t4);
+
+      // Re-add t1 and t3 — they should appear again
+      await tagByRef(user1, t1, def, true);
+      await tagByRef(user1, t3, def, true);
+      list = await tagResolver.getActiveTargetsByAttesterAndSchema(def, u1Addr, dummySchemaUID, 0n, 10n);
+      expect(list.length).to.equal(4);
+      expect(list).to.include(t1).and.include(t2).and.include(t3).and.include(t4);
+    });
+
+    it("Should handle removing the only item in the list", async function () {
+      const def = await createDefinition("sap-single-def");
+      const target = await createTarget("sap-single");
+      const u1Addr = await user1.getAddress();
+
+      await tagByRef(user1, target, def, true);
+      expect(await tagResolver.getActiveTargetsByAttesterAndSchemaCount(def, u1Addr, dummySchemaUID)).to.equal(1n);
+
+      await tagByRef(user1, target, def, false);
+      expect(await tagResolver.getActiveTargetsByAttesterAndSchemaCount(def, u1Addr, dummySchemaUID)).to.equal(0n);
+
+      const list = await tagResolver.getActiveTargetsByAttesterAndSchema(def, u1Addr, dummySchemaUID, 0n, 10n);
+      expect(list.length).to.equal(0);
+    });
+
+    it("Should not double-remove (idempotent negation)", async function () {
+      const def = await createDefinition("sap-idem-def");
+      const t1 = await createTarget("sap-idem-1");
+      const t2 = await createTarget("sap-idem-2");
+      const u1Addr = await user1.getAddress();
+
+      await tagByRef(user1, t1, def, true);
+      await tagByRef(user1, t2, def, true);
+
+      // Remove t1 twice — second should be a no-op
+      await tagByRef(user1, t1, def, false);
+      await tagByRef(user1, t1, def, false); // already absent — _swapAndPop guards with indexPlusOne==0
+
+      const list = await tagResolver.getActiveTargetsByAttesterAndSchema(def, u1Addr, dummySchemaUID, 0n, 10n);
+      expect(list.length).to.equal(1);
+      expect(list[0]).to.equal(t2);
+    });
+
+    it("Should remove all items one by one leaving empty list", async function () {
+      const def = await createDefinition("sap-drain-def");
+      const targets = [];
+      for (let i = 0; i < 6; i++) {
+        targets.push(await createTarget(`sap-drain-${i}`));
+      }
+      const u1Addr = await user1.getAddress();
+
+      for (const t of targets) {
+        await tagByRef(user1, t, def, true);
+      }
+      expect(await tagResolver.getActiveTargetsByAttesterAndSchemaCount(def, u1Addr, dummySchemaUID)).to.equal(6n);
+
+      // Remove in a non-sequential order: 2, 0, 5, 3, 1, 4
+      const removeOrder = [2, 0, 5, 3, 1, 4];
+      for (let step = 0; step < removeOrder.length; step++) {
+        await tagByRef(user1, targets[removeOrder[step]], def, false);
+        const remaining = 6 - (step + 1);
+        expect(await tagResolver.getActiveTargetsByAttesterAndSchemaCount(def, u1Addr, dummySchemaUID)).to.equal(
+          BigInt(remaining),
+        );
+      }
+
+      const finalList = await tagResolver.getActiveTargetsByAttesterAndSchema(def, u1Addr, dummySchemaUID, 0n, 10n);
+      expect(finalList.length).to.equal(0);
+    });
   });
 });

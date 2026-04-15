@@ -448,12 +448,8 @@ contract EFSRouter is IDecentralizedApp {
             }
         }
 
-        // Fallback: no editions specified — try any DATA referencing this anchor
-        if (editions.length == 0) {
-            bytes32[] memory records = indexer.getReferencingAttestations(targetAnchor, dataSchema, 0, 1, true);
-            if (records.length > 0) return records[0];
-        }
-
+        // No editions and no TAG match → not found.
+        // (DATA is standalone with refUID=0x0, so editions are required for TAG-based lookup.)
         return bytes32(0);
     }
 

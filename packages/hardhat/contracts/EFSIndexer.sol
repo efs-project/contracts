@@ -955,6 +955,11 @@ contract EFSIndexer is SchemaResolver {
             _isRevoked[uid] = true;
         }
 
+        // Emit schema-specific events for off-chain indexers
+        if (schema == MIRROR_SCHEMA_UID) {
+            emit MirrorCreated(att.refUID, uid, att.attester);
+        }
+
         emit AttestationIndexed(uid, schema, att.attester);
         return true;
     }

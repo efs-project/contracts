@@ -7,7 +7,7 @@ import { GenericContractsDeclaration } from "~~/utils/scaffold-eth/contract";
 const deployedContracts = {
   31337: {
     EFSFileView: {
-      address: "0x72796FDEAc581612ad4C83651Db2C7c285Cd11b7",
+      address: "0x22BE270C7C9d473f0b96c16496d171a51323Bb3f",
       abi: [
         {
           inputs: [
@@ -551,7 +551,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     EFSRouter: {
-      address: "0x243D417FD0C5A61c576e4A7dC3Ed012E80a48158",
+      address: "0x832e834eB356EC89064BBD262BdE6BEB25a8c5BC",
       abi: [
         {
           inputs: [
@@ -706,7 +706,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     EFSSortOverlay: {
-      address: "0x963236AD045681Aa06372Eef7593c5A367Bc0A61",
+      address: "0xc0Ed85961787ddEE55F1F57480DfA73265462a49",
       abi: [
         {
           inputs: [
@@ -1685,7 +1685,7 @@ const deployedContracts = {
       },
     },
     Indexer: {
-      address: "0xfD54b8EF2941E6D723722417F3555f703146EaaA",
+      address: "0x5C54760d0f97d8Bb7Ab00C2cbDfC4f813aeded53",
       abi: [
         {
           inputs: [
@@ -3793,7 +3793,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     MirrorResolver: {
-      address: "0x8618D39C6004a926CE2e16a14d579F797e35FC53",
+      address: "0x72248dDf1800E7A65467ea06F58C7C670dB7A2fd",
       abi: [
         {
           inputs: [
@@ -4200,7 +4200,7 @@ const deployedContracts = {
       },
     },
     NameSort: {
-      address: "0xbC852aC46FcBCE372be0b7D3B502F16540637376",
+      address: "0x33658305185fD06148F36346A70aDAc0728D5760",
       abi: [
         {
           inputs: [
@@ -4286,7 +4286,7 @@ const deployedContracts = {
       },
     },
     SchemaNameIndex: {
-      address: "0x2a88C3373cD7D7CAc90420515614d5C43777A00c",
+      address: "0x663E3D9828557530873A1b2f727c6A0CFA1F62F4",
       abi: [
         {
           inputs: [
@@ -4391,7 +4391,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     TagResolver: {
-      address: "0x854aF23a86Be244aC7BbDe397054eF0b5a28798D",
+      address: "0x935544F653C55367C0db373ab0bE36B3B3C371bE",
       abi: [
         {
           inputs: [
@@ -5143,7 +5143,7 @@ const deployedContracts = {
       },
     },
     TimestampSort: {
-      address: "0x6e2D4b9fABb3A1Cbec42bb38c51Ff421D4dD4b5A",
+      address: "0x40CEAaCffDf75ef85dF680DCc1734B39A20400dD",
       abi: [
         {
           inputs: [
