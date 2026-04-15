@@ -214,6 +214,8 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
         }
 
         // For each definition, check if the connected user has an active tag and resolve the name.
+        // Only show tags whose definition anchor lives under /tags/ — file placement TAGs
+        // (where definition is a file/folder anchor) are internal bookkeeping, not user-facing.
         const tags = await Promise.all(
           allDefs.map(async defUID => {
             const [activeTagUID, defAttestation] = await Promise.all([
@@ -225,6 +227,26 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
               }) as Promise<`0x${string}`>,
               getEASAttestation(defUID) as Promise<any>,
             ]);
+
+            // Filter: only show definitions that are descendants of /tags/.
+            // Walk up the refUID chain from the definition anchor until we hit tagsRoot
+            // (it's a user-facing tag) or 0x0/root (it's not).
+            if (!tagsRoot) return null;
+            let isUnderTags = false;
+            let walker = defAttestation.refUID as `0x${string}`;
+            while (walker && walker !== zeroHash) {
+              if (walker.toLowerCase() === tagsRoot.toLowerCase()) {
+                isUnderTags = true;
+                break;
+              }
+              try {
+                const parentAtt = (await getEASAttestation(walker)) as any;
+                walker = parentAtt.refUID as `0x${string}`;
+              } catch {
+                break;
+              }
+            }
+            if (!isUnderTags) return null;
 
             let tagName: string;
             try {
@@ -264,8 +286,8 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
         );
 
         if (!cancelled) {
-          // Only show definitions where the connected user has an active tag
-          setUserTags(tags.filter(t => t.activeTagUID !== null));
+          // Only show /tags/ definitions where the connected user has an active tag
+          setUserTags(tags.filter((t): t is UserTag => t !== null && t.activeTagUID !== null));
           setIsLoadingTags(false);
         }
       } catch (e) {
@@ -281,7 +303,7 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
     return () => {
       cancelled = true;
     };
-  }, [publicClient, tagResolverAddress, effectiveUID, connectedAddress, easInfo, refreshKey]);
+  }, [publicClient, tagResolverAddress, effectiveUID, connectedAddress, easInfo, refreshKey, tagsRoot]);
 
   const handleAddTag = async (applies: boolean) => {
     if (!anchorSchemaUID || !connectedAddress || !publicClient || !tagResolverAddress || !tagsRoot) return;
