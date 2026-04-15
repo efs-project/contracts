@@ -1,6 +1,13 @@
 # Data Models and Schemas
 
-EFS is composed of a "Quad-Schema" model (four core EAS schemas), adhering to the principles outlined in [System Architecture](./01-System-Architecture.md). These schemas interact through `refUID` links to create a hierarchical, permissionless filesystem state natively on Ethereum. For details on how these are tracked, refer to the [Onchain Indexing Strategy](./03-Onchain-Indexing-Strategy.md).
+EFS uses six core EAS schemas arranged in three conceptual layers, adhering to the principles outlined in [System Architecture](./01-System-Architecture.md). These schemas interact through `refUID` links and TAG-based placement to create a hierarchical, permissionless filesystem state natively on Ethereum. For details on how these are tracked, refer to the [Onchain Indexing Strategy](./03-Onchain-Indexing-Strategy.md).
+
+**Three-layer architecture:**
+- **Paths** (Anchors) — Schelling points for names and locations
+- **Data** (DATA + PROPERTY) — Standalone file identity and metadata
+- **Retrieval** (MIRROR) — Transport-specific URIs for fetching content
+
+Files are placed at paths via TAGs, not by direct `refUID` linking. This decouples identity from location: the same DATA can appear at multiple paths, and multiple users can independently place different DATAs at the same path.
 
 ## 1. Anchor Schema
 **Purpose**: Acts as a "Schelling Point" or a shared naming reference for a given Topic.
@@ -12,33 +19,68 @@ EFS is composed of a "Quad-Schema" model (four core EAS schemas), adhering to th
 **Details**: An Anchor represents a name (like a folder name or a file name) within a specific context. It references (is a child of) an attestation in its EAS `refUID` field. Other attestations reference these Anchors in their `refUID` fields when they need to be associated with that specific name. Names are considered unique within their direct hierarchy level relative to the parent entity.
 
 ## 2. Property Schema
-**Purpose**: Key-value pairs for metadata or settings.
+**Purpose**: Key-value metadata attached to Anchors or DATA attestations.
 **Structure**:
-`refUID = Anchor UID (for the property name)`
+`refUID = Anchor UID or DATA UID`
+- `key` (string) — e.g. `"contentType"`, `"previousVersion"`, `"description"`, `"icon"`
 - `value` (string)
 
-**Details**: A Property must reference an Anchor in its `refUID` to be associated with a name. It is an onchain string containing simple text data easily usable by contracts and users (e.g., an icon URL, a descriptive text, or metadata).
+**Details**: A Property must reference either a PROPERTY-typed Anchor (for named settings on folders) or a DATA attestation (for file metadata). Common uses on DATA: `contentType` (MIME type like `image/jpeg`), `previousVersion` (DATA UID of the prior version), `description`. Singleton by convention — the newest Property from a given attester for a given key is the active one.
 
 ## 3. Data Schema
-**Purpose**: File system metadata directly linking names to content URIs.
+**Purpose**: Standalone file identity — content-addressed, non-revocable, location-independent.
 **Structure**:
-`refUID = Anchor UID`
-- `uri` (string) - URI resolving to the content (e.g., web3://, ipfs://, ar://, or plain HTTPS).
-- `contentType` (string) - Valid MIME type (e.g., `image/jpeg` or `text/markdown`).
-- `fileMode` (string) - Defines the file type (e.g., normal file, `tombstone` for deletion, symlink, etc).
+`refUID = 0x0 (standalone — no parent reference)`
+- `contentHash` (bytes32) — keccak256 of the canonical file bytes
+- `size` (uint64) — byte count
 
-**Details**: Data attestations must reference an Anchor in their `refUID` to be given a name within a folder. They contain file system data such as whether an item is a 'normal file', a 'symlink', a 'hardlink', 'deletion info', or 'rename info'. They directly embed the `uri` and `contentType` avoiding the need for a separate physical BLOB attestation.
+**Revocable**: `false` — DATA is permanent. Once a file identity exists, it cannot be removed.
+
+**Details**: DATA attestations are standalone (refUID = 0x0). They represent file identity, not file location. A DATA is placed at a path via a TAG attestation (see Tag Schema below). The same DATA can be tagged into multiple paths without duplication.
+
+Content-addressed deduplication: `EFSIndexer.dataByContentKey[contentHash]` stores the first DATA UID per content hash as the canonical entry. Subsequent DATAs with the same hash still get created (different UIDs) but the canonical lookup returns the first.
+
+Metadata (content type, description, version history) is stored as PROPERTY attestations referencing the DATA UID. Retrieval URIs are stored as MIRROR attestations referencing the DATA UID.
+
+## 3a. Mirror Schema
+**Purpose**: Retrieval method for a DATA attestation — maps a transport type to a URI.
+**Structure**:
+`refUID = DATA UID`
+- `transportDefinition` (bytes32) — Anchor UID for the transport type (e.g., `/transports/ipfs`)
+- `uri` (string) — retrieval URI (e.g., `ipfs://QmXxx`, `ar://yyy`, `web3://0xABC`)
+
+**Revocable**: `true`
+
+**Details**: MIRRORs attach retrieval methods to a DATA. The `MirrorResolver` contract validates that `refUID` points to a valid DATA attestation and `transportDefinition` points to a valid Anchor. No singleton enforcement — multiple mirrors per transport type per attester are allowed.
+
+### Transport Definition Anchors
+Well-known transport types are created at deploy time under `/transports/`:
+- `/transports/onchain` — `web3://` URIs pointing to SSTORE2 chunk managers
+- `/transports/ipfs` — `ipfs://` URIs
+- `/transports/arweave` — `ar://` URIs
+- `/transports/magnet` — `magnet:` URIs
+- `/transports/https` — `https://` URIs
+
+The transport preference order for display is: onchain > ipfs > arweave > https > magnet.
 
 ## 4. Tag Schema
-**Purpose**: Subjective categorization, labeling, and filtering via the "Type as Topic" pattern.
+**Purpose**: Subjective categorization, file placement, and labeling via the "Type as Topic" pattern.
 **Structure**:
 `refUID = Target Attestation UID` or `recipient = Target Ethereum Address`
-- `definition` (bytes32) - The Anchor UID that defines the label of the tag. This points to a "Type as Topic" definition, such as the UID for the `/tags/nsfw` or `/tags/favorites` anchor. By forcing tags to reference an Anchor UID (rather than a raw string), the tag namespace remains hierarchical, collision-resistant, and indexable.
+- `definition` (bytes32) - The Anchor UID that defines the label/location of the tag. For file placement, this is the path Anchor (e.g., the UID of the `cat.jpg` Anchor under `/memes/`). For labeling, this points to a tag definition Anchor (e.g., `/tags/nsfw`). By forcing tags to reference an Anchor UID (rather than a raw string), the tag namespace remains hierarchical, collision-resistant, and indexable.
 - `applies` (bool) - `true` means the tag is active and applies to the target. `false` means the tag is explicitly negated or removed.
 
-**Details**: Tags create a graph layer that overlays the strict tree-like directory structure. A single file can have many tags without data duplication, enabling many-to-many relationships.
+**Details**: Tags serve two primary roles:
+1. **File placement**: `TAG(refUID=DATA_UID, definition=path_Anchor, applies=true)` — places a DATA at a path. This is how files appear in directories. The definition is the Anchor UID of the file's name within its parent folder.
+2. **Labeling**: `TAG(refUID=DATA_UID, definition=label_Anchor, applies=true)` — applies a label like "nsfw" or "favorites" to a DATA. The definition is an Anchor under `/tags/`.
+
+Tags create a graph layer that overlays the strict tree-like directory structure. A single DATA can be tagged into many paths and with many labels without duplication, enabling many-to-many relationships.
 
 Tags target either an attestation (via `refUID`) or an Ethereum address (via `recipient`), keeping the custom payload minimal. The `EFSTagResolver` contract enforces a **singleton tagging pattern**: only one active tag exists per `(attester, target, definition)` triple. When a user applies a new tag matching an existing combination, the resolver logically supersedes the old tag by overwriting its internal mapping. This ensures query functions always return the latest state as a clean single source of truth.
+
+`applies` is a per-attester assertion:
+- File placement: `true` = "I place this file here", `false` = "I remove my placement"
+- Labels: `true` = "I think this label applies", `false` = "I think this label does NOT apply"
 
 Complex aggregation logic (Sybil resistance, reputation weighting, running averages) is entirely delegated to upper-layer indexers and client UIs, not computed on-chain.
 
@@ -77,6 +119,10 @@ See [Lists and Collections](./06-Lists-and-Collections.md) for the full architec
 
 ## Schema Hierarchy
 To represent a standard filesystem interaction where a file has a name within a folder:
-1. **Parent Topic** (e.g., Folder "memes") ->
-2. **Anchor** (name: "vitalik.jpg", `refUID` points to Parent Topic) ->
-3. **Data** (`refUID` points to Anchor, securely holds `uri` answering directly to an IPFS, Web3, or external link alongside `contentType`).
+1. **Parent Folder** (e.g., Anchor "memes") →
+2. **File Anchor** (name: "vitalik.jpg", `refUID` points to Parent Folder) →
+3. **DATA** (standalone, `refUID = 0x0`, holds `contentHash` and `size`) — placed at the Anchor via TAG
+4. **PROPERTY** (`refUID` = DATA UID, `key = "contentType"`, `value = "image/jpeg"`) — metadata on the DATA
+5. **MIRROR** (`refUID` = DATA UID, `transportDefinition = /transports/onchain`, `uri = web3://0xABC`) — retrieval method
+
+All of steps 3–5 are typically batched into a single `multiAttest` transaction for atomicity.

@@ -21,7 +21,7 @@ A curated list is just a directory whose children are **positional Anchors**:
 
 The **kernel** (EFSIndexer) tracks these children in insertion order. The **sort overlay** (EFSSortOverlay) maintains per-attester sorted linked lists on top of the kernel arrays, using any pluggable `ISortFunc` comparator.
 
-**Editions on lists:** Positional Anchors ("a0", "a1", …) enable per-position Editions. Alice's DATA on "a1" = hamster.gif, Bob's DATA on "a1" = dragon.jpg. The existing `getDataByAddressList` fallback handles this — no new mechanism needed.
+**Editions on lists:** Positional Anchors ("a0", "a1", …) enable per-position Editions. Alice tags her DATA at "a1" = hamster.gif, Bob tags his DATA at "a1" = dragon.jpg. The existing TAG-based placement via `getActiveTargetsByAttesterAndSchema` handles this — no new mechanism needed.
 
 ---
 

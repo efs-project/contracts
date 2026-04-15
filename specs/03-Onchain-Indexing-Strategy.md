@@ -4,23 +4,33 @@ EFS is designed to work fully onchain without offchain centralized dependencies,
 
 For practical queries utilizing this index, see [Core Workflows](./04-Core-Workflows.md).
 
-## The Two-Level Attestation Challenge
-In a typical filesystem, a folder contains items (files or properties). In EFS, to associate a name with an item inside a folder, we use a two-step link involving an Anchor.
+## The Multi-Level Attestation Challenge
+In EFS, file identity is decoupled from file location. A DATA attestation is standalone (`refUID = 0x0`) and placed at paths via TAG attestations. The logical flow is:
 
-The logical flow is:
-`Folder (Topic)` -> `Anchor (File/Property Name)` -> `Property / Data`
+```
+Folder (Anchor) → File Name (child Anchor) ←── TAG(definition=Anchor, refUID=DATA) ←── DATA (standalone)
+                                                                                        ├── PROPERTY (contentType)
+                                                                                        └── MIRROR (retrieval URI)
+```
 
-Because Ethereum cannot natively query "all properties where the name's parent is X" without an index, EFS contracts must explicitly track two levels of relationships.
+Because Ethereum cannot natively query "all DATAs placed at this Anchor by this attester" without an index, EFS uses two coordinated contracts:
+- **EFSIndexer** — indexes Anchors (directory tree), PROPERTYs, and MIRRORs via resolver hooks
+- **TagResolver** — indexes TAG-based file placement via its `_activeByAAS` compact index
 
 ## Contract Indexing Approach
-To make fast directory browsing possible, the smart contracts maintain an internal index of the children for a given Topic (Folder). EFS utilizes the **EAS SchemaResolver** pattern. The `EFSIndexer` contract is registered as the resolver for all EFS schemas.
+To make fast directory browsing possible, two resolver contracts maintain complementary indices:
 
-When a user creates a new file (a `Data` attestation pointing to an `Anchor` pointing to a `Folder`):
-1. EAS automatically calls `onAttest` on the `EFSIndexer` in the same transaction.
-2. The indexer verifies the schema constraints and records the association between the `Folder UID` and the underlying `Anchor UID`.
-3. The indexer also records mapping data for the `Anchor UID` and the newest `Data` or `Property` attestation linked to it.
+**EFSIndexer** (resolver for ANCHOR, DATA, PROPERTY schemas):
+1. When an Anchor is created, EAS calls `onAttest` → the indexer records parent–child relationships, name lookups, and schema-filtered child lists.
+2. When a standalone DATA is created (`refUID = 0x0`), the indexer records content-addressed deduplication via `dataByContentKey[contentHash]`.
+3. When a PROPERTY or MIRROR references a DATA, the indexer records it in referencing indices.
 
-Essentially, the contract maintains a real-time tracking list for any given Folder. This allows a client to query a single function to fetch the directory contents.
+**TagResolver** (resolver for TAG schema):
+1. When a TAG with `applies=true` places a DATA at an Anchor, the TagResolver adds the DATA UID to `_activeByAAS[definition][attester][schema]` — a compact, swap-and-pop array enabling efficient folder listing.
+2. When a TAG with `applies=false` removes a placement, the TagResolver swap-and-pops the DATA UID out of the array.
+3. The TagResolver also calls `indexer.propagateContains(definition, attester)` to flag the Anchor's ancestors in the tree, enabling "has content" checks for tree rendering.
+
+This allows a client to query `getActiveTargetsByAttesterAndSchema(anchorUID, attester, DATA_SCHEMA_UID, start, length)` to get a compact, active-only list of DATAs at any path.
 
 ### Gas Limits, Spam, and Append-Only Storage
 Because EAS is permissionless, anyone can attest files to a folder. To prevent Out-Of-Gas (OOG) errors:
@@ -33,12 +43,13 @@ EFSIndexer emits structured events from its native schema resolver hooks, enabli
 
 ```solidity
 event AnchorCreated(bytes32 indexed parentUID, bytes32 indexed anchorUID, address indexed attester, bytes32 anchorSchema);
-event DataCreated(bytes32 indexed anchorUID, bytes32 indexed dataUID, address indexed attester);
+event DataCreated(bytes32 indexed dataUID, address indexed attester, bytes32 contentHash);
+event MirrorCreated(bytes32 indexed dataUID, bytes32 indexed mirrorUID, address indexed attester);
 event PropertyCreated(bytes32 indexed anchorUID, bytes32 indexed propertyUID, address indexed attester);
 event AttestationRevoked(bytes32 indexed uid, address indexed attester);
 ```
 
-All four events are indexed on the most useful lookup fields. A Graph subgraph subscribing to these events can reconstruct full directory state without any additional contract reads during sync.
+All events are indexed on the most useful lookup fields. `DataCreated` includes `contentHash` for off-chain dedup tracking. `MirrorCreated` links mirrors to their parent DATA. A Graph subgraph subscribing to these events can reconstruct full directory state without any additional contract reads during sync.
 
 `EFSSortOverlay` emits `ItemSorted(sortInfoUID, attester, itemUID, leftNeighbour, rightNeighbour)` for each item inserted into a sorted list — enabling The Graph to reconstruct sorted order off-chain.
 
@@ -46,19 +57,42 @@ All four events are indexed on the most useful lookup fields. A Graph subgraph s
 `getChildrenByAttesterAt(parentUID, attester, idx)` exposes direct index-based access into the `_childrenByAttester` array. Used internally by `EFSSortOverlay.processItems` to validate submitted items against the kernel — callers cannot inject arbitrary UIDs into their sorted view.
 
 ## Editions (Address-Based Namespaces)
-To support subjective file resolution natively onchain, the Indexer maintains additional append-only mappings:
+To support subjective file resolution natively onchain, two coordinated index systems work together:
+
+### EFSIndexer: Directory Structure
 - **Core Referencing History**: `_allReferencing` and `_referencingByAttester` track immutable history, ensuring revocations do not break the chain of edits.
-- **Subjective File Content**: `_dataAttestationsByAddress` tracks user iterations of a file payload. Clients use `getDataByAddressList` with a list of trusted addresses to auto-fallback and resolve the highest-trusted active file version in fast time.
-- **Deduplicated Directory Listings**: `getChildrenByAddressList` walks the global `_children` array (unique, insertion order) and includes only items where any of the provided attesters has contributed — no duplicates possible. Use this for rendering a flat directory view filtered to a set of trusted addresses.
-- **Schema + Attester Filtered Listings**: `getAnchorsBySchemaAndAddressList(parentUID, anchorSchema, attesters, startCursor, pageSize, reverseOrder, showRevoked)` intersects `_childrenBySchema[anchorSchema]` with `_containsAttestations` per attester. Use this when the caller wants a specific anchor type (e.g. `DATA_SCHEMA_UID` for file anchors, `SORT_INFO_SCHEMA_UID` for sort anchors) from a multi-attester directory without interleaving unrelated anchor types. This is the correct API for schema-aware directory browsing — EAS schemas are the fundamental unit of data classification, and directories can contain mixed Anchor types (files, sorts, metadata) that should be queried independently.
+- **Deduplicated Directory Listings**: `getChildrenByAddressList` walks the global `_children` array (unique, insertion order) and includes only items where any of the provided attesters has contributed — no duplicates possible. Pass the returned cursor to get the next page.
+- **Schema + Attester Filtered Listings**: `getAnchorsBySchemaAndAddressList(parentUID, anchorSchema, attesters, startCursor, pageSize, reverseOrder, showRevoked)` intersects `_childrenBySchema[anchorSchema]` with `_containsAttestations` per attester. Use this when the caller wants a specific anchor type (e.g. `DATA_SCHEMA_UID` for file anchors, `SORT_INFO_SCHEMA_UID` for sort anchors) from a multi-attester directory without interleaving unrelated anchor types.
+- **Content-Addressed Dedup**: `dataByContentKey[contentHash]` maps content hashes to the first (canonical) DATA UID.
 
-### `_childrenByAttester` Propagation Behaviour
-`_childrenByAttester[parentUID][attester]` is not limited to items the attester *created*. When an attester submits **any** attestation whose `refUID` chains up to a directory, the attester is considered "active" in that directory and the relevant ancestor anchors are pushed into their perspective arrays. In practice this means:
+### TagResolver: File Placement (Compact Index)
+- **`_activeByAAS[definition][attester][schema]`**: The primary index for folder listing. A compact, swap-and-pop array of target UIDs per (definition Anchor, attester, target schema). When `applies=true`, the target is pushed; when `applies=false`, it's swap-and-popped out. This gives O(1) add/remove and contiguous reads — no revoked-item scanning needed.
+- **`_activeByAASIndex[definition][attester][schema][target]`**: Position+1 index for O(1) swap-and-pop removal (0 = absent).
+- **Queried via**: `getActiveTargetsByAttesterAndSchema(definition, attester, schema, start, length)` and `getActiveTargetsByAttesterAndSchemaCount(definition, attester, schema)`.
 
-- Alice creates `apple.mp3` (Anchor) under `/music/`. `_childrenByAttester[musicUID][alice]` gets `apple.mp3`. ✓ Expected.
-- Bob attests DATA to Alice’s `apple.mp3`. `_childrenByAttester[musicUID][bob]` also gets `apple.mp3` — because Bob is now active in `/music/` via his DATA contribution.
+**Folder listing pattern**:
+```
+For each attester in editions:
+  files = tagResolver.getActiveTargetsByAttesterAndSchema(anchorUID, attester, DATA_SCHEMA_UID, 0, pageSize)
+  subfolders = tagResolver.getActiveTargetsByAttesterAndSchema(anchorUID, attester, ANCHOR_SCHEMA_UID, 0, pageSize)
+```
 
-**UI implication**: `getChildrenByAddressList(musicUID, [alice, bob])` walks the global `_children` array and O(1)-checks `_containsAttestations`. If alice has 6 anchors and bob contributed DATA to 3 of alice’s, the result is exactly 9 unique anchors. No client-side deduplication needed. For fair per-attester representation, fetch `getChildrenByAttester` per attester and merge client-side.
+### `propagateContains` (Tree Visibility)
+When a TAG with `applies=true` places a DATA at a structural Anchor, the TagResolver calls `indexer.propagateContains(definition, attester)`. This walks up the `_parents` chain from the definition Anchor, setting `_containsAttestations[ancestor][attester] = true` at each level. Early-exit on already-flagged ancestors makes repeated contributions amortized O(1). This enables the sidebar tree to show which folders contain content from a given attester without scanning their children.
+
+`MAX_ANCHOR_DEPTH = 32` caps the upward walk to prevent gas griefing via deeply nested Anchor chains.
+
+### `_childrenByAttester` and `_containsAttestations` Propagation Behaviour
+`_containsAttestations[anchorUID][attester]` is flagged when an attester contributes content under that anchor. Two paths trigger propagation:
+
+1. **Anchor creation**: When an attester creates an Anchor under a parent, the indexer walks up `_parents` flagging `_containsAttestations` and pushing to `_childrenByAttester` at each ancestor.
+2. **TAG-based file placement**: When the TagResolver processes a TAG with `applies=true` where the definition is a structural Anchor, it calls `indexer.propagateContains(definition, attester)` which performs the same upward walk.
+
+In practice this means:
+- Alice creates `apple.mp3` (Anchor) under `/music/`. `_childrenByAttester[musicUID][alice]` gets `apple.mp3`. Direct anchor creation.
+- Bob tags a DATA into Alice’s `apple.mp3` Anchor. TagResolver calls `propagateContains(apple.mp3, bob)` → `_containsAttestations[musicUID][bob]` is set and `apple.mp3` is pushed to `_childrenByAttester[musicUID][bob]`.
+
+**UI implication**: `getChildrenByAddressList(musicUID, [alice, bob])` walks the global `_children` array and O(1)-checks `_containsAttestations`. Both alice’s and bob’s contributions appear without duplicates.
 
 ## Efficient Client Traversal
 When a web client needs to load a directory:
@@ -103,26 +137,28 @@ indexer.getOutgoingAttestations(attester, TAG_SCHEMA_UID, 0, 100, false)
 
 ### On-Chain Query Functions
 - `getActiveTagUID(attester, targetID, definition)` — Returns the active tag attestation UID for a specific triple. Returns zero if no active tag exists (never set, revoked, or the active attestation was for a different triple).
+- `isActivelyTagged(targetID, definition)` — Returns true if any attester has an active `applies=true` tag for this (target, definition) pair.
+- `isActivelyTaggedByAny(targetID, definition, attesters[])` — Returns true if any of the given attesters has an active `applies=true` tag.
 - `getTagDefinitionCount(targetID)` — Number of distinct definitions ever applied to a target.
 - `getTagDefinitions(targetID, start, length)` — Paginated list of definitions applied to a target.
 - `getTaggedTargetCount(definition)` — Number of distinct targets ever tagged with a definition.
 - `getTaggedTargets(definition, start, length)` — Paginated list of targets tagged with a definition.
+- **`getActiveTargetsByAttesterAndSchema(definition, attester, schema, start, length)`** — Paginated list of active target UIDs from the compact `_activeByAAS` index. **This is the primary folder listing query** — returns only currently-placed items, no revoked-item scanning needed.
+- **`getActiveTargetsByAttesterAndSchemaCount(definition, attester, schema)`** — Count of active targets in the compact index.
 
 ### Edition-Aware Tag Filtering
-When filtering a directory listing by tags, the client must account for editions. Each file Anchor can have multiple DATA attestations (one per user). Tags target specific DATA UIDs, not the shared Anchor UID. The filtering algorithm is:
+When filtering a directory listing by tags, the client must account for editions. Tags target specific DATA UIDs, not the shared Anchor UID. The filtering algorithm is:
 
-1. **Resolve the tag definition**: `resolvePath(tagsAnchorUID, tagName)` returns the definition Anchor UID.
+1. **Resolve the tag definition**: `resolvePath(tagsAnchorUID, tagName)` returns the definition Anchor UID. Tag definitions can be nested (e.g., `/tags/nsfw/orgy/`); the UI walks `refUID` up from a definition to check if it's a descendant of `/tags/`.
 2. **Fetch tagged targets**: `getTaggedTargets(definitionUID, 0, count)` returns all DATA UIDs ever tagged with this definition.
-3. **For each file item in the directory listing**:
-   a. Determine the relevant attesters: `editionAddresses` (if viewing specific editions) or `[connectedAddress]` (if viewing own files).
-   b. For each attester, call `getDataByAddressList(anchorUID, [attester], false)` to get their current DATA UID.
-   c. If **any** of those DATA UIDs appears in the tagged targets set, the item matches the filter.
+3. **Build a DATA UID map for the directory**: For each file item, resolve its DATA UIDs via `getActiveTargetsByAttesterAndSchema(anchorUID, attester, DATA_SCHEMA_UID, 0, count)` for each attester in the editions list.
+4. **Match**: If **any** of the file's DATA UIDs appears in the tagged targets set, the item matches the filter.
 
 This ensures that tagging User A's edition of `test.txt` as "nsfw" does not cause User B's edition to appear when filtering by "nsfw".
 
 ### Edge Cases and Caveats
 - **Append-only discovery**: `getTaggedTargets` returns UIDs that were ever tagged, including revoked ones. A strict filter should additionally verify each candidate via `getActiveTagUID` or by checking the `applies` field of the active attestation.
-- **Updated DATA (new uploads)**: If a user uploads a new version of a file, `getDataByAddressList` returns the latest DATA UID. Tags on the old DATA UID do not carry over to the new version. Users must re-tag after uploading a new version.
+- **Updated DATA (new uploads)**: When a user uploads a new version, they TAG the new DATA at the path (`applies=true`) and TAG the old DATA (`applies=false`). Tags (labels like "nsfw") on the old DATA UID do not carry over to the new version. Users must re-tag after uploading a new version.
 - **Cross-user tagging**: User B can tag User A's DATA UID. The tag is stored under `(userB, dataA_UID, definition)` and `dataA_UID` appears in `getTaggedTargets`. When viewing User A's edition, the filter matches regardless of who applied the tag.
 - **Folder-level tags**: Tags on Anchor UIDs (folders) are checked directly against the anchor UID without DATA indirection.
 
@@ -187,7 +223,7 @@ EFSIndexer exposes a permissionless indexing API for any EAS attestation whose s
 - **`indexRevocation(bytes32 uid)`** — mirrors a revocation from EAS into `_isRevoked`. Call after `eas.revoke()` to make `isRevoked()` return true for externally-resolved schemas. Requires the attestation to already be revoked in EAS. Idempotent. Emits `RevocationIndexed`.
 - **`isIndexed(bytes32 uid) → bool`** — returns true if a UID was indexed via the public API (not via `onAttest`).
 
-**How EFSSortOverlay and TagResolver use this:**
+**How partner resolvers use this:**
 ```
 // EFSSortOverlay
 onAttest → indexer.index(attestation.uid)           // makes SORT_INFO discoverable
@@ -195,6 +231,10 @@ onRevoke → indexer.indexRevocation(attestation.uid) // syncs revocation state
 
 // TagResolver
 onAttest → indexer.index(attestation.uid)           // makes TAG attestations discoverable
+onRevoke → indexer.indexRevocation(attestation.uid) // syncs revocation state
+
+// MirrorResolver
+onAttest → indexer.index(attestation.uid)           // makes MIRROR discoverable via getReferencingAttestations
 onRevoke → indexer.indexRevocation(attestation.uid) // syncs revocation state
 ```
 
