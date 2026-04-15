@@ -1205,30 +1205,6 @@ describe("EFSIndexer", function () {
       expect(results[2]).to.equal(f3);
     });
 
-    it.skip("getChildrenByAddressList: no duplicates when multiple attesters contribute to same anchor [SKIPPED: DATA is standalone, old refUID-based propagation removed]", async function () {
-      const u1Addr = await user1.getAddress();
-      const u2Addr = await user2.getAddress();
-
-      // user2 attests DATA to the anchor user1 created (fileAnchorUID from beforeEach)
-      await eas.connect(user2).attest({
-        schema: dataSchemaUID,
-        data: {
-          recipient: ZeroAddress,
-          expirationTime: 0n,
-          revocable: true,
-          refUID: fileAnchorUID,
-          data: new ethers.AbiCoder().encode(["string", "string", "string"], ["ipfs://u2", "text/plain", "file"]),
-          value: 0n,
-        },
-      });
-
-      // Both user1 and user2 now have _containsAttestations[fileAnchorUID] = true.
-      // getChildrenByAddressList must return the anchor exactly once.
-      const [results] = await indexer.getChildrenByAddressList(parentUID, [u1Addr, u2Addr], 0n, 10, false, false);
-      expect(results.length).to.equal(1);
-      expect(results[0]).to.equal(fileAnchorUID);
-    });
-
     it("getChildrenByAddressList: cursor pagination returns all items exactly once", async function () {
       const schemaEncoder = new ethers.AbiCoder();
       const u1Addr = await user1.getAddress();
@@ -1412,52 +1388,6 @@ describe("EFSIndexer", function () {
       expect(await indexer.containsAttestations(rootUID, u2Address)).to.equal(true);
     });
 
-    it.skip("Should flag containsAttestations when a user attaches DATA schemas [SKIPPED: DATA is standalone, containsAttestations propagated via TAG instead]", async function () {
-      // User1 creates a file anchor
-      let tx = await eas.connect(user1).attest({
-        schema: anchorSchemaUID,
-        data: {
-          recipient: ZeroAddress,
-          expirationTime: 0n,
-          revocable: false,
-          refUID: folder2UID,
-          data: schemaEncoder.encode(["string", "bytes32"], ["shared_file.txt", dataSchemaUID]),
-          value: 0n,
-        },
-      });
-      fileUID = getUIDFromReceipt(await tx.wait());
-
-      // User2 attaches data to User1's file anchor (Collaborative Edition)
-      tx = await eas.connect(user2).attest({
-        schema: dataSchemaUID,
-        data: {
-          recipient: ZeroAddress,
-          expirationTime: 0n,
-          revocable: true,
-          refUID: fileUID,
-          data: schemaEncoder.encode(["string", "string", "string"], ["ipfs://content", "text/plain", "file"]),
-          value: 0n,
-        },
-      });
-      await tx.wait();
-
-      const u1Address = await user1.getAddress();
-      const u2Address = await user2.getAddress();
-
-      // User1 should be flagged on the folder because they created the anchor
-      expect(await indexer.containsAttestations(folder2UID, u1Address)).to.equal(true);
-
-      // User2 should be flagged on the FILE ANCHOR because they attached DATA to it
-      expect(await indexer.containsAttestations(fileUID, u2Address)).to.equal(true);
-
-      // User2 should ALSO be recursively flagged all the way up to ROOT because the indexing logic traverses _parents
-      expect(await indexer.containsAttestations(folder2UID, u2Address)).to.equal(true);
-      expect(await indexer.containsAttestations(folder1UID, u2Address)).to.equal(true);
-      expect(await indexer.containsAttestations(rootUID, u2Address)).to.equal(true);
-
-      // Check Schema specific flag for User2 on the File Anchor
-      expect(await indexer.containsSchemaAttestations(fileUID, u2Address, dataSchemaUID)).to.equal(true);
-    });
   });
 
   // ============================================================================================
@@ -1502,74 +1432,24 @@ describe("EFSIndexer", function () {
       await expect(tx).to.emit(indexer, "AnchorCreated").withArgs(parentUID, childUID, ownerAddr, ZERO_BYTES32);
     });
 
-    it.skip("emits DataCreated when DATA is attached to a file Anchor — skipped: old model used DATA.refUID=anchor; new model DATA is standalone", async function () {
+    it("emits DataCreated when standalone DATA is created", async function () {
       const ownerAddr = await owner.getAddress();
-
-      // Create file anchor (anchorSchema = DATA_SCHEMA_UID marks it as a file slot)
-      const anchorTx = await eas.connect(owner).attest({
-        schema: anchorSchemaUID,
-        data: {
-          recipient: ZeroAddress,
-          expirationTime: NO_EXPIRATION,
-          revocable: false,
-          refUID: parentUID,
-          data: enc.encode(["string", "bytes32"], ["event-file", dataSchemaUID]),
-          value: 0n,
-        },
-      });
-      const anchorUID = getUIDFromReceipt(await anchorTx.wait());
+      const contentHash = ethers.keccak256(ethers.toUtf8Bytes("event-test-content"));
 
       const dataTx = await eas.connect(owner).attest({
         schema: dataSchemaUID,
         data: {
           recipient: ZeroAddress,
           expirationTime: NO_EXPIRATION,
-          revocable: true,
-          refUID: anchorUID,
-          data: enc.encode(["string", "string", "string"], ["ipfs://test", "text/plain", "file"]),
-          value: 0n,
-        },
-      });
-      const dataUID = getUIDFromReceipt(await dataTx.wait());
-
-      await expect(dataTx).to.emit(indexer, "DataCreated").withArgs(anchorUID, dataUID, ownerAddr);
-    });
-
-    it.skip("emits AttestationRevoked when a DATA attestation is revoked — skipped: DATA is now non-revocable", async function () {
-      const ownerAddr = await owner.getAddress();
-
-      const anchorTx = await eas.connect(owner).attest({
-        schema: anchorSchemaUID,
-        data: {
-          recipient: ZeroAddress,
-          expirationTime: NO_EXPIRATION,
           revocable: false,
-          refUID: parentUID,
-          data: enc.encode(["string", "bytes32"], ["event-revoke-file", dataSchemaUID]),
-          value: 0n,
-        },
-      });
-      const anchorUID = getUIDFromReceipt(await anchorTx.wait());
-
-      const dataTx = await eas.connect(owner).attest({
-        schema: dataSchemaUID,
-        data: {
-          recipient: ZeroAddress,
-          expirationTime: NO_EXPIRATION,
-          revocable: true,
-          refUID: anchorUID,
-          data: enc.encode(["string", "string", "string"], ["ipfs://test", "text/plain", "file"]),
+          refUID: ZERO_BYTES32,
+          data: enc.encode(["bytes32", "uint64"], [contentHash, 42]),
           value: 0n,
         },
       });
       const dataUID = getUIDFromReceipt(await dataTx.wait());
 
-      const revokeTx = await eas.connect(owner).revoke({
-        schema: dataSchemaUID,
-        data: { uid: dataUID, value: 0n },
-      });
-
-      await expect(revokeTx).to.emit(indexer, "AttestationRevoked").withArgs(dataUID, ownerAddr);
+      await expect(dataTx).to.emit(indexer, "DataCreated").withArgs(dataUID, ownerAddr, contentHash);
     });
   });
 

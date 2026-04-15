@@ -64,7 +64,7 @@ describe("EFS Data Model — E2E Integration", function () {
 
   const encodeData = (contentHash: string, size: bigint) => enc.encode(["bytes32", "uint64"], [contentHash, size]);
 
-  const encodeProperty = (value: string) => enc.encode(["string"], [value]);
+  const encodeProperty = (key: string, value: string) => enc.encode(["string", "string"], [key, value]);
 
   const encodeTag = (definition: string, applies: boolean) => enc.encode(["bytes32", "bool"], [definition, applies]);
 
@@ -121,7 +121,7 @@ describe("EFS Data Model — E2E Integration", function () {
     return getUID(await tx.wait());
   }
 
-  async function createProperty(refUID: string, value: string, signer: Signer = owner): Promise<string> {
+  async function createProperty(refUID: string, key: string, value: string, signer: Signer = owner): Promise<string> {
     const tx = await eas.connect(signer).attest({
       schema: propertySchemaUID,
       data: {
@@ -129,7 +129,7 @@ describe("EFS Data Model — E2E Integration", function () {
         expirationTime: NO_EXPIRATION,
         revocable: true,
         refUID: refUID,
-        data: encodeProperty(value),
+        data: encodeProperty(key, value),
         value: 0n,
       },
     });
@@ -192,7 +192,7 @@ describe("EFS Data Model — E2E Integration", function () {
     const size = BigInt(Buffer.from(content).length);
 
     const dataUID = await createData(contentHash, size, signer);
-    const propertyUID = await createProperty(dataUID, contentType, signer);
+    const propertyUID = await createProperty(dataUID, "contentType", contentType, signer);
     const mirrorUID = await createMirror(dataUID, transportUID, mirrorUri, signer);
     const tagUID = await tagTarget(dataUID, folderUID, true, signer);
 
@@ -227,7 +227,7 @@ describe("EFS Data Model — E2E Integration", function () {
     );
     propertySchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
-      ["string value", futureIndexerAddr, true],
+      ["string key, string value", futureIndexerAddr, true],
     );
     dataSchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
@@ -260,7 +260,7 @@ describe("EFS Data Model — E2E Integration", function () {
 
     // Register schemas
     await (await registry.register("string name, bytes32 schemaUID", futureIndexerAddr, false)).wait();
-    await (await registry.register("string value", futureIndexerAddr, true)).wait();
+    await (await registry.register("string key, string value", futureIndexerAddr, true)).wait();
     await (await registry.register("bytes32 contentHash, uint64 size", futureIndexerAddr, false)).wait();
     await (await registry.register("bytes32 definition, bool applies", await tagResolver.getAddress(), true)).wait();
     await (
@@ -349,7 +349,8 @@ describe("EFS Data Model — E2E Integration", function () {
       const props = await indexer.getReferencingAttestations(dataUID, propertySchemaUID, 0, 10, false);
       expect(props.length).to.equal(1);
       const propAtt = await eas.getAttestation(props[0]);
-      const [decodedValue] = enc.decode(["string"], propAtt.data);
+      const [decodedKey, decodedValue] = enc.decode(["string", "string"], propAtt.data);
+      expect(decodedKey).to.equal("contentType");
       expect(decodedValue).to.equal("text/markdown");
 
       // Verify onchain MIRROR exists
@@ -490,13 +491,14 @@ describe("EFS Data Model — E2E Integration", function () {
   describe("PROPERTY Metadata on DATA", function () {
     it("should store contentType as PROPERTY", async function () {
       const dataUID = await createData(hash("typed file"), 10n);
-      await createProperty(dataUID, "image/jpeg");
+      await createProperty(dataUID, "contentType", "image/jpeg");
 
       const props = await indexer.getReferencingAttestations(dataUID, propertySchemaUID, 0, 10, false);
       expect(props.length).to.equal(1);
 
       const propAtt = await eas.getAttestation(props[0]);
-      const [val] = enc.decode(["string"], propAtt.data);
+      const [key, val] = enc.decode(["string", "string"], propAtt.data);
+      expect(key).to.equal("contentType");
       expect(val).to.equal("image/jpeg");
     });
 
@@ -508,19 +510,20 @@ describe("EFS Data Model — E2E Integration", function () {
       const v2 = await createData(v2Hash, 17n);
 
       // Attach previousVersion PROPERTY to v2 referencing v1
-      await createProperty(v2, v1);
+      await createProperty(v2, "previousVersion", v1);
 
       const props = await indexer.getReferencingAttestations(v2, propertySchemaUID, 0, 10, false);
       expect(props.length).to.equal(1);
       const propAtt = await eas.getAttestation(props[0]);
-      const [prevVersion] = enc.decode(["string"], propAtt.data);
+      const [key, prevVersion] = enc.decode(["string", "string"], propAtt.data);
+      expect(key).to.equal("previousVersion");
       expect(prevVersion).to.equal(v1);
     });
 
     it("should allow multiple PROPERTYs on same DATA (contentType + description)", async function () {
       const dataUID = await createData(hash("multi prop"), 10n);
-      await createProperty(dataUID, "text/html");
-      await createProperty(dataUID, "A cool webpage");
+      await createProperty(dataUID, "contentType", "text/html");
+      await createProperty(dataUID, "description", "A cool webpage");
 
       const props = await indexer.getReferencingAttestations(dataUID, propertySchemaUID, 0, 10, false);
       expect(props.length).to.equal(2);
@@ -648,7 +651,7 @@ describe("EFS Data Model — E2E Integration", function () {
       // Create DATA + contentType + mirror once
       const contentHash = hash("cat picture shared");
       const dataUID = await createData(contentHash, 18n);
-      await createProperty(dataUID, "image/jpeg");
+      await createProperty(dataUID, "contentType", "image/jpeg");
       await createMirror(dataUID, ipfsTransportUID, "ipfs://QmSharedCat");
 
       // Tag at both /memes/ and /animals/
@@ -703,11 +706,11 @@ describe("EFS Data Model — E2E Integration", function () {
       // Upload v2 (different content, same folder)
       const v2Hash = hash("v2 content updated");
       const v2DataUID = await createData(v2Hash, 18n);
-      await createProperty(v2DataUID, "text/markdown");
+      await createProperty(v2DataUID, "contentType", "text/markdown");
       await createMirror(v2DataUID, onchainTransportUID, "web3://0xV2");
 
       // Link v2 → v1 via previousVersion PROPERTY
-      await createProperty(v2DataUID, v1.dataUID);
+      await createProperty(v2DataUID, "previousVersion", v1.dataUID);
 
       // Untag v1, tag v2
       await tagTarget(v1.dataUID, docsUID, false);
@@ -734,12 +737,12 @@ describe("EFS Data Model — E2E Integration", function () {
       await tagTarget(v1, docsUID, true);
 
       const v2 = await createData(hash("v2"), 2n);
-      await createProperty(v2, v1); // previousVersion
+      await createProperty(v2, "previousVersion", v1); // previousVersion
       await tagTarget(v1, docsUID, false);
       await tagTarget(v2, docsUID, true);
 
       const v3 = await createData(hash("v3"), 2n);
-      await createProperty(v3, v2); // previousVersion
+      await createProperty(v3, "previousVersion", v2); // previousVersion
       await tagTarget(v2, docsUID, false);
       await tagTarget(v3, docsUID, true);
 
@@ -1428,9 +1431,9 @@ describe("EFS Data Model — E2E Integration", function () {
       // ── Alice edits photo2 (new version) ──
       const photo2v2Hash = hash("mountain view pixels ENHANCED");
       const photo2v2 = await createData(photo2v2Hash, 30n, alice);
-      await createProperty(photo2v2, "image/jpeg", alice);
+      await createProperty(photo2v2, "contentType", "image/jpeg", alice);
       await createMirror(photo2v2, ipfsTransportUID, "ipfs://QmMountainV2", alice);
-      await createProperty(photo2v2, photo2.dataUID, alice); // previousVersion
+      await createProperty(photo2v2, "previousVersion", photo2.dataUID, alice); // previousVersion
 
       // Untag old, tag new
       await tagTarget(photo2.dataUID, vacationUID, false, alice);

@@ -33,7 +33,7 @@ describe("EFS Transports & Data Model", function () {
 
   const encodeData = (contentHash: string, size: bigint) => enc.encode(["bytes32", "uint64"], [contentHash, size]);
 
-  const encodeProperty = (value: string) => enc.encode(["string"], [value]);
+  const encodeProperty = (key: string, value: string) => enc.encode(["string", "string"], [key, value]);
 
   const encodeTag = (definition: string, applies: boolean) => enc.encode(["bytes32", "bool"], [definition, applies]);
 
@@ -86,7 +86,7 @@ describe("EFS Transports & Data Model", function () {
     );
     propertySchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
-      ["string value", futureIndexerAddr, true],
+      ["string key, string value", futureIndexerAddr, true],
     );
     dataSchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
@@ -120,7 +120,7 @@ describe("EFS Transports & Data Model", function () {
 
     // Register schemas
     await (await registry.register("string name, bytes32 schemaUID", futureIndexerAddr, false)).wait();
-    await (await registry.register("string value", futureIndexerAddr, true)).wait();
+    await (await registry.register("string key, string value", futureIndexerAddr, true)).wait();
     await (await registry.register("bytes32 contentHash, uint64 size", futureIndexerAddr, false)).wait();
     await (await registry.register("bytes32 definition, bool applies", await tagResolver.getAddress(), true)).wait();
     await (
@@ -207,7 +207,7 @@ describe("EFS Transports & Data Model", function () {
     return getUID(await tx.wait());
   }
 
-  async function createProperty(refUID: string, value: string, signer: Signer = owner): Promise<string> {
+  async function createProperty(refUID: string, key: string, value: string, signer: Signer = owner): Promise<string> {
     const tx = await eas.connect(signer).attest({
       schema: propertySchemaUID,
       data: {
@@ -215,7 +215,7 @@ describe("EFS Transports & Data Model", function () {
         expirationTime: NO_EXPIRATION,
         revocable: true,
         refUID: refUID,
-        data: encodeProperty(value),
+        data: encodeProperty(key, value),
         value: 0n,
       },
     });
@@ -319,7 +319,7 @@ describe("EFS Transports & Data Model", function () {
     it("should allow PROPERTY on DATA attestation (contentType)", async function () {
       const contentHash = ethers.keccak256(ethers.toUtf8Bytes("image data"));
       const dataUID = await createData(contentHash, 1024n);
-      const propUID = await createProperty(dataUID, "image/jpeg");
+      const propUID = await createProperty(dataUID, "contentType", "image/jpeg");
 
       expect(propUID).to.not.equal(ZERO_BYTES32);
     });
@@ -581,7 +581,7 @@ describe("EFS Transports & Data Model", function () {
       const dataUID = await createData(contentHash, 15n);
 
       // 2. Attach PROPERTY (contentType)
-      await createProperty(dataUID, "text/markdown");
+      await createProperty(dataUID, "contentType", "text/markdown");
 
       // 3. Create MIRROR (onchain retrieval)
       await createMirror(dataUID, onchainUID, "web3://0x1234567890123456789012345678901234567890");

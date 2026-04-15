@@ -635,7 +635,7 @@ export const Toolbar = ({
 
       // 3) Create PROPERTY(contentType) referencing DATA
       notification.info("Attesting content type...");
-      const encodedProperty = ethers.AbiCoder.defaultAbiCoder().encode(["string"], [contentType]);
+      const encodedProperty = ethers.AbiCoder.defaultAbiCoder().encode(["string", "string"], ["contentType", contentType]);
       const propTxHash = await attest({
         functionName: "attest",
         args: [

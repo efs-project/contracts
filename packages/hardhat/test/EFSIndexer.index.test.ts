@@ -188,46 +188,6 @@ describe("EFSIndexer — public index() API", function () {
       await indexer.index(rootUID); // no revert
     });
 
-    it.skip("silently skips EFS DATA schema — skipped: old DATA model (refUID=anchor, revocable); new model is standalone", async function () {
-      // Create a root anchor first
-      const rootTx = await eas.connect(owner).attest({
-        schema: anchorSchemaUID,
-        data: {
-          recipient: ZeroAddress,
-          expirationTime: NO_EXPIRATION,
-          revocable: false,
-          refUID: ZERO_BYTES32,
-          data: enc.encode(["string", "bytes32"], ["root", ZERO_BYTES32]),
-          value: 0n,
-        },
-      });
-      const rootUID = getUID(await rootTx.wait());
-      const fileTx = await eas.connect(owner).attest({
-        schema: anchorSchemaUID,
-        data: {
-          recipient: ZeroAddress,
-          expirationTime: NO_EXPIRATION,
-          revocable: false,
-          refUID: rootUID,
-          data: enc.encode(["string", "bytes32"], ["file.txt", dataSchemaUID]),
-          value: 0n,
-        },
-      });
-      const fileAnchorUID = getUID(await fileTx.wait());
-      const dataTx = await eas.connect(alice).attest({
-        schema: dataSchemaUID,
-        data: {
-          recipient: ZeroAddress,
-          expirationTime: NO_EXPIRATION,
-          revocable: true,
-          refUID: fileAnchorUID,
-          data: enc.encode(["string", "string", "string"], ["ipfs://foo", "text/plain", "file"]),
-          value: 0n,
-        },
-      });
-      const dataUID = getUID(await dataTx.wait());
-      expect(await indexer.index.staticCall(dataUID)).to.be.false;
-    });
   });
 
   // ============================================================================================
@@ -489,51 +449,6 @@ describe("EFSIndexer — public index() API", function () {
       await expect(indexer.indexRevocation(fakeUID)).to.be.revertedWithCustomError(indexer, "InvalidAttestation");
     });
 
-    it.skip("works for EFS-native schema (DATA) revocations too — skipped: DATA is now non-revocable", async function () {
-      // Create root + file anchor + data
-      const rootTx = await eas.connect(owner).attest({
-        schema: anchorSchemaUID,
-        data: {
-          recipient: ZeroAddress,
-          expirationTime: NO_EXPIRATION,
-          revocable: false,
-          refUID: ZERO_BYTES32,
-          data: enc.encode(["string", "bytes32"], ["root", ZERO_BYTES32]),
-          value: 0n,
-        },
-      });
-      const rootUID = getUID(await rootTx.wait());
-      const fileTx = await eas.connect(owner).attest({
-        schema: anchorSchemaUID,
-        data: {
-          recipient: ZeroAddress,
-          expirationTime: NO_EXPIRATION,
-          revocable: false,
-          refUID: rootUID,
-          data: enc.encode(["string", "bytes32"], ["file.txt", dataSchemaUID]),
-          value: 0n,
-        },
-      });
-      const fileAnchorUID = getUID(await fileTx.wait());
-      const dataTx = await eas.connect(alice).attest({
-        schema: dataSchemaUID,
-        data: {
-          recipient: ZeroAddress,
-          expirationTime: NO_EXPIRATION,
-          revocable: true,
-          refUID: fileAnchorUID,
-          data: enc.encode(["string", "string", "string"], ["ipfs://foo", "text/plain", "file"]),
-          value: 0n,
-        },
-      });
-      const dataUID = getUID(await dataTx.wait());
-
-      // EFS onRevoke already handles this — but indexRevocation should also work without double-effect
-      await eas.connect(alice).revoke({ schema: dataSchemaUID, data: { uid: dataUID, value: 0n } });
-      // Already revoked by onRevoke hook; indexRevocation should be idempotent
-      await indexer.indexRevocation(dataUID);
-      expect(await indexer.isRevoked(dataUID)).to.be.true;
-    });
   });
 
   // ============================================================================================

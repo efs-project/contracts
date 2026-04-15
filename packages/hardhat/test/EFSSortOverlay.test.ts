@@ -577,33 +577,6 @@ describe("EFSSortOverlay", function () {
   // REVOKED ITEMS — consistency
   // ============================================================================================
 
-  describe("revoked items in sorted list", function () {
-    it.skip("revoked items are inserted but skipped by default in getSortedChunk — skipped: DATA is now non-revocable; revocation test needs redesign for new model", async function () {
-      const dirUID = await createAnchor(alice, "dir");
-
-      // Create a DATA attestation (revocable) under a file anchor
-      const fileAnchorUID = await createAnchor(alice, "file", dirUID, dataSchemaUID);
-      const dataTx = await eas.connect(alice).attest({
-        schema: dataSchemaUID,
-        data: {
-          recipient: ZeroAddress,
-          expirationTime: 0n,
-          revocable: true,
-          refUID: fileAnchorUID,
-          data: enc.encode(["string", "string", "string"], ["ipfs://v1", "text/plain", "file"]),
-          value: 0n,
-        },
-      });
-      const dataUID = getUID(await dataTx.wait());
-
-      // Revoke the data attestation
-      await eas.connect(alice).revoke({ schema: dataSchemaUID, data: { uid: dataUID, value: 0n } });
-      expect(await indexer.isRevoked(dataUID)).to.equal(true);
-
-      // The anchor itself is not revocable, so it's still in the kernel — confirm isRevoked=false
-      expect(await indexer.isRevoked(fileAnchorUID)).to.equal(false);
-    });
-  });
 
   // ============================================================================================
   // TIMESTAMP SORT
