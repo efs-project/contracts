@@ -5,10 +5,10 @@ import { ethers } from "ethers";
 import { encodeDeployData, toHex, zeroHash } from "viem";
 import { useAccount, usePublicClient, useWalletClient } from "wagmi";
 import { ArrowUpTrayIcon, LinkIcon, PlusIcon, TrashIcon } from "@heroicons/react/24/outline";
-import { useTargetNetwork } from "~~/hooks/scaffold-eth/useTargetNetwork";
 import { useDeployedContractInfo, useScaffoldReadContract, useScaffoldWriteContract } from "~~/hooks/scaffold-eth";
-import { TRANSPORT_LABELS, detectTransport, resolveGatewayUrl } from "~~/utils/efs/transports";
+import { useTargetNetwork } from "~~/hooks/scaffold-eth/useTargetNetwork";
 import { TAG_RESOLVER_ABI } from "~~/utils/efs/tagResolver";
+import { TRANSPORT_LABELS, detectTransport, resolveGatewayUrl } from "~~/utils/efs/transports";
 import { notification } from "~~/utils/scaffold-eth";
 
 const MOCK_CHUNKED_FILE_ABI = [
@@ -29,7 +29,6 @@ interface MirrorItem {
   attester: string;
   timestamp: bigint;
 }
-
 
 const FILE_VIEW_MIRRORS_ABI = [
   {
@@ -97,8 +96,7 @@ export const MirrorsPanel = ({
   const resolveDataUID = useCallback(async () => {
     if (!publicClient || !tagResolverInfo || !dataSchemaUID || !fileAnchorUID) return;
 
-    const attesters =
-      editionAddresses.length > 0 ? editionAddresses : connectedAddress ? [connectedAddress] : [];
+    const attesters = editionAddresses.length > 0 ? editionAddresses : connectedAddress ? [connectedAddress] : [];
     if (attesters.length === 0) return;
 
     for (const attester of attesters) {
@@ -119,7 +117,7 @@ export const MirrorsPanel = ({
               fileAnchorUID as `0x${string}`,
               attester as `0x${string}`,
               dataSchemaUID as `0x${string}`,
-              (count - 1n),
+              count - 1n,
               1n,
             ],
           })) as `0x${string}`[];
@@ -319,7 +317,7 @@ export const MirrorsPanel = ({
       if (dataBytes.length > MAX_ONCHAIN_SIZE) {
         notification.error(
           `File too large for on-chain upload (${Math.round(dataBytes.length / 1024 / 1024)}MB). ` +
-          `Maximum is ~${MAX_ONCHAIN_SIZE / 1_000_000}MB. Use IPFS or Arweave for large files.`,
+            `Maximum is ~${MAX_ONCHAIN_SIZE / 1_000_000}MB. Use IPFS or Arweave for large files.`,
         );
         return;
       }
@@ -434,7 +432,9 @@ export const MirrorsPanel = ({
             const gwUrl = resolveGatewayUrl(m.uri);
             return (
               <div key={m.uid} className="flex items-center gap-1.5 text-xs group">
-                <span className="badge badge-xs badge-outline shrink-0">{getTransportLabel(m.transportDefinition)}</span>
+                <span className="badge badge-xs badge-outline shrink-0">
+                  {getTransportLabel(m.transportDefinition)}
+                </span>
                 {gwUrl || m.uri.startsWith("http") ? (
                   <a
                     href={gwUrl || m.uri}
@@ -463,9 +463,7 @@ export const MirrorsPanel = ({
               </div>
             );
           })}
-          {mirrors.length === 0 && !isLoading && (
-            <span className="text-xs text-base-content/40">No mirrors found</span>
-          )}
+          {mirrors.length === 0 && !isLoading && <span className="text-xs text-base-content/40">No mirrors found</span>}
         </div>
       )}
 
@@ -511,7 +509,14 @@ export const MirrorsPanel = ({
           )}
 
           <div className="flex gap-1 justify-end">
-            <button className="btn btn-ghost btn-xs" onClick={() => { setIsAddingMirror(false); setFileToUpload(null); setNewUri(""); }}>
+            <button
+              className="btn btn-ghost btn-xs"
+              onClick={() => {
+                setIsAddingMirror(false);
+                setFileToUpload(null);
+                setNewUri("");
+              }}
+            >
               Cancel
             </button>
             <button

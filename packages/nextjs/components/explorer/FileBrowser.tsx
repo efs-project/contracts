@@ -873,7 +873,13 @@ export const FileBrowser = ({
                       address: tagResolverAddress,
                       abi: TAG_RESOLVER_ABI,
                       functionName: "getActiveTargetsByAttesterAndSchema",
-                      args: [item.uid as `0x${string}`, attester as `0x${string}`, dataSchemaUID as `0x${string}`, 0n, count],
+                      args: [
+                        item.uid as `0x${string}`,
+                        attester as `0x${string}`,
+                        dataSchemaUID as `0x${string}`,
+                        0n,
+                        count,
+                      ],
                     })) as `0x${string}`[];
                     for (const t of targets) {
                       if (t !== zeroHash) dataUIDs.add(t.toLowerCase());
@@ -1211,7 +1217,9 @@ export const FileBrowser = ({
           {/* Transport badge — shown when file preview is loaded */}
           {fileContent && !isFileLoading && fileContentType && (
             <div className="px-4 py-1 border-b border-base-300 shrink-0 flex gap-1.5 items-center">
-              <span className="badge badge-sm badge-outline">{TRANSPORT_LABELS[fileTransportType as keyof typeof TRANSPORT_LABELS] || fileTransportType}</span>
+              <span className="badge badge-sm badge-outline">
+                {TRANSPORT_LABELS[fileTransportType as keyof typeof TRANSPORT_LABELS] || fileTransportType}
+              </span>
               <span className="text-xs text-base-content/50">{fileContentType}</span>
             </div>
           )}
@@ -1254,7 +1262,10 @@ export const FileBrowser = ({
                   src={fileContent}
                   controls
                   className="max-w-full h-auto rounded cursor-pointer"
-                  onClick={e => { e.preventDefault(); setPreviewFullscreen(true); }}
+                  onClick={e => {
+                    e.preventDefault();
+                    setPreviewFullscreen(true);
+                  }}
                 />
               ) : fileContentType?.startsWith("audio/") ? (
                 <audio src={fileContent} controls className="w-full" />
@@ -1275,10 +1286,7 @@ export const FileBrowser = ({
 
           {/* Mirrors panel */}
           {!selectedFile.isFolder && (
-            <MirrorsPanel
-              fileAnchorUID={selectedFile.uid}
-              editionAddresses={editionAddresses}
-            />
+            <MirrorsPanel fileAnchorUID={selectedFile.uid} editionAddresses={editionAddresses} />
           )}
         </div>
       )}
@@ -1360,11 +1368,7 @@ export const FileBrowser = ({
                     style={{ width: "90vw", height: "85vh" }}
                   />
                 ) : fileContentType?.startsWith("video/") ? (
-                  <video
-                    src={fileContent}
-                    controls
-                    className="max-w-[90vw] max-h-[85vh] object-contain"
-                  />
+                  <video src={fileContent} controls className="max-w-[90vw] max-h-[85vh] object-contain" />
                 ) : fileContentType?.startsWith("audio/") ? (
                   <audio src={fileContent} controls className="w-[60vw]" />
                 ) : fileContentType && !isTextViewable(fileContentType) ? (

@@ -548,7 +548,7 @@ export const Toolbar = ({
         if (dataBytes.length > MAX_ONCHAIN_SIZE) {
           notification.error(
             `File too large for on-chain upload (${Math.round(dataBytes.length / 1024 / 1024)}MB). ` +
-            `Maximum is ~${MAX_ONCHAIN_SIZE / 1_000_000}MB. Use IPFS or Arweave for large files.`,
+              `Maximum is ~${MAX_ONCHAIN_SIZE / 1_000_000}MB. Use IPFS or Arweave for large files.`,
           );
           setIsSubmitting(false);
           return;
@@ -635,7 +635,10 @@ export const Toolbar = ({
 
       // 3) Create PROPERTY(contentType) referencing DATA
       notification.info("Attesting content type...");
-      const encodedProperty = ethers.AbiCoder.defaultAbiCoder().encode(["string", "string"], ["contentType", contentType]);
+      const encodedProperty = ethers.AbiCoder.defaultAbiCoder().encode(
+        ["string", "string"],
+        ["contentType", contentType],
+      );
       const propTxHash = await attest({
         functionName: "attest",
         args: [
@@ -812,9 +815,7 @@ export const Toolbar = ({
       {/* DaisyUI Modal */}
       <dialog id="create_modal" className="modal" ref={modalRef}>
         <div className="modal-box">
-          <h3 className="font-bold text-lg">
-            {creationType === "Folder" ? "Create New Folder" : "Add File"}
-          </h3>
+          <h3 className="font-bold text-lg">{creationType === "Folder" ? "Create New Folder" : "Add File"}</h3>
           {creationType !== "Folder" && (
             <div className="tabs tabs-bordered mt-2">
               <button
@@ -840,7 +841,10 @@ export const Toolbar = ({
               placeholder={`Enter ${creationType === "Folder" ? "folder" : "file"} name`}
               className="input input-bordered w-full"
               value={newName}
-              onChange={e => { setNewName(e.target.value); setExistingAnchorWarning(false); }}
+              onChange={e => {
+                setNewName(e.target.value);
+                setExistingAnchorWarning(false);
+              }}
               onKeyDown={e => {
                 if (
                   e.key === "Enter" &&
@@ -914,7 +918,9 @@ export const Toolbar = ({
                     <span>File Details</span>
                     {(pasteContentType || pasteSize || pasteContentHash) && (
                       <span className="badge badge-xs badge-success ml-1">
-                        {[pasteContentType && "type", pasteSize && "size", pasteContentHash && "hash"].filter(Boolean).join(", ")}
+                        {[pasteContentType && "type", pasteSize && "size", pasteContentHash && "hash"]
+                          .filter(Boolean)
+                          .join(", ")}
                       </span>
                     )}
                   </span>
@@ -922,7 +928,10 @@ export const Toolbar = ({
                     <button
                       type="button"
                       className="btn btn-xs btn-outline"
-                      onClick={e => { e.stopPropagation(); handleFetchInfo(); }}
+                      onClick={e => {
+                        e.stopPropagation();
+                        handleFetchInfo();
+                      }}
                       disabled={isFetchingInfo}
                     >
                       {isFetchingInfo ? "Fetching..." : "Fetch Info"}
@@ -966,15 +975,16 @@ export const Toolbar = ({
                         value={pasteContentHash || ""}
                         onChange={e => {
                           const val = e.target.value;
-                          if (!val) { setPasteContentHash(null); return; }
+                          if (!val) {
+                            setPasteContentHash(null);
+                            return;
+                          }
                           setPasteContentHash(val as `0x${string}`);
                         }}
                       />
                       {pasteContentHash && (
                         <label className="label py-0">
-                          <span className="label-text-alt text-success text-xs">
-                            Verified from file bytes
-                          </span>
+                          <span className="label-text-alt text-success text-xs">Verified from file bytes</span>
                         </label>
                       )}
                     </div>
@@ -986,7 +996,8 @@ export const Toolbar = ({
 
           {existingAnchorWarning && creationType !== "Folder" && (
             <div className="alert alert-warning mt-2 text-sm py-2">
-              A file named &quot;{newName}&quot; already exists here. Submitting will add a new version to the existing anchor.
+              A file named &quot;{newName}&quot; already exists here. Submitting will add a new version to the existing
+              anchor.
             </div>
           )}
 
@@ -1047,7 +1058,11 @@ export const Toolbar = ({
                 (creationType === "PasteLink" && !pasteUri)
               }
             >
-              {isSubmitting ? "Creating..." : existingAnchorWarning && creationType !== "Folder" ? "Update Existing" : "Create"}
+              {isSubmitting
+                ? "Creating..."
+                : existingAnchorWarning && creationType !== "Folder"
+                  ? "Update Existing"
+                  : "Create"}
             </button>
           </div>
         </div>
