@@ -252,13 +252,7 @@ async function main() {
     addressList: string[],
   ): Promise<{ uid: string; uri: string } | null> => {
     for (const attester of addressList) {
-      const targets = await tagResolver.getActiveTargetsByAttesterAndSchema(
-        anchorUID,
-        attester,
-        dataSchemaUID,
-        0,
-        1,
-      );
+      const targets = await tagResolver.getActiveTargetsByAttesterAndSchema(anchorUID, attester, dataSchemaUID, 0, 1);
       if (targets.length > 0) {
         const dataUID = targets[0];
         // Resolve the MIRROR URI for this DATA
@@ -617,7 +611,11 @@ async function main() {
 
   // Bob-only: 3 anchors he created + anchors where he placed DATA via TAG
   const [bobOnly] = await indexer.getChildrenByAddressList(musicUID, [bobAddr], 0n, 50, false, false);
-  assert("Bob-only dedup = 6 unique anchors (3 created + 3 with TAG placement)", bobOnly.length === 6, `got ${bobOnly.length}`);
+  assert(
+    "Bob-only dedup = 6 unique anchors (3 created + 3 with TAG placement)",
+    bobOnly.length === 6,
+    `got ${bobOnly.length}`,
+  );
 
   // Combined [alice, bob]: 9 unique anchors (all in /music/ except the SORT_INFO naming anchor
   // which was created by deployer, not alice or bob)
@@ -662,11 +660,7 @@ async function main() {
 
   // Now only v2 should resolve
   const appleAfterV2 = await resolveEdition(aliceApple, [aliceAddr]);
-  assert(
-    "After version swap, v2 resolves",
-    appleAfterV2?.uri === "ipfs://alice-apple-v2",
-    appleAfterV2?.uri ?? "null",
-  );
+  assert("After version swap, v2 resolves", appleAfterV2?.uri === "ipfs://alice-apple-v2", appleAfterV2?.uri ?? "null");
 
   // Verify previousVersion PROPERTY chain
   const v2Props = await indexer.getReferencingAttestations(aliceAppleV2.uid, propertySchemaUID, 0, 10, false);
@@ -693,32 +687,20 @@ async function main() {
   // Alice tags apple and banana DATA as "favorite"
   await tagLabel(alice, aliceAppleV2.uid, favoriteDefUID);
   await tagLabel(alice, aliceAppleData.uid, favoriteDefUID); // tag v1 too (both versions labeled)
-  const aliceBananaData = (await tagResolver.getActiveTargetsByAttesterAndSchema(
-    aliceBanana,
-    aliceAddr,
-    dataSchemaUID,
-    0,
-    1,
-  ))[0];
+  const aliceBananaData = (
+    await tagResolver.getActiveTargetsByAttesterAndSchema(aliceBanana, aliceAddr, dataSchemaUID, 0, 1)
+  )[0];
   await tagLabel(alice, aliceBananaData, favoriteDefUID);
 
   // Bob tags apple DATA as "favorite" and mango DATA as "classic"
-  const bobAppleData = (await tagResolver.getActiveTargetsByAttesterAndSchema(
-    aliceApple,
-    bobAddr,
-    dataSchemaUID,
-    0,
-    1,
-  ))[0];
+  const bobAppleData = (
+    await tagResolver.getActiveTargetsByAttesterAndSchema(aliceApple, bobAddr, dataSchemaUID, 0, 1)
+  )[0];
   await tagLabel(bob, bobAppleData, favoriteDefUID);
 
-  const aliceMangoData = (await tagResolver.getActiveTargetsByAttesterAndSchema(
-    aliceMango,
-    aliceAddr,
-    dataSchemaUID,
-    0,
-    1,
-  ))[0];
+  const aliceMangoData = (
+    await tagResolver.getActiveTargetsByAttesterAndSchema(aliceMango, aliceAddr, dataSchemaUID, 0, 1)
+  )[0];
   await tagLabel(bob, aliceMangoData, classicDefUID);
   console.log("  Alice: favorite(apple v1+v2, banana); Bob: favorite(apple), classic(mango)");
 
@@ -727,7 +709,10 @@ async function main() {
     "apple v2 DATA is actively tagged as favorite",
     await tagResolver.isActivelyTagged(aliceAppleV2.uid, favoriteDefUID),
   );
-  assert("banana DATA is actively tagged as favorite", await tagResolver.isActivelyTagged(aliceBananaData, favoriteDefUID));
+  assert(
+    "banana DATA is actively tagged as favorite",
+    await tagResolver.isActivelyTagged(aliceBananaData, favoriteDefUID),
+  );
   assert("mango DATA is actively tagged as classic", await tagResolver.isActivelyTagged(aliceMangoData, classicDefUID));
 
   // getActiveTagUID: specific attester's active tag
@@ -862,11 +847,7 @@ async function main() {
 
   // Existing sorted data is still readable after revoke
   const afterRevoke = await readSortedAll(alphaInfoUID, musicUID);
-  assert(
-    "Sorted data still readable after sort revoke",
-    afterRevoke.length === 10,
-    `got ${afterRevoke.length}`,
-  );
+  assert("Sorted data still readable after sort revoke", afterRevoke.length === 10, `got ${afterRevoke.length}`);
 
   // Editions still resolve correctly after sort is revoked (sort ≠ content)
   const appleEditionAfterSortRevoke = await resolveEdition(aliceApple, [aliceAddr]);

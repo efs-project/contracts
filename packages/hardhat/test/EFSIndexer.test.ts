@@ -463,7 +463,7 @@ describe("EFSIndexer", function () {
     // let dataUID: string;
     let userFileUID: string;
     let user2FileUID: string;
-    let fileUID: string;
+    let _fileUID: string;
     const schemaEncoder = new ethers.AbiCoder();
 
     beforeEach(async function () {
@@ -510,7 +510,7 @@ describe("EFSIndexer", function () {
         },
       });
       const rcFile = await txFile.wait();
-      fileUID = getUIDFromReceipt(rcFile);
+      _fileUID = getUIDFromReceipt(rcFile);
 
       // 4. Create standalone DATA (new model: refUID=0x0, non-revocable)
       const contentHash = ethers.keccak256(ethers.toUtf8Bytes("my_video.mp4"));
@@ -623,7 +623,7 @@ describe("EFSIndexer", function () {
   describe("Kernel Keep-Forever & _isRevoked Filtering", function () {
     const schemaEncoder = new ethers.AbiCoder();
     let parentUID: string;
-    let child1UID: string;
+    let _child1UID: string;
     let _child2UID: string;
     let dataUID1: string;
 
@@ -655,7 +655,7 @@ describe("EFSIndexer", function () {
           value: 0n,
         },
       });
-      child1UID = getUIDFromReceipt(await txChild1.wait());
+      _child1UID = getUIDFromReceipt(await txChild1.wait());
 
       const txChild2 = await eas.connect(user1).attest({
         schema: anchorSchemaUID,
@@ -744,7 +744,6 @@ describe("EFSIndexer", function () {
       const count = await indexer.getChildrenByAttesterCount(parentUID, await user1.getAddress());
       expect(count).to.equal(2);
     });
-
   });
 
   describe("Tags (Generic Referencing via tagSchemaUID)", function () {
@@ -1296,7 +1295,7 @@ describe("EFSIndexer", function () {
     let rootUID: string;
     let folder1UID: string;
     let folder2UID: string;
-    let fileUID: string;
+    let _fileUID: string;
 
     beforeEach(async function () {
       // Create Root (Zero Hash)
@@ -1355,7 +1354,7 @@ describe("EFSIndexer", function () {
           value: 0n,
         },
       });
-      fileUID = getUIDFromReceipt(await tx.wait());
+      _fileUID = getUIDFromReceipt(await tx.wait());
 
       // Check direct flag on the folder (since anchor refUID = folder2UID)
       const u1Address = await user1.getAddress();
@@ -1387,7 +1386,6 @@ describe("EFSIndexer", function () {
       expect(await indexer.containsAttestations(folder1UID, u2Address)).to.equal(true);
       expect(await indexer.containsAttestations(rootUID, u2Address)).to.equal(true);
     });
-
   });
 
   // ============================================================================================

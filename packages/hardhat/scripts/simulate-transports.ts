@@ -40,10 +40,14 @@ async function main() {
     }
   };
 
-  console.log("\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550");
+  console.log(
+    "\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550",
+  );
   console.log("  EFS Transports & Mirrors Simulation");
   console.log("  DATA \u2192 MIRROR(s) \u2192 Gateway Resolution");
-  console.log("\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\n");
+  console.log(
+    "\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\n",
+  );
 
   const [deployer, user1, user2] = await ethers.getSigners();
   const owner = deployer;
@@ -250,8 +254,8 @@ async function main() {
   await property(owner, docData.uid, "contentType", "application/pdf");
 
   // Three transports for the same DATA
-  const docMirrorIPFS = await createMirror(owner, docData.uid, ipfsTransportUID, "ipfs://QmPaper456");
-  const docMirrorArweave = await createMirror(owner, docData.uid, arweaveTransportUID, "ar://paper789");
+  const _docMirrorIPFS = await createMirror(owner, docData.uid, ipfsTransportUID, "ipfs://QmPaper456");
+  const _docMirrorArweave = await createMirror(owner, docData.uid, arweaveTransportUID, "ar://paper789");
   const docMirrorHTTPS = await createMirror(owner, docData.uid, httpsTransportUID, "https://example.com/paper.pdf");
   await tag(owner, docData.uid, docUID, true);
 
@@ -262,8 +266,7 @@ async function main() {
   for (const mUID of docMirrors) {
     const att = await eas.getAttestation(mUID);
     const [tDef] = encode.decode(["bytes32", "string"], att.data);
-    const isKnownTransport =
-      tDef === ipfsTransportUID || tDef === arweaveTransportUID || tDef === httpsTransportUID;
+    const isKnownTransport = tDef === ipfsTransportUID || tDef === arweaveTransportUID || tDef === httpsTransportUID;
     assert(`mirror ${mUID.slice(0, 10)}... has valid transport`, isKnownTransport);
   }
 
@@ -300,7 +303,11 @@ async function main() {
 
   // getDataMirrors should filter out the revoked one
   const postRevokeMirrors = await fileView.getDataMirrors(docData.uid, 0, 10);
-  assert("getDataMirrors returns 2 after revocation", postRevokeMirrors.length === 2, `got ${postRevokeMirrors.length}`);
+  assert(
+    "getDataMirrors returns 2 after revocation",
+    postRevokeMirrors.length === 2,
+    `got ${postRevokeMirrors.length}`,
+  );
 
   // Verify the surviving mirrors are IPFS and Arweave
   const survivingTransports = postRevokeMirrors.map(m => m.transportDefinition);
@@ -313,7 +320,7 @@ async function main() {
   console.log("\n[6] Permissionless Mirror Addition (user1 mirrors owner's DATA)\n");
 
   // user1 adds an Arweave mirror to owner's sunset.jpg DATA
-  const u1SunsetMirror = await createMirror(user1, photo1Data.uid, arweaveTransportUID, "ar://user1-sunset-backup");
+  const _u1SunsetMirror = await createMirror(user1, photo1Data.uid, arweaveTransportUID, "ar://user1-sunset-backup");
 
   const sunsetMirrors = await fileView.getDataMirrors(photo1Data.uid, 0, 10);
   assert("sunset.jpg now has 2 mirrors", sunsetMirrors.length === 2, `got ${sunsetMirrors.length}`);
@@ -362,13 +369,21 @@ async function main() {
 
   // Verify the DATA is now in both paths
   const galleryTargets = await tagResolver.getActiveTargetsByAttesterAndSchema(
-    photo1UID, ownerAddr, dataSchemaUID, 0, 10,
+    photo1UID,
+    ownerAddr,
+    dataSchemaUID,
+    0,
+    10,
   );
   assert("sunset.jpg in /gallery/ via TAG", galleryTargets.length === 1);
   assert("gallery points to original DATA", galleryTargets[0] === photo1Data.uid);
 
   const faveTargets = await tagResolver.getActiveTargetsByAttesterAndSchema(
-    faveSunsetUID, ownerAddr, dataSchemaUID, 0, 10,
+    faveSunsetUID,
+    ownerAddr,
+    dataSchemaUID,
+    0,
+    10,
   );
   assert("sunset.jpg in /faves/ via TAG", faveTargets.length === 1);
   assert("faves points to same DATA", faveTargets[0] === photo1Data.uid);
@@ -383,17 +398,13 @@ async function main() {
   console.log("\n[9] EFSFileView.getFilesAtPath\n");
 
   // List DATAs at the gallery folder for owner
-  const galleryFiles = await fileView.getFilesAtPath(
-    photo1UID, [ownerAddr], dataSchemaUID, 0, 10,
-  );
+  const galleryFiles = await fileView.getFilesAtPath(photo1UID, [ownerAddr], dataSchemaUID, 0, 10);
   assert("getFilesAtPath returns 1 DATA at sunset.jpg anchor", galleryFiles.length === 1, `got ${galleryFiles.length}`);
   assert("returned item has correct contentHash", galleryFiles[0].contentHash === photo1Data.contentHash);
   assert("returned item hasData=true", galleryFiles[0].hasData);
 
   // Multi-attester query: owner + user2 at sunset anchor (owner tagged, user2 didn't)
-  const multiAttesterFiles = await fileView.getFilesAtPath(
-    photo1UID, [ownerAddr, u2Addr], dataSchemaUID, 0, 10,
-  );
+  const multiAttesterFiles = await fileView.getFilesAtPath(photo1UID, [ownerAddr, u2Addr], dataSchemaUID, 0, 10);
   assert("multi-attester: only owner's DATA", multiAttesterFiles.length === 1);
 
   // ======================================================================
@@ -430,20 +441,20 @@ async function main() {
 
   // Router request — should pick ipfs or https (no web3:// mirror, so first non-web3 wins)
   // Since _getBestMirrorURI prefers web3://, and there's none, it picks the first available
-  const routerRes = await router.request(
-    [`gallery_${S}`, `pref_${S}.txt`],
-    [{ key: "editions", value: ownerAddr }],
-  );
+  const routerRes = await router.request([`gallery_${S}`, `pref_${S}.txt`], [{ key: "editions", value: ownerAddr }]);
   assert("Router returns 200", routerRes[0] === 200n, `got ${routerRes[0]}`);
   // External URI → message/external-body response
-  const headerStr = new TextDecoder().decode(ethers.getBytes(routerRes[1]));
+  const _headerStr = new TextDecoder().decode(ethers.getBytes(routerRes[1]));
   // Body is empty for external URIs; check headers
   const headers = routerRes[2];
   const contentTypeHeader = headers.find(
     (h: { key: string; value: string }) => h.key === "Content-Type" && !h.value.startsWith("message/"),
   );
-  assert("Router resolves contentType from PROPERTY", contentTypeHeader?.value === "text/plain",
-    `got: ${contentTypeHeader?.value}`);
+  assert(
+    "Router resolves contentType from PROPERTY",
+    contentTypeHeader?.value === "text/plain",
+    `got: ${contentTypeHeader?.value}`,
+  );
 
   // ======================================================================
   // TEST 12: contentType PROPERTY Resolution
@@ -465,10 +476,7 @@ async function main() {
   console.log("\n[13] Router Full Path Walk\n");
 
   // Resolve sunset.jpg through the Router (gallery path)
-  const sunsetRes = await router.request(
-    [`gallery_${S}`, "sunset.jpg"],
-    [{ key: "editions", value: ownerAddr }],
-  );
+  const sunsetRes = await router.request([`gallery_${S}`, "sunset.jpg"], [{ key: "editions", value: ownerAddr }]);
   assert("Router resolves /gallery/sunset.jpg", sunsetRes[0] === 200n, `status ${sunsetRes[0]}`);
 
   // Non-existent path
@@ -479,16 +487,16 @@ async function main() {
   assert("Router returns 404 for missing file", notFoundRes[0] === 404n);
 
   // No editions → should still find data via referencing fallback or return 404
-  const noEditionsRes = await router.request(
-    [`gallery_${S}`, "sunset.jpg"],
-    [],
-  );
+  const noEditionsRes = await router.request([`gallery_${S}`, "sunset.jpg"], []);
   // Without editions, Router falls back to getReferencingAttestations
   // sunset.jpg anchor has no direct DATA refUID, but photo1Data.uid doesn't ref the anchor either
   // In new model without editions, the router's no-editions fallback checks getReferencingAttestations
   // on the anchor for DATA_SCHEMA — which returns empty (DATA is standalone). So this should 404.
-  assert("Router with no editions returns 404 (DATA is tag-placed, not direct ref)", noEditionsRes[0] === 404n,
-    `got ${noEditionsRes[0]}`);
+  assert(
+    "Router with no editions returns 404 (DATA is tag-placed, not direct ref)",
+    noEditionsRes[0] === 404n,
+    `got ${noEditionsRes[0]}`,
+  );
 
   // ======================================================================
   // TEST 14: DATA with No Mirrors
@@ -519,7 +527,7 @@ async function main() {
   if (failed > 0) process.exit(1);
 }
 
-main().catch((error) => {
+main().catch(error => {
   console.error(error);
   process.exit(1);
 });

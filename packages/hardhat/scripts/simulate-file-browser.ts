@@ -303,13 +303,7 @@ async function main() {
   assert("Owner's DATA UID matches", ownerDatasAtBest[0] === ownerBestData.uid);
 
   // User1 placed u1BestData at bestUID
-  const u1DatasAtBest = await tagResolver.getActiveTargetsByAttesterAndSchema(
-    bestUID,
-    u1Addr,
-    dataSchemaUID,
-    0,
-    10,
-  );
+  const u1DatasAtBest = await tagResolver.getActiveTargetsByAttesterAndSchema(bestUID, u1Addr, dataSchemaUID, 0, 10);
   assert("User1 has 1 DATA placed at best.jpg", u1DatasAtBest.length === 1);
   assert("User1's DATA UID matches", u1DatasAtBest[0] === u1BestData.uid);
 
@@ -345,24 +339,12 @@ async function main() {
   // Remove User1's placement of their DATA at best.jpg
   await tag(user1, u1BestData.uid, bestUID, false);
 
-  const u1AfterRemoval = await tagResolver.getActiveTargetsByAttesterAndSchema(
-    bestUID,
-    u1Addr,
-    dataSchemaUID,
-    0,
-    10,
-  );
+  const u1AfterRemoval = await tagResolver.getActiveTargetsByAttesterAndSchema(bestUID, u1Addr, dataSchemaUID, 0, 10);
   assert("User1's DATA removed from best.jpg after TAG applies=false", u1AfterRemoval.length === 0);
 
   // Re-tag it back
   await tag(user1, u1BestData.uid, bestUID, true);
-  const u1AfterRetag = await tagResolver.getActiveTargetsByAttesterAndSchema(
-    bestUID,
-    u1Addr,
-    dataSchemaUID,
-    0,
-    10,
-  );
+  const u1AfterRetag = await tagResolver.getActiveTargetsByAttesterAndSchema(bestUID, u1Addr, dataSchemaUID, 0, 10);
   assert("User1's DATA re-placed at best.jpg after re-tag", u1AfterRetag.length === 1);
 
   // ── Test 8: Cross-Reference (same DATA at multiple paths) ──

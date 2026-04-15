@@ -14,8 +14,8 @@ describe("EFSRouter Web3 Capabilities", function () {
   let registry: any;
   let router: any;
   let owner: Signer;
-  let user1: Signer;
-  let user2: Signer;
+  let _user1: Signer;
+  let _user2: Signer;
 
   let anchorSchemaUID: string;
   let dataSchemaUID: string;
@@ -46,7 +46,7 @@ describe("EFSRouter Web3 Capabilities", function () {
   };
 
   beforeEach(async function () {
-    [owner, user1, user2] = await ethers.getSigners();
+    [owner, _user1, _user2] = await ethers.getSigners();
     ownerAddr = await owner.getAddress();
 
     // Deploy EAS infrastructure
@@ -278,12 +278,7 @@ describe("EFSRouter Web3 Capabilities", function () {
     );
   }
 
-  async function addProperty(
-    dataUID: string,
-    key: string,
-    value: string,
-    signer: Signer = owner,
-  ): Promise<string> {
+  async function addProperty(dataUID: string, key: string, value: string, signer: Signer = owner): Promise<string> {
     return getUID(
       await (
         await eas.connect(signer).attest({
@@ -635,7 +630,10 @@ describe("EFSRouter Web3 Capabilities", function () {
       await addMirror(dataUID, onchainTransportUID, `web3://${targetAddress}`);
       await tagAtPath(dataUID, fileAnchorUID, true);
 
-      const [statusCode, body, headers] = await router.request(["ideas", "deep", "nested", "deep_test.md"], ownerParams());
+      const [statusCode, body, headers] = await router.request(
+        ["ideas", "deep", "nested", "deep_test.md"],
+        ownerParams(),
+      );
       expect(statusCode).to.equal(200);
       expect(Buffer.from(ethers.getBytes(body)).toString("utf8")).to.equal(fileContent);
       expect(headers.find((h: any) => h.key === "Content-Type")?.value).to.equal("text/markdown");

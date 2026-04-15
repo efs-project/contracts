@@ -17,7 +17,7 @@ describe("EFSFileView", function () {
   let anchorSchemaUID: string;
   let dataSchemaUID: string;
   let propertySchemaUID: string;
-  let tagSchemaUID: string;
+  let _tagSchemaUID: string;
 
   beforeEach(async function () {
     [owner] = await ethers.getSigners();
@@ -78,7 +78,7 @@ describe("EFSFileView", function () {
     // TAG schema
     const tx5 = await registry.register("bytes32 definition, bool applies", futureTagResolverAddr, true);
     const rc5 = await tx5.wait();
-    tagSchemaUID = rc5!.logs[0].topics[1];
+    _tagSchemaUID = rc5!.logs[0].topics[1];
 
     // Deploy Indexer
     const IndexerFactory = await ethers.getContractFactory("EFSIndexer");

@@ -187,7 +187,6 @@ describe("EFSIndexer — public index() API", function () {
       expect(await indexer.index.staticCall(rootUID)).to.be.false;
       await indexer.index(rootUID); // no revert
     });
-
   });
 
   // ============================================================================================
@@ -448,7 +447,6 @@ describe("EFSIndexer — public index() API", function () {
       const fakeUID = ethers.keccak256(ethers.toUtf8Bytes("nonexistent"));
       await expect(indexer.indexRevocation(fakeUID)).to.be.revertedWithCustomError(indexer, "InvalidAttestation");
     });
-
   });
 
   // ============================================================================================

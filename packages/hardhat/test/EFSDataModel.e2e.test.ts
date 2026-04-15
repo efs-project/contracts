@@ -892,18 +892,12 @@ describe("EFS Data Model — E2E Integration", function () {
         2n,
       );
       expect(await tagResolver.getActiveTargetsByAttesterAndSchemaCount(memesUID, bobAddr, dataSchemaUID)).to.equal(2n);
-      expect(
-        await tagResolver.getActiveTargetsByAttesterAndSchemaCount(memesUID, charlieAddr, dataSchemaUID),
-      ).to.equal(2n);
+      expect(await tagResolver.getActiveTargetsByAttesterAndSchemaCount(memesUID, charlieAddr, dataSchemaUID)).to.equal(
+        2n,
+      );
 
       // Query all three → 3 unique items
-      const all = await fileView.getFilesAtPath(
-        memesUID,
-        [aliceAddr, bobAddr, charlieAddr],
-        dataSchemaUID,
-        0,
-        50,
-      );
+      const all = await fileView.getFilesAtPath(memesUID, [aliceAddr, bobAddr, charlieAddr], dataSchemaUID, 0, 50);
       expect(all.length).to.equal(3);
     });
   });
@@ -1071,13 +1065,7 @@ describe("EFS Data Model — E2E Integration", function () {
       await tagTarget(d2, folderUID, true, alice);
 
       // Both files visible
-      const items = await tagResolver.getActiveTargetsByAttesterAndSchema(
-        folderUID,
-        aliceAddr,
-        dataSchemaUID,
-        0,
-        10,
-      );
+      const items = await tagResolver.getActiveTargetsByAttesterAndSchema(folderUID, aliceAddr, dataSchemaUID, 0, 10);
       expect(items.length).to.equal(2);
     });
   });
@@ -1196,13 +1184,7 @@ describe("EFS Data Model — E2E Integration", function () {
       await tagTarget(d1, folderUID, false);
       await tagTarget(d1, folderUID, true);
 
-      const items = await tagResolver.getActiveTargetsByAttesterAndSchema(
-        folderUID,
-        ownerAddr,
-        dataSchemaUID,
-        0,
-        10,
-      );
+      const items = await tagResolver.getActiveTargetsByAttesterAndSchema(folderUID, ownerAddr, dataSchemaUID, 0, 10);
       expect(items.length).to.equal(3);
       // d1 should be at the end now (after swap-and-pop removed it, re-push puts it at end)
       expect(items[2]).to.equal(d1);
@@ -1419,7 +1401,7 @@ describe("EFS Data Model — E2E Integration", function () {
       // ── Alice cross-references photo1 into /photos/favorites/ ──
       await tagTarget(photo1.dataUID, favoritesUID, true, alice);
 
-      let favItems = await fileView.getFilesAtPath(favoritesUID, [aliceAddr], dataSchemaUID, 0, 50);
+      const favItems = await fileView.getFilesAtPath(favoritesUID, [aliceAddr], dataSchemaUID, 0, 50);
       expect(favItems.length).to.equal(1);
       expect(favItems[0].uid).to.equal(photo1.dataUID);
 
