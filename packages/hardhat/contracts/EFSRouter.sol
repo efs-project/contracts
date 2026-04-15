@@ -423,11 +423,12 @@ contract EFSRouter is IDecentralizedApp {
         return string(buffer);
     }
 
-    // Find DATA at a path anchor via TAG query
+    // Find DATA at a path anchor via TAG query — returns the most recent DATA by timestamp.
+    // The _activeByAttesterAndSchema array uses swap-and-pop, so element order is not
+    // chronological. We scan all active targets and pick the one with the highest `time`.
     function _findDataAtPath(bytes32 targetAnchor, address[] memory editions) private view returns (bytes32) {
         bytes32 dataSchema = indexer.DATA_SCHEMA_UID();
 
-        // Try TAG-based lookup (new model): DATAs tagged at this anchor
         if (editions.length > 0) {
             for (uint256 i = 0; i < editions.length; i++) {
                 uint256 count = tagResolver.getActiveTargetsByAttesterAndSchemaCount(
@@ -435,21 +436,30 @@ contract EFSRouter is IDecentralizedApp {
                     editions[i],
                     dataSchema
                 );
-                if (count > 0) {
-                    bytes32[] memory targets = tagResolver.getActiveTargetsByAttesterAndSchema(
-                        targetAnchor,
-                        editions[i],
-                        dataSchema,
-                        count - 1,
-                        1
-                    );
-                    if (targets.length > 0) return targets[0];
+                if (count == 0) continue;
+
+                bytes32[] memory targets = tagResolver.getActiveTargetsByAttesterAndSchema(
+                    targetAnchor,
+                    editions[i],
+                    dataSchema,
+                    0,
+                    count > 50 ? 50 : count
+                );
+
+                // Pick the most recent target by attestation timestamp
+                bytes32 best = targets[0];
+                uint64 bestTime = eas.getAttestation(targets[0]).time;
+                for (uint256 j = 1; j < targets.length; j++) {
+                    uint64 t = eas.getAttestation(targets[j]).time;
+                    if (t > bestTime) {
+                        bestTime = t;
+                        best = targets[j];
+                    }
                 }
+                return best;
             }
         }
 
-        // No editions and no TAG match → not found.
-        // (DATA is standalone with refUID=0x0, so editions are required for TAG-based lookup.)
         return bytes32(0);
     }
 
@@ -458,7 +468,7 @@ contract EFSRouter is IDecentralizedApp {
         bytes32 mirrorSchema = indexer.MIRROR_SCHEMA_UID();
         if (mirrorSchema == bytes32(0)) return ""; // MIRROR not wired yet
 
-        bytes32[] memory mirrors = indexer.getReferencingAttestations(dataUID, mirrorSchema, 0, 10, true);
+        bytes32[] memory mirrors = indexer.getReferencingAttestations(dataUID, mirrorSchema, 0, 50, true);
 
         // Simple strategy: return first non-revoked mirror with a web3:// URI (onchain), else first available
         string memory fallbackURI = "";

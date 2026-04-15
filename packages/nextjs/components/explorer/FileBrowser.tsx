@@ -181,6 +181,15 @@ export const FileBrowser = ({
   const publicClient = usePublicClient();
   const { address: connectedAddress } = useAccount();
 
+  // Revoke blob URLs when fileContent changes to prevent memory leaks
+  useEffect(() => {
+    return () => {
+      if (fileContent && fileContent.startsWith("blob:")) {
+        URL.revokeObjectURL(fileContent);
+      }
+    };
+  }, [fileContent]);
+
   useEffect(() => {
     setPageSize(50n);
   }, [currentAnchorUID]);
@@ -1236,10 +1245,13 @@ export const FileBrowser = ({
               </div>
             ) : fileContent ? (
               fileContentType?.includes("image/svg") ? (
-                <div
-                  className="flex justify-center cursor-pointer"
+                // Render SVG as <img> data URI to prevent XSS from untrusted content
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={`data:image/svg+xml;base64,${btoa(fileContent)}`}
+                  alt={selectedFile.name}
+                  className="max-w-full h-auto rounded cursor-pointer"
                   onClick={() => setPreviewFullscreen(true)}
-                  dangerouslySetInnerHTML={{ __html: fileContent }}
                 />
               ) : fileContentType?.startsWith("image/") ? (
                 // eslint-disable-next-line @next/next/no-img-element
@@ -1350,7 +1362,13 @@ export const FileBrowser = ({
                 </div>
               ) : fileContent ? (
                 fileContentType?.includes("image/svg") ? (
-                  <div dangerouslySetInnerHTML={{ __html: fileContent }} />
+                  // Render SVG as <img> data URI to prevent XSS from untrusted content
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={`data:image/svg+xml;base64,${btoa(fileContent)}`}
+                    alt={selectedFile.name}
+                    className="max-w-[90vw] max-h-[85vh] object-contain"
+                  />
                 ) : fileContentType?.startsWith("image/") ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img

@@ -3,7 +3,7 @@
  *
  * Uses EFSFileView.getFilesAtPath(anchorUID, attesters, schema, start, length).
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePublicClient } from "wagmi";
 import { useDeployedContractInfo } from "~~/hooks/scaffold-eth";
 
@@ -70,6 +70,9 @@ export function usePathFiles({ anchorUID, attesters, schema, pageSize = 50, refr
   const publicClient = usePublicClient();
   const { data: fileViewInfo } = useDeployedContractInfo({ contractName: "EFSFileView" });
 
+  // Stabilize attesters array reference to prevent re-fetch on every render
+  const attestersKey = useMemo(() => attesters.join(","), [attesters]);
+
   const fetch = useCallback(async () => {
     if (!anchorUID || !schema || attesters.length === 0 || !publicClient || !fileViewInfo) {
       setItems([]);
@@ -117,7 +120,8 @@ export function usePathFiles({ anchorUID, attesters, schema, pageSize = 50, refr
     } finally {
       setIsLoading(false);
     }
-  }, [anchorUID, attesters, schema, publicClient, fileViewInfo, pageSize, refreshKey]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [anchorUID, attestersKey, schema, publicClient, fileViewInfo, pageSize, refreshKey]);
 
   useEffect(() => {
     fetch();

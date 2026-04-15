@@ -205,7 +205,7 @@ contract EFSIndexer is SchemaResolver {
      * @param attester  The attester whose presence to propagate.
      */
     function propagateContains(bytes32 anchorUID, address attester) external {
-        if (msg.sender != tagResolver && msg.sender != sortOverlay && msg.sender != mirrorResolver) {
+        if (msg.sender != tagResolver && msg.sender != sortOverlay) {
             revert Unauthorized();
         }
         _propagateContains(anchorUID, attester);
@@ -213,8 +213,10 @@ contract EFSIndexer is SchemaResolver {
 
     function _propagateContains(bytes32 anchorUID, address attester) private {
         bytes32 current = anchorUID;
+        uint256 depth = 0;
         while (current != bytes32(0)) {
             if (_containsAttestations[current][attester]) break;
+            if (depth++ > MAX_ANCHOR_DEPTH) break;
             _containsAttestations[current][attester] = true;
             bytes32 parentUID = _parents[current];
             if (parentUID != bytes32(0)) {
@@ -956,7 +958,7 @@ contract EFSIndexer is SchemaResolver {
         }
 
         // Emit schema-specific events for off-chain indexers
-        if (schema == MIRROR_SCHEMA_UID) {
+        if (schema == MIRROR_SCHEMA_UID && !_isRevoked[uid]) {
             emit MirrorCreated(att.refUID, uid, att.attester);
         }
 
