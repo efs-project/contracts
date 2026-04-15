@@ -467,23 +467,38 @@ contract EFSRouter is IDecentralizedApp {
         return bytes32(0);
     }
 
-    // Get the best mirror URI for a DATA attestation (prefers onchain > ipfs > arweave > https > magnet)
+    // Get the best mirror URI for a DATA attestation.
+    // Preference order: web3:// > ipfs:// > ar:// > https:// > magnet:
+    // All non-revoked mirrors are collected first, then the highest-priority one is returned.
     function _getBestMirrorURI(bytes32 dataUID) private view returns (string memory) {
         bytes32 mirrorSchema = indexer.MIRROR_SCHEMA_UID();
         if (mirrorSchema == bytes32(0)) return ""; // MIRROR not wired yet
 
         bytes32[] memory mirrors = indexer.getReferencingAttestations(dataUID, mirrorSchema, 0, 50, true);
 
-        // Simple strategy: return first non-revoked mirror with a web3:// URI (onchain), else first available
-        string memory fallbackURI = "";
+        // Track best candidate per tier (lower index = higher priority)
+        string memory best = "";
+        uint256 bestPriority = 99;
+
         for (uint256 i = 0; i < mirrors.length; i++) {
             if (indexer.isRevoked(mirrors[i])) continue;
             IEAS.Attestation memory mirrorAtt = eas.getAttestation(mirrors[i]);
             (, string memory uri) = abi.decode(mirrorAtt.data, (bytes32, string));
-            if (_startsWith(uri, "web3://")) return uri;
-            if (bytes(fallbackURI).length == 0) fallbackURI = uri;
+
+            uint256 priority;
+            if (_startsWith(uri, "web3://"))  priority = 0;
+            else if (_startsWith(uri, "ipfs://"))  priority = 1;
+            else if (_startsWith(uri, "ar://"))    priority = 2;
+            else if (_startsWith(uri, "https://")) priority = 3;
+            else                                   priority = 4; // magnet: and anything else
+
+            if (priority < bestPriority) {
+                bestPriority = priority;
+                best = uri;
+                if (priority == 0) break; // web3:// is highest — no need to scan further
+            }
         }
-        return fallbackURI;
+        return best;
     }
 
     // Get contentType from PROPERTY on DATA

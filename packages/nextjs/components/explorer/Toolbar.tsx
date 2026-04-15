@@ -602,7 +602,11 @@ export const Toolbar = ({
         // --- PASTE LINK ---
         mirrorUri = pasteUri;
         const detected = detectTransport(pasteUri);
-        transportName = detected === "unknown" ? "https" : detected;
+        if (detected === "unknown") {
+          notification.error(`Unsupported URI scheme. Supported: web3://, ipfs://, ar://, https://, magnet:`);
+          return;
+        }
+        transportName = detected;
         contentType = pasteContentType || "application/octet-stream";
         contentHash = pasteContentHash || (ethers.ZeroHash as `0x${string}`);
         fileSize = pasteSize ? BigInt(pasteSize) : 0n;
