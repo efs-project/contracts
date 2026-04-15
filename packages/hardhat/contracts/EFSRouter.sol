@@ -429,39 +429,48 @@ contract EFSRouter is IDecentralizedApp {
     function _findDataAtPath(bytes32 targetAnchor, address[] memory editions) private view returns (bytes32) {
         bytes32 dataSchema = indexer.DATA_SCHEMA_UID();
 
+        // Build the attester list to query. When no editions are specified (bare web3:// URL),
+        // fall back to the anchor's own attester so that `web3://<router>/path/file` works
+        // without requiring an explicit ?editions= parameter.
+        address[] memory attesters;
         if (editions.length > 0) {
-            for (uint256 i = 0; i < editions.length; i++) {
-                uint256 count = tagResolver.getActiveTargetsByAttesterAndSchemaCount(
-                    targetAnchor,
-                    editions[i],
-                    dataSchema
-                );
-                if (count == 0) continue;
+            attesters = editions;
+        } else {
+            attesters = new address[](1);
+            attesters[0] = eas.getAttestation(targetAnchor).attester;
+        }
 
-                // Cap at 50 — more than 50 active DATA revisions per attester per anchor is
-                // outside normal use. The recommended workflow untags the old DATA before
-                // tagging new, keeping count at 1. If the cap is hit, the newest in the
-                // first 50 by timestamp is served.
-                bytes32[] memory targets = tagResolver.getActiveTargetsByAttesterAndSchema(
-                    targetAnchor,
-                    editions[i],
-                    dataSchema,
-                    0,
-                    count > 50 ? 50 : count
-                );
+        for (uint256 i = 0; i < attesters.length; i++) {
+            uint256 count = tagResolver.getActiveTargetsByAttesterAndSchemaCount(
+                targetAnchor,
+                attesters[i],
+                dataSchema
+            );
+            if (count == 0) continue;
 
-                // Pick the most recent target by attestation timestamp
-                bytes32 best = targets[0];
-                uint64 bestTime = eas.getAttestation(targets[0]).time;
-                for (uint256 j = 1; j < targets.length; j++) {
-                    uint64 t = eas.getAttestation(targets[j]).time;
-                    if (t > bestTime) {
-                        bestTime = t;
-                        best = targets[j];
-                    }
+            // Cap at 50 — more than 50 active DATA revisions per attester per anchor is
+            // outside normal use. The recommended workflow untags the old DATA before
+            // tagging new, keeping count at 1. If the cap is hit, the newest in the
+            // first 50 by timestamp is served.
+            bytes32[] memory targets = tagResolver.getActiveTargetsByAttesterAndSchema(
+                targetAnchor,
+                attesters[i],
+                dataSchema,
+                0,
+                count > 50 ? 50 : count
+            );
+
+            // Pick the most recent target by attestation timestamp
+            bytes32 best = targets[0];
+            uint64 bestTime = eas.getAttestation(targets[0]).time;
+            for (uint256 j = 1; j < targets.length; j++) {
+                uint64 t = eas.getAttestation(targets[j]).time;
+                if (t > bestTime) {
+                    bestTime = t;
+                    best = targets[j];
                 }
-                return best;
             }
+            return best;
         }
 
         return bytes32(0);

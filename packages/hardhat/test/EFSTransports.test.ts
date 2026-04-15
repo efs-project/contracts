@@ -443,15 +443,31 @@ describe("EFS Transports & Data Model", function () {
       );
     });
 
-    it("should handle re-tag after untag", async function () {
+    it("should handle re-tag after untag: count, list contents, and isActivelyTagged are correct", async function () {
       const ownerAddr = await owner.getAddress();
-      await tagTarget(catDataUID, memesUID, true);
-      await tagTarget(catDataUID, memesUID, false);
-      await tagTarget(catDataUID, memesUID, true);
 
-      expect(await tagResolver.getActiveTargetsByAttesterAndSchemaCount(memesUID, ownerAddr, dataSchemaUID)).to.equal(
-        1n,
-      );
+      // Initial state: not tagged
+      expect(await tagResolver.getActiveTargetsByAttesterAndSchemaCount(memesUID, ownerAddr, dataSchemaUID)).to.equal(0n);
+      expect(await tagResolver.isActivelyTagged(catDataUID, memesUID)).to.equal(false);
+
+      // Tag
+      await tagTarget(catDataUID, memesUID, true);
+      expect(await tagResolver.getActiveTargetsByAttesterAndSchemaCount(memesUID, ownerAddr, dataSchemaUID)).to.equal(1n);
+      expect(await tagResolver.isActivelyTagged(catDataUID, memesUID)).to.equal(true);
+
+      // Untag
+      await tagTarget(catDataUID, memesUID, false);
+      expect(await tagResolver.getActiveTargetsByAttesterAndSchemaCount(memesUID, ownerAddr, dataSchemaUID)).to.equal(0n);
+      expect(await tagResolver.isActivelyTagged(catDataUID, memesUID)).to.equal(false);
+
+      // Re-tag: DATA must reappear in the list
+      await tagTarget(catDataUID, memesUID, true);
+      expect(await tagResolver.getActiveTargetsByAttesterAndSchemaCount(memesUID, ownerAddr, dataSchemaUID)).to.equal(1n);
+      expect(await tagResolver.isActivelyTagged(catDataUID, memesUID)).to.equal(true);
+
+      const listed = await tagResolver.getActiveTargetsByAttesterAndSchema(memesUID, ownerAddr, dataSchemaUID, 0, 10);
+      expect(listed.length).to.equal(1);
+      expect(listed[0]).to.equal(catDataUID);
     });
 
     it("should support same DATA at multiple paths", async function () {

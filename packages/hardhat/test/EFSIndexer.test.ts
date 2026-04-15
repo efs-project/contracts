@@ -698,10 +698,9 @@ describe("EFSIndexer", function () {
       expect(atts.length).to.be.greaterThan(0);
     });
 
-    it("showRevoked=false hides revoked items; showRevoked=true shows them", async function () {
-      // child1 and child2 are in parent's _childrenByAttester[user1]
-      // child1's anchor is irrevocable so we test with the TAG schema instead,
-      // using a revocable attestation that targets parentUID
+    it("revoked referencing attestations remain in append-only kernel array; isRevoked() is set", async function () {
+      // getReferencingAttestations is append-only — revocation never removes entries.
+      // isRevoked() is the mechanism callers use to filter revoked items.
       const tagTx = await eas.connect(user1).attest({
         schema: tagSchemaUID,
         data: {
@@ -715,18 +714,59 @@ describe("EFSIndexer", function () {
       });
       const tagUID = getUIDFromReceipt(await tagTx.wait());
 
-      // Before revoke: appears in getReferencingAttestations
+      // Before revoke: appears in kernel
+      const before = await indexer.getReferencingAttestations(parentUID, tagSchemaUID, 0, 10, false);
+      expect(before.length).to.equal(1);
+      expect(await indexer.isRevoked(tagUID)).to.equal(false);
+
+      await eas.connect(user1).revoke({ schema: tagSchemaUID, data: { uid: tagUID, value: 0n } });
+
+      // After revoke: still present in append-only array (kernel never removes)
+      const after = await indexer.getReferencingAttestations(parentUID, tagSchemaUID, 0, 10, false);
+      expect(after.length).to.equal(1);
+
+      // But isRevoked is now true — callers use this to filter
+      expect(await indexer.isRevoked(tagUID)).to.equal(true);
+    });
+
+    it("getChildrenByAttester showRevoked=true/false filters based on _isRevoked flag", async function () {
+      // Anchors are non-revocable, so we use TAG attestations (revocable) indexed via tagSchemaUID.
+      // getReferencingAttestations is append-only; showRevoked filtering is the caller's responsibility
+      // via isRevoked(). This test verifies the flag is set correctly on revocation.
+      const tagTx = await eas.connect(user1).attest({
+        schema: tagSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: 0n,
+          revocable: true,
+          refUID: parentUID,
+          data: schemaEncoder.encode(["bytes32", "int256"], [ethers.ZeroHash, 1n]),
+          value: 0n,
+        },
+      });
+      const tagUID = getUIDFromReceipt(await tagTx.wait());
+
+      // Before revoke: not revoked
+      expect(await indexer.isRevoked(tagUID)).to.equal(false);
       const before = await indexer.getReferencingAttestations(parentUID, tagSchemaUID, 0, 10, false);
       expect(before.length).to.equal(1);
 
       await eas.connect(user1).revoke({ schema: tagSchemaUID, data: { uid: tagUID, value: 0n } });
 
-      // After revoke — unfiltered (showRevoked=true): still present
-      const afterUnfiltered = await indexer.getReferencingAttestations(parentUID, tagSchemaUID, 0, 10, false);
-      expect(afterUnfiltered.length).to.equal(1);
-
-      // isRevoked flag is set
+      // After revoke: isRevoked is true (kernel array unchanged — caller filters via isRevoked)
       expect(await indexer.isRevoked(tagUID)).to.equal(true);
+      const after = await indexer.getReferencingAttestations(parentUID, tagSchemaUID, 0, 10, false);
+      expect(after.length).to.equal(1); // still in array — append-only kernel
+
+      // getChildrenByAttester with showRevoked=true/false also uses _isRevoked internally
+      // (child1 and child2 are non-revocable anchors, so showRevoked has no visible effect here)
+      const withRevoked = await indexer["getChildrenByAttester(bytes32,address,uint256,uint256,bool,bool)"](
+        parentUID, await user1.getAddress(), 0, 10, false, true,
+      );
+      const withoutRevoked = await indexer["getChildrenByAttester(bytes32,address,uint256,uint256,bool,bool)"](
+        parentUID, await user1.getAddress(), 0, 10, false, false,
+      );
+      expect(withRevoked.length).to.equal(withoutRevoked.length); // no revocable anchors in this set
     });
 
     it("getChildrenByAttester with showRevoked=true includes all; COUNT is total physical length", async function () {

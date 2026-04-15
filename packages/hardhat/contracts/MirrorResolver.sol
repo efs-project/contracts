@@ -44,6 +44,7 @@ contract MirrorResolver is SchemaResolver {
 
         // Validate transportDefinition is a valid Anchor
         (bytes32 transportDefinition, ) = abi.decode(attestation.data, (bytes32, string));
+        if (transportDefinition == EMPTY_UID) revert InvalidTransport();
         Attestation memory transport = _eas.getAttestation(transportDefinition);
         if (transport.schema != indexer.ANCHOR_SCHEMA_UID()) revert InvalidTransport();
 

@@ -115,7 +115,7 @@ EFS lists use the kernel/overlay architecture: the kernel (EFSIndexer) tracks it
 - **Step 2 — Add items**: For each item, attest an Anchor as a child of the list directory. Set `anchorSchema = DATA_SCHEMA_UID` for file items. Items accumulate in the kernel in insertion order.
 - **Step 3 — Create a sort**: Attest an Anchor for the sort name (e.g. "alphabetical") under the list directory with `anchorSchema = SORT_INFO_SCHEMA_UID` as the naming anchor. Then attest a SORT_INFO attestation with `refUID = namingAnchorUID`, `sortFunc = <ISortFunc address>`, `targetSchema = bytes32(0)` (or restrict to a specific schema).
 - **Step 4 — Populate the sort**: Call `EFSSortOverlay.processItems(sortInfoUID, items, leftHints, rightHints)`. See workflow 14 for the hint computation algorithm.
-- **Result**: Items are pageable via `getSortedChunk(sortInfoUID, attester, bytes32(0), 10)`.
+- **Result**: Items are pageable via `getSortedChunk(sortInfoUID, parentAnchor, bytes32(0), 10, false)`. The sorted list is shared — all attesters contribute to a single ordering per `(sortInfoUID, parentAnchor)`. Edition filtering is applied at read time via `getSortedChunkByAddressList`.
 
 ### 17. Populate a Sort (processItems Client Algorithm)
 
@@ -123,18 +123,20 @@ EFS lists use the kernel/overlay architecture: the kernel (EFSIndexer) tracks it
 
 **Inputs:**
 - `sortInfoUID` — the SORT_INFO attestation UID
-- `attester` — the address whose sorted view to update (msg.sender)
+- `parentAnchor` — the directory anchor the sort belongs to (read from `SortConfig.parentUID`)
+
+Note: the sorted list is **shared across attesters** — `processItems` is keyed by `(sortInfoUID, parentAnchor)`, not by `attester`. Edition filtering is applied at read time.
 
 **Step 1 — Determine what to process:**
 ```
-lastIdx = overlay.getLastProcessedIndex(sortInfoUID, attester)
+lastIdx = overlay.getLastProcessedIndex(sortInfoUID, parentAnchor)
 newItems = indexer.getChildrenByAttester(dirUID, attester, lastIdx, pageSize, false, false)
 // newItems are in kernel insertion order starting from lastIdx
 ```
 
 **Step 2 — Fetch the current sorted state:**
 ```
-alreadySorted = readSortedAll(sortInfoUID, attester)  // via getSortedChunk pagination
+alreadySorted = readSortedAll(sortInfoUID, parentAnchor)  // via getSortedChunk pagination
 ```
 
 **Step 3 — Compute sort keys for all items:**
@@ -160,10 +162,10 @@ The overlay validates each position with `ISortFunc.isLessThan` on-chain and rev
 ### 18. Paginate Through a Sorted List
 
 - **Action**: SPA renders a sorted list.
-- **Step 1**: Call `getSortedChunk(sortInfoUID, attester, bytes32(0), 20)` → returns `items[0..19]` and `nextCursor`.
-- **Step 2**: On scroll, call `getSortedChunk(sortInfoUID, attester, nextCursor, 20)` → next page.
+- **Step 1**: Call `getSortedChunk(sortInfoUID, parentAnchor, bytes32(0), 20, false)` → returns `items[0..19]` and `nextCursor`. To filter by attester/edition, use `getSortedChunkByAddressList(sortInfoUID, parentAnchor, bytes32(0), 20, attesters)` instead.
+- **Step 2**: On scroll, call `getSortedChunk(sortInfoUID, parentAnchor, nextCursor, 20, false)` → next page.
 - **Step 3**: For each item UID, resolve content via TagResolver queries and MIRROR resolution.
-- **Staleness check**: Call `getSortStaleness(sortInfoUID, attester)` before rendering. If `> 0`, prompt the user: "N items unprocessed — pay gas to update sort?".
+- **Staleness check**: Call `getSortStaleness(sortInfoUID, parentAnchor)` before rendering. If `> 0`, prompt the user: "N items unprocessed — pay gas to update sort?".
 - **Key rule**: Pin `blockNumber` in `eth_call` across all pages in a session to prevent cursor drift from concurrent `processItems` calls.
 
 ### 19. Remove a List Item
@@ -175,14 +177,12 @@ The overlay validates each position with `ISortFunc.isLessThan` on-chain and rev
 
 ### 20. View a Merged Sorted List from Multiple Attesters
 
-- **Action**: SPA displays a sorted list merging Alice's curation with Bob's additions.
-- **Step 1**: Read Alice's sorted view: `getSortedChunk(sortInfoUID, alice, bytes32(0), 20)`.
-- **Step 2**: Read Bob's sorted view: `getSortedChunk(sortInfoUID, bob, bytes32(0), 20)`.
-- **Step 3 (client)**: Each attester's sorted view is independent. Merge strategies:
-  - **Union**: combine and deduplicate by anchor UID, re-sort client-side by sort key.
-  - **Interleave**: display Alice's list first (or Bob's), then items the other has that aren't in the first.
-  - **Edition-aware**: for each position, resolve content per attester priority via TagResolver queries.
-- **Result**: No on-chain coupling between attesters' lists. Each is independently maintained.
+- **Action**: SPA displays a sorted list filtered to Alice's and Bob's contributions.
+- **Shared list model**: The sorted linked list is shared — all attesters contribute items to a single ordering keyed by `(sortInfoUID, parentAnchor)`. Edition filtering is applied at read time, not at write time.
+- **Step 1**: Call `getSortedChunkByAddressList(sortInfoUID, parentAnchor, bytes32(0), 20, [alice, bob])` → returns only items contributed by Alice or Bob, in sorted order.
+- **Step 2**: On scroll, pass the returned `nextCursor` to the next call.
+- **Step 3**: For each item UID, resolve content via TagResolver queries and MIRROR resolution.
+- **Result**: Single sorted list on-chain; attester filtering is a read-time concern. See [Sort Overlay Architecture](./07-Sort-Overlay-Architecture.md) for the authoritative API reference.
 
 ### 21. Restrict a Sort to a Specific Schema
 

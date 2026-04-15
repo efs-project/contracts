@@ -612,7 +612,26 @@ export const Toolbar = ({
         fileSize = pasteSize ? BigInt(pasteSize) : 0n;
       }
 
-      // 2) Create standalone DATA attestation (non-revocable)
+      // 2) Dedup check — warn if a canonical DATA already exists for this contentHash
+      if (contentHash !== ethers.ZeroHash && indexer && publicClient) {
+        try {
+          const canonical = (await publicClient.readContract({
+            address: indexer.address as `0x${string}`,
+            abi: indexer.abi,
+            functionName: "dataByContentKey",
+            args: [contentHash as `0x${string}`],
+          })) as `0x${string}`;
+          if (canonical && canonical !== ethers.ZeroHash) {
+            notification.info(
+              "Note: A DATA attestation for this content already exists. A new one will still be created and tagged.",
+            );
+          }
+        } catch {
+          // Non-fatal — proceed with upload
+        }
+      }
+
+      // 3) Create standalone DATA attestation (non-revocable)
       notification.info("Creating DATA attestation...");
       const encodedData = ethers.AbiCoder.defaultAbiCoder().encode(["bytes32", "uint64"], [contentHash, fileSize]);
       const dataTxHash = await attest({
