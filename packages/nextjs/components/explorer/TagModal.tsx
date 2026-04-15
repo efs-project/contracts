@@ -8,6 +8,34 @@ import { useDeployedContractInfo, useScaffoldReadContract, useScaffoldWriteContr
 import { TAG_RESOLVER_ABI, getTagResolverAddress } from "~~/utils/efs/tagResolver";
 import { notification } from "~~/utils/scaffold-eth";
 
+const EAS_GET_ATTESTATION_ABI = [
+  {
+    inputs: [{ internalType: "bytes32", name: "uid", type: "bytes32" }],
+    name: "getAttestation",
+    outputs: [
+      {
+        components: [
+          { internalType: "bytes32", name: "uid", type: "bytes32" },
+          { internalType: "bytes32", name: "schema", type: "bytes32" },
+          { internalType: "uint64", name: "time", type: "uint64" },
+          { internalType: "uint64", name: "expirationTime", type: "uint64" },
+          { internalType: "uint64", name: "revocationTime", type: "uint64" },
+          { internalType: "bytes32", name: "refUID", type: "bytes32" },
+          { internalType: "address", name: "recipient", type: "address" },
+          { internalType: "address", name: "attester", type: "address" },
+          { internalType: "bool", name: "revocable", type: "bool" },
+          { internalType: "bytes", name: "data", type: "bytes" },
+        ],
+        internalType: "struct Attestation",
+        name: "",
+        type: "tuple",
+      },
+    ],
+    stateMutability: "view",
+    type: "function",
+  },
+] as const;
+
 interface TagModalProps {
   uid: string; // The anchor UID of the item being tagged
   isFile?: boolean; // When true, tags are attached to the connected user's DATA attestation for this anchor
@@ -106,18 +134,37 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
           })) as bigint;
 
           if (count > 0n) {
-            // Fetch the most recent (last) DATA placed at this anchor
+            // Scan all active targets and pick the one with the highest attestation timestamp.
+            // The swap-and-pop array is NOT chronologically ordered after removals.
+            const scanCount = count > 50n ? 50n : count;
             const targets = (await publicClient.readContract({
               address: tagResolverAddress,
               abi: TAG_RESOLVER_ABI,
               functionName: "getActiveTargetsByAttesterAndSchema",
-              args: [uid as `0x${string}`, attester, dataSchemaUID as `0x${string}`, count - 1n, 1n],
+              args: [uid as `0x${string}`, attester, dataSchemaUID as `0x${string}`, 0n, scanCount],
             })) as `0x${string}`[];
 
-            if (!cancelled && targets.length > 0 && targets[0] !== zeroHash) {
-              setEffectiveUID(targets[0]);
-              setIsResolvingDataUID(false);
-              return;
+            if (targets.length > 0 && easInfo) {
+              let best = targets[0];
+              let bestTime = 0n;
+              for (const target of targets) {
+                if (!target || target === zeroHash) continue;
+                const att = (await publicClient.readContract({
+                  address: easInfo.address as `0x${string}`,
+                  abi: EAS_GET_ATTESTATION_ABI,
+                  functionName: "getAttestation",
+                  args: [target],
+                })) as { time: bigint };
+                if (att.time > bestTime) {
+                  bestTime = att.time;
+                  best = target;
+                }
+              }
+              if (!cancelled && best && best !== zeroHash) {
+                setEffectiveUID(best);
+                setIsResolvingDataUID(false);
+                return;
+              }
             }
           }
         }
@@ -139,7 +186,7 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
     return () => {
       cancelled = true;
     };
-  }, [uid, isFile, publicClient, connectedAddress, editionAddresses, tagResolverAddress, dataSchemaUID]);
+  }, [uid, isFile, publicClient, connectedAddress, editionAddresses, tagResolverAddress, dataSchemaUID, easInfo]);
 
   // Load TagResolver address and the "tags" anchor UID (discovered from the normal tree).
   useEffect(() => {

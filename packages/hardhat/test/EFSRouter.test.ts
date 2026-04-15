@@ -731,15 +731,32 @@ describe("EFSRouter Web3 Capabilities", function () {
       expect(Buffer.from(ethers.getBytes(body)).toString()).to.equal("chunk zero data");
     });
 
-    it("Should return 500 for invalid web3:// URI format", async function () {
+    it("Should return 404 when only mirror has a malformed web3:// URI (no valid address)", async function () {
+      // A malformed web3:// URI is now filtered out in _getBestMirrorURI before committing.
+      // With no valid mirrors remaining, the router returns 404 rather than 500.
       const fileAnchorUID = await createFileAnchor(ideasUID, "bad_uri.bin");
       const dataUID = await createData("bad-uri-content");
       await addProperty(dataUID, "contentType", "application/octet-stream");
-      await addMirror(dataUID, onchainTransportUID, "web3://short");
+      await addMirror(dataUID, onchainTransportUID, "web3://short"); // too short to parse an address
       await tagAtPath(dataUID, fileAnchorUID, true);
 
       const [statusCode] = await router.request(["ideas", "bad_uri.bin"], ownerParams());
-      expect(statusCode).to.equal(500);
+      expect(statusCode).to.equal(404);
+    });
+
+    it("Should fall back to ipfs:// when web3:// mirror has a malformed address", async function () {
+      // Router skips the invalid web3:// and uses the next-best valid mirror.
+      const fileAnchorUID = await createFileAnchor(ideasUID, "fallback.txt");
+      const dataUID = await createData("fallback-content");
+      await addProperty(dataUID, "contentType", "text/plain");
+      await addMirror(dataUID, onchainTransportUID, "web3://short"); // invalid
+      await addMirror(dataUID, ipfsTransportUID, "ipfs://QmFallback");
+      await tagAtPath(dataUID, fileAnchorUID, true);
+
+      const [statusCode, , headers] = await router.request(["ideas", "fallback.txt"], ownerParams());
+      expect(statusCode).to.equal(200);
+      const ct = headers.find((h: any) => h.key === "Content-Type")?.value ?? "";
+      expect(ct).to.include("ipfs://QmFallback");
     });
 
     it("Should default to application/octet-stream when no contentType PROPERTY", async function () {

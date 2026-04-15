@@ -502,9 +502,17 @@ contract EFSRouter is IDecentralizedApp {
             else                                   priority = 4; // magnet: and anything else
 
             if (priority < bestPriority) {
+                if (priority == 0) {
+                    // Validate web3:// address format before committing — a malformed URI
+                    // would return 500 even when valid lower-priority mirrors exist.
+                    address candidate = _parseContractFromWeb3URI(uri);
+                    if (candidate == address(0)) continue; // bad address — try lower-priority mirrors
+                    bestPriority = 0;
+                    best = uri;
+                    break; // web3:// with valid address is highest priority — stop scanning
+                }
                 bestPriority = priority;
                 best = uri;
-                if (priority == 0) break; // web3:// is highest — no need to scan further
             }
         }
         return best;
