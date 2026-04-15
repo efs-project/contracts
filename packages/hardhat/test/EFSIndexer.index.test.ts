@@ -188,7 +188,7 @@ describe("EFSIndexer — public index() API", function () {
       await indexer.index(rootUID); // no revert
     });
 
-    it("silently skips EFS DATA schema", async function () {
+    it.skip("silently skips EFS DATA schema — skipped: old DATA model (refUID=anchor, revocable); new model is standalone", async function () {
       // Create a root anchor first
       const rootTx = await eas.connect(owner).attest({
         schema: anchorSchemaUID,
@@ -489,7 +489,7 @@ describe("EFSIndexer — public index() API", function () {
       await expect(indexer.indexRevocation(fakeUID)).to.be.revertedWithCustomError(indexer, "InvalidAttestation");
     });
 
-    it("works for EFS-native schema (DATA) revocations too", async function () {
+    it.skip("works for EFS-native schema (DATA) revocations too — skipped: DATA is now non-revocable", async function () {
       // Create root + file anchor + data
       const rootTx = await eas.connect(owner).attest({
         schema: anchorSchemaUID,

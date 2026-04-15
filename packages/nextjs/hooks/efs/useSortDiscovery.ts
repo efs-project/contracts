@@ -281,10 +281,7 @@ export function useSortDiscovery({
         // republishing a new config supersedes the oldest attestation. We fetch a small
         // window rather than a single result so that a revoked latest attestation
         // doesn't mask a still-valid older one from the same attester.
-        async function resolveSortInfo(
-          namingUID: `0x${string}`,
-          chain: string[],
-        ): Promise<`0x${string}` | null> {
+        async function resolveSortInfo(namingUID: `0x${string}`, chain: string[]): Promise<`0x${string}` | null> {
           const LOOKBACK = 10n;
           for (const attester of chain) {
             try {
@@ -391,8 +388,8 @@ export function useSortDiscovery({
     return () => {
       cancelled = true;
     };
-  // editionsKey: serialize array so array reference changes don't retrigger the effect
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // editionsKey: serialize array so array reference changes don't retrigger the effect
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [parentAnchor, indexerAddress, easAddress, publicClient, editionsKey, filterBySchema, refreshKey]);
 
   return { availableSorts, isLoading, refetch };

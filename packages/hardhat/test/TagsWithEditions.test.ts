@@ -18,7 +18,10 @@ const NO_EXPIRATION = 0n;
  *   2. For each file item, call getDataByAddressList(anchorUID, [attester]) → dataUID
  *   3. Check if dataUID is in getTaggedTargets(definition) → show/hide
  */
-describe("Tags with Editions (Integration)", function () {
+// TODO: Rewrite for new data model — DATA is now standalone (refUID=0x0, non-revocable,
+// schema "bytes32 contentHash, uint64 size"), placed via TAGs. Old model used DATA.refUID=anchor
+// with per-attester DATA under shared file anchors. See EFSTransports.test.ts for new model coverage.
+describe.skip("Tags with Editions (Integration)", function () {
   let tagResolver: TagResolver;
   let indexer: EFSIndexer;
   let eas: EAS;

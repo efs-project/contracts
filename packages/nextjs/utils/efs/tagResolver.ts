@@ -75,6 +75,30 @@ export const TAG_RESOLVER_ABI = [
     stateMutability: "view",
     type: "function",
   },
+  {
+    inputs: [
+      { internalType: "bytes32", name: "definition", type: "bytes32" },
+      { internalType: "address", name: "attester", type: "address" },
+      { internalType: "bytes32", name: "schema", type: "bytes32" },
+      { internalType: "uint256", name: "start", type: "uint256" },
+      { internalType: "uint256", name: "length", type: "uint256" },
+    ],
+    name: "getActiveTargetsByAttesterAndSchema",
+    outputs: [{ internalType: "bytes32[]", name: "", type: "bytes32[]" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [
+      { internalType: "bytes32", name: "definition", type: "bytes32" },
+      { internalType: "address", name: "attester", type: "address" },
+      { internalType: "bytes32", name: "schema", type: "bytes32" },
+    ],
+    name: "getActiveTargetsByAttesterAndSchemaCount",
+    outputs: [{ internalType: "uint256", name: "", type: "uint256" }],
+    stateMutability: "view",
+    type: "function",
+  },
 ] as const;
 
 /**

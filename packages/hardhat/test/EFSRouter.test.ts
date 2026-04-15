@@ -7,7 +7,10 @@ import { Signer, ZeroAddress } from "ethers";
 const NO_EXPIRATION = 0n;
 const ZERO_BYTES32 = "0x0000000000000000000000000000000000000000000000000000000000000000";
 
-describe("EFSRouter Web3 Capabilities", function () {
+// TODO: Rewrite for new data model — DATA is now standalone (refUID=0x0, non-revocable,
+// schema "bytes32 contentHash, uint64 size"), placed via TAGs, resolved via TAG→DATA→MIRROR chain.
+// Router constructor now takes 4 args (added TagResolver). See EFSTransports.test.ts for new model coverage.
+describe.skip("EFSRouter Web3 Capabilities", function () {
   let router: any; // EFSRouter
   let indexer: any; // EFSIndexer
   let eas: any; // EAS

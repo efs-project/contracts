@@ -11,6 +11,8 @@ contract EFSIndexer is SchemaResolver {
     error MissingParent();
     error InvalidAttestation();
     error AlreadyIndexed();
+    error AnchorTooDeep();
+    error Unauthorized();
 
     /// @notice Emitted when a new Anchor is created under a parent directory.
     ///         Enables off-chain indexers (The Graph) to track directory structure changes
@@ -22,8 +24,11 @@ contract EFSIndexer is SchemaResolver {
         bytes32 anchorSchema
     );
 
-    /// @notice Emitted when a DATA attestation is attached to an Anchor (new file edition).
-    event DataCreated(bytes32 indexed anchorUID, bytes32 indexed dataUID, address indexed attester);
+    /// @notice Emitted when a standalone DATA attestation is created (file identity).
+    event DataCreated(bytes32 indexed dataUID, address indexed attester, bytes32 contentHash);
+
+    /// @notice Emitted when a MIRROR attestation is attached to a DATA (retrieval method).
+    event MirrorCreated(bytes32 indexed dataUID, bytes32 indexed mirrorUID, address indexed attester);
 
     /// @notice Emitted when a PROPERTY attestation is attached to an Anchor.
     event PropertyCreated(bytes32 indexed anchorUID, bytes32 indexed propertyUID, address indexed attester);
@@ -50,8 +55,10 @@ contract EFSIndexer is SchemaResolver {
     // These are bytes32 storage (not immutable) because partner contracts deploy after EFSIndexer.
     bytes32 public TAG_SCHEMA_UID;
     bytes32 public SORT_INFO_SCHEMA_UID;
+    bytes32 public MIRROR_SCHEMA_UID;
     address public tagResolver;
     address public sortOverlay;
+    address public mirrorResolver;
     address public schemaRegistry;
 
     // Well-known /sorts/ anchor — set once via setSortsAnchor() after deployment
@@ -59,6 +66,12 @@ contract EFSIndexer is SchemaResolver {
 
     // Deployer — authorized to call wireContracts()
     address public immutable DEPLOYER;
+
+    // Maximum anchor nesting depth — prevents gas griefing in propagateContains
+    uint256 public constant MAX_ANCHOR_DEPTH = 32;
+
+    // Content-addressed deduplication: keccak256(contentHash) => first DATA UID
+    mapping(bytes32 => bytes32) public dataByContentKey;
 
     // Revocation tracking (set in onRevoke, never cleared)
     mapping(bytes32 => bool) private _isRevoked;
@@ -162,6 +175,8 @@ contract EFSIndexer is SchemaResolver {
         bytes32 _tagSchemaUID,
         address _sortOverlay,
         bytes32 _sortInfoSchemaUID,
+        address _mirrorResolver,
+        bytes32 _mirrorSchemaUID,
         address _schemaRegistry
     ) external {
         require(msg.sender == DEPLOYER, "EFSIndexer: not deployer");
@@ -170,6 +185,8 @@ contract EFSIndexer is SchemaResolver {
         TAG_SCHEMA_UID = _tagSchemaUID;
         sortOverlay = _sortOverlay;
         SORT_INFO_SCHEMA_UID = _sortInfoSchemaUID;
+        mirrorResolver = _mirrorResolver;
+        MIRROR_SCHEMA_UID = _mirrorSchemaUID;
         schemaRegistry = _schemaRegistry;
     }
 
@@ -182,6 +199,37 @@ contract EFSIndexer is SchemaResolver {
         require(msg.sender == DEPLOYER, "EFSIndexer: not deployer");
         require(sortsAnchorUID == bytes32(0), "EFSIndexer: sorts anchor already set");
         sortsAnchorUID = _sortsAnchorUID;
+    }
+
+    /**
+     * @notice Propagate "contains attestations by attester" flags from an anchor up the tree.
+     *         Called by TagResolver when a TAG with applies=true places content at an anchor,
+     *         and by SortOverlay for sort-related propagation.
+     *
+     *         Walks _parents from anchorUID to root, flagging _containsAttestations and
+     *         building _childrenByAttester. Early-exits if already flagged (amortized O(1)).
+     *
+     * @param anchorUID The anchor to start propagation from.
+     * @param attester  The attester whose presence to propagate.
+     */
+    function propagateContains(bytes32 anchorUID, address attester) external {
+        if (msg.sender != tagResolver && msg.sender != sortOverlay && msg.sender != mirrorResolver) {
+            revert Unauthorized();
+        }
+        _propagateContains(anchorUID, attester);
+    }
+
+    function _propagateContains(bytes32 anchorUID, address attester) private {
+        bytes32 current = anchorUID;
+        while (current != bytes32(0)) {
+            if (_containsAttestations[current][attester]) break;
+            _containsAttestations[current][attester] = true;
+            bytes32 parentUID = _parents[current];
+            if (parentUID != bytes32(0)) {
+                _childrenByAttester[parentUID][attester].push(current);
+            }
+            current = parentUID;
+        }
     }
 
     function onAttest(Attestation calldata attestation, uint256 /*value*/) internal override returns (bool) {
@@ -221,6 +269,17 @@ contract EFSIndexer is SchemaResolver {
                 revert DuplicateFileName();
             }
 
+            // Validation: Enforce MAX_ANCHOR_DEPTH to prevent gas griefing in propagateContains
+            if (parentUID != bytes32(0)) {
+                uint256 depth = 1;
+                bytes32 walker = parentUID;
+                while (_parents[walker] != bytes32(0)) {
+                    depth++;
+                    if (depth > MAX_ANCHOR_DEPTH) revert AnchorTooDeep();
+                    walker = _parents[walker];
+                }
+            }
+
             // Write Directory
             _nameToAnchor[parentUID][name][anchorSchema] = attestation.uid;
 
@@ -245,51 +304,40 @@ contract EFSIndexer is SchemaResolver {
             emit AnchorCreated(parentUID, attestation.uid, attestation.attester, anchorSchema);
             return true;
         } else if (schema == DATA_SCHEMA_UID) {
-            // VALIDATION: Check refUID is a valid Anchor AND matches DATA_SCHEMA constraint
-            if (attestation.refUID == EMPTY_UID) return false;
+            // DATA is standalone file identity: refUID must be 0x0, non-revocable
+            if (attestation.refUID != EMPTY_UID) return false;
+            if (attestation.revocable) return false;
 
-            Attestation memory target = _eas.getAttestation(attestation.refUID);
-            if (target.schema != ANCHOR_SCHEMA_UID) return false;
+            (bytes32 contentHash, ) = abi.decode(attestation.data, (bytes32, uint64));
 
-            // Enforce that the attributes/data are attached to a FILE ANCHOR (schema == DATA_SCHEMA_UID)
-            // Decode the anchor to check its type? No, we don't have the data decoded.
-            // BUT we can check _nameToAnchor? No, we have the UID.
-            // We need to know the schema of the Anchor.
-            // We can decode the target.data.
-            (, bytes32 targetAnchorSchema) = abi.decode(target.data, (string, bytes32));
-            if (targetAnchorSchema != DATA_SCHEMA_UID) {
-                return false; // Files must be attached to Data Anchors
+            // Content-addressed deduplication: first DATA per contentHash is canonical
+            if (contentHash != bytes32(0) && dataByContentKey[contentHash] == bytes32(0)) {
+                dataByContentKey[contentHash] = attestation.uid;
             }
 
-            // Index MimeType
-            bytes32 parentUID = _parents[attestation.refUID];
-            if (parentUID != bytes32(0)) {
-                _indexMimeType(parentUID, attestation.refUID, attestation.data);
-            }
-
-            // Index File Content Perspectives (Append-only by design, not deleted in onRevoke)
-            _dataAttestationsByAddress[attestation.refUID][attestation.attester].push(attestation.uid);
-
-            emit DataCreated(attestation.refUID, attestation.uid, attestation.attester);
+            emit DataCreated(attestation.uid, attestation.attester, contentHash);
             return true;
         } else if (schema == PROPERTY_SCHEMA_UID) {
-            // VALIDATION: Check refUID is a valid Anchor AND matches PROPERTY_SCHEMA constraint
+            // Properties can target Anchors (PROPERTY-typed) or DATA attestations
             if (attestation.refUID == EMPTY_UID) return false;
 
             Attestation memory target = _eas.getAttestation(attestation.refUID);
-            if (target.schema != ANCHOR_SCHEMA_UID) return false;
 
-            // Enforce that properties are attached to PROPERTY ANCHORS
-            (, bytes32 targetAnchorSchema) = abi.decode(target.data, (string, bytes32));
-            // Optimization: If property anchor schema is 0 (generic), we might allow properties on generic anchors?
-            // User plan said: "Properties must verify their parent Anchor has schema == PROPERTY_SCHEMA"
-            if (targetAnchorSchema != PROPERTY_SCHEMA_UID) {
-                return false;
-            }
-
-            // Ensure Anchor is valid (has parent or recipient)
-            if (target.refUID == EMPTY_UID && target.recipient == address(0)) {
-                return false; // Floating anchor
+            if (target.schema == DATA_SCHEMA_UID) {
+                // Properties on DATA: contentType, previousVersion, description, etc.
+                // No further validation needed — DATA is always valid standalone
+            } else if (target.schema == ANCHOR_SCHEMA_UID) {
+                // Properties on Anchors: must be PROPERTY-typed anchors
+                (, bytes32 targetAnchorSchema) = abi.decode(target.data, (string, bytes32));
+                if (targetAnchorSchema != PROPERTY_SCHEMA_UID) {
+                    return false;
+                }
+                // Ensure Anchor is valid (has parent or recipient)
+                if (target.refUID == EMPTY_UID && target.recipient == address(0)) {
+                    return false;
+                }
+            } else {
+                return false; // Properties only on DATA or PROPERTY Anchors
             }
 
             emit PropertyCreated(attestation.refUID, attestation.uid, attestation.attester);

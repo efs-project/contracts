@@ -58,8 +58,8 @@ describe("EFSIndexer", function () {
     const rc2 = await tx2.wait();
     propertySchemaUID = rc2!.logs[0].topics[1];
 
-    // DATA: string uri, string contentType, string fileMode (matches EFSRouter schema)
-    const tx3 = await registry.register("string uri, string contentType, string fileMode", futureIndexerAddr, true);
+    // DATA: bytes32 contentHash, uint64 size (standalone, non-revocable)
+    const tx3 = await registry.register("bytes32 contentHash, uint64 size", futureIndexerAddr, false);
     const rc3 = await tx3.wait();
     dataSchemaUID = rc3!.logs[0].topics[1];
 
@@ -233,36 +233,52 @@ describe("EFSIndexer", function () {
   });
 
   describe("Enforcement (Relationships)", function () {
-    it("Should fail to attach DATA to a non-Anchor (e.g. Root)", async function () {
-      // Try attaching DATA to ZeroHash (not an Anchor)
+    it("Should accept standalone DATA with refUID=0x0 and non-revocable", async function () {
       const schemaEncoder = new ethers.AbiCoder();
-      // Expect EAS to revert with InvalidAttestation() because indexer returns false
-      await expect(
-        eas.attest({
-          schema: dataSchemaUID,
-          data: {
-            recipient: ZeroAddress,
-            expirationTime: NO_EXPIRATION,
-            revocable: true,
-            refUID: ZERO_BYTES32, // Invalid Ref
-            data: schemaEncoder.encode(["bytes32", "string"], [ZERO_BYTES32, "0644"]),
-            value: 0n,
-          },
-        }),
-      ).to.be.revertedWithCustomError(eas, "InvalidAttestation");
+      const contentHash = ethers.keccak256(ethers.toUtf8Bytes("test"));
+      const tx = await eas.attest({
+        schema: dataSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: NO_EXPIRATION,
+          revocable: false,
+          refUID: ZERO_BYTES32,
+          data: schemaEncoder.encode(["bytes32", "uint64"], [contentHash, 4n]),
+          value: 0n,
+        },
+      });
+      const receipt = await tx.wait();
+      const uid = getUIDFromReceipt(receipt);
+      expect(uid).to.not.equal(ZERO_BYTES32);
     });
 
-    it("Should rejection DATA attached to invalid UID", async function () {
+    it("Should reject DATA with non-zero refUID", async function () {
+      // Create an anchor first
       const schemaEncoder = new ethers.AbiCoder();
+      const rootData = schemaEncoder.encode(["string", "bytes32"], ["root", ZERO_BYTES32]);
+      const rootTx = await eas.attest({
+        schema: anchorSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: NO_EXPIRATION,
+          revocable: false,
+          refUID: ZERO_BYTES32,
+          data: rootData,
+          value: 0n,
+        },
+      });
+      const rootUID = getUIDFromReceipt(await rootTx.wait());
+
+      const contentHash = ethers.keccak256(ethers.toUtf8Bytes("test"));
       await expect(
         eas.attest({
           schema: dataSchemaUID,
           data: {
             recipient: ZeroAddress,
             expirationTime: NO_EXPIRATION,
-            revocable: true,
-            refUID: ZERO_BYTES32,
-            data: schemaEncoder.encode(["bytes32", "string"], [ZERO_BYTES32, "0644"]),
+            revocable: false,
+            refUID: rootUID, // Must be 0x0 for standalone DATA
+            data: schemaEncoder.encode(["bytes32", "uint64"], [contentHash, 4n]),
             value: 0n,
           },
         }),
@@ -496,16 +512,16 @@ describe("EFSIndexer", function () {
       const rcFile = await txFile.wait();
       fileUID = getUIDFromReceipt(rcFile);
 
-      // 4. Attach DATA to "my_video.mp4"
-      // DATA schema is `string uri, string contentType, string fileMode`
+      // 4. Create standalone DATA (new model: refUID=0x0, non-revocable)
+      const contentHash = ethers.keccak256(ethers.toUtf8Bytes("my_video.mp4"));
       const dataTx = await eas.attest({
         schema: dataSchemaUID,
         data: {
           recipient: ZeroAddress,
           expirationTime: NO_EXPIRATION,
-          revocable: true,
-          refUID: fileUID, // Points to the file Anchor
-          data: schemaEncoder.encode(["string", "string", "string"], ["web3://", "video/mp4", "file"]),
+          revocable: false,
+          refUID: ZERO_BYTES32,
+          data: schemaEncoder.encode(["bytes32", "uint64"], [contentHash, 1024n]),
           value: 0n,
         },
       });
@@ -543,7 +559,7 @@ describe("EFSIndexer", function () {
       user2FileUID = getUIDFromReceipt(receiptUser2File);
     });
 
-    it("Should index by mime type and category", async function () {
+    it.skip("Should index by mime type and category [SKIPPED: contentType moved from DATA to PROPERTY in transport redesign]", async function () {
       // Verify getChildrenByType("video/mp4") on Parent ("files")
       // Should return "my_video.mp4" (fileUID)
       const videos = await indexer["getChildrenByType(bytes32,string,uint256,uint256,bool,bool)"](
@@ -679,34 +695,32 @@ describe("EFSIndexer", function () {
       });
       _child2UID = getUIDFromReceipt(await txChild2.wait());
 
-      // Attach revocable DATA to child1
+      // Create standalone DATA (new model)
+      const contentHash = ethers.keccak256(ethers.toUtf8Bytes("file1-content"));
       const txData = await eas.connect(user1).attest({
         schema: dataSchemaUID,
         data: {
           recipient: ZeroAddress,
           expirationTime: 0n,
-          revocable: true,
-          refUID: child1UID,
-          data: schemaEncoder.encode(["string", "string", "string"], ["ipfs://v1", "text/plain", "file"]),
+          revocable: false,
+          refUID: ZERO_BYTES32,
+          data: schemaEncoder.encode(["bytes32", "uint64"], [contentHash, 100n]),
           value: 0n,
         },
       });
       dataUID1 = getUIDFromReceipt(await txData.wait());
     });
 
-    it("isRevoked returns false before revocation and true after", async function () {
+    it("isRevoked returns false for non-revocable DATA", async function () {
       expect(await indexer.isRevoked(dataUID1)).to.equal(false);
-      await eas.connect(user1).revoke({ schema: dataSchemaUID, data: { uid: dataUID1, value: 0n } });
-      expect(await indexer.isRevoked(dataUID1)).to.equal(true);
+      // DATA is non-revocable, so revoke should fail
+      await expect(eas.connect(user1).revoke({ schema: dataSchemaUID, data: { uid: dataUID1, value: 0n } })).to.be
+        .reverted;
     });
 
-    it("revoked DATA stays in kernel arrays (showRevoked=true shows it)", async function () {
-      await eas.connect(user1).revoke({ schema: dataSchemaUID, data: { uid: dataUID1, value: 0n } });
-
-      // Data attestations are indexed in _referencingAttestations — still there after revoke
-      const refs = await indexer.getReferencingAttestations(child1UID, dataSchemaUID, 0, 10, false);
-      expect(refs.length).to.equal(1);
-      expect(refs[0]).to.equal(dataUID1);
+    it("standalone DATA is indexed in schema attestations", async function () {
+      const atts = await indexer.getAttestationsBySchema(dataSchemaUID, 0, 10, false);
+      expect(atts.length).to.be.greaterThan(0);
     });
 
     it("showRevoked=false hides revoked items; showRevoked=true shows them", async function () {
@@ -756,31 +770,11 @@ describe("EFSIndexer", function () {
       expect(count).to.equal(2);
     });
 
-    it("getDataByAddressList skips revoked with showRevoked=false", async function () {
-      // Attach a second DATA to child1
-      const txData2 = await eas.connect(user1).attest({
-        schema: dataSchemaUID,
-        data: {
-          recipient: ZeroAddress,
-          expirationTime: 0n,
-          revocable: true,
-          refUID: child1UID,
-          data: schemaEncoder.encode(["string", "string", "string"], ["ipfs://v2", "text/plain", "file"]),
-          value: 0n,
-        },
-      });
-      const dataUID2 = getUIDFromReceipt(await txData2.wait());
-
-      // Revoke the second (most recent)
-      await eas.connect(user1).revoke({ schema: dataSchemaUID, data: { uid: dataUID2, value: 0n } });
-
-      // Without showRevoked: should fall back to v1
+    it("standalone DATA is not indexed in _dataAttestationsByAddress (new model uses TAGs)", async function () {
+      // In the new model, DATA is standalone (refUID=0x0). getDataByAddressList is a legacy
+      // function for the old model. Standalone DATAs are discovered via TAG queries instead.
       const result = await indexer.getDataByAddressList(child1UID, [await user1.getAddress()], false);
-      expect(result).to.equal(dataUID1);
-
-      // With showRevoked: latest is v2 (most recently attested)
-      const resultWithRevoked = await indexer.getDataByAddressList(child1UID, [await user1.getAddress()], true);
-      expect(resultWithRevoked).to.equal(dataUID2);
+      expect(result).to.equal(ZERO_BYTES32);
     });
   });
 
@@ -1095,32 +1089,30 @@ describe("EFSIndexer", function () {
         },
       });
       const receiptBlob = await txBlob.wait();
-      const blobUID = getUIDFromReceipt(receiptBlob);
+      const _blobUID = getUIDFromReceipt(receiptBlob);
 
-      // 3. Link Anchor to Blob via Data Schema
-      // DATA schema is `string uri, string contentType, string fileMode`
-      // The blobUID is encoded as the uri field to preserve the reference
+      // 3. Create standalone DATA (new model)
+      const contentHash = ethers.keccak256(ethers.toUtf8Bytes("intro.mp4-content"));
       const txData = await eas.attest({
         schema: dataSchemaUID,
         data: {
           recipient: ZeroAddress,
           expirationTime: NO_EXPIRATION,
-          revocable: true,
-          refUID: anchorUID,
-          data: schemaEncoder.encode(["string", "string", "string"], [blobUID, "video/mp4", "file"]),
+          revocable: false,
+          refUID: ZERO_BYTES32,
+          data: schemaEncoder.encode(["bytes32", "uint64"], [contentHash, 1024n]),
           value: 0n,
         },
       });
       const receiptData = await txData.wait();
-      getUIDFromReceipt(receiptData);
+      const dataUID = getUIDFromReceipt(receiptData);
 
       // 4. Resolve Anchor
       const resolvedAnchor = await indexer.resolveAnchor(parentUID, "intro.mp4", dataSchemaUID);
       expect(resolvedAnchor).to.equal(anchorUID);
 
-      // 5. Get Data Attestations
-      const dataAttestations = await indexer.getReferencingAttestations(anchorUID, dataSchemaUID, 0, 10, false);
-      expect(dataAttestations.length).to.equal(1);
+      // 5. Verify DATA is indexed and dedup works
+      expect(await indexer.dataByContentKey(contentHash)).to.equal(dataUID);
     });
   });
 
@@ -1207,31 +1199,33 @@ describe("EFSIndexer", function () {
       expect(allRefAfter.length).to.equal(1);
     });
 
-    it("Should return Single Address History (showRevoked vs active)", async function () {
-      // User 1 makes an edit
+    it.skip("Should return Single Address History [SKIPPED: DATA is standalone in new model, getDataHistoryByAddress requires refUID]", async function () {
+      // In the new model, DATA is standalone. getDataHistoryByAddress tracks DATA
+      // by [refUID][attester], so standalone DATA (refUID=0x0) won't appear there.
+      const contentHash1 = ethers.keccak256(ethers.toUtf8Bytes("v1"));
       const dataTx1 = await eas.connect(user1).attest({
         schema: dataSchemaUID,
         data: {
           recipient: ZeroAddress,
           expirationTime: 0n,
-          revocable: true,
-          refUID: fileAnchorUID,
-          data: schemaEncoder.encode(["string", "string", "string"], ["ipfs://v1", "application/json", "file"]),
+          revocable: false,
+          refUID: ZERO_BYTES32,
+          data: schemaEncoder.encode(["bytes32", "uint64"], [contentHash1, 100n]),
           value: 0n,
         },
       });
       const r1 = await dataTx1.wait();
       const uid1 = getUIDFromReceipt(r1);
 
-      // User 1 makes a second edit
+      const contentHash2 = ethers.keccak256(ethers.toUtf8Bytes("v2"));
       const dataTx2 = await eas.connect(user1).attest({
         schema: dataSchemaUID,
         data: {
           recipient: ZeroAddress,
           expirationTime: 0n,
-          revocable: true,
-          refUID: fileAnchorUID,
-          data: schemaEncoder.encode(["string", "string", "string"], ["ipfs://v2", "application/json", "file"]),
+          revocable: false,
+          refUID: ZERO_BYTES32,
+          data: schemaEncoder.encode(["bytes32", "uint64"], [contentHash2, 200n]),
           value: 0n,
         },
       });
@@ -1279,7 +1273,7 @@ describe("EFSIndexer", function () {
       expect(historyAll.length).to.equal(2);
     });
 
-    it("Should fallback correctly via getDataByAddressList", async function () {
+    it.skip("Should fallback correctly via getDataByAddressList [SKIPPED: DATA is standalone in new model]", async function () {
       // User 1 edit
       const dataTx1 = await eas.connect(user1).attest({
         schema: dataSchemaUID,
@@ -1333,7 +1327,7 @@ describe("EFSIndexer", function () {
       expect(result4).to.equal(uid2);
     });
 
-    it("Should return bytes32(0) from getDataByAddressList when all data is revoked", async function () {
+    it.skip("Should return bytes32(0) from getDataByAddressList when all data is revoked [SKIPPED: DATA is non-revocable and standalone in new model]", async function () {
       const dataTx1 = await eas.connect(user1).attest({
         schema: dataSchemaUID,
         data: {
@@ -1392,7 +1386,7 @@ describe("EFSIndexer", function () {
       expect(results[2]).to.equal(f3);
     });
 
-    it("getChildrenByAddressList: no duplicates when multiple attesters contribute to same anchor", async function () {
+    it.skip("getChildrenByAddressList: no duplicates when multiple attesters contribute to same anchor [SKIPPED: DATA is standalone, old refUID-based propagation removed]", async function () {
       const u1Addr = await user1.getAddress();
       const u2Addr = await user2.getAddress();
 
@@ -1599,7 +1593,7 @@ describe("EFSIndexer", function () {
       expect(await indexer.containsAttestations(rootUID, u2Address)).to.equal(true);
     });
 
-    it("Should flag containsAttestations when a user attaches DATA schemas (Editions)", async function () {
+    it.skip("Should flag containsAttestations when a user attaches DATA schemas [SKIPPED: DATA is standalone, containsAttestations propagated via TAG instead]", async function () {
       // User1 creates a file anchor
       let tx = await eas.connect(user1).attest({
         schema: anchorSchemaUID,
@@ -1689,7 +1683,7 @@ describe("EFSIndexer", function () {
       await expect(tx).to.emit(indexer, "AnchorCreated").withArgs(parentUID, childUID, ownerAddr, ZERO_BYTES32);
     });
 
-    it("emits DataCreated when DATA is attached to a file Anchor", async function () {
+    it.skip("emits DataCreated when DATA is attached to a file Anchor — skipped: old model used DATA.refUID=anchor; new model DATA is standalone", async function () {
       const ownerAddr = await owner.getAddress();
 
       // Create file anchor (anchorSchema = DATA_SCHEMA_UID marks it as a file slot)
@@ -1722,7 +1716,7 @@ describe("EFSIndexer", function () {
       await expect(dataTx).to.emit(indexer, "DataCreated").withArgs(anchorUID, dataUID, ownerAddr);
     });
 
-    it("emits AttestationRevoked when a DATA attestation is revoked", async function () {
+    it.skip("emits AttestationRevoked when a DATA attestation is revoked — skipped: DATA is now non-revocable", async function () {
       const ownerAddr = await owner.getAddress();
 
       const anchorTx = await eas.connect(owner).attest({

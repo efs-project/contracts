@@ -11,6 +11,8 @@ interface IEFSIndexerForTag {
     function index(bytes32 uid) external returns (bool);
     function indexRevocation(bytes32 uid) external;
     function getParent(bytes32 anchorUID) external view returns (bytes32);
+    function propagateContains(bytes32 anchorUID, address attester) external;
+    function ANCHOR_SCHEMA_UID() external view returns (bytes32);
 }
 
 /**
@@ -30,6 +32,7 @@ interface IEFSIndexerForTag {
 contract TagResolver is SchemaResolver {
     error MustTargetSomething();
     error InvalidDefinition();
+    error InvalidTarget();
 
     /// @notice The EAS schema UID for the Tag schema registered with this resolver
     bytes32 public immutable TAG_SCHEMA_UID;
@@ -66,7 +69,19 @@ contract TagResolver is SchemaResolver {
     mapping(bytes32 => mapping(bytes32 => bytes32[])) private _childrenTaggedWith;
     mapping(bytes32 => mapping(bytes32 => mapping(bytes32 => bool))) private _isChildTaggedWith;
 
-    constructor(IEAS eas, bytes32 tagSchemaUID, IEFSIndexerForTag _indexer, ISchemaRegistry _schemaRegistry) SchemaResolver(eas) {
+    // Compact index: active targets per (definition, attester, targetSchema).
+    // Swap-and-pop for O(1) removal. Used for efficient folder listing.
+    // _activeByAttesterAndSchema[definition][attester][schema] => target UIDs
+    mapping(bytes32 => mapping(address => mapping(bytes32 => bytes32[]))) private _activeByAAS;
+    // Position index for O(1) swap-and-pop: value is position+1 (0 = absent)
+    mapping(bytes32 => mapping(address => mapping(bytes32 => mapping(bytes32 => uint256)))) private _activeByAASIndex;
+
+    constructor(
+        IEAS eas,
+        bytes32 tagSchemaUID,
+        IEFSIndexerForTag _indexer,
+        ISchemaRegistry _schemaRegistry
+    ) SchemaResolver(eas) {
         TAG_SCHEMA_UID = tagSchemaUID;
         indexer = _indexer;
         schemaRegistry = _schemaRegistry;
@@ -80,11 +95,18 @@ contract TagResolver is SchemaResolver {
 
         bytes32 targetID = _resolveTargetID(attestation.refUID, attestation.recipient);
 
+        // Cache target attestation (one SLOAD instead of three)
+        bytes32 targetSchema;
+        if (attestation.refUID != EMPTY_UID) {
+            Attestation memory target = _eas.getAttestation(attestation.refUID);
+            if (target.uid == bytes32(0)) revert InvalidTarget();
+            targetSchema = target.schema;
+        }
+
         bytes32 compositeHash = keccak256(abi.encodePacked(attestation.attester, targetID, definition));
         bytes32 targetDefHash = keccak256(abi.encodePacked(targetID, definition));
 
         // Update active count: track transitions between applied and not-applied states.
-        // _isApplied defaults false, so a zero _activeTag entry is treated as "not applied".
         bool oldApplied = _isApplied[compositeHash];
         if (applies && !oldApplied) {
             _activeCount[targetDefHash]++;
@@ -95,6 +117,17 @@ contract TagResolver is SchemaResolver {
         // Logical superseding: overwrite the active UID (old attestation stays on-chain but is ignored)
         _activeTag[compositeHash] = attestation.uid;
         _isApplied[compositeHash] = applies;
+
+        // Compact index maintenance: _activeByAAS[definition][attester][targetSchema]
+        if (attestation.refUID != EMPTY_UID) {
+            if (applies && !oldApplied) {
+                bytes32[] storage arr = _activeByAAS[definition][attestation.attester][targetSchema];
+                arr.push(targetID);
+                _activeByAASIndex[definition][attestation.attester][targetSchema][targetID] = arr.length;
+            } else if (!applies && oldApplied) {
+                _swapAndPop(definition, attestation.attester, targetSchema, targetID);
+            }
+        }
 
         // Track discovery indices (append-only, never removed)
         if (applies) {
@@ -108,13 +141,21 @@ contract TagResolver is SchemaResolver {
             }
         }
 
-        // Build children-tagged-with index: when an attestation (anchor) that is a child
-        // of some parent is tagged, record it under that parent for efficient folder queries.
+        // Build children-tagged-with index
         if (attestation.refUID != EMPTY_UID && applies) {
             bytes32 parent = indexer.getParent(attestation.refUID);
             if (parent != bytes32(0) && !_isChildTaggedWith[parent][definition][attestation.refUID]) {
                 _childrenTaggedWith[parent][definition].push(attestation.refUID);
                 _isChildTaggedWith[parent][definition][attestation.refUID] = true;
+            }
+        }
+
+        // Propagate "contains" flags up the anchor tree when tagging content at a structural anchor.
+        // Definition must be an Anchor for this to apply (file placement / folder membership).
+        if (applies && attestation.refUID != EMPTY_UID) {
+            Attestation memory defAtt = _eas.getAttestation(definition);
+            if (defAtt.schema == indexer.ANCHOR_SCHEMA_UID()) {
+                indexer.propagateContains(definition, attestation.attester);
             }
         }
 
@@ -137,6 +178,12 @@ contract TagResolver is SchemaResolver {
             if (_isApplied[compositeHash]) {
                 bytes32 targetDefHash = keccak256(abi.encodePacked(targetID, definition));
                 _activeCount[targetDefHash]--;
+
+                // Remove from compact index
+                if (attestation.refUID != EMPTY_UID) {
+                    Attestation memory target = _eas.getAttestation(attestation.refUID);
+                    _swapAndPop(definition, attestation.attester, target.schema, targetID);
+                }
             }
             delete _activeTag[compositeHash];
             delete _isApplied[compositeHash];
@@ -226,8 +273,51 @@ contract TagResolver is SchemaResolver {
     }
 
     // ============================================================================================
+    // READ FUNCTIONS: COMPACT INDEX
+    // ============================================================================================
+
+    /// @notice Get active targets for a (definition, attester, schema) triple.
+    ///         Primary query for folder listing: "DATAs in /memes/ by vitalik".
+    function getActiveTargetsByAttesterAndSchema(
+        bytes32 definition,
+        address attester,
+        bytes32 schema,
+        uint256 start,
+        uint256 length
+    ) external view returns (bytes32[] memory) {
+        return _sliceUIDs(_activeByAAS[definition][attester][schema], start, length);
+    }
+
+    /// @notice Count of active targets for a (definition, attester, schema) triple.
+    function getActiveTargetsByAttesterAndSchemaCount(
+        bytes32 definition,
+        address attester,
+        bytes32 schema
+    ) external view returns (uint256) {
+        return _activeByAAS[definition][attester][schema].length;
+    }
+
+    // ============================================================================================
     // INTERNAL HELPERS
     // ============================================================================================
+
+    /// @dev Swap-and-pop removal from the compact _activeByAAS index.
+    function _swapAndPop(bytes32 definition, address attester, bytes32 schema, bytes32 targetID) private {
+        uint256 indexPlusOne = _activeByAASIndex[definition][attester][schema][targetID];
+        if (indexPlusOne == 0) return; // already absent
+
+        bytes32[] storage arr = _activeByAAS[definition][attester][schema];
+        uint256 pos = indexPlusOne - 1;
+        uint256 lastIdx = arr.length - 1;
+
+        if (pos != lastIdx) {
+            bytes32 lastItem = arr[lastIdx];
+            arr[pos] = lastItem;
+            _activeByAASIndex[definition][attester][schema][lastItem] = pos + 1;
+        }
+        arr.pop();
+        delete _activeByAASIndex[definition][attester][schema][targetID];
+    }
 
     /// @dev Validate that definition is a valid attestation UID, registered schema UID, or address.
     function _validateDefinition(bytes32 definition) private view {

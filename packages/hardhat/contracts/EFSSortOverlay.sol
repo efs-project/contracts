@@ -289,8 +289,8 @@ contract EFSSortOverlay is SchemaResolver {
         // Check item is actually in the sorted list before anything else.
         // An item is in the list if it is the head, OR if it has a non-zero prev/next pointer.
         bool inList = _sortHeads[sortInfoUID][parentAnchor] == itemUID ||
-                      node.prev != bytes32(0) ||
-                      node.next != bytes32(0);
+            node.prev != bytes32(0) ||
+            node.next != bytes32(0);
         if (!inList) revert InvalidItem();
 
         // Idempotency check: if item already satisfies sorted invariant vs current neighbours,

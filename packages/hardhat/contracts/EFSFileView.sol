@@ -5,9 +5,30 @@ import { IEAS, Attestation } from "@ethereum-attestation-service/eas-contracts/c
 
 interface ITagResolverForFileView {
     function isActivelyTagged(bytes32 targetID, bytes32 definition) external view returns (bool);
-    function isActivelyTaggedByAny(bytes32 targetID, bytes32 definition, address[] calldata attesters) external view returns (bool);
-    function getChildrenTaggedWith(bytes32 parentUID, bytes32 definition, uint256 start, uint256 length) external view returns (bytes32[] memory);
+    function isActivelyTaggedByAny(
+        bytes32 targetID,
+        bytes32 definition,
+        address[] calldata attesters
+    ) external view returns (bool);
+    function getChildrenTaggedWith(
+        bytes32 parentUID,
+        bytes32 definition,
+        uint256 start,
+        uint256 length
+    ) external view returns (bytes32[] memory);
     function getChildrenTaggedWithCount(bytes32 parentUID, bytes32 definition) external view returns (uint256);
+    function getActiveTargetsByAttesterAndSchema(
+        bytes32 definition,
+        address attester,
+        bytes32 schema,
+        uint256 start,
+        uint256 length
+    ) external view returns (bytes32[] memory);
+    function getActiveTargetsByAttesterAndSchemaCount(
+        bytes32 definition,
+        address attester,
+        bytes32 schema
+    ) external view returns (uint256);
 }
 
 interface IEFSIndexer {
@@ -49,6 +70,16 @@ interface IEFSIndexer {
     function getEAS() external view returns (IEAS);
     function DATA_SCHEMA_UID() external view returns (bytes32);
     function PROPERTY_SCHEMA_UID() external view returns (bytes32);
+    function MIRROR_SCHEMA_UID() external view returns (bytes32);
+    function ANCHOR_SCHEMA_UID() external view returns (bytes32);
+    function dataByContentKey(bytes32 contentHash) external view returns (bytes32);
+    function getReferencingAttestations(
+        bytes32 targetUID,
+        bytes32 schemaUID,
+        uint256 start,
+        uint256 length,
+        bool reverseOrder
+    ) external view returns (bytes32[] memory);
 }
 
 contract EFSFileView {
@@ -63,6 +94,15 @@ contract EFSFileView {
         uint64 timestamp;
         address attester;
         bytes32 schema; // Anchor Schema Type
+        bytes32 contentHash; // For DATA attestations
+    }
+
+    struct MirrorItem {
+        bytes32 uid;
+        bytes32 transportDefinition;
+        string uri;
+        address attester;
+        uint64 timestamp;
     }
 
     IEFSIndexer public immutable indexer;
@@ -148,8 +188,8 @@ contract EFSFileView {
             attesters,
             startingCursor,
             pageSize,
-            true,   // reverseOrder (newest first)
-            false   // showRevoked
+            true, // reverseOrder (newest first)
+            false // showRevoked
         );
 
         // 2. Tagged folders — first page only (typically a small set)
@@ -206,7 +246,12 @@ contract EFSFileView {
         // page 1 of getDirectoryPageBySchemaAndAddressList. This is a view function, so
         // the only bound is the caller's eth_call gas limit.
         uint256 taggedCount = tagResolver.getChildrenTaggedWithCount(parentAnchor, anchorSchema);
-        bytes32[] memory taggedCandidates = tagResolver.getChildrenTaggedWith(parentAnchor, anchorSchema, 0, taggedCount);
+        bytes32[] memory taggedCandidates = tagResolver.getChildrenTaggedWith(
+            parentAnchor,
+            anchorSchema,
+            0,
+            taggedCount
+        );
 
         // Also scan generic folders (source A) — full scan of _childrenBySchema[parent][0]
         // for the same reason. Folders discovered through the tag index still get merged/deduped.
@@ -214,7 +259,13 @@ contract EFSFileView {
         bytes32[] memory genericFolders;
         if (genericCount > 0) {
             (genericFolders, ) = indexer.getAnchorsBySchemaAndAddressList(
-                parentAnchor, bytes32(0), attesters, 0, genericCount, true, false
+                parentAnchor,
+                bytes32(0),
+                attesters,
+                0,
+                genericCount,
+                true,
+                false
             );
         } else {
             genericFolders = new bytes32[](0);
@@ -252,7 +303,10 @@ contract EFSFileView {
             // Skip if already added via tag path
             bool alreadyAdded = false;
             for (uint256 k = 0; k < count; k++) {
-                if (temp[k] == uid) { alreadyAdded = true; break; }
+                if (temp[k] == uid) {
+                    alreadyAdded = true;
+                    break;
+                }
             }
             if (alreadyAdded) continue;
 
@@ -301,11 +355,141 @@ contract EFSFileView {
                 propertyCount: propertyCount,
                 timestamp: att.time,
                 attester: att.attester,
-                schema: anchorType
+                schema: anchorType,
+                contentHash: bytes32(0)
             });
         }
 
         return result;
+    }
+
+    /**
+     * @notice Tag-based file listing: get DATAs placed at an anchor by specific attesters.
+     *         Uses TagResolver's _activeByAttesterAndSchema compact index.
+     * @param anchorUID  The path anchor (e.g. /memes/)
+     * @param attesters  Edition addresses to query
+     * @param schema     Target schema to filter (DATA_SCHEMA_UID for files, ANCHOR_SCHEMA_UID for sub-folders)
+     * @param start      Pagination offset
+     * @param length     Page size
+     * @return items     DATA/Anchor attestation details with contentHash populated for DATAs
+     */
+    function getFilesAtPath(
+        bytes32 anchorUID,
+        address[] calldata attesters,
+        bytes32 schema,
+        uint256 start,
+        uint256 length
+    ) external view returns (FileSystemItem[] memory items) {
+        // Collect from all attesters, dedup by UID
+        bytes32[] memory temp = new bytes32[](length * attesters.length);
+        uint256 count = 0;
+
+        for (uint256 a = 0; a < attesters.length; a++) {
+            bytes32[] memory targets = tagResolver.getActiveTargetsByAttesterAndSchema(
+                anchorUID,
+                attesters[a],
+                schema,
+                start,
+                length
+            );
+            for (uint256 i = 0; i < targets.length; i++) {
+                // Dedup
+                bool exists = false;
+                for (uint256 j = 0; j < count; j++) {
+                    if (temp[j] == targets[i]) {
+                        exists = true;
+                        break;
+                    }
+                }
+                if (!exists && count < temp.length) {
+                    temp[count++] = targets[i];
+                }
+            }
+        }
+
+        items = new FileSystemItem[](count);
+        bytes32 dataSchemaUID = indexer.DATA_SCHEMA_UID();
+
+        for (uint256 i = 0; i < count; i++) {
+            Attestation memory att = eas.getAttestation(temp[i]);
+
+            bytes32 contentHash;
+            string memory name = "";
+
+            if (att.schema == dataSchemaUID) {
+                // DATA attestation: decode contentHash
+                (contentHash, ) = abi.decode(att.data, (bytes32, uint64));
+            } else {
+                // Anchor: decode name
+                bytes32 anchorType;
+                (name, anchorType) = abi.decode(att.data, (string, bytes32));
+            }
+
+            items[i] = FileSystemItem({
+                uid: temp[i],
+                name: name,
+                parentUID: anchorUID,
+                isFolder: att.schema != dataSchemaUID,
+                hasData: att.schema == dataSchemaUID,
+                childCount: 0,
+                propertyCount: 0,
+                timestamp: att.time,
+                attester: att.attester,
+                schema: att.schema,
+                contentHash: contentHash
+            });
+        }
+    }
+
+    /**
+     * @notice Get mirrors (retrieval methods) for a DATA attestation.
+     * @param dataUID  The DATA attestation UID
+     * @param start    Pagination offset
+     * @param length   Page size
+     */
+    function getDataMirrors(
+        bytes32 dataUID,
+        uint256 start,
+        uint256 length
+    ) external view returns (MirrorItem[] memory) {
+        bytes32 mirrorSchemaUID = indexer.MIRROR_SCHEMA_UID();
+        bytes32[] memory mirrorUIDs = indexer.getReferencingAttestations(
+            dataUID,
+            mirrorSchemaUID,
+            start,
+            length,
+            false
+        );
+
+        // First pass: count non-revoked mirrors
+        uint256 activeCount = 0;
+        for (uint256 i = 0; i < mirrorUIDs.length; i++) {
+            if (!indexer.isRevoked(mirrorUIDs[i])) activeCount++;
+        }
+
+        // Second pass: populate result
+        MirrorItem[] memory result = new MirrorItem[](activeCount);
+        uint256 idx = 0;
+        for (uint256 i = 0; i < mirrorUIDs.length; i++) {
+            if (indexer.isRevoked(mirrorUIDs[i])) continue;
+            Attestation memory att = eas.getAttestation(mirrorUIDs[i]);
+            (bytes32 transportDef, string memory uri) = abi.decode(att.data, (bytes32, string));
+            result[idx++] = MirrorItem({
+                uid: mirrorUIDs[i],
+                transportDefinition: transportDef,
+                uri: uri,
+                attester: att.attester,
+                timestamp: att.time
+            });
+        }
+        return result;
+    }
+
+    /**
+     * @notice Look up the canonical DATA UID for a content hash.
+     */
+    function getCanonicalData(bytes32 contentHash) external view returns (bytes32) {
+        return indexer.dataByContentKey(contentHash);
     }
 
     function decodeName(bytes memory data) external pure returns (string memory) {

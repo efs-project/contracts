@@ -57,18 +57,22 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
   const { writeContractAsync: easWrite } = useScaffoldWriteContract("EAS");
   const { data: easInfo } = useDeployedContractInfo({ contractName: "EAS" });
 
+  const { data: dataSchemaUID } = useScaffoldReadContract({
+    contractName: "Indexer",
+    functionName: "DATA_SCHEMA_UID",
+  });
+
   // For file items: resolve the DATA attestation UID to tag.
-  // The TagModal targets the DATA that the user is actually *viewing* — i.e. the same
-  // attester list FileBrowser uses when building its view. This matters because tags
-  // stored against DATA UIDs that don't appear in the view won't affect the tag filter
-  // (filter walks viewed DATA UIDs, not anchors). Rules:
+  // DATA is standalone (refUID=0x0) and placed at anchors via TAGs, so we query
+  // TagResolver's _activeByAAS index: getActiveTargetsByAttesterAndSchema(anchor, attester, DATA_SCHEMA).
+  // The TagModal targets the DATA that the user is actually *viewing*:
   //   - editions set → resolve via editionAddresses (what's on screen)
   //   - no editions → resolve via connectedAddress (own-files default view)
   //   - neither resolves → fall back to anchor UID (folder-level semantics)
   useEffect(() => {
-    if (!isFile || !publicClient) {
+    if (!isFile || !publicClient || !tagResolverAddress || !dataSchemaUID) {
       setEffectiveUID(uid);
-      setIsResolvingDataUID(false);
+      if (!isFile) setIsResolvingDataUID(false);
       return;
     }
 
@@ -77,17 +81,6 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
 
     const resolve = async () => {
       try {
-        const indexer = await import("~~/contracts/deployedContracts").then(m => {
-          return (m.default as any)[publicClient.chain.id]?.Indexer;
-        });
-        if (!indexer) {
-          if (!cancelled) {
-            setEffectiveUID(uid);
-            setIsResolvingDataUID(false);
-          }
-          return;
-        }
-
         const viewAttesters: `0x${string}`[] =
           editionAddresses.length > 0
             ? (editionAddresses.map(a => a as `0x${string}`) as `0x${string}`[])
@@ -103,15 +96,35 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
           return;
         }
 
-        const viewDataUID = (await publicClient.readContract({
-          address: indexer.address as `0x${string}`,
-          abi: indexer.abi,
-          functionName: "getDataByAddressList",
-          args: [uid as `0x${string}`, viewAttesters, false],
-        })) as `0x${string}`;
+        // Query TagResolver for DATAs placed at this anchor by each attester (most recent first)
+        for (const attester of viewAttesters) {
+          const count = (await publicClient.readContract({
+            address: tagResolverAddress,
+            abi: TAG_RESOLVER_ABI,
+            functionName: "getActiveTargetsByAttesterAndSchemaCount",
+            args: [uid as `0x${string}`, attester, dataSchemaUID as `0x${string}`],
+          })) as bigint;
 
+          if (count > 0n) {
+            // Fetch the most recent (last) DATA placed at this anchor
+            const targets = (await publicClient.readContract({
+              address: tagResolverAddress,
+              abi: TAG_RESOLVER_ABI,
+              functionName: "getActiveTargetsByAttesterAndSchema",
+              args: [uid as `0x${string}`, attester, dataSchemaUID as `0x${string}`, count - 1n, 1n],
+            })) as `0x${string}`[];
+
+            if (!cancelled && targets.length > 0 && targets[0] !== zeroHash) {
+              setEffectiveUID(targets[0]);
+              setIsResolvingDataUID(false);
+              return;
+            }
+          }
+        }
+
+        // No DATA found via tags — fall back to anchor UID
         if (!cancelled) {
-          setEffectiveUID(viewDataUID && viewDataUID !== zeroHash ? viewDataUID : uid);
+          setEffectiveUID(uid);
           setIsResolvingDataUID(false);
         }
       } catch {
@@ -126,7 +139,7 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
     return () => {
       cancelled = true;
     };
-  }, [uid, isFile, publicClient, connectedAddress, editionAddresses]);
+  }, [uid, isFile, publicClient, connectedAddress, editionAddresses, tagResolverAddress, dataSchemaUID]);
 
   // Load TagResolver address and the "tags" anchor UID (discovered from the normal tree).
   useEffect(() => {

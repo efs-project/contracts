@@ -42,6 +42,28 @@ interface IEFSIndexer {
         uint256 length,
         bool reverseOrder
     ) external view returns (bytes32[] memory);
+
+    function isRevoked(bytes32 uid) external view returns (bool);
+
+    function DATA_SCHEMA_UID() external view returns (bytes32);
+    function MIRROR_SCHEMA_UID() external view returns (bytes32);
+    function PROPERTY_SCHEMA_UID() external view returns (bytes32);
+}
+
+interface ITagResolverForRouter {
+    function getActiveTargetsByAttesterAndSchema(
+        bytes32 definition,
+        address attester,
+        bytes32 schema,
+        uint256 start,
+        uint256 length
+    ) external view returns (bytes32[] memory);
+
+    function getActiveTargetsByAttesterAndSchemaCount(
+        bytes32 definition,
+        address attester,
+        bytes32 schema
+    ) external view returns (uint256);
 }
 
 interface IEAS {
@@ -64,11 +86,13 @@ interface IEAS {
 contract EFSRouter is IDecentralizedApp {
     IEFSIndexer public indexer;
     IEAS public eas;
+    ITagResolverForRouter public tagResolver;
     bytes32 public dataSchemaUID;
 
-    constructor(address _indexer, address _eas, bytes32 _dataSchemaUID) {
+    constructor(address _indexer, address _eas, address _tagResolver, bytes32 _dataSchemaUID) {
         indexer = IEFSIndexer(_indexer);
         eas = IEAS(_eas);
+        tagResolver = ITagResolverForRouter(_tagResolver);
         dataSchemaUID = _dataSchemaUID;
     }
 
@@ -148,33 +172,29 @@ contract EFSRouter is IDecentralizedApp {
         // Data attestation UID for this anchor by this edition.
         // Since `EFSRouter` runs natively on the EVM, we use `getDataByAddressList`.
 
-        bytes32 dataUID = _findActiveDataAttestation(targetAnchor, editions);
+        // 2. Find DATA via TAG query (new model) or legacy direct reference
+        bytes32 dataUID = _findDataAtPath(targetAnchor, editions);
         if (dataUID == bytes32(0)) {
             return (404, "Not Found: No data attached or curator unset", new KeyValue[](0));
         }
 
-        IEAS.Attestation memory dataAtt = eas.getAttestation(dataUID);
+        // 3. Get best MIRROR for retrieval URI
+        string memory uri = _getBestMirrorURI(dataUID);
 
-        // Decode Data (Quad-Schema): string uri, string contentType, string fileMode
-        (string memory uri, string memory contentType, string memory fileMode) = abi.decode(
-            dataAtt.data,
-            (string, string, string)
-        );
+        // 4. Get contentType from PROPERTY on DATA
+        string memory contentType = _getContentType(dataUID);
 
-        // 3. Evaluate FileMode
-        if (_stringsEqual(fileMode, "tombstone")) {
-            return (404, bytes("Not Found: Deleted"), new KeyValue[](0));
-        }
-        if (_stringsEqual(fileMode, "symlink")) {
-            // Return HTTP 307 Redirect.
-            // `uri` holds the redirect target (another web3:// or Path)
-            headers = new KeyValue[](1);
-            headers[0] = KeyValue("Location", uri);
-            return (307, bytes(""), headers);
+        // 5. Content Retrieval & Translation
+        if (bytes(uri).length == 0) {
+            return (404, bytes("Not Found: No mirror available"), new KeyValue[](0));
         }
 
-        // 4. Content Retrieval & Translation
-        if (_startsWith(uri, "ipfs://") || _startsWith(uri, "ar://") || _startsWith(uri, "https://")) {
+        if (
+            _startsWith(uri, "ipfs://") ||
+            _startsWith(uri, "ar://") ||
+            _startsWith(uri, "https://") ||
+            _startsWith(uri, "magnet:")
+        ) {
             // External URI Delegation (message/external-body)
             headers = new KeyValue[](2);
             headers[0] = KeyValue(
@@ -417,20 +437,73 @@ contract EFSRouter is IDecentralizedApp {
         return string(buffer);
     }
 
-    // Searches Indexer for the most recent Data attestation attached to an Anchor by Edition
-    function _findActiveDataAttestation(
-        bytes32 targetAnchor,
-        address[] memory editions
-    ) private view returns (bytes32) {
+    // Find DATA at a path anchor via TAG query
+    function _findDataAtPath(bytes32 targetAnchor, address[] memory editions) private view returns (bytes32) {
+        bytes32 dataSchema = indexer.DATA_SCHEMA_UID();
+
+        // Try TAG-based lookup (new model): DATAs tagged at this anchor
         if (editions.length > 0) {
-            return indexer.getDataByAddressList(targetAnchor, editions, false);
-        } else {
-            // Fallback to most recent overall if no editions provided
-            bytes32[] memory records = indexer.getReferencingAttestations(targetAnchor, dataSchemaUID, 0, 1, true);
-            if (records.length > 0) {
-                return records[0];
+            for (uint256 i = 0; i < editions.length; i++) {
+                uint256 count = tagResolver.getActiveTargetsByAttesterAndSchemaCount(
+                    targetAnchor,
+                    editions[i],
+                    dataSchema
+                );
+                if (count > 0) {
+                    bytes32[] memory targets = tagResolver.getActiveTargetsByAttesterAndSchema(
+                        targetAnchor,
+                        editions[i],
+                        dataSchema,
+                        count - 1,
+                        1
+                    );
+                    if (targets.length > 0) return targets[0];
+                }
             }
         }
+
+        // Fallback: legacy direct DATA reference on anchor
+        if (editions.length > 0) {
+            bytes32 legacy = indexer.getDataByAddressList(targetAnchor, editions, false);
+            if (legacy != bytes32(0)) return legacy;
+        } else {
+            bytes32[] memory records = indexer.getReferencingAttestations(targetAnchor, dataSchema, 0, 1, true);
+            if (records.length > 0) return records[0];
+        }
+
         return bytes32(0);
+    }
+
+    // Get the best mirror URI for a DATA attestation (prefers onchain > ipfs > arweave > https > magnet)
+    function _getBestMirrorURI(bytes32 dataUID) private view returns (string memory) {
+        bytes32 mirrorSchema = indexer.MIRROR_SCHEMA_UID();
+        if (mirrorSchema == bytes32(0)) return ""; // MIRROR not wired yet
+
+        bytes32[] memory mirrors = indexer.getReferencingAttestations(dataUID, mirrorSchema, 0, 10, true);
+
+        // Simple strategy: return first non-revoked mirror with a web3:// URI (onchain), else first available
+        string memory fallbackURI = "";
+        for (uint256 i = 0; i < mirrors.length; i++) {
+            if (indexer.isRevoked(mirrors[i])) continue;
+            IEAS.Attestation memory mirrorAtt = eas.getAttestation(mirrors[i]);
+            (, string memory uri) = abi.decode(mirrorAtt.data, (bytes32, string));
+            if (_startsWith(uri, "web3://")) return uri;
+            if (bytes(fallbackURI).length == 0) fallbackURI = uri;
+        }
+        return fallbackURI;
+    }
+
+    // Get contentType from PROPERTY on DATA
+    function _getContentType(bytes32 dataUID) private view returns (string memory) {
+        bytes32 propertySchema = indexer.PROPERTY_SCHEMA_UID();
+        bytes32[] memory props = indexer.getReferencingAttestations(dataUID, propertySchema, 0, 20, true);
+
+        for (uint256 i = 0; i < props.length; i++) {
+            if (indexer.isRevoked(props[i])) continue;
+            IEAS.Attestation memory propAtt = eas.getAttestation(props[i]);
+            string memory value = abi.decode(propAtt.data, (string));
+            if (bytes(value).length > 0) return value;
+        }
+        return "application/octet-stream";
     }
 }

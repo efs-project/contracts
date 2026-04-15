@@ -19,9 +19,12 @@ const deployEFSRouter: DeployFunction = async function (hre: HardhatRuntimeEnvir
 
   const dataSchemaUID = await indexer.DATA_SCHEMA_UID();
 
+  // Get TagResolver (deployed in 01_indexer.ts)
+  const tagResolverDeployment = await hre.deployments.get("TagResolver");
+
   await deploy("EFSRouter", {
     from: deployer,
-    args: [indexer.target, EAS_ADDRESS, dataSchemaUID],
+    args: [indexer.target, EAS_ADDRESS, tagResolverDeployment.address, dataSchemaUID],
     log: true,
     autoMine: true,
   });

@@ -34,7 +34,7 @@ const deployEFSIndexer: DeployFunction = async function (hre: HardhatRuntimeEnvi
   const schemas = [
     { name: "ANCHOR", definition: "string name, bytes32 schemaUID", revocable: false },
     { name: "PROPERTY", definition: "string value", revocable: true },
-    { name: "DATA", definition: "string uri, string contentType, string fileMode", revocable: true },
+    { name: "DATA", definition: "bytes32 contentHash, uint64 size", revocable: false },
     {
       name: "BLOB",
       definition: "string mimeType, uint8 storageType, bytes location",

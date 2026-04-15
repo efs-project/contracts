@@ -94,6 +94,17 @@ describe("TagResolver", function () {
     );
     await indexer.waitForDeployment();
     expect(await indexer.getAddress()).to.equal(futureIndexerAddress);
+
+    // Wire TagResolver into Indexer so propagateContains calls are authorized
+    await indexer.wireContracts(
+      await tagResolver.getAddress(),
+      tagSchemaUID,
+      ZeroAddress, // sortOverlay (not used in this test)
+      ZERO_BYTES32, // sortInfoSchemaUID (placeholder)
+      ZeroAddress, // mirrorResolver (not used in this test)
+      ZERO_BYTES32, // mirrorSchemaUID (placeholder)
+      await registry.getAddress(),
+    );
   });
 
   // ─── Helpers ───────────────────────────────────────────────────────────────

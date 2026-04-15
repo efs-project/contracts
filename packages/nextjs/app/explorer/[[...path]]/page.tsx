@@ -68,6 +68,21 @@ export default function ExplorerPage() {
     functionName: "ANCHOR_SCHEMA_UID",
   });
 
+  // Schema UIDs for new data model (DATA + PROPERTY + MIRROR + TAG)
+  const { data: propertySchemaUID } = useScaffoldReadContract({
+    contractName: "Indexer",
+    functionName: "PROPERTY_SCHEMA_UID",
+  });
+  const { data: tagSchemaUID } = useScaffoldReadContract({
+    contractName: "Indexer",
+    functionName: "TAG_SCHEMA_UID",
+  });
+
+  const { data: mirrorSchemaUID } = useScaffoldReadContract({
+    contractName: "Indexer",
+    functionName: "MIRROR_SCHEMA_UID",
+  });
+
   // Sort overlay addresses
   const { data: indexerInfo } = useDeployedContractInfo({ contractName: "Indexer" });
   const { data: sortOverlayInfo } = useDeployedContractInfo({ contractName: "EFSSortOverlay" });
@@ -206,7 +221,8 @@ export default function ExplorerPage() {
     router.push(`/explorer/${urlSegments.join("/")}${queryPart}`);
   };
 
-  if (!rootUID || !dataSchemaUID || !anchorSchemaUID) return <div>Loading System...</div>;
+  if (!rootUID || !dataSchemaUID || !anchorSchemaUID || !propertySchemaUID || !tagSchemaUID || !mirrorSchemaUID)
+    return <div>Loading System...</div>;
   if (isResolvingEditions) return <div>Resolving Editions...</div>;
   // We could show a specific "Resolving..." skeleton here if we want, but keeping global loading is safer for now.
 
@@ -222,6 +238,9 @@ export default function ExplorerPage() {
           currentAnchorUID={currentAnchorUID}
           anchorSchemaUID={anchorSchemaUID}
           dataSchemaUID={dataSchemaUID}
+          propertySchemaUID={propertySchemaUID}
+          tagSchemaUID={tagSchemaUID}
+          mirrorSchemaUID={mirrorSchemaUID}
           indexerAddress={indexerAddress}
           easAddress={easAddress}
           sortOverlayAddress={sortOverlayAddress}
