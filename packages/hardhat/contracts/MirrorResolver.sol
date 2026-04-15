@@ -28,6 +28,10 @@ interface IEFSIndexerForMirror {
 contract MirrorResolver is SchemaResolver {
     error InvalidData();
     error InvalidTransport();
+    error URITooLong();
+
+    /// @notice Maximum allowed byte length for a MIRROR URI.
+    uint256 public constant MAX_URI_LENGTH = 8192;
 
     IEFSIndexerForMirror public immutable indexer;
 
@@ -42,8 +46,9 @@ contract MirrorResolver is SchemaResolver {
         Attestation memory target = _eas.getAttestation(attestation.refUID);
         if (target.schema != indexer.DATA_SCHEMA_UID()) return false;
 
-        // Validate transportDefinition is a valid Anchor
-        (bytes32 transportDefinition, ) = abi.decode(attestation.data, (bytes32, string));
+        // Validate transportDefinition is a valid Anchor and URI is within length limit
+        (bytes32 transportDefinition, string memory uri) = abi.decode(attestation.data, (bytes32, string));
+        if (bytes(uri).length > MAX_URI_LENGTH) revert URITooLong();
         if (transportDefinition == EMPTY_UID) revert InvalidTransport();
         Attestation memory transport = _eas.getAttestation(transportDefinition);
         if (transport.schema != indexer.ANCHOR_SCHEMA_UID()) revert InvalidTransport();

@@ -182,6 +182,8 @@ export const MirrorsPanel = ({
         console.warn("Failed to resolve DATA for attester", attester, e);
       }
     }
+    // No active DATA found for any attester — clear stale value
+    setDataUID(null);
   }, [publicClient, tagResolverInfo, easInfo, dataSchemaUID, fileAnchorUID, editionAddresses, connectedAddress]);
 
   // Fetch mirrors for the resolved DATA UID
@@ -340,9 +342,13 @@ export const MirrorsPanel = ({
     setIsSubmitting(true);
     try {
       const detected = detectTransport(newUri);
-      const transportName = detected === "unknown" ? "https" : detected;
-      await createMirrorAttestation(transportName, newUri);
-      notification.success(`${TRANSPORT_LABELS[transportName as keyof typeof TRANSPORT_LABELS]} mirror added.`);
+      if (detected === "unknown") {
+        notification.error("Unrecognized URI scheme. Use web3://, ipfs://, ar://, https://, or magnet:");
+        setIsSubmitting(false);
+        return;
+      }
+      await createMirrorAttestation(detected, newUri);
+      notification.success(`${TRANSPORT_LABELS[detected as keyof typeof TRANSPORT_LABELS]} mirror added.`);
       setNewUri("");
       setIsAddingMirror(false);
       fetchMirrors();

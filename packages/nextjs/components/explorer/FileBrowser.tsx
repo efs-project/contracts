@@ -1170,7 +1170,11 @@ export const FileBrowser = ({
             })}
           {(sortedItems ?? items)?.length === 0 && (
             <div className="col-span-4 text-center text-gray-500">
-              {tagFilteredUIDs !== null ? `No items match tag filter: "${tagFilter}"` : "Topic is empty"}
+              {tagFilteredUIDs !== null
+                ? `No items match tag filter: "${tagFilter}"`
+                : tagExcludedUIDs.size > 0
+                  ? "All items hidden by active exclusion filter"
+                  : "Topic is empty"}
             </div>
           )}
         </div>

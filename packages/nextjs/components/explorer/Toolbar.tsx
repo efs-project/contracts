@@ -225,18 +225,48 @@ export const Toolbar = ({
       } else if (sizeNum > 10 * 1024 * 1024) {
         notification.info(`File is ${Math.round(sizeNum / 1024 / 1024)}MB — hash not computed (too large).`);
       } else {
-        // No content-length from HEAD — try full GET
-        notification.info("Downloading file to determine size and hash...");
-        const getResp = await fetch(gatewayUrl);
-        const bytes = new Uint8Array(await getResp.arrayBuffer());
-        setPasteSize(String(bytes.length));
-        if (bytes.length <= 10 * 1024 * 1024) {
+        // No content-length from HEAD — stream up to 10 MB before giving up.
+        const MAX_AUTO_DOWNLOAD = 10 * 1024 * 1024;
+        notification.info("Downloading file to determine size and hash (cap: 10 MB)...");
+        const controller = new AbortController();
+        const getResp = await fetch(gatewayUrl, { signal: controller.signal });
+        const reader = getResp.body?.getReader();
+        const chunks: Uint8Array[] = [];
+        let totalBytes = 0;
+        let truncated = false;
+        if (reader) {
+          try {
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done || !value) break;
+              if (totalBytes + value.length > MAX_AUTO_DOWNLOAD) {
+                truncated = true;
+                controller.abort();
+                break;
+              }
+              chunks.push(value);
+              totalBytes += value.length;
+            }
+          } catch {
+            // AbortError expected when we cancel; other errors bubble to outer catch
+          }
+        }
+        if (truncated) {
+          notification.info("File exceeds 10 MB — hash not computed. Enter values manually.");
+        } else if (totalBytes > 0) {
+          const bytes = new Uint8Array(totalBytes);
+          let offset = 0;
+          for (const chunk of chunks) {
+            bytes.set(chunk, offset);
+            offset += chunk.length;
+          }
+          setPasteSize(String(totalBytes));
           setPasteContentHash(computeContentHash(bytes));
           notification.success("Content hash computed.");
-        }
-        if (!ct) {
-          const getCt = getResp.headers.get("content-type");
-          if (getCt) setPasteContentType(getCt.split(";")[0].trim());
+          if (!ct) {
+            const getCt = getResp.headers.get("content-type");
+            if (getCt) setPasteContentType(getCt.split(";")[0].trim());
+          }
         }
       }
     } catch (e) {
@@ -298,6 +328,10 @@ export const Toolbar = ({
 
   const handleSubmitCreate = async () => {
     if (!currentAnchorUID || !newName || !walletClient || !publicClient) return;
+    if (newName.includes("/") || newName.includes("\0")) {
+      notification.error("Name cannot contain '/' or null characters.");
+      return;
+    }
     if (creationType === "File" && !fileToUpload) {
       notification.error("Please select a file to upload.");
       return;
@@ -354,10 +388,14 @@ export const Toolbar = ({
           if (!newAnchorUID) throw new Error("Could not extract new Anchor UID");
         }
 
-        // Tag the folder so it appears in schema-filtered views
+        // Tag the new folder as a child of the current directory.
+        // definition = currentAnchorUID (parent) so it appears in _activeByAAS[currentAnchorUID][attester][ANCHOR_SCHEMA].
         if (tagResolverInfo && newAnchorUID) {
           try {
-            const encodedTagData = ethers.AbiCoder.defaultAbiCoder().encode(["bytes32", "bool"], [dataSchemaUID, true]);
+            const encodedTagData = ethers.AbiCoder.defaultAbiCoder().encode(
+              ["bytes32", "bool"],
+              [currentAnchorUID, true],
+            );
             const tagTxHash = await attest({
               functionName: "attest",
               args: [

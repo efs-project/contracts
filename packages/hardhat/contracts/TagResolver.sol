@@ -152,6 +152,13 @@ contract TagResolver is SchemaResolver {
 
         // Propagate "contains" flags up the anchor tree when tagging content at a structural anchor.
         // Definition must be an Anchor for this to apply (file placement / folder membership).
+        //
+        // NOTE: _containsAttestations flags are set on applies=true but NOT cleared on applies=false.
+        // Clearing would require per-attester content counts per folder (expensive). The flag is an
+        // optimistic visibility hint: once an attester places anything under a path, the path stays
+        // flagged forever even if all content is later removed. False positives are harmless — readers
+        // discover an empty folder rather than missing a non-empty one. A full reference-counted
+        // de-propagation is deferred to a future improvement.
         if (applies && attestation.refUID != EMPTY_UID) {
             Attestation memory defAtt = _eas.getAttestation(definition);
             if (defAtt.schema == indexer.ANCHOR_SCHEMA_UID()) {
