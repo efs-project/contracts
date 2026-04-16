@@ -5,9 +5,10 @@ export type TransportType = "onchain" | "ipfs" | "arweave" | "magnet" | "https" 
 /**
  * Ordered by preference for display/resolution.
  * web3:// (on-chain, permanent) > ar:// (permanent, content-addressed) >
- * ipfs:// (content-addressed, requires pinning) > https:// (mutable) > magnet: (peer-dependent)
+ * ipfs:// (content-addressed, requires pinning) > magnet: (peer-dependent) >
+ * https:// (mutable, centralized — least reliable)
  */
-export const TRANSPORT_PREFERENCE: TransportType[] = ["onchain", "arweave", "ipfs", "https", "magnet"];
+export const TRANSPORT_PREFERENCE: TransportType[] = ["onchain", "arweave", "ipfs", "magnet", "https"];
 
 /** Detect transport type from a URI string. */
 export function detectTransport(uri: string): TransportType {

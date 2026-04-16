@@ -731,9 +731,9 @@ describe("EFSRouter Web3 Capabilities", function () {
       expect(Buffer.from(ethers.getBytes(body)).toString()).to.equal("chunk zero data");
     });
 
-    it("Should return 404 when only mirror has a malformed web3:// URI (no valid address)", async function () {
-      // A malformed web3:// URI is now filtered out in _getBestMirrorURI before committing.
-      // With no valid mirrors remaining, the router returns 404 rather than 500.
+    it("Should return 500 when only mirror has a malformed web3:// URI (no valid address)", async function () {
+      // A malformed web3:// URI is filtered out in _getBestMirrorURI before committing.
+      // hadMirrors=true (the mirror existed) but best="" → router returns 500, not 404.
       const fileAnchorUID = await createFileAnchor(ideasUID, "bad_uri.bin");
       const dataUID = await createData("bad-uri-content");
       await addProperty(dataUID, "contentType", "application/octet-stream");
@@ -741,7 +741,35 @@ describe("EFSRouter Web3 Capabilities", function () {
       await tagAtPath(dataUID, fileAnchorUID, true);
 
       const [statusCode] = await router.request(["ideas", "bad_uri.bin"], ownerParams());
-      expect(statusCode).to.equal(404);
+      expect(statusCode).to.equal(500);
+    });
+
+    it("Should ignore mirrors attached by third parties not in editions", async function () {
+      // owner places the file and attaches a valid onchain mirror
+      // user1 (not in editions) attaches an https mirror to the same DATA
+      // Router should only consider owner's mirror
+      const u1 = "0x1111111111111111111111111111111111111113";
+      await ethers.provider.send("hardhat_impersonateAccount", [u1]);
+      const signer1 = await ethers.getSigner(u1);
+      await owner.sendTransaction({ to: u1, value: ethers.parseEther("1.0") });
+
+      const targetAddress = "0x0000000000000000000000000000000000000090";
+      await setCode(targetAddress, "0x00" + Buffer.from("owner content").toString("hex"));
+
+      const fileAnchorUID = await createFileAnchor(ideasUID, "spam_test.txt");
+      const dataUID = await createData("spam-content");
+      await addProperty(dataUID, "contentType", "text/plain");
+      await addMirror(dataUID, onchainTransportUID, `web3://${targetAddress}`);
+      await addMirror(dataUID, httpsTransportUID, "https://evil.example/hijack", signer1); // third-party mirror
+      await tagAtPath(dataUID, fileAnchorUID, true);
+
+      const [statusCode, body, headers] = await router.request(["ideas", "spam_test.txt"], ownerParams());
+      expect(statusCode).to.equal(200);
+      // Must serve owner's onchain mirror, not the third-party https mirror
+      expect(Buffer.from(ethers.getBytes(body)).toString()).to.equal("owner content");
+      // Content-Type should not be message/external-body (which https would produce)
+      const ct = headers.find((h: any) => h.key === "Content-Type")?.value ?? "";
+      expect(ct).to.not.include("evil.example");
     });
 
     it("Should fall back to ipfs:// when web3:// mirror has a malformed address", async function () {

@@ -159,19 +159,23 @@ contract EFSRouter is IDecentralizedApp {
         }
 
         // 2. Find DATA via TAG query: resolve editions → TAG → DATA → MIRROR
-        bytes32 dataUID = _findDataAtPath(targetAnchor, editions);
+        (bytes32 dataUID, address dataAttester) = _findDataAtPath(targetAnchor, editions);
         if (dataUID == bytes32(0)) {
             return (404, "Not Found: No data attached or curator unset", new KeyValue[](0));
         }
 
-        // 3. Get best MIRROR for retrieval URI
-        string memory uri = _getBestMirrorURI(dataUID);
+        // 3. Get best MIRROR for retrieval URI (scoped to the edition attester)
+        (string memory uri, bool hadMirrors) = _getBestMirrorURI(dataUID, dataAttester);
 
         // 4. Get contentType from PROPERTY on DATA
         string memory contentType = _getContentType(dataUID);
 
         // 5. Content Retrieval & Translation
         if (bytes(uri).length == 0) {
+            if (hadMirrors) {
+                // Mirrors exist but none have a valid URI — data is stored but unresolvable.
+                return (500, bytes("Stored mirror URI is invalid"), new KeyValue[](0));
+            }
             return (404, bytes("Not Found: No mirror available"), new KeyValue[](0));
         }
 
@@ -423,10 +427,11 @@ contract EFSRouter is IDecentralizedApp {
         return string(buffer);
     }
 
-    // Find DATA at a path anchor via TAG query — returns the most recent DATA by timestamp.
+    // Find DATA at a path anchor via TAG query — returns the most recent DATA by timestamp
+    // and the attester whose TAG resolved it (used to scope mirror selection).
     // The _activeByAttesterAndSchema array uses swap-and-pop, so element order is not
     // chronological. We scan all active targets and pick the one with the highest `time`.
-    function _findDataAtPath(bytes32 targetAnchor, address[] memory editions) private view returns (bytes32) {
+    function _findDataAtPath(bytes32 targetAnchor, address[] memory editions) private view returns (bytes32, address) {
         bytes32 dataSchema = indexer.DATA_SCHEMA_UID();
 
         // Build the attester list to query. When no editions are specified (bare web3:// URL),
@@ -470,39 +475,47 @@ contract EFSRouter is IDecentralizedApp {
                     best = targets[j];
                 }
             }
-            return best;
+            return (best, attesters[i]);
         }
 
-        return bytes32(0);
+        return (bytes32(0), address(0));
     }
 
-    // Get the best mirror URI for a DATA attestation.
-    // Preference order: web3:// > ipfs:// > ar:// > https:// > magnet:
-    // All non-revoked mirrors are collected first, then the highest-priority one is returned.
-    function _getBestMirrorURI(bytes32 dataUID) private view returns (string memory) {
+    // Get the best mirror URI for a DATA attestation, scoped to the edition attester.
+    // Only mirrors attached by `attester` are considered — prevents third parties from
+    // injecting mirrors onto a DATA that is served under someone else's edition.
+    //
+    // Returns (uri, hadMirrors) where hadMirrors=true means at least one non-revoked mirror
+    // from `attester` existed (even if none had a valid URI). Caller uses this to distinguish
+    // 404 (no mirrors) from 500 (mirrors exist but all are unresolvable).
+    //
+    // Priority order: web3:// (on-chain, permanent) > ar:// (permanent, content-addressed) >
+    //                 ipfs:// (content-addressed, requires pinning) >
+    //                 magnet: (peer-dependent) > https:// (mutable, centralized)
+    function _getBestMirrorURI(bytes32 dataUID, address attester) private view returns (string memory, bool) {
         bytes32 mirrorSchema = indexer.MIRROR_SCHEMA_UID();
-        if (mirrorSchema == bytes32(0)) return ""; // MIRROR not wired yet
+        if (mirrorSchema == bytes32(0)) return ("", false); // MIRROR not wired yet
 
         bytes32[] memory mirrors = indexer.getReferencingAttestations(dataUID, mirrorSchema, 0, 50, true);
 
-        // Track best candidate per tier (lower index = higher priority).
-        // Priority order: web3:// (on-chain, permanent) > ar:// (permanent, content-addressed) >
-        //                 ipfs:// (content-addressed, requires pinning) > https:// (mutable) >
-        //                 magnet: (peer-dependent, not HTTP-fetchable)
         string memory best = "";
         uint256 bestPriority = 99;
+        bool hadMirrors = false;
 
         for (uint256 i = 0; i < mirrors.length; i++) {
             if (indexer.isRevoked(mirrors[i])) continue;
             IEAS.Attestation memory mirrorAtt = eas.getAttestation(mirrors[i]);
+            if (mirrorAtt.attester != attester) continue; // only mirrors from the edition attester
+            hadMirrors = true;
+
             (, string memory uri) = abi.decode(mirrorAtt.data, (bytes32, string));
 
             uint256 priority;
-            if (_startsWith(uri, "web3://"))  priority = 0;
-            else if (_startsWith(uri, "ar://"))    priority = 1;
-            else if (_startsWith(uri, "ipfs://"))  priority = 2;
-            else if (_startsWith(uri, "https://")) priority = 3;
-            else                                   priority = 4; // magnet: and anything else
+            if (_startsWith(uri, "web3://")) priority = 0;
+            else if (_startsWith(uri, "ar://")) priority = 1;
+            else if (_startsWith(uri, "ipfs://")) priority = 2;
+            else if (_startsWith(uri, "magnet:")) priority = 3;
+            else priority = 4; // https:// and anything else
 
             if (priority < bestPriority) {
                 if (priority == 0) {
@@ -518,7 +531,7 @@ contract EFSRouter is IDecentralizedApp {
                 best = uri;
             }
         }
-        return best;
+        return (best, hadMirrors);
     }
 
     // Get contentType from PROPERTY on DATA
