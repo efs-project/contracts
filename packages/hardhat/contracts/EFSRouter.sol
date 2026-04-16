@@ -57,6 +57,7 @@ interface IEFSIndexer {
     function DATA_SCHEMA_UID() external view returns (bytes32);
     function MIRROR_SCHEMA_UID() external view returns (bytes32);
     function PROPERTY_SCHEMA_UID() external view returns (bytes32);
+    function DEPLOYER() external view returns (address);
 }
 
 interface ITagResolverForRouter {
@@ -189,6 +190,7 @@ contract EFSRouter is IDecentralizedApp {
 
         // Combine parameter checks
         address[] memory editions;
+        address caller = msg.sender; // non-zero if web3:// client sets `from` on eth_call
         string memory chunkIndexStr = "";
         for (uint i = 0; i < params.length; i++) {
             if (
@@ -199,11 +201,14 @@ contract EFSRouter is IDecentralizedApp {
                 editions = _parseAddressList(params[i].value);
             } else if (_stringsEqual(params[i].key, "chunk")) {
                 chunkIndexStr = params[i].value;
+            } else if (_stringsEqual(params[i].key, "caller")) {
+                address[] memory parsed = _parseAddressList(params[i].value);
+                if (parsed.length > 0) caller = parsed[0];
             }
         }
 
         // 2. Find DATA via TAG query: resolve editions → TAG → DATA → MIRROR
-        (bytes32 dataUID, address dataAttester) = _findDataAtPath(targetAnchor, editions);
+        (bytes32 dataUID, address dataAttester) = _findDataAtPath(targetAnchor, editions, caller);
         if (dataUID == bytes32(0)) {
             return (404, "Not Found: No data attached or curator unset", new KeyValue[](0));
         }
@@ -489,18 +494,24 @@ contract EFSRouter is IDecentralizedApp {
     // and the attester whose TAG resolved it (used to scope mirror selection).
     // The _activeByAttesterAndSchema array uses swap-and-pop, so element order is not
     // chronological. We scan all active targets and pick the one with the highest `time`.
-    function _findDataAtPath(bytes32 targetAnchor, address[] memory editions) private view returns (bytes32, address) {
+    //
+    // Fallback priority when no ?editions= is specified:
+    //   1. caller (from ?caller= param or msg.sender if non-zero) — user sees their own files
+    //   2. EFS deployer — system-provided defaults (settings, docs, etc.)
+    function _findDataAtPath(bytes32 targetAnchor, address[] memory editions, address caller) private view returns (bytes32, address) {
         bytes32 dataSchema = indexer.DATA_SCHEMA_UID();
 
-        // Build the attester list to query. When no editions are specified (bare web3:// URL),
-        // fall back to the anchor's own attester so that `web3://<router>/path/file` works
-        // without requiring an explicit ?editions= parameter.
         address[] memory attesters;
         if (editions.length > 0) {
             attesters = editions;
+        } else if (caller != address(0)) {
+            // Try caller first, then EFS deployer as fallback
+            attesters = new address[](2);
+            attesters[0] = caller;
+            attesters[1] = indexer.DEPLOYER();
         } else {
             attesters = new address[](1);
-            attesters[0] = eas.getAttestation(targetAnchor).attester;
+            attesters[0] = indexer.DEPLOYER();
         }
 
         for (uint256 i = 0; i < attesters.length; i++) {

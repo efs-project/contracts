@@ -805,10 +805,10 @@ describe("EFSRouter Web3 Capabilities", function () {
       expect(headers.find((h: any) => h.key === "Content-Type")?.value).to.equal("application/octet-stream");
     });
 
-    it("Should serve content with no ?editions= param (falls back to anchor attester)", async function () {
+    it("Should serve content with no ?editions= param (falls back to EFS deployer)", async function () {
       // When no editions param is supplied, _findDataAtPath falls back to
-      // eas.getAttestation(targetAnchor).attester. The anchor was created by owner,
-      // so owner's DATA (placed via TAG) should be found.
+      // indexer.DEPLOYER(). In tests owner IS the deployer, so owner's DATA
+      // (placed via TAG) should be found.
       const targetAddress = ethers.getAddress("0x00000000000000000000000000000000000000A0");
       await setCode(targetAddress, "0x00" + Buffer.from("bare web3 content").toString("hex"));
 
@@ -822,6 +822,27 @@ describe("EFSRouter Web3 Capabilities", function () {
       const [statusCode, body] = await router.request(["ideas", "bare_web3.txt"], []);
       expect(statusCode).to.equal(200);
       expect(Buffer.from(ethers.getBytes(body)).toString()).to.equal("bare web3 content");
+    });
+
+    it("Should resolve ?caller= param to serve that user's files when no editions", async function () {
+      // user1 creates a file, requesting with ?caller=user1 (no editions) should find it
+      const [, user1] = await ethers.getSigners();
+      const user1Addr = await user1.getAddress();
+
+      const fileAnchorUID = await createFileAnchor(ideasUID, "caller_test.txt");
+      const dataUID = await createData("caller content", user1);
+      await addProperty(dataUID, "contentType", "text/plain", user1);
+      await addMirror(dataUID, ipfsTransportUID, "ipfs://QmCallerTest", user1);
+      await tagAtPath(dataUID, fileAnchorUID, true, user1);
+
+      // With ?caller=user1 and no editions — should find user1's file
+      const [statusCode, , headers] = await router.request(
+        ["ideas", "caller_test.txt"],
+        [{ key: "caller", value: user1Addr }],
+      );
+      expect(statusCode).to.equal(200);
+      const ct = headers.find((h: any) => h.key === "Content-Type")?.value ?? "";
+      expect(ct).to.include("ipfs://QmCallerTest");
     });
 
     it("Should prefer ar:// over ipfs:// when both mirrors exist", async function () {
