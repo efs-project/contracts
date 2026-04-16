@@ -214,35 +214,66 @@ contract EFSFileView {
      *      they've been tagged with it by a trusted attester (empty folder visibility).
      *      Bounded by TagResolver's _childrenTaggedWith + Indexer's _childrenBySchema.
      */
+    /// @dev Maximum generic sub-folders scanned per call in _getQualifyingFolders (source A).
+    ///      Bounds the O(N) scan to prevent view-call timeouts on pathologically large directories.
+    ///      Folders past this cap are invisible in schema-filtered listings unless explicitly tagged.
+    uint256 private constant MAX_GENERIC_FOLDER_SCAN = 500;
+
     function _getQualifyingTaggedFolders(
         bytes32 parentAnchor,
         bytes32 anchorSchema,
         address[] memory attesters
     ) internal view returns (bytes32[] memory) {
-        // Folders qualify for schema-filtered listing only if they were explicitly tagged
-        // with anchorSchema by a trusted attester. Scanning all generic sub-folders for
-        // organically-acquired children is O(N_total_folders), which is unbounded for
-        // large directories (e.g. /tags/). Requiring explicit tagging keeps this O(M_tagged).
-        // The UI auto-tags folders on creation, so this covers normal workflows. Developers
-        // placing content programmatically should tag the folder with its intended schema.
+        // Two sources of qualifying generic folders:
+        //
+        // A) Folders that organically acquired children of anchorSchema — detected by checking
+        //    _childrenBySchema. Capped at MAX_GENERIC_FOLDER_SCAN (most-recent N) to bound gas.
+        //    Covers the normal case: user creates a folder, uploads files, folder appears.
+        //
+        // B) Folders explicitly tagged with anchorSchema via TagResolver — covers empty folders
+        //    and any folder beyond the source-A cap. Scan is over the tag index (small by nature).
+
+        // Source A: scan most-recent generic folders, include those with children of anchorSchema
+        uint256 genericCount = indexer.getChildCountBySchema(parentAnchor, bytes32(0));
+        uint256 scanLimit = genericCount > MAX_GENERIC_FOLDER_SCAN ? MAX_GENERIC_FOLDER_SCAN : genericCount;
+
+        bytes32[] memory genericFolders;
+        if (scanLimit > 0) {
+            (genericFolders, ) = indexer.getAnchorsBySchemaAndAddressList(
+                parentAnchor,
+                bytes32(0),
+                attesters,
+                0,
+                scanLimit,
+                true, // reverseOrder (newest first — most likely to have content)
+                false
+            );
+        } else {
+            genericFolders = new bytes32[](0);
+        }
+
+        // Source B: folders explicitly tagged with anchorSchema (always a small set)
         uint256 taggedCount = tagResolver.getChildrenTaggedWithCount(parentAnchor, anchorSchema);
-        if (taggedCount == 0) return new bytes32[](0);
+        bytes32[] memory taggedCandidates = taggedCount > 0
+            ? tagResolver.getChildrenTaggedWith(parentAnchor, anchorSchema, 0, taggedCount)
+            : new bytes32[](0);
 
-        bytes32[] memory taggedCandidates = tagResolver.getChildrenTaggedWith(
-            parentAnchor,
-            anchorSchema,
-            0,
-            taggedCount
-        );
-
-        bytes32[] memory temp = new bytes32[](taggedCandidates.length);
+        // Merge both sources, dedup, and filter
+        bytes32[] memory temp = new bytes32[](genericFolders.length + taggedCandidates.length);
         uint256 count = 0;
 
+        // Process source A: include if the folder has children of anchorSchema
+        for (uint256 i = 0; i < genericFolders.length; i++) {
+            bytes32 uid = genericFolders[i];
+            if (indexer.isRevoked(uid)) continue;
+            if (indexer.getChildCountBySchema(uid, anchorSchema) == 0) continue;
+            temp[count++] = uid;
+        }
+
+        // Process source B: include if actively tagged by a trusted attester
         for (uint256 i = 0; i < taggedCandidates.length; i++) {
             bytes32 uid = taggedCandidates[i];
             if (indexer.isRevoked(uid)) continue;
-
-            // Editions-aware: only include if a trusted attester applied the tag
             if (!tagResolver.isActivelyTaggedByAny(uid, anchorSchema, attesters)) continue;
 
             // Attester contribution check
@@ -254,6 +285,16 @@ contract EFSFileView {
                 }
             }
             if (!qualifies) continue;
+
+            // Dedup against source A results
+            bool alreadyAdded = false;
+            for (uint256 k = 0; k < count; k++) {
+                if (temp[k] == uid) {
+                    alreadyAdded = true;
+                    break;
+                }
+            }
+            if (alreadyAdded) continue;
 
             temp[count++] = uid;
         }

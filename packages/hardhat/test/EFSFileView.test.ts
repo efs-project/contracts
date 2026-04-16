@@ -147,45 +147,43 @@ describe("EFSFileView", function () {
     return getUIDFromReceipt(await tx.wait());
   };
 
-  it("Should return only explicitly-tagged folders in schema-filtered views", async function () {
-    // Regression / design test: _getQualifyingTaggedFolders no longer scans all generic
-    // folders (O(N_total)). Only folders explicitly tagged with the target schema UID appear.
-    // Untagged folders that happen to contain schema-matching children are NOT returned —
-    // developers must tag folders to opt them into schema-filtered listings.
-
+  it("Source A: folders with file-anchor children appear without explicit tagging", async function () {
+    // A generic subfolder qualifies in schema-filtered listings if it organically acquired
+    // children of the target schema (file Anchors with schemaUID=dataSchemaUID). No TAG needed.
     const ownerAddr = await owner.getAddress();
 
-    // 1. Create root
     const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32);
 
-    // 2. Create tagged folders — each is tagged with definition=dataSchemaUID via TagResolver
-    const TAGGED_COUNT = 5;
-    const taggedNames: string[] = [];
-    for (let i = 0; i < TAGGED_COUNT; i++) {
-      const name = `tagged-${i}`;
-      taggedNames.push(name);
-      const folderUID = await createAnchor(name, rootUID, ZERO_BYTES32);
-      await createTag(folderUID, dataSchemaUID, true);
-    }
+    // Create a generic folder containing a file anchor — qualifies via source A
+    const folderWithContentUID = await createAnchor("has-content", rootUID, ZERO_BYTES32);
+    await createAnchor("cat.jpg", folderWithContentUID, dataSchemaUID); // file anchor inside
 
-    // 3. Create untagged folders — generic folders with no TAG attestation
-    for (let i = 0; i < 3; i++) {
-      await createAnchor(`untagged-${i}`, rootUID, ZERO_BYTES32);
-    }
+    // Create a generic folder with no children — should NOT appear
+    await createAnchor("empty-untagged", rootUID, ZERO_BYTES32);
 
-    // 4. Query schema-filtered directory
-    const [items] = await fileView.getDirectoryPageBySchemaAndAddressList(rootUID, dataSchemaUID, [ownerAddr], 0, 20);
+    const [items] = await fileView.getDirectoryPageBySchemaAndAddressList(rootUID, dataSchemaUID, [ownerAddr], 0, 10);
 
-    // Only tagged folders qualify — untagged ones are absent
-    expect(items.length).to.equal(TAGGED_COUNT);
+    expect(items.length).to.equal(1);
+    expect(items[0].name).to.equal("has-content");
+  });
 
-    const returnedNames = new Set(items.map((i: any) => i.name));
-    for (const name of taggedNames) {
-      expect(returnedNames.has(name), `missing tagged folder: ${name}`).to.equal(true);
-    }
-    for (let i = 0; i < 3; i++) {
-      expect(returnedNames.has(`untagged-${i}`), `untagged folder should not appear`).to.equal(false);
-    }
+  it("Source B: empty folders appear when explicitly tagged with the schema UID", async function () {
+    // Empty generic folders are invisible to source A (no children), but they appear via
+    // source B if explicitly tagged with definition=dataSchemaUID via TagResolver.
+    const ownerAddr = await owner.getAddress();
+
+    const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32);
+
+    const emptyTaggedUID = await createAnchor("empty-tagged", rootUID, ZERO_BYTES32);
+    await createTag(emptyTaggedUID, dataSchemaUID, true);
+
+    // An empty folder with no tag — should NOT appear
+    await createAnchor("empty-untagged", rootUID, ZERO_BYTES32);
+
+    const [items] = await fileView.getDirectoryPageBySchemaAndAddressList(rootUID, dataSchemaUID, [ownerAddr], 0, 10);
+
+    expect(items.length).to.equal(1);
+    expect(items[0].name).to.equal("empty-tagged");
   });
 
   it("Should not return a tagged folder after its tag is set to applies=false", async function () {
@@ -194,14 +192,12 @@ describe("EFSFileView", function () {
     const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32);
     const folderUID = await createAnchor("my-folder", rootUID, ZERO_BYTES32);
 
-    // Tag the folder
     await createTag(folderUID, dataSchemaUID, true);
 
     const [before] = await fileView.getDirectoryPageBySchemaAndAddressList(rootUID, dataSchemaUID, [ownerAddr], 0, 10);
     expect(before.length).to.equal(1);
     expect(before[0].name).to.equal("my-folder");
 
-    // Untag the folder
     await createTag(folderUID, dataSchemaUID, false);
 
     const [after] = await fileView.getDirectoryPageBySchemaAndAddressList(rootUID, dataSchemaUID, [ownerAddr], 0, 10);
