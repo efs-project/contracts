@@ -141,6 +141,18 @@ contract EFSIndexer is SchemaResolver {
     mapping(bytes32 => mapping(address => bool)) private _containsAttestations;
     mapping(bytes32 => mapping(address => mapping(bytes32 => bool))) private _containsSchemaAttestations;
 
+    // Anchor type cache: anchorUID => anchorSchema (the bytes32 content-type field in anchor data).
+    // Stored at creation so parent-type checks are O(1) without re-decoding EAS attestation data.
+    mapping(bytes32 => bytes32) private _anchorSchemaOf;
+
+    // Qualifying-folder index: parentUID => contentSchema => attester => generic subfolder UIDs.
+    // A subfolder F is recorded here the first time attester A places a contentSchema anchor inside F.
+    // This gives O(m_qualifying) enumeration for _getQualifyingTaggedFolders instead of O(N_total).
+    // Append-only (same sticky semantics as _containsAttestations — revocation does not remove).
+    mapping(bytes32 => mapping(bytes32 => mapping(address => bytes32[]))) private _qualifyingFolders;
+    // Dedup guard: prevents the same subfolder from being pushed twice per (parent, schema, attester).
+    mapping(bytes32 => mapping(bytes32 => mapping(address => mapping(bytes32 => bool)))) private _hasQualifyingFolder;
+
     constructor(
         IEAS eas,
         bytes32 anchorSchemaUID,
@@ -304,6 +316,9 @@ contract EFSIndexer is SchemaResolver {
 
             _parents[attestation.uid] = parentUID;
 
+            // Anchor type cache — enables O(1) parent-type lookup without re-decoding EAS data
+            _anchorSchemaOf[attestation.uid] = anchorSchema;
+
             // Attester Index (My Files)
             // Note: Since _childrenByAttester is now natively tracking collaborative interactions deeply via the recursion loop above,
             // we only push to it here IF it's the very first time this creator has interacted with this parent, to prevent duplicates.
@@ -311,6 +326,20 @@ contract EFSIndexer is SchemaResolver {
                 _containsAttestations[attestation.uid][attestation.attester] = true;
                 if (parentUID != bytes32(0)) {
                     _childrenByAttester[parentUID][attestation.attester].push(attestation.uid);
+                }
+            }
+
+            // Qualifying-folder index: when a file anchor (anchorSchema != 0) is placed inside a
+            // generic folder (parent anchorSchema == 0), record the parent folder under the
+            // grandparent so _getQualifyingTaggedFolders can enumerate without an O(N) scan.
+            // Fires at most once per (parent, anchorSchema, attester) triple — amortized O(1).
+            if (anchorSchema != bytes32(0) && parentUID != bytes32(0)) {
+                bytes32 grandparent = _parents[parentUID];
+                if (grandparent != bytes32(0) && _anchorSchemaOf[parentUID] == bytes32(0)) {
+                    if (!_hasQualifyingFolder[grandparent][anchorSchema][attestation.attester][parentUID]) {
+                        _qualifyingFolders[grandparent][anchorSchema][attestation.attester].push(parentUID);
+                        _hasQualifyingFolder[grandparent][anchorSchema][attestation.attester][parentUID] = true;
+                    }
                 }
             }
 
@@ -758,6 +787,28 @@ contract EFSIndexer is SchemaResolver {
         bytes32 schemaUID
     ) external view returns (bool) {
         return _containsSchemaAttestations[targetUID][attester][schemaUID];
+    }
+
+    /// @notice Paginated list of generic subfolders under `parentUID` that contain at least one
+    ///         anchor of `contentSchema` created by `attester`. Populated at write time — O(1) per
+    ///         file anchor creation, amortized once per (folder, schema, attester) triple.
+    function getQualifyingFolders(
+        bytes32 parentUID,
+        bytes32 contentSchema,
+        address attester,
+        uint256 start,
+        uint256 length
+    ) external view returns (bytes32[] memory) {
+        return _sliceUIDs(_qualifyingFolders[parentUID][contentSchema][attester], start, length, false);
+    }
+
+    /// @notice Count of qualifying subfolders for a given (parent, contentSchema, attester).
+    function getQualifyingFolderCount(
+        bytes32 parentUID,
+        bytes32 contentSchema,
+        address attester
+    ) external view returns (uint256) {
+        return _qualifyingFolders[parentUID][contentSchema][attester].length;
     }
 
     // ============================================================================================
