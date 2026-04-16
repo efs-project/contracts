@@ -33,8 +33,8 @@ const deployEFSIndexer: DeployFunction = async function (hre: HardhatRuntimeEnvi
   // 2. Define Schemas
   const schemas = [
     { name: "ANCHOR", definition: "string name, bytes32 schemaUID", revocable: false },
-    { name: "PROPERTY", definition: "string value", revocable: true },
-    { name: "DATA", definition: "string uri, string contentType, string fileMode", revocable: true },
+    { name: "PROPERTY", definition: "string key, string value", revocable: true },
+    { name: "DATA", definition: "bytes32 contentHash, uint64 size", revocable: false },
     {
       name: "BLOB",
       definition: "string mimeType, uint8 storageType, bytes location",
@@ -131,8 +131,12 @@ const deployEFSIndexer: DeployFunction = async function (hre: HardhatRuntimeEnvi
   console.log("EFSIndexer deployed at:", indexer.target);
 
   if (indexer.target !== futureIndexerAddress) {
-    console.warn("WARNING: Deployed address different from predicted! Resolver configuration might be broken.");
-    console.warn(`Expected: ${futureIndexerAddress}, Got: ${indexer.target}`);
+    throw new Error(
+      `Indexer deployed at wrong address — resolver wiring is broken.\n` +
+        `Expected: ${futureIndexerAddress}\n` +
+        `Got:      ${indexer.target}\n` +
+        `Adjust the nonce offset in the deploy script and redeploy.`,
+    );
   }
 
   // 7. Deploy SchemaNameIndex

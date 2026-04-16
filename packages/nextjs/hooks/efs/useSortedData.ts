@@ -171,11 +171,20 @@ export function useSortedData({
     return () => {
       cancelled = true;
     };
-  // loadTrigger drives fetching — cursor is a ref so it doesn't retrigger the effect.
-  // hasMore is read inside the guard above, but we intentionally exclude it from deps
-  // so setting hasMore=false doesn't cause a re-run.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sortInfoUID, parentAnchor, sortOverlayAddress, publicClient, editionAddresses, showRevoked, pageSize, loadTrigger]);
+    // loadTrigger drives fetching — cursor is a ref so it doesn't retrigger the effect.
+    // hasMore is read inside the guard above, but we intentionally exclude it from deps
+    // so setting hasMore=false doesn't cause a re-run.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    sortInfoUID,
+    parentAnchor,
+    sortOverlayAddress,
+    publicClient,
+    editionAddresses,
+    showRevoked,
+    pageSize,
+    loadTrigger,
+  ]);
 
   return { sortedUIDs, isLoading, hasMore, loadMore, reset };
 }

@@ -92,7 +92,7 @@ describe("EFSIndexer — public index() API", function () {
     anchorSchemaUID = (await tx1.wait())!.logs[0].topics[1];
     const tx2 = await registry.register("string key, string value", futureIndexerAddr, true);
     propertySchemaUID = (await tx2.wait())!.logs[0].topics[1];
-    const tx3 = await registry.register("string uri, string contentType, string fileMode", futureIndexerAddr, true);
+    const tx3 = await registry.register("bytes32 contentHash, uint64 size", futureIndexerAddr, false);
     dataSchemaUID = (await tx3.wait())!.logs[0].topics[1];
     const tx4 = await registry.register("string mimeType, uint8 storageType, bytes location", ZeroAddress, true);
     blobSchemaUID = (await tx4.wait())!.logs[0].topics[1];
@@ -186,47 +186,6 @@ describe("EFSIndexer — public index() API", function () {
       // index() on an EFS-native UID returns false and does not revert
       expect(await indexer.index.staticCall(rootUID)).to.be.false;
       await indexer.index(rootUID); // no revert
-    });
-
-    it("silently skips EFS DATA schema", async function () {
-      // Create a root anchor first
-      const rootTx = await eas.connect(owner).attest({
-        schema: anchorSchemaUID,
-        data: {
-          recipient: ZeroAddress,
-          expirationTime: NO_EXPIRATION,
-          revocable: false,
-          refUID: ZERO_BYTES32,
-          data: enc.encode(["string", "bytes32"], ["root", ZERO_BYTES32]),
-          value: 0n,
-        },
-      });
-      const rootUID = getUID(await rootTx.wait());
-      const fileTx = await eas.connect(owner).attest({
-        schema: anchorSchemaUID,
-        data: {
-          recipient: ZeroAddress,
-          expirationTime: NO_EXPIRATION,
-          revocable: false,
-          refUID: rootUID,
-          data: enc.encode(["string", "bytes32"], ["file.txt", dataSchemaUID]),
-          value: 0n,
-        },
-      });
-      const fileAnchorUID = getUID(await fileTx.wait());
-      const dataTx = await eas.connect(alice).attest({
-        schema: dataSchemaUID,
-        data: {
-          recipient: ZeroAddress,
-          expirationTime: NO_EXPIRATION,
-          revocable: true,
-          refUID: fileAnchorUID,
-          data: enc.encode(["string", "string", "string"], ["ipfs://foo", "text/plain", "file"]),
-          value: 0n,
-        },
-      });
-      const dataUID = getUID(await dataTx.wait());
-      expect(await indexer.index.staticCall(dataUID)).to.be.false;
     });
   });
 
@@ -487,52 +446,6 @@ describe("EFSIndexer — public index() API", function () {
     it("reverts on non-existent attestation", async function () {
       const fakeUID = ethers.keccak256(ethers.toUtf8Bytes("nonexistent"));
       await expect(indexer.indexRevocation(fakeUID)).to.be.revertedWithCustomError(indexer, "InvalidAttestation");
-    });
-
-    it("works for EFS-native schema (DATA) revocations too", async function () {
-      // Create root + file anchor + data
-      const rootTx = await eas.connect(owner).attest({
-        schema: anchorSchemaUID,
-        data: {
-          recipient: ZeroAddress,
-          expirationTime: NO_EXPIRATION,
-          revocable: false,
-          refUID: ZERO_BYTES32,
-          data: enc.encode(["string", "bytes32"], ["root", ZERO_BYTES32]),
-          value: 0n,
-        },
-      });
-      const rootUID = getUID(await rootTx.wait());
-      const fileTx = await eas.connect(owner).attest({
-        schema: anchorSchemaUID,
-        data: {
-          recipient: ZeroAddress,
-          expirationTime: NO_EXPIRATION,
-          revocable: false,
-          refUID: rootUID,
-          data: enc.encode(["string", "bytes32"], ["file.txt", dataSchemaUID]),
-          value: 0n,
-        },
-      });
-      const fileAnchorUID = getUID(await fileTx.wait());
-      const dataTx = await eas.connect(alice).attest({
-        schema: dataSchemaUID,
-        data: {
-          recipient: ZeroAddress,
-          expirationTime: NO_EXPIRATION,
-          revocable: true,
-          refUID: fileAnchorUID,
-          data: enc.encode(["string", "string", "string"], ["ipfs://foo", "text/plain", "file"]),
-          value: 0n,
-        },
-      });
-      const dataUID = getUID(await dataTx.wait());
-
-      // EFS onRevoke already handles this — but indexRevocation should also work without double-effect
-      await eas.connect(alice).revoke({ schema: dataSchemaUID, data: { uid: dataUID, value: 0n } });
-      // Already revoked by onRevoke hook; indexRevocation should be idempotent
-      await indexer.indexRevocation(dataUID);
-      expect(await indexer.isRevoked(dataUID)).to.be.true;
     });
   });
 

@@ -8,6 +8,34 @@ import { useDeployedContractInfo, useScaffoldReadContract, useScaffoldWriteContr
 import { TAG_RESOLVER_ABI, getTagResolverAddress } from "~~/utils/efs/tagResolver";
 import { notification } from "~~/utils/scaffold-eth";
 
+const EAS_GET_ATTESTATION_ABI = [
+  {
+    inputs: [{ internalType: "bytes32", name: "uid", type: "bytes32" }],
+    name: "getAttestation",
+    outputs: [
+      {
+        components: [
+          { internalType: "bytes32", name: "uid", type: "bytes32" },
+          { internalType: "bytes32", name: "schema", type: "bytes32" },
+          { internalType: "uint64", name: "time", type: "uint64" },
+          { internalType: "uint64", name: "expirationTime", type: "uint64" },
+          { internalType: "uint64", name: "revocationTime", type: "uint64" },
+          { internalType: "bytes32", name: "refUID", type: "bytes32" },
+          { internalType: "address", name: "recipient", type: "address" },
+          { internalType: "address", name: "attester", type: "address" },
+          { internalType: "bool", name: "revocable", type: "bool" },
+          { internalType: "bytes", name: "data", type: "bytes" },
+        ],
+        internalType: "struct Attestation",
+        name: "",
+        type: "tuple",
+      },
+    ],
+    stateMutability: "view",
+    type: "function",
+  },
+] as const;
+
 interface TagModalProps {
   uid: string; // The anchor UID of the item being tagged
   isFile?: boolean; // When true, tags are attached to the connected user's DATA attestation for this anchor
@@ -57,18 +85,22 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
   const { writeContractAsync: easWrite } = useScaffoldWriteContract("EAS");
   const { data: easInfo } = useDeployedContractInfo({ contractName: "EAS" });
 
+  const { data: dataSchemaUID } = useScaffoldReadContract({
+    contractName: "Indexer",
+    functionName: "DATA_SCHEMA_UID",
+  });
+
   // For file items: resolve the DATA attestation UID to tag.
-  // The TagModal targets the DATA that the user is actually *viewing* — i.e. the same
-  // attester list FileBrowser uses when building its view. This matters because tags
-  // stored against DATA UIDs that don't appear in the view won't affect the tag filter
-  // (filter walks viewed DATA UIDs, not anchors). Rules:
+  // DATA is standalone (refUID=0x0) and placed at anchors via TAGs, so we query
+  // TagResolver's _activeByAAS index: getActiveTargetsByAttesterAndSchema(anchor, attester, DATA_SCHEMA).
+  // The TagModal targets the DATA that the user is actually *viewing*:
   //   - editions set → resolve via editionAddresses (what's on screen)
   //   - no editions → resolve via connectedAddress (own-files default view)
   //   - neither resolves → fall back to anchor UID (folder-level semantics)
   useEffect(() => {
-    if (!isFile || !publicClient) {
+    if (!isFile || !publicClient || !tagResolverAddress || !dataSchemaUID) {
       setEffectiveUID(uid);
-      setIsResolvingDataUID(false);
+      if (!isFile) setIsResolvingDataUID(false);
       return;
     }
 
@@ -77,17 +109,6 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
 
     const resolve = async () => {
       try {
-        const indexer = await import("~~/contracts/deployedContracts").then(m => {
-          return (m.default as any)[publicClient.chain.id]?.Indexer;
-        });
-        if (!indexer) {
-          if (!cancelled) {
-            setEffectiveUID(uid);
-            setIsResolvingDataUID(false);
-          }
-          return;
-        }
-
         const viewAttesters: `0x${string}`[] =
           editionAddresses.length > 0
             ? (editionAddresses.map(a => a as `0x${string}`) as `0x${string}`[])
@@ -103,15 +124,53 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
           return;
         }
 
-        const viewDataUID = (await publicClient.readContract({
-          address: indexer.address as `0x${string}`,
-          abi: indexer.abi,
-          functionName: "getDataByAddressList",
-          args: [uid as `0x${string}`, viewAttesters, false],
-        })) as `0x${string}`;
+        // Query TagResolver for DATAs placed at this anchor by each attester (most recent first)
+        for (const attester of viewAttesters) {
+          const count = (await publicClient.readContract({
+            address: tagResolverAddress,
+            abi: TAG_RESOLVER_ABI,
+            functionName: "getActiveTargetsByAttesterAndSchemaCount",
+            args: [uid as `0x${string}`, attester, dataSchemaUID as `0x${string}`],
+          })) as bigint;
 
+          if (count > 0n) {
+            // Scan all active targets and pick the one with the highest attestation timestamp.
+            // The swap-and-pop array is NOT chronologically ordered after removals.
+            const targets = (await publicClient.readContract({
+              address: tagResolverAddress,
+              abi: TAG_RESOLVER_ABI,
+              functionName: "getActiveTargetsByAttesterAndSchema",
+              args: [uid as `0x${string}`, attester, dataSchemaUID as `0x${string}`, 0n, count],
+            })) as `0x${string}`[];
+
+            if (targets.length > 0 && easInfo) {
+              let best = targets[0];
+              let bestTime = 0n;
+              for (const target of targets) {
+                if (!target || target === zeroHash) continue;
+                const att = (await publicClient.readContract({
+                  address: easInfo.address as `0x${string}`,
+                  abi: EAS_GET_ATTESTATION_ABI,
+                  functionName: "getAttestation",
+                  args: [target],
+                })) as { time: bigint };
+                if (att.time > bestTime) {
+                  bestTime = att.time;
+                  best = target;
+                }
+              }
+              if (!cancelled && best && best !== zeroHash) {
+                setEffectiveUID(best);
+                setIsResolvingDataUID(false);
+                return;
+              }
+            }
+          }
+        }
+
+        // No DATA found via tags — fall back to anchor UID
         if (!cancelled) {
-          setEffectiveUID(viewDataUID && viewDataUID !== zeroHash ? viewDataUID : uid);
+          setEffectiveUID(uid);
           setIsResolvingDataUID(false);
         }
       } catch {
@@ -126,7 +185,7 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
     return () => {
       cancelled = true;
     };
-  }, [uid, isFile, publicClient, connectedAddress, editionAddresses]);
+  }, [uid, isFile, publicClient, connectedAddress, editionAddresses, tagResolverAddress, dataSchemaUID, easInfo]);
 
   // Load TagResolver address and the "tags" anchor UID (discovered from the normal tree).
   useEffect(() => {
@@ -201,6 +260,8 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
         }
 
         // For each definition, check if the connected user has an active tag and resolve the name.
+        // Only show tags whose definition anchor lives under /tags/ — file placement TAGs
+        // (where definition is a file/folder anchor) are internal bookkeeping, not user-facing.
         const tags = await Promise.all(
           allDefs.map(async defUID => {
             const [activeTagUID, defAttestation] = await Promise.all([
@@ -212,6 +273,26 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
               }) as Promise<`0x${string}`>,
               getEASAttestation(defUID) as Promise<any>,
             ]);
+
+            // Filter: only show definitions that are descendants of /tags/.
+            // Walk up the refUID chain from the definition anchor until we hit tagsRoot
+            // (it's a user-facing tag) or 0x0/root (it's not).
+            if (!tagsRoot) return null;
+            let isUnderTags = false;
+            let walker = defAttestation.refUID as `0x${string}`;
+            while (walker && walker !== zeroHash) {
+              if (walker.toLowerCase() === tagsRoot.toLowerCase()) {
+                isUnderTags = true;
+                break;
+              }
+              try {
+                const parentAtt = (await getEASAttestation(walker)) as any;
+                walker = parentAtt.refUID as `0x${string}`;
+              } catch {
+                break;
+              }
+            }
+            if (!isUnderTags) return null;
 
             let tagName: string;
             try {
@@ -251,8 +332,8 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
         );
 
         if (!cancelled) {
-          // Only show definitions where the connected user has an active tag
-          setUserTags(tags.filter(t => t.activeTagUID !== null));
+          // Only show /tags/ definitions where the connected user has an active tag
+          setUserTags(tags.filter((t): t is UserTag => t !== null && t.activeTagUID !== null));
           setIsLoadingTags(false);
         }
       } catch (e) {
@@ -268,7 +349,7 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
     return () => {
       cancelled = true;
     };
-  }, [publicClient, tagResolverAddress, effectiveUID, connectedAddress, easInfo, refreshKey]);
+  }, [publicClient, tagResolverAddress, effectiveUID, connectedAddress, easInfo, refreshKey, tagsRoot]);
 
   const handleAddTag = async (applies: boolean) => {
     if (!anchorSchemaUID || !connectedAddress || !publicClient || !tagResolverAddress || !tagsRoot) return;

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { MirrorsPanel } from "./MirrorsPanel";
 import { PropertiesModal } from "./PropertiesModal";
 import { TagModal } from "./TagModal";
 import { ethers } from "ethers";
@@ -26,6 +27,7 @@ import { useTargetNetwork } from "~~/hooks/scaffold-eth/useTargetNetwork";
 import { isFile, isTopic } from "~~/utils/efs/efsTypes";
 import { SORT_OVERLAY_ABI } from "~~/utils/efs/sortOverlay";
 import { TAG_RESOLVER_ABI, getTagResolverAddress } from "~~/utils/efs/tagResolver";
+import { TRANSPORT_LABELS, detectTransport, resolveGatewayUrl } from "~~/utils/efs/transports";
 import { notification } from "~~/utils/scaffold-eth";
 
 export type DrawerTagFilterState = "neutral" | "include" | "exclude";
@@ -87,6 +89,37 @@ const CHILD_AT_ABI = [
   },
 ] as const;
 
+/** application/* MIME types that are human-readable text */
+const TEXT_LIKE_APPLICATION_TYPES = new Set([
+  "application/json",
+  "application/ld+json",
+  "application/xml",
+  "application/xhtml+xml",
+  "application/javascript",
+  "application/typescript",
+  "application/x-javascript",
+  "application/ecmascript",
+  "application/yaml",
+  "application/x-yaml",
+  "application/toml",
+  "application/sql",
+  "application/graphql",
+  "application/x-sh",
+  "application/x-httpd-php",
+  "application/rtf",
+  "application/x-ndjson",
+]);
+
+function isTextViewable(contentType: string | null): boolean {
+  if (!contentType) return false;
+  if (contentType.startsWith("text/")) return true;
+  if (contentType.includes("image/svg")) return true;
+  if (TEXT_LIKE_APPLICATION_TYPES.has(contentType)) return true;
+  // Catch-all for +json, +xml, +yaml suffixes (e.g. application/vnd.api+json)
+  if (/\+(json|xml|yaml)$/.test(contentType)) return true;
+  return false;
+}
+
 export const FileBrowser = ({
   currentAnchorUID,
   dataSchemaUID,
@@ -118,7 +151,9 @@ export const FileBrowser = ({
   const [tagModalIsFile, setTagModalIsFile] = useState(false);
   const [selectedFile, setSelectedFile] = useState<any | null>(null);
   const [fileContent, setFileContent] = useState<string | null>(null);
+  const fetchIdRef = useRef(0);
   const [fileContentType, setFileContentType] = useState<string | null>(null);
+  const [fileTransportType, setFileTransportType] = useState<string>("onchain");
   const [isFileLoading, setIsFileLoading] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [previewFullscreen, setPreviewFullscreen] = useState(false);
@@ -146,6 +181,15 @@ export const FileBrowser = ({
   const { targetNetwork } = useTargetNetwork();
   const publicClient = usePublicClient();
   const { address: connectedAddress } = useAccount();
+
+  // Revoke blob URLs when fileContent changes to prevent memory leaks
+  useEffect(() => {
+    return () => {
+      if (fileContent && fileContent.startsWith("blob:")) {
+        URL.revokeObjectURL(fileContent);
+      }
+    };
+  }, [fileContent]);
 
   useEffect(() => {
     setPageSize(50n);
@@ -325,9 +369,12 @@ export const FileBrowser = ({
       notification.error("EFSRouter not found. Please deploy.");
       return;
     }
+    // Increment fetch ID so any in-flight fetch from a previous file click becomes stale
+    const fetchId = ++fetchIdRef.current;
     setIsFileLoading(true);
     setFileContent(null);
     setFileContentType(null);
+    setFileTransportType("onchain");
     setFetchError(null);
     try {
       // In a real implementation we might pass the full path from the Toolbar/Page.
@@ -389,16 +436,23 @@ export const FileBrowser = ({
           result.push(...value);
         }
 
+        // web3protocol collapses duplicate headers, so we can't reliably detect
+        // message/external-body here. If body is empty, fall through to the
+        // direct contract call which preserves both raw Content-Type headers.
+        if (result.length === 0) {
+          throw new Error("Empty body — likely external URI delegation, trying direct fallback");
+        }
+
         const contentTypeInfo = Object.entries(fetchedWeb3Url.httpHeaders || {}).find(
           ([k]) => k.toLowerCase() === "content-type",
         );
         contentTypeStr = contentTypeInfo ? (contentTypeInfo[1] as string) : "text/plain";
       } catch (protocolErr) {
-        console.warn("web3protocol failed, using direct fallback", protocolErr);
-        // Direct Router Fallback for local dev
+        console.warn("web3protocol failed or empty response, using direct fallback", protocolErr);
+        // Direct Router Fallback — also handles external-body delegation (IPFS, Arweave, etc.)
         if (!publicClient) throw protocolErr;
 
-        result = []; // Clear any partial chunks downloaded before web3protocol crashed
+        result = [];
 
         let hasMoreChunks = true;
         let currentChunkHeader = "";
@@ -429,7 +483,42 @@ export const FileBrowser = ({
           })) as any;
 
           if (response[0] === 200n || response[0] === 200) {
-            // Convert hex body to bytes. (response.body is now a hex string since we changed ABI to return bytes)
+            const outHeaders = response[2] as any[];
+            const ctHeaders = outHeaders.filter((h: any) => h.key.toLowerCase() === "content-type");
+
+            // Detect external-body delegation (IPFS, Arweave, HTTPS mirrors)
+            const externalHeader = ctHeaders.find((h: any) => h.value.includes("message/external-body"));
+            if (externalHeader) {
+              // Extract the original URI from: message/external-body; access-type=URL; URL="ipfs://..."
+              const urlMatch = externalHeader.value.match(/URL="([^"]+)"/);
+              const externalUri = urlMatch?.[1];
+              // Extract the actual MIME type from the content-type= parameter in the
+              // message/external-body header (router embeds it as a quoted parameter).
+              const ctParam = externalHeader.value.match(/content-type="([^"]+)"/);
+              if (ctParam?.[1]) contentTypeStr = ctParam[1];
+
+              if (externalUri) {
+                setFileTransportType(detectTransport(externalUri));
+                const gatewayUrl = resolveGatewayUrl(externalUri);
+                if (gatewayUrl) {
+                  // Fetch from gateway
+                  const gatewayResp = await globalThis.fetch(gatewayUrl);
+                  if (!gatewayResp.ok) throw new Error(`Gateway returned ${gatewayResp.status} for ${gatewayUrl}`);
+                  const buf = await gatewayResp.arrayBuffer();
+                  const bytes = new Uint8Array(buf);
+                  for (let i = 0; i < bytes.length; i++) result.push(bytes[i]);
+                  // Use gateway content-type as fallback if we didn't get one from the contract
+                  if (contentTypeStr === "text/plain") {
+                    const gwCt = gatewayResp.headers.get("content-type");
+                    if (gwCt) contentTypeStr = gwCt.split(";")[0].trim();
+                  }
+                }
+                hasMoreChunks = false;
+                break;
+              }
+            }
+
+            // On-chain body
             const bodyHex = response[1] as `0x${string}`;
             if (bodyHex && bodyHex !== "0x") {
               const bodyBytes = ethers.getBytes(bodyHex);
@@ -437,13 +526,11 @@ export const FileBrowser = ({
                 result.push(bodyBytes[i]);
               }
             }
-            // Try to get content-type from headers
-            const outHeaders = response[2] as any[];
-            const ctHeader = outHeaders.find(h => h.key.toLowerCase() === "content-type");
-            if (ctHeader) contentTypeStr = ctHeader.value;
+            // Use first content-type header for on-chain responses
+            if (ctHeaders.length > 0) contentTypeStr = ctHeaders[0].value;
 
             // Check for next chunk
-            const nextChunkHeader = outHeaders.find(h => h.key.toLowerCase() === "web3-next-chunk");
+            const nextChunkHeader = outHeaders.find((h: any) => h.key.toLowerCase() === "web3-next-chunk");
             if (nextChunkHeader) {
               currentChunkHeader = nextChunkHeader.value;
             } else {
@@ -455,10 +542,18 @@ export const FileBrowser = ({
         }
       }
 
+      // Discard results from a superseded fetch (user clicked a different file)
+      if (fetchId !== fetchIdRef.current) return;
+
       setFileContentType(contentTypeStr);
 
-      if (contentTypeStr.startsWith("image/") && !contentTypeStr.includes("svg")) {
-        // Use native Blob to bypass browser string-length and Base64-render truncations
+      const useBlobUrl =
+        (contentTypeStr.startsWith("image/") && !contentTypeStr.includes("svg")) ||
+        contentTypeStr.startsWith("video/") ||
+        contentTypeStr.startsWith("audio/") ||
+        contentTypeStr === "application/pdf";
+
+      if (useBlobUrl) {
         const bytes = new Uint8Array(result);
         const blob = new Blob([bytes], { type: contentTypeStr });
         const objectUrl = URL.createObjectURL(blob);
@@ -469,12 +564,15 @@ export const FileBrowser = ({
         setFileContent(text);
       }
     } catch (e: unknown) {
+      if (fetchId !== fetchIdRef.current) return;
       const err = e as Error;
       console.error("Failed to fetch file content", err);
       setFileContent(null);
       setFetchError(err.message || String(e));
     } finally {
-      setIsFileLoading(false);
+      // Only clear the loading flag if this fetch is still the active one —
+      // a stale fetch completing should not stop the spinner for the newer request.
+      if (fetchId === fetchIdRef.current) setIsFileLoading(false);
     }
   };
 
@@ -748,18 +846,12 @@ export const FileBrowser = ({
   const isLoading = useEditionsQuery ? isEditionLoading : isStandardLoading;
   const rawItems = useEditionsQuery ? (editionItemsRaw ? (editionItemsRaw as any)[0] : undefined) : standardItems;
 
-  // When a tag filter is active, resolve DATA UIDs for each file item based on the
-  // currently-viewed attesters. item.attester is always the ANCHOR creator (fixed), so we
-  // derive the attester list from the viewing context instead:
-  //   - editions mode → editionAddresses (whose data is on screen)
-  //   - own-files mode → [connectedAddress]
-  // Multiple attesters can have data for the same anchor, so we store a Set per anchor and
-  // show the item if ANY of those DATA UIDs is in the tag filter set.
+  // When a tag filter is active, resolve DATA UIDs for each file item.
+  // DATA is standalone (refUID=0x0) and placed at anchors via TAGs, so we query
+  // TagResolver's _activeByAAS index to find which DATAs are at each anchor.
+  // Multiple attesters can have data for the same anchor, so we store a Set per anchor.
   useEffect(() => {
-    // connectedAddress is only needed as the own-files fallback; if editionAddresses is
-    // already provided (e.g. shared ?editions= link), we can build the map without a wallet.
-    // Build the map whenever either an include filter OR an exclude filter is active.
-    if ((!tagFilteredUIDs && tagExcludedUIDs.size === 0) || !rawItems || !publicClient || !indexerInfo) {
+    if ((!tagFilteredUIDs && tagExcludedUIDs.size === 0) || !rawItems || !publicClient || !tagResolverAddress) {
       setDataUIDMap(new Map());
       setIsDataUIDMapLoading(false);
       return;
@@ -767,8 +859,6 @@ export const FileBrowser = ({
 
     setIsDataUIDMapLoading(true);
 
-    // Which attesters' data are we looking at?
-    // editionAddresses takes precedence; fall back to connected wallet for own-files mode.
     const attesters: string[] =
       editionAddresses.length > 0 ? editionAddresses : connectedAddress ? [connectedAddress] : [];
 
@@ -784,20 +874,34 @@ export const FileBrowser = ({
     const resolve = async () => {
       await Promise.all(
         (rawItems as any[])
-          .filter((item: any) => isFile(item, dataSchemaUID) && item.hasData)
+          .filter((item: any) => isFile(item, dataSchemaUID))
           .map(async (item: any) => {
             const dataUIDs = new Set<string>();
             await Promise.all(
               attesters.map(async attester => {
                 try {
-                  const dataUID = (await publicClient.readContract({
-                    address: indexerInfo.address as `0x${string}`,
-                    abi: indexerInfo.abi,
-                    functionName: "getDataByAddressList",
-                    args: [item.uid as `0x${string}`, [attester as `0x${string}`], false],
-                  })) as `0x${string}`;
-                  if (dataUID && dataUID !== zeroHash) {
-                    dataUIDs.add(dataUID.toLowerCase());
+                  const count = (await publicClient.readContract({
+                    address: tagResolverAddress,
+                    abi: TAG_RESOLVER_ABI,
+                    functionName: "getActiveTargetsByAttesterAndSchemaCount",
+                    args: [item.uid as `0x${string}`, attester as `0x${string}`, dataSchemaUID as `0x${string}`],
+                  })) as bigint;
+                  if (count > 0n) {
+                    const targets = (await publicClient.readContract({
+                      address: tagResolverAddress,
+                      abi: TAG_RESOLVER_ABI,
+                      functionName: "getActiveTargetsByAttesterAndSchema",
+                      args: [
+                        item.uid as `0x${string}`,
+                        attester as `0x${string}`,
+                        dataSchemaUID as `0x${string}`,
+                        0n,
+                        count,
+                      ],
+                    })) as `0x${string}`[];
+                    for (const t of targets) {
+                      if (t !== zeroHash) dataUIDs.add(t.toLowerCase());
+                    }
                   }
                 } catch {
                   // ignore
@@ -824,26 +928,27 @@ export const FileBrowser = ({
     tagExcludedUIDs,
     rawItems,
     publicClient,
-    indexerInfo,
+    tagResolverAddress,
     dataSchemaUID,
     connectedAddress,
     editionAddresses,
-  ]); // connectedAddress kept for own-files fallback re-trigger
+  ]);
 
   // Apply tag filters. Include filter (tagFilteredUIDs): item must be in set (null = no filter).
   // Exclude filter (tagExcludedUIDs): item must NOT be in set (empty = no exclusions).
   const matchesUID = (item: any, uidSet: Set<string>): boolean => {
+    const anchorUID = item.uid.toLowerCase();
     if (isFile(item, dataSchemaUID)) {
-      // For files, tags target DATA UIDs (per-edition), not the shared anchor UID.
-      // Only check DATA UIDs — anchor UID fallback would match stale/wrong-level tags.
-      const anchorUID = item.uid.toLowerCase();
+      // Tags target DATA UIDs (standalone, placed at anchors via TAGs).
+      // Check if any DATA placed at this anchor matches the filter set.
       const dataUIDs = dataUIDMap.get(anchorUID);
       if (dataUIDs && dataUIDs.size > 0) {
         return [...dataUIDs].some(uid => uidSet.has(uid));
       }
-      return false;
+      // Fallback: check anchor UID directly (covers tags applied to anchor itself)
+      return uidSet.has(anchorUID);
     }
-    return uidSet.has(item.uid.toLowerCase());
+    return uidSet.has(anchorUID);
   };
 
   const items = rawItems?.filter((item: any) => {
@@ -950,6 +1055,11 @@ export const FileBrowser = ({
   // Update the keyboard handler ref each render with fresh closure
   keyHandlerRef.current = (e: KeyboardEvent) => {
     if (!selectedFile) return;
+    // Don't intercept keys when user is typing in an input/textarea/contenteditable,
+    // or when any modal dialog is open
+    const tag = (e.target as HTMLElement)?.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || (e.target as HTMLElement)?.isContentEditable) return;
+    if (document.querySelector("dialog[open]")) return;
     if (e.key === "ArrowLeft") {
       e.preventDefault();
       navigateGallery(-1);
@@ -1062,7 +1172,11 @@ export const FileBrowser = ({
             })}
           {(sortedItems ?? items)?.length === 0 && (
             <div className="col-span-4 text-center text-gray-500">
-              {tagFilteredUIDs !== null ? `No items match tag filter: "${tagFilter}"` : "Topic is empty"}
+              {tagFilteredUIDs !== null
+                ? `No items match tag filter: "${tagFilter}"`
+                : tagExcludedUIDs.size > 0
+                  ? "All items hidden by active exclusion filter"
+                  : "Topic is empty"}
             </div>
           )}
         </div>
@@ -1122,6 +1236,16 @@ export const FileBrowser = ({
             </div>
           </div>
 
+          {/* Transport badge — shown when file preview is loaded */}
+          {fileContent && !isFileLoading && fileContentType && (
+            <div className="px-4 py-1 border-b border-base-300 shrink-0 flex gap-1.5 items-center">
+              <span className="badge badge-sm badge-outline">
+                {TRANSPORT_LABELS[fileTransportType as keyof typeof TRANSPORT_LABELS] || fileTransportType}
+              </span>
+              <span className="text-xs text-base-content/50">{fileContentType}</span>
+            </div>
+          )}
+
           <div className="flex-1 overflow-auto p-4">
             {isFileLoading ? (
               <div className="flex items-center justify-center h-32">
@@ -1134,10 +1258,13 @@ export const FileBrowser = ({
               </div>
             ) : fileContent ? (
               fileContentType?.includes("image/svg") ? (
-                <div
-                  className="flex justify-center cursor-pointer"
+                // Render SVG as <img> data URI to prevent XSS from untrusted content
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(fileContent)}`}
+                  alt={selectedFile.name}
+                  className="max-w-full h-auto rounded cursor-pointer"
                   onClick={() => setPreviewFullscreen(true)}
-                  dangerouslySetInnerHTML={{ __html: fileContent }}
                 />
               ) : fileContentType?.startsWith("image/") ? (
                 // eslint-disable-next-line @next/next/no-img-element
@@ -1147,7 +1274,28 @@ export const FileBrowser = ({
                   className="max-w-full h-auto rounded cursor-pointer"
                   onClick={() => setPreviewFullscreen(true)}
                 />
-              ) : fileContentType && !fileContentType.startsWith("text/") ? (
+              ) : fileContentType === "application/pdf" ? (
+                <iframe
+                  src={fileContent}
+                  title={selectedFile.name}
+                  className="w-full rounded cursor-pointer"
+                  style={{ height: "60vh" }}
+                  sandbox="allow-same-origin"
+                  onClick={() => setPreviewFullscreen(true)}
+                />
+              ) : fileContentType?.startsWith("video/") ? (
+                <video
+                  src={fileContent}
+                  controls
+                  className="max-w-full h-auto rounded cursor-pointer"
+                  onClick={e => {
+                    e.preventDefault();
+                    setPreviewFullscreen(true);
+                  }}
+                />
+              ) : fileContentType?.startsWith("audio/") ? (
+                <audio src={fileContent} controls className="w-full" />
+              ) : fileContentType && !isTextViewable(fileContentType) ? (
                 <div className="text-center text-gray-500">
                   <p className="font-semibold mb-1">Binary file — cannot preview</p>
                   <p className="text-xs opacity-60">{fileContentType}</p>
@@ -1161,6 +1309,11 @@ export const FileBrowser = ({
               <div className="text-center text-gray-500">No content found.</div>
             )}
           </div>
+
+          {/* Mirrors panel */}
+          {!selectedFile.isFolder && (
+            <MirrorsPanel fileAnchorUID={selectedFile.uid} editionAddresses={editionAddresses} />
+          )}
         </div>
       )}
 
@@ -1223,7 +1376,13 @@ export const FileBrowser = ({
                 </div>
               ) : fileContent ? (
                 fileContentType?.includes("image/svg") ? (
-                  <div dangerouslySetInnerHTML={{ __html: fileContent }} />
+                  // Render SVG as <img> data URI to prevent XSS from untrusted content
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(fileContent)}`}
+                    alt={selectedFile.name}
+                    className="max-w-[90vw] max-h-[85vh] object-contain"
+                  />
                 ) : fileContentType?.startsWith("image/") ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
@@ -1233,7 +1392,19 @@ export const FileBrowser = ({
                     alt={selectedFile.name}
                     className="max-w-[90vw] max-h-[85vh] object-contain"
                   />
-                ) : fileContentType && !fileContentType.startsWith("text/") ? (
+                ) : fileContentType === "application/pdf" ? (
+                  <iframe
+                    src={fileContent}
+                    title={selectedFile.name}
+                    className="rounded"
+                    style={{ width: "90vw", height: "85vh" }}
+                    sandbox="allow-same-origin"
+                  />
+                ) : fileContentType?.startsWith("video/") ? (
+                  <video src={fileContent} controls className="max-w-[90vw] max-h-[85vh] object-contain" />
+                ) : fileContentType?.startsWith("audio/") ? (
+                  <audio src={fileContent} controls className="w-[60vw]" />
+                ) : fileContentType && !isTextViewable(fileContentType) ? (
                   <div className="text-center text-white/50">
                     <p className="font-semibold mb-1">Binary file — cannot preview</p>
                     <p className="text-xs opacity-60">{fileContentType}</p>

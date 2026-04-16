@@ -5,9 +5,30 @@ import { IEAS, Attestation } from "@ethereum-attestation-service/eas-contracts/c
 
 interface ITagResolverForFileView {
     function isActivelyTagged(bytes32 targetID, bytes32 definition) external view returns (bool);
-    function isActivelyTaggedByAny(bytes32 targetID, bytes32 definition, address[] calldata attesters) external view returns (bool);
-    function getChildrenTaggedWith(bytes32 parentUID, bytes32 definition, uint256 start, uint256 length) external view returns (bytes32[] memory);
+    function isActivelyTaggedByAny(
+        bytes32 targetID,
+        bytes32 definition,
+        address[] calldata attesters
+    ) external view returns (bool);
+    function getChildrenTaggedWith(
+        bytes32 parentUID,
+        bytes32 definition,
+        uint256 start,
+        uint256 length
+    ) external view returns (bytes32[] memory);
     function getChildrenTaggedWithCount(bytes32 parentUID, bytes32 definition) external view returns (uint256);
+    function getActiveTargetsByAttesterAndSchema(
+        bytes32 definition,
+        address attester,
+        bytes32 schema,
+        uint256 start,
+        uint256 length
+    ) external view returns (bytes32[] memory);
+    function getActiveTargetsByAttesterAndSchemaCount(
+        bytes32 definition,
+        address attester,
+        bytes32 schema
+    ) external view returns (uint256);
 }
 
 interface IEFSIndexer {
@@ -38,17 +59,34 @@ interface IEFSIndexer {
     ) external view returns (bytes32[] memory results, uint256 nextCursor);
     function getChildrenCount(bytes32 anchorUID) external view returns (uint256);
     function getChildCountBySchema(bytes32 parentAnchor, bytes32 schema) external view returns (uint256);
-    function getDataByAddressList(
-        bytes32 anchorUID,
-        address[] calldata attesters,
-        bool showRevoked
-    ) external view returns (bytes32);
+    function getQualifyingFolders(
+        bytes32 parentUID,
+        bytes32 contentSchema,
+        address attester,
+        uint256 start,
+        uint256 length
+    ) external view returns (bytes32[] memory);
+    function getQualifyingFolderCount(
+        bytes32 parentUID,
+        bytes32 contentSchema,
+        address attester
+    ) external view returns (uint256);
     function getReferencingAttestationCount(bytes32 targetUID, bytes32 schemaUID) external view returns (uint256);
     function containsAttestations(bytes32 targetUID, address attester) external view returns (bool);
     function isRevoked(bytes32 uid) external view returns (bool);
     function getEAS() external view returns (IEAS);
     function DATA_SCHEMA_UID() external view returns (bytes32);
     function PROPERTY_SCHEMA_UID() external view returns (bytes32);
+    function MIRROR_SCHEMA_UID() external view returns (bytes32);
+    function ANCHOR_SCHEMA_UID() external view returns (bytes32);
+    function dataByContentKey(bytes32 contentHash) external view returns (bytes32);
+    function getReferencingAttestations(
+        bytes32 targetUID,
+        bytes32 schemaUID,
+        uint256 start,
+        uint256 length,
+        bool reverseOrder
+    ) external view returns (bytes32[] memory);
 }
 
 contract EFSFileView {
@@ -63,6 +101,15 @@ contract EFSFileView {
         uint64 timestamp;
         address attester;
         bytes32 schema; // Anchor Schema Type
+        bytes32 contentHash; // For DATA attestations
+    }
+
+    struct MirrorItem {
+        bytes32 uid;
+        bytes32 transportDefinition;
+        string uri;
+        address attester;
+        uint64 timestamp;
     }
 
     IEFSIndexer public immutable indexer;
@@ -131,6 +178,10 @@ contract EFSFileView {
      * @param startingCursor Index into _childrenBySchema to resume from (0 = first page).
      * @param pageSize       Max content items per page (folders are additional on page 1).
      */
+    /// @dev Maximum attesters per schema-filtered listing call.
+    ///      Prevents quadratic memory allocation in getFilesAtPath and O(n²) dedup.
+    uint256 private constant MAX_ATTESTERS_PER_QUERY = 20;
+
     function getDirectoryPageBySchemaAndAddressList(
         bytes32 parentAnchor,
         bytes32 anchorSchema,
@@ -139,6 +190,7 @@ contract EFSFileView {
         uint256 pageSize
     ) external view returns (FileSystemItem[] memory items, uint256 nextCursor) {
         require(attesters.length > 0, "Attesters list cannot be empty");
+        require(attesters.length <= MAX_ATTESTERS_PER_QUERY, "Too many attesters");
         require(pageSize > 0, "Page size must be > 0");
 
         // 1. Content items — paginated via _childrenBySchema index (O(pageSize))
@@ -148,8 +200,8 @@ contract EFSFileView {
             attesters,
             startingCursor,
             pageSize,
-            true,   // reverseOrder (newest first)
-            false   // showRevoked
+            true, // reverseOrder (newest first)
+            false // showRevoked
         );
 
         // 2. Tagged folders — first page only (typically a small set)
@@ -184,85 +236,76 @@ contract EFSFileView {
         bytes32 anchorSchema,
         address[] memory attesters
     ) internal view returns (bytes32[] memory) {
-        // Two sources of qualifying folders:
-        // A) Generic folders that have children of anchorSchema
-        //    → _childrenBySchema[parent][bytes32(0)] filtered by getChildCountBySchema > 0
-        // B) Generic folders tagged with anchorSchema by a trusted attester
-        //    → tagResolver._childrenTaggedWith[parent][anchorSchema]
+        // Two sources of qualifying generic subfolders:
         //
-        // Source B is always small (few tagged folders) and is the primary path.
-        // Source A folders also appear in _childrenBySchema[parent][bytes32(0)] but scanning
-        // ALL generic folders would be O(N). Instead, we rely on the tag index:
-        // - Non-empty folders with children of anchorSchema are discovered naturally when
-        //   the user navigates into them. They also appear if tagged.
-        // - The UI auto-tags folders on creation with their intended schema, so tagged
-        //   folders cover both empty and non-empty cases.
+        // A) Write-time index — EFSIndexer._qualifyingFolders[parent][schema][attester].
+        //    Populated at O(1) amortised cost when a file anchor (anchorSchema != 0) is first
+        //    placed inside a generic folder by a given attester. Read is O(m_qualifying) with
+        //    no scan of non-qualifying folders — scales to any directory size.
         //
-        // For completeness, we also scan generic folders (capped) to catch untagged folders
-        // that organically acquired children of the target schema.
+        // B) Explicit tag index — tagResolver._childrenTaggedWith[parent][schema].
+        //    Covers empty folders the attester created but has not yet uploaded content into.
+        //    Populated when a TAG(definition=anchorSchema, refUID=folder) is attested.
 
-        // Collect from tag index (source B). Scan the full index — truncating would
-        // permanently hide folders past the cap since this function is only invoked on
-        // page 1 of getDirectoryPageBySchemaAndAddressList. This is a view function, so
-        // the only bound is the caller's eth_call gas limit.
-        uint256 taggedCount = tagResolver.getChildrenTaggedWithCount(parentAnchor, anchorSchema);
-        bytes32[] memory taggedCandidates = tagResolver.getChildrenTaggedWith(parentAnchor, anchorSchema, 0, taggedCount);
-
-        // Also scan generic folders (source A) — full scan of _childrenBySchema[parent][0]
-        // for the same reason. Folders discovered through the tag index still get merged/deduped.
-        uint256 genericCount = indexer.getChildCountBySchema(parentAnchor, bytes32(0));
-        bytes32[] memory genericFolders;
-        if (genericCount > 0) {
-            (genericFolders, ) = indexer.getAnchorsBySchemaAndAddressList(
-                parentAnchor, bytes32(0), attesters, 0, genericCount, true, false
-            );
-        } else {
-            genericFolders = new bytes32[](0);
+        // Upper bound on result size: sum of qualifying counts across all attesters for both sources.
+        uint256 MAX_TAGGED_FOLDERS = 1000;
+        uint256 maxSize = 0;
+        for (uint256 a = 0; a < attesters.length; a++) {
+            maxSize += indexer.getQualifyingFolderCount(parentAnchor, anchorSchema, attesters[a]);
         }
+        // Cap before using as allocation bound — an uncapped count could exhaust call gas/memory
+        // before the safety limit is enforced later.
+        uint256 taggedTotal = tagResolver.getChildrenTaggedWithCount(parentAnchor, anchorSchema);
+        if (taggedTotal > MAX_TAGGED_FOLDERS) taggedTotal = MAX_TAGGED_FOLDERS;
+        maxSize += taggedTotal;
 
-        // Merge both sources, dedup, and filter
-        bytes32[] memory temp = new bytes32[](taggedCandidates.length + genericFolders.length);
+        if (maxSize == 0) return new bytes32[](0);
+
+        bytes32[] memory temp = new bytes32[](maxSize);
         uint256 count = 0;
 
-        // Process tagged candidates
-        for (uint256 i = 0; i < taggedCandidates.length; i++) {
-            bytes32 uid = taggedCandidates[i];
-            if (indexer.isRevoked(uid)) continue;
-
-            // Editions-aware: only include if a trusted attester applied the tag
-            if (!tagResolver.isActivelyTaggedByAny(uid, anchorSchema, attesters)) continue;
-
-            // Attester contribution check
-            bool qualifies = false;
-            for (uint256 j = 0; j < attesters.length; j++) {
-                if (indexer.containsAttestations(uid, attesters[j])) {
-                    qualifies = true;
-                    break;
+        // Source A: qualifying folders from the write-time index, one attester at a time.
+        for (uint256 a = 0; a < attesters.length; a++) {
+            uint256 n = indexer.getQualifyingFolderCount(parentAnchor, anchorSchema, attesters[a]);
+            if (n == 0) continue;
+            bytes32[] memory folders = indexer.getQualifyingFolders(parentAnchor, anchorSchema, attesters[a], 0, n);
+            for (uint256 i = 0; i < folders.length; i++) {
+                bytes32 uid = folders[i];
+                if (indexer.isRevoked(uid)) continue;
+                // Dedup across attesters (inner loop — typically n_attesters is small)
+                bool seen = false;
+                for (uint256 k = 0; k < count; k++) {
+                    if (temp[k] == uid) { seen = true; break; }
                 }
+                if (!seen) temp[count++] = uid;
             }
-            if (!qualifies) continue;
-
-            temp[count++] = uid;
         }
 
-        // Process generic folders that have children of anchorSchema (untagged discovery)
-        for (uint256 i = 0; i < genericFolders.length; i++) {
-            bytes32 uid = genericFolders[i];
-
-            // Skip if already added via tag path
-            bool alreadyAdded = false;
-            for (uint256 k = 0; k < count; k++) {
-                if (temp[k] == uid) { alreadyAdded = true; break; }
+        // Source B: explicitly tagged folders (empty-folder visibility).
+        // Capped at MAX_TAGGED_FOLDERS — explicit tagging is a deliberate user action so
+        // counts are expected to be small. Spam tagging is on-chain write cost for the attacker
+        // but only read-side up to this cap.
+        uint256 taggedCount = taggedTotal; // already capped above
+        if (taggedCount > 0) {
+            bytes32[] memory tagged = tagResolver.getChildrenTaggedWith(parentAnchor, anchorSchema, 0, taggedCount);
+            for (uint256 i = 0; i < tagged.length; i++) {
+                bytes32 uid = tagged[i];
+                if (indexer.isRevoked(uid)) continue;
+                if (!tagResolver.isActivelyTaggedByAny(uid, anchorSchema, attesters)) continue;
+                bool qualifies = false;
+                for (uint256 j = 0; j < attesters.length; j++) {
+                    if (indexer.containsAttestations(uid, attesters[j])) { qualifies = true; break; }
+                }
+                if (!qualifies) continue;
+                // Dedup against source A
+                bool seen = false;
+                for (uint256 k = 0; k < count; k++) {
+                    if (temp[k] == uid) { seen = true; break; }
+                }
+                if (!seen) temp[count++] = uid;
             }
-            if (alreadyAdded) continue;
-
-            // Include only if folder has children of the target schema
-            if (indexer.getChildCountBySchema(uid, anchorSchema) == 0) continue;
-
-            temp[count++] = uid;
         }
 
-        // Trim to actual size
         assembly {
             mstore(temp, count)
         }
@@ -301,11 +344,142 @@ contract EFSFileView {
                 propertyCount: propertyCount,
                 timestamp: att.time,
                 attester: att.attester,
-                schema: anchorType
+                schema: anchorType,
+                contentHash: bytes32(0)
             });
         }
 
         return result;
+    }
+
+    /**
+     * @notice Tag-based file listing: get DATAs placed at an anchor by specific attesters.
+     *         Uses TagResolver's _activeByAttesterAndSchema compact index.
+     * @param anchorUID  The path anchor (e.g. /memes/)
+     * @param attesters  Edition addresses to query
+     * @param schema     Target schema to filter (DATA_SCHEMA_UID for files, ANCHOR_SCHEMA_UID for sub-folders)
+     * @param start      Pagination offset
+     * @param length     Page size
+     * @return items     DATA/Anchor attestation details with contentHash populated for DATAs
+     */
+    function getFilesAtPath(
+        bytes32 anchorUID,
+        address[] calldata attesters,
+        bytes32 schema,
+        uint256 start,
+        uint256 length
+    ) external view returns (FileSystemItem[] memory items) {
+        require(attesters.length <= MAX_ATTESTERS_PER_QUERY, "Too many attesters");
+        // Collect from all attesters, dedup by UID
+        bytes32[] memory temp = new bytes32[](length * attesters.length);
+        uint256 count = 0;
+
+        for (uint256 a = 0; a < attesters.length; a++) {
+            bytes32[] memory targets = tagResolver.getActiveTargetsByAttesterAndSchema(
+                anchorUID,
+                attesters[a],
+                schema,
+                start,
+                length
+            );
+            for (uint256 i = 0; i < targets.length; i++) {
+                // Dedup
+                bool exists = false;
+                for (uint256 j = 0; j < count; j++) {
+                    if (temp[j] == targets[i]) {
+                        exists = true;
+                        break;
+                    }
+                }
+                if (!exists && count < temp.length) {
+                    temp[count++] = targets[i];
+                }
+            }
+        }
+
+        items = new FileSystemItem[](count);
+        bytes32 dataSchemaUID = indexer.DATA_SCHEMA_UID();
+
+        for (uint256 i = 0; i < count; i++) {
+            Attestation memory att = eas.getAttestation(temp[i]);
+
+            bytes32 contentHash;
+            string memory name = "";
+
+            if (att.schema == dataSchemaUID) {
+                // DATA attestation: decode contentHash
+                (contentHash, ) = abi.decode(att.data, (bytes32, uint64));
+            } else {
+                // Anchor: decode name
+                bytes32 anchorType;
+                (name, anchorType) = abi.decode(att.data, (string, bytes32));
+            }
+
+            items[i] = FileSystemItem({
+                uid: temp[i],
+                name: name,
+                parentUID: anchorUID,
+                isFolder: att.schema != dataSchemaUID,
+                hasData: att.schema == dataSchemaUID,
+                childCount: 0,
+                propertyCount: 0,
+                timestamp: att.time,
+                attester: att.attester,
+                schema: att.schema,
+                contentHash: contentHash
+            });
+        }
+    }
+
+    /**
+     * @notice Get mirrors (retrieval methods) for a DATA attestation.
+     * @param dataUID  The DATA attestation UID
+     * @param start    Pagination offset
+     * @param length   Page size
+     */
+    function getDataMirrors(
+        bytes32 dataUID,
+        uint256 start,
+        uint256 length
+    ) external view returns (MirrorItem[] memory) {
+        bytes32 mirrorSchemaUID = indexer.MIRROR_SCHEMA_UID();
+        bytes32[] memory mirrorUIDs = indexer.getReferencingAttestations(
+            dataUID,
+            mirrorSchemaUID,
+            start,
+            length,
+            false
+        );
+
+        // First pass: count non-revoked mirrors
+        uint256 activeCount = 0;
+        for (uint256 i = 0; i < mirrorUIDs.length; i++) {
+            if (!indexer.isRevoked(mirrorUIDs[i])) activeCount++;
+        }
+
+        // Second pass: populate result
+        MirrorItem[] memory result = new MirrorItem[](activeCount);
+        uint256 idx = 0;
+        for (uint256 i = 0; i < mirrorUIDs.length; i++) {
+            if (indexer.isRevoked(mirrorUIDs[i])) continue;
+            Attestation memory att = eas.getAttestation(mirrorUIDs[i]);
+            (bytes32 transportDef, string memory uri) = abi.decode(att.data, (bytes32, string));
+            result[idx++] = MirrorItem({
+                uid: mirrorUIDs[i],
+                transportDefinition: transportDef,
+                uri: uri,
+                attester: att.attester,
+                timestamp: att.time
+            });
+        }
+        return result;
+    }
+
+    /**
+     * @notice Look up the canonical DATA UID for a content hash.
+     */
+    function getCanonicalData(bytes32 contentHash) external view returns (bytes32) {
+        return indexer.dataByContentKey(contentHash);
     }
 
     function decodeName(bytes memory data) external pure returns (string memory) {

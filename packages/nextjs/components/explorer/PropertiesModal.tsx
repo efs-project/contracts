@@ -137,7 +137,7 @@ export const PropertiesModal = ({ uid, onClose }: PropertiesModalProps) => {
       }
 
       // 2. Create Property Value
-      const encodedValue = encodeAbiParameters(parseAbiParameters("string value"), [propValue]);
+      const encodedValue = encodeAbiParameters(parseAbiParameters("string key, string value"), [propName, propValue]);
 
       await attest({
         functionName: "attest",
@@ -297,7 +297,7 @@ const PropertyValueDecoded = ({ data }: { data: string }) => {
     const decode = async () => {
       try {
         const { decodeAbiParameters, parseAbiParameters } = await import("viem");
-        const [v] = decodeAbiParameters(parseAbiParameters("string value"), data as `0x${string}`);
+        const [, v] = decodeAbiParameters(parseAbiParameters("string key, string value"), data as `0x${string}`);
         setValue(v);
       } catch (e) {
         console.error("Decode failed", e);

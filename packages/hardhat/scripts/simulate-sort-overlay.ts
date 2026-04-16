@@ -4,10 +4,12 @@ import { EFSIndexer, EFSSortOverlay, NameSort, TimestampSort, TagResolver } from
 /**
  * EFS Sort Overlay + Editions + Tags Simulation
  *
- * Exercises everything the UI will need against a deployed EFSIndexer, EFSSortOverlay,
- * and TagResolver. Two users (Alice, Bob) build a shared /music/ directory, sort it
- * independently, attach editions (DATA) to each item, tag items, and exercise every
- * read path the UI will call.
+ * Exercises everything the UI will need against a deployed EFS stack using the
+ * three-layer data model: paths (Anchors) → data (DATA) → retrieval (MIRRORs).
+ *
+ * Two users (Alice, Bob) build a shared /music/ directory, sort it independently,
+ * place DATAs via TAGs, add MIRRORs, label items with tag definitions, and exercise
+ * every read path the UI will call.
  *
  * Run: npx hardhat run scripts/simulate-sort-overlay.ts --network localhost
  *
@@ -32,7 +34,7 @@ function assert(label: string, condition: boolean, detail: string = "") {
 async function main() {
   console.log("════════════════════════════════════════════════════════════");
   console.log("  EFS Full Integration Simulation");
-  console.log("  Sorts · Editions · Tags · History · Discovery");
+  console.log("  Sorts · DATA · MIRRORs · TAGs · Editions");
   console.log("════════════════════════════════════════════════════════════\n");
 
   const [deployer, alice, bob] = await ethers.getSigners();
@@ -54,11 +56,17 @@ async function main() {
   // All schema UIDs and partner contract addresses are available on a single entry point: EFSIndexer
   const anchorSchemaUID = await indexer.ANCHOR_SCHEMA_UID();
   const dataSchemaUID = await indexer.DATA_SCHEMA_UID();
+  const propertySchemaUID = await indexer.PROPERTY_SCHEMA_UID();
+  const mirrorSchemaUID = await indexer.MIRROR_SCHEMA_UID();
   const sortInfoSchemaUID = await indexer.SORT_INFO_SCHEMA_UID();
   const tagSchemaUID = await indexer.TAG_SCHEMA_UID();
   const tagResolverAddr = await indexer.tagResolver();
   const tagResolver = (await ethers.getContractAt("TagResolver", tagResolverAddr)) as unknown as TagResolver;
   const rootUID = await indexer.rootAnchorUID();
+
+  // Resolve /transports/ for MIRRORs
+  const transportsUID = await indexer.resolvePath(rootUID, "transports");
+  const ipfsTransportUID = await indexer.resolvePath(transportsUID, "ipfs");
 
   console.log(`Indexer:     ${indexer.target}`);
   console.log(`Overlay:     ${overlay.target}`);
@@ -110,31 +118,55 @@ async function main() {
     return getUID(tx);
   };
 
-  /** Attest DATA to an anchor (simulates file upload) */
-  const data = async (
-    signer: any,
-    anchorUID: string,
-    uri: string,
-    contentType = "application/epub+zip",
-    fileMode = "file",
-  ): Promise<string> => {
+  /** Create a standalone DATA attestation (contentHash + size, non-revocable, standalone) */
+  const createData = async (signer: any, content: string): Promise<{ uid: string; contentHash: string }> => {
+    const contentBytes = ethers.toUtf8Bytes(content);
+    const contentHash = ethers.keccak256(contentBytes);
+    const size = contentBytes.length;
     const tx = await eas.connect(signer).attest({
       schema: dataSchemaUID,
       data: {
         recipient: ethers.ZeroAddress,
         expirationTime: 0n,
+        revocable: false,
+        refUID: ethers.ZeroHash,
+        data: encode.encode(["bytes32", "uint64"], [contentHash, size]),
+        value: 0n,
+      },
+    });
+    return { uid: await getUID(tx), contentHash };
+  };
+
+  /** Create a PROPERTY on a DATA or Anchor */
+  const property = async (signer: any, targetUID: string, key: string, value: string): Promise<string> => {
+    const tx = await eas.connect(signer).attest({
+      schema: propertySchemaUID,
+      data: {
+        recipient: ethers.ZeroAddress,
+        expirationTime: 0n,
         revocable: true,
-        refUID: anchorUID,
-        data: encode.encode(["string", "string", "string"], [uri, contentType, fileMode]),
+        refUID: targetUID,
+        data: encode.encode(["string", "string"], [key, value]),
         value: 0n,
       },
     });
     return getUID(tx);
   };
 
-  /** Revoke a DATA attestation */
-  const revokeData = async (signer: any, uid: string): Promise<void> => {
-    await (await eas.connect(signer).revoke({ schema: dataSchemaUID, data: { uid, value: 0n } })).wait();
+  /** Create a MIRROR on a DATA */
+  const createMirror = async (signer: any, dataUID: string, transportDef: string, uri: string): Promise<string> => {
+    const tx = await eas.connect(signer).attest({
+      schema: mirrorSchemaUID,
+      data: {
+        recipient: ethers.ZeroAddress,
+        expirationTime: 0n,
+        revocable: true,
+        refUID: dataUID,
+        data: encode.encode(["bytes32", "string"], [transportDef, uri]),
+        value: 0n,
+      },
+    });
+    return getUID(tx);
   };
 
   /** Attest SORT_INFO pointing at a naming anchor */
@@ -159,8 +191,24 @@ async function main() {
     return getUID(tx);
   };
 
-  /** Attest a TAG (definition, applies) targeting an anchor */
-  const tag = async (signer: any, targetUID: string, definitionUID: string, applies = true): Promise<string> => {
+  /** Place a DATA at an Anchor via TAG */
+  const placeData = async (signer: any, dataUID: string, anchorUID: string, applies = true): Promise<string> => {
+    const tx = await eas.connect(signer).attest({
+      schema: tagSchemaUID,
+      data: {
+        recipient: ethers.ZeroAddress,
+        expirationTime: 0n,
+        revocable: true,
+        refUID: dataUID,
+        data: encode.encode(["bytes32", "bool"], [anchorUID, applies]),
+        value: 0n,
+      },
+    });
+    return getUID(tx);
+  };
+
+  /** Attest a TAG (definition, applies) targeting an anchor (for labels) */
+  const tagLabel = async (signer: any, targetUID: string, definitionUID: string, applies = true): Promise<string> => {
     const tx = await eas.connect(signer).attest({
       schema: tagSchemaUID,
       data: {
@@ -173,64 +221,6 @@ async function main() {
       },
     });
     return getUID(tx);
-  };
-
-  /**
-   * Compute processItems hints for a batch of new kernel items.
-   * Uses ISortFunc.getSortKey to determine ordering.
-   * Takes into account items already in the sorted list.
-   */
-  const _computeHints = async (
-    newItems: string[],
-    alreadySorted: string[],
-    sortFuncAddr: string,
-    sortInfoUID: string,
-  ): Promise<{ leftHints: string[]; rightHints: string[] }> => {
-    const iface = new ethers.Interface([
-      "function getSortKey(bytes32 uid, bytes32 sortInfoUID) external view returns (bytes memory)",
-    ]);
-    const func = new ethers.Contract(sortFuncAddr, iface, ethers.provider);
-
-    const newKeys: Buffer[] = await Promise.all(
-      newItems.map(async uid => Buffer.from(((await func.getSortKey(uid, sortInfoUID)) as string).slice(2), "hex")),
-    );
-    const existingKeys: Buffer[] = await Promise.all(
-      alreadySorted.map(async uid =>
-        Buffer.from(((await func.getSortKey(uid, sortInfoUID)) as string).slice(2), "hex"),
-      ),
-    );
-
-    const simList = [...alreadySorted];
-    const simKeys = [...existingKeys];
-    const leftHints: string[] = [];
-    const rightHints: string[] = [];
-
-    for (let i = 0; i < newItems.length; i++) {
-      const uid = newItems[i];
-      const key = newKeys[i];
-
-      if (key.length === 0) {
-        leftHints.push(ethers.ZeroHash);
-        rightHints.push(ethers.ZeroHash);
-        continue;
-      }
-
-      let lo = 0,
-        hi = simList.length;
-      while (lo < hi) {
-        const mid = (lo + hi) >>> 1;
-        if (Buffer.compare(simKeys[mid], key) <= 0) lo = mid + 1;
-        else hi = mid;
-      }
-      const pos = lo;
-
-      leftHints.push(pos === 0 ? ethers.ZeroHash : simList[pos - 1]);
-      rightHints.push(pos === simList.length ? ethers.ZeroHash : simList[pos]);
-      simList.splice(pos, 0, uid);
-      simKeys.splice(pos, 0, key);
-    }
-
-    return { leftHints, rightHints };
   };
 
   /** Drain all sorted items for a (sortInfoUID, parentAnchor) pair using cursor pagination */
@@ -252,26 +242,30 @@ async function main() {
     return name;
   };
 
-  /** Decode DATA attestation → {uri, contentType, fileMode} */
-  const decodeData = (raw: string): { uri: string; contentType: string; fileMode: string } => {
-    const [uri, contentType, fileMode] = encode.decode(["string", "string", "string"], raw) as unknown as [
-      string,
-      string,
-      string,
-    ];
-    return { uri, contentType, fileMode };
-  };
-
-  /** Resolve DATA for an anchor from an ordered address list, return {uid, uri} or null */
+  /**
+   * Resolve the first DATA placed at an anchor by a prioritized list of attesters.
+   * Uses TagResolver.getActiveTargetsByAttesterAndSchema — the new edition resolution path.
+   * Returns {uid, uri} from the first attester that has a TAG placement.
+   */
   const resolveEdition = async (
     anchorUID: string,
     addressList: string[],
-    showRevoked = false,
   ): Promise<{ uid: string; uri: string } | null> => {
-    const uid = await indexer.getDataByAddressList(anchorUID, addressList, showRevoked);
-    if (uid === ethers.ZeroHash) return null;
-    const att = await eas.getAttestation(uid);
-    return { uid, ...decodeData(att.data) };
+    for (const attester of addressList) {
+      const targets = await tagResolver.getActiveTargetsByAttesterAndSchema(anchorUID, attester, dataSchemaUID, 0, 1);
+      if (targets.length > 0) {
+        const dataUID = targets[0];
+        // Resolve the MIRROR URI for this DATA
+        const mirrors = await indexer.getReferencingAttestations(dataUID, mirrorSchemaUID, 0, 1, false);
+        if (mirrors.length > 0) {
+          const mirrorAtt = await eas.getAttestation(mirrors[0]);
+          const [, uri] = encode.decode(["bytes32", "string"], mirrorAtt.data);
+          return { uid: dataUID, uri };
+        }
+        return { uid: dataUID, uri: "(no mirror)" };
+      }
+    }
+    return null;
   };
 
   // ════════════════════════════════════════════════════════════════════════════════
@@ -370,8 +364,6 @@ async function main() {
   assert("processItems rejects fabricated UIDs (InvalidItem)", rejectedFake);
 
   // ── overlay.computeHints cross-check ────────────────────────────────────────
-  // Verify that a second computeHints call (for hypothetical new items) uses the populated list.
-  // Just check it returns arrays of the right length.
   const [contractLeft, contractRight] = await overlay.computeHints(alphaInfoUID, musicUID, allKernelItems.slice(0, 2));
   const hintsMatch = contractLeft.length === 2 && contractRight.length === 2;
   assert("overlay.computeHints returns correct array lengths", hintsMatch);
@@ -442,8 +434,6 @@ async function main() {
   assert("Shared sorted = 10 items after adding 2 more", finalSorted.length === 10, `got ${finalSorted.length}`);
   assert("Staleness = 0", (await overlay.getSortStaleness(alphaInfoUID, musicUID)) === 0n);
 
-  const aliceFinalNames = finalNames; // alias for later use
-
   // ════════════════════════════════════════════════════════════════════════════════
   // PHASE 6: Cursor pagination of sorted list
   // ════════════════════════════════════════════════════════════════════════════════
@@ -461,76 +451,100 @@ async function main() {
 
   console.log(`  ${pagedNames.length} items across ${pageCount} pages`);
   assert("Pagination returns all 10 items", pagedNames.length === finalSorted.length, `got ${pagedNames.length}`);
-  assert("Pagination order matches direct read", pagedNames.join(",") === aliceFinalNames.join(","));
+  assert("Pagination order matches direct read", pagedNames.join(",") === finalNames.join(","));
 
   // ════════════════════════════════════════════════════════════════════════════════
-  // PHASE 7: DATA editions — attach content to anchors
+  // PHASE 7: DATA editions — place content at anchors via TAGs
   // ════════════════════════════════════════════════════════════════════════════════
-  console.log("\n── Phase 7: DATA editions ──\n");
+  console.log("\n── Phase 7: DATA editions (three-layer: DATA + MIRROR + TAG) ──\n");
+
+  // Helper: create DATA + MIRROR + TAG (place at anchor) in sequence
+  const uploadFile = async (
+    signer: any,
+    anchorUID: string,
+    content: string,
+    uri: string,
+    contentType = "application/epub+zip",
+  ) => {
+    const d = await createData(signer, content);
+    await property(signer, d.uid, "contentType", contentType);
+    await createMirror(signer, d.uid, ipfsTransportUID, uri);
+    await placeData(signer, d.uid, anchorUID);
+    return d;
+  };
 
   // Alice uploads her editions for all 6 of her anchors
-  const aliceAppleData = await data(alice, aliceApple, "ipfs://alice-apple-v1");
-  await data(alice, aliceBanana, "ipfs://alice-banana-v1");
-  await data(alice, aliceMango, "ipfs://alice-mango-v1");
-  const aliceZebraData = await data(alice, aliceZebra, "ipfs://alice-zebra-v1");
-  await data(alice, aliceCarrot, "ipfs://alice-carrot-v1");
-  await data(alice, aliceAardvark, "ipfs://alice-aardvark-v1");
+  const aliceAppleData = await uploadFile(alice, aliceApple, "alice-apple-v1-bytes", "ipfs://alice-apple-v1");
+  await uploadFile(alice, aliceBanana, "alice-banana-v1-bytes", "ipfs://alice-banana-v1");
+  await uploadFile(alice, aliceMango, "alice-mango-v1-bytes", "ipfs://alice-mango-v1");
+  const aliceZebraData = await uploadFile(alice, aliceZebra, "alice-zebra-v1-bytes", "ipfs://alice-zebra-v1");
+  await uploadFile(alice, aliceCarrot, "alice-carrot-v1-bytes", "ipfs://alice-carrot-v1");
+  await uploadFile(alice, aliceAardvark, "alice-aardvark-v1-bytes", "ipfs://alice-aardvark-v1");
   console.log("  Alice uploaded editions for all 6 anchors");
 
   // Bob uploads editions for 3 of Alice's anchors (covering, remixing)
-  await data(bob, aliceApple, "ipfs://bob-apple-v1");
-  await data(bob, aliceBanana, "ipfs://bob-banana-v1");
-  const bobZebraData = await data(bob, aliceZebra, "ipfs://bob-zebra-v1");
+  await uploadFile(bob, aliceApple, "bob-apple-v1-bytes", "ipfs://bob-apple-v1");
+  await uploadFile(bob, aliceBanana, "bob-banana-v1-bytes", "ipfs://bob-banana-v1");
+  const bobZebraData = await uploadFile(bob, aliceZebra, "bob-zebra-v1-bytes", "ipfs://bob-zebra-v1");
   console.log("  Bob uploaded editions for apple.mp3, banana.mp3, zebra.mp3");
 
   // Alice-only lookup
   const appleAlice = await resolveEdition(aliceApple, [aliceAddr]);
-  assert("apple.mp3 [alice] → alice's uri", appleAlice?.uri === "ipfs://alice-apple-v1", appleAlice?.uri);
+  assert("apple.mp3 [alice] → alice's uri", appleAlice?.uri === "ipfs://alice-apple-v1", appleAlice?.uri ?? "null");
 
   // Bob-only lookup
   const appleBob = await resolveEdition(aliceApple, [bobAddr]);
-  assert("apple.mp3 [bob] → bob's uri", appleBob?.uri === "ipfs://bob-apple-v1", appleBob?.uri);
+  assert("apple.mp3 [bob] → bob's uri", appleBob?.uri === "ipfs://bob-apple-v1", appleBob?.uri ?? "null");
 
   // Priority: Bob first
   const appleBobFirst = await resolveEdition(aliceApple, [bobAddr, aliceAddr]);
-  assert("apple.mp3 [bob,alice] → bob wins", appleBobFirst?.uri === "ipfs://bob-apple-v1", appleBobFirst?.uri);
+  assert(
+    "apple.mp3 [bob,alice] → bob wins",
+    appleBobFirst?.uri === "ipfs://bob-apple-v1",
+    appleBobFirst?.uri ?? "null",
+  );
 
   // Priority: Alice first
   const appleAliceFirst = await resolveEdition(aliceApple, [aliceAddr, bobAddr]);
-  assert("apple.mp3 [alice,bob] → alice wins", appleAliceFirst?.uri === "ipfs://alice-apple-v1", appleAliceFirst?.uri);
+  assert(
+    "apple.mp3 [alice,bob] → alice wins",
+    appleAliceFirst?.uri === "ipfs://alice-apple-v1",
+    appleAliceFirst?.uri ?? "null",
+  );
 
   // Anchor with no edition from Bob
   const carrotBob = await resolveEdition(aliceCarrot, [bobAddr]);
   assert("carrot.mp3 [bob only] → null (no edition)", carrotBob === null);
 
   // ════════════════════════════════════════════════════════════════════════════════
-  // PHASE 8: Edition revoke + fallback
+  // PHASE 8: Edition removal via TAG applies=false + fallback
   // ════════════════════════════════════════════════════════════════════════════════
-  console.log("\n── Phase 8: Edition revoke + fallback ──\n");
+  console.log("\n── Phase 8: Edition removal + fallback ──\n");
 
-  // Alice revokes her zebra edition
-  await revokeData(alice, aliceZebraData);
+  // Alice removes her zebra placement (TAG applies=false)
+  await placeData(alice, aliceZebraData.uid, aliceZebra, false);
 
   // Bob's edition should now win
-  const zebraAfterRevoke = await resolveEdition(aliceZebra, [aliceAddr, bobAddr]);
+  const zebraAfterRemoval = await resolveEdition(aliceZebra, [aliceAddr, bobAddr]);
   assert(
-    "zebra.mp3 [alice,bob]: falls back to bob after alice revoke",
-    zebraAfterRevoke?.uri === "ipfs://bob-zebra-v1",
-    zebraAfterRevoke?.uri,
+    "zebra.mp3 [alice,bob]: falls back to bob after alice removes placement",
+    zebraAfterRemoval?.uri === "ipfs://bob-zebra-v1",
+    zebraAfterRemoval?.uri ?? "null",
   );
 
-  // showRevoked=true still returns Alice's revoked edition (she's first)
-  const zebraShowRevoked = await resolveEdition(aliceZebra, [aliceAddr, bobAddr], true);
-  assert(
-    "zebra.mp3 showRevoked=true → alice's revoked edition",
-    zebraShowRevoked?.uri === "ipfs://alice-zebra-v1",
-    zebraShowRevoked?.uri,
-  );
+  // If both remove placement → null
+  await placeData(bob, bobZebraData.uid, aliceZebra, false);
+  const zebraAllRemoved = await resolveEdition(aliceZebra, [aliceAddr, bobAddr]);
+  assert("zebra.mp3: all placements removed → null", zebraAllRemoved === null);
 
-  // If both Alice's and Bob's are revoked → null
-  await revokeData(bob, bobZebraData);
-  const zebraAllRevoked = await resolveEdition(aliceZebra, [aliceAddr, bobAddr]);
-  assert("zebra.mp3: all editions revoked → null", zebraAllRevoked === null);
+  // Re-place Alice's zebra (TAG applies=true again)
+  await placeData(alice, aliceZebraData.uid, aliceZebra, true);
+  const zebraReplaced = await resolveEdition(aliceZebra, [aliceAddr]);
+  assert(
+    "zebra.mp3: re-placed after removal",
+    zebraReplaced?.uri === "ipfs://alice-zebra-v1",
+    zebraReplaced?.uri ?? "null",
+  );
 
   // ════════════════════════════════════════════════════════════════════════════════
   // PHASE 9: Sorted list + per-position edition resolution (main UI read path)
@@ -550,7 +564,7 @@ async function main() {
   console.log("  Sorted + editions:");
   resolved.forEach(r => console.log(`    ${r.name} → ${r.uri ?? "(no edition)"}`));
 
-  // aardvark and carrot only have Alice's editions; apple and banana have both; zebra is all-revoked; mango only alice
+  // aardvark and carrot only have Alice's editions; apple and banana have both; zebra was re-placed by alice; mango only alice
   assert(
     "aardvark.mp3 → alice's uri",
     resolved.find(r => r.name === "aardvark.mp3")?.uri === "ipfs://alice-aardvark-v1",
@@ -564,7 +578,10 @@ async function main() {
     resolved.find(r => r.name === "banana.mp3")?.uri === "ipfs://alice-banana-v1",
   );
   assert("mango.mp3 → alice's uri", resolved.find(r => r.name === "mango.mp3")?.uri === "ipfs://alice-mango-v1");
-  assert("zebra.mp3 → null (both editions revoked)", resolved.find(r => r.name === "zebra.mp3")?.uri === null);
+  assert(
+    "zebra.mp3 → alice's uri (re-placed)",
+    resolved.find(r => r.name === "zebra.mp3")?.uri === "ipfs://alice-zebra-v1",
+  );
 
   // Same list but bob-first: apple and banana should now resolve to bob's uri
   const resolvedBobFirst: { name: string; uri: string | null }[] = [];
@@ -588,13 +605,17 @@ async function main() {
   console.log("\n── Phase 10: Directory listing (dedup and interleaved) ──\n");
 
   // getChildrenByAddressList — unique items only, global insertion order
-  // Alice-only: 6 anchors alice created (zebra, banana, mango, apple, carrot, aardvark)
+  // Alice-only: 6 anchors alice created (zebra, apple, mango, banana, carrot, aardvark)
   const [aliceOnly] = await indexer.getChildrenByAddressList(musicUID, [aliceAddr], 0n, 50, false, false);
   assert("Alice-only dedup = 6 unique anchors", aliceOnly.length === 6, `got ${aliceOnly.length}`);
 
-  // Bob-only: 3 he created + 3 he added DATA to (apple, banana, zebra) = 6
+  // Bob-only: 3 anchors he created + anchors where he placed DATA via TAG
   const [bobOnly] = await indexer.getChildrenByAddressList(musicUID, [bobAddr], 0n, 50, false, false);
-  assert("Bob-only dedup = 6 unique anchors (3 created + 3 with DATA)", bobOnly.length === 6, `got ${bobOnly.length}`);
+  assert(
+    "Bob-only dedup = 6 unique anchors (3 created + 3 with TAG placement)",
+    bobOnly.length === 6,
+    `got ${bobOnly.length}`,
+  );
 
   // Combined [alice, bob]: 9 unique anchors (all in /music/ except the SORT_INFO naming anchor
   // which was created by deployer, not alice or bob)
@@ -625,108 +646,96 @@ async function main() {
   console.log(`  dedup: ${dedupResults.length} unique items`);
 
   // ════════════════════════════════════════════════════════════════════════════════
-  // PHASE 11: Data history — multiple versions per user
+  // PHASE 11: Version history — new DATA + TAG swap
   // ════════════════════════════════════════════════════════════════════════════════
-  console.log("\n── Phase 11: Data history (multiple editions per user) ──\n");
+  console.log("\n── Phase 11: Version history (new DATA + TAG swap) ──\n");
 
-  // Alice uploads a v2 of apple.mp3
-  await data(alice, aliceApple, "ipfs://alice-apple-v2");
-  console.log("  Alice uploaded apple.mp3 v2");
+  // Alice uploads a v2 of apple.mp3: new DATA, untag old, tag new
+  const aliceAppleV2 = await uploadFile(alice, aliceApple, "alice-apple-v2-bytes", "ipfs://alice-apple-v2");
+  // Link v2 → v1 via previousVersion PROPERTY
+  await property(alice, aliceAppleV2.uid, "previousVersion", aliceAppleData.uid);
+  // Remove old placement
+  await placeData(alice, aliceAppleData.uid, aliceApple, false);
+  console.log("  Alice uploaded apple.mp3 v2, untagged v1");
 
-  // Full history (showRevoked=true) → 2 entries
-  const [histAll] = await indexer.getDataHistoryByAddress(aliceApple, aliceAddr, 0, 10, false, true);
-  assert("Alice apple.mp3 full history = 2 versions", histAll.length === 2, `got ${histAll.length}`);
+  // Now only v2 should resolve
+  const appleAfterV2 = await resolveEdition(aliceApple, [aliceAddr]);
+  assert("After version swap, v2 resolves", appleAfterV2?.uri === "ipfs://alice-apple-v2", appleAfterV2?.uri ?? "null");
 
-  // Active-only (showRevoked=false) → 2 entries (v1 not revoked, v2 added)
-  const [histActive] = await indexer.getDataHistoryByAddress(aliceApple, aliceAddr, 0, 10, false, false);
-  assert("Alice apple.mp3 active history = 2 (neither revoked)", histActive.length === 2, `got ${histActive.length}`);
-
-  // getDataByAddressList returns most recent (v2)
-  const appleLatest = await resolveEdition(aliceApple, [aliceAddr]);
-  assert(
-    "getDataByAddressList returns latest version (v2)",
-    appleLatest?.uri === "ipfs://alice-apple-v2",
-    appleLatest?.uri,
-  );
-
-  // Revoke v1 — active history drops to 1
-  await revokeData(alice, aliceAppleData);
-  const [histAfterRevoke] = await indexer.getDataHistoryByAddress(aliceApple, aliceAddr, 0, 10, false, false);
-  assert("Active history = 1 after revoking v1", histAfterRevoke.length === 1, `got ${histAfterRevoke.length}`);
-
-  // Latest is still v2
-  const appleAfterRevokeV1 = await resolveEdition(aliceApple, [aliceAddr]);
-  assert(
-    "After revoking v1, v2 still served",
-    appleAfterRevokeV1?.uri === "ipfs://alice-apple-v2",
-    appleAfterRevokeV1?.uri,
-  );
-
-  // Reverse order: most recent first
-  const [histReverse] = await indexer.getDataHistoryByAddress(aliceApple, aliceAddr, 0, 10, true, true);
-  const attV2 = await eas.getAttestation(histReverse[0]);
-  const { uri: uriReverse } = decodeData(attV2.data);
-  assert("Reverse history[0] = v2 (most recent)", uriReverse === "ipfs://alice-apple-v2", uriReverse);
-
-  // Count
-  const appleHistCount = await indexer.getDataHistoryCountByAddress(aliceApple, aliceAddr);
-  assert("getDataHistoryCountByAddress = 2", appleHistCount === 2n, `got ${appleHistCount}`);
+  // Verify previousVersion PROPERTY chain
+  const v2Props = await indexer.getReferencingAttestations(aliceAppleV2.uid, propertySchemaUID, 0, 10, false);
+  let foundPrevVersion = false;
+  for (const propUID of v2Props) {
+    const propAtt = await eas.getAttestation(propUID);
+    const [key, value] = encode.decode(["string", "string"], propAtt.data);
+    if (key === "previousVersion" && value === aliceAppleData.uid) {
+      foundPrevVersion = true;
+    }
+  }
+  assert("previousVersion PROPERTY links v2 → v1", foundPrevVersion);
 
   // ════════════════════════════════════════════════════════════════════════════════
-  // PHASE 12: Tags on list items
+  // PHASE 12: Tags on list items (labels, not file placement)
   // ════════════════════════════════════════════════════════════════════════════════
   console.log("\n── Phase 12: Tags on list items ──\n");
 
-  // Create tag definition anchors (the "Type as Topic" pattern — a definition is just an anchor)
+  // Create tag definition anchors
   const favoriteDefUID = await anchor(deployer, `favorite_${S}`, rootUID);
   const classicDefUID = await anchor(deployer, `classic_${S}`, rootUID);
   console.log("  Tag definitions: favorite, classic");
 
-  // Alice tags apple.mp3 and banana.mp3 as "favorite"
-  await tag(alice, aliceApple, favoriteDefUID);
-  await tag(alice, aliceBanana, favoriteDefUID);
+  // Alice tags apple and banana DATA as "favorite"
+  await tagLabel(alice, aliceAppleV2.uid, favoriteDefUID);
+  await tagLabel(alice, aliceAppleData.uid, favoriteDefUID); // tag v1 too (both versions labeled)
+  const aliceBananaData = (
+    await tagResolver.getActiveTargetsByAttesterAndSchema(aliceBanana, aliceAddr, dataSchemaUID, 0, 1)
+  )[0];
+  await tagLabel(alice, aliceBananaData, favoriteDefUID);
 
-  // Bob tags apple.mp3 as "favorite" and mango.mp3 as "classic"
-  await tag(bob, aliceApple, favoriteDefUID);
-  await tag(bob, aliceMango, classicDefUID);
-  console.log("  Alice: favorite(apple, banana); Bob: favorite(apple), classic(mango)");
+  // Bob tags apple DATA as "favorite" and mango DATA as "classic"
+  const bobAppleData = (
+    await tagResolver.getActiveTargetsByAttesterAndSchema(aliceApple, bobAddr, dataSchemaUID, 0, 1)
+  )[0];
+  await tagLabel(bob, bobAppleData, favoriteDefUID);
+
+  const aliceMangoData = (
+    await tagResolver.getActiveTargetsByAttesterAndSchema(aliceMango, aliceAddr, dataSchemaUID, 0, 1)
+  )[0];
+  await tagLabel(bob, aliceMangoData, classicDefUID);
+  console.log("  Alice: favorite(apple v1+v2, banana); Bob: favorite(apple), classic(mango)");
 
   // isActivelyTagged: O(1) counter
-  assert("apple.mp3 is actively tagged as favorite", await tagResolver.isActivelyTagged(aliceApple, favoriteDefUID));
-  assert("banana.mp3 is actively tagged as favorite", await tagResolver.isActivelyTagged(aliceBanana, favoriteDefUID));
-  assert("mango.mp3 is actively tagged as classic", await tagResolver.isActivelyTagged(aliceMango, classicDefUID));
-  assert("carrot.mp3 is NOT tagged as favorite", !(await tagResolver.isActivelyTagged(aliceCarrot, favoriteDefUID)));
+  assert(
+    "apple v2 DATA is actively tagged as favorite",
+    await tagResolver.isActivelyTagged(aliceAppleV2.uid, favoriteDefUID),
+  );
+  assert(
+    "banana DATA is actively tagged as favorite",
+    await tagResolver.isActivelyTagged(aliceBananaData, favoriteDefUID),
+  );
+  assert("mango DATA is actively tagged as classic", await tagResolver.isActivelyTagged(aliceMangoData, classicDefUID));
 
   // getActiveTagUID: specific attester's active tag
-  const aliceAppleTagUID = await tagResolver.getActiveTagUID(aliceAddr, aliceApple, favoriteDefUID);
-  assert("Alice has an active tag UID on apple.mp3", aliceAppleTagUID !== ethers.ZeroHash);
-
-  // getTagDefinitions: what definitions have ever been applied to apple.mp3
-  const appleDefs = await tagResolver.getTagDefinitions(aliceApple, 0, 10);
-  assert("apple.mp3 has 1 tag definition (favorite)", appleDefs.length === 1 && appleDefs[0] === favoriteDefUID);
-
-  // getTaggedTargets: what items have been tagged with "favorite"
-  const favoriteTargets = await tagResolver.getTaggedTargets(favoriteDefUID, 0, 10);
-  assert("2 items tagged as favorite (apple, banana)", favoriteTargets.length === 2, `got ${favoriteTargets.length}`);
+  const aliceAppleTagUID = await tagResolver.getActiveTagUID(aliceAddr, aliceAppleV2.uid, favoriteDefUID);
+  assert("Alice has an active tag UID on apple v2 DATA", aliceAppleTagUID !== ethers.ZeroHash);
 
   // Negate a tag: Alice un-favorites banana
-  await tag(alice, aliceBanana, favoriteDefUID, false);
+  await tagLabel(alice, aliceBananaData, favoriteDefUID, false);
   assert(
-    "banana.mp3: active count drops after Alice negates tag",
-    !(await tagResolver.isActivelyTagged(aliceBanana, favoriteDefUID)),
+    "banana DATA: no longer actively tagged after Alice negates",
+    !(await tagResolver.isActivelyTagged(aliceBananaData, favoriteDefUID)),
   );
-  // apple.mp3 still active (2 users → 1 after negation of banana, apple still has 2)
-  assert("apple.mp3 still actively tagged as favorite", await tagResolver.isActivelyTagged(aliceApple, favoriteDefUID));
+  // apple v2 still active
+  assert(
+    "apple v2 still actively tagged as favorite",
+    await tagResolver.isActivelyTagged(aliceAppleV2.uid, favoriteDefUID),
+  );
 
   // ════════════════════════════════════════════════════════════════════════════════
   // PHASE 13: Discover available sorts via getAnchorsBySchema
   // ════════════════════════════════════════════════════════════════════════════════
   console.log("\n── Phase 13: Sort discovery ──\n");
 
-  // The UI discovers available sorts for a directory in two steps:
-  //
-  // Step 1 (on-chain): getAnchorsBySchema finds naming anchors with anchorSchema == SORT_INFO_SCHEMA_UID.
-  //   These are regular ANCHOR attestations indexed by EFSIndexer.
   const sortNamingAnchors = await indexer["getAnchorsBySchema(bytes32,bytes32,uint256,uint256,bool)"](
     musicUID,
     sortInfoSchemaUID,
@@ -740,8 +749,6 @@ async function main() {
     `got ${sortNamingAnchors.length}`,
   );
 
-  // Step 2 (fully on-chain): EFSSortOverlay.onAttest calls indexer.index(uid), so SORT_INFO
-  //   attestations are registered into EFSIndexer's generic referencing indices. No eth_getLogs needed.
   const sortInfoRefsFromIndexer = await indexer.getReferencingAttestations(
     alphaNameUID,
     sortInfoSchemaUID,
@@ -756,7 +763,6 @@ async function main() {
   );
   assert("Discovered SORT_INFO UID matches known alphaInfoUID", sortInfoRefsFromIndexer[0] === alphaInfoUID);
 
-  // The SORT_INFO UID is now discoverable purely on-chain:
   const discoveredConfig = await overlay.getSortConfig(alphaInfoUID);
   assert("getSortConfig returns valid config for known sortInfoUID", await overlay.isSortRegistered(alphaInfoUID));
   assert(
@@ -767,7 +773,6 @@ async function main() {
   const namingAnchorName = await getName(alphaNameUID);
   assert("Naming anchor name = alphabetical", namingAnchorName === "alphabetical");
 
-  // Once we have the sortInfoUID, all overlay reads are on-chain (shared list, keyed by parentAnchor):
   const sortLength = await overlay.getSortLength(alphaInfoUID, musicUID);
   const sortStaleness = await overlay.getSortStaleness(alphaInfoUID, musicUID);
   assert("getSortLength = 10 (all shared items)", sortLength === 10n, `got ${sortLength}`);
@@ -788,9 +793,10 @@ async function main() {
   const tsNameUID = await anchor(deployer, "by-date", vidDirUID, sortInfoSchemaUID);
   const tsInfoUID = await sortInfo(deployer, tsNameUID, (timestampSort as any).target);
 
-  // Fetch all 3 video anchors from the global kernel
+  // Fetch all video anchors from the global kernel (includes by-date sort naming anchor)
+  const vidKernelCount = await indexer.getChildrenCount(vidDirUID);
   const vidItems: string[] = [];
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < Number(vidKernelCount); i++) {
     vidItems.push(await indexer.getChildAt(vidDirUID, i));
   }
 
@@ -809,13 +815,13 @@ async function main() {
     (await Promise.all(tsSorted.map(getName))).join(","),
   );
 
-  // Alice also uploads DATA to her videos — timestamps affect sort, not content
-  await data(alice, vid1, "ipfs://alice-first-mp4", "video/mp4");
-  await data(alice, vid2, "ipfs://alice-second-mp4", "video/mp4");
-  await data(alice, vid3, "ipfs://alice-third-mp4", "video/mp4");
+  // Alice uploads DATA + MIRRORs to her videos
+  await uploadFile(alice, vid1, "alice-first-mp4-bytes", "ipfs://alice-first-mp4", "video/mp4");
+  await uploadFile(alice, vid2, "alice-second-mp4-bytes", "ipfs://alice-second-mp4", "video/mp4");
+  await uploadFile(alice, vid3, "alice-third-mp4-bytes", "ipfs://alice-third-mp4", "video/mp4");
 
   const vid1Edition = await resolveEdition(vid1, [aliceAddr]);
-  assert("vid1 edition resolves correctly", vid1Edition?.uri === "ipfs://alice-first-mp4", vid1Edition?.uri);
+  assert("vid1 edition resolves correctly", vid1Edition?.uri === "ipfs://alice-first-mp4", vid1Edition?.uri ?? "null");
 
   // ════════════════════════════════════════════════════════════════════════════════
   // PHASE 15: Revoke SORT_INFO — processItems blocked, existing data readable
@@ -840,19 +846,15 @@ async function main() {
   assert("processItems reverts on revoked sortInfoUID", revertedCorrectly);
 
   // Existing sorted data is still readable after revoke
-  const aliceAfterRevoke = await readSortedAll(alphaInfoUID, musicUID);
-  assert(
-    "Sorted data still readable after sort revoke",
-    aliceAfterRevoke.length === 6,
-    `got ${aliceAfterRevoke.length}`,
-  );
+  const afterRevoke = await readSortedAll(alphaInfoUID, musicUID);
+  assert("Sorted data still readable after sort revoke", afterRevoke.length === 10, `got ${afterRevoke.length}`);
 
   // Editions still resolve correctly after sort is revoked (sort ≠ content)
   const appleEditionAfterSortRevoke = await resolveEdition(aliceApple, [aliceAddr]);
   assert(
     "Edition resolution unaffected by sort revoke",
     appleEditionAfterSortRevoke?.uri === "ipfs://alice-apple-v2",
-    appleEditionAfterSortRevoke?.uri,
+    appleEditionAfterSortRevoke?.uri ?? "null",
   );
 
   // ════════════════════════════════════════════════════════════════════════════════

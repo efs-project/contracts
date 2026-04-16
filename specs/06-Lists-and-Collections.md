@@ -19,9 +19,9 @@ A curated list is just a directory whose children are **positional Anchors**:
       └── SORT_INFO: { sortFunc: <FractionalSort address> }
 ```
 
-The **kernel** (EFSIndexer) tracks these children in insertion order. The **sort overlay** (EFSSortOverlay) maintains per-attester sorted linked lists on top of the kernel arrays, using any pluggable `ISortFunc` comparator.
+The **kernel** (EFSIndexer) tracks these children in insertion order. The **sort overlay** (EFSSortOverlay) maintains a **shared** sorted linked list per `(sortInfoUID, parentAnchor)` on top of the kernel arrays, using any pluggable `ISortFunc` comparator. Edition filtering is applied at read time via `getSortedChunkByAddressList`.
 
-**Editions on lists:** Positional Anchors ("a0", "a1", …) enable per-position Editions. Alice's DATA on "a1" = hamster.gif, Bob's DATA on "a1" = dragon.jpg. The existing `getDataByAddressList` fallback handles this — no new mechanism needed.
+**Editions on lists:** Positional Anchors ("a0", "a1", …) enable per-position Editions. Alice tags her DATA at "a1" = hamster.gif, Bob tags his DATA at "a1" = dragon.jpg. The existing TAG-based placement via `getActiveTargetsByAttesterAndSchema` handles this — no new mechanism needed.
 
 ---
 
@@ -68,6 +68,8 @@ Reference implementations: `AlphabeticalSort` (reads Anchor name), `TimestampSor
 ```solidity
 function processItems(
     bytes32 sortInfoUID,
+    bytes32 parentAnchor,          // the directory being sorted
+    uint256 expectedStartIndex,    // _lastProcessedIndex at call time (concurrency guard)
     bytes32[] calldata items,      // kernel UIDs in kernel order
     bytes32[] calldata leftHints,  // left neighbour in sorted list (bytes32(0) = insert at head)
     bytes32[] calldata rightHints  // right neighbour in sorted list (bytes32(0) = insert at tail)
@@ -87,7 +89,7 @@ Anyone can call `processItems` — gas is paid by the caller. The overlay is mai
 ### getSortStaleness
 
 ```solidity
-function getSortStaleness(bytes32 sortInfoUID, address attester) external view returns (uint256);
+function getSortStaleness(bytes32 sortInfoUID, bytes32 parentAnchor) external view returns (uint256);
 ```
 
 `staleness = kernelCount - lastProcessedIndex`. UI shows: "Alphabetical: 3 items behind".
@@ -99,9 +101,10 @@ function getSortStaleness(bytes32 sortInfoUID, address attester) external view r
 ```solidity
 function getSortedChunk(
     bytes32 sortInfoUID,
-    address attester,
-    bytes32 startNode,  // bytes32(0) = start at head
-    uint256 limit       // max items, capped at MAX_PAGE_SIZE (100)
+    bytes32 parentAnchor,
+    bytes32 startNode,   // bytes32(0) = start at head
+    uint256 limit,       // max items, capped at MAX_PAGE_SIZE (100)
+    bool showRevoked
 ) external view returns (bytes32[] memory items, bytes32 nextCursor)
 ```
 
@@ -109,19 +112,19 @@ Returns `(items[], nextCursor)`. Pass `nextCursor` as `startNode` on the next ca
 
 ---
 
-## 4. Per-Attester Independence
+## 4. Shared List + Edition Filtering at Read Time
 
-The sorted linked list is keyed by `(sortInfoUID, attester)`:
+The sorted linked list is keyed by `(sortInfoUID, parentAnchor)` — one shared ordering per directory:
 
 ```
-_sortNodes[sortInfoUID][attester][itemUID] → Node
-_sortHeads[sortInfoUID][attester]          → first UID (sorted)
-_sortTails[sortInfoUID][attester]          → last UID (sorted)
-_sortLengths[sortInfoUID][attester]        → count
-_lastProcessedIndex[sortInfoUID][attester] → kernel items acknowledged
+_sortNodes[sortInfoUID][parentAnchor][itemUID] → Node
+_sortHeads[sortInfoUID][parentAnchor]          → first UID (sorted)
+_sortTails[sortInfoUID][parentAnchor]          → last UID (sorted)
+_sortLengths[sortInfoUID][parentAnchor]        → count
+_lastProcessedIndex[sortInfoUID][parentAnchor] → kernel items acknowledged
 ```
 
-Each attester independently maintains their sorted view of the same kernel array. Alice's sorted list for a sort is separate from Bob's — they pay their own gas and can choose different orderings (by using different ISortFunc contracts or processing items differently).
+All attesters contribute to a single sorted list per `(sortInfoUID, parentAnchor)`. Anyone can call `processItems` and pay gas to maintain it. Edition filtering is applied at read time via `getSortedChunkByAddressList(sortInfoUID, parentAnchor, startNode, limit, attesters)` — only items contributed by the specified attesters are returned, in sorted order.
 
 ---
 
@@ -153,13 +156,14 @@ When browsing `/memes/` (Anchor uid=0xAAA, attester = alice):
    every SORT_INFO attestation into EFSIndexer's generic referencing indices.
 
 3. Read sort config and staleness:
-   overlay.getSortConfig(sortInfoUID)     → { sortFunc, targetSchema, valid, revoked }
-   overlay.getSortStaleness(sortInfoUID, alice) → N (unprocessed items)
+   overlay.getSortConfig(sortInfoUID)               → { sortFunc, targetSchema, valid, revoked }
+   overlay.getSortStaleness(sortInfoUID, 0xAAA)     → N (unprocessed items for this directory)
 
 4. UI: "Sort by: Added (default) | Alphabetical ⚡ | Newest First (3 behind)"
 
 5. On sort selection:
-   - Call getSortedChunk(sortInfoUID, alice, bytes32(0), 20)
+   - Call getSortedChunk(sortInfoUID, 0xAAA, bytes32(0), 20, false) for all items
+   - Or getSortedChunkByAddressList(sortInfoUID, 0xAAA, bytes32(0), 20, [alice]) for edition-filtered
    - If staleness > 0, prompt: "N items unprocessed — pay gas to maintain?"
    - If user accepts, run processItems (see workflow 14 in Core Workflows)
 ```
@@ -170,11 +174,12 @@ When browsing `/memes/` (Anchor uid=0xAAA, attester = alice):
 
 The contract validates hints on-chain with `isLessThan`, so `processItems` requires correct `leftHint`/`rightHint` pairs or it reverts with `InvalidPosition`.
 
-**On-chain (recommended):** Call `overlay.computeHints(sortInfoUID, attester, newItems)` — a free `view` function (`eth_call`) that computes all hints for a batch. No client-side sort logic needed:
+**On-chain (recommended):** Call `overlay.computeHints(sortInfoUID, parentAnchor, newItems)` — a free `view` function (`eth_call`) that computes all hints for a batch. No client-side sort logic needed:
 
 ```ts
-const [leftHints, rightHints] = await overlay.computeHints(sortInfoUID, attesterAddr, newItems);
-await overlay.processItems(sortInfoUID, newItems, leftHints, rightHints);
+const startIndex = await overlay.getLastProcessedIndex(sortInfoUID, parentAnchor);
+const [leftHints, rightHints] = await overlay.computeHints(sortInfoUID, parentAnchor, newItems);
+await overlay.processItems(sortInfoUID, parentAnchor, startIndex, newItems, leftHints, rightHints);
 ```
 
 **Client-side (fallback, for custom sorting or offline use):** Compute hints locally using the TypeScript algorithm below. Useful when the client already has sort keys cached or wants to avoid the `computeHints` call.
@@ -222,7 +227,7 @@ async function computeHints(newItems, alreadySorted, sortFunc, sortInfoUID) {
 ```
 
 **Key invariants:**
-- `newItems` must be in kernel order starting from `getLastProcessedIndex(sortInfoUID, attester)`
+- `newItems` must be in kernel order starting from `getLastProcessedIndex(sortInfoUID, parentAnchor)`
 - Process items in kernel order — don't reorder them before calling `processItems`
 - The simulation must account for items inserted earlier in the same batch
 - `bytes32(0)` hints are sentinels: left=ZeroHash means "insert at head", right=ZeroHash means "insert at tail"

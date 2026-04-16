@@ -11,6 +11,7 @@ import { useSortDiscovery } from "~~/hooks/efs/useSortDiscovery";
 import { useDeployedContractInfo, useScaffoldWriteContract } from "~~/hooks/scaffold-eth";
 import { useTargetNetwork } from "~~/hooks/scaffold-eth/useTargetNetwork";
 import { SORT_OVERLAY_ABI } from "~~/utils/efs/sortOverlay";
+import { TRANSPORT_LABELS, computeContentHash, detectTransport, resolveGatewayUrl } from "~~/utils/efs/transports";
 import { notification } from "~~/utils/scaffold-eth";
 
 const MOCK_CHUNKED_FILE_ABI = [
@@ -72,6 +73,9 @@ export const Toolbar = ({
   currentAnchorUID,
   anchorSchemaUID,
   dataSchemaUID,
+  propertySchemaUID,
+  tagSchemaUID,
+  mirrorSchemaUID,
   indexerAddress,
   easAddress,
   sortOverlayAddress,
@@ -93,6 +97,9 @@ export const Toolbar = ({
   currentAnchorUID: string | null;
   anchorSchemaUID: string;
   dataSchemaUID: string;
+  propertySchemaUID: string;
+  tagSchemaUID: string;
+  mirrorSchemaUID: string;
   indexerAddress?: `0x${string}`;
   easAddress?: `0x${string}`;
   sortOverlayAddress?: `0x${string}`;
@@ -113,14 +120,20 @@ export const Toolbar = ({
 }) => {
   const { writeContractAsync: attest } = useScaffoldWriteContract({ contractName: "EAS" });
   const { data: indexer } = useDeployedContractInfo({ contractName: "Indexer" });
-  const { data: tagResolverInfo } = useDeployedContractInfo({ contractName: "TagResolver" });
   const { targetNetwork } = useTargetNetwork();
 
   // Modal State
-  const [creationType, setCreationType] = useState<"Folder" | "File" | null>(null);
+  const [creationType, setCreationType] = useState<"Folder" | "File" | "PasteLink" | null>(null);
   const [newName, setNewName] = useState("");
   const [fileToUpload, setFileToUpload] = useState<File | null>(null);
+  const [pasteUri, setPasteUri] = useState("");
+  const [pasteContentType, setPasteContentType] = useState("");
+  const [pasteSize, setPasteSize] = useState("");
+  const [pasteContentHash, setPasteContentHash] = useState<`0x${string}` | null>(null);
+  const [isFetchingInfo, setIsFetchingInfo] = useState(false);
+  const [showPasteDetails, setShowPasteDetails] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [existingAnchorWarning, setExistingAnchorWarning] = useState(false);
 
   // Sort auto-update config: discover available sorts, let user opt specific ones out
   const { availableSorts } = useSortDiscovery({
@@ -152,242 +165,240 @@ export const Toolbar = ({
     }
   }, [creationType]);
 
-  const handleOpenModal = (type: "Folder" | "File") => {
+  const handleOpenModal = (type: "Folder" | "File" | "PasteLink") => {
     if (!currentAnchorUID) {
       notification.error("Cannot create item: Root not found.");
       return;
     }
     setCreationType(type);
     setNewName("");
+    setPasteUri("");
+    setPasteContentType("");
+    setPasteSize("");
+    setPasteContentHash(null);
+    setShowPasteDetails(false);
   };
 
   const handleCloseModal = () => {
     setCreationType(null);
     setNewName("");
     setFileToUpload(null);
+    setPasteUri("");
+    setPasteContentType("");
+    setPasteSize("");
+    setPasteContentHash(null);
+    setShowPasteDetails(false);
+    setExistingAnchorWarning(false);
+  };
+
+  /** Fetch content info from a pasted URI via its gateway. */
+  const handleFetchInfo = async () => {
+    if (!pasteUri) return;
+    const gatewayUrl = resolveGatewayUrl(pasteUri);
+    if (!gatewayUrl) {
+      notification.error("Cannot fetch info for this URI type. Enter values manually.");
+      return;
+    }
+    setIsFetchingInfo(true);
+    setShowPasteDetails(true);
+    try {
+      // Try HEAD first for metadata
+      const headResp = await fetch(gatewayUrl, { method: "HEAD" });
+      if (!headResp.ok) throw new Error(`HTTP ${headResp.status}`);
+
+      const ct = headResp.headers.get("content-type");
+      if (ct) setPasteContentType(ct.split(";")[0].trim());
+
+      const cl = headResp.headers.get("content-length");
+      if (cl) setPasteSize(cl);
+
+      // For files under 10MB, fetch full body to compute real contentHash
+      const sizeNum = cl ? parseInt(cl, 10) : 0;
+      if (sizeNum > 0 && sizeNum <= 10 * 1024 * 1024) {
+        notification.info("Downloading file to compute content hash...");
+        const getResp = await fetch(gatewayUrl);
+        if (!getResp.ok) throw new Error(`HTTP ${getResp.status}`);
+        const bytes = new Uint8Array(await getResp.arrayBuffer());
+        setPasteSize(String(bytes.length));
+        setPasteContentHash(computeContentHash(bytes));
+        notification.success("Content hash computed.");
+      } else if (sizeNum > 10 * 1024 * 1024) {
+        notification.info(`File is ${Math.round(sizeNum / 1024 / 1024)}MB — hash not computed (too large).`);
+      } else {
+        // No content-length from HEAD — stream up to 10 MB before giving up.
+        const MAX_AUTO_DOWNLOAD = 10 * 1024 * 1024;
+        notification.info("Downloading file to determine size and hash (cap: 10 MB)...");
+        const controller = new AbortController();
+        const getResp = await fetch(gatewayUrl, { signal: controller.signal });
+        if (!getResp.ok) throw new Error(`Gateway returned ${getResp.status} — cannot compute hash`);
+        const reader = getResp.body?.getReader();
+        const chunks: Uint8Array[] = [];
+        let totalBytes = 0;
+        let truncated = false;
+        if (reader) {
+          try {
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done || !value) break;
+              if (totalBytes + value.length > MAX_AUTO_DOWNLOAD) {
+                truncated = true;
+                controller.abort();
+                break;
+              }
+              chunks.push(value);
+              totalBytes += value.length;
+            }
+          } catch (err) {
+            // AbortError is expected when we cancel; re-throw anything else
+            if (err instanceof Error && err.name !== "AbortError") throw err;
+          }
+        }
+        if (truncated) {
+          notification.info("File exceeds 10 MB — hash not computed. Enter values manually.");
+        } else if (totalBytes > 0) {
+          const bytes = new Uint8Array(totalBytes);
+          let offset = 0;
+          for (const chunk of chunks) {
+            bytes.set(chunk, offset);
+            offset += chunk.length;
+          }
+          setPasteSize(String(totalBytes));
+          setPasteContentHash(computeContentHash(bytes));
+          notification.success("Content hash computed.");
+          if (!ct) {
+            const getCt = getResp.headers.get("content-type");
+            if (getCt) setPasteContentType(getCt.split(";")[0].trim());
+          }
+        }
+      }
+    } catch (e) {
+      console.error("Fetch info failed:", e);
+      notification.error("Could not fetch info from gateway. Enter values manually.");
+    } finally {
+      setIsFetchingInfo(false);
+    }
+  };
+
+  /** Extract attestation UID from a transaction receipt. */
+  const extractUIDFromReceipt = (receipt: any): `0x${string}` | undefined => {
+    for (const log of receipt.logs) {
+      try {
+        const event = decodeEventLog({
+          abi: [
+            parseAbiItem(
+              "event Attested(address indexed recipient, address indexed attester, bytes32 uid, bytes32 indexed schemaUID)",
+            ),
+          ],
+          data: log.data,
+          topics: log.topics,
+        });
+        return (event.args as any).uid as `0x${string}`;
+      } catch {
+        // Not our event
+      }
+    }
+    return undefined;
+  };
+
+  /** Resolve a transport anchor UID (e.g. /transports/onchain). */
+  const resolveTransportAnchor = async (transportName: string): Promise<`0x${string}` | null> => {
+    if (!indexer || !publicClient) return null;
+    try {
+      const rootUID = (await publicClient.readContract({
+        address: indexer.address as `0x${string}`,
+        abi: indexer.abi,
+        functionName: "rootAnchorUID",
+      })) as `0x${string}`;
+      const transportsUID = (await publicClient.readContract({
+        address: indexer.address as `0x${string}`,
+        abi: indexer.abi,
+        functionName: "resolvePath",
+        args: [rootUID, "transports"],
+      })) as `0x${string}`;
+      if (!transportsUID || transportsUID === ethers.ZeroHash) return null;
+      const uid = (await publicClient.readContract({
+        address: indexer.address as `0x${string}`,
+        abi: indexer.abi,
+        functionName: "resolvePath",
+        args: [transportsUID, transportName],
+      })) as `0x${string}`;
+      return uid && uid !== ethers.ZeroHash ? uid : null;
+    } catch {
+      return null;
+    }
   };
 
   const handleSubmitCreate = async () => {
     if (!currentAnchorUID || !newName || !walletClient || !publicClient) return;
+    if (newName.includes("/") || newName.includes("\0")) {
+      notification.error("Name cannot contain '/' or null characters.");
+      return;
+    }
     if (creationType === "File" && !fileToUpload) {
       notification.error("Please select a file to upload.");
+      return;
+    }
+    if (creationType === "PasteLink" && !pasteUri) {
+      notification.error("Please enter a URI.");
       return;
     }
     setIsSubmitting(true);
 
     try {
-      const schemaUID = creationType === "File" ? (dataSchemaUID as `0x${string}`) : ethers.ZeroHash;
-      const encodedName = ethers.AbiCoder.defaultAbiCoder().encode(["string", "bytes32"], [newName, schemaUID]);
+      if (creationType === "Folder") {
+        // --- FOLDER CREATION ---
+        const encodedName = ethers.AbiCoder.defaultAbiCoder().encode(["string", "bytes32"], [newName, ethers.ZeroHash]);
 
-      let newAnchorUID: `0x${string}` | undefined;
-
-      // 1) First check if the Anchor already exists
-      if (indexer) {
-        try {
-          const existingUID = (await publicClient.readContract({
-            address: indexer.address as `0x${string}`,
-            abi: indexer.abi,
-            functionName: "resolveAnchor",
-            args: [currentAnchorUID as `0x${string}`, newName, schemaUID as `0x${string}`],
-          })) as `0x${string}`;
-
-          if (existingUID && existingUID !== ethers.ZeroHash) {
-            newAnchorUID = existingUID;
-            notification.info("Namespace already exists. Appending to it...");
-          }
-        } catch (e) {
-          console.warn("Failed to check if anchor exists", e);
-        }
-      }
-
-      // 2) If not existing, create a new Anchor
-      if (!newAnchorUID) {
-        const txHash = await attest({
-          functionName: "attest",
-          args: [
-            {
-              schema: anchorSchemaUID as `0x${string}`,
-              data: {
-                recipient: ethers.ZeroAddress,
-                expirationTime: 0n,
-                revocable: false,
-                refUID: currentAnchorUID as `0x${string}`,
-                data: encodedName as `0x${string}`,
-                value: 0n,
-              },
-            },
-          ],
-        });
-
-        if (creationType === "File") {
-          notification.info("File Anchor created. Uploading data...");
-        }
-
-        if (!txHash) throw new Error("No txHash returned for ANCHOR creation.");
-
-        const receipt = await publicClient?.waitForTransactionReceipt({ hash: txHash });
-        if (!receipt) throw new Error("Failed to get transaction receipt for ANCHOR");
-
-        for (const log of receipt.logs) {
+        let newAnchorUID: `0x${string}` | undefined;
+        if (indexer) {
           try {
-            const event = decodeEventLog({
-              abi: [
-                parseAbiItem(
-                  "event Attested(address indexed recipient, address indexed attester, bytes32 uid, bytes32 indexed schemaUID)",
-                ),
-              ],
-              data: log.data,
-              topics: log.topics,
-            });
-            newAnchorUID = (event.args as any).uid as `0x${string}`;
-            break;
-          } catch {
-            // Not our event
-          }
-        }
-
-        if (!newAnchorUID) throw new Error("Could not extract new Anchor UID");
-      }
-
-      // 3) Create Data / Folder logic
-      if (creationType === "File") {
-        notification.info(`Target Anchor UID: ${newAnchorUID}`);
-        // Read file contents as bytes for accurate chunking
-        const fileArrayBuffer = await fileToUpload!.arrayBuffer();
-        const dataBytes = new Uint8Array(fileArrayBuffer);
-        const contentType = fileToUpload!.type || "text/plain";
-
-        if (dataBytes.length === 0) {
-          notification.error("Cannot upload an empty file.");
-          setIsSubmitting(false);
-          return;
-        }
-
-        let uri = "";
-        const CHUNK_SIZE = 24000; // Under 24576 bytes limit to leave room for 1-byte SSTORE2 prefix
-
-        // Always upload to SSTORE2 — `uri` must be a web3:// URI, never raw file content.
-        // Embedding file bytes directly in an EAS attestation calldata causes gas estimation
-        // to time out even for files a few KB in size.
-        const totalChunks = Math.ceil(dataBytes.length / CHUNK_SIZE) || 1;
-        notification.info(
-          `Uploading ${Math.round(dataBytes.length / 1024) || 1}KB in ${totalChunks} chunk${totalChunks > 1 ? "s" : ""} via SSTORE2...`,
-        );
-        const chunkAddresses: string[] = [];
-
-        for (let i = 0; i < dataBytes.length; i += CHUNK_SIZE) {
-          const chunk = dataBytes.slice(i, i + CHUNK_SIZE);
-          const chunkHex = toHex(chunk);
-
-          // Creation code prefix for SSTORE2 (0x00 stop-byte + data)
-          const sizeTotal = chunk.length + 1;
-          const sizeHex = sizeTotal.toString(16).padStart(4, "0");
-          const bytecode = `0x61${sizeHex}80600a3d393df300${chunkHex.slice(2)}`;
-
-          const hash = await walletClient.sendTransaction({
-            data: bytecode as `0x${string}`,
-            account: walletClient.account,
-          });
-          const chunkReceipt = await publicClient.waitForTransactionReceipt({ hash });
-          if (!chunkReceipt.contractAddress) throw new Error("Chunk deployment failed");
-          chunkAddresses.push(chunkReceipt.contractAddress);
-          notification.info(`Deployed chunk ${chunkAddresses.length} of ${totalChunks}...`);
-        }
-
-        notification.info("Deploying chunk manager...");
-        const deployData = encodeDeployData({
-          abi: MOCK_CHUNKED_FILE_ABI,
-          bytecode: MOCK_CHUNKED_FILE_BYTECODE as `0x${string}`,
-          args: [chunkAddresses as readonly `0x${string}`[]],
-        });
-
-        const managerHash = await walletClient.sendTransaction({
-          data: deployData,
-          account: walletClient.account,
-        });
-        const managerReceipt = await publicClient.waitForTransactionReceipt({ hash: managerHash });
-        if (!managerReceipt.contractAddress) throw new Error("Manager deployment failed");
-
-        uri = `web3://${managerReceipt.contractAddress}:${targetNetwork.id}`;
-        notification.info(`File URI: ${uri}`);
-
-        // Encode DATA schema: string uri, string contentType, string fileMode
-        const encodedData = ethers.AbiCoder.defaultAbiCoder().encode(
-          ["string", "string", "string"],
-          [uri, contentType, ""],
-        );
-
-        notification.info("Attesting file data...");
-        const dataTxHash = await attest({
-          functionName: "attest",
-          args: [
-            {
-              schema: dataSchemaUID as `0x${string}`,
-              data: {
-                recipient: ethers.ZeroAddress,
-                expirationTime: 0n,
-                revocable: true,
-                refUID: newAnchorUID,
-                data: encodedData as `0x${string}`,
-                value: 0n,
-              },
-            },
-          ],
-        });
-
-        if (dataTxHash) {
-          await publicClient.waitForTransactionReceipt({ hash: dataTxHash });
-        }
-
-        notification.success("File uploaded and data attested successfully.");
-        onFileCreated?.(enabledSortUIDs);
-      } else {
-        // Tag the new folder with dataSchemaUID so it appears in schema-filtered views
-        // even before it has any children of that schema.
-        if (tagResolverInfo && newAnchorUID) {
-          try {
-            const tagSchemaUID = ethers.solidityPackedKeccak256(
-              ["string", "address", "bool"],
-              ["bytes32 definition, bool applies", tagResolverInfo.address, true],
-            );
-            const encodedTagData = ethers.AbiCoder.defaultAbiCoder().encode(["bytes32", "bool"], [dataSchemaUID, true]);
-            const tagTxHash = await attest({
-              functionName: "attest",
-              args: [
-                {
-                  schema: tagSchemaUID as `0x${string}`,
-                  data: {
-                    recipient: ethers.ZeroAddress,
-                    expirationTime: 0n,
-                    revocable: true,
-                    refUID: newAnchorUID,
-                    data: encodedTagData as `0x${string}`,
-                    value: 0n,
-                  },
-                },
-              ],
-            });
-            if (tagTxHash) {
-              await publicClient.waitForTransactionReceipt({ hash: tagTxHash });
+            const existingUID = (await publicClient.readContract({
+              address: indexer.address as `0x${string}`,
+              abi: indexer.abi,
+              functionName: "resolveAnchor",
+              args: [currentAnchorUID as `0x${string}`, newName, ethers.ZeroHash as `0x${string}`],
+            })) as `0x${string}`;
+            if (existingUID && existingUID !== ethers.ZeroHash) {
+              newAnchorUID = existingUID;
+              notification.info("Folder already exists.");
             }
           } catch (e) {
-            console.error("Auto-tag folder failed:", e);
+            console.warn("Failed to check if anchor exists", e);
           }
         }
 
+        if (!newAnchorUID) {
+          const txHash = await attest({
+            functionName: "attest",
+            args: [
+              {
+                schema: anchorSchemaUID as `0x${string}`,
+                data: {
+                  recipient: ethers.ZeroAddress,
+                  expirationTime: 0n,
+                  revocable: false,
+                  refUID: currentAnchorUID as `0x${string}`,
+                  data: encodedName as `0x${string}`,
+                  value: 0n,
+                },
+              },
+            ],
+          });
+          if (!txHash) throw new Error("No txHash returned for ANCHOR creation.");
+          const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+          newAnchorUID = extractUIDFromReceipt(receipt);
+          if (!newAnchorUID) throw new Error("Could not extract new Anchor UID");
+        }
+
+        // Folder membership is established by the ANCHOR's refUID = currentAnchorUID.
+        // EFSIndexer tracks this natively; no extra TAG attestation is needed for subfolder listing.
         notification.success("Folder created successfully.");
         handleCloseModal();
 
-        // Process parent directory sorts before navigating away.
-        // The new folder anchor is immediately in the parent's kernel array (staleness +1).
-        // Once we navigate into the child, SortDropdown's parentAnchor changes, so we must
-        // process the parent's sorts here while we still have the correct context.
+        // Process parent directory sorts
         if (sortOverlayAddress && indexerAddress && currentAnchorUID && walletClient?.account && publicClient) {
           for (const sortInfoUID of enabledSortUIDs) {
             try {
-              // Fetch SortConfig so we can route reads through the correct kernel accessor.
-              // processItems validates items against sourceType-specific kernel lists,
-              // so using the wrong accessor reverts InvalidItem.
               const config = (await publicClient.readContract({
                 address: sortOverlayAddress,
                 abi: SORT_OVERLAY_ABI,
@@ -395,12 +406,8 @@ export const Toolbar = ({
                 args: [sortInfoUID as `0x${string}`],
               })) as { sortFunc: string; targetSchema: `0x${string}`; sourceType: number };
 
-              if (config.sourceType !== 0 && config.sourceType !== 1) {
-                console.warn(`Skipping sort ${sortInfoUID}: unsupported sourceType ${config.sourceType}`);
-                continue;
-              }
+              if (config.sourceType !== 0 && config.sourceType !== 1) continue;
 
-              // Use staleness as a sourceType-agnostic count source.
               const [currentIndex, staleness] = (await Promise.all([
                 publicClient.readContract({
                   address: sortOverlayAddress,
@@ -416,7 +423,6 @@ export const Toolbar = ({
                 }),
               ])) as [bigint, bigint];
               const totalCount = currentIndex + staleness;
-
               if (totalCount <= currentIndex) continue;
 
               const items: `0x${string}`[] = [];
@@ -467,11 +473,289 @@ export const Toolbar = ({
           }
         }
 
-        if (newAnchorUID) {
-          onFolderCreated?.(newAnchorUID, newName);
-        }
+        if (newAnchorUID) onFolderCreated?.(newAnchorUID, newName);
         return;
       }
+
+      // --- FILE UPLOAD or PASTE LINK ---
+      // Order: (a) cheap anchor dedup check to show warning early, (b) expensive content
+      // work (SSTORE2 chunks), (c) anchor write, (d) DATA/PROPERTY/MIRROR/TAG attestations.
+      // This way a failed attestation step leaves orphaned SSTORE2 chunks (benign — they have
+      // no EFS references) rather than orphaned half-completed EFS records.
+
+      const fileAnchorSchemaUID = dataSchemaUID as `0x${string}`;
+      const encodedName = ethers.AbiCoder.defaultAbiCoder().encode(
+        ["string", "bytes32"],
+        [newName, fileAnchorSchemaUID],
+      );
+
+      // (a) Check if a file anchor already exists at this path (read-only, no gas).
+      //     Show a confirmation warning before overwriting; bail if user hasn't confirmed.
+      let existingFileAnchorUID: `0x${string}` | undefined;
+      if (indexer) {
+        try {
+          const existingUID = (await publicClient.readContract({
+            address: indexer.address as `0x${string}`,
+            abi: indexer.abi,
+            functionName: "resolveAnchor",
+            args: [currentAnchorUID as `0x${string}`, newName, fileAnchorSchemaUID],
+          })) as `0x${string}`;
+          if (existingUID && existingUID !== ethers.ZeroHash) {
+            if (!existingAnchorWarning) {
+              setExistingAnchorWarning(true);
+              setIsSubmitting(false);
+              return;
+            }
+            existingFileAnchorUID = existingUID;
+            setExistingAnchorWarning(false);
+          }
+        } catch (e) {
+          console.warn("Failed to check if anchor exists", e);
+        }
+      }
+
+      // (b) Process content: compute hash + deploy SSTORE2 chunks (on-chain) or parse paste URI.
+      let contentHash: `0x${string}`;
+      let fileSize: bigint;
+      let mirrorUri: string;
+      let transportName: string;
+      let contentType: string;
+
+      if (creationType === "File") {
+        // --- ON-CHAIN FILE UPLOAD ---
+        const fileArrayBuffer = await fileToUpload!.arrayBuffer();
+        const dataBytes = new Uint8Array(fileArrayBuffer);
+        contentType = fileToUpload!.type || "application/octet-stream";
+
+        if (dataBytes.length === 0) {
+          notification.error("Cannot upload an empty file.");
+          setIsSubmitting(false);
+          return;
+        }
+
+        // EIP-3860 limits contract init code to ~49KB. The chunk manager's constructor
+        // args grow with chunk count. Cap at 1000 chunks (~24MB) to stay safe.
+        // This is a client-side upload limitation, not a protocol one — future upload
+        // tools can use hierarchical managers for larger files.
+        const MAX_ONCHAIN_SIZE = 24_000_000; // ~24MB
+        if (dataBytes.length > MAX_ONCHAIN_SIZE) {
+          notification.error(
+            `File too large for on-chain upload (${Math.round(dataBytes.length / 1024 / 1024)}MB). ` +
+              `Maximum is ~${MAX_ONCHAIN_SIZE / 1_000_000}MB. Use IPFS or Arweave for large files.`,
+          );
+          setIsSubmitting(false);
+          return;
+        }
+
+        contentHash = computeContentHash(dataBytes);
+        fileSize = BigInt(dataBytes.length);
+
+        // SSTORE2 chunking
+        const CHUNK_SIZE = 24000;
+        const totalChunks = Math.ceil(dataBytes.length / CHUNK_SIZE) || 1;
+        notification.info(
+          `Uploading ${Math.round(dataBytes.length / 1024) || 1}KB in ${totalChunks} chunk${totalChunks > 1 ? "s" : ""} via SSTORE2...`,
+        );
+        const chunkAddresses: string[] = [];
+
+        for (let i = 0; i < dataBytes.length; i += CHUNK_SIZE) {
+          const chunk = dataBytes.slice(i, i + CHUNK_SIZE);
+          const chunkHex = toHex(chunk);
+          const sizeTotal = chunk.length + 1;
+          const sizeHex = sizeTotal.toString(16).padStart(4, "0");
+          const bytecode = `0x61${sizeHex}80600a3d393df300${chunkHex.slice(2)}`;
+
+          const hash = await walletClient.sendTransaction({
+            data: bytecode as `0x${string}`,
+            account: walletClient.account,
+          });
+          const chunkReceipt = await publicClient.waitForTransactionReceipt({ hash });
+          if (!chunkReceipt.contractAddress) throw new Error("Chunk deployment failed");
+          chunkAddresses.push(chunkReceipt.contractAddress);
+          notification.info(`Deployed chunk ${chunkAddresses.length} of ${totalChunks}...`);
+        }
+
+        notification.info("Deploying chunk manager...");
+        const deployData = encodeDeployData({
+          abi: MOCK_CHUNKED_FILE_ABI,
+          bytecode: MOCK_CHUNKED_FILE_BYTECODE as `0x${string}`,
+          args: [chunkAddresses as readonly `0x${string}`[]],
+        });
+        const managerHash = await walletClient.sendTransaction({
+          data: deployData,
+          account: walletClient.account,
+        });
+        const managerReceipt = await publicClient.waitForTransactionReceipt({ hash: managerHash });
+        if (!managerReceipt.contractAddress) throw new Error("Manager deployment failed");
+
+        mirrorUri = `web3://${managerReceipt.contractAddress}:${targetNetwork.id}`;
+        transportName = "onchain";
+        notification.info(`File URI: ${mirrorUri}`);
+      } else {
+        // --- PASTE LINK ---
+        mirrorUri = pasteUri;
+        const detected = detectTransport(pasteUri);
+        if (detected === "unknown") {
+          notification.error(`Unsupported URI scheme. Supported: web3://, ipfs://, ar://, https://, magnet:`);
+          return;
+        }
+        transportName = detected;
+        contentType = pasteContentType || "application/octet-stream";
+        contentHash = pasteContentHash || (ethers.ZeroHash as `0x${string}`);
+        fileSize = pasteSize ? BigInt(pasteSize) : 0n;
+      }
+
+      // (c) Create the file anchor now that content is ready (or reuse existing).
+      //     Doing this after SSTORE2 means a failed anchor attest leaves only orphaned chunks
+      //     (no EFS references), not a named slot with no content behind it.
+      let fileAnchorUID: `0x${string}` | undefined = existingFileAnchorUID;
+      if (!fileAnchorUID) {
+        const txHash = await attest({
+          functionName: "attest",
+          args: [
+            {
+              schema: anchorSchemaUID as `0x${string}`,
+              data: {
+                recipient: ethers.ZeroAddress,
+                expirationTime: 0n,
+                revocable: false,
+                refUID: currentAnchorUID as `0x${string}`,
+                data: encodedName as `0x${string}`,
+                value: 0n,
+              },
+            },
+          ],
+        });
+        if (!txHash) throw new Error("No txHash returned for file ANCHOR creation.");
+        const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+        fileAnchorUID = extractUIDFromReceipt(receipt);
+        if (!fileAnchorUID) throw new Error("Could not extract file Anchor UID");
+        notification.info("File anchor created.");
+      }
+
+      // (d) Dedup check — warn if a canonical DATA already exists for this contentHash
+      if (contentHash !== ethers.ZeroHash && indexer && publicClient) {
+        try {
+          const canonical = (await publicClient.readContract({
+            address: indexer.address as `0x${string}`,
+            abi: indexer.abi,
+            functionName: "dataByContentKey",
+            args: [contentHash as `0x${string}`],
+          })) as `0x${string}`;
+          if (canonical && canonical !== ethers.ZeroHash) {
+            notification.info(
+              "Note: A DATA attestation for this content already exists. A new one will still be created and tagged.",
+            );
+          }
+        } catch {
+          // Non-fatal — proceed with upload
+        }
+      }
+
+      // 3) Create standalone DATA attestation (non-revocable)
+      notification.info("Creating DATA attestation...");
+      const encodedData = ethers.AbiCoder.defaultAbiCoder().encode(["bytes32", "uint64"], [contentHash, fileSize]);
+      const dataTxHash = await attest({
+        functionName: "attest",
+        args: [
+          {
+            schema: dataSchemaUID as `0x${string}`,
+            data: {
+              recipient: ethers.ZeroAddress,
+              expirationTime: 0n,
+              revocable: false,
+              refUID: ethers.ZeroHash as `0x${string}`,
+              data: encodedData as `0x${string}`,
+              value: 0n,
+            },
+          },
+        ],
+      });
+      if (!dataTxHash) throw new Error("DATA attestation failed.");
+      const dataReceipt = await publicClient.waitForTransactionReceipt({ hash: dataTxHash });
+      const dataUID = extractUIDFromReceipt(dataReceipt);
+      if (!dataUID) throw new Error("Could not extract DATA UID");
+      notification.info(`DATA created: ${dataUID.slice(0, 10)}...`);
+
+      // 3) Create PROPERTY(contentType) referencing DATA
+      notification.info("Attesting content type...");
+      const encodedProperty = ethers.AbiCoder.defaultAbiCoder().encode(
+        ["string", "string"],
+        ["contentType", contentType],
+      );
+      const propTxHash = await attest({
+        functionName: "attest",
+        args: [
+          {
+            schema: propertySchemaUID as `0x${string}`,
+            data: {
+              recipient: ethers.ZeroAddress,
+              expirationTime: 0n,
+              revocable: true,
+              refUID: dataUID,
+              data: encodedProperty as `0x${string}`,
+              value: 0n,
+            },
+          },
+        ],
+      });
+      if (propTxHash) await publicClient.waitForTransactionReceipt({ hash: propTxHash });
+
+      // 4) Create MIRROR referencing DATA
+      const transportAnchorUID = await resolveTransportAnchor(transportName);
+      if (!transportAnchorUID) {
+        notification.error(`Transport anchor '/transports/${transportName}' not found. Aborting upload.`);
+        return; // do not place the file in the folder with no mirror
+      } else {
+        notification.info(
+          `Creating ${TRANSPORT_LABELS[transportName as keyof typeof TRANSPORT_LABELS] || transportName} mirror...`,
+        );
+        const encodedMirror = ethers.AbiCoder.defaultAbiCoder().encode(
+          ["bytes32", "string"],
+          [transportAnchorUID, mirrorUri],
+        );
+        const mirrorTxHash = await attest({
+          functionName: "attest",
+          args: [
+            {
+              schema: mirrorSchemaUID as `0x${string}`,
+              data: {
+                recipient: ethers.ZeroAddress,
+                expirationTime: 0n,
+                revocable: true,
+                refUID: dataUID,
+                data: encodedMirror as `0x${string}`,
+                value: 0n,
+              },
+            },
+          ],
+        });
+        if (mirrorTxHash) await publicClient.waitForTransactionReceipt({ hash: mirrorTxHash });
+      }
+
+      // 5) Create TAG placing DATA at the file anchor
+      notification.info("Placing file in folder via TAG...");
+      const encodedTag = ethers.AbiCoder.defaultAbiCoder().encode(["bytes32", "bool"], [fileAnchorUID, true]);
+      const tagTxHash = await attest({
+        functionName: "attest",
+        args: [
+          {
+            schema: tagSchemaUID as `0x${string}`,
+            data: {
+              recipient: ethers.ZeroAddress,
+              expirationTime: 0n,
+              revocable: true,
+              refUID: dataUID,
+              data: encodedTag as `0x${string}`,
+              value: 0n,
+            },
+          },
+        ],
+      });
+      if (tagTxHash) await publicClient.waitForTransactionReceipt({ hash: tagTxHash });
+
+      notification.success("File uploaded and placed successfully.");
+      onFileCreated?.(enabledSortUIDs);
       handleCloseModal();
     } catch (e) {
       console.error(e);
@@ -569,26 +853,51 @@ export const Toolbar = ({
           New Folder
         </button>
         <button className="btn btn-sm btn-primary" onClick={() => handleOpenModal("File")} disabled={!currentAnchorUID}>
-          New File
+          Add File
         </button>
       </div>
 
       {/* DaisyUI Modal */}
       <dialog id="create_modal" className="modal" ref={modalRef}>
         <div className="modal-box">
-          <h3 className="font-bold text-lg">Create New {creationType}</h3>
+          <h3 className="font-bold text-lg">{creationType === "Folder" ? "Create New Folder" : "Add File"}</h3>
+          {creationType !== "Folder" && (
+            <div className="tabs tabs-bordered mt-2">
+              <button
+                className={`tab ${creationType === "File" ? "tab-active" : ""}`}
+                onClick={() => setCreationType("File")}
+              >
+                Upload File
+              </button>
+              <button
+                className={`tab ${creationType === "PasteLink" ? "tab-active" : ""}`}
+                onClick={() => setCreationType("PasteLink")}
+              >
+                Paste Link
+              </button>
+            </div>
+          )}
           <div className="py-4 form-control w-full">
             <label className="label">
               <span className="label-text">Name</span>
             </label>
             <input
               type="text"
-              placeholder={`Enter ${creationType} Name`}
+              placeholder={`Enter ${creationType === "Folder" ? "folder" : "file"} name`}
               className="input input-bordered w-full"
               value={newName}
-              onChange={e => setNewName(e.target.value)}
+              onChange={e => {
+                setNewName(e.target.value);
+                setExistingAnchorWarning(false);
+              }}
               onKeyDown={e => {
-                if (e.key === "Enter" && newName && (creationType !== "File" || fileToUpload)) handleSubmitCreate();
+                if (
+                  e.key === "Enter" &&
+                  newName &&
+                  (creationType !== "File" || fileToUpload) &&
+                  (creationType !== "PasteLink" || pasteUri)
+                )
+                  handleSubmitCreate();
                 if (e.key === "Escape") handleCloseModal();
               }}
               autoFocus
@@ -614,10 +923,132 @@ export const Toolbar = ({
               />
             </div>
           )}
+          {creationType === "PasteLink" && (
+            <>
+              <div className="py-2 form-control w-full">
+                <label className="label">
+                  <span className="label-text">URI</span>
+                </label>
+                <input
+                  type="text"
+                  placeholder="ipfs://Qm..., ar://..., bafyb..."
+                  className="input input-bordered w-full"
+                  value={pasteUri}
+                  onChange={e => {
+                    let val = e.target.value.trim();
+                    // Auto-detect bare IPFS CIDs (CIDv0: Qm..., CIDv1: bafy...)
+                    if (/^(Qm[1-9A-HJ-NP-Za-km-z]{44,}|bafy[a-z2-7]{50,})$/.test(val)) {
+                      val = `ipfs://${val}`;
+                    }
+                    setPasteUri(val);
+                  }}
+                />
+                {pasteUri && (
+                  <label className="label">
+                    <span className="label-text-alt text-base-content/50">
+                      Detected: {TRANSPORT_LABELS[detectTransport(pasteUri)]}
+                    </span>
+                  </label>
+                )}
+              </div>
+              {/* Collapsible file details section */}
+              <div className="mt-1">
+                <button
+                  type="button"
+                  className="flex items-center justify-between w-full text-sm text-base-content/60 hover:text-base-content transition-colors"
+                  onClick={() => setShowPasteDetails(v => !v)}
+                >
+                  <span className="flex items-center gap-1">
+                    <span>{showPasteDetails ? "▾" : "▸"}</span>
+                    <span>File Details</span>
+                    {(pasteContentType || pasteSize || pasteContentHash) && (
+                      <span className="badge badge-xs badge-success ml-1">
+                        {[pasteContentType && "type", pasteSize && "size", pasteContentHash && "hash"]
+                          .filter(Boolean)
+                          .join(", ")}
+                      </span>
+                    )}
+                  </span>
+                  {pasteUri && detectTransport(pasteUri) !== "magnet" && detectTransport(pasteUri) !== "onchain" && (
+                    <button
+                      type="button"
+                      className="btn btn-xs btn-outline"
+                      onClick={e => {
+                        e.stopPropagation();
+                        handleFetchInfo();
+                      }}
+                      disabled={isFetchingInfo}
+                    >
+                      {isFetchingInfo ? "Fetching..." : "Fetch Info"}
+                    </button>
+                  )}
+                </button>
+                {showPasteDetails && (
+                  <div className="mt-2 pl-4 border-l-2 border-base-300 flex flex-col gap-2">
+                    <div className="form-control w-full">
+                      <label className="label py-1">
+                        <span className="label-text text-sm">Content Type</span>
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="e.g. image/png, text/html"
+                        className="input input-bordered input-sm w-full"
+                        value={pasteContentType}
+                        onChange={e => setPasteContentType(e.target.value)}
+                      />
+                    </div>
+                    <div className="form-control w-full">
+                      <label className="label py-1">
+                        <span className="label-text text-sm">Size (bytes)</span>
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="Unknown"
+                        className="input input-bordered input-sm w-full"
+                        value={pasteSize}
+                        onChange={e => setPasteSize(e.target.value.replace(/\D/g, ""))}
+                      />
+                    </div>
+                    <div className="form-control w-full">
+                      <label className="label py-1">
+                        <span className="label-text text-sm">Content Hash</span>
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="0x... (auto-computed via Fetch Info)"
+                        className="input input-bordered input-sm w-full font-mono text-xs"
+                        value={pasteContentHash || ""}
+                        onChange={e => {
+                          const val = e.target.value;
+                          if (!val) {
+                            setPasteContentHash(null);
+                            return;
+                          }
+                          setPasteContentHash(val as `0x${string}`);
+                        }}
+                      />
+                      {pasteContentHash && (
+                        <label className="label py-0">
+                          <span className="label-text-alt text-success text-xs">Verified from file bytes</span>
+                        </label>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+
+          {existingAnchorWarning && creationType !== "Folder" && (
+            <div className="alert alert-warning mt-2 text-sm py-2">
+              A file named &quot;{newName}&quot; already exists here. Submitting will add a new version to the existing
+              anchor.
+            </div>
+          )}
 
           <div className="modal-action items-center">
             {/* Sort auto-update config — bottom left, only for file uploads when sorts exist */}
-            {creationType === "File" && availableSorts.length > 0 ? (
+            {creationType !== "Folder" && availableSorts.length > 0 ? (
               <div className="flex-1">
                 <button
                   type="button"
@@ -663,11 +1094,20 @@ export const Toolbar = ({
               Cancel
             </button>
             <button
-              className="btn btn-primary"
+              className={`btn ${existingAnchorWarning && creationType !== "Folder" ? "btn-warning" : "btn-primary"}`}
               onClick={handleSubmitCreate}
-              disabled={!newName || isSubmitting || (creationType === "File" && !fileToUpload)}
+              disabled={
+                !newName ||
+                isSubmitting ||
+                (creationType === "File" && !fileToUpload) ||
+                (creationType === "PasteLink" && !pasteUri)
+              }
             >
-              {isSubmitting ? "Creating..." : "Create"}
+              {isSubmitting
+                ? "Creating..."
+                : existingAnchorWarning && creationType !== "Folder"
+                  ? "Update Existing"
+                  : "Create"}
             </button>
           </div>
         </div>
