@@ -120,7 +120,6 @@ export const Toolbar = ({
 }) => {
   const { writeContractAsync: attest } = useScaffoldWriteContract({ contractName: "EAS" });
   const { data: indexer } = useDeployedContractInfo({ contractName: "Indexer" });
-  const { data: tagResolverInfo } = useDeployedContractInfo({ contractName: "TagResolver" });
   const { targetNetwork } = useTargetNetwork();
 
   // Modal State
@@ -388,36 +387,8 @@ export const Toolbar = ({
           if (!newAnchorUID) throw new Error("Could not extract new Anchor UID");
         }
 
-        // Tag the new folder as a child of the current directory.
-        // definition = currentAnchorUID (parent) so it appears in _activeByAAS[currentAnchorUID][attester][ANCHOR_SCHEMA].
-        if (tagResolverInfo && newAnchorUID) {
-          try {
-            const encodedTagData = ethers.AbiCoder.defaultAbiCoder().encode(
-              ["bytes32", "bool"],
-              [currentAnchorUID, true],
-            );
-            const tagTxHash = await attest({
-              functionName: "attest",
-              args: [
-                {
-                  schema: tagSchemaUID as `0x${string}`,
-                  data: {
-                    recipient: ethers.ZeroAddress,
-                    expirationTime: 0n,
-                    revocable: true,
-                    refUID: newAnchorUID,
-                    data: encodedTagData as `0x${string}`,
-                    value: 0n,
-                  },
-                },
-              ],
-            });
-            if (tagTxHash) await publicClient.waitForTransactionReceipt({ hash: tagTxHash });
-          } catch (e) {
-            console.error("Auto-tag folder failed:", e);
-          }
-        }
-
+        // Folder membership is established by the ANCHOR's refUID = currentAnchorUID.
+        // EFSIndexer tracks this natively; no extra TAG attestation is needed for subfolder listing.
         notification.success("Folder created successfully.");
         handleCloseModal();
 
@@ -504,16 +475,20 @@ export const Toolbar = ({
       }
 
       // --- FILE UPLOAD or PASTE LINK ---
-      // Both create: file anchor + standalone DATA + PROPERTY(contentType) + MIRROR + TAG(placement)
+      // Order: (a) cheap anchor dedup check to show warning early, (b) expensive content
+      // work (SSTORE2 chunks), (c) anchor write, (d) DATA/PROPERTY/MIRROR/TAG attestations.
+      // This way a failed attestation step leaves orphaned SSTORE2 chunks (benign — they have
+      // no EFS references) rather than orphaned half-completed EFS records.
 
-      // 1) Ensure file anchor exists
       const fileAnchorSchemaUID = dataSchemaUID as `0x${string}`;
       const encodedName = ethers.AbiCoder.defaultAbiCoder().encode(
         ["string", "bytes32"],
         [newName, fileAnchorSchemaUID],
       );
 
-      let fileAnchorUID: `0x${string}` | undefined;
+      // (a) Check if a file anchor already exists at this path (read-only, no gas).
+      //     Show a confirmation warning before overwriting; bail if user hasn't confirmed.
+      let existingFileAnchorUID: `0x${string}` | undefined;
       if (indexer) {
         try {
           const existingUID = (await publicClient.readContract({
@@ -528,7 +503,7 @@ export const Toolbar = ({
               setIsSubmitting(false);
               return;
             }
-            fileAnchorUID = existingUID;
+            existingFileAnchorUID = existingUID;
             setExistingAnchorWarning(false);
           }
         } catch (e) {
@@ -536,30 +511,7 @@ export const Toolbar = ({
         }
       }
 
-      if (!fileAnchorUID) {
-        const txHash = await attest({
-          functionName: "attest",
-          args: [
-            {
-              schema: anchorSchemaUID as `0x${string}`,
-              data: {
-                recipient: ethers.ZeroAddress,
-                expirationTime: 0n,
-                revocable: false,
-                refUID: currentAnchorUID as `0x${string}`,
-                data: encodedName as `0x${string}`,
-                value: 0n,
-              },
-            },
-          ],
-        });
-        if (!txHash) throw new Error("No txHash returned for file ANCHOR creation.");
-        const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
-        fileAnchorUID = extractUIDFromReceipt(receipt);
-        if (!fileAnchorUID) throw new Error("Could not extract file Anchor UID");
-        notification.info("File anchor created.");
-      }
-
+      // (b) Process content: compute hash + deploy SSTORE2 chunks (on-chain) or parse paste URI.
       let contentHash: `0x${string}`;
       let fileSize: bigint;
       let mirrorUri: string;
@@ -650,7 +602,35 @@ export const Toolbar = ({
         fileSize = pasteSize ? BigInt(pasteSize) : 0n;
       }
 
-      // 2) Dedup check — warn if a canonical DATA already exists for this contentHash
+      // (c) Create the file anchor now that content is ready (or reuse existing).
+      //     Doing this after SSTORE2 means a failed anchor attest leaves only orphaned chunks
+      //     (no EFS references), not a named slot with no content behind it.
+      let fileAnchorUID: `0x${string}` | undefined = existingFileAnchorUID;
+      if (!fileAnchorUID) {
+        const txHash = await attest({
+          functionName: "attest",
+          args: [
+            {
+              schema: anchorSchemaUID as `0x${string}`,
+              data: {
+                recipient: ethers.ZeroAddress,
+                expirationTime: 0n,
+                revocable: false,
+                refUID: currentAnchorUID as `0x${string}`,
+                data: encodedName as `0x${string}`,
+                value: 0n,
+              },
+            },
+          ],
+        });
+        if (!txHash) throw new Error("No txHash returned for file ANCHOR creation.");
+        const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+        fileAnchorUID = extractUIDFromReceipt(receipt);
+        if (!fileAnchorUID) throw new Error("Could not extract file Anchor UID");
+        notification.info("File anchor created.");
+      }
+
+      // (d) Dedup check — warn if a canonical DATA already exists for this contentHash
       if (contentHash !== ethers.ZeroHash && indexer && publicClient) {
         try {
           const canonical = (await publicClient.readContract({

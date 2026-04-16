@@ -485,7 +485,10 @@ contract EFSRouter is IDecentralizedApp {
 
         bytes32[] memory mirrors = indexer.getReferencingAttestations(dataUID, mirrorSchema, 0, 50, true);
 
-        // Track best candidate per tier (lower index = higher priority)
+        // Track best candidate per tier (lower index = higher priority).
+        // Priority order: web3:// (on-chain, permanent) > ar:// (permanent, content-addressed) >
+        //                 ipfs:// (content-addressed, requires pinning) > https:// (mutable) >
+        //                 magnet: (peer-dependent, not HTTP-fetchable)
         string memory best = "";
         uint256 bestPriority = 99;
 
@@ -496,8 +499,8 @@ contract EFSRouter is IDecentralizedApp {
 
             uint256 priority;
             if (_startsWith(uri, "web3://"))  priority = 0;
-            else if (_startsWith(uri, "ipfs://"))  priority = 1;
-            else if (_startsWith(uri, "ar://"))    priority = 2;
+            else if (_startsWith(uri, "ar://"))    priority = 1;
+            else if (_startsWith(uri, "ipfs://"))  priority = 2;
             else if (_startsWith(uri, "https://")) priority = 3;
             else                                   priority = 4; // magnet: and anything else
 

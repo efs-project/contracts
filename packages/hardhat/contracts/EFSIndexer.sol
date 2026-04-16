@@ -211,6 +211,25 @@ contract EFSIndexer is SchemaResolver {
         _propagateContains(anchorUID, attester);
     }
 
+    /**
+     * @notice Clear the "contains attestations by attester" flag at a single anchor.
+     *         Called by TagResolver when the last active item placed at an anchor by an
+     *         attester is removed (TAG applies=false). Only clears the immediate anchor —
+     *         ancestor flags remain set (optimistic / sticky).
+     *
+     *         Clearing the immediate folder flag is O(1) and sufficient for accurate
+     *         subfolder listing: getDirectoryByAddressList and getAnchorsBySchemaAndAddressList
+     *         both check _containsAttestations[child][attester] on the direct children, so
+     *         clearing it makes an empty folder disappear from the attester's directory view.
+     *
+     * @param anchorUID The folder anchor to clear.
+     * @param attester  The attester whose flag to clear.
+     */
+    function clearContains(bytes32 anchorUID, address attester) external {
+        if (msg.sender != tagResolver) revert Unauthorized();
+        _containsAttestations[anchorUID][attester] = false;
+    }
+
     function _propagateContains(bytes32 anchorUID, address attester) private {
         bytes32 current = anchorUID;
         uint256 depth = 0;

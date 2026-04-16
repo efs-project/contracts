@@ -2,8 +2,12 @@ import { keccak256 } from "viem";
 
 export type TransportType = "onchain" | "ipfs" | "arweave" | "magnet" | "https" | "unknown";
 
-/** Ordered by preference for display/resolution. */
-export const TRANSPORT_PREFERENCE: TransportType[] = ["onchain", "ipfs", "arweave", "https", "magnet"];
+/**
+ * Ordered by preference for display/resolution.
+ * web3:// (on-chain, permanent) > ar:// (permanent, content-addressed) >
+ * ipfs:// (content-addressed, requires pinning) > https:// (mutable) > magnet: (peer-dependent)
+ */
+export const TRANSPORT_PREFERENCE: TransportType[] = ["onchain", "arweave", "ipfs", "https", "magnet"];
 
 /** Detect transport type from a URI string. */
 export function detectTransport(uri: string): TransportType {

@@ -12,6 +12,7 @@ interface IEFSIndexerForTag {
     function indexRevocation(bytes32 uid) external;
     function getParent(bytes32 anchorUID) external view returns (bytes32);
     function propagateContains(bytes32 anchorUID, address attester) external;
+    function clearContains(bytes32 anchorUID, address attester) external;
     function ANCHOR_SCHEMA_UID() external view returns (bytes32);
 }
 
@@ -76,6 +77,11 @@ contract TagResolver is SchemaResolver {
     // Position index for O(1) swap-and-pop: value is position+1 (0 = absent)
     mapping(bytes32 => mapping(address => mapping(bytes32 => mapping(bytes32 => uint256)))) private _activeByAASIndex;
 
+    // Total active item count per (definition, attester) across all schemas.
+    // When this hits zero, the attester has no active placements in this definition anchor
+    // and the indexer's _containsAttestations flag can be cleared for that folder.
+    mapping(bytes32 => mapping(address => uint256)) private _activeTotalByDefAndAttester;
+
     constructor(
         IEAS eas,
         bytes32 tagSchemaUID,
@@ -124,8 +130,20 @@ contract TagResolver is SchemaResolver {
                 bytes32[] storage arr = _activeByAAS[definition][attestation.attester][targetSchema];
                 arr.push(targetID);
                 _activeByAASIndex[definition][attestation.attester][targetSchema][targetID] = arr.length;
+                _activeTotalByDefAndAttester[definition][attestation.attester]++;
             } else if (!applies && oldApplied) {
                 _swapAndPop(definition, attestation.attester, targetSchema, targetID);
+                // If this was the last active item, clear the folder's containsAttestations flag.
+                // Only applies when definition is an Anchor (structural placement, not a label tag).
+                if (_activeTotalByDefAndAttester[definition][attestation.attester] > 0) {
+                    _activeTotalByDefAndAttester[definition][attestation.attester]--;
+                }
+                if (_activeTotalByDefAndAttester[definition][attestation.attester] == 0) {
+                    Attestation memory defAtt = _eas.getAttestation(definition);
+                    if (defAtt.schema == indexer.ANCHOR_SCHEMA_UID()) {
+                        indexer.clearContains(definition, attestation.attester);
+                    }
+                }
             }
         }
 
@@ -186,10 +204,19 @@ contract TagResolver is SchemaResolver {
                 bytes32 targetDefHash = keccak256(abi.encodePacked(targetID, definition));
                 _activeCount[targetDefHash]--;
 
-                // Remove from compact index
+                // Remove from compact index and maintain total-count for de-propagation
                 if (attestation.refUID != EMPTY_UID) {
                     Attestation memory target = _eas.getAttestation(attestation.refUID);
                     _swapAndPop(definition, attestation.attester, target.schema, targetID);
+                    if (_activeTotalByDefAndAttester[definition][attestation.attester] > 0) {
+                        _activeTotalByDefAndAttester[definition][attestation.attester]--;
+                    }
+                    if (_activeTotalByDefAndAttester[definition][attestation.attester] == 0) {
+                        Attestation memory defAtt = _eas.getAttestation(definition);
+                        if (defAtt.schema == indexer.ANCHOR_SCHEMA_UID()) {
+                            indexer.clearContains(definition, attestation.attester);
+                        }
+                    }
                 }
             }
             delete _activeTag[compositeHash];
