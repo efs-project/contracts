@@ -858,6 +858,56 @@ describe("EFSRouter Web3 Capabilities", function () {
       expect(Buffer.from(ethers.getBytes(bodyAfter)).toString()).to.include("No mirror");
     });
 
+    it("Should prefer web3:// over ar:// (highest-priority pair)", async function () {
+      // web3:// priority = 0, ar:// priority = 1 — on-chain mirror must win
+      const targetAddress = ethers.getAddress("0x00000000000000000000000000000000000000D0");
+      await setCode(targetAddress, "0x00" + Buffer.from("onchain beats arweave").toString("hex"));
+
+      const fileAnchorUID = await createFileAnchor(ideasUID, "web3_vs_ar.txt");
+      const dataUID = await createData("onchain beats arweave");
+      await addProperty(dataUID, "contentType", "text/plain");
+      // Add ar:// first so it appears earlier in the attestation array
+      await addMirror(dataUID, arweaveTransportUID, "ar://ShouldNotWin");
+      await addMirror(dataUID, onchainTransportUID, `web3://${targetAddress}`);
+      await tagAtPath(dataUID, fileAnchorUID, true);
+
+      const [statusCode, body] = await router.request(["ideas", "web3_vs_ar.txt"], ownerParams());
+      expect(statusCode).to.equal(200);
+      // web3:// mirror is served inline — body contains the actual content
+      expect(Buffer.from(ethers.getBytes(body)).toString()).to.equal("onchain beats arweave");
+    });
+
+    it("Should fall back to next-best mirror when highest-priority mirror is revoked", async function () {
+      // web3:// mirror gets revoked → should fall back to ipfs:// (not 404)
+      const targetAddress = ethers.getAddress("0x00000000000000000000000000000000000000D1");
+      await setCode(targetAddress, "0x00" + Buffer.from("fallback content").toString("hex"));
+
+      const fileAnchorUID = await createFileAnchor(ideasUID, "fallback_mirror.txt");
+      const dataUID = await createData("fallback content");
+      await addProperty(dataUID, "contentType", "text/plain");
+      const web3MirrorUID = await addMirror(dataUID, onchainTransportUID, `web3://${targetAddress}`);
+      await addMirror(dataUID, ipfsTransportUID, "ipfs://QmFallbackHash");
+      await tagAtPath(dataUID, fileAnchorUID, true);
+
+      // Before revocation: web3:// serves content directly
+      const [statusBefore, bodyBefore] = await router.request(["ideas", "fallback_mirror.txt"], ownerParams());
+      expect(statusBefore).to.equal(200);
+      expect(Buffer.from(ethers.getBytes(bodyBefore)).toString()).to.equal("fallback content");
+
+      // Revoke the web3:// mirror
+      await eas.revoke({ schema: mirrorSchemaUID, data: { uid: web3MirrorUID, value: 0n } });
+
+      // After revocation: falls back to ipfs:// (message/external-body, not 404)
+      const [statusAfter, , headersAfter] = await router.request(
+        ["ideas", "fallback_mirror.txt"],
+        ownerParams(),
+      );
+      expect(statusAfter).to.equal(200);
+      const ct = headersAfter.find((h: any) => h.key === "Content-Type")?.value ?? "";
+      expect(ct).to.include("message/external-body");
+      expect(ct).to.include("QmFallbackHash");
+    });
+
     it("Should continue past editions with no DATA and serve from a later edition", async function () {
       // First edition has no DATA at this anchor; second edition has a file.
       // Router should skip the first and serve from the second.

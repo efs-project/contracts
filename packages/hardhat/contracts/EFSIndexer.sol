@@ -13,6 +13,7 @@ contract EFSIndexer is SchemaResolver {
     error AlreadyIndexed();
     error AnchorTooDeep();
     error Unauthorized();
+    error InvalidAnchorName();
 
     /// @notice Emitted when a new Anchor is created under a parent directory.
     ///         Enables off-chain indexers (The Graph) to track directory structure changes
@@ -268,6 +269,11 @@ contract EFSIndexer is SchemaResolver {
             if (attestation.revocable) return false;
 
             (string memory name, bytes32 anchorSchema) = abi.decode(attestation.data, (string, bytes32));
+
+            // Validate name: must be IRI-segment safe (mirrors TopicResolver validation).
+            // Rejects empty, path-segment delimiters (/), null bytes, URI-special chars,
+            // and reserved path segments (. and ..) to prevent web3:// URI routing breaks.
+            if (!_isValidAnchorName(name)) revert InvalidAnchorName();
 
             // Resolve Parent (Use refUID, else recipient cast to bytes32, else generic root if 0)
             bytes32 parentUID = attestation.refUID;
@@ -826,6 +832,41 @@ contract EFSIndexer is SchemaResolver {
     // ============================================================================================
 
     /// @notice Unfiltered slice — used by generic explorer functions that don't need revocation filtering.
+    /// @dev IRI-segment name validation ported from TopicResolver, with "."/".." guard added.
+    ///      Rejects: empty, NUL, space, and URI-special bytes that break web3:// routing.
+    function _isValidAnchorName(string memory _name) private pure returns (bool) {
+        bytes memory nb = bytes(_name);
+        if (nb.length == 0) return false;
+        // Reject "." and ".." — reserved relative path segments
+        if (nb.length == 1 && nb[0] == 0x2E) return false;
+        if (nb.length == 2 && nb[0] == 0x2E && nb[1] == 0x2E) return false;
+        for (uint256 i = 0; i < nb.length; i++) {
+            bytes1 c = nb[i];
+            if (
+                c == 0x00 || // NUL
+                c == 0x20 || // space
+                c == 0x22 || // "
+                c == 0x23 || // #
+                c == 0x25 || // %
+                c == 0x26 || // &
+                c == 0x2F || // /
+                c == 0x3A || // :
+                c == 0x3D || // =
+                c == 0x3F || // ?
+                c == 0x40 || // @
+                c == 0x5B || // [
+                c == 0x5C || // \
+                c == 0x5D || // ]
+                c == 0x5E || // ^
+                c == 0x60 || // `
+                c == 0x7B || // {
+                c == 0x7C || // |
+                c == 0x7D    // }
+            ) return false;
+        }
+        return true;
+    }
+
     function _sliceUIDs(
         bytes32[] storage uids,
         uint256 start,

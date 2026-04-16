@@ -95,6 +95,10 @@ contract EFSRouter is IDecentralizedApp {
         return "5219";
     }
 
+    /// @dev Maximum number of edition addresses accepted in a single `?editions=` query param.
+    ///      Prevents crafted URLs from causing unbounded `_parseAddressList` gas in RPC nodes.
+    uint256 private constant MAX_EDITIONS = 20;
+
     // String comparison helper
     function _stringsEqual(string memory a, string memory b) private pure returns (bool) {
         return keccak256(bytes(a)) == keccak256(bytes(b));
@@ -315,6 +319,9 @@ contract EFSRouter is IDecentralizedApp {
         for (uint i = 0; i < strBytes.length; i++) {
             if (strBytes[i] == ",") count++;
         }
+
+        // Guard against DoS via crafted URLs with hundreds of addresses
+        if (count > MAX_EDITIONS) count = MAX_EDITIONS;
 
         address[] memory addresses = new address[](count);
         uint256 addrIdx = 0;

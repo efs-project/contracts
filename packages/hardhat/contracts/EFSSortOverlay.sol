@@ -95,10 +95,9 @@ contract EFSSortOverlay is SchemaResolver {
     }
 
     // sortInfoUID => cached SORT_INFO data (populated in onAttest)
+    // Existence is derived from config.sortFunc != address(0) — no separate bool needed
+    // (valid sortFunc is always a non-zero contract address, validated in onAttest).
     mapping(bytes32 => SortConfig) private _sortConfigs;
-
-    // Track which sortInfoUIDs have been registered (vs uninitialized)
-    mapping(bytes32 => bool) private _sortConfigExists;
 
     // ============================================================================================
     // STORAGE: SHARED SORTED DOUBLY LINKED LIST (per sortInfoUID, per parentAnchor)
@@ -167,7 +166,7 @@ contract EFSSortOverlay is SchemaResolver {
             targetSchema: targetSchema,
             sourceType: sourceType
         });
-        _sortConfigExists[attestation.uid] = true;
+        // existence derived from config.sortFunc != address(0) — no separate bool write needed
 
         // Register in EFSIndexer so SORT_INFO attestations are discoverable via
         // getReferencingAttestations(namingAnchorUID, SORT_INFO_SCHEMA_UID).
@@ -215,7 +214,7 @@ contract EFSSortOverlay is SchemaResolver {
         if (items.length != leftHints.length || items.length != rightHints.length) revert ArrayLengthMismatch();
 
         SortConfig storage config = _sortConfigs[sortInfoUID];
-        if (!_sortConfigExists[sortInfoUID]) revert InvalidSortInfo();
+        if (_sortConfigs[sortInfoUID].sortFunc == address(0)) revert InvalidSortInfo();
         if (indexer.isRevoked(sortInfoUID)) revert InvalidSortInfo();
 
         ISortFunc sortFunc = ISortFunc(config.sortFunc);
@@ -278,7 +277,7 @@ contract EFSSortOverlay is SchemaResolver {
         bytes32 newLeftHint,
         bytes32 newRightHint
     ) external nonReentrant {
-        if (!_sortConfigExists[sortInfoUID]) revert InvalidSortInfo();
+        if (_sortConfigs[sortInfoUID].sortFunc == address(0)) revert InvalidSortInfo();
         if (indexer.isRevoked(sortInfoUID)) revert InvalidSortInfo();
 
         SortConfig storage config = _sortConfigs[sortInfoUID];
@@ -336,7 +335,7 @@ contract EFSSortOverlay is SchemaResolver {
         bytes32 parentAnchor,
         bytes32[] calldata newItems
     ) external view returns (bytes32[] memory leftHints, bytes32[] memory rightHints) {
-        if (!_sortConfigExists[sortInfoUID]) revert InvalidSortInfo();
+        if (_sortConfigs[sortInfoUID].sortFunc == address(0)) revert InvalidSortInfo();
 
         SortConfig storage config = _sortConfigs[sortInfoUID];
         ISortFunc sortFunc = ISortFunc(config.sortFunc);
@@ -529,8 +528,10 @@ contract EFSSortOverlay is SchemaResolver {
 
         bytes32[] memory result = new bytes32[](limit);
         uint256 count = 0;
+        uint256 traversed = 0;
 
-        while (currentNode != bytes32(0) && count < limit) {
+        while (currentNode != bytes32(0) && count < limit && traversed < DEFAULT_MAX_TRAVERSAL) {
+            traversed++;
             if (showRevoked || !indexer.isRevoked(currentNode)) {
                 result[count++] = currentNode;
             }
@@ -619,7 +620,7 @@ contract EFSSortOverlay is SchemaResolver {
      *      Returns 0 for unknown or revoked sortInfoUIDs.
      */
     function getSortStaleness(bytes32 sortInfoUID, bytes32 parentAnchor) external view returns (uint256) {
-        if (!_sortConfigExists[sortInfoUID]) return 0;
+        if (_sortConfigs[sortInfoUID].sortFunc == address(0)) return 0;
         if (indexer.isRevoked(sortInfoUID)) return 0;
 
         SortConfig storage config = _sortConfigs[sortInfoUID];
@@ -672,6 +673,6 @@ contract EFSSortOverlay is SchemaResolver {
 
     /// @notice Returns true if a sortInfoUID has been registered via onAttest.
     function isSortRegistered(bytes32 sortInfoUID) external view returns (bool) {
-        return _sortConfigExists[sortInfoUID];
+        return _sortConfigs[sortInfoUID].sortFunc != address(0);
     }
 }

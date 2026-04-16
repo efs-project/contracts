@@ -178,6 +178,10 @@ contract EFSFileView {
      * @param startingCursor Index into _childrenBySchema to resume from (0 = first page).
      * @param pageSize       Max content items per page (folders are additional on page 1).
      */
+    /// @dev Maximum attesters per schema-filtered listing call.
+    ///      Prevents quadratic memory allocation in getFilesAtPath and O(n²) dedup.
+    uint256 private constant MAX_ATTESTERS_PER_QUERY = 20;
+
     function getDirectoryPageBySchemaAndAddressList(
         bytes32 parentAnchor,
         bytes32 anchorSchema,
@@ -186,6 +190,7 @@ contract EFSFileView {
         uint256 pageSize
     ) external view returns (FileSystemItem[] memory items, uint256 nextCursor) {
         require(attesters.length > 0, "Attesters list cannot be empty");
+        require(attesters.length <= MAX_ATTESTERS_PER_QUERY, "Too many attesters");
         require(pageSize > 0, "Page size must be > 0");
 
         // 1. Content items — paginated via _childrenBySchema index (O(pageSize))
@@ -272,7 +277,12 @@ contract EFSFileView {
         }
 
         // Source B: explicitly tagged folders (empty-folder visibility).
+        // Capped at MAX_TAGGED_FOLDERS — explicit tagging is a deliberate user action so
+        // counts are expected to be small. Spam tagging is on-chain write cost for the attacker
+        // but only read-side up to this cap.
+        uint256 MAX_TAGGED_FOLDERS = 1000;
         uint256 taggedCount = tagResolver.getChildrenTaggedWithCount(parentAnchor, anchorSchema);
+        if (taggedCount > MAX_TAGGED_FOLDERS) taggedCount = MAX_TAGGED_FOLDERS;
         if (taggedCount > 0) {
             bytes32[] memory tagged = tagResolver.getChildrenTaggedWith(parentAnchor, anchorSchema, 0, taggedCount);
             for (uint256 i = 0; i < tagged.length; i++) {
@@ -356,6 +366,7 @@ contract EFSFileView {
         uint256 start,
         uint256 length
     ) external view returns (FileSystemItem[] memory items) {
+        require(attesters.length <= MAX_ATTESTERS_PER_QUERY, "Too many attesters");
         // Collect from all attesters, dedup by UID
         bytes32[] memory temp = new bytes32[](length * attesters.length);
         uint256 count = 0;
