@@ -1,10 +1,25 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Project conventions and architecture overview for Claude Code working in this repository.
+
+> **All agents (Claude, Codex, Cursor, Gemini, etc.):** start with `AGENTS.md`. It defines the cross-tool workflow, escalation rules, and discovery order. This file (`CLAUDE.md`) is loaded by Claude Code automatically and contains the project-specific orientation.
 
 ## Project Overview
 
 EFS (Ethereum File System) is an on-chain file system built on EAS (Ethereum Attestation Service) attestations. It uses Scaffold-ETH 2 as a base framework. The system stores files/folders as on-chain attestations and serves them via `web3://` URIs.
+
+The data model is **three-layer**: Anchors (paths) → DATA (content identity) → MIRRORs (retrieval URIs), connected by TAGs. See `docs/adr/0001-three-layer-data-model.md` for the full reasoning.
+
+## Documentation map
+
+- **`AGENTS.md`** — workflow rules for AI agents (escalation tiers, discovery order, decision logging)
+- **`docs/specs/`** — current system behavior (authoritative for "how does X work today?")
+- **`docs/adr/`** — architectural decisions and reasoning (immutable; see `docs/adr/README.md`)
+- **`docs/QUESTIONS.md`** — open items needing James's input
+- **`docs/FUTURE_WORK.md`** — known backlog (post-launch and beyond)
+- **`docs/LAUNCH_CHECKLIST.md`** — pre-launch blockers
+- **`docs/decisions.md`** — informal dated log of small decisions made by agents
+- **`reference/`** — external specs (EAS, EIPs, Scaffold-ETH)
 
 ## Development Setup
 
@@ -56,36 +71,41 @@ cd packages/hardhat && npx hardhat test test/EFSIndexer.test.ts --network hardha
 
 ### Monorepo Structure
 - `packages/hardhat/` — Solidity contracts + deploy scripts
-- `packages/nextjs/` — Next.js frontend (App Router)
+- `packages/nextjs/` — Next.js frontend (App Router, internal devtools UI)
 - `reference/` — EAS docs, Scaffold-ETH docs, EIP specs (4804, 6860, 5219, 6944, 7617, 6821, 7618, 7774)
 
 ### EFS Data Model
 
-Five EAS schema types:
+Six EAS schema types:
 
-| Schema | Fields | Resolver | Purpose |
-|--------|--------|----------|---------|
-| `ANCHOR` | `string name, bytes32 schemaUID` | EFSIndexer | Folders/positions (permanent, non-revocable). `schemaUID` differentiates file anchors, sort anchors, etc. |
-| `DATA` | `string uri, string contentType, string fileMode` | EFSIndexer | File content (uri = `web3://...` pointing to SSTORE2 chunks) |
-| `PROPERTY` | `string key, string value` | EFSIndexer | Key-value metadata attached to anchors |
-| `TAG` | `bytes32 definition, bool applies` | TagResolver | Labels/tags (singleton per attester+target+definition) |
-| `SORT_INFO` | `address sortFunc, bytes32 targetSchema` | EFSSortOverlay | Sort overlay declaration. `refUID` → naming Anchor (child of directory being sorted). `sortFunc` implements `ISortFunc`. |
+| Schema | Fields | Resolver | Revocable | Purpose |
+|--------|--------|----------|-----------|---------|
+| `ANCHOR` | `string name, bytes32 schemaUID` | EFSIndexer | No | Folders/positions. `schemaUID` differentiates file anchors, sort anchors, etc. |
+| `DATA` | `bytes32 contentHash, uint64 size` | EFSIndexer | No | Standalone file identity (`refUID = 0x0`). Cross-referenced via TAG. |
+| `MIRROR` | `bytes32 transportDefinition, string uri` | MirrorResolver | Yes | Retrieval URI. `refUID = DATA UID`. Multiple per DATA allowed. |
+| `TAG` | `bytes32 definition, bool applies` | TagResolver | Yes | Places content at a path: `definition = anchorUID, refUID = dataUID`. Singleton per (attester, target, definition). |
+| `PROPERTY` | `string key, string value` | EFSIndexer | Yes | Key-value metadata. `refUID = parent attestation UID`. |
+| `SORT_INFO` | `address sortFunc, bytes32 targetSchema` | EFSSortOverlay | Yes | Sort overlay declaration. `refUID = naming Anchor`. |
 
-Files are stored via SSTORE2 chunking: content is split into 24KB chunks deployed as raw bytecode contracts, then a chunk manager contract is deployed and attested as a `DATA` attestation with a `web3://` URI.
+**Three-layer model**: paths (Anchors) are decoupled from content (DATA, content-hash addressed) which is decoupled from retrieval (MIRRORs). Files are placed at paths via TAG attestations. See `docs/adr/0001-three-layer-data-model.md`.
 
-**Kernel/overlay architecture**: EFSIndexer is the append-only kernel — revocations set `_isRevoked[uid]` but never remove from arrays. EFSSortOverlay maintains per-attester sorted linked lists over kernel arrays, populated lazily via `processItems` calls validated by pluggable `ISortFunc` comparators.
+Files are stored via SSTORE2 chunking: content split into 24KB chunks deployed as raw bytecode, then a chunk manager contract is deployed and attested as a MIRROR with a `web3://` URI.
 
-**Curated lists** use positional Anchors: create a directory of child Anchors (named "a0", "a1", etc.), attach a SORT_INFO child with `sortFunc = FractionalSort`, and set a `defaultSort` PROPERTY. Each position Anchor can have per-attester DATA — enabling Editions-style overrides per position.
+**Kernel/overlay architecture**: EFSIndexer is the append-only kernel — revocations set `_isRevoked[uid]` but never remove from arrays. EFSSortOverlay maintains per-parent sorted linked lists, populated lazily via `processItems` calls validated by pluggable `ISortFunc` comparators.
 
-### Smart Contracts (deployed to Sepolia fork)
+### Smart Contracts
 
-- **`Indexer` (EFSIndexer)** — Core kernel. Manages schemas, resolver hooks, path resolution (`resolvePath`, `rootAnchorUID`), directory pagination, and revocation tracking (`isRevoked`). Read functions include `showRevoked` param for filtering. Public index API: `index(uid)`, `indexBatch(uids)`, `indexRevocation(uid)`, `isIndexed(uid)` — allows any EAS attestation from an external resolver to opt into EFSIndexer's discovery layer. Partner contract addresses and schema UIDs are set once after full deployment via `wireContracts()` (deployer-only, one-time) and queryable as public state: `TAG_SCHEMA_UID`, `SORT_INFO_SCHEMA_UID`, `tagResolver`, `sortOverlay`, `schemaRegistry` — single entry point for all schema/contract discovery. Emits `AnchorCreated`, `DataCreated`, `PropertyCreated`, `AttestationRevoked` events from native schema hooks — enables efficient off-chain indexing (The Graph) without scanning all EAS events. `getChildrenByAttesterAt(parentUID, attester, idx)` exposes single-element kernel array access by physical index. `getAnchorsBySchemaAndAddressList(parentUID, anchorSchema, attesters, startCursor, pageSize, reverseOrder, showRevoked)` — schema + attester filtered pagination: intersects `_childrenBySchema[anchorSchema]` with `_containsAttestations` per attester — use to fetch only file Anchors (DATA_SCHEMA), only sort Anchors (SORT_INFO_SCHEMA), etc. from a multi-attester directory without mixing unrelated anchor types.
-- **`EFSRouter`** — Implements `IDecentralizedApp` for `web3://` URI resolution (ERC-5219 mode). Takes path segments and returns file content.
-- **`EFSFileView`** — Enriched directory listing views over EFSIndexer. `getDirectoryPage` (simple), `getDirectoryPageByAddressList` (attester-filtered), and `getDirectoryPageBySchemaAndAddressList(parentAnchor, anchorSchema, attesters, startingCursor, pageSize)` (schema + attester filtered — use this to fetch only file Anchors, only sort Anchors, etc. without mixing types). Returns `FileSystemItem[]` structs with metadata resolved from EAS.
-- **`TagResolver`** — Singleton tagging pattern: one active tag per (attester, target, definition). Wired to EFSIndexer: `onAttest` calls `indexer.index(uid)` and `onRevoke` calls `indexer.indexRevocation(uid)` — TAG attestations are discoverable via EFSIndexer's generic indices (`getReferencingAttestations`, `getOutgoingAttestations`, etc.) just like any other schema.
-- **`EFSSortOverlay`** — Per-attester sorted linked lists for SORT_INFO schemas. `processItems(sortInfoUID, items, leftHints, rightHints)` lazily processes kernel items — validates each item against the kernel via `getChildrenByAttesterAt` before inserting (integrity guarantee: callers cannot inject arbitrary UIDs). `getSortedChunk(sortInfoUID, attester, startNode, limit)` for cursor-based pagination. `getSortStaleness(sortInfoUID, attester)` shows unprocessed count. `computeHints(sortInfoUID, attester, newItems)` is a view function (free `eth_call`) that computes correct `leftHints`/`rightHints` using binary search — no client-side sort logic needed. `SortConfig` caches `parentUID` at attest time (no EAS call chain needed at read time). Calls `indexer.index()` and `indexer.indexRevocation()` from its resolver hooks so SORT_INFO attestations are fully discoverable on-chain via `getReferencingAttestations`.
-- **`AlphabeticalSort`** / **`TimestampSort`** — Reference `ISortFunc` implementations.
-- Deploy scripts: `01_indexer.ts` → `02_fileview.ts` → `03_router.ts` → `04_sortoverlay.ts`
+- **`EFSIndexer`** — Core kernel. Manages schemas, resolver hooks, path resolution (`resolvePath`, `rootAnchorUID`), directory pagination, revocation tracking (`isRevoked`), the `_qualifyingFolders` write-time index, and content-hash dedup (`dataByContentKey`). Partner contracts wired once via `wireContracts()` (deployer-only, one-time, **no escape hatch on mainnet**). Schema UIDs are immutable. Emits per-schema events for off-chain indexing.
+- **`EFSRouter`** — Implements `IDecentralizedApp` for `web3://` URI resolution (ERC-5219 mode). Trace: path → `?editions=` parsing (or fallback to `?caller=` then deployer) → TAG-based DATA lookup → mirror priority resolution → SSTORE2 fetch (web3://) or `message/external-body` redirect (other transports).
+- **`EFSFileView`** — Enriched directory listing views over EFSIndexer. Three variants:
+  - `getDirectoryPage(parentAnchor, start, length, dataSchemaUID, propertySchemaUID)` — all children, insertion order
+  - `getDirectoryPageByAddressList(parentAnchor, attesters, startingCursor, pageSize)` — attester-filtered
+  - `getDirectoryPageBySchemaAndAddressList(parentAnchor, anchorSchema, attesters, startingCursor, pageSize)` — schema + attester filtered
+- **`TagResolver`** — Singleton tagging pattern: one active tag per (attester, target, definition). Compact `_activeByAAS` index uses swap-and-pop for O(1) removal. Wired bidirectionally with EFSIndexer (`propagateContains` / `clearContains`).
+- **`MirrorResolver`** — Validates MIRROR attestations. Enforces transport ancestry (`transportDefinition` must descend from `/transports/` anchor), URI scheme allowlist (web3, ipfs, ar, https, magnet), and 8KB URI length cap.
+- **`EFSSortOverlay`** — Per-parent sorted linked lists. `processItems` lazily inserts new items with binary-search hints. `computeHints` is a free view function (eth_call) that computes correct hints client-side via binary search.
+- **`NameSort`** / **`TimestampSort`** — Reference `ISortFunc` implementations.
+- Deploy order: `01_indexer.ts` → `02_fileview.ts` → `03_router.ts` → `04_sortoverlay.ts` → `05_mirrors.ts` → `06_sort_functions.ts`. Final step: `wireContracts()` on EFSIndexer.
 
 EAS contracts (Sepolia addresses used in fork):
 - EAS: `0xC2679fBD37d54388Ce493F1DB75320D236e1815e`
@@ -93,7 +113,7 @@ EAS contracts (Sepolia addresses used in fork):
 
 ### Internal DevTools Architecture
 
-> **Note:** These pages apply only to the Scaffold-ETH internal debugging UI (`packages/nextjs`). The true **EFS Client UI** (Vite/Lit) lives in a completely separate external repository.
+> **Note:** The pages in `packages/nextjs/` are the internal Scaffold-ETH debugging UI. The production **EFS Client UI** (Vite/Lit) lives in a separate external repository.
 
 **Pages** (`packages/nextjs/app/`):
 - `/` — Landing page
@@ -105,33 +125,21 @@ EAS contracts (Sepolia addresses used in fork):
 **Explorer data flow:**
 1. `explorer/[[...path]]/page.tsx` resolves the URL path → anchor UID via `Indexer.resolvePath()`, manages `editionAddresses` (the attester filter)
 2. `TopicTree.tsx` renders the folder sidebar using `getDirectoryPage`
-3. `FileBrowser.tsx` renders directory contents — uses `getDirectoryPage` (all files) or `getDirectoryPageByAddressList` (filtered by attester addresses)
-4. `Toolbar.tsx` handles file upload (SSTORE2 chunking + DATA attestation) and folder creation (ANCHOR attestation)
+3. `FileBrowser.tsx` renders directory contents — uses `getDirectoryPageBySchemaAndAddressList` (filtered by attester addresses)
+4. `Toolbar.tsx` handles file upload (SSTORE2 chunking + DATA + MIRROR + TAG attestations) and folder creation (ANCHOR attestation)
 
 **Editions system** (`?editions=` query param):
 - Empty / no param → show only files from connected wallet (`[connectedAddress]`)
 - `?editions=0xABC,vitalik.eth` → show files from those addresses (ENS names resolved async via `publicClient.getEnsAddress`)
 - `editionAddresses` is derived synchronously via `useMemo` to prevent flash of unfiltered data on account switch
 - `lockedToEditions` ref in `FileBrowser` prevents reverting to standard query during transient empty states
+- See `docs/adr/0031-editions-url-param-model.md` for the design rationale
 
 **Key hooks** (`packages/nextjs/hooks/scaffold-eth/`):
 - `useScaffoldReadContract` — reads from deployed contracts by name (resolves address from `deployedContracts.ts`)
 - `useScaffoldWriteContract` — writes to deployed contracts
 - `useDeployedContractInfo` — gets ABI + address for a contract name
 - `useTargetNetwork` — returns the configured chain from `scaffold.config.ts`
-
-**`EFSFileView` API signatures** (important — arg counts vary per function):
-```ts
-// All children, insertion order (basic paging)
-getDirectoryPage(parentAnchor, start, length, dataSchemaUID, propertySchemaUID)
-
-// All children filtered by attester set (4 args — no schema UIDs)
-getDirectoryPageByAddressList(parentAnchor, attesters, startingCursor, pageSize)
-
-// Children of a specific anchorSchema filtered by attester set (5 args)
-getDirectoryPageBySchemaAndAddressList(parentAnchor, anchorSchema, attesters, startingCursor, pageSize)
-```
-`getDirectoryPage` is the only variant that takes `dataSchemaUID`/`propertySchemaUID` explicitly — the others read them from the indexer. Use `getDirectoryPageBySchemaAndAddressList` to fetch only file Anchors, only sort Anchors, etc.
 
 ### Dev Wallet Switcher
 
@@ -144,3 +152,7 @@ After changing contracts and redeploying, regenerate the TypeScript ABIs:
 yarn deploy  # auto-runs generateTsAbis script
 ```
 Generated ABIs land in `packages/nextjs/contracts/deployedContracts.ts`.
+
+## Mainnet permanence
+
+**Contracts on mainnet are permanent.** No proxies, no upgradeability. This is intentional (credible neutrality) — see `docs/adr/0030-mainnet-permanence.md`. Devnet/Sepolia may use upgradeable proxies during the design phase; mainnet does not. **Any change that would require a future migration must be flagged in `docs/QUESTIONS.md` before being implemented.**
