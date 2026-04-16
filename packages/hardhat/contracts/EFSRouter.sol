@@ -167,8 +167,8 @@ contract EFSRouter is IDecentralizedApp {
         // 3. Get best MIRROR for retrieval URI (scoped to the edition attester)
         (string memory uri, bool hadMirrors) = _getBestMirrorURI(dataUID, dataAttester);
 
-        // 4. Get contentType from PROPERTY on DATA
-        string memory contentType = _getContentType(dataUID);
+        // 4. Get contentType from PROPERTY on DATA, scoped to the edition attester
+        string memory contentType = _getContentType(dataUID, dataAttester);
 
         // 5. Content Retrieval & Translation
         if (bytes(uri).length == 0) {
@@ -534,14 +534,17 @@ contract EFSRouter is IDecentralizedApp {
         return (best, hadMirrors);
     }
 
-    // Get contentType from PROPERTY on DATA
-    function _getContentType(bytes32 dataUID) private view returns (string memory) {
+    // Get contentType from PROPERTY on DATA, scoped to the edition attester.
+    // Only properties authored by `attester` are considered — prevents third parties from
+    // overriding the MIME type by attaching a later PROPERTY to someone else's DATA.
+    function _getContentType(bytes32 dataUID, address attester) private view returns (string memory) {
         bytes32 propertySchema = indexer.PROPERTY_SCHEMA_UID();
         bytes32[] memory props = indexer.getReferencingAttestations(dataUID, propertySchema, 0, 20, true);
 
         for (uint256 i = 0; i < props.length; i++) {
             if (indexer.isRevoked(props[i])) continue;
             IEAS.Attestation memory propAtt = eas.getAttestation(props[i]);
+            if (propAtt.attester != attester) continue;
             (string memory key, string memory value) = abi.decode(propAtt.data, (string, string));
             if (keccak256(bytes(key)) == keccak256("contentType") && bytes(value).length > 0) return value;
         }

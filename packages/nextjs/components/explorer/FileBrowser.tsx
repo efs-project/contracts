@@ -1278,6 +1278,7 @@ export const FileBrowser = ({
                   title={selectedFile.name}
                   className="w-full rounded cursor-pointer"
                   style={{ height: "60vh" }}
+                  sandbox="allow-same-origin"
                   onClick={() => setPreviewFullscreen(true)}
                 />
               ) : fileContentType?.startsWith("video/") ? (
@@ -1395,6 +1396,7 @@ export const FileBrowser = ({
                     title={selectedFile.name}
                     className="rounded"
                     style={{ width: "90vw", height: "85vh" }}
+                    sandbox="allow-same-origin"
                   />
                 ) : fileContentType?.startsWith("video/") ? (
                   <video src={fileContent} controls className="max-w-[90vw] max-h-[85vh] object-contain" />

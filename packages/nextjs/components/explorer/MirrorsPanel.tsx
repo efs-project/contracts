@@ -128,7 +128,10 @@ export const MirrorsPanel = ({
     if (!publicClient || !tagResolverInfo || !easInfo || !dataSchemaUID || !fileAnchorUID) return;
 
     const attesters = editionAddresses.length > 0 ? editionAddresses : connectedAddress ? [connectedAddress] : [];
-    if (attesters.length === 0) return;
+    if (attesters.length === 0) {
+      setDataUID(null);
+      return;
+    }
 
     for (const attester of attesters) {
       try {

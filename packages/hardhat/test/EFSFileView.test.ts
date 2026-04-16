@@ -65,8 +65,8 @@ describe("EFSFileView", function () {
     const rc2 = await tx2.wait();
     propertySchemaUID = rc2!.logs[0].topics[1];
 
-    // Data (aligned with EFSRouter: string uri, string contentType, string fileMode)
-    const tx3 = await registry.register("string uri, string contentType, string fileMode", futureIndexerAddr, true);
+    // Data (non-revocable, content-addressed — matches EFSIndexer DATA_SCHEMA_UID)
+    const tx3 = await registry.register("bytes32 contentHash, uint64 size", futureIndexerAddr, false);
     const rc3 = await tx3.wait();
     dataSchemaUID = rc3!.logs[0].topics[1];
 

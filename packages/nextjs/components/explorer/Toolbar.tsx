@@ -217,6 +217,7 @@ export const Toolbar = ({
       if (sizeNum > 0 && sizeNum <= 10 * 1024 * 1024) {
         notification.info("Downloading file to compute content hash...");
         const getResp = await fetch(gatewayUrl);
+        if (!getResp.ok) throw new Error(`HTTP ${getResp.status}`);
         const bytes = new Uint8Array(await getResp.arrayBuffer());
         setPasteSize(String(bytes.length));
         setPasteContentHash(computeContentHash(bytes));
@@ -246,8 +247,9 @@ export const Toolbar = ({
               chunks.push(value);
               totalBytes += value.length;
             }
-          } catch {
-            // AbortError expected when we cancel; other errors bubble to outer catch
+          } catch (err) {
+            // AbortError is expected when we cancel; re-throw anything else
+            if (err instanceof Error && err.name !== "AbortError") throw err;
           }
         }
         if (truncated) {

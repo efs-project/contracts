@@ -29,6 +29,7 @@ contract MirrorResolver is SchemaResolver {
     error InvalidData();
     error InvalidTransport();
     error URITooLong();
+    error InvalidURIScheme();
 
     /// @notice Maximum allowed byte length for a MIRROR URI.
     uint256 public constant MAX_URI_LENGTH = 8192;
@@ -46,9 +47,10 @@ contract MirrorResolver is SchemaResolver {
         Attestation memory target = _eas.getAttestation(attestation.refUID);
         if (target.schema != indexer.DATA_SCHEMA_UID()) return false;
 
-        // Validate transportDefinition is a valid Anchor and URI is within length limit
+        // Validate transportDefinition is a valid Anchor and URI passes scheme/length checks
         (bytes32 transportDefinition, string memory uri) = abi.decode(attestation.data, (bytes32, string));
         if (bytes(uri).length > MAX_URI_LENGTH) revert URITooLong();
+        if (!_isAllowedScheme(uri)) revert InvalidURIScheme();
         if (transportDefinition == EMPTY_UID) revert InvalidTransport();
         Attestation memory transport = _eas.getAttestation(transportDefinition);
         if (transport.schema != indexer.ANCHOR_SCHEMA_UID()) revert InvalidTransport();
@@ -61,6 +63,27 @@ contract MirrorResolver is SchemaResolver {
 
     function onRevoke(Attestation calldata attestation, uint256 /*value*/) internal override returns (bool) {
         indexer.indexRevocation(attestation.uid);
+        return true;
+    }
+
+    /// @dev Returns true iff the URI starts with a known-safe scheme.
+    /// Rejects javascript:, data:, ftp:, and other schemes that could be
+    /// executed or misinterpreted by clients.
+    function _isAllowedScheme(string memory uri) private pure returns (bool) {
+        bytes memory u = bytes(uri);
+        if (_startsWith(u, "web3://"))  return true;
+        if (_startsWith(u, "ipfs://"))  return true;
+        if (_startsWith(u, "ar://"))    return true;
+        if (_startsWith(u, "https://")) return true;
+        if (_startsWith(u, "magnet:"))  return true;
+        return false;
+    }
+
+    function _startsWith(bytes memory str, bytes memory prefix) private pure returns (bool) {
+        if (str.length < prefix.length) return false;
+        for (uint256 i = 0; i < prefix.length; i++) {
+            if (str[i] != prefix[i]) return false;
+        }
         return true;
     }
 }

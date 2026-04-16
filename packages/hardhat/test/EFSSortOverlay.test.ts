@@ -63,7 +63,7 @@ describe("EFSSortOverlay", function () {
     const tx2 = await registry.register("string key, string value", futureIndexerAddr, true);
     propertySchemaUID = (await tx2.wait())!.logs[0].topics[1];
 
-    const tx3 = await registry.register("string uri, string contentType, string fileMode", futureIndexerAddr, true);
+    const tx3 = await registry.register("bytes32 contentHash, uint64 size", futureIndexerAddr, false);
     dataSchemaUID = (await tx3.wait())!.logs[0].topics[1];
 
     const tx4 = await registry.register("string mimeType, uint8 storageType, bytes location", ZeroAddress, true);
