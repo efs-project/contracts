@@ -876,9 +876,10 @@ describe("EFSRouter Web3 Capabilities", function () {
 
       // Pass owner first (has no DATA here), then user2 (has DATA) — should fall through to user2
       const noDataAddr = ownerAddr;
-      const [statusCode, body] = await router.request(["ideas", "fallthrough.txt"], [
-        { key: "editions", value: `${noDataAddr},${u2Addr}` },
-      ]);
+      const [statusCode, body] = await router.request(
+        ["ideas", "fallthrough.txt"],
+        [{ key: "editions", value: `${noDataAddr},${u2Addr}` }],
+      );
       expect(statusCode).to.equal(200);
       expect(Buffer.from(ethers.getBytes(body)).toString()).to.equal("user2 file content");
     });
