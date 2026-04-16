@@ -356,8 +356,10 @@ contract EFSRouter is IDecentralizedApp {
 
         uint160 parsed = 0;
         for (uint i = 0; i < 40; i++) {
+            uint8 nibble = _hexCharToByte(uint8(addrBytes[offset + i]));
+            if (nibble == 0xFF) return address(0); // non-hex char — malformed
             parsed *= 16;
-            parsed += _hexCharToByte(uint8(addrBytes[offset + i]));
+            parsed += nibble;
         }
         return address(parsed);
     }

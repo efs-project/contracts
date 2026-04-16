@@ -34,35 +34,10 @@ const deployMirrors: DeployFunction = async function (hre: HardhatRuntimeEnviron
   const indexerAddress = indexerDeployment.address;
   console.log("Using EFSIndexer at:", indexerAddress);
 
-  // 3. Nonce prediction for MirrorResolver address
-  // Deployment order:
-  //   nonce+0: Register MIRROR schema
-  //   nonce+1: Deploy MirrorResolver
-  const currentNonce = await ethers.provider.getTransactionCount(deployer);
-  console.log("Current Nonce:", currentNonce);
-
-  const futureMirrorResolverAddress = ethers.getCreateAddress({ from: deployer, nonce: currentNonce + 1 });
-  console.log("Predicted MirrorResolver Address:", futureMirrorResolverAddress);
-
-  // 4. Register MIRROR schema
-  const mirrorDefinition = "bytes32 transportDefinition, string uri";
-  const mirrorRevocable = true;
-
-  const mirrorSchemaUID = ethers.solidityPackedKeccak256(
-    ["string", "address", "bool"],
-    [mirrorDefinition, futureMirrorResolverAddress, mirrorRevocable],
-  );
-  console.log("Registering MIRROR schema:", mirrorSchemaUID);
-
-  try {
-    const tx = await schemaRegistry.register(mirrorDefinition, futureMirrorResolverAddress, mirrorRevocable);
-    await tx.wait();
-    console.log("Registered MIRROR schema");
-  } catch {
-    console.log("Failed to register MIRROR (likely already exists). Skipping.");
-  }
-
-  // 5. Deploy MirrorResolver
+  // 3. Deploy MirrorResolver first, then register schema with its actual address.
+  //    This avoids nonce-prediction fragility: if schema registration were first and
+  //    failed during gas estimation (no tx sent), no nonce would be consumed and the
+  //    resolver would deploy at the wrong address.
   await deploy("MirrorResolver", {
     contract: "MirrorResolver",
     from: deployer,
@@ -72,11 +47,25 @@ const deployMirrors: DeployFunction = async function (hre: HardhatRuntimeEnviron
   });
 
   const mirrorResolver = await hre.ethers.getContract<Contract>("MirrorResolver", deployer);
-  console.log("MirrorResolver deployed at:", mirrorResolver.target);
+  const mirrorResolverAddress = mirrorResolver.target as string;
+  console.log("MirrorResolver deployed at:", mirrorResolverAddress);
 
-  if (mirrorResolver.target !== futureMirrorResolverAddress) {
-    console.warn("WARNING: MirrorResolver address different from predicted!");
-    console.warn(`Expected: ${futureMirrorResolverAddress}, Got: ${mirrorResolver.target}`);
+  // 4. Register MIRROR schema using the actual resolver address
+  const mirrorDefinition = "bytes32 transportDefinition, string uri";
+  const mirrorRevocable = true;
+
+  const mirrorSchemaUID = ethers.solidityPackedKeccak256(
+    ["string", "address", "bool"],
+    [mirrorDefinition, mirrorResolverAddress, mirrorRevocable],
+  );
+  console.log("Registering MIRROR schema:", mirrorSchemaUID);
+
+  try {
+    const tx = await schemaRegistry.register(mirrorDefinition, mirrorResolverAddress, mirrorRevocable);
+    await tx.wait();
+    console.log("Registered MIRROR schema");
+  } catch {
+    console.log("Failed to register MIRROR (likely already exists). Skipping.");
   }
 
   // 6. Wire ALL partner contracts into EFSIndexer
