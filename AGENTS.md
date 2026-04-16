@@ -41,7 +41,6 @@ cd packages/hardhat && npx hardhat test test/EFSIndexer.test.ts --network hardha
 
 ## Critical
 
-- **Mainnet contracts are permanent.** Any change that would require post-launch migration is Tier 1 — stop and ask. See [agent-workflow.md](./docs/agent-workflow.md).
 - **Specs are authoritative.** If specs and code disagree, surface it (likely Tier 2). Don't guess which is right.
 - **ADRs are immutable once Accepted.** Don't edit historical ones. Supersede instead.
 
