@@ -37,6 +37,15 @@ interface IEFSIndexer {
         bool reverseOrder
     ) external view returns (bytes32[] memory);
 
+    function getReferencingBySchemaAndAttester(
+        bytes32 targetUID,
+        bytes32 schemaUID,
+        address attester,
+        uint256 start,
+        uint256 length,
+        bool reverseOrder
+    ) external view returns (bytes32[] memory);
+
     function isRevoked(bytes32 uid) external view returns (bool);
 
     function DATA_SCHEMA_UID() external view returns (bytes32);
@@ -329,12 +338,13 @@ contract EFSRouter is IDecentralizedApp {
 
         for (uint i = 0; i < strBytes.length; i++) {
             if (strBytes[i] == ",") {
+                if (addrIdx >= count) break; // stop writing once array is full
                 addresses[addrIdx++] = _parseAddress(_substring(addrListStr, lastSplit, i));
                 lastSplit = i + 1;
             }
         }
 
-        if (lastSplit < strBytes.length) {
+        if (addrIdx < count && lastSplit < strBytes.length) {
             addresses[addrIdx] = _parseAddress(_substring(addrListStr, lastSplit, strBytes.length));
         }
 
@@ -499,7 +509,9 @@ contract EFSRouter is IDecentralizedApp {
         bytes32 mirrorSchema = indexer.MIRROR_SCHEMA_UID();
         if (mirrorSchema == bytes32(0)) return ("", false); // MIRROR not wired yet
 
-        bytes32[] memory mirrors = indexer.getReferencingAttestations(dataUID, mirrorSchema, 0, 50, true);
+        // Use the per-(data,schema,attester) index so spam mirrors from other addresses
+        // cannot push the edition attester's mirrors out of the scanned window.
+        bytes32[] memory mirrors = indexer.getReferencingBySchemaAndAttester(dataUID, mirrorSchema, attester, 0, 50, true);
 
         string memory best = "";
         uint256 bestPriority = 99;
@@ -508,7 +520,6 @@ contract EFSRouter is IDecentralizedApp {
         for (uint256 i = 0; i < mirrors.length; i++) {
             if (indexer.isRevoked(mirrors[i])) continue;
             IEAS.Attestation memory mirrorAtt = eas.getAttestation(mirrors[i]);
-            if (mirrorAtt.attester != attester) continue; // only mirrors from the edition attester
             hadMirrors = true;
 
             (, string memory uri) = abi.decode(mirrorAtt.data, (bytes32, string));
