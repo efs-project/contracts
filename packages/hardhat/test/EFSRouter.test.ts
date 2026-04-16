@@ -801,5 +801,112 @@ describe("EFSRouter Web3 Capabilities", function () {
       expect(statusCode).to.equal(200);
       expect(headers.find((h: any) => h.key === "Content-Type")?.value).to.equal("application/octet-stream");
     });
+
+    it("Should serve content with no ?editions= param (falls back to anchor attester)", async function () {
+      // When no editions param is supplied, _findDataAtPath falls back to
+      // eas.getAttestation(targetAnchor).attester. The anchor was created by owner,
+      // so owner's DATA (placed via TAG) should be found.
+      const targetAddress = ethers.getAddress("0x00000000000000000000000000000000000000A0");
+      await setCode(targetAddress, "0x00" + Buffer.from("bare web3 content").toString("hex"));
+
+      const fileAnchorUID = await createFileAnchor(ideasUID, "bare_web3.txt");
+      const dataUID = await createData("bare web3 content");
+      await addProperty(dataUID, "contentType", "text/plain");
+      await addMirror(dataUID, onchainTransportUID, `web3://${targetAddress}`);
+      await tagAtPath(dataUID, fileAnchorUID, true);
+
+      // Request with NO editions param — empty array
+      const [statusCode, body] = await router.request(["ideas", "bare_web3.txt"], []);
+      expect(statusCode).to.equal(200);
+      expect(Buffer.from(ethers.getBytes(body)).toString()).to.equal("bare web3 content");
+    });
+
+    it("Should prefer ar:// over ipfs:// when both mirrors exist", async function () {
+      // ar:// priority = 1, ipfs:// priority = 2 — arweave should win
+      const fileAnchorUID = await createFileAnchor(ideasUID, "priority_test.txt");
+      const dataUID = await createData("priority-content");
+      await addProperty(dataUID, "contentType", "text/plain");
+      await addMirror(dataUID, ipfsTransportUID, "ipfs://QmPriorityTest");
+      await addMirror(dataUID, arweaveTransportUID, "ar://ArweavePriorityTest");
+      await tagAtPath(dataUID, fileAnchorUID, true);
+
+      const [statusCode, , headers] = await router.request(["ideas", "priority_test.txt"], ownerParams());
+      expect(statusCode).to.equal(200);
+      const ct = headers.find((h: any) => h.key === "Content-Type")?.value ?? "";
+      // ar:// mirror wins — Content-Type contains the arweave gateway URI
+      expect(ct).to.include("ArweavePriorityTest");
+      expect(ct).to.not.include("QmPriorityTest");
+    });
+
+    it("Should skip a revoked mirror and return 404 when it was the only mirror", async function () {
+      const fileAnchorUID = await createFileAnchor(ideasUID, "revoked_mirror.txt");
+      const dataUID = await createData("revoked-mirror-content");
+      await addProperty(dataUID, "contentType", "text/plain");
+      const mirrorUID = await addMirror(dataUID, ipfsTransportUID, "ipfs://QmRevoked");
+      await tagAtPath(dataUID, fileAnchorUID, true);
+
+      // Verify it serves before revocation
+      const [statusBefore] = await router.request(["ideas", "revoked_mirror.txt"], ownerParams());
+      expect(statusBefore).to.equal(200);
+
+      // Revoke the mirror
+      await eas.revoke({ schema: mirrorSchemaUID, data: { uid: mirrorUID, value: 0n } });
+
+      // After revocation, the mirror is skipped — no valid mirrors remain → 404
+      const [statusAfter, bodyAfter] = await router.request(["ideas", "revoked_mirror.txt"], ownerParams());
+      expect(statusAfter).to.equal(404);
+      expect(Buffer.from(ethers.getBytes(bodyAfter)).toString()).to.include("No mirror");
+    });
+
+    it("Should continue past editions with no DATA and serve from a later edition", async function () {
+      // First edition has no DATA at this anchor; second edition has a file.
+      // Router should skip the first and serve from the second.
+      const [, , user2] = await ethers.getSigners();
+      const u2Addr = await user2.getAddress();
+
+      const targetAddress = ethers.getAddress("0x00000000000000000000000000000000000000B0");
+      await setCode(targetAddress, "0x00" + Buffer.from("user2 file content").toString("hex"));
+
+      const fileAnchorUID = await createFileAnchor(ideasUID, "fallthrough.txt");
+      // Only user2 places a file here; owner does not
+      const dataUID = await createData("user2 file content", user2);
+      await addProperty(dataUID, "contentType", "text/plain", user2);
+      await addMirror(dataUID, onchainTransportUID, `web3://${targetAddress}`, user2);
+      await tagAtPath(dataUID, fileAnchorUID, true, user2);
+
+      // Pass owner first (has no DATA here), then user2 (has DATA) — should fall through to user2
+      const noDataAddr = ownerAddr;
+      const [statusCode, body] = await router.request(["ideas", "fallthrough.txt"], [
+        { key: "editions", value: `${noDataAddr},${u2Addr}` },
+      ]);
+      expect(statusCode).to.equal(200);
+      expect(Buffer.from(ethers.getBytes(body)).toString()).to.equal("user2 file content");
+    });
+
+    it("Should pick the DATA with the highest attestation timestamp when multiple are active", async function () {
+      // Two DATAs placed at the same anchor by the same attester — newest timestamp wins.
+      const addr1 = ethers.getAddress("0x00000000000000000000000000000000000000C0");
+      const addr2 = ethers.getAddress("0x00000000000000000000000000000000000000C1");
+      await setCode(addr1, "0x00" + Buffer.from("version 1").toString("hex"));
+      await setCode(addr2, "0x00" + Buffer.from("version 2").toString("hex"));
+
+      const fileAnchorUID = await createFileAnchor(ideasUID, "versioned.txt");
+
+      // Create two DATAs and place both at the same anchor (unusual but valid)
+      const dataUID1 = await createData("version 1");
+      await addProperty(dataUID1, "contentType", "text/plain");
+      await addMirror(dataUID1, onchainTransportUID, `web3://${addr1}`);
+      await tagAtPath(dataUID1, fileAnchorUID, true);
+
+      const dataUID2 = await createData("version 2");
+      await addProperty(dataUID2, "contentType", "text/plain");
+      await addMirror(dataUID2, onchainTransportUID, `web3://${addr2}`);
+      await tagAtPath(dataUID2, fileAnchorUID, true);
+
+      // dataUID2 was attested after dataUID1 → higher timestamp → should be served
+      const [statusCode, body] = await router.request(["ideas", "versioned.txt"], ownerParams());
+      expect(statusCode).to.equal(200);
+      expect(Buffer.from(ethers.getBytes(body)).toString()).to.equal("version 2");
+    });
   });
 });
