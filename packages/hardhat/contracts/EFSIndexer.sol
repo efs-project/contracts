@@ -244,6 +244,26 @@ contract EFSIndexer is SchemaResolver {
     }
 
     function _propagateContains(bytes32 anchorUID, address attester) private {
+        // If the starting anchor is a file-type anchor (e.g. called from TagResolver when a TAG
+        // places DATA there), populate _qualifyingFolders for any generic ancestor folders —
+        // same walk as ANCHOR creation.  Without this, tag-only contributors (who never created
+        // the anchor themselves) would never appear in getDirectoryPageBySchemaAndAddressList.
+        bytes32 anchorSchema = _anchorSchemaOf[anchorUID];
+        bytes32 startParent = _parents[anchorUID];
+        if (anchorSchema != bytes32(0) && startParent != bytes32(0)) {
+            bytes32 folder = startParent;
+            bytes32 ancestor = _parents[folder];
+            uint256 d = 0;
+            while (ancestor != bytes32(0) && _anchorSchemaOf[folder] == bytes32(0) && d++ < MAX_ANCHOR_DEPTH) {
+                if (!_hasQualifyingFolder[ancestor][anchorSchema][attester][folder]) {
+                    _qualifyingFolders[ancestor][anchorSchema][attester].push(folder);
+                    _hasQualifyingFolder[ancestor][anchorSchema][attester][folder] = true;
+                }
+                folder = ancestor;
+                ancestor = _parents[folder];
+            }
+        }
+
         bytes32 current = anchorUID;
         uint256 depth = 0;
         while (current != bytes32(0)) {

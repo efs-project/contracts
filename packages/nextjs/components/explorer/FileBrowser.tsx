@@ -502,15 +502,14 @@ export const FileBrowser = ({
                 if (gatewayUrl) {
                   // Fetch from gateway
                   const gatewayResp = await globalThis.fetch(gatewayUrl);
-                  if (gatewayResp.ok) {
-                    const buf = await gatewayResp.arrayBuffer();
-                    const bytes = new Uint8Array(buf);
-                    for (let i = 0; i < bytes.length; i++) result.push(bytes[i]);
-                    // Use gateway content-type as fallback if we didn't get one from the contract
-                    if (contentTypeStr === "text/plain") {
-                      const gwCt = gatewayResp.headers.get("content-type");
-                      if (gwCt) contentTypeStr = gwCt.split(";")[0].trim();
-                    }
+                  if (!gatewayResp.ok) throw new Error(`Gateway returned ${gatewayResp.status} for ${gatewayUrl}`);
+                  const buf = await gatewayResp.arrayBuffer();
+                  const bytes = new Uint8Array(buf);
+                  for (let i = 0; i < bytes.length; i++) result.push(bytes[i]);
+                  // Use gateway content-type as fallback if we didn't get one from the contract
+                  if (contentTypeStr === "text/plain") {
+                    const gwCt = gatewayResp.headers.get("content-type");
+                    if (gwCt) contentTypeStr = gwCt.split(";")[0].trim();
                   }
                 }
                 hasMoreChunks = false;
@@ -570,7 +569,9 @@ export const FileBrowser = ({
       setFileContent(null);
       setFetchError(err.message || String(e));
     } finally {
-      setIsFileLoading(false);
+      // Only clear the loading flag if this fetch is still the active one —
+      // a stale fetch completing should not stop the spinner for the newer request.
+      if (fetchId === fetchIdRef.current) setIsFileLoading(false);
     }
   };
 

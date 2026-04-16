@@ -306,13 +306,16 @@ export const MirrorsPanel = ({
     }
   };
 
-  /** Create a MIRROR attestation referencing the DATA UID. */
-  const createMirrorAttestation = async (transportName: string, mirrorUri: string) => {
-    if (!mirrorSchemaUID || !dataUID) return;
+  /** Create a MIRROR attestation referencing the DATA UID. Returns true if a tx was sent. */
+  const createMirrorAttestation = async (transportName: string, mirrorUri: string): Promise<boolean> => {
+    if (!mirrorSchemaUID || !dataUID) {
+      notification.error("Mirror schema or DATA UID not available.");
+      return false;
+    }
     const transportAnchorUID = await resolveTransportAnchorUID(transportName);
     if (!transportAnchorUID) {
       notification.error(`Transport anchor '/transports/${transportName}' not found.`);
-      return;
+      return false;
     }
     const encodedMirror = ethers.AbiCoder.defaultAbiCoder().encode(
       ["bytes32", "string"],
@@ -337,7 +340,7 @@ export const MirrorsPanel = ({
     if (txHash && publicClient) {
       await publicClient.waitForTransactionReceipt({ hash: txHash });
     }
-    return txHash;
+    return !!txHash;
   };
 
   const handleAddMirrorByUri = async () => {
@@ -350,7 +353,8 @@ export const MirrorsPanel = ({
         setIsSubmitting(false);
         return;
       }
-      await createMirrorAttestation(detected, newUri);
+      const submitted = await createMirrorAttestation(detected, newUri);
+      if (!submitted) return;
       notification.success(`${TRANSPORT_LABELS[detected as keyof typeof TRANSPORT_LABELS]} mirror added.`);
       setNewUri("");
       setIsAddingMirror(false);
@@ -422,7 +426,8 @@ export const MirrorsPanel = ({
       if (!managerReceipt.contractAddress) throw new Error("Manager deployment failed");
 
       const mirrorUri = `web3://${managerReceipt.contractAddress}:${targetNetwork.id}`;
-      await createMirrorAttestation("onchain", mirrorUri);
+      const submitted = await createMirrorAttestation("onchain", mirrorUri);
+      if (!submitted) return;
 
       notification.success("On-chain mirror added.");
       setFileToUpload(null);

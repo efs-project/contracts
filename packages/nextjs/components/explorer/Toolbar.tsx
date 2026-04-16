@@ -230,6 +230,7 @@ export const Toolbar = ({
         notification.info("Downloading file to determine size and hash (cap: 10 MB)...");
         const controller = new AbortController();
         const getResp = await fetch(gatewayUrl, { signal: controller.signal });
+        if (!getResp.ok) throw new Error(`Gateway returned ${getResp.status} — cannot compute hash`);
         const reader = getResp.body?.getReader();
         const chunks: Uint8Array[] = [];
         let totalBytes = 0;
@@ -703,7 +704,8 @@ export const Toolbar = ({
       // 4) Create MIRROR referencing DATA
       const transportAnchorUID = await resolveTransportAnchor(transportName);
       if (!transportAnchorUID) {
-        notification.error(`Transport anchor '/transports/${transportName}' not found. Skipping mirror.`);
+        notification.error(`Transport anchor '/transports/${transportName}' not found. Aborting upload.`);
+        return; // do not place the file in the folder with no mirror
       } else {
         notification.info(
           `Creating ${TRANSPORT_LABELS[transportName as keyof typeof TRANSPORT_LABELS] || transportName} mirror...`,

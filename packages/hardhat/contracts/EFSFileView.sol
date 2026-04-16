@@ -248,11 +248,16 @@ contract EFSFileView {
         //    Populated when a TAG(definition=anchorSchema, refUID=folder) is attested.
 
         // Upper bound on result size: sum of qualifying counts across all attesters for both sources.
+        uint256 MAX_TAGGED_FOLDERS = 1000;
         uint256 maxSize = 0;
         for (uint256 a = 0; a < attesters.length; a++) {
             maxSize += indexer.getQualifyingFolderCount(parentAnchor, anchorSchema, attesters[a]);
         }
-        maxSize += tagResolver.getChildrenTaggedWithCount(parentAnchor, anchorSchema);
+        // Cap before using as allocation bound — an uncapped count could exhaust call gas/memory
+        // before the safety limit is enforced later.
+        uint256 taggedTotal = tagResolver.getChildrenTaggedWithCount(parentAnchor, anchorSchema);
+        if (taggedTotal > MAX_TAGGED_FOLDERS) taggedTotal = MAX_TAGGED_FOLDERS;
+        maxSize += taggedTotal;
 
         if (maxSize == 0) return new bytes32[](0);
 
@@ -280,9 +285,7 @@ contract EFSFileView {
         // Capped at MAX_TAGGED_FOLDERS — explicit tagging is a deliberate user action so
         // counts are expected to be small. Spam tagging is on-chain write cost for the attacker
         // but only read-side up to this cap.
-        uint256 MAX_TAGGED_FOLDERS = 1000;
-        uint256 taggedCount = tagResolver.getChildrenTaggedWithCount(parentAnchor, anchorSchema);
-        if (taggedCount > MAX_TAGGED_FOLDERS) taggedCount = MAX_TAGGED_FOLDERS;
+        uint256 taggedCount = taggedTotal; // already capped above
         if (taggedCount > 0) {
             bytes32[] memory tagged = tagResolver.getChildrenTaggedWith(parentAnchor, anchorSchema, 0, taggedCount);
             for (uint256 i = 0; i < tagged.length; i++) {

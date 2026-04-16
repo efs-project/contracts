@@ -553,12 +553,13 @@ contract EFSRouter is IDecentralizedApp {
     // overriding the MIME type by attaching a later PROPERTY to someone else's DATA.
     function _getContentType(bytes32 dataUID, address attester) private view returns (string memory) {
         bytes32 propertySchema = indexer.PROPERTY_SCHEMA_UID();
-        bytes32[] memory props = indexer.getReferencingAttestations(dataUID, propertySchema, 0, 20, true);
+        // Use the per-(data,schema,attester) index so PROPERTY attestations from other
+        // addresses cannot displace the edition attester's contentType out of the window.
+        bytes32[] memory props = indexer.getReferencingBySchemaAndAttester(dataUID, propertySchema, attester, 0, 20, true);
 
         for (uint256 i = 0; i < props.length; i++) {
             if (indexer.isRevoked(props[i])) continue;
             IEAS.Attestation memory propAtt = eas.getAttestation(props[i]);
-            if (propAtt.attester != attester) continue;
             (string memory key, string memory value) = abi.decode(propAtt.data, (string, string));
             if (keccak256(bytes(key)) == keccak256("contentType") && bytes(value).length > 0) return value;
         }
