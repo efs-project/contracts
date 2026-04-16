@@ -732,7 +732,6 @@ contract EFSIndexer is SchemaResolver {
         return _eas;
     }
 
-
     function getAllReferencingCount(bytes32 targetUID) external view returns (uint256) {
         return _allReferencing[targetUID].length;
     }

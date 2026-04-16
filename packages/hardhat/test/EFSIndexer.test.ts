@@ -761,10 +761,20 @@ describe("EFSIndexer", function () {
       // getChildrenByAttester with showRevoked=true/false also uses _isRevoked internally
       // (child1 and child2 are non-revocable anchors, so showRevoked has no visible effect here)
       const withRevoked = await indexer["getChildrenByAttester(bytes32,address,uint256,uint256,bool,bool)"](
-        parentUID, await user1.getAddress(), 0, 10, false, true,
+        parentUID,
+        await user1.getAddress(),
+        0,
+        10,
+        false,
+        true,
       );
       const withoutRevoked = await indexer["getChildrenByAttester(bytes32,address,uint256,uint256,bool,bool)"](
-        parentUID, await user1.getAddress(), 0, 10, false, false,
+        parentUID,
+        await user1.getAddress(),
+        0,
+        10,
+        false,
+        false,
       );
       expect(withRevoked.length).to.equal(withoutRevoked.length); // no revocable anchors in this set
     });

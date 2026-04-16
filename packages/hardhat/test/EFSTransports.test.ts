@@ -447,22 +447,30 @@ describe("EFS Transports & Data Model", function () {
       const ownerAddr = await owner.getAddress();
 
       // Initial state: not tagged
-      expect(await tagResolver.getActiveTargetsByAttesterAndSchemaCount(memesUID, ownerAddr, dataSchemaUID)).to.equal(0n);
+      expect(await tagResolver.getActiveTargetsByAttesterAndSchemaCount(memesUID, ownerAddr, dataSchemaUID)).to.equal(
+        0n,
+      );
       expect(await tagResolver.isActivelyTagged(catDataUID, memesUID)).to.equal(false);
 
       // Tag
       await tagTarget(catDataUID, memesUID, true);
-      expect(await tagResolver.getActiveTargetsByAttesterAndSchemaCount(memesUID, ownerAddr, dataSchemaUID)).to.equal(1n);
+      expect(await tagResolver.getActiveTargetsByAttesterAndSchemaCount(memesUID, ownerAddr, dataSchemaUID)).to.equal(
+        1n,
+      );
       expect(await tagResolver.isActivelyTagged(catDataUID, memesUID)).to.equal(true);
 
       // Untag
       await tagTarget(catDataUID, memesUID, false);
-      expect(await tagResolver.getActiveTargetsByAttesterAndSchemaCount(memesUID, ownerAddr, dataSchemaUID)).to.equal(0n);
+      expect(await tagResolver.getActiveTargetsByAttesterAndSchemaCount(memesUID, ownerAddr, dataSchemaUID)).to.equal(
+        0n,
+      );
       expect(await tagResolver.isActivelyTagged(catDataUID, memesUID)).to.equal(false);
 
       // Re-tag: DATA must reappear in the list
       await tagTarget(catDataUID, memesUID, true);
-      expect(await tagResolver.getActiveTargetsByAttesterAndSchemaCount(memesUID, ownerAddr, dataSchemaUID)).to.equal(1n);
+      expect(await tagResolver.getActiveTargetsByAttesterAndSchemaCount(memesUID, ownerAddr, dataSchemaUID)).to.equal(
+        1n,
+      );
       expect(await tagResolver.isActivelyTagged(catDataUID, memesUID)).to.equal(true);
 
       const listed = await tagResolver.getActiveTargetsByAttesterAndSchema(memesUID, ownerAddr, dataSchemaUID, 0, 10);
