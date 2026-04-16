@@ -492,9 +492,10 @@ export const FileBrowser = ({
               // Extract the original URI from: message/external-body; access-type=URL; URL="ipfs://..."
               const urlMatch = externalHeader.value.match(/URL="([^"]+)"/);
               const externalUri = urlMatch?.[1];
-              // Use the second Content-Type header as the actual MIME type
-              const mimeHeader = ctHeaders.find((h: any) => !h.value.includes("message/external-body"));
-              if (mimeHeader) contentTypeStr = mimeHeader.value;
+              // Extract the actual MIME type from the content-type= parameter in the
+              // message/external-body header (router embeds it as a quoted parameter).
+              const ctParam = externalHeader.value.match(/content-type="([^"]+)"/);
+              if (ctParam?.[1]) contentTypeStr = ctParam[1];
 
               if (externalUri) {
                 setFileTransportType(detectTransport(externalUri));

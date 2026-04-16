@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ethers } from "ethers";
 import { encodeDeployData, toHex, zeroHash } from "viem";
 import { useAccount, usePublicClient, useWalletClient } from "wagmi";
@@ -121,11 +121,16 @@ export const MirrorsPanel = ({
   });
   const { data: easInfo } = useDeployedContractInfo({ contractName: "EAS" });
 
+  // Monotonic request ID to prevent stale async results from overwriting current state.
+  const resolveIdRef = useRef(0);
+
   // Resolve DATA UID from file anchor via TAG query.
   // Scans all active targets and picks the one with the highest attestation timestamp
   // because the swap-and-pop array is not chronologically ordered.
   const resolveDataUID = useCallback(async () => {
     if (!publicClient || !tagResolverInfo || !easInfo || !dataSchemaUID || !fileAnchorUID) return;
+
+    const requestId = ++resolveIdRef.current;
 
     const attesters = editionAddresses.length > 0 ? editionAddresses : connectedAddress ? [connectedAddress] : [];
     if (attesters.length === 0) {
@@ -142,8 +147,9 @@ export const MirrorsPanel = ({
           args: [fileAnchorUID as `0x${string}`, attester as `0x${string}`, dataSchemaUID as `0x${string}`],
         })) as bigint;
 
+        if (requestId !== resolveIdRef.current) return; // stale
+
         if (count > 0n) {
-          const scanCount = count > 50n ? 50n : count;
           const targets = (await publicClient.readContract({
             address: tagResolverInfo.address as `0x${string}`,
             abi: TAG_RESOLVER_ABI,
@@ -153,10 +159,11 @@ export const MirrorsPanel = ({
               attester as `0x${string}`,
               dataSchemaUID as `0x${string}`,
               0n,
-              scanCount,
+              count,
             ],
           })) as `0x${string}`[];
 
+          if (requestId !== resolveIdRef.current) return; // stale
           if (targets.length === 0) continue;
 
           // Pick the most recent DATA by attestation timestamp
@@ -176,6 +183,7 @@ export const MirrorsPanel = ({
             }
           }
 
+          if (requestId !== resolveIdRef.current) return; // stale
           if (best && best !== zeroHash) {
             setDataUID(best);
             return;
@@ -186,7 +194,7 @@ export const MirrorsPanel = ({
       }
     }
     // No active DATA found for any attester — clear stale value
-    setDataUID(null);
+    if (requestId === resolveIdRef.current) setDataUID(null);
   }, [publicClient, tagResolverInfo, easInfo, dataSchemaUID, fileAnchorUID, editionAddresses, connectedAddress]);
 
   // Fetch mirrors for the resolved DATA UID

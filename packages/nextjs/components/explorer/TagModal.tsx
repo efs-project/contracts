@@ -136,12 +136,11 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
           if (count > 0n) {
             // Scan all active targets and pick the one with the highest attestation timestamp.
             // The swap-and-pop array is NOT chronologically ordered after removals.
-            const scanCount = count > 50n ? 50n : count;
             const targets = (await publicClient.readContract({
               address: tagResolverAddress,
               abi: TAG_RESOLVER_ABI,
               functionName: "getActiveTargetsByAttesterAndSchema",
-              args: [uid as `0x${string}`, attester, dataSchemaUID as `0x${string}`, 0n, scanCount],
+              args: [uid as `0x${string}`, attester, dataSchemaUID as `0x${string}`, 0n, count],
             })) as `0x${string}`[];
 
             if (targets.length > 0 && easInfo) {

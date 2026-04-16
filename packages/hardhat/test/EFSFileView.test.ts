@@ -199,12 +199,24 @@ describe("EFSFileView", function () {
     await createAnchor("cat.jpg", catsUID, dataSchemaUID);
 
     // Root level: /photos/ must appear
-    const [rootItems] = await fileView.getDirectoryPageBySchemaAndAddressList(rootUID, dataSchemaUID, [ownerAddr], 0, 10);
+    const [rootItems] = await fileView.getDirectoryPageBySchemaAndAddressList(
+      rootUID,
+      dataSchemaUID,
+      [ownerAddr],
+      0,
+      10,
+    );
     expect(rootItems.length).to.equal(1);
     expect(rootItems[0].name).to.equal("photos");
 
     // /photos/ level: /cats/ must appear
-    const [photosItems] = await fileView.getDirectoryPageBySchemaAndAddressList(photosUID, dataSchemaUID, [ownerAddr], 0, 10);
+    const [photosItems] = await fileView.getDirectoryPageBySchemaAndAddressList(
+      photosUID,
+      dataSchemaUID,
+      [ownerAddr],
+      0,
+      10,
+    );
     expect(photosItems.length).to.equal(1);
     expect(photosItems[0].name).to.equal("cats");
   });

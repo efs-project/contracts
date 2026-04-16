@@ -182,12 +182,16 @@ const deployMirrors: DeployFunction = async function (hre: HardhatRuntimeEnviron
   }
 
   // 8. Wire /transports/ anchor into MirrorResolver for ancestry validation
-  const currentTransportsAnchor = await mirrorResolver.transportsAnchorUID();
-  if (currentTransportsAnchor === ethers.ZeroHash) {
-    await (await mirrorResolver.setTransportsAnchor(transportsUID)).wait();
-    console.log("MirrorResolver.transportsAnchorUID set to:", transportsUID);
+  if (transportsUID !== ethers.ZeroHash) {
+    const currentTransportsAnchor = await mirrorResolver.transportsAnchorUID();
+    if (currentTransportsAnchor === ethers.ZeroHash) {
+      await (await mirrorResolver.setTransportsAnchor(transportsUID)).wait();
+      console.log("MirrorResolver.transportsAnchorUID set to:", transportsUID);
+    } else {
+      console.log("MirrorResolver.transportsAnchorUID already set:", currentTransportsAnchor);
+    }
   } else {
-    console.log("MirrorResolver.transportsAnchorUID already set:", currentTransportsAnchor);
+    console.log("WARNING: /transports/ anchor UID is zero — skipping MirrorResolver wiring (EAS likely unavailable).");
   }
 
   console.log("MirrorResolver deployment and transport anchors complete.");

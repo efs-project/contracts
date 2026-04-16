@@ -901,10 +901,7 @@ describe("EFSRouter Web3 Capabilities", function () {
       await eas.revoke({ schema: mirrorSchemaUID, data: { uid: web3MirrorUID, value: 0n } });
 
       // After revocation: falls back to ipfs:// (message/external-body, not 404)
-      const [statusAfter, , headersAfter] = await router.request(
-        ["ideas", "fallback_mirror.txt"],
-        ownerParams(),
-      );
+      const [statusAfter, , headersAfter] = await router.request(["ideas", "fallback_mirror.txt"], ownerParams());
       expect(statusAfter).to.equal(200);
       const ct = headersAfter.find((h: any) => h.key === "Content-Type")?.value ?? "";
       expect(ct).to.include("message/external-body");
@@ -960,9 +957,7 @@ describe("EFSRouter Web3 Capabilities", function () {
       // After revocation: falls back to application/octet-stream
       const [statusAfter, , headersAfter] = await router.request(["ideas", "revoked_ct.txt"], ownerParams());
       expect(statusAfter).to.equal(200);
-      expect(headersAfter.find((h: any) => h.key === "Content-Type")?.value).to.equal(
-        "application/octet-stream",
-      );
+      expect(headersAfter.find((h: any) => h.key === "Content-Type")?.value).to.equal("application/octet-stream");
     });
 
     it("Should return 404 when the placement TAG is revoked", async function () {

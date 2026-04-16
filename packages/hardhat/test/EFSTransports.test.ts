@@ -29,8 +29,8 @@ describe("EFS Transports & Data Model", function () {
   let ipfsTransportUID: string;
   let arweaveTransportUID: string;
   let onchainTransportUID: string;
-  let httpsTransportUID: string;
-  let magnetTransportUID: string;
+  let _httpsTransportUID: string;
+  let _magnetTransportUID: string;
 
   const enc = new ethers.AbiCoder();
 
@@ -194,8 +194,8 @@ describe("EFS Transports & Data Model", function () {
     ipfsTransportUID = await mkAnchor(transportsUID, "ipfs");
     arweaveTransportUID = await mkAnchor(transportsUID, "arweave");
     onchainTransportUID = await mkAnchor(transportsUID, "onchain");
-    httpsTransportUID = await mkAnchor(transportsUID, "https");
-    magnetTransportUID = await mkAnchor(transportsUID, "magnet");
+    _httpsTransportUID = await mkAnchor(transportsUID, "https");
+    _magnetTransportUID = await mkAnchor(transportsUID, "magnet");
 
     // Wire transport ancestry into MirrorResolver
     await mirrorResolver.setTransportsAnchor(transportsUID);
