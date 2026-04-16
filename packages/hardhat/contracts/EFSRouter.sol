@@ -131,6 +131,31 @@ contract EFSRouter is IDecentralizedApp {
         return true;
     }
 
+    /// @dev Strip double-quotes and control characters (< 0x20) from a header value
+    ///      to prevent header injection via user-supplied PROPERTY content types.
+    function _sanitizeHeaderValue(string memory value) private pure returns (string memory) {
+        bytes memory raw = bytes(value);
+        // First pass: count safe bytes
+        uint256 safeCount = 0;
+        for (uint256 i = 0; i < raw.length; i++) {
+            bytes1 c = raw[i];
+            if (c != '"' && c != "\\" && uint8(c) >= 0x20) {
+                safeCount++;
+            }
+        }
+        if (safeCount == raw.length) return value; // nothing to strip
+        // Second pass: build sanitized string
+        bytes memory out = new bytes(safeCount);
+        uint256 j = 0;
+        for (uint256 i = 0; i < raw.length; i++) {
+            bytes1 c = raw[i];
+            if (c != '"' && c != "\\" && uint8(c) >= 0x20) {
+                out[j++] = c;
+            }
+        }
+        return string(out);
+    }
+
     // Web3 Request Handler (EIP-5219)
     function request(
         string[] memory resource,
@@ -207,12 +232,14 @@ contract EFSRouter is IDecentralizedApp {
             // External URI Delegation (message/external-body)
             // Single Content-Type with the actual type embedded as a parameter,
             // avoiding duplicate headers that clients may collapse or mishandle.
+            // Sanitize contentType: strip quotes and control chars to prevent header injection.
+            string memory safeContentType = _sanitizeHeaderValue(contentType);
             headers = new KeyValue[](1);
             headers[0] = KeyValue(
                 "Content-Type",
                 string(abi.encodePacked(
                     'message/external-body; access-type=URL; URL="', uri, '"',
-                    bytes(contentType).length > 0 ? string(abi.encodePacked('; content-type="', contentType, '"')) : ""
+                    bytes(safeContentType).length > 0 ? string(abi.encodePacked('; content-type="', safeContentType, '"')) : ""
                 ))
             );
             return (200, bytes(""), headers);
@@ -529,7 +556,13 @@ contract EFSRouter is IDecentralizedApp {
         bool hadMirrors = false;
         uint256 PAGE = 50;
 
-        for (uint256 offset = 0; offset < total; offset += PAGE) {
+        // Cap total pages to prevent unbounded gas consumption if an attester
+        // accumulates a huge number of mirrors (including revoked ones).
+        uint256 MAX_PAGES = 10; // 10 × 50 = 500 mirrors max scanned
+        uint256 pages = 0;
+
+        for (uint256 offset = 0; offset < total && pages < MAX_PAGES; offset += PAGE) {
+            pages++;
             uint256 remaining = total - offset;
             uint256 chunk = remaining < PAGE ? remaining : PAGE;
             bytes32[] memory mirrors = indexer.getReferencingBySchemaAndAttester(
@@ -560,9 +593,6 @@ contract EFSRouter is IDecentralizedApp {
                     best = uri;
                 }
             }
-
-            // If we already found the second-best (ar://), no need to keep paging
-            if (bestPriority <= 1) break;
         }
         return (best, hadMirrors);
     }

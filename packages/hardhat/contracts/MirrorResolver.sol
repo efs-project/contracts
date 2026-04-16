@@ -90,6 +90,9 @@ contract MirrorResolver is SchemaResolver {
     }
 
     /// @dev Walk ancestors of `anchorUID` to check if /transports/ is in the chain.
+    ///      Supports up to MAX_TRANSPORT_DEPTH (8) levels of nesting below /transports/.
+    ///      e.g. /transports/ipfs (depth 1), /transports/ipfs/v2 (depth 2).
+    ///      Anchors deeper than 8 levels below /transports/ will be rejected.
     function _isDescendantOfTransports(bytes32 anchorUID) private view returns (bool) {
         bytes32 current = anchorUID;
         for (uint256 i = 0; i < MAX_TRANSPORT_DEPTH; i++) {
