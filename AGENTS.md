@@ -1,6 +1,6 @@
 # AGENTS.md
 
-EFS — Ethereum File System. On-chain file system built on EAS attestations. Pre-launch, devnet target April 19, 2026. Mainnet contracts will be permanent ([ADR-0030](./docs/adr/0030-mainnet-permanence.md)) — no upgradeability, no admin override.
+EFS — Ethereum File System. On-chain file system built on EAS attestations. Pre-launch, devnet target April 19, 2026. Breaking changes are acceptable for now as there's no real data created yet. Good design and future proofing is key.
 
 ## Read on init
 
