@@ -219,28 +219,15 @@ contract EFSFileView {
         bytes32 anchorSchema,
         address[] memory attesters
     ) internal view returns (bytes32[] memory) {
-        // Two sources of qualifying folders:
-        // A) Generic folders that have children of anchorSchema
-        //    → _childrenBySchema[parent][bytes32(0)] filtered by getChildCountBySchema > 0
-        // B) Generic folders tagged with anchorSchema by a trusted attester
-        //    → tagResolver._childrenTaggedWith[parent][anchorSchema]
-        //
-        // Source B is always small (few tagged folders) and is the primary path.
-        // Source A folders also appear in _childrenBySchema[parent][bytes32(0)] but scanning
-        // ALL generic folders would be O(N). Instead, we rely on the tag index:
-        // - Non-empty folders with children of anchorSchema are discovered naturally when
-        //   the user navigates into them. They also appear if tagged.
-        // - The UI auto-tags folders on creation with their intended schema, so tagged
-        //   folders cover both empty and non-empty cases.
-        //
-        // For completeness, we also scan generic folders (capped) to catch untagged folders
-        // that organically acquired children of the target schema.
-
-        // Collect from tag index (source B). Scan the full index — truncating would
-        // permanently hide folders past the cap since this function is only invoked on
-        // page 1 of getDirectoryPageBySchemaAndAddressList. This is a view function, so
-        // the only bound is the caller's eth_call gas limit.
+        // Folders qualify for schema-filtered listing only if they were explicitly tagged
+        // with anchorSchema by a trusted attester. Scanning all generic sub-folders for
+        // organically-acquired children is O(N_total_folders), which is unbounded for
+        // large directories (e.g. /tags/). Requiring explicit tagging keeps this O(M_tagged).
+        // The UI auto-tags folders on creation, so this covers normal workflows. Developers
+        // placing content programmatically should tag the folder with its intended schema.
         uint256 taggedCount = tagResolver.getChildrenTaggedWithCount(parentAnchor, anchorSchema);
+        if (taggedCount == 0) return new bytes32[](0);
+
         bytes32[] memory taggedCandidates = tagResolver.getChildrenTaggedWith(
             parentAnchor,
             anchorSchema,
@@ -248,29 +235,9 @@ contract EFSFileView {
             taggedCount
         );
 
-        // Also scan generic folders (source A) — full scan of _childrenBySchema[parent][0]
-        // for the same reason. Folders discovered through the tag index still get merged/deduped.
-        uint256 genericCount = indexer.getChildCountBySchema(parentAnchor, bytes32(0));
-        bytes32[] memory genericFolders;
-        if (genericCount > 0) {
-            (genericFolders, ) = indexer.getAnchorsBySchemaAndAddressList(
-                parentAnchor,
-                bytes32(0),
-                attesters,
-                0,
-                genericCount,
-                true,
-                false
-            );
-        } else {
-            genericFolders = new bytes32[](0);
-        }
-
-        // Merge both sources, dedup, and filter
-        bytes32[] memory temp = new bytes32[](taggedCandidates.length + genericFolders.length);
+        bytes32[] memory temp = new bytes32[](taggedCandidates.length);
         uint256 count = 0;
 
-        // Process tagged candidates
         for (uint256 i = 0; i < taggedCandidates.length; i++) {
             bytes32 uid = taggedCandidates[i];
             if (indexer.isRevoked(uid)) continue;
@@ -291,27 +258,6 @@ contract EFSFileView {
             temp[count++] = uid;
         }
 
-        // Process generic folders that have children of anchorSchema (untagged discovery)
-        for (uint256 i = 0; i < genericFolders.length; i++) {
-            bytes32 uid = genericFolders[i];
-
-            // Skip if already added via tag path
-            bool alreadyAdded = false;
-            for (uint256 k = 0; k < count; k++) {
-                if (temp[k] == uid) {
-                    alreadyAdded = true;
-                    break;
-                }
-            }
-            if (alreadyAdded) continue;
-
-            // Include only if folder has children of the target schema
-            if (indexer.getChildCountBySchema(uid, anchorSchema) == 0) continue;
-
-            temp[count++] = uid;
-        }
-
-        // Trim to actual size
         assembly {
             mstore(temp, count)
         }

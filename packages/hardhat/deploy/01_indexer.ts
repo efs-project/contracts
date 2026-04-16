@@ -131,8 +131,12 @@ const deployEFSIndexer: DeployFunction = async function (hre: HardhatRuntimeEnvi
   console.log("EFSIndexer deployed at:", indexer.target);
 
   if (indexer.target !== futureIndexerAddress) {
-    console.warn("WARNING: Deployed address different from predicted! Resolver configuration might be broken.");
-    console.warn(`Expected: ${futureIndexerAddress}, Got: ${indexer.target}`);
+    throw new Error(
+      `Indexer deployed at wrong address — resolver wiring is broken.\n` +
+        `Expected: ${futureIndexerAddress}\n` +
+        `Got:      ${indexer.target}\n` +
+        `Adjust the nonce offset in the deploy script and redeploy.`,
+    );
   }
 
   // 7. Deploy SchemaNameIndex

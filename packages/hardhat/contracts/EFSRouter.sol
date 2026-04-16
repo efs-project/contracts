@@ -453,16 +453,12 @@ contract EFSRouter is IDecentralizedApp {
             );
             if (count == 0) continue;
 
-            // Cap at 50 — more than 50 active DATA revisions per attester per anchor is
-            // outside normal use. The recommended workflow untags the old DATA before
-            // tagging new, keeping count at 1. If the cap is hit, the newest in the
-            // first 50 by timestamp is served.
             bytes32[] memory targets = tagResolver.getActiveTargetsByAttesterAndSchema(
                 targetAnchor,
                 attesters[i],
                 dataSchema,
                 0,
-                count > 50 ? 50 : count
+                count
             );
 
             // Pick the most recent target by attestation timestamp

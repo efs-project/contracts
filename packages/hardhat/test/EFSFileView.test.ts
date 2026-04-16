@@ -17,7 +17,7 @@ describe("EFSFileView", function () {
   let anchorSchemaUID: string;
   let dataSchemaUID: string;
   let propertySchemaUID: string;
-  let _tagSchemaUID: string;
+  let tagSchemaUID: string;
 
   beforeEach(async function () {
     [owner] = await ethers.getSigners();
@@ -78,7 +78,7 @@ describe("EFSFileView", function () {
     // TAG schema
     const tx5 = await registry.register("bytes32 definition, bool applies", futureTagResolverAddr, true);
     const rc5 = await tx5.wait();
-    _tagSchemaUID = rc5!.logs[0].topics[1];
+    tagSchemaUID = rc5!.logs[0].topics[1];
 
     // Deploy Indexer
     const IndexerFactory = await ethers.getContractFactory("EFSIndexer");
@@ -113,80 +113,98 @@ describe("EFSFileView", function () {
     throw new Error("Attested event not found in receipt");
   };
 
-  it("Should return all qualifying generic folders even when count exceeds prior 200-item cap", async function () {
-    // Regression test: _getQualifyingTaggedFolders previously hard-capped both the
-    // tagged and generic scans at 200. Since the helper is only invoked on page 1 of
-    // getDirectoryPageBySchemaAndAddressList, folders past the cap were permanently
-    // unreachable. This test creates >200 qualifying generic folders and asserts all
-    // of them are returned.
+  const enc = new ethers.AbiCoder();
 
-    const schemaEncoder = new ethers.AbiCoder();
-    const ownerAddr = await owner.getAddress();
-
-    // 1. Create root
-    const rootData = schemaEncoder.encode(["string", "bytes32"], ["root", ZERO_BYTES32]);
-    const txRoot = await eas.attest({
+  /** Create an anchor under parentUID with the given name and schema type. */
+  const createAnchor = async (name: string, parentUID: string, schema: string): Promise<string> => {
+    const tx = await eas.attest({
       schema: anchorSchemaUID,
       data: {
         recipient: ZeroAddress,
         expirationTime: NO_EXPIRATION,
         revocable: false,
-        refUID: ZERO_BYTES32,
-        data: rootData,
+        refUID: parentUID,
+        data: enc.encode(["string", "bytes32"], [name, schema]),
         value: 0n,
       },
     });
-    const rootUID = getUIDFromReceipt(await txRoot.wait());
+    return getUIDFromReceipt(await tx.wait());
+  };
 
-    // 2. Create 205 generic folders, each containing a file anchor whose `schemaUID`
-    //    field is dataSchemaUID. That makes each folder qualify via source A
-    //    (`getChildCountBySchema(folder, dataSchemaUID) > 0`), so the scan must return
-    //    all of them even though the count exceeds the old cap.
-    const FOLDER_COUNT = 205;
-    const folderNames: string[] = [];
-    for (let i = 0; i < FOLDER_COUNT; i++) {
-      const name = `folder-${i.toString().padStart(3, "0")}`;
-      folderNames.push(name);
+  /** Create a TAG attestation (goes through TagResolver). */
+  const createTag = async (targetUID: string, definition: string, applies: boolean): Promise<string> => {
+    const tx = await eas.attest({
+      schema: tagSchemaUID,
+      data: {
+        recipient: ZeroAddress,
+        expirationTime: NO_EXPIRATION,
+        revocable: true,
+        refUID: targetUID,
+        data: enc.encode(["bytes32", "bool"], [definition, applies]),
+        value: 0n,
+      },
+    });
+    return getUIDFromReceipt(await tx.wait());
+  };
 
-      const folderData = schemaEncoder.encode(["string", "bytes32"], [name, ZERO_BYTES32]);
-      const txFolder = await eas.attest({
-        schema: anchorSchemaUID,
-        data: {
-          recipient: ZeroAddress,
-          expirationTime: NO_EXPIRATION,
-          revocable: false,
-          refUID: rootUID,
-          data: folderData,
-          value: 0n,
-        },
-      });
-      const folderUID = getUIDFromReceipt(await txFolder.wait());
+  it("Should return only explicitly-tagged folders in schema-filtered views", async function () {
+    // Regression / design test: _getQualifyingTaggedFolders no longer scans all generic
+    // folders (O(N_total)). Only folders explicitly tagged with the target schema UID appear.
+    // Untagged folders that happen to contain schema-matching children are NOT returned —
+    // developers must tag folders to opt them into schema-filtered listings.
 
-      // Child file anchor with anchorSchema = dataSchemaUID so the folder qualifies
-      const childData = schemaEncoder.encode(["string", "bytes32"], [`f-${i}.txt`, dataSchemaUID]);
-      await eas.attest({
-        schema: anchorSchemaUID,
-        data: {
-          recipient: ZeroAddress,
-          expirationTime: NO_EXPIRATION,
-          revocable: false,
-          refUID: folderUID,
-          data: childData,
-          value: 0n,
-        },
-      });
+    const ownerAddr = await owner.getAddress();
+
+    // 1. Create root
+    const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32);
+
+    // 2. Create tagged folders — each is tagged with definition=dataSchemaUID via TagResolver
+    const TAGGED_COUNT = 5;
+    const taggedNames: string[] = [];
+    for (let i = 0; i < TAGGED_COUNT; i++) {
+      const name = `tagged-${i}`;
+      taggedNames.push(name);
+      const folderUID = await createAnchor(name, rootUID, ZERO_BYTES32);
+      await createTag(folderUID, dataSchemaUID, true);
     }
 
-    // 3. Page 1 with a small pageSize — folders are prepended regardless of pageSize,
-    //    so every qualifying folder must be present on the first page.
-    const [items] = await fileView.getDirectoryPageBySchemaAndAddressList(rootUID, dataSchemaUID, [ownerAddr], 0, 10);
+    // 3. Create untagged folders — generic folders with no TAG attestation
+    for (let i = 0; i < 3; i++) {
+      await createAnchor(`untagged-${i}`, rootUID, ZERO_BYTES32);
+    }
 
-    // All folders qualify, no direct content items under root → items.length == FOLDER_COUNT
-    expect(items.length).to.equal(FOLDER_COUNT);
+    // 4. Query schema-filtered directory
+    const [items] = await fileView.getDirectoryPageBySchemaAndAddressList(rootUID, dataSchemaUID, [ownerAddr], 0, 20);
+
+    // Only tagged folders qualify — untagged ones are absent
+    expect(items.length).to.equal(TAGGED_COUNT);
 
     const returnedNames = new Set(items.map((i: any) => i.name));
-    for (const name of folderNames) {
-      expect(returnedNames.has(name), `missing folder ${name}`).to.equal(true);
+    for (const name of taggedNames) {
+      expect(returnedNames.has(name), `missing tagged folder: ${name}`).to.equal(true);
     }
+    for (let i = 0; i < 3; i++) {
+      expect(returnedNames.has(`untagged-${i}`), `untagged folder should not appear`).to.equal(false);
+    }
+  });
+
+  it("Should not return a tagged folder after its tag is set to applies=false", async function () {
+    const ownerAddr = await owner.getAddress();
+
+    const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32);
+    const folderUID = await createAnchor("my-folder", rootUID, ZERO_BYTES32);
+
+    // Tag the folder
+    await createTag(folderUID, dataSchemaUID, true);
+
+    const [before] = await fileView.getDirectoryPageBySchemaAndAddressList(rootUID, dataSchemaUID, [ownerAddr], 0, 10);
+    expect(before.length).to.equal(1);
+    expect(before[0].name).to.equal("my-folder");
+
+    // Untag the folder
+    await createTag(folderUID, dataSchemaUID, false);
+
+    const [after] = await fileView.getDirectoryPageBySchemaAndAddressList(rootUID, dataSchemaUID, [ownerAddr], 0, 10);
+    expect(after.length).to.equal(0);
   });
 });
