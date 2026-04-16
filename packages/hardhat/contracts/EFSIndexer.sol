@@ -329,17 +329,27 @@ contract EFSIndexer is SchemaResolver {
                 }
             }
 
-            // Qualifying-folder index: when a file anchor (anchorSchema != 0) is placed inside a
-            // generic folder (parent anchorSchema == 0), record the parent folder under the
-            // grandparent so _getQualifyingTaggedFolders can enumerate without an O(N) scan.
-            // Fires at most once per (parent, anchorSchema, attester) triple — amortized O(1).
+            // Qualifying-folder index: walk up the ancestor chain recording each generic folder
+            // (anchorSchema == 0) under its parent's qualifying list so _getQualifyingTaggedFolders
+            // can enumerate without an O(N) scan at any nesting depth.
+            //
+            // Example: root → /photos/ → /cats/ → cat.jpg (anchorSchema=DATA)
+            //   Iteration 1: folder=/cats/, parent=/photos/ → record /cats/ under /photos/
+            //   Iteration 2: folder=/photos/, parent=root   → record /photos/ under root
+            //   Iteration 3: parent=0x0 → exit
+            //
+            // Fires at most once per (parent, anchorSchema, attester, folder) tuple — amortized O(1).
+            // Loop bounded by MAX_ANCHOR_DEPTH (validated above).
             if (anchorSchema != bytes32(0) && parentUID != bytes32(0)) {
-                bytes32 grandparent = _parents[parentUID];
-                if (grandparent != bytes32(0) && _anchorSchemaOf[parentUID] == bytes32(0)) {
-                    if (!_hasQualifyingFolder[grandparent][anchorSchema][attestation.attester][parentUID]) {
-                        _qualifyingFolders[grandparent][anchorSchema][attestation.attester].push(parentUID);
-                        _hasQualifyingFolder[grandparent][anchorSchema][attestation.attester][parentUID] = true;
+                bytes32 folder = parentUID;
+                bytes32 ancestor = _parents[folder];
+                while (ancestor != bytes32(0) && _anchorSchemaOf[folder] == bytes32(0)) {
+                    if (!_hasQualifyingFolder[ancestor][anchorSchema][attestation.attester][folder]) {
+                        _qualifyingFolders[ancestor][anchorSchema][attestation.attester].push(folder);
+                        _hasQualifyingFolder[ancestor][anchorSchema][attestation.attester][folder] = true;
                     }
+                    folder = ancestor;
+                    ancestor = _parents[folder];
                 }
             }
 

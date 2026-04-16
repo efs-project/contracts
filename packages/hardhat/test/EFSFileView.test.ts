@@ -186,6 +186,29 @@ describe("EFSFileView", function () {
     expect(items[0].name).to.equal("empty-tagged");
   });
 
+  it("Source A (deep): grandparent folder appears without explicit tagging when a nested file-anchor exists", async function () {
+    // root → /photos/ → /cats/ → cat.jpg (file anchor)
+    // Listing root with dataSchemaUID should return /photos/ even though the file is 2 hops down.
+    // Without the ancestor-chain walk this was a navigation-breaking bug — only /cats/ appeared
+    // when listing /photos/, but /photos/ never appeared when listing root.
+    const ownerAddr = await owner.getAddress();
+
+    const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32);
+    const photosUID = await createAnchor("photos", rootUID, ZERO_BYTES32);
+    const catsUID = await createAnchor("cats", photosUID, ZERO_BYTES32);
+    await createAnchor("cat.jpg", catsUID, dataSchemaUID);
+
+    // Root level: /photos/ must appear
+    const [rootItems] = await fileView.getDirectoryPageBySchemaAndAddressList(rootUID, dataSchemaUID, [ownerAddr], 0, 10);
+    expect(rootItems.length).to.equal(1);
+    expect(rootItems[0].name).to.equal("photos");
+
+    // /photos/ level: /cats/ must appear
+    const [photosItems] = await fileView.getDirectoryPageBySchemaAndAddressList(photosUID, dataSchemaUID, [ownerAddr], 0, 10);
+    expect(photosItems.length).to.equal(1);
+    expect(photosItems[0].name).to.equal("cats");
+  });
+
   it("Should not return a tagged folder after its tag is set to applies=false", async function () {
     const ownerAddr = await owner.getAddress();
 
