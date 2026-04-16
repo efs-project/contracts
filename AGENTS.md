@@ -8,12 +8,12 @@ EFS — Ethereum File System. On-chain file system built on EAS attestations. Pr
 
 ## Read as needed
 
-- **[specs/](./specs/)** — current system behavior (authoritative)
+- **[specs/README.md](./specs/README.md)** — current system behavior (authoritative; indexed)
 - **[docs/adr/](./docs/adr/)** — past decisions and reasoning
 - **[docs/QUESTIONS.md](./docs/QUESTIONS.md)** — open items needing the human's input (check before working in any area)
 - **[docs/FUTURE_WORK.md](./docs/FUTURE_WORK.md)** — backlog
 - **[docs/LAUNCH_CHECKLIST.md](./docs/LAUNCH_CHECKLIST.md)** — pre-launch blockers
-- **[reference/](./reference/)** — EAS docs, EIPs, Scaffold-ETH docs
+- **[reference/README.md](./reference/README.md)** — EAS, EIP, Scaffold-ETH docs (indexed by task)
 
 ## Setup
 
