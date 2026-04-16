@@ -197,12 +197,16 @@ export const MirrorsPanel = ({
     if (requestId === resolveIdRef.current) setDataUID(null);
   }, [publicClient, tagResolverInfo, easInfo, dataSchemaUID, fileAnchorUID, editionAddresses, connectedAddress]);
 
+  // Monotonic request ID to prevent stale mirror fetch results from overwriting current state.
+  const fetchMirrorsIdRef = useRef(0);
+
   // Fetch mirrors for the resolved DATA UID
   const fetchMirrors = useCallback(async () => {
     if (!dataUID || !publicClient || !fileViewInfo) {
       setMirrors([]);
       return;
     }
+    const fetchId = ++fetchMirrorsIdRef.current;
     setIsLoading(true);
     try {
       const result = (await publicClient.readContract({
@@ -218,6 +222,7 @@ export const MirrorsPanel = ({
         timestamp: bigint;
       }[];
 
+      if (fetchId !== fetchMirrorsIdRef.current) return; // stale
       setMirrors(
         result.map(m => ({
           uid: m.uid,
@@ -230,7 +235,7 @@ export const MirrorsPanel = ({
     } catch (e) {
       console.error("Failed to fetch mirrors:", e);
     } finally {
-      setIsLoading(false);
+      if (fetchId === fetchMirrorsIdRef.current) setIsLoading(false);
     }
   }, [dataUID, publicClient, fileViewInfo]);
 

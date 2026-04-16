@@ -398,6 +398,7 @@ contract EFSRouter is IDecentralizedApp {
     }
 
     // Helper to decode 1 hex char
+    /// @dev Returns 0xFF on invalid hex character (sentinel, never a valid nibble).
     function _hexCharToByte(uint8 c) private pure returns (uint8) {
         if (bytes1(c) >= bytes1("0") && bytes1(c) <= bytes1("9")) {
             return c - uint8(bytes1("0"));
@@ -408,10 +409,11 @@ contract EFSRouter is IDecentralizedApp {
         if (bytes1(c) >= bytes1("A") && bytes1(c) <= bytes1("F")) {
             return 10 + c - uint8(bytes1("A"));
         }
-        revert("Invalid hex char");
+        return 0xFF; // invalid — caller checks
     }
 
-    // Parses string "web3://0x123..." -> address
+    // Parses string "web3://0x123..." -> address. Returns address(0) on any malformed input
+    // (wrong prefix, too short, non-hex chars) so callers can skip bad mirrors without reverting.
     function _parseContractFromWeb3URI(string memory uri) private pure returns (address) {
         bytes memory uriBytes = bytes(uri);
         // Expect format: web3://0xAbCdEf... (minimum 49 chars)
@@ -440,8 +442,10 @@ contract EFSRouter is IDecentralizedApp {
 
         uint160 parsed = 0;
         for (uint i = 0; i < 40; i++) {
+            uint8 nibble = _hexCharToByte(uint8(uriBytes[offset + i]));
+            if (nibble == 0xFF) return address(0); // non-hex char — malformed
             parsed *= 16;
-            parsed += _hexCharToByte(uint8(uriBytes[offset + i]));
+            parsed += nibble;
         }
         return address(parsed);
     }
