@@ -934,6 +934,74 @@ describe("EFSRouter Web3 Capabilities", function () {
       expect(Buffer.from(ethers.getBytes(body)).toString()).to.equal("user2 file content");
     });
 
+    it("Should return application/octet-stream when the contentType PROPERTY is revoked", async function () {
+      // _getContentType skips revoked PROPERTY attestations (isRevoked check).
+      // When the only contentType prop is revoked, the default MIME type must be returned.
+      const targetAddress = ethers.getAddress("0x00000000000000000000000000000000000000E0");
+      await setCode(targetAddress, "0x00" + Buffer.from("no content type").toString("hex"));
+
+      const fileAnchorUID = await createFileAnchor(ideasUID, "revoked_ct.txt");
+      const dataUID = await createData("no content type");
+      const propUID = await addProperty(dataUID, "contentType", "text/plain");
+      await addMirror(dataUID, onchainTransportUID, `web3://${targetAddress}`);
+      await tagAtPath(dataUID, fileAnchorUID, true);
+
+      // Sanity: text/plain before revocation
+      const [statusBefore, , headersBefore] = await router.request(["ideas", "revoked_ct.txt"], ownerParams());
+      expect(statusBefore).to.equal(200);
+      expect(headersBefore.find((h: any) => h.key === "Content-Type")?.value).to.equal("text/plain");
+
+      // Revoke the PROPERTY
+      await eas.revoke({ schema: propertySchemaUID, data: { uid: propUID, value: 0n } });
+
+      // After revocation: falls back to application/octet-stream
+      const [statusAfter, , headersAfter] = await router.request(["ideas", "revoked_ct.txt"], ownerParams());
+      expect(statusAfter).to.equal(200);
+      expect(headersAfter.find((h: any) => h.key === "Content-Type")?.value).to.equal(
+        "application/octet-stream",
+      );
+    });
+
+    it("Should return 404 when the placement TAG is revoked", async function () {
+      // Revoking a TAG(applies=true) removes the DATA from _activeByAAS.
+      // The router can no longer find a DATA at the anchor → 404.
+      const targetAddress = ethers.getAddress("0x00000000000000000000000000000000000000E1");
+      await setCode(targetAddress, "0x00" + Buffer.from("tag revoked content").toString("hex"));
+
+      const fileAnchorUID = await createFileAnchor(ideasUID, "tag_revoked.txt");
+      const dataUID = await createData("tag revoked content");
+      await addProperty(dataUID, "contentType", "text/plain");
+      await addMirror(dataUID, onchainTransportUID, `web3://${targetAddress}`);
+      const tagUID = await tagAtPath(dataUID, fileAnchorUID, true);
+
+      const [statusBefore] = await router.request(["ideas", "tag_revoked.txt"], ownerParams());
+      expect(statusBefore).to.equal(200);
+
+      // Revoke the TAG — removes DATA from the active compact index in TagResolver
+      await eas.revoke({ schema: tagSchemaUID, data: { uid: tagUID, value: 0n } });
+
+      const [statusAfter] = await router.request(["ideas", "tag_revoked.txt"], ownerParams());
+      expect(statusAfter).to.equal(404);
+    });
+
+    it("Should parse web3:// URI with :chainId suffix (suffix ignored, address extracted)", async function () {
+      // _parseContractFromWeb3URI reads exactly 40 hex chars after '0x' and stops.
+      // A :chainId suffix does not interfere with address parsing.
+      const targetAddress = ethers.getAddress("0x00000000000000000000000000000000000000E2");
+      await setCode(targetAddress, "0x00" + Buffer.from("chainid suffix content").toString("hex"));
+
+      const fileAnchorUID = await createFileAnchor(ideasUID, "chainid_suffix.txt");
+      const dataUID = await createData("chainid suffix content");
+      await addProperty(dataUID, "contentType", "text/plain");
+      // URI with :1 chain ID suffix appended
+      await addMirror(dataUID, onchainTransportUID, `web3://${targetAddress}:1`);
+      await tagAtPath(dataUID, fileAnchorUID, true);
+
+      const [statusCode, body] = await router.request(["ideas", "chainid_suffix.txt"], ownerParams());
+      expect(statusCode).to.equal(200);
+      expect(Buffer.from(ethers.getBytes(body)).toString()).to.equal("chainid suffix content");
+    });
+
     it("Should pick the DATA with the highest attestation timestamp when multiple are active", async function () {
       // Two DATAs placed at the same anchor by the same attester — newest timestamp wins.
       const addr1 = ethers.getAddress("0x00000000000000000000000000000000000000C0");

@@ -936,11 +936,9 @@ contract EFSIndexer is SchemaResolver {
             currentIndex++;
         }
 
-        bytes32[] memory res = new bytes32[](count);
-        for (uint256 i = 0; i < count; i++) {
-            res[i] = temp[i];
-        }
-        return res;
+        // Truncate to actual count in-place — avoids a second allocation + copy loop.
+        assembly { mstore(temp, count) }
+        return temp;
     }
 
     /// @dev Core indexing logic shared by onAttest and the public index() API.
@@ -948,26 +946,30 @@ contract EFSIndexer is SchemaResolver {
     ///      referencing, and the upward _childrenByAttester propagation chain.
     ///      Does NOT run EFS-specific logic (Anchor tree, DATA content, Property validation).
     function _indexGlobal(Attestation memory attestation) private {
+        // Cache struct fields to avoid repeated memory reads across multiple mappings.
+        bytes32 uid = attestation.uid;
         bytes32 schema = attestation.schema;
+        address attester = attestation.attester;
+        bytes32 refUID = attestation.refUID;
 
-        _schemaAttestations[schema].push(attestation.uid);
-        _schemaAttesterAttestations[schema][attestation.attester].push(attestation.uid);
-        _sentAttestations[attestation.attester][schema].push(attestation.uid);
+        _schemaAttestations[schema].push(uid);
+        _schemaAttesterAttestations[schema][attester].push(uid);
+        _sentAttestations[attester][schema].push(uid);
 
         if (attestation.recipient != address(0)) {
-            _receivedAttestations[attestation.recipient][schema].push(attestation.uid);
+            _receivedAttestations[attestation.recipient][schema].push(uid);
         }
 
-        if (attestation.refUID != EMPTY_UID) {
-            _referencingAttestations[attestation.refUID][schema].push(attestation.uid);
-            _addReferencingSchema(attestation.refUID, schema);
+        if (refUID != EMPTY_UID) {
+            _referencingAttestations[refUID][schema].push(uid);
+            _addReferencingSchema(refUID, schema);
 
-            _allReferencing[attestation.refUID].push(attestation.uid);
-            _referencingByAttester[attestation.refUID][attestation.attester].push(attestation.uid);
-            _referencingBySchemaAndAttester[attestation.refUID][schema][attestation.attester].push(attestation.uid);
+            _allReferencing[refUID].push(uid);
+            _referencingByAttester[refUID][attester].push(uid);
+            _referencingBySchemaAndAttester[refUID][schema][attester].push(uid);
 
             // Edition Mappings (Recursive upward propagation for Folder Visibility)
-            // This loop walks the _parents chain from attestation.refUID to root, marking each
+            // This loop walks the _parents chain from refUID to root, marking each
             // ancestor as "containing activity by this attester". It also pushes each ancestor
             // into its parent's _childrenByAttester, so edition-filtered directory listings
             // transitively include intermediate folders that contain the attester's work.
@@ -977,27 +979,27 @@ contract EFSIndexer is SchemaResolver {
             //   → _childrenByAttester[petsUID][user2]  gets catsUID
             //   → _childrenByAttester[rootUID][user2]  gets petsUID
             // This enables getChildrenByAddressList to show the full navigable tree for each user.
-            bytes32 currentUID = attestation.refUID;
+            bytes32 currentUID = refUID;
 
             // Set specific schema interaction on the direct target only (not recursively)
-            if (!_containsSchemaAttestations[currentUID][attestation.attester][schema]) {
-                _containsSchemaAttestations[currentUID][attestation.attester][schema] = true;
+            if (!_containsSchemaAttestations[currentUID][attester][schema]) {
+                _containsSchemaAttestations[currentUID][attester][schema] = true;
             }
 
             // Propagate generic "active in this structure" flag all the way up the tree
             while (currentUID != bytes32(0)) {
                 // If this level is already flagged true, the rest of the chain above it must be too.
                 // Break early to save gas (amortized O(1) for repeat contributions by same user).
-                if (_containsAttestations[currentUID][attestation.attester]) {
+                if (_containsAttestations[currentUID][attester]) {
                     break;
                 }
 
-                _containsAttestations[currentUID][attestation.attester] = true;
+                _containsAttestations[currentUID][attester] = true;
 
                 // Drive the structural index: push this child into the parent's Edition array
                 bytes32 parentUID = _parents[currentUID];
                 if (parentUID != bytes32(0)) {
-                    _childrenByAttester[parentUID][attestation.attester].push(currentUID);
+                    _childrenByAttester[parentUID][attester].push(currentUID);
                 }
 
                 currentUID = parentUID;
