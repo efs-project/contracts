@@ -107,14 +107,14 @@ EFS files are modified by issuing new attestations.
 
 ## List Workflows
 
-EFS lists use the kernel/overlay architecture: the kernel (EFSIndexer) tracks items in insertion order; the sort overlay (EFSSortOverlay) maintains per-attester sorted linked lists on top. There is no separate list contract. See [Lists and Collections](./06-Lists-and-Collections.md) for the full design.
+EFS lists use the kernel/overlay architecture: the kernel (EFSIndexer) tracks items in insertion order; the sort overlay (EFSSortOverlay) maintains shared sorted linked lists on top (keyed by `(sortInfoUID, parentAnchor)` — edition filtering is applied at read time). There is no separate list contract. See [Lists and Collections](./06-Lists-and-Collections.md) for the full design.
 
 ### 16. Create a New Sort and Add Items
 
 - **Step 1 — Create the directory**: The list is a normal EFS directory (Anchor). If it doesn't exist yet, attest an Anchor for it under the desired parent.
 - **Step 2 — Add items**: For each item, attest an Anchor as a child of the list directory. Set `anchorSchema = DATA_SCHEMA_UID` for file items. Items accumulate in the kernel in insertion order.
 - **Step 3 — Create a sort**: Attest an Anchor for the sort name (e.g. "alphabetical") under the list directory with `anchorSchema = SORT_INFO_SCHEMA_UID` as the naming anchor. Then attest a SORT_INFO attestation with `refUID = namingAnchorUID`, `sortFunc = <ISortFunc address>`, `targetSchema = bytes32(0)` (or restrict to a specific schema).
-- **Step 4 — Populate the sort**: Call `EFSSortOverlay.processItems(sortInfoUID, items, leftHints, rightHints)`. See workflow 14 for the hint computation algorithm.
+- **Step 4 — Populate the sort**: Call `EFSSortOverlay.processItems(sortInfoUID, parentAnchor, expectedStartIndex, items, leftHints, rightHints)`. See workflow 17 for the hint computation algorithm.
 - **Result**: Items are pageable via `getSortedChunk(sortInfoUID, parentAnchor, bytes32(0), 10, false)`. The sorted list is shared — all attesters contribute to a single ordering per `(sortInfoUID, parentAnchor)`. Edition filtering is applied at read time via `getSortedChunkByAddressList`.
 
 ### 17. Populate a Sort (processItems Client Algorithm)
@@ -154,7 +154,7 @@ For each new item (in kernel order), simulate inserting it into the current sort
 
 **Step 5 — Submit:**
 ```
-overlay.processItems(sortInfoUID, newItems, leftHints, rightHints)
+overlay.processItems(sortInfoUID, parentAnchor, lastIdx, newItems, leftHints, rightHints)
 ```
 
 The overlay validates each position with `ISortFunc.isLessThan` on-chain and reverts with `InvalidPosition` if hints are wrong.
