@@ -10,7 +10,7 @@ Informal dated log of small decisions agents made while working. Lighter than AD
 
 ### 2026-04-16 — [claude] dev-process branch initial structure
 
-Created `dev-process` branch from main with: rewritten `AGENTS.md` (tier system, discovery order, escalation rules), updated `CLAUDE.md` (corrected stale DATA schema, pointed at docs/), 32 ADRs (29 from dev's RTF + 3 architectural retroactive), `docs/QUESTIONS.md`, `docs/FUTURE_WORK.md`, `docs/LAUNCH_CHECKLIST.md`, `docs/decisions.md`. Tier 2 chosen as the default escalation tier per James's guidance. ADRs follow the immutable-once-accepted convention; supersession is the only way to evolve them.
+Created `dev-process` branch from main with: lean `AGENTS.md` as canonical entrypoint, `CLAUDE.md` as one-line pointer to AGENTS.md, `docs/agent-workflow.md` for escalation tiers and workflow rules, 32 ADRs (29 from dev's notes + 3 architectural retroactive), `docs/QUESTIONS.md`, `docs/FUTURE_WORK.md`, `docs/LAUNCH_CHECKLIST.md`, `docs/decisions.md`. Tier 2 is the default escalation tier per the human's guidance. ADRs follow the immutable-once-accepted convention; supersession is the only way to evolve them. Architecture lives in `specs/` — agent-facing docs point to specs rather than duplicating.
 
 ---
 

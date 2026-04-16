@@ -1,4 +1,4 @@
-# Open Questions for James
+# Open Questions
 
 Questions agents have flagged for human decision. Review and resolve before agents continue work in those areas.
 
