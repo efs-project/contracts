@@ -51,7 +51,7 @@ event AttestationRevoked(bytes32 indexed uid, address indexed attester);
 
 All events are indexed on the most useful lookup fields. `DataCreated` includes `contentHash` for off-chain dedup tracking. `MirrorCreated` links mirrors to their parent DATA. A Graph subgraph subscribing to these events can reconstruct full directory state without any additional contract reads during sync.
 
-`EFSSortOverlay` emits `ItemSorted(sortInfoUID, attester, itemUID, leftNeighbour, rightNeighbour)` for each item inserted into a sorted list — enabling The Graph to reconstruct sorted order off-chain.
+`EFSSortOverlay` emits `ItemSorted(sortInfoUID, parentAnchor, itemUID, leftNeighbour, rightNeighbour)` for each item inserted into a sorted list — enabling The Graph to reconstruct sorted order off-chain.
 
 ### Single-Element Kernel Access
 `getChildrenByAttesterAt(parentUID, attester, idx)` exposes direct index-based access into the `_childrenByAttester` array. Used internally by `EFSSortOverlay.processItems` to validate submitted items against the kernel — callers cannot inject arbitrary UIDs into their sorted view.
@@ -175,16 +175,16 @@ The SORT_INFO schema is handled by `EFSSortOverlay`. It is registered in EAS wit
 
 Sort overlays are **not populated in the resolver hook** — they are populated lazily off-hook by `processItems` calls. The resolver hook only validates and caches the sort config.
 
-### Per-Attester Sorted Linked Lists
+### Shared Sorted Linked Lists
 
-The `EFSSortOverlay` maintains a doubly linked list **per `(sortInfoUID, attester)` pair**:
+The `EFSSortOverlay` maintains a shared doubly linked list **per `(sortInfoUID, parentAnchor)` pair**. All attesters contribute to a single ordering per directory. Edition filtering is applied at read time via `getSortedChunkByAddressList`.
 
 ```
-_sortNodes[sortInfoUID][attester][itemUID]  → Node { prev, next }
-_sortHeads[sortInfoUID][attester]           → head UID (bytes32(0) = empty)
-_sortTails[sortInfoUID][attester]           → tail UID (bytes32(0) = empty)
-_sortLengths[sortInfoUID][attester]         → item count
-_lastProcessedIndex[sortInfoUID][attester]  → kernel items acknowledged
+_sortNodes[sortInfoUID][parentAnchor][itemUID]  → Node { prev, next }
+_sortHeads[sortInfoUID][parentAnchor]           → head UID (bytes32(0) = empty)
+_sortTails[sortInfoUID][parentAnchor]           → tail UID (bytes32(0) = empty)
+_sortLengths[sortInfoUID][parentAnchor]         → item count
+_lastProcessedIndex[sortInfoUID][parentAnchor]  → kernel items acknowledged
 ```
 
 The kernel (EFSIndexer) remains the source of truth. The sort overlay is a secondary index providing a different ordering.
@@ -197,15 +197,15 @@ The kernel (EFSIndexer) remains the source of truth. The sort overlay is a secon
 ### On-Chain Query Functions
 
 **Sorted pagination:**
-- `getSortedChunk(sortInfoUID, attester, startNode, limit)` — Cursor-based pagination. `startNode = bytes32(0)` starts at head. Returns `(items[], nextCursor)`. Hard cap: `limit ≤ 100`.
-- `getSortLength(sortInfoUID, attester)` — Sorted item count.
-- `getSortHead(sortInfoUID, attester)` — First (smallest) item UID.
-- `getSortTail(sortInfoUID, attester)` — Last (largest) item UID.
-- `getSortNode(sortInfoUID, attester, itemUID)` — Raw `Node { prev, next }` for a specific item.
+- `getSortedChunk(sortInfoUID, parentAnchor, startNode, limit, showRevoked)` — Cursor-based pagination. `startNode = bytes32(0)` starts at head. Returns `(items[], nextCursor)`. Hard cap: `limit ≤ 100`. Use `getSortedChunkByAddressList` for edition-filtered reads.
+- `getSortLength(sortInfoUID, parentAnchor)` — Sorted item count.
+- `getSortHead(sortInfoUID, parentAnchor)` — First (smallest) item UID.
+- `getSortTail(sortInfoUID, parentAnchor)` — Last (largest) item UID.
+- `getSortNode(sortInfoUID, parentAnchor, itemUID)` — Raw `Node { prev, next }` for a specific item.
 
 **Staleness and progress:**
-- `getSortStaleness(sortInfoUID, attester)` — `kernelCount - lastProcessedIndex`. How many kernel items are unprocessed.
-- `getLastProcessedIndex(sortInfoUID, attester)` — Physical kernel index to resume from.
+- `getSortStaleness(sortInfoUID, parentAnchor)` — `kernelCount - lastProcessedIndex`. How many kernel items are unprocessed.
+- `getLastProcessedIndex(sortInfoUID, parentAnchor)` — Physical kernel index to resume from.
 
 **Sort config:**
 - `getSortConfig(sortInfoUID)` — Cached `SortConfig { sortFunc, targetSchema, valid, revoked }`.
