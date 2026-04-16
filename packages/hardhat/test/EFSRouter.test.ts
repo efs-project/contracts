@@ -218,6 +218,9 @@ describe("EFSRouter Web3 Capabilities", function () {
     arweaveTransportUID = await createTransport("arweave");
     httpsTransportUID = await createTransport("https");
     magnetTransportUID = await createTransport("magnet");
+
+    // Wire /transports/ ancestry into MirrorResolver
+    await mirrorResolver.setTransportsAnchor(transportsUID);
   });
 
   // ─── Helpers ──────────────────────────────────────────────────────────────

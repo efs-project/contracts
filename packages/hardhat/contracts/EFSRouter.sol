@@ -46,6 +46,12 @@ interface IEFSIndexer {
         bool reverseOrder
     ) external view returns (bytes32[] memory);
 
+    function getReferencingBySchemaAndAttesterCount(
+        bytes32 targetUID,
+        bytes32 schemaUID,
+        address attester
+    ) external view returns (uint256);
+
     function isRevoked(bytes32 uid) external view returns (bool);
 
     function DATA_SCHEMA_UID() external view returns (bytes32);
@@ -199,12 +205,16 @@ contract EFSRouter is IDecentralizedApp {
             _startsWith(uri, "magnet:")
         ) {
             // External URI Delegation (message/external-body)
-            headers = new KeyValue[](2);
+            // Single Content-Type with the actual type embedded as a parameter,
+            // avoiding duplicate headers that clients may collapse or mishandle.
+            headers = new KeyValue[](1);
             headers[0] = KeyValue(
                 "Content-Type",
-                string(abi.encodePacked('message/external-body; access-type=URL; URL="', uri, '"'))
+                string(abi.encodePacked(
+                    'message/external-body; access-type=URL; URL="', uri, '"',
+                    bytes(contentType).length > 0 ? string(abi.encodePacked('; content-type="', contentType, '"')) : ""
+                ))
             );
-            headers[1] = KeyValue("Content-Type", contentType); // Provide hint
             return (200, bytes(""), headers);
         } else if (_startsWith(uri, "web3://")) {
             // On-chain fetch via SSTORE2 or similar.
@@ -509,41 +519,50 @@ contract EFSRouter is IDecentralizedApp {
         bytes32 mirrorSchema = indexer.MIRROR_SCHEMA_UID();
         if (mirrorSchema == bytes32(0)) return ("", false); // MIRROR not wired yet
 
-        // Use the per-(data,schema,attester) index so spam mirrors from other addresses
-        // cannot push the edition attester's mirrors out of the scanned window.
-        bytes32[] memory mirrors = indexer.getReferencingBySchemaAndAttester(dataUID, mirrorSchema, attester, 0, 50, true);
+        // Page through the per-attester mirror index in chunks. The index is append-only
+        // (revoked mirrors stay), so we must scan past revoked entries to find valid ones.
+        uint256 total = indexer.getReferencingBySchemaAndAttesterCount(dataUID, mirrorSchema, attester);
+        if (total == 0) return ("", false);
 
         string memory best = "";
         uint256 bestPriority = 99;
         bool hadMirrors = false;
+        uint256 PAGE = 50;
 
-        for (uint256 i = 0; i < mirrors.length; i++) {
-            if (indexer.isRevoked(mirrors[i])) continue;
-            IEAS.Attestation memory mirrorAtt = eas.getAttestation(mirrors[i]);
-            hadMirrors = true;
+        for (uint256 offset = 0; offset < total; offset += PAGE) {
+            uint256 remaining = total - offset;
+            uint256 chunk = remaining < PAGE ? remaining : PAGE;
+            bytes32[] memory mirrors = indexer.getReferencingBySchemaAndAttester(
+                dataUID, mirrorSchema, attester, offset, chunk, true
+            );
 
-            (, string memory uri) = abi.decode(mirrorAtt.data, (bytes32, string));
+            for (uint256 i = 0; i < mirrors.length; i++) {
+                if (indexer.isRevoked(mirrors[i])) continue;
+                IEAS.Attestation memory mirrorAtt = eas.getAttestation(mirrors[i]);
+                hadMirrors = true;
 
-            uint256 priority;
-            if (_startsWith(uri, "web3://")) priority = 0;
-            else if (_startsWith(uri, "ar://")) priority = 1;
-            else if (_startsWith(uri, "ipfs://")) priority = 2;
-            else if (_startsWith(uri, "magnet:")) priority = 3;
-            else priority = 4; // https:// and anything else
+                (, string memory uri) = abi.decode(mirrorAtt.data, (bytes32, string));
 
-            if (priority < bestPriority) {
-                if (priority == 0) {
-                    // Validate web3:// address format before committing — a malformed URI
-                    // would return 500 even when valid lower-priority mirrors exist.
-                    address candidate = _parseContractFromWeb3URI(uri);
-                    if (candidate == address(0)) continue; // bad address — try lower-priority mirrors
-                    bestPriority = 0;
+                uint256 priority;
+                if (_startsWith(uri, "web3://")) priority = 0;
+                else if (_startsWith(uri, "ar://")) priority = 1;
+                else if (_startsWith(uri, "ipfs://")) priority = 2;
+                else if (_startsWith(uri, "magnet:")) priority = 3;
+                else priority = 4; // https:// and anything else
+
+                if (priority < bestPriority) {
+                    if (priority == 0) {
+                        address candidate = _parseContractFromWeb3URI(uri);
+                        if (candidate == address(0)) continue;
+                        return (uri, true); // web3:// is highest — done
+                    }
+                    bestPriority = priority;
                     best = uri;
-                    break; // web3:// with valid address is highest priority — stop scanning
                 }
-                bestPriority = priority;
-                best = uri;
             }
+
+            // If we already found the second-best (ar://), no need to keep paging
+            if (bestPriority <= 1) break;
         }
         return (best, hadMirrors);
     }

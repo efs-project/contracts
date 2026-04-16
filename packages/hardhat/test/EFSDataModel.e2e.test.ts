@@ -315,6 +315,9 @@ describe("EFS Data Model — E2E Integration", function () {
     arweaveTransportUID = await createAnchor(transportsUID, "arweave");
     magnetTransportUID = await createAnchor(transportsUID, "magnet");
     httpsTransportUID = await createAnchor(transportsUID, "https");
+
+    // Wire /transports/ ancestry into MirrorResolver
+    await mirrorResolver.setTransportsAnchor(transportsUID);
   });
 
   // =========================================================================

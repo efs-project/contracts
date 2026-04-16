@@ -25,6 +25,12 @@ describe("EFS Transports & Data Model", function () {
   let blobSchemaUID: string;
 
   let rootUID: string;
+  let transportsUID: string;
+  let ipfsTransportUID: string;
+  let arweaveTransportUID: string;
+  let onchainTransportUID: string;
+  let httpsTransportUID: string;
+  let magnetTransportUID: string;
 
   const enc = new ethers.AbiCoder();
 
@@ -168,6 +174,31 @@ describe("EFS Transports & Data Model", function () {
     });
     rootUID = getUID(await rootTx.wait());
     expect(await indexer.rootAnchorUID()).to.equal(rootUID);
+
+    // Create /transports/ anchor tree (shared across all tests)
+    const mkAnchor = async (parent: string, name: string) => {
+      const tx = await eas.attest({
+        schema: anchorSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: NO_EXPIRATION,
+          revocable: false,
+          refUID: parent,
+          data: encodeAnchor(name),
+          value: 0n,
+        },
+      });
+      return getUID(await tx.wait());
+    };
+    transportsUID = await mkAnchor(rootUID, "transports");
+    ipfsTransportUID = await mkAnchor(transportsUID, "ipfs");
+    arweaveTransportUID = await mkAnchor(transportsUID, "arweave");
+    onchainTransportUID = await mkAnchor(transportsUID, "onchain");
+    httpsTransportUID = await mkAnchor(transportsUID, "https");
+    magnetTransportUID = await mkAnchor(transportsUID, "magnet");
+
+    // Wire transport ancestry into MirrorResolver
+    await mirrorResolver.setTransportsAnchor(transportsUID);
   });
 
   // ─── Helpers ──────────────────────────────────────────────────────────────
@@ -328,17 +359,9 @@ describe("EFS Transports & Data Model", function () {
   // ─── MIRROR Tests ─────────────────────────────────────────────────────────
 
   describe("MirrorResolver", function () {
-    let transportsUID: string;
-    let ipfsTransportUID: string;
-    let arweaveTransportUID: string;
     let testDataUID: string;
 
     beforeEach(async function () {
-      // Create transport anchors
-      transportsUID = await createAnchor(rootUID, "transports");
-      ipfsTransportUID = await createAnchor(transportsUID, "ipfs");
-      arweaveTransportUID = await createAnchor(transportsUID, "arweave");
-
       // Create a DATA to attach mirrors to
       const contentHash = ethers.keccak256(ethers.toUtf8Bytes("cat.jpg"));
       testDataUID = await createData(contentHash, 50000n);
@@ -392,6 +415,18 @@ describe("EFS Transports & Data Model", function () {
       // Use a random bytes32 that's not an anchor
       const fakeTransport = ethers.keccak256(ethers.toUtf8Bytes("not-a-transport"));
       await expect(createMirror(testDataUID, fakeTransport, "fake://something")).to.be.reverted;
+    });
+
+    it("should reject MIRROR whose transport anchor is not under /transports/", async function () {
+      // Create an anchor outside /transports/ tree
+      const randomAnchor = await createAnchor(rootUID, "not-transports");
+      await expect(createMirror(testDataUID, randomAnchor, "ipfs://QmHash")).to.be.reverted;
+    });
+
+    it("should accept MIRROR with nested transport anchor (/transports/ipfs/v2)", async function () {
+      const ipfsV2 = await createAnchor(ipfsTransportUID, "v2");
+      const mirrorUID = await createMirror(testDataUID, ipfsV2, "ipfs://QmNestedHash");
+      expect(mirrorUID).to.not.equal(ZERO_BYTES32);
     });
 
     it("should be discoverable via getReferencingAttestations", async function () {
@@ -566,17 +601,14 @@ describe("EFS Transports & Data Model", function () {
 
   describe("EFSFileView.getDataMirrors", function () {
     it("should return mirrors for a DATA", async function () {
-      const transportsUID = await createAnchor(rootUID, "transports-view");
-      const ipfsUID = await createAnchor(transportsUID, "ipfs");
-
       const contentHash = ethers.keccak256(ethers.toUtf8Bytes("mirror test"));
       const dataUID = await createData(contentHash, 100n);
-      await createMirror(dataUID, ipfsUID, "ipfs://QmTest");
+      await createMirror(dataUID, ipfsTransportUID, "ipfs://QmTest");
 
       const mirrors = await fileView.getDataMirrors(dataUID, 0, 10);
       expect(mirrors.length).to.equal(1);
       expect(mirrors[0].uri).to.equal("ipfs://QmTest");
-      expect(mirrors[0].transportDefinition).to.equal(ipfsUID);
+      expect(mirrors[0].transportDefinition).to.equal(ipfsTransportUID);
     });
   });
 
@@ -593,10 +625,6 @@ describe("EFS Transports & Data Model", function () {
 
   describe("Full upload flow", function () {
     it("should create DATA + PROPERTY + MIRROR + TAG in sequence", async function () {
-      // Setup transport
-      const transportsUID = await createAnchor(rootUID, "transports-flow");
-      const onchainUID = await createAnchor(transportsUID, "onchain");
-
       // Create file anchor path
       const docsUID = await createAnchor(rootUID, "docs");
 
@@ -608,7 +636,7 @@ describe("EFS Transports & Data Model", function () {
       await createProperty(dataUID, "contentType", "text/markdown");
 
       // 3. Create MIRROR (onchain retrieval)
-      await createMirror(dataUID, onchainUID, "web3://0x1234567890123456789012345678901234567890");
+      await createMirror(dataUID, onchainTransportUID, "web3://0x1234567890123456789012345678901234567890");
 
       // 4. TAG to place at /docs/
       await tagTarget(dataUID, docsUID, true);

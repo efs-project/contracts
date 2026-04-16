@@ -11,6 +11,7 @@ interface IEFSIndexerForMirror {
     function indexRevocation(bytes32 uid) external;
     function DATA_SCHEMA_UID() external view returns (bytes32);
     function ANCHOR_SCHEMA_UID() external view returns (bytes32);
+    function getParent(bytes32 anchorUID) external view returns (bytes32);
 }
 
 /**
@@ -34,10 +35,27 @@ contract MirrorResolver is SchemaResolver {
     /// @notice Maximum allowed byte length for a MIRROR URI.
     uint256 public constant MAX_URI_LENGTH = 8192;
 
+    /// @notice Maximum depth when walking ancestors to find /transports/.
+    uint256 private constant MAX_TRANSPORT_DEPTH = 8;
+
     IEFSIndexerForMirror public immutable indexer;
+    address private immutable _deployer;
+
+    /// @notice The UID of the /transports/ anchor. Transport definitions must be
+    ///         descendants of this anchor (e.g. /transports/ipfs, /transports/ipfs/v2).
+    bytes32 public transportsAnchorUID;
 
     constructor(IEAS eas, IEFSIndexerForMirror _indexer) SchemaResolver(eas) {
         indexer = _indexer;
+        _deployer = msg.sender;
+    }
+
+    /// @notice Set the /transports/ anchor UID. Can only be called once, by deployer.
+    function setTransportsAnchor(bytes32 uid) external {
+        require(msg.sender == _deployer, "only deployer");
+        require(transportsAnchorUID == EMPTY_UID, "already set");
+        require(uid != EMPTY_UID, "zero uid");
+        transportsAnchorUID = uid;
     }
 
     function onAttest(Attestation calldata attestation, uint256 /*value*/) internal override returns (bool) {
@@ -55,6 +73,11 @@ contract MirrorResolver is SchemaResolver {
         Attestation memory transport = _eas.getAttestation(transportDefinition);
         if (transport.schema != indexer.ANCHOR_SCHEMA_UID()) revert InvalidTransport();
 
+        // Verify the transport anchor is a descendant of /transports/.
+        // Allows /transports/ipfs, /transports/ipfs/v2, etc. but rejects
+        // arbitrary anchors like /memes/cat.jpg being used as transport labels.
+        if (!_isDescendantOfTransports(transportDefinition)) revert InvalidTransport();
+
         // Register in EFSIndexer for discovery via getReferencingAttestations
         indexer.index(attestation.uid);
 
@@ -64,6 +87,18 @@ contract MirrorResolver is SchemaResolver {
     function onRevoke(Attestation calldata attestation, uint256 /*value*/) internal override returns (bool) {
         indexer.indexRevocation(attestation.uid);
         return true;
+    }
+
+    /// @dev Walk ancestors of `anchorUID` to check if /transports/ is in the chain.
+    function _isDescendantOfTransports(bytes32 anchorUID) private view returns (bool) {
+        bytes32 current = anchorUID;
+        for (uint256 i = 0; i < MAX_TRANSPORT_DEPTH; i++) {
+            bytes32 parent = indexer.getParent(current);
+            if (parent == EMPTY_UID) return false;
+            if (parent == transportsAnchorUID) return true;
+            current = parent;
+        }
+        return false;
     }
 
     /// @dev Returns true iff the URI starts with a known-safe scheme.
