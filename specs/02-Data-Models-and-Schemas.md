@@ -61,7 +61,7 @@ Well-known transport types are created at deploy time under `/transports/`:
 - `/transports/magnet` — `magnet:` URIs
 - `/transports/https` — `https://` URIs
 
-The transport preference order for display is: onchain > ipfs > arweave > https > magnet.
+The transport preference order for serving is: `web3://` (onchain) > `ar://` > `ipfs://` > `magnet:` > `https://`. See ADR-0012 for rationale.
 
 ## 4. Tag Schema
 **Purpose**: Subjective categorization, file placement, and labeling via the "Type as Topic" pattern.
@@ -109,11 +109,12 @@ Tags can be removed through two mechanisms:
 `refUID = Naming Anchor UID — the Anchor is a child of the directory being sorted (anchorSchema = SORT_INFO_SCHEMA)`
 - `sortFunc` (address) — `ISortFunc` comparator contract. Implements `isLessThan(a, b, sortInfoUID)` and `getSortKey(uid, sortInfoUID)`.
 - `targetSchema` (bytes32) — Which Anchor schema to sort. `bytes32(0)` = all children. `DATA_SCHEMA` = file anchors only.
+- `sourceType` (uint8) — Source-list selector for what gets sorted. Reserved for future variants (kernel-shared vs per-attester children); current default is 0.
 - Revocable: `true` — revoking signals "I'm done maintaining this sort; hide from menu"
 
-**Details**: A SORT_INFO attestation names a sort by creating a naming Anchor as a child of the directory. The naming Anchor's `anchorSchema = SORT_INFO_SCHEMA` distinguishes it from file Anchors. The `EFSSortOverlay` contract is the resolver — it validates the `sortFunc` address and caches the sort config. The actual sorted data lives in the sort overlay's per-attester linked lists, populated lazily by `processItems` calls.
+**Details**: A SORT_INFO attestation names a sort by creating a naming Anchor as a child of the directory. The naming Anchor's `anchorSchema = SORT_INFO_SCHEMA` distinguishes it from file Anchors. The `EFSSortOverlay` contract is the resolver — it validates the `sortFunc` address and caches the sort config. The sorted data lives in the sort overlay's linked lists keyed by `(sortInfoUID, parentAnchor)` — **one shared list per parent**, not per-attester. Edition filtering is applied at read time via `getSortedChunkByAddressList`.
 
-Multiple attesters can each call `processItems` for the same sort, building their own independent sorted views. The `getSortStaleness(sortInfoUID, attester)` function reports how many kernel items are unprocessed.
+The `getSortStaleness(sortInfoUID, parentAnchor)` function reports how many kernel items are unprocessed. Any attester may call `processItems` to advance the shared sorted list.
 
 See [Lists and Collections](./06-Lists-and-Collections.md) for the full architecture.
 

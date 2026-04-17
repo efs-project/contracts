@@ -55,9 +55,7 @@ export const PropertiesModal = ({ uid, onClose }: PropertiesModalProps) => {
       const { encodeAbiParameters, parseAbiParameters } = await import("viem");
 
       // 1. Find or Create Anchor (Key)
-      console.log("Searching for anchor with name:", propName);
       let targetAnchorUID = fileSystemItems?.find(item => item.name === propName)?.uid;
-      console.log("Found targetAnchorUID:", targetAnchorUID);
 
       if (!targetAnchorUID) {
         // Create Anchor (Property Type)
@@ -130,7 +128,6 @@ export const PropertiesModal = ({ uid, onClose }: PropertiesModalProps) => {
           return;
         }
 
-        console.log("Extracted new Anchor UID:", newAnchorUID);
         targetAnchorUID = newAnchorUID;
         notification.success("Key created! Automatically proving value...");
         // Proceed to Step 2 automatically

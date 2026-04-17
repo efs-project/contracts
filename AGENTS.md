@@ -1,65 +1,73 @@
-# Agent Context
+# AGENTS.md
 
-## Reference Paths
-- **Scaffold-ETH2 Docs**: `/contracts/reference/scaffold-docs.txt` - Use for UI elements and project structure.
-- **EAS General Docs**: `/contracts/reference/eas-docs.txt` - High-level concepts.
-- **EAS SDK Docs**: `/contracts/reference/eas-sdk-docs.txt` - Official interaction with attestations.
-- **EIPs**: `/contracts/reference/EIPs/` - EIPs relevant to this project. Noteable ones are 4804 / 6860 (Main Web3 URI spec), 5219 (Contract Resource Requests), 6944 (ERC-5219 Resolve Mode), 7617 (Chunk support for ERC-5219 mode in Web3 URL), 6821 (Support ENS Name for Web3 URL), 7618 (Content encoding in ERC-5219 mode), and 7774 (Cache invalidation in ERC-5219 mode).
-- **Web3Protocol**: `/contracts/reference/web3protocol.md` - JS library to parse and fetch Web3 URLs.
-- **Web3Curl**: `/contracts/reference/web3curl.md` - CLI tool to fetch and debug Web3 URLs.
+EFS — Ethereum File System. On-chain file system built on EAS attestations. Pre-launch, devnet target April 19, 2026. Breaking changes are acceptable for now as there's no real data created yet. Good design and future proofing is key.
 
-## Project Setup Commands
+**Production web client** (Vite/Lit, separate repo): https://github.com/efs-project/client. The internal UI at `packages/nextjs/` in this repo is a Scaffold-ETH-based devtools/debug interface — not the production client. Don't apply Scaffold-ETH patterns (`useScaffoldReadContract` etc.) to the production client.
 
-You need to run a fork of Sepolia so we can use the pre-deployed EAS contracts.
+## Read on init
 
-When using the Browser you must also click the money icon in the top right as that's the faucet that adds ETH for gas to your account.
+**If your tool does not auto-load `@`-imported files (non-Claude-Code agents: Codex CLI, Cursor, Gemini, GitHub Actions agents, etc.), you MUST read all of these before starting any task:**
 
-### Blockchain
-1. **Start Chain**: 
-   ```bash
-   # From project root or /contracts/
-   yarn run fork
-   ```
+- **[docs/agent-workflow.md](./docs/agent-workflow.md)** — escalation tiers, decision logging, asking-the-human protocol. **Required before any task.**
+- **[specs/overview.md](./specs/overview.md)** — architecture at a glance.
+- **[docs/QUESTIONS.md](./docs/QUESTIONS.md)** — open items needing the human's input. Check before working in any area.
 
-2. **Deploy Contracts**: 
-   ```bash
-   # From /contracts/
-   yarn run deploy
-   ```
+(Claude Code auto-loads the above via `CLAUDE.md`'s `@` imports.)
 
-### UI Initialization
-1. **Start Debug UI / DevTools**:
-   ```bash
-   # From /contracts/ (will run packages/nextjs schema testing app)
-   yarn start
-   ```
-   *Note the local URL provided in the output (typically `http://localhost:3000`). This is NOT the EFS Web Client.*
+## Read as needed
 
-2. **Starting the EFS Web Client**:
-   If your task involves the actual web explorer, you must switch into the isolated EFS Client repository (a separate codebase). The path varies by machine.
-   Once inside the client repo, you must sync your recently deployed local contracts:
-   ```bash
-   npm run sync-abis
-   npm run dev
-   ```
+- **[specs/README.md](./specs/README.md)** — index of detailed specs (authoritative current behavior)
+- **[docs/adr/](./docs/adr/)** — past decisions and reasoning
+- **[docs/FUTURE_WORK.md](./docs/FUTURE_WORK.md)** — backlog
+- **[docs/LAUNCH_CHECKLIST.md](./docs/LAUNCH_CHECKLIST.md)** — pre-launch blockers
+- **[reference/README.md](./reference/README.md)** — EAS, EIP, Scaffold-ETH docs (indexed by task)
 
-2. **Fund Wallet**: 
-   - In the top right of the UI, click the **Local Faucet** (cash icon) to send test funds to your burner wallet. Attestations require gas!
+## Change-type → required reads
 
-## Schema Debug & Verification
+If your task fits one of these categories, load the listed ADRs *before* writing code. Most Tier 1 mistakes come from missing the right governing decision.
 
-### Schema Debug Page
-Once the UI is running, navigate to the Schema Debug page at:  
-`{BASE_URL}/debug/schemas`  
-*(e.g., `http://localhost:3000/debug/schemas`)*
+| Change type | Required reads |
+|---|---|
+| Schema field change (ANCHOR, DATA, MIRROR, TAG, PROPERTY, SORT_INFO) | ADR-0005, ADR-0030, ADR-0032, `specs/02-Data-Models-and-Schemas.md` |
+| New transport type or priority change | ADR-0011, ADR-0012, ADR-0023, `specs/02` §Mirror |
+| Kernel index / indexing logic (EFSIndexer) | ADR-0007, ADR-0008, ADR-0009, ADR-0010, ADR-0021, `specs/03-Onchain-Indexing-Strategy.md` |
+| Editions / router resolution | ADR-0013, ADR-0014, ADR-0016, ADR-0017, ADR-0020, ADR-0031, `specs/04-Core-Workflows.md` |
+| Security limits (MAX_*) | ADR-0021 through ADR-0026 |
+| Deploy / wiring / contract addresses | ADR-0027, ADR-0028, ADR-0030 |
+| Sort overlay | ADR-0011 (transports pattern analog), `specs/07-Sort-Overlay-Architecture.md` |
+| Licensing / legal | ADR-0029 |
 
-### Test an Attestation
-To verify the agent's ability to attest, use the **Tag Schema** form on the debug page:
+## Setup
 
-1.  **Ref UID (Topic)**: Enter a dummy Topic UID (or leave the pre-filled root topic UID if available).
-2.  **Definition**: Enter a short string (e.g., `test-tag`).
-3.  **Action**: Click **"Attest Tag"**.
-4.  **Verification**: 
-    - Wait for the "Success! Tx: ..." notification.
-    - Scroll down to the **"Attestation Viewer"**.
-    - Ensure your new attestation appears under the **"Tags"** list.
+```bash
+yarn fork     # Terminal 1 — local Sepolia fork (required, not plain hardhat node)
+yarn deploy   # Terminal 2 — deploy contracts (handles workspace + env)
+yarn start    # Terminal 3 — Next.js debug UI at http://localhost:3000
+```
+
+Click the cash/faucet icon (top right of UI) to fund the burner wallet — attestations need gas.
+
+**Smoke test**: navigate to `http://localhost:3000/debug/schemas`, submit a test TAG attestation via the Tag Schema form, and confirm it appears in the Attestation Viewer below. This verifies EAS is reachable, schemas are registered, and the resolver chain is wired correctly.
+
+## Commands
+
+```bash
+yarn hardhat:test           # contract tests
+yarn hardhat:simulate       # run simulate-file-browser.ts against localhost
+yarn next:check-types       # TypeScript check
+yarn lint && yarn format    # both packages
+```
+
+Single test file:
+```bash
+cd packages/hardhat && npx hardhat test test/EFSIndexer.test.ts --network hardhat
+```
+
+## Critical
+
+- **Specs are authoritative.** If specs and code disagree, surface it (likely Tier 2). Don't guess which is right.
+- **ADRs are immutable once Accepted.** Don't edit historical ones. Supersede instead.
+
+---
+
+*Claude Code: see CLAUDE.md (pointer to this file).*

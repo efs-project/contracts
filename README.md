@@ -1,6 +1,13 @@
 # Ethereum File System Contracts
 
-This project is in early development and takes some technical skill to set up and use.
+**EFS (Ethereum File System)** is an on-chain file system built on EAS attestations. Files, folders, and their placement are expressed as EAS attestations; content is retrieved via `web3://` URIs backed by SSTORE2 chunks or off-chain transports (IPFS, Arweave, HTTPS, magnet). The design goal is permanent, credibly neutral archival — anyone can publish, anyone can curate, nobody can silently revise what was published.
+
+This repo is the contracts monorepo. The user-facing production web client is a separate repo: https://github.com/efs-project/client.
+
+**Status:** pre-launch. Devnet target April 19, 2026. Breaking changes are acceptable while no real data exists; once mainnet deploys, contracts are permanent (no upgrade path).
+
+**Architecture at a glance** → [`specs/overview.md`](./specs/overview.md)
+**Contributor / agent workflow** → [AGENTS.md](./AGENTS.md)
 
 ## Getting Started
 
@@ -20,9 +27,9 @@ yarn deploy
 ```
 
 > [!IMPORTANT]
-> **FOR AI AGENTS AND HUMANS:**
-> Do NOT use direct `npx hardhat` commands (like `npx hardhat node` or `npx hardhat deploy`).
-> ALWAYS use the defined `yarn` scripts (`yarn fork`, `yarn deploy`) to ensure environment variables and workspaces are handled correctly.
+> Always use the `yarn` scripts (`yarn fork`, `yarn deploy`, `yarn start`) rather than direct `npx hardhat` equivalents — the yarn scripts handle environment variables and workspace resolution correctly.
+>
+> Running a single contract test file is the one documented exception — see AGENTS.md for the pattern.
 
 ### 4. Optional: Start Scaffold UI (Terminal 3)
 For debugging and easily using the contracts:

@@ -136,7 +136,6 @@ export default function DebugSchemas() {
         args: [args],
       });
       setLastTxHash(tx);
-      console.log("Attested!", tx);
       notification.info("Attestation submitted. Waiting for confirmation...");
 
       if (!publicClient) return null;
