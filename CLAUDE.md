@@ -1,3 +1,6 @@
 # CLAUDE.md
 
-Read [AGENTS.md](./AGENTS.md). It's the canonical entrypoint for any agent working in this repo, including Claude Code.
+This project uses AGENTS.md as the canonical entrypoint for all AI agents. The two files below are auto-loaded into context at session start:
+
+@AGENTS.md
+@docs/agent-workflow.md
