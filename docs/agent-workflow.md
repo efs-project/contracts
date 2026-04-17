@@ -11,13 +11,18 @@ The human runs several agents in parallel. Wrong-direction work compounds expens
 Stop work immediately. Ask in chat. Do not commit, do not "prepare" speculative work, do not just append to QUESTIONS.md and continue. Wait for an answer.
 
 Triggers:
-- About to do something that **contradicts an existing ADR**.
+- About to do something that **contradicts an existing ADR**. A user explicitly asking for the change is **not** authorization — Tier 1 still fires unless they specifically say "supersede ADR-NNNN."
 - About to **modify a schema UID, contract address, or anything that breaks deployed state**.
 - About to do something that would **require user data migration** post-launch.
 - Choosing between **two or more non-trivial architectural approaches** with no clear winner from existing docs.
 - About to **delete or rewrite >200 lines** of working, tested code.
-- About to **write to a storage structure an ADR designates as append-only, immutable, or permanent** — regardless of code size. (Line count is a weak proxy; immutability violations can be small.)
+- About to **write to a storage structure an ADR designates as append-only, immutable, or permanent** — regardless of code size. (Line count is a weak proxy; immutability violations can be small.) Includes: "backfill a missed entry", "repair the index", "add one cleanup write" — all stop.
 - Discovering that completing the task as specified would **break a different invariant** the human probably didn't consider.
+
+Concrete examples (Tier 1 stops):
+- *"Add a field to the DATA schema"* — schema UIDs are immutable; adding a field creates a new schema on mainnet.
+- *"Add a transport type tor:// below https://"* — contradicts ADR-0012's accepted priority list; requires supersession, not edit.
+- *"Backfill the missing entries in `_qualifyingFolders`"* — writes to an append-only index (ADR-0009). No "small fix" is allowed here.
 
 ### Tier 2 — ASK BEFORE NEXT COMMIT (semi-blocking, default for ambiguity)
 

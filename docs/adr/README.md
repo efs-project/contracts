@@ -19,6 +19,16 @@ ADRs are **immutable** once `Status: Accepted`. To change a decision:
 
 This preserves the chain of reasoning. Future agents can see *why* we tried X, *why* we moved to Y, and *what we learned*.
 
+### Grace period for retroactive ADRs
+
+ADRs marked `formalized retroactively` capture a decision made *before* the ADR was written, so the first readers may catch prose-level errors (wrong cross-reference, miscounted schemas, stale function name, inaccurate gas estimate) that don't reflect the decision itself.
+
+For the first **30 days** after a retroactive ADR's write-up date, **prose-accuracy corrections may be made in place** — fix the wording, commit with a message explaining the correction, add a short note at the bottom of the ADR if the correction is substantive (e.g. "Correction 2026-05-01: gas estimate was off by 1 SSTORE; real cost is two.").
+
+After 30 days, or for any change that modifies the actual decision or its consequences, supersession is required.
+
+**In-place corrections are never allowed for:** the `Decision` section's content, the `Consequences` semantics, or the `Alternatives considered` arguments. Those are the historical record.
+
 ## Format
 
 Compact, scannable. Aim for one screen per ADR.
