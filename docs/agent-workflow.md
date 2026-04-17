@@ -45,6 +45,20 @@ Append to the appropriate file and keep working. **Tier 3 items do NOT go in `do
 - **`docs/FUTURE_WORK.md`** — nice-to-have improvements, scale concerns, refactor opportunities.
 - **`docs/decisions.md`** — small decisions you made that future agents should know about (one-line entries with date and reasoning).
 
+### Trivial changes — no tier, no decision log
+
+Some work has zero architectural risk and deserves a fast path. For the following, skip the tier check entirely and just do the work:
+
+- Typo fixes in comments, error strings, revert reasons, log messages, markdown prose.
+- Rename of a `private` / `internal` Solidity function or a file-local TS/JS symbol (grep confirms no external references).
+- Local variable renames, comment additions, whitespace, import reordering.
+- TypeScript type-only fixes that don't change runtime behavior.
+- Lint/format auto-fixes.
+
+**Sanity check before using this fast path:** grep `docs/adr/` and `specs/` for the exact symbol or string you're changing. If no hit, proceed. If a hit, the change is no longer trivial — return to the tier check.
+
+This fast path exists because 95% of real work is mundane, and making it pay the full escalation tax is friction without safety. The tier system is for change classes that touch invariants, public APIs, or deployed state — not for `s/occured/occurred/`.
+
 ## Asking well
 
 When you escalate (Tier 1 or 2), the human's time is the constrained resource. Make the question:
