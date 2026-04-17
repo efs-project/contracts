@@ -35,20 +35,22 @@ This document maps the step-by-step execution for specific developer and user in
 
 ### 5. Navigate to `/memes/` and list files
 - **Action**: Query TagResolver for DATAs and sub-folders at an Anchor, filtered by attester.
-- **Execution**:
+- **Execution**: call EFSFileView — it iterates child anchors, merges editions, and paginates.
   ```
-  For each attester in editions:
-    files = tagResolver.getActiveTargetsByAttesterAndSchema(memesAnchor, attester, DATA_SCHEMA_UID, 0, pageSize)
-    subfolders = tagResolver.getActiveTargetsByAttesterAndSchema(memesAnchor, attester, ANCHOR_SCHEMA_UID, 0, pageSize)
+  items = efsFileView.getDirectoryPageBySchemaAndAddressList(
+    memesAnchor, DATA_SCHEMA_UID, [attesterA, attesterB], startingCursor, pageSize
+  )  // files only
+  subfolders = efsFileView.getDirectoryPageBySchemaAndAddressList(
+    memesAnchor, bytes32(0), [attesterA, attesterB], startingCursor, pageSize
+  )  // generic (folder) anchors
   ```
-- **Result**: Compact reads, no filtering needed — `_activeByAAS` only contains currently-placed items. Client merges across attesters, deduplicates by UID.
+- **Do not** call `tagResolver.getActiveTargetsByAttesterAndSchema(memesAnchor, ...)` directly. The TAG placement `definition` is the file anchor (e.g. `cat.jpg`'s Anchor), not the parent folder — a direct query on the folder anchor returns nothing. See `specs/03-Onchain-Indexing-Strategy.md` "TagResolver: File Placement" for why.
+- **Result**: EFSFileView returns `FileSystemItem[]` with deduplicated edition-merged results, revocation-filtered. The returned cursor paginates the next page.
 
 ### 6. Show items tagged 'Funny', hide items tagged 'NSFW'
 - **Action**: When rendering the children of an Anchor, resolve tag definitions and cross-reference against the edition-specific DATA UIDs.
 - **Resolve definitions**: Look up `resolvePath(tagsAnchorUID, "funny")` and `resolvePath(tagsAnchorUID, "nsfw")` to get the definition Anchor UIDs.
-- **Fetch tagged targets**: Call `getTaggedTargets(funnyDefUID, 0, count)` and `getTaggedTargets(nsfwDefUID, 0, count)` to get the sets of tagged DATA UIDs.
-- **Build DATA UID map**: For each file item, resolve its DATA UIDs via `getActiveTargetsByAttesterAndSchema(anchorUID, attester, DATA_SCHEMA_UID, 0, count)` for each attester in the editions list.
-- **Per-item check**: Check if any of the file's DATA UIDs appear in the "Funny" set (include) or the "NSFW" set (exclude).
+- **Per-item check** (scoped to trusted editions): Call `tagResolver.isActivelyTaggedByAny(dataUID, TAG_SCHEMA_UID, defUID, [editionAttesters])` for each DATA UID against each definition. This scopes the check to **active tags by trusted attesters only** — no revoked tags, no untrusted attesters. Include if any edition tagged "Funny"; exclude if any edition tagged "NSFW".
 - **Key invariant**: Tags are on DATA UIDs, not Anchor UIDs. If User A tagged their edition as NSFW, User B's edition of the same filename is unaffected.
 
 ### 7. Get property 'icon' in `/memes/` made by `0x123...`
@@ -69,8 +71,8 @@ EFS files are modified by issuing new attestations.
 
 ### 10. List Merged Directory by Trusted Addresses
 - **Action**: User opens `/pets/` and wants to see files uploaded by both "Vitalik" and "Self".
-- **Execution**: For each attester, call `getActiveTargetsByAttesterAndSchema(petsAnchor, attester, DATA_SCHEMA_UID, 0, pageSize)`. Client merges results, deduplicates by DATA UID.
-- **Result**: Only files placed by the trusted attesters appear.
+- **Execution**: `efsFileView.getDirectoryPageBySchemaAndAddressList(petsAnchor, DATA_SCHEMA_UID, [vitalik, self], cursor, pageSize)`. EFSFileView iterates child file anchors and merges edition placements internally.
+- **Result**: Deduplicated, edition-merged, revocation-filtered list of file anchors under `/pets/` that have active DATA from any listed attester.
 
 ### 11. Tag a File (Edition-Specific)
 - **Action**: User wants to tag their edition of `/memes/vitalik.jpg` as "funny".
@@ -88,10 +90,9 @@ EFS files are modified by issuing new attestations.
 ### 13. Filter by Tags Across Editions
 - **Action**: User is viewing `/memes/` with `editions=[Alice, Bob]` and applies tag filter "funny".
 - **Resolve**: Look up the "funny" definition UID via `resolvePath(tagsAnchorUID, "funny")`.
-- **Build tagged set**: Fetch `getTaggedTargets(funnyDefUID, 0, count)` into a `Set`.
-- **Build DATA UID map**: For each file item, resolve DATA UIDs via `getActiveTargetsByAttesterAndSchema(anchorUID, attester, DATA_SCHEMA_UID, 0, count)` per attester.
-- **Per-item check**: If **any** of the file's DATA UIDs appears in the tagged set, include the item. If **none** match, exclude it.
-- **Result**: Only files where at least one of the viewed editions has been tagged "funny" appear in the listing.
+- **Filter per DATA**: For each DATA UID surfaced by the directory listing, call `tagResolver.isActivelyTaggedByAny(dataUID, TAG_SCHEMA_UID, funnyDefUID, [alice, bob])`. Returns true only if one of the listed attesters has an **active** (not revoked, not `applies=false`) tag on that DATA.
+- **Do not** use raw `getTaggedTargets(funnyDefUID, ...)` for this — it is an append-only index that includes revoked tags and tags from untrusted attesters.
+- **Result**: Only files where at least one of the viewed editions has an active "funny" tag appear in the listing.
 
 ### 14. Cross-User Tagging (Curating Someone Else's Content)
 - **Action**: User B wants to mark User A's edition of `/memes/cat.gif` as "nsfw".
@@ -130,9 +131,14 @@ Note: the sorted list is **shared across attesters** — `processItems` is keyed
 **Step 1 — Determine what to process:**
 ```
 lastIdx = overlay.getLastProcessedIndex(sortInfoUID, parentAnchor)
-newItems = indexer.getChildrenByAttester(dirUID, attester, lastIdx, pageSize, false, false)
-// newItems are in kernel insertion order starting from lastIdx
+total   = indexer.getChildCountBySchema(parentAnchor, targetSchema)
+// Walk kernel children from lastIdx..total for items matching the SORT_INFO's
+// targetSchema. The overlay validates each item against the shared kernel
+// arrays, not per-attester — the sort includes everyone's contributions.
+newItems = indexer.getChildrenBySchema(parentAnchor, targetSchema, lastIdx, total - lastIdx, false, false)
 ```
+
+Alternatively use `EFSSortOverlay.computeHints(sortInfoUID, parentAnchor, newItems)` — a free view function that computes correct `leftHints` and `rightHints` for you via on-chain binary search, removing the need to implement Steps 2–4 client-side for lists under ~1000 items.
 
 **Step 2 — Fetch the current sorted state:**
 ```

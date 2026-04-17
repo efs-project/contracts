@@ -46,8 +46,11 @@ event AnchorCreated(bytes32 indexed parentUID, bytes32 indexed anchorUID, addres
 event DataCreated(bytes32 indexed dataUID, address indexed attester, bytes32 contentHash);
 event MirrorCreated(bytes32 indexed dataUID, bytes32 indexed mirrorUID, address indexed attester);
 event PropertyCreated(bytes32 indexed anchorUID, bytes32 indexed propertyUID, address indexed attester);
-event AttestationRevoked(bytes32 indexed uid, address indexed attester);
+event AttestationRevoked(bytes32 indexed uid, address indexed attester);  // native-schema revocations
+event RevocationIndexed(bytes32 indexed uid);                              // externally-resolved schemas indexed via indexRevocation()
 ```
+
+Subscribe to both revocation events. `AttestationRevoked` fires from the resolver hook on native schemas (ANCHOR, DATA, PROPERTY); `RevocationIndexed` fires when an external resolver calls `indexRevocation()` to surface a TAG/MIRROR/SORT_INFO revocation into the kernel.
 
 All events are indexed on the most useful lookup fields. `DataCreated` includes `contentHash` for off-chain dedup tracking. `MirrorCreated` links mirrors to their parent DATA. A Graph subgraph subscribing to these events can reconstruct full directory state without any additional contract reads during sync.
 
@@ -66,21 +69,28 @@ To support subjective file resolution natively onchain, two coordinated index sy
 - **Content-Addressed Dedup**: `dataByContentKey[contentHash]` maps content hashes to the first (canonical) DATA UID.
 
 ### TagResolver: File Placement (Compact Index)
-- **`_activeByAAS[definition][attester][schema]`**: The primary index for folder listing. A compact, swap-and-pop array of target UIDs per (definition Anchor, attester, target schema). When `applies=true`, the target is pushed; when `applies=false`, it's swap-and-popped out. This gives O(1) add/remove and contiguous reads — no revoked-item scanning needed.
+- **`_activeByAAS[definition][attester][schema]`**: Compact swap-and-pop array of active targets per `(definition, attester, schema)`. **The `definition` is the Anchor where content is placed — for a file like `/memes/cat.jpg`, the definition is `cat.jpg`'s Anchor, NOT the `/memes/` Anchor.** When `applies=true`, the target is pushed; when `applies=false`, it's swap-and-popped out. This gives O(1) add/remove and contiguous reads — no revoked-item scanning needed.
 - **`_activeByAASIndex[definition][attester][schema][target]`**: Position+1 index for O(1) swap-and-pop removal (0 = absent).
 - **Queried via**: `getActiveTargetsByAttesterAndSchema(definition, attester, schema, start, length)` and `getActiveTargetsByAttesterAndSchemaCount(definition, attester, schema)`.
 
-**Folder listing pattern**:
-```
-For each attester in editions:
-  files = tagResolver.getActiveTargetsByAttesterAndSchema(anchorUID, attester, DATA_SCHEMA_UID, 0, pageSize)
-  subfolders = tagResolver.getActiveTargetsByAttesterAndSchema(anchorUID, attester, ANCHOR_SCHEMA_UID, 0, pageSize)
-```
+**Do not use raw `_activeByAAS` queries for folder listing.** The index is keyed per file anchor, not per folder. Listing the files inside `/memes/` requires iterating the folder's child anchors. Use `EFSFileView` (next section) — it handles the iteration, pagination, edition merge, and revocation filtering for you.
+
+### EFSFileView: High-level directory views
+EFSFileView is the read-side wrapper most client code should call rather than composing EFSIndexer + TagResolver queries by hand. Three variants:
+
+- `getDirectoryPage(parent, start, length, dataSchemaUID, propertySchemaUID)` — all children, insertion order.
+- `getDirectoryPageByAddressList(parent, attesters, startingCursor, pageSize)` — attester-filtered directory listing.
+- `getDirectoryPageBySchemaAndAddressList(parent, anchorSchema, attesters, startingCursor, pageSize)` — schema + attester filtered (e.g. file anchors only).
+
+Use `getDirectoryPageBySchemaAndAddressList(folderUID, DATA_SCHEMA_UID, [alice, bob], 0, 50)` to list files in `/memes/` from Alice and Bob's editions. EFSFileView also exposes `getFilesAtPath(fileAnchorUID, attesters, schema, start, length)` for the narrower case of "what DATA attestations are on this specific anchor" — callers pass a file anchor, not a folder.
 
 ### `propagateContains` (Tree Visibility)
 When a TAG with `applies=true` places a DATA at a structural Anchor, the TagResolver calls `indexer.propagateContains(definition, attester)`. This walks up the `_parents` chain from the definition Anchor, setting `_containsAttestations[ancestor][attester] = true` at each level. Early-exit on already-flagged ancestors makes repeated contributions amortized O(1). This enables the sidebar tree to show which folders contain content from a given attester without scanning their children.
 
 `MAX_ANCHOR_DEPTH = 32` caps the upward walk to prevent gas griefing via deeply nested Anchor chains.
+
+### `clearContains` (partial de-propagation)
+When the last active item placed at a definition Anchor by an attester is removed (TAG with `applies=false`, or revocation), TagResolver calls `indexer.clearContains(definition, attester)`. This clears the **immediate folder's** `_containsAttestations` flag only — ancestor flags remain sticky (see ADR-0010). The immediate-folder clear is sufficient because `getDirectoryPageByAddressList` checks the direct child's flag; leaving ancestors flagged is conservative (a folder might stop appearing empty) and avoids the gas cost of reference-counted de-propagation.
 
 ### `_childrenByAttester` and `_containsAttestations` Propagation Behaviour
 `_containsAttestations[anchorUID][attester]` is flagged when an attester contributes content under that anchor. Two paths trigger propagation:
