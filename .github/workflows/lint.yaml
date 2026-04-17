@@ -41,3 +41,6 @@ jobs:
 
       - name: Check typings on nextjs
         run: yarn next:check-types
+
+      - name: Check docs references
+        run: yarn docs:check
