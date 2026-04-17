@@ -2,6 +2,8 @@
 
 This project is in early development and takes some technical skill to set up and use.
 
+> **Contributors (human or AI):** start at [AGENTS.md](./AGENTS.md). It's the canonical entrypoint — project conventions, setup, architecture, workflow rules. For a one-screen architecture overview, see [`specs/overview.md`](./specs/overview.md).
+
 ## Getting Started
 
 ### 1. Install Dependencies

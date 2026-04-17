@@ -61,7 +61,7 @@ Well-known transport types are created at deploy time under `/transports/`:
 - `/transports/magnet` — `magnet:` URIs
 - `/transports/https` — `https://` URIs
 
-The transport preference order for display is: onchain > ipfs > arweave > https > magnet.
+The transport preference order for serving is: `web3://` (onchain) > `ar://` > `ipfs://` > `magnet:` > `https://`. See ADR-0012 for rationale.
 
 ## 4. Tag Schema
 **Purpose**: Subjective categorization, file placement, and labeling via the "Type as Topic" pattern.

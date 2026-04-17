@@ -89,7 +89,7 @@ Currently agent reviews are manual. A `.github/workflows/agent-review.yml` trigg
 ### `make questions` shortcut to surface open items
 The QUESTIONS.md file works only if the human checks it. A daily-use shortcut (alias, Makefile target, or shell function) to print open questions reduces friction.
 
-### `// AGENT-Q:` in-code question marker
+### ~~`// AGENT-Q:` in-code question marker~~ — *landed in agent-workflow.md; remove from backlog.*
 For questions tied to specific lines (rather than whole-task questions), an in-code marker pattern that agents grep for. Lighter than QUESTIONS.md for quick clarifications.
 
 ### Integration test suite for full upload + read cycle

@@ -15,7 +15,7 @@ EAS (Ethereum Attestation Service) provides:
 
 ## Decision
 
-EFS is built as a layer on EAS. All EFS data is EAS attestations. The five EFS schemas (ANCHOR, DATA, MIRROR, TAG, PROPERTY, SORT_INFO) are registered in the EAS SchemaRegistry and use EAS attestation flow.
+EFS is built as a layer on EAS. All EFS data is EAS attestations. The six EFS schemas (ANCHOR, DATA, MIRROR, TAG, PROPERTY, SORT_INFO) are registered in the EAS SchemaRegistry and use EAS attestation flow.
 
 The EFS contracts (EFSIndexer, TagResolver, MirrorResolver, EFSSortOverlay) are EAS resolvers — they hook into EAS via the resolver pattern.
 

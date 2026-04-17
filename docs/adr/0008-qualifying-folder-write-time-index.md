@@ -24,7 +24,7 @@ Reading is O(M_qualifying) where M is the number of folders that actually contai
 ## Consequences
 
 - Schema-filtered directory listings scale to any directory size (no silent cap).
-- One extra SSTORE per ancestor on first file creation in a deep tree (~32 max). Amortized O(1) for repeat uploads (the dedup guard short-circuits).
+- Two SSTOREs per ancestor on first file creation in a deep tree (~32 max) — one to push the folder UID into `_qualifyingFolders`, one to set the `_hasQualifyingFolder` dedup bool. Amortized O(1) for repeat uploads (the dedup guard short-circuits).
 - `_anchorSchemaOf[uid]` cache (one SSTORE per ANCHOR creation) enables O(1) parent-type checks without re-decoding EAS attestation data.
 - Sticky semantics: a folder that once contained matching content stays in the qualifying index even if all content is removed. Consistent with `_containsAttestations` (ADR-0010). UI may want to cross-check with `containsAttestations()` to hide empty folders.
 - Source B (explicit TAG of empty folders) remains as a separate path so users can opt empty folders into visibility.

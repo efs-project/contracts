@@ -59,7 +59,7 @@ Good Tier 1 question:
 
 If you make a Tier 2 or 3 decision and act on it, **document it**:
 
-- **Tier 2** decisions: add or update an ADR, OR add an entry to `docs/decisions.md` with date and reasoning. Mention in PR description.
+- **Tier 2** decisions: add a new ADR (or supersede an existing one), OR add an entry to `docs/decisions.md` with date and reasoning. Mention in PR description. Note: do not edit accepted ADRs in place — supersede them by writing a new ADR.
 - **Tier 3** decisions: one-line entry in `docs/decisions.md`.
 
 ADRs are **immutable** once `Status: Accepted`. To change a decision, write a new ADR that supersedes the old one and update the old one's Status to `Superseded by ADR-NNNN`.

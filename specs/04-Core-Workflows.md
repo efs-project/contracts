@@ -26,7 +26,7 @@ This document maps the step-by-step execution for specific developer and user in
 ### 3. Add a mirror to an existing file
 - **Action**: Attach an additional retrieval method to an existing DATA.
 - **Execution**: Single `MIRROR(refUID=existing DATA UID, transportDef=/transports/arweave, uri=ar://yyy)` attestation.
-- **Result**: File now has multiple transport options. Client picks best available per transport preference (onchain > ipfs > arweave > https > magnet).
+- **Result**: File now has multiple transport options. Client picks best available per transport preference (web3 > ar > ipfs > magnet > https; see ADR-0012).
 
 ### 4. Cross-reference the same file at another path
 - **Action**: Place an existing DATA at a second path (e.g., same cat.jpg at `/animals/cat.jpg`).

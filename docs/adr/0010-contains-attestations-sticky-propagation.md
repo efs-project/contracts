@@ -17,7 +17,7 @@ Full clearing requires reference counting across the tree (an ancestor stays fla
 Propagation is **one-way (sticky)** with a partial exception:
 
 - **Set on TAG**: `propagateContains` walks the ancestor chain (bounded by `MAX_ANCHOR_DEPTH`) flagging each ancestor.
-- **Clear on untag**: `clearContains` clears only the **immediate folder** flag (not ancestors), and only when the `_activeTotalByDefAndAttester` counter for that (definition, attester) hits zero. The immediate-folder clear is sufficient for accurate subfolder listing because `getDirectoryByAddressList` checks the direct child's flag.
+- **Clear on untag**: `clearContains` clears only the **immediate folder** flag (not ancestors), and only when the `_activeTotalByDefAndAttester` counter for that (definition, attester) hits zero. The immediate-folder clear is sufficient for accurate subfolder listing because `getDirectoryPageByAddressList` checks the direct child's flag.
 - **Ancestor flags remain sticky.** A folder that once contained content for an attester appears in their parent's edition view forever, even if all content is removed.
 
 ## Consequences

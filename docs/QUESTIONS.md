@@ -51,7 +51,7 @@ C is cleanest for URLs. B is cleanest for code. A is cheapest.
 ## Resolved (recent — keep for context)
 
 ### [resolved 2026-04-16] Production EFS Client repo path
-URL: https://github.com/efs-project/client — recorded in `docs/external-repos.md`. Production client review is still deferred to a dedicated session (tracked in `docs/LAUNCH_CHECKLIST.md` under Pre-Mainnet → Production UI).
+URL: https://github.com/efs-project/client — recorded inline in `AGENTS.md`. Production client review is still deferred to a dedicated session (tracked in `docs/LAUNCH_CHECKLIST.md` under Pre-Mainnet → Production UI).
 
 ---
 
