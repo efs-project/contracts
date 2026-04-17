@@ -64,6 +64,16 @@ If you make a Tier 2 or 3 decision and act on it, **document it**:
 
 ADRs are **immutable** once `Status: Accepted`. To change a decision, write a new ADR that supersedes the old one and update the old one's Status to `Superseded by ADR-NNNN`.
 
+### Keeping `decisions.md` healthy
+
+`decisions.md` is an append-only historical log; it will grow over time. Periodically (or when an agent notices the file approaching ~500 lines), prune:
+
+- **Stabilized patterns** (the same decision applied repeatedly) → promote to a new ADR. Delete the original entries with a pointer to the ADR.
+- **Reversed or irrelevant decisions** → delete, or move to a "superseded" section.
+- **Small decisions that never mattered again** → delete outright.
+
+Pruning is a Tier 3 task itself; log the pruning pass in `decisions.md` as a single entry.
+
 ## Working alongside other agents
 
 If another agent is working on the same area (check git log, recent PRs, branch names like `claude/*` or `codex/*`):

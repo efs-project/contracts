@@ -1,8 +1,25 @@
-# Welcome to Scaffold-ETH 2 Contributing Guide
+# Contributing to EFS
 
-Thank you for investing your time in contributing to Scaffold-ETH 2!
+Thank you for investing your time in contributing to EFS (Ethereum File System).
 
-This guide aims to provide an overview of the contribution workflow to help us make the contribution process effective for everyone involved.
+## For all contributors — human or AI
+
+This project's primary entrypoint is **[AGENTS.md](./AGENTS.md)**. Read it first. It covers:
+
+- What EFS is and its three-layer architecture
+- Setup commands and smoke test
+- Where to find specs, ADRs, open questions, and backlog
+- Load-bearing invariants (things that break deployed state if touched carelessly)
+
+If you're using an AI coding assistant (Claude Code, Codex CLI, Cursor, Gemini, etc.), it should already be picking up `AGENTS.md` automatically. The **[agent workflow rules](./docs/agent-workflow.md)** — escalation tiers, decision logging, pre-PR checklist — apply to every contributor, agent or human.
+
+Before opening a PR: see the pre-PR checklist in `docs/agent-workflow.md`.
+
+---
+
+## Scaffold-ETH 2 base (original guide)
+
+EFS is built on Scaffold-ETH 2. Contributions touching the frontend package (`packages/nextjs/`) may benefit from the Scaffold-ETH guide below. Contract contributions should follow EFS conventions in `AGENTS.md` and `specs/`.
 
 ## About the Project
 
