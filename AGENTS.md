@@ -2,6 +2,8 @@
 
 EFS — Ethereum File System. On-chain file system built on EAS attestations. Pre-launch, devnet target April 19, 2026. Breaking changes are acceptable for now as there's no real data created yet. Good design and future proofing is key.
 
+**Production web client** (Vite/Lit, separate repo): https://github.com/efs-project/client. The internal UI at `packages/nextjs/` in this repo is a Scaffold-ETH-based devtools/debug interface — not the production client. Don't apply Scaffold-ETH patterns (`useScaffoldReadContract` etc.) to the production client.
+
 ## System at a glance
 
 **Three layers, linked by TAG:** Anchors (paths) → DATA (content identity, content-hashed) → MIRRORs (retrieval URIs). TAG attestations place DATA at paths. Content addressability and multi-attester "editions" fall out of this separation.
@@ -38,7 +40,6 @@ ANCHOR, DATA, MIRROR, TAG, PROPERTY, SORT_INFO.
 - **[docs/FUTURE_WORK.md](./docs/FUTURE_WORK.md)** — backlog
 - **[docs/LAUNCH_CHECKLIST.md](./docs/LAUNCH_CHECKLIST.md)** — pre-launch blockers
 - **[reference/README.md](./reference/README.md)** — EAS, EIP, Scaffold-ETH docs (indexed by task)
-- **[docs/external-repos.md](./docs/external-repos.md)** — production EFS Client and other repos outside this monorepo
 
 ## Setup
 
