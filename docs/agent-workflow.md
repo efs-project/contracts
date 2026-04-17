@@ -16,6 +16,7 @@ Triggers:
 - About to do something that would **require user data migration** post-launch.
 - Choosing between **two or more non-trivial architectural approaches** with no clear winner from existing docs.
 - About to **delete or rewrite >200 lines** of working, tested code.
+- About to **write to a storage structure an ADR designates as append-only, immutable, or permanent** — regardless of code size. (Line count is a weak proxy; immutability violations can be small.)
 - Discovering that completing the task as specified would **break a different invariant** the human probably didn't consider.
 
 ### Tier 2 — ASK BEFORE NEXT COMMIT (semi-blocking, default for ambiguity)
