@@ -46,21 +46,12 @@ C is cleanest for URLs. B is cleanest for code. A is cheapest.
 
 **Blocks:** anything that depends on multi-edition resolution semantics being final. Doesn't block this PR.
 
-### [tier-2, 2026-04-16, claude] Production EFS Client UI review scope
-
-The internal devtools UI in `packages/nextjs/` has been reviewed. The production EFS Client (Vite/Lit, separate repo) has not been included in any review pass. It is the actual user touchpoint pre-launch.
-
-Should the dev-process branch reference the external repo path so agents can discover it? Or do you want the production client review held until a dedicated session?
-
-**Default if not answered:** add a stub `docs/external-repos.md` with the path and reviewer notes; defer the actual review to a dedicated session.
-
-**Blocks:** complete pre-launch readiness assessment.
-
 ---
 
 ## Resolved (recent — keep for context)
 
-*(none yet — populate as questions get answered)*
+### [resolved 2026-04-16] Production EFS Client repo path
+URL: https://github.com/efs-project/client — recorded in `docs/external-repos.md`. Production client review is still deferred to a dedicated session (tracked in `docs/LAUNCH_CHECKLIST.md` under Pre-Mainnet → Production UI).
 
 ---
 

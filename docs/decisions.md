@@ -16,4 +16,6 @@ Created `dev-process` branch from main with: lean `AGENTS.md` as canonical entry
 
 ## Older entries
 
-*(populate as decisions accumulate)*
+### 2026-04-16 — [claude] Production EFS Client repo URL recorded
+
+The production EFS Client (Vite/Lit) lives at https://github.com/efs-project/client. Recorded in `docs/external-repos.md`. Resolves the Tier 2 question on production client discoverability. Actual review of the client's code is still deferred to a dedicated session per `docs/LAUNCH_CHECKLIST.md`.

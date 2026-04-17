@@ -6,7 +6,7 @@ EFS spans multiple repositories. This file indexes them so agents working across
 
 The user-facing web client — the actual touchpoint for most users — lives in a **separate repository**. The internal UI at `packages/nextjs/` in *this* repo is a Scaffold-ETH-based devtools/debug interface, not the production client.
 
-**Repo path / URL: unresolved** — see `docs/QUESTIONS.md` for the open Tier 2 item.
+**Repo:** https://github.com/efs-project/client
 
 Agents working on features that touch both the contracts and the production client should:
 1. Flag the cross-repo boundary in chat before starting (Tier 2 — the production client review scope is not yet defined here).
