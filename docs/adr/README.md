@@ -84,7 +84,7 @@ What else we looked at and why it lost.
 ### Deploy & Infrastructure
 - [ADR-0027 — Deploy-before-register pattern](./0027-deploy-before-register.md)
 - [ADR-0028 — CI graceful degradation](./0028-ci-graceful-degradation.md)
-- [ADR-0029 — Dual licensing: MIT for contracts, AGPL for web client](./0029-dual-licensing-mit-agpl.md)
+- [ADR-0029 — MIT license for EFS contracts (web client license deferred)](./0029-dual-licensing-mit-agpl.md)
 
 ### Architectural Foundations
 - [ADR-0030 — Mainnet permanence (no upgradeability)](./0030-mainnet-permanence.md)

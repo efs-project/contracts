@@ -14,6 +14,7 @@ EFS — Ethereum File System. On-chain file system built on EAS attestations. Pr
 - **[docs/FUTURE_WORK.md](./docs/FUTURE_WORK.md)** — backlog
 - **[docs/LAUNCH_CHECKLIST.md](./docs/LAUNCH_CHECKLIST.md)** — pre-launch blockers
 - **[reference/README.md](./reference/README.md)** — EAS, EIP, Scaffold-ETH docs (indexed by task)
+- **[docs/external-repos.md](./docs/external-repos.md)** — production EFS Client and other repos outside this monorepo
 
 ## Setup
 
@@ -24,6 +25,8 @@ yarn start    # Terminal 3 — Next.js debug UI at http://localhost:3000
 ```
 
 Click the cash/faucet icon (top right of UI) to fund the burner wallet — attestations need gas.
+
+**Smoke test**: navigate to `http://localhost:3000/debug/schemas`, submit a test TAG attestation via the Tag Schema form, and confirm it appears in the Attestation Viewer below. This verifies EAS is reachable, schemas are registered, and the resolver chain is wired correctly.
 
 ## Commands
 
