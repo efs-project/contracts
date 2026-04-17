@@ -2,6 +2,30 @@
 
 EFS — Ethereum File System. On-chain file system built on EAS attestations. Pre-launch, devnet target April 19, 2026. Breaking changes are acceptable for now as there's no real data created yet. Good design and future proofing is key.
 
+## System at a glance
+
+**Three layers, linked by TAG:** Anchors (paths) → DATA (content identity, content-hashed) → MIRRORs (retrieval URIs). TAG attestations place DATA at paths. Content addressability and multi-attester "editions" fall out of this separation.
+
+**Six EAS schemas** (see [specs/02-Data-Models-and-Schemas.md](./specs/02-Data-Models-and-Schemas.md) for fields):
+ANCHOR, DATA, MIRROR, TAG, PROPERTY, SORT_INFO.
+
+**Core contracts:**
+
+| Contract | Role | State? | Redeployable? |
+|---|---|---|---|
+| `EFSIndexer` | Append-only kernel. All indices, path resolution, revocation tracking. | Yes (heavy) | No — schema UIDs encode its address |
+| `EFSRouter` | `web3://` URI resolution (ERC-5219). Edition-scoped content serving. | No | Yes (URIs change) |
+| `EFSFileView` | Directory listing views over EFSIndexer. | No | Yes — fully stateless |
+| `TagResolver` | TAG schema hook. Singleton placement via `_activeByAAS`. | Yes | No — wired into EFSIndexer |
+| `MirrorResolver` | MIRROR schema hook. URI allowlist + transport ancestry check. | Minimal | No — wired into EFSIndexer |
+| `EFSSortOverlay` | Per-parent sorted linked lists. Overlay on EFSIndexer. | Yes | No — wired into EFSIndexer |
+
+**Load-bearing invariants** (violating these is expensive):
+- **Append-only indices** (ADR-0009) — never compact, never mutate existing entries.
+- **Schema UIDs are immutable** — they hash the field string; any field change creates a new schema and new UID.
+- **Edition-scoped reads** (ADR-0013, ADR-0014) — mirrors and PROPERTYs on DATA are scoped to the edition attester at read time; cross-attester injection is blocked by design.
+- **Mainnet contracts are permanent** (ADR-0030) — no upgrades, no admin overrides, no migrations. Devnet is upgradeable; mainnet is not.
+
 ## Read on init
 
 - **[docs/agent-workflow.md](./docs/agent-workflow.md)** — escalation tiers, decision logging, asking-the-human protocol. **Required before any task.**

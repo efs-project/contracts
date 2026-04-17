@@ -33,12 +33,12 @@ Triggers:
 
 ### Tier 3 — NOTE FOR LATER (non-blocking)
 
-Append to the appropriate file and keep working.
+Append to the appropriate file and keep working. **Tier 3 items do NOT go in `docs/QUESTIONS.md`** — that file is auto-loaded at session start and must stay reserved for Tier 1/2 blockers.
 
-- **`docs/QUESTIONS.md`** — question about a specific in-progress task that needs eventual human input.
+- **In-code `// AGENT-Q:` comments** — task-specific questions bound to code lines. Preferred for most Tier 3 questions.
+- **In-code `// AGENT-NOTE:` comments** — observations bound to specific lines (not questions).
 - **`docs/FUTURE_WORK.md`** — nice-to-have improvements, scale concerns, refactor opportunities.
 - **`docs/decisions.md`** — small decisions you made that future agents should know about (one-line entries with date and reasoning).
-- **In-code `// AGENT-NOTE:` comments** — observations bound to specific lines.
 
 ## Asking well
 

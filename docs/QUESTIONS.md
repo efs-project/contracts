@@ -2,10 +2,14 @@
 
 Questions agents have flagged for human decision. Review and resolve before agents continue work in those areas.
 
-> **For agents:** see `docs/agent-workflow.md` for the full escalation tier system. This file holds **questions awaiting the human's decision** specifically. Routing by tier:
+> **For agents:** see `docs/agent-workflow.md` for the full escalation tier system. This file holds **Tier 1 and Tier 2 blocking questions only** — it is auto-loaded at session start and must stay sharp.
+>
+> Routing:
 > - **Tier 1** — belong in chat first (blocking). Add here only after the human acknowledges, for tracking.
 > - **Tier 2** — belong in chat AND here.
-> - **Tier 3** — questions about specific in-progress tasks belong here. Other Tier 3 items route elsewhere: nice-to-haves to `FUTURE_WORK.md`, decisions you made to `decisions.md`, line-specific observations as `// AGENT-NOTE:` comments.
+> - **Tier 3** (task-specific questions) — do NOT go here. Use inline `// AGENT-Q:` code comments, or `decisions.md` if you made a call, or `FUTURE_WORK.md` if it's a nice-to-have.
+>
+> When resolved, move the entry to `docs/decisions.md` as a one-liner. Don't let this file grow past ~10 items; resolve or reroute.
 
 > **Format:** newest at top. When resolved, move to `docs/decisions.md` (one-liner) and either delete from this file OR mark resolved in-place. Promote to an ADR if the decision is durable and architectural.
 
