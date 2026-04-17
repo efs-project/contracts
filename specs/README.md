@@ -4,6 +4,7 @@ Authoritative description of how EFS works today. If specs and code disagree, th
 
 ## Index
 
+- **`overview.md`** — **EFS at a glance.** One-screen canonical reference: three-layer model, six schemas, core contracts, load-bearing invariants. Start here for any non-trivial task. Auto-loaded at session start.
 - **`01-System-Architecture.md`** — high-level vision, kernel/overlay model, the three-layer separation. Read first when orienting on EFS conceptually.
 - **`02-Data-Models-and-Schemas.md`** — the six EAS schemas (ANCHOR, DATA, MIRROR, TAG, PROPERTY, SORT_INFO), their fields, resolvers, and how they relate. Required reading for any contract work.
 - **`03-Onchain-Indexing-Strategy.md`** — how EFSIndexer maintains lookup indices, the append-only kernel pattern, edition filtering. Read before modifying any index in EFSIndexer or TagResolver.
