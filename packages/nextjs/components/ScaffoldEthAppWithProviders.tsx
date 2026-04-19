@@ -8,6 +8,7 @@ import { useTheme } from "next-themes";
 import { Toaster } from "react-hot-toast";
 import { WagmiProvider } from "wagmi";
 import { BackgroundOpsDrawer } from "~~/components/BackgroundOpsDrawer";
+import { DevnetAutoFund } from "~~/components/DevnetAutoFund";
 import { DevnetBanner } from "~~/components/DevnetBanner";
 import { Footer } from "~~/components/Footer";
 import { Header } from "~~/components/Header";
@@ -28,6 +29,8 @@ const ScaffoldEthApp = ({ children }: { children: React.ReactNode }) => {
       </div>
       <Toaster />
       <BackgroundOpsDrawer />
+      {/* No-op off the hardhat fork; silently tops up freshly-connected wallets with 0 balance. */}
+      <DevnetAutoFund />
     </>
   );
 };

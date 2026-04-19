@@ -61,7 +61,7 @@ yarn deploy   # Terminal 2 — deploy contracts (handles workspace + env)
 yarn start    # Terminal 3 — Next.js debug UI at http://localhost:3000
 ```
 
-Click the cash/faucet icon (top right of UI) to fund the burner wallet — attestations need gas.
+Open the wallet menu (address chip, top right of UI) and click **Fund wallet (1 ETH)** to top up the burner — attestations need gas.
 
 ### Running alongside another project (parallel agents / worktrees)
 
