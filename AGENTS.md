@@ -93,6 +93,19 @@ wagmi client. Set both to the same URL when running end-to-end.
 
 **Smoke test**: navigate to `http://localhost:3000/debug/schemas`, submit a test TAG attestation via the Tag Schema form, and confirm it appears in the Attestation Viewer below. This verifies EAS is reachable, schemas are registered, and the resolver chain is wired correctly.
 
+### Seeding demo data (devnet + local first-run)
+
+After `yarn deploy`, the file tree is empty. `yarn hardhat:seed` populates a small
+demo tree (`/docs/`, `/images/`, `/shared/`) with an editions demo on `shared/photo.png`.
+The script is **idempotent** — each top-level subtree is guarded by a `resolveAnchor`
+call, so re-running after a partial failure only fills in what's missing, and re-running
+after a successful seed is a zero-write no-op. Safe to wire unconditionally into a
+devnet reset flow:
+
+```bash
+yarn deploy && yarn hardhat:seed
+```
+
 ### Pinned Sepolia fork (coordination unit for devnet / client)
 
 The hardhat network forks Sepolia at a **pinned block** (see `packages/hardhat/hardhat.config.ts` → `networks.hardhat.forking.blockNumber`; default set via `FORK_BLOCK`). This makes contract addresses, EAS schema UIDs, and `packages/nextjs/contracts/deployedContracts.ts` byte-identical across every environment that runs this commit — local hardhat, CI, the devnet VPS, the statically hosted Vite client. See ADR-0037.
@@ -104,6 +117,7 @@ The hardhat network forks Sepolia at a **pinned block** (see `packages/hardhat/h
 ```bash
 yarn hardhat:test           # contract tests
 yarn hardhat:simulate       # run simulate-file-browser.ts against localhost
+yarn hardhat:seed           # idempotent demo tree (/docs /images /shared)
 yarn next:check-types       # TypeScript check
 yarn lint && yarn format    # both packages
 ```

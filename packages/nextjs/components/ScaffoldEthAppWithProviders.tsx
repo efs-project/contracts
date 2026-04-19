@@ -8,6 +8,7 @@ import { useTheme } from "next-themes";
 import { Toaster } from "react-hot-toast";
 import { WagmiProvider } from "wagmi";
 import { BackgroundOpsDrawer } from "~~/components/BackgroundOpsDrawer";
+import { DevnetBanner } from "~~/components/DevnetBanner";
 import { Footer } from "~~/components/Footer";
 import { Header } from "~~/components/Header";
 import { BlockieAvatar } from "~~/components/scaffold-eth";
@@ -20,6 +21,7 @@ const ScaffoldEthApp = ({ children }: { children: React.ReactNode }) => {
   return (
     <>
       <div className={`flex flex-col min-h-screen `}>
+        <DevnetBanner />
         <Header />
         <main className="relative flex flex-col flex-1">{children}</main>
         <Footer />

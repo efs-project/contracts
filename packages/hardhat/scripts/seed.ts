@@ -14,6 +14,13 @@
  *
  * Run: npx hardhat run scripts/seed.ts --network localhost
  *      (or: yarn hardhat:seed)
+ *
+ * Idempotency: each top-level seed anchor (/docs/, /images/, /shared/) is
+ * independently guarded via `resolveAnchor(rootUID, name, 0)`. Re-running after
+ * a successful seed is a no-op (three read calls, zero writes). Re-running
+ * after a partial failure only re-creates the subtrees that are missing. This
+ * is the invocation contract the devnet reset flow relies on — `yarn deploy &&
+ * yarn hardhat:seed` is safe to call unconditionally.
  */
 
 import { ethers, getNamedAccounts } from "hardhat";
@@ -103,32 +110,76 @@ async function main() {
     return uid;
   };
 
+  // Per-anchor idempotency guard. Returns the existing UID (if any) or null.
+  // `_nameToAnchor[parent][name][schema]` is set on the first anchor attestation
+  // matching the triple; EFSIndexer.resolveAnchor is a pure view on that mapping.
+  const findAnchor = async (
+    parentUID: string,
+    name: string,
+    schema: string = ethers.ZeroHash,
+  ): Promise<string | null> => {
+    const uid = await indexer.resolveAnchor(parentUID, name, schema);
+    return uid === ethers.ZeroHash ? null : uid;
+  };
+
   // ── Build tree ────────────────────────────────────────────────────────────────
 
-  console.log("── /docs/ ──");
-  const docsUID = await makeAnchor(deployerSigner, "docs", rootUID);
-  const readmeUID = await makeAnchor(deployerSigner, "readme.txt", docsUID, dataSchemaUID);
-  await makeData(deployerSigner, readmeUID, "data:text/plain,Hello%20from%20EFS!", "text/plain");
-  const notesUID = await makeAnchor(deployerSigner, "notes.txt", docsUID, dataSchemaUID);
-  await makeData(deployerSigner, notesUID, "data:text/plain,Some%20notes", "text/plain");
+  let skipped = 0;
+  let docsUID: string;
+  let imagesUID: string;
+  let sharedUID: string;
 
-  console.log("\n── /images/ ──");
-  const imagesUID = await makeAnchor(deployerSigner, "images", rootUID);
-  const catUID = await makeAnchor(deployerSigner, "cat.jpg", imagesUID, dataSchemaUID);
-  await makeData(deployerSigner, catUID, "https://placecats.com/300/200", "image/jpeg");
-  const dogUID = await makeAnchor(deployerSigner, "dog.jpg", imagesUID, dataSchemaUID);
-  await makeData(deployerSigner, dogUID, "https://placedog.net/300/200", "image/jpeg");
+  const existingDocs = await findAnchor(rootUID, "docs");
+  if (existingDocs) {
+    docsUID = existingDocs;
+    console.log(`── /docs/ (exists, skipping) ── ${docsUID.slice(0, 14)}…`);
+    skipped++;
+  } else {
+    console.log("── /docs/ ──");
+    docsUID = await makeAnchor(deployerSigner, "docs", rootUID);
+    const readmeUID = await makeAnchor(deployerSigner, "readme.txt", docsUID, dataSchemaUID);
+    await makeData(deployerSigner, readmeUID, "data:text/plain,Hello%20from%20EFS!", "text/plain");
+    const notesUID = await makeAnchor(deployerSigner, "notes.txt", docsUID, dataSchemaUID);
+    await makeData(deployerSigner, notesUID, "data:text/plain,Some%20notes", "text/plain");
+  }
 
-  console.log("\n── /shared/ (editions demo) ──");
-  const sharedUID = await makeAnchor(deployerSigner, "shared", rootUID);
-  const photoUID = await makeAnchor(deployerSigner, "photo.png", sharedUID, dataSchemaUID);
-  await makeData(deployerSigner, photoUID, "ipfs://owner-version-of-photo", "image/png");
-  await makeData(user1, photoUID, "ipfs://user1-version-of-photo", "image/png");
+  const existingImages = await findAnchor(rootUID, "images");
+  if (existingImages) {
+    imagesUID = existingImages;
+    console.log(`\n── /images/ (exists, skipping) ── ${imagesUID.slice(0, 14)}…`);
+    skipped++;
+  } else {
+    console.log("\n── /images/ ──");
+    imagesUID = await makeAnchor(deployerSigner, "images", rootUID);
+    const catUID = await makeAnchor(deployerSigner, "cat.jpg", imagesUID, dataSchemaUID);
+    await makeData(deployerSigner, catUID, "https://placecats.com/300/200", "image/jpeg");
+    const dogUID = await makeAnchor(deployerSigner, "dog.jpg", imagesUID, dataSchemaUID);
+    await makeData(deployerSigner, dogUID, "https://placedog.net/300/200", "image/jpeg");
+  }
+
+  const existingShared = await findAnchor(rootUID, "shared");
+  if (existingShared) {
+    sharedUID = existingShared;
+    console.log(`\n── /shared/ (exists, skipping) ── ${sharedUID.slice(0, 14)}…`);
+    skipped++;
+  } else {
+    console.log("\n── /shared/ (editions demo) ──");
+    sharedUID = await makeAnchor(deployerSigner, "shared", rootUID);
+    const photoUID = await makeAnchor(deployerSigner, "photo.png", sharedUID, dataSchemaUID);
+    await makeData(deployerSigner, photoUID, "ipfs://owner-version-of-photo", "image/png");
+    await makeData(user1, photoUID, "ipfs://user1-version-of-photo", "image/png");
+  }
 
   // ── Summary ───────────────────────────────────────────────────────────────────
 
   console.log("\n═══════════════════════════════════════");
-  console.log("  Seeding complete!");
+  if (skipped === 3) {
+    console.log("  Seed already applied — no writes needed.");
+  } else if (skipped > 0) {
+    console.log(`  Seeding complete (${skipped}/3 subtrees already existed).`);
+  } else {
+    console.log("  Seeding complete!");
+  }
   console.log(`  docs/     ${docsUID.slice(0, 14)}…`);
   console.log(`  images/   ${imagesUID.slice(0, 14)}…`);
   console.log(`  shared/   ${sharedUID.slice(0, 14)}…`);
