@@ -4,23 +4,37 @@
  * Creates a small realistic file tree for manual UI testing:
  *
  *   /docs/
- *     readme.txt  (owner DATA: "Hello from EFS!")
- *     notes.txt   (owner DATA: "Some notes")
+ *     readme.txt   (owner edition)
+ *     notes.txt    (owner edition)
  *   /images/
- *     cat.jpg     (owner DATA)
- *     dog.jpg     (owner DATA)
+ *     cat.jpg      (owner edition, https mirror)
+ *     dog.jpg      (owner edition, https mirror)
  *   /shared/
- *     photo.png   (owner + user1 DATA — editions demo)
+ *     photo.png    (owner edition + user1 edition — editions demo)
  *
  * Run: npx hardhat run scripts/seed.ts --network localhost
- *      (or: yarn hardhat:seed)
+ *      (or: yarn hardhat:seed — also chained onto `yarn deploy`)
  *
- * Idempotency: each top-level seed anchor (/docs/, /images/, /shared/) is
+ * Each file uses the current three-layer model (ADR-0001/0002/0005/0035):
+ *   - Anchor (filename with schema=DATA_SCHEMA_UID → "file slot")
+ *   - DATA (standalone, refUID=0x0, encodes contentHash + size)
+ *   - PROPERTY contentType via ADR-0035 three-attestation dance
+ *     (key-anchor under DATA + free-floating PROPERTY(value) + TAG binding)
+ *   - MIRROR (refUID=DATA, refs a /transports/* anchor, carries URI)
+ *   - TAG (refUID=DATA, definition=fileAnchorUID, applies=true → placement)
+ *
+ * Idempotency: each top-level seed subtree (/docs/, /images/, /shared/) is
  * independently guarded via `resolveAnchor(rootUID, name, 0)`. Re-running after
  * a successful seed is a no-op (three read calls, zero writes). Re-running
- * after a partial failure only re-creates the subtrees that are missing. This
- * is the invocation contract the devnet reset flow relies on — `yarn deploy &&
- * yarn hardhat:seed` is safe to call unconditionally.
+ * after a partial failure mid-subtree will skip that whole subtree on retry —
+ * which is fine for this script's contract ("run once after a fresh deploy"),
+ * and `yarn deploy && yarn hardhat:seed` is safe to call unconditionally on a
+ * freshly-forked chain (no state leaks across preview restarts since the fork
+ * is process-scoped with no --state persistence).
+ *
+ * Fail-soft at the top: if the Indexer contract isn't registered (e.g. CI
+ * against vanilla hardhat without EAS), log a skip and exit 0 — don't break
+ * the deploy chain for environments that don't have EAS state.
  */
 
 import { ethers, getNamedAccounts } from "hardhat";
@@ -62,14 +76,26 @@ async function main() {
 
   const anchorSchemaUID = await indexer.ANCHOR_SCHEMA_UID();
   const dataSchemaUID = await indexer.DATA_SCHEMA_UID();
+  const mirrorSchemaUID = await indexer.MIRROR_SCHEMA_UID();
+  const tagSchemaUID = await indexer.TAG_SCHEMA_UID();
+  const propertySchemaUID = await indexer.PROPERTY_SCHEMA_UID();
   const rootUID = await indexer.rootAnchorUID();
   const encode = ethers.AbiCoder.defaultAbiCoder();
 
+  // Resolve /transports/ anchors for MIRRORs. Registered by deploy script
+  // 05_mirrors.ts (names: onchain, ipfs, arweave, magnet, https).
+  const transportsUID = await indexer.resolvePath(rootUID, "transports");
+  const httpsTransportUID = await indexer.resolvePath(transportsUID, "https");
+  const ipfsTransportUID = await indexer.resolvePath(transportsUID, "ipfs");
+
   console.log(`Indexer:  ${indexer.target}`);
-  console.log(`Root:     ${rootUID}\n`);
+  console.log(`Root:     ${rootUID}`);
+  console.log(`/transports/https:  ${httpsTransportUID.slice(0, 14)}…`);
+  console.log(`/transports/ipfs:   ${ipfsTransportUID.slice(0, 14)}…\n`);
 
   // ── Helpers ──────────────────────────────────────────────────────────────────
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const getUID = async (tx: any): Promise<string> => {
     const receipt = await tx.wait();
     for (const log of receipt.logs) {
@@ -81,9 +107,9 @@ async function main() {
     throw new Error("Attested event not found in receipt");
   };
 
-  // Create an ANCHOR attestation. schema=ZeroHash → generic folder.
-  // schema=dataSchemaUID → file slot (will hold DATA attestations).
+  /** Create an ANCHOR attestation. schema=ZeroHash → generic folder; schema=DATA_SCHEMA_UID → file slot. */
   const makeAnchor = async (
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     signer: any,
     name: string,
     parentUID: string,
@@ -101,31 +127,147 @@ async function main() {
       },
     });
     const uid = await getUID(tx);
-    console.log(`  Anchor  "${name}"  ${uid.slice(0, 10)}…`);
+    console.log(`  Anchor    "${name}"  ${uid.slice(0, 10)}…`);
     return uid;
   };
 
-  // Attach a DATA attestation to an anchor (file content pointer).
-  const makeData = async (signer: any, anchorUID: string, uri: string, contentType: string): Promise<string> => {
+  /** Create a standalone DATA attestation (ADR-0002: refUID=0x0, non-revocable, (contentHash, size)). */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const makeData = async (signer: any, content: string): Promise<string> => {
+    const contentBytes = ethers.toUtf8Bytes(content);
+    const contentHash = ethers.keccak256(contentBytes);
+    const size = contentBytes.length;
     const tx = await eas.connect(signer).attest({
       schema: dataSchemaUID,
       data: {
         recipient: ethers.ZeroAddress,
         expirationTime: 0n,
-        revocable: true,
-        refUID: anchorUID,
-        data: encode.encode(["string", "string", "string"], [uri, contentType, "file"]),
+        revocable: false,
+        refUID: ethers.ZeroHash,
+        data: encode.encode(["bytes32", "uint64"], [contentHash, size]),
         value: 0n,
       },
     });
     const uid = await getUID(tx);
-    console.log(`  Data    ${uid.slice(0, 10)}…  →  ${uri}`);
+    console.log(`  Data      ${uid.slice(0, 10)}…  (hash=${contentHash.slice(0, 10)}…, size=${size})`);
     return uid;
   };
 
-  // Per-anchor idempotency guard. Returns the existing UID (if any) or null.
-  // `_nameToAnchor[parent][name][schema]` is set on the first anchor attestation
-  // matching the triple; EFSIndexer.resolveAnchor is a pure view on that mapping.
+  /** Create a MIRROR attestation on a DATA (ADR-0011: transport is a /transports/* anchor UID). */
+  const makeMirror = async (
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    signer: any,
+    dataUID: string,
+    transportUID: string,
+    uri: string,
+  ): Promise<string> => {
+    const tx = await eas.connect(signer).attest({
+      schema: mirrorSchemaUID,
+      data: {
+        recipient: ethers.ZeroAddress,
+        expirationTime: 0n,
+        revocable: true,
+        refUID: dataUID,
+        data: encode.encode(["bytes32", "string"], [transportUID, uri]),
+        value: 0n,
+      },
+    });
+    const uid = await getUID(tx);
+    console.log(`  Mirror    ${uid.slice(0, 10)}…  →  ${uri}`);
+    return uid;
+  };
+
+  /** Create a TAG attestation (ADR-0003: TAG-based placement; applies=true activates). */
+  const makeTag = async (
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    signer: any,
+    targetUID: string,
+    definition: string,
+    applies: boolean = true,
+  ): Promise<string> => {
+    const tx = await eas.connect(signer).attest({
+      schema: tagSchemaUID,
+      data: {
+        recipient: ethers.ZeroAddress,
+        expirationTime: 0n,
+        revocable: true,
+        refUID: targetUID,
+        data: encode.encode(["bytes32", "bool"], [definition, applies]),
+        value: 0n,
+      },
+    });
+    return getUID(tx);
+  };
+
+  /**
+   * Attach a PROPERTY(key=value) to a container using the ADR-0035 free-floating model.
+   * Three attestations: key anchor under container (if not present) + standalone PROPERTY
+   * (value) + TAG binding key-anchor↔property. Reserved keys include `contentType`.
+   */
+  const makeProperty = async (
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    signer: any,
+    containerUID: string,
+    key: string,
+    value: string,
+  ): Promise<string> => {
+    let keyAnchorUID: string = await indexer.resolveAnchor(containerUID, key, propertySchemaUID);
+    if (keyAnchorUID === ethers.ZeroHash) {
+      const tx = await eas.connect(signer).attest({
+        schema: anchorSchemaUID,
+        data: {
+          recipient: ethers.ZeroAddress,
+          expirationTime: 0n,
+          revocable: false,
+          refUID: containerUID,
+          data: encode.encode(["string", "bytes32"], [key, propertySchemaUID]),
+          value: 0n,
+        },
+      });
+      keyAnchorUID = await getUID(tx);
+    }
+
+    const propTx = await eas.connect(signer).attest({
+      schema: propertySchemaUID,
+      data: {
+        recipient: ethers.ZeroAddress,
+        expirationTime: 0n,
+        revocable: false,
+        refUID: ethers.ZeroHash,
+        data: encode.encode(["string"], [value]),
+        value: 0n,
+      },
+    });
+    const propertyUID = await getUID(propTx);
+
+    await makeTag(signer, propertyUID, keyAnchorUID, true);
+    return propertyUID;
+  };
+
+  /**
+   * Full file creation: file-slot anchor + DATA + contentType + mirror + placement TAG.
+   * The "file slot" is an ANCHOR whose `schema` field is DATA_SCHEMA_UID (convention
+   * per `specs/02` §Anchor — marks the anchor as a placement target for DATA).
+   */
+  const makeFile = async (
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    signer: any,
+    parentUID: string,
+    name: string,
+    content: string,
+    contentType: string,
+    transportUID: string,
+    uri: string,
+  ): Promise<{ fileUID: string; dataUID: string }> => {
+    const fileUID = await makeAnchor(signer, name, parentUID, dataSchemaUID);
+    const dataUID = await makeData(signer, content);
+    await makeProperty(signer, dataUID, "contentType", contentType);
+    await makeMirror(signer, dataUID, transportUID, uri);
+    await makeTag(signer, dataUID, fileUID, true);
+    return { fileUID, dataUID };
+  };
+
+  // Per-subtree idempotency guard. Returns the existing UID (if any) or null.
   const findAnchor = async (
     parentUID: string,
     name: string,
@@ -150,10 +292,24 @@ async function main() {
   } else {
     console.log("── /docs/ ──");
     docsUID = await makeAnchor(deployerSigner, "docs", rootUID);
-    const readmeUID = await makeAnchor(deployerSigner, "readme.txt", docsUID, dataSchemaUID);
-    await makeData(deployerSigner, readmeUID, "data:text/plain,Hello%20from%20EFS!", "text/plain");
-    const notesUID = await makeAnchor(deployerSigner, "notes.txt", docsUID, dataSchemaUID);
-    await makeData(deployerSigner, notesUID, "data:text/plain,Some%20notes", "text/plain");
+    await makeFile(
+      deployerSigner,
+      docsUID,
+      "readme.txt",
+      "Hello from EFS!",
+      "text/plain",
+      httpsTransportUID,
+      "https://example.com/efs/readme.txt",
+    );
+    await makeFile(
+      deployerSigner,
+      docsUID,
+      "notes.txt",
+      "Some notes",
+      "text/plain",
+      httpsTransportUID,
+      "https://example.com/efs/notes.txt",
+    );
   }
 
   const existingImages = await findAnchor(rootUID, "images");
@@ -164,10 +320,24 @@ async function main() {
   } else {
     console.log("\n── /images/ ──");
     imagesUID = await makeAnchor(deployerSigner, "images", rootUID);
-    const catUID = await makeAnchor(deployerSigner, "cat.jpg", imagesUID, dataSchemaUID);
-    await makeData(deployerSigner, catUID, "https://placecats.com/300/200", "image/jpeg");
-    const dogUID = await makeAnchor(deployerSigner, "dog.jpg", imagesUID, dataSchemaUID);
-    await makeData(deployerSigner, dogUID, "https://placedog.net/300/200", "image/jpeg");
+    await makeFile(
+      deployerSigner,
+      imagesUID,
+      "cat.jpg",
+      "cat-jpeg-placeholder",
+      "image/jpeg",
+      httpsTransportUID,
+      "https://placecats.com/300/200",
+    );
+    await makeFile(
+      deployerSigner,
+      imagesUID,
+      "dog.jpg",
+      "dog-jpeg-placeholder",
+      "image/jpeg",
+      httpsTransportUID,
+      "https://placedog.net/300/200",
+    );
   }
 
   const existingShared = await findAnchor(rootUID, "shared");
@@ -178,9 +348,22 @@ async function main() {
   } else {
     console.log("\n── /shared/ (editions demo) ──");
     sharedUID = await makeAnchor(deployerSigner, "shared", rootUID);
+    // Single file-slot anchor, two editions — deployer and user1 each attest their own
+    // DATA+PROPERTY+MIRROR+TAG triple. Router fallback (ADR-0031) picks whichever edition
+    // is first in the `?editions=` list.
     const photoUID = await makeAnchor(deployerSigner, "photo.png", sharedUID, dataSchemaUID);
-    await makeData(deployerSigner, photoUID, "ipfs://owner-version-of-photo", "image/png");
-    await makeData(user1, photoUID, "ipfs://user1-version-of-photo", "image/png");
+
+    // Owner edition
+    const ownerPhotoData = await makeData(deployerSigner, "owner-photo-png-bytes");
+    await makeProperty(deployerSigner, ownerPhotoData, "contentType", "image/png");
+    await makeMirror(deployerSigner, ownerPhotoData, ipfsTransportUID, "ipfs://owner-version-of-photo");
+    await makeTag(deployerSigner, ownerPhotoData, photoUID, true);
+
+    // User1 edition
+    const user1PhotoData = await makeData(user1, "user1-photo-png-bytes");
+    await makeProperty(user1, user1PhotoData, "contentType", "image/png");
+    await makeMirror(user1, user1PhotoData, ipfsTransportUID, "ipfs://user1-version-of-photo");
+    await makeTag(user1, user1PhotoData, photoUID, true);
   }
 
   // ── Summary ───────────────────────────────────────────────────────────────────
