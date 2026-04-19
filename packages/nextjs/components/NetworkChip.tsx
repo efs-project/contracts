@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * NetworkChip — compact header badge showing the active chain + RPC URL.
+ * NetworkChip — compact corner badge showing the active chain + RPC URL.
  *
  * For the alpha, this is **read-only**: it tells the user "you're on Devnet" or
  * "you're on Local" so they know whether data is real. Runtime network switching
@@ -9,15 +9,17 @@
  * docs/FUTURE_WORK.md. Switching today means changing env vars and rebuilding,
  * which is fine for ops but not for casual visitors.
  *
+ * Placement: lives in the bottom-right corner via the Footer's fixed bar.
+ * Previously sat in the header with flavor-coloured badges (info / success),
+ * which drew the eye to a piece of meta-info most visitors don't care about.
+ * Now rendered in a subdued ghost style at reduced opacity so it reads as
+ * "status, available if you need it" rather than "primary call to action".
+ *
  * Label inference (this app only targets hardhat chain id 31337, so the split
  * is "is the RPC URL pointing at localhost or somewhere else?"):
- *   - hardhat chain + localhost/127.0.0.1 URL  → "Local"   (info)
- *   - hardhat chain + any other URL            → "Devnet"  (success)
- *   - any other chain id                       → chain.name (neutral ghost)
- *
- * Both Local and Devnet are rendered as positive states (info / success
- * colors) because they're expected; the yellow/warning tone is reserved for
- * truly unexpected configurations.
+ *   - hardhat chain + localhost/127.0.0.1 URL  → "Local"
+ *   - hardhat chain + any other URL            → "Devnet"
+ *   - any other chain id                       → chain.name
  *
  * The click surface reveals the full RPC URL + chain ID so operators can copy
  * them when triaging "why does nothing load" on the devnet.
@@ -30,11 +32,13 @@ const HARDHAT_CHAIN_ID = 31337;
 
 type NetworkFlavor = "local" | "devnet" | "other" | "unknown";
 
-const flavorStyles: Record<NetworkFlavor, { badge: string; label: string }> = {
-  local: { badge: "badge-info", label: "Local" },
-  devnet: { badge: "badge-success", label: "Devnet" },
-  other: { badge: "badge-ghost", label: "" }, // label derived from chain.name
-  unknown: { badge: "badge-ghost", label: "?" },
+// All flavors render ghost-style — the chip is informational, not a CTA, so
+// colour-coding would overstate its importance. The label alone differentiates.
+const flavorLabels: Record<NetworkFlavor, string> = {
+  local: "Local",
+  devnet: "Devnet",
+  other: "", // derived from chain.name
+  unknown: "?",
 };
 
 function inferFlavor(rpcUrl: string | undefined, chainId: number | undefined): NetworkFlavor {
@@ -59,12 +63,11 @@ export const NetworkChip = () => {
   const activeChain = chain ?? config.chains[0];
   const rpcUrl = activeChain?.rpcUrls.default.http[0];
   const flavor = inferFlavor(rpcUrl, activeChain?.id);
-  const style = flavorStyles[flavor];
-  const label = flavor === "other" ? (activeChain?.name ?? "Unknown") : style.label;
+  const label = flavor === "other" ? (activeChain?.name ?? "Unknown") : flavorLabels[flavor];
 
   // Pre-hydration, render a skeleton to avoid mismatch (chain comes from wagmi hook).
   if (!mounted) {
-    return <div className="badge badge-ghost h-7 w-20 animate-pulse" aria-hidden />;
+    return <div className="badge badge-ghost h-6 w-16 opacity-40" aria-hidden />;
   }
 
   const onCopy = async () => {
@@ -79,19 +82,19 @@ export const NetworkChip = () => {
   };
 
   return (
-    <div className="dropdown dropdown-end">
+    <div className="dropdown dropdown-end dropdown-top">
       <div
         tabIndex={0}
         role="button"
         aria-label={`Active network: ${label}`}
-        className={`badge ${style.badge} gap-1.5 cursor-pointer h-7 px-2 font-medium`}
+        className="badge badge-ghost gap-1 cursor-pointer h-6 px-2 text-xs font-normal opacity-50 hover:opacity-100 transition-opacity"
       >
-        <GlobeAltIcon className="h-3.5 w-3.5" aria-hidden />
+        <GlobeAltIcon className="h-3 w-3" aria-hidden />
         <span>{label}</span>
       </div>
       <div
         tabIndex={0}
-        className="dropdown-content mt-2 z-[50] card card-compact w-72 bg-base-100 shadow-lg border border-base-300"
+        className="dropdown-content mb-2 z-[50] card card-compact w-72 bg-base-100 shadow-lg border border-base-300"
       >
         <div className="card-body gap-2">
           <div>

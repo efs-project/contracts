@@ -53,16 +53,17 @@ export const DevnetBanner = () => {
     <div
       role="status"
       aria-live="polite"
-      className="fixed top-3 left-1/2 -translate-x-1/2 z-[100] w-[min(calc(100vw-1.5rem),42rem)] pointer-events-none"
+      className="fixed top-3 left-1/2 -translate-x-1/2 z-[100] w-[min(calc(100vw-1.5rem),48rem)] pointer-events-none"
     >
-      <div className="pointer-events-auto flex items-center gap-2 px-4 py-2 bg-warning text-warning-content text-sm font-medium rounded-full shadow-lg ring-1 ring-warning-content/10">
-        <ExclamationTriangleIcon className="h-4 w-4 flex-shrink-0" aria-hidden />
-        <span className="flex-1 truncate">{message}</span>
+      {/* rounded-3xl (not rounded-full) so the pill still looks right when the message wraps to 2+ lines on narrow viewports. `items-start` keeps the icon/close aligned to the first line rather than floating mid-height. */}
+      <div className="pointer-events-auto flex items-start gap-2 px-4 py-2 bg-warning text-warning-content text-sm font-medium rounded-3xl shadow-lg ring-1 ring-warning-content/10">
+        <ExclamationTriangleIcon className="h-4 w-4 flex-shrink-0 mt-0.5" aria-hidden />
+        <span className="flex-1 break-words">{message}</span>
         <button
           type="button"
           onClick={onDismiss}
           aria-label="Dismiss banner for this session"
-          className="flex-shrink-0 p-1 -mr-1 rounded-full hover:bg-warning-content/10 transition-colors"
+          className="flex-shrink-0 p-1 -mr-1 -mt-0.5 rounded-full hover:bg-warning-content/10 transition-colors"
         >
           <XMarkIcon className="h-4 w-4" />
         </button>

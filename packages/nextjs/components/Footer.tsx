@@ -9,6 +9,7 @@ import {
 } from "@heroicons/react/24/outline";
 import { HeartIcon } from "@heroicons/react/24/outline";
 import { BuidlGuidlLogo } from "~~/components/assets/BuidlGuidlLogo";
+import { NetworkChip } from "~~/components/NetworkChip";
 import { Faucet } from "~~/components/scaffold-eth";
 import { useTargetNetwork } from "~~/hooks/scaffold-eth/useTargetNetwork";
 import { useGlobalState } from "~~/services/store/store";
@@ -59,6 +60,11 @@ export const Footer = () => {
                 </>
               )}
             </div>
+          </div>
+          {/* Network chip lives in the bottom-right corner: low-prominence status,
+              click to reveal chain id + full RPC URL. See NetworkChip.tsx. */}
+          <div className="pointer-events-auto">
+            <NetworkChip />
           </div>
         </div>
       </div>
