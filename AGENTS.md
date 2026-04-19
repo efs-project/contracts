@@ -152,6 +152,45 @@ rm /data/anvil-state.json   # or: mv … /data/anvil-state.json.prepinned
 
 After a pinned restart + fresh `yarn deploy`, anvil's head should be `FORK_BLOCK + ~80` (roughly one block per deploy/seed tx). If `eth_blockNumber` reports a number ~1000+ above the pin, the state file was still loaded.
 
+### Static export for IPFS / eth.limo (`app.efs.eth.limo`, `app.efs.eth.link`)
+
+The Next.js app ships as a **pure static export** — `output: "export"` in `packages/nextjs/next.config.js`. `yarn workspace @se-2/nextjs build` writes `out/`, a flat file tree with no server, no edge runtime, no ISR. Target deployment: pin `out/` to IPFS and point the ENS name (`app.efs.eth`) at the CID. `eth.limo` / `eth.link` then serve it directly to browsers; no reverse proxy needed for the frontend.
+
+**Service endpoints must be absolute VPS URLs baked at build time.** The app loads from the `app.efs.eth.limo` origin but talks to the devnet VPS across origins — so RPC, IPFS gateway, Arweave gateway, and WS URLs all need absolute values. See `packages/nextjs/.env.example` for the canonical list; all four variables are `NEXT_PUBLIC_*` and thus inlined by webpack at build time.
+
+**Minimal `out/`-producing build command** (run in CI or VPS publish pipeline):
+
+```bash
+cd packages/nextjs
+NEXT_PUBLIC_SITE_URL=https://app.efs.eth.limo \
+NEXT_PUBLIC_HARDHAT_RPC_URL=https://<vps-host>/rpc \
+NEXT_PUBLIC_IPFS_GATEWAY=https://<vps-host>/ipfs/ \
+NEXT_PUBLIC_ARWEAVE_GATEWAY=https://<vps-host>/arweave/ \
+NEXT_PUBLIC_DEVNET_BANNER="DEVNET — resets weekly." \
+yarn build
+```
+
+Outputs `packages/nextjs/out/`. `ipfs add -r out/` → copy the resulting root CID to the ENS name.
+
+**Deep-link SPA fallback.** The only truly dynamic route is `/explorer/[[...path]]` — anchor / address / schema / attestation URLs aren't enumerable at build time. Next's static export emits one shell at `/explorer/index.html`; `public/_redirects` tells IPFS gateways (per the [web-redirects spec](https://specs.ipfs.tech/http-gateways/web-redirects-file/), honored by Kubo ≥ 0.23 and eth.limo) to serve that shell with status 200 for any `/explorer/*` URL. The shell is a client component that reads `useParams()` at runtime and renders the real path. Blockexplorer's `/address/[address]` and `/transaction/[txHash]` use the same trick via dummy `generateStaticParams` values.
+
+**CORS prerequisite on the VPS.** Because the app origin (`app.efs.eth.limo`) is different from the service origin (the VPS), the VPS reverse proxy (Caddy/nginx) MUST respond with:
+
+```
+Access-Control-Allow-Origin: https://app.efs.eth.limo, https://app.efs.eth.link
+Access-Control-Allow-Headers: content-type
+Access-Control-Allow-Methods: GET, POST, OPTIONS
+```
+
+on the `/rpc`, `/ipfs/`, `/arweave/` paths. Without this, the browser blocks every read from the app and you'll see CORS errors in the console. Local dev (`yarn start`) stays same-origin so this concern doesn't apply there.
+
+**Smoke test after publishing.** Visit these URLs and confirm each renders the expected content without reloading:
+
+1. `https://app.efs.eth.limo/` — landing page
+2. `https://app.efs.eth.limo/explorer/` — Explorer root
+3. `https://app.efs.eth.limo/explorer/docs/readme.txt` — deep path (tests `_redirects`)
+4. DevTools → Network tab: every XHR should target `<vps-host>`, none should target `localhost` or `eth.limo`.
+
 ## Commands
 
 ```bash

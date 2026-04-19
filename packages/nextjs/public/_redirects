@@ -1,0 +1,26 @@
+# SPA-fallback rewrites for static-exported EFS devtools.
+#
+# Honored by:
+#   - IPFS / IPNS gateways (Kubo ≥ 0.23): spec at
+#     https://specs.ipfs.tech/http-gateways/web-redirects-file/
+#   - eth.limo / eth.link (dweb.link under the hood)
+#   - Cloudflare Pages, Netlify (same format)
+#   - Caddy (with a tiny rewrite rule translating these lines)
+#
+# Status 200 = rewrite (serve the target file, keep the URL in the address
+# bar). 301/302/404 = redirect. We only use 200 so that deep links like
+# /explorer/memes/cat.jpg stay visually intact while the app renders.
+#
+# The explorer is the only true dynamic tree. Blockexplorer's `[address]` and
+# `[txHash]` dynamic segments are exported with a single dummy value via
+# `generateStaticParams` — the shell reads the real address/hash from
+# `useParams()` at runtime, so we point any deeper URL at that dummy page's
+# index.html and the client redraws.
+#
+# Everything else falls through to the root index.html as a last resort.
+
+/explorer/*                /explorer/index.html                                                                         200
+/blockexplorer/address/*   /blockexplorer/address/0x0000000000000000000000000000000000000000/index.html                 200
+/blockexplorer/transaction/* /blockexplorer/transaction/0x0000000000000000000000000000000000000000/index.html           200
+/debug/*                   /debug/index.html                                                                            200
+/*                         /index.html                                                                                  200
