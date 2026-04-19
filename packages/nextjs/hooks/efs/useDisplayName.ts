@@ -64,6 +64,17 @@ const TAG_RESOLVER_ABI = [
     stateMutability: "view",
     type: "function",
   },
+  {
+    inputs: [
+      { name: "definition", type: "bytes32" },
+      { name: "attester", type: "address" },
+      { name: "schema", type: "bytes32" },
+    ],
+    name: "getActiveTargetsByAttesterAndSchemaCount",
+    outputs: [{ name: "", type: "uint256" }],
+    stateMutability: "view",
+    type: "function",
+  },
 ] as const;
 
 type UseDisplayNameArgs = {
@@ -211,34 +222,63 @@ export const useDisplayName = ({
         })) as `0x${string}`;
 
         // 2. For each attester in edition order, fetch the active PROPERTY under the key anchor.
+        //    Recency disambiguation (mirrors EFSRouter._getContentType): the TAG singleton is
+        //    per (attester, targetID, definition), so a single attester can have multiple active
+        //    PROPERTY bindings on the same key anchor when they `name`-rebind without revoking
+        //    the prior TAG. `_activeByAAS` stores entries in first-attestation (oldest-first)
+        //    order, so `targets[0]` can be stale. Fetch all active targets and pick the one with
+        //    the newest `att.time`.
         for (const edition of editionsList) {
+          const count = (await publicClient.readContract({
+            address: tagResolverAddress,
+            abi: TAG_RESOLVER_ABI,
+            functionName: "getActiveTargetsByAttesterAndSchemaCount",
+            args: [keyAnchorUID, getAddress(edition), propertySchemaUID],
+          })) as bigint;
+          if (count === 0n) continue;
+
           const targets = (await publicClient.readContract({
             address: tagResolverAddress,
             abi: TAG_RESOLVER_ABI,
             functionName: "getActiveTargetsByAttesterAndSchema",
-            args: [keyAnchorUID, getAddress(edition), propertySchemaUID, 0n, 1n],
+            args: [keyAnchorUID, getAddress(edition), propertySchemaUID, 0n, count],
           })) as `0x${string}`[];
           if (targets.length === 0) continue;
 
-          const propertyUID = targets[0];
-          try {
-            const att = (await publicClient.readContract({
-              address: easAddress,
-              abi: EAS_GET_ATTESTATION_ABI,
-              functionName: "getAttestation",
-              args: [propertyUID],
-            })) as { uid: `0x${string}`; revocationTime: bigint; data: `0x${string}` };
-            if (!att || att.uid === zeroHash) continue;
-            if (att.revocationTime !== 0n) continue;
-            const value = decodeValue(att.data);
-            if (value && value.length > 0) {
-              if (!cancelled) {
-                setPropertyLookup({ name: value, attester: getAddress(edition), loading: false });
+          // Fetch attestations and pick the newest non-revoked PROPERTY.
+          let bestValue: string | null = null;
+          let bestTime = -1n;
+          for (const propertyUID of targets) {
+            try {
+              const att = (await publicClient.readContract({
+                address: easAddress,
+                abi: EAS_GET_ATTESTATION_ABI,
+                functionName: "getAttestation",
+                args: [propertyUID],
+              })) as {
+                uid: `0x${string}`;
+                time: bigint;
+                revocationTime: bigint;
+                data: `0x${string}`;
+              };
+              if (!att || att.uid === zeroHash) continue;
+              if (att.revocationTime !== 0n) continue;
+              const value = decodeValue(att.data);
+              if (!value || value.length === 0) continue;
+              if (att.time > bestTime) {
+                bestTime = att.time;
+                bestValue = value;
               }
-              return;
+            } catch {
+              // malformed PROPERTY — skip this target, try the next
             }
-          } catch {
-            // malformed PROPERTY — try next edition
+          }
+
+          if (bestValue) {
+            if (!cancelled) {
+              setPropertyLookup({ name: bestValue, attester: getAddress(edition), loading: false });
+            }
+            return;
           }
         }
 

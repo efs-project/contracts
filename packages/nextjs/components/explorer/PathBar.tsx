@@ -56,11 +56,14 @@ function buildUrlFromPath(currentPath: PathItem[], containerKind: ContainerKind)
   // currentPath[0] is the container root. For anchor walks the head is the root
   // anchor (display label "Topics") and should NOT appear in the URL bar. For
   // address/schema/attestation containers the head IS the URL segment
-  // (e.g. "vitalik.eth" or "0x1234…/5678") and must be shown.
+  // (e.g. "vitalik.eth" or "0x8626f6940E2eb28930eFb4CeF49B2d1F2C9C1199") and
+  // must be shown. `urlSegment` carries the verbatim user-typed segment;
+  // falling back to `name` here would emit a shortened hex like `0x8626…1199`
+  // that doesn't round-trip through the top-level classifier.
   if (currentPath.length === 0) return "";
   const [head, ...rest] = currentPath;
-  const tail = rest.map(p => p.name).join("/");
-  const headSegment = containerKind === "anchor" ? "" : head.name;
+  const tail = rest.map(p => p.urlSegment ?? p.name).join("/");
+  const headSegment = containerKind === "anchor" ? "" : (head.urlSegment ?? head.name);
   if (headSegment && tail) return `${headSegment}/${tail}`;
   if (headSegment) return headSegment;
   return tail;
@@ -134,7 +137,9 @@ export const PathBar = ({
     const trimmed = editionsInput.trim();
     if (trimmed) next.set("editions", trimmed);
     else next.delete("editions");
-    const tailSegments = currentPath.slice(containerKind === "anchor" ? 1 : 0).map(p => encodeURIComponent(p.name));
+    const tailSegments = currentPath
+      .slice(containerKind === "anchor" ? 1 : 0)
+      .map(p => p.urlSegment ?? encodeURIComponent(p.name));
     const q = next.toString();
     router.push(`/explorer/${tailSegments.join("/")}${q ? `?${q}` : ""}`);
   };
@@ -271,7 +276,7 @@ export const PathBar = ({
                 next.delete("editions");
                 const tailSegments = currentPath
                   .slice(containerKind === "anchor" ? 1 : 0)
-                  .map(p => encodeURIComponent(p.name));
+                  .map(p => p.urlSegment ?? encodeURIComponent(p.name));
                 const q = next.toString();
                 router.push(`/explorer/${tailSegments.join("/")}${q ? `?${q}` : ""}`);
               }}

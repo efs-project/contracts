@@ -204,7 +204,18 @@ export default function ExplorerClient() {
           }
         }
 
-        const resolvedPath: PathItem[] = [{ uid: seedUID, name: rootLabel }];
+        // Seed head PathItem. `urlSegment` carries the verbatim user-typed
+        // segment for container walks (address/schema/attestation) so URL
+        // builders can round-trip even when `name` is a shortened display
+        // label like `0x8626…1199`. Anchor walks leave it unset — the head
+        // is the root anchor and is never written to the URL.
+        const resolvedPath: PathItem[] = [
+          {
+            uid: seedUID,
+            name: rootLabel,
+            urlSegment: container ? container.rawSegment : undefined,
+          },
+        ];
         let currentUID: `0x${string}` = seedUID;
 
         for (const segment of walkSegments) {
@@ -223,7 +234,10 @@ export default function ExplorerClient() {
             return;
           }
 
-          resolvedPath.push({ uid: childUID, name: decodeURIComponent(segment) });
+          // Preserve the original URL-encoded segment so rebuilding the URL
+          // round-trips losslessly (matters for non-ASCII names that were
+          // percent-encoded by the browser).
+          resolvedPath.push({ uid: childUID, name: decodeURIComponent(segment), urlSegment: segment });
           currentUID = childUID;
         }
 
@@ -281,9 +295,11 @@ export default function ExplorerClient() {
     // The first path item is the container root; we skip it in the URL only for
     // anchor walks (where the head *is* rootUID, not a URL segment). For
     // address/schema/attestation containers, the first item *is* a URL segment
-    // (e.g. "vitalik.eth").
+    // (e.g. "vitalik.eth"). Prefer `urlSegment` over `name` because `name` may
+    // be a shortened display label (e.g. `0x8626…1199`) that won't round-trip
+    // through the top-level container classifier.
     const skipHead = newPathItems[0]?.uid === rootUID;
-    const urlSegments = newPathItems.slice(skipHead ? 1 : 0).map(p => encodeURIComponent(p.name));
+    const urlSegments = newPathItems.slice(skipHead ? 1 : 0).map(p => p.urlSegment ?? encodeURIComponent(p.name));
     const currentQuery = searchParams.toString();
     const queryPart = currentQuery ? `?${currentQuery}` : "";
     const url = `/explorer/${urlSegments.join("/")}${queryPart}`;
@@ -295,7 +311,7 @@ export default function ExplorerClient() {
     if (sortInfoUID) currentQuery.set("sort", sortInfoUID);
     else currentQuery.delete("sort");
     const skipHead = currentPath[0]?.uid === rootUID;
-    const urlSegments = currentPath.slice(skipHead ? 1 : 0).map(p => encodeURIComponent(p.name));
+    const urlSegments = currentPath.slice(skipHead ? 1 : 0).map(p => p.urlSegment ?? encodeURIComponent(p.name));
     const queryPart = currentQuery.toString() ? `?${currentQuery.toString()}` : "";
     router.push(`/explorer/${urlSegments.join("/")}${queryPart}`);
   };

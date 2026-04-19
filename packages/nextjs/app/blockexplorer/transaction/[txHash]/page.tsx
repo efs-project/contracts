@@ -1,22 +1,16 @@
-import TransactionComp from "../_components/TransactionComp";
+import { TransactionPageClient } from "./TransactionPageClient";
 import type { NextPage } from "next";
-import { Hash } from "viem";
-import { isZeroAddress } from "~~/utils/scaffold-eth/common";
-
-type PageProps = {
-  params: { txHash?: Hash };
-};
 
 export function generateStaticParams() {
-  // An workaround to enable static exports in Next.js, generating single dummy page.
+  // Workaround to enable static exports in Next.js, generating a single dummy
+  // page. The real txHash is read at runtime by `TransactionPageClient` via
+  // `useParams()`, so this shell serves every `/blockexplorer/transaction/*`
+  // URL after `public/_redirects` rewrites deep links to it.
   return [{ txHash: "0x0000000000000000000000000000000000000000" }];
 }
-const TransactionPage: NextPage<PageProps> = ({ params }: PageProps) => {
-  const txHash = params?.txHash as Hash;
 
-  if (isZeroAddress(txHash)) return null;
-
-  return <TransactionComp txHash={txHash} />;
+const TransactionPage: NextPage = () => {
+  return <TransactionPageClient />;
 };
 
 export default TransactionPage;

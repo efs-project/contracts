@@ -141,6 +141,14 @@ export async function classifyTopLevelSegment(raw: string, deps: ClassifyDeps): 
   }
 
   // 2. Raw 40-char hex — Ethereum address.
+  //
+  // Zero-address poisoning guard: `/0x0000…0000/foo` must fall through to the
+  // anchor branch — mirroring EFSRouter._classifyTopLevel (see ADR-0033). The
+  // router treats address(0) as "no container" (EAS uses it as the "no
+  // recipient" sentinel, not a user), and address containers default their
+  // editions to `[connected, viewed]`, which would inject zero into the list
+  // if we let it through. Keeping the two classifiers byte-identical avoids a
+  // UI/router split that's invisible in local dev but drifts at the edges.
   const hexBody = segment.startsWith("0x") || segment.startsWith("0X") ? segment.slice(2) : segment;
   const looksHex = /^[0-9a-fA-F]+$/.test(hexBody);
 
@@ -148,18 +156,23 @@ export async function classifyTopLevelSegment(raw: string, deps: ClassifyDeps): 
     const candidate = `0x${hexBody}` as `0x${string}`;
     if (isAddress(candidate)) {
       const checksummed = getAddress(candidate);
-      return {
-        kind: "address",
-        uid: addressToBytes32(checksummed),
-        displayName: shortHex(checksummed),
-        address: checksummed,
-        rawSegment,
-      };
+      if (checksummed !== zeroAddress) {
+        return {
+          kind: "address",
+          uid: addressToBytes32(checksummed),
+          displayName: shortHex(checksummed),
+          address: checksummed,
+          rawSegment,
+        };
+      }
+      // address(0) → fall through to anchor, matching the router.
     }
   }
 
   // 3. Raw 64-char hex — schema UID or attestation UID.
-  if (looksHex && hexBody.length === 64) {
+  //    bytes32(0) is rejected for the same poisoning reason (the root anchor
+  //    UID is 0 before indexer wiring; a classified-zero UID would collide).
+  if (looksHex && hexBody.length === 64 && !/^0+$/.test(hexBody)) {
     const uid = `0x${hexBody.toLowerCase()}` as `0x${string}`;
     if (isHex(uid) && deps.publicClient && deps.easAddress) {
       // Try SchemaRegistry first.

@@ -99,6 +99,21 @@ describe("EFSFileView", function () {
     const FileViewFactory = await ethers.getContractFactory("EFSFileView");
     fileView = await FileViewFactory.deploy(await indexer.getAddress(), await tagResolver.getAddress());
     await fileView.waitForDeployment();
+
+    // Wire the indexer -> tagResolver link so TagResolver.onAttest can call
+    // indexer.propagateContains without reverting Unauthorized. The sort/mirror
+    // slots aren't exercised here, so passing zero addresses for them is fine
+    // (only the tagResolver + TAG_SCHEMA_UID + schemaRegistry fields are read
+    // on the file-view paths these tests cover).
+    await indexer.wireContracts(
+      await tagResolver.getAddress(),
+      tagSchemaUID,
+      ZeroAddress,
+      ZERO_BYTES32,
+      ZeroAddress,
+      ZERO_BYTES32,
+      await registry.getAddress(),
+    );
   });
 
   const getUIDFromReceipt = (receipt: any) => {
@@ -444,6 +459,58 @@ describe("EFSFileView", function () {
     const p3 = await fileView.getFilesAtPath(folderUID, [ownerAddr], dataSchemaUID, garbageForFiles, 10);
     // Empty page or full page, either is fine — the guarantee is no-revert.
     expect(p3.nextCursor.length).to.be.greaterThanOrEqual(2); // at minimum "0x"
+  });
+
+  it("getFilesAtPath dedup must filter earlier attester's applies=false tag (ADR-0031 fallback)", async function () {
+    // Regression: the cross-attester dedup in `getFilesAtPath` previously relied on
+    // `getActiveTagUID != 0`. But `TagResolver._activeTag` retains the latest TAG UID
+    // even when that TAG is applies=false (a "negation" that supersedes a prior
+    // applies=true). So if Alice first tags then negates a target, her active-tag
+    // UID stays nonzero — the dedup would incorrectly treat Bob's still-active tag
+    // as "claimed by Alice" and suppress it. ADR-0031's first-attester-wins fallback
+    // must only fall through on an applies=true claim; a negation should yield to
+    // later attesters.
+    const aliceAddr = await alice.getAddress();
+    const bobAddr = await bob.getAddress();
+
+    const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32);
+    const folderUID = await createAnchor("folder", rootUID, ZERO_BYTES32);
+
+    // Create a DATA attestation (its UID is what Alice/Bob will TAG against `folderUID`).
+    const dataTx = await eas.attest({
+      schema: dataSchemaUID,
+      data: {
+        recipient: ZeroAddress,
+        expirationTime: NO_EXPIRATION,
+        revocable: false,
+        refUID: ZERO_BYTES32,
+        data: enc.encode(["bytes32", "uint64"], [ethers.keccak256(ethers.toUtf8Bytes("payload")), 7n]),
+        value: 0n,
+      },
+    });
+    const dataUID = getUIDFromReceipt(await dataTx.wait());
+
+    // Alice places it, then negates.
+    await createTag(dataUID, folderUID, true, alice);
+    await createTag(dataUID, folderUID, false, alice);
+
+    // Bob still has it applied.
+    await createTag(dataUID, folderUID, true, bob);
+
+    // Sanity: after negation, Alice's _activeTag UID is NONZERO (points at the
+    // applies=false tag) but her applies-state is false. Bob's is true. This is
+    // the exact configuration that broke the old dedup.
+    expect(await tagResolver.getActiveTagUID(aliceAddr, dataUID, folderUID)).to.not.equal(ZERO_BYTES32);
+    expect(await tagResolver.isActivelyApplied(aliceAddr, dataUID, folderUID)).to.equal(false);
+    expect(await tagResolver.isActivelyApplied(bobAddr, dataUID, folderUID)).to.equal(true);
+
+    // Multi-attester fallback: Alice first, Bob second. With the bug, Alice's
+    // nonzero active-UID suppresses Bob's entry → 0 items. With the fix, Bob's
+    // DATA is returned.
+    const page = await fileView.getFilesAtPath(folderUID, [aliceAddr, bobAddr], dataSchemaUID, "0x", 10);
+    expect(page.items.length).to.equal(1);
+    // getFilesAtPath returns the DATA UID inside `items[].uid`.
+    expect(page.items[0].uid).to.equal(dataUID);
   });
 
   it("Surfaces >10k tagged folders without silent truncation (ADR-0036)", async function () {

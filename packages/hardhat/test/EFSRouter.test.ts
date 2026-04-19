@@ -1408,6 +1408,25 @@ describe("EFSRouter Web3 Capabilities", function () {
         expect(Buffer.from(ethers.getBytes(body)).toString()).to.equal("case-insensitive");
       });
 
+      it("Should match alias anchor when URL uses uppercase 0X prefix", async function () {
+        // The top-level classifier accepts both `0x` and `0X`. Alias anchors are
+        // stored with lowercase `0x`, so `_lowercaseHex` must also lowercase the
+        // `X` — otherwise `0X<hex>` URLs miss the alias even when their UID
+        // parsed correctly.
+        const aliasName = dataSchemaUID.toLowerCase();
+        const aliasUID = await createFolder(rootUID, aliasName);
+        const fileAnchor = await createFileAnchor(aliasUID, "p.txt");
+
+        const codeAddr = ethers.getAddress("0x0000000000000000000000000000000000000A04");
+        await uploadOnchain("uppercase-prefix", "text/plain", codeAddr, fileAnchor);
+
+        // Uppercase prefix, lowercase digits — exercises the X→x path specifically.
+        const upperPrefix = "0X" + dataSchemaUID.slice(2);
+        const [statusCode, body] = await router.request([upperPrefix, "p.txt"], ownerParams());
+        expect(statusCode).to.equal(200);
+        expect(Buffer.from(ethers.getBytes(body)).toString()).to.equal("uppercase-prefix");
+      });
+
       it("Should fall through to raw-info JSON at /<schemaUID> when alias has no DATA", async function () {
         // Alias anchor exists but no TAG/DATA under it. Router still returns raw schema JSON.
         const aliasName = dataSchemaUID.toLowerCase();

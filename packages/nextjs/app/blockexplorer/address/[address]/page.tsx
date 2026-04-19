@@ -1,100 +1,15 @@
-import fs from "fs";
-import path from "path";
-import { hardhat } from "viem/chains";
-import { AddressComponent } from "~~/app/blockexplorer/_components/AddressComponent";
-import deployedContracts from "~~/contracts/deployedContracts";
-import { isZeroAddress } from "~~/utils/scaffold-eth/common";
-import { GenericContractsDeclaration } from "~~/utils/scaffold-eth/contract";
-
-type PageProps = {
-  params: { address: string };
-};
-
-async function fetchByteCodeAndAssembly(buildInfoDirectory: string, contractPath: string) {
-  const buildInfoFiles = fs.readdirSync(buildInfoDirectory);
-  let bytecode = "";
-  let assembly = "";
-
-  for (let i = 0; i < buildInfoFiles.length; i++) {
-    const filePath = path.join(buildInfoDirectory, buildInfoFiles[i]);
-
-    const buildInfo = JSON.parse(fs.readFileSync(filePath, "utf8"));
-
-    if (buildInfo.output.contracts[contractPath]) {
-      for (const contract in buildInfo.output.contracts[contractPath]) {
-        bytecode = buildInfo.output.contracts[contractPath][contract].evm.bytecode.object;
-        assembly = buildInfo.output.contracts[contractPath][contract].evm.bytecode.opcodes;
-        break;
-      }
-    }
-
-    if (bytecode && assembly) {
-      break;
-    }
-  }
-
-  return { bytecode, assembly };
-}
-
-const getContractData = async (address: string) => {
-  const contracts = deployedContracts as GenericContractsDeclaration | null;
-  const chainId = hardhat.id;
-  let contractPath = "";
-
-  const buildInfoDirectory = path.join(
-    __dirname,
-    "..",
-    "..",
-    "..",
-    "..",
-    "..",
-    "..",
-    "..",
-    "hardhat",
-    "artifacts",
-    "build-info",
-  );
-
-  // On the VPS / devnet, the production Next.js build is shipped without the
-  // sibling `packages/hardhat/artifacts` tree — build-info only lives alongside
-  // the compiler, not alongside the app bundle. Degrade gracefully so
-  // `/blockexplorer/address/<any>` still renders; contract bytecode/assembly
-  // just won't be available in that deployment. Previously this threw, which
-  // 500'd every address page on devnet.
-  if (!fs.existsSync(buildInfoDirectory)) {
-    return null;
-  }
-
-  const deployedContractsOnChain = contracts ? contracts[chainId] : {};
-  for (const [contractName, contractInfo] of Object.entries(deployedContractsOnChain)) {
-    if (contractInfo.address.toLowerCase() === address.toLowerCase()) {
-      contractPath = `contracts/${contractName}.sol`;
-      break;
-    }
-  }
-
-  if (!contractPath) {
-    // No contract found at this address
-    return null;
-  }
-
-  const { bytecode, assembly } = await fetchByteCodeAndAssembly(buildInfoDirectory, contractPath);
-
-  return { bytecode, assembly };
-};
+import { AddressPageClient } from "./AddressPageClient";
 
 export function generateStaticParams() {
-  // An workaround to enable static exports in Next.js, generating single dummy page.
+  // Workaround to enable static exports in Next.js, generating a single dummy
+  // page. The real address is read at runtime by `AddressPageClient` via
+  // `useParams()`, so this shell serves every `/blockexplorer/address/*` URL
+  // after `public/_redirects` rewrites deep links to it.
   return [{ address: "0x0000000000000000000000000000000000000000" }];
 }
 
-const AddressPage = async ({ params }: PageProps) => {
-  const address = params?.address as string;
-
-  if (isZeroAddress(address)) return null;
-
-  const contractData: { bytecode: string; assembly: string } | null = await getContractData(address);
-  return <AddressComponent address={address} contractData={contractData} />;
+const AddressPage = () => {
+  return <AddressPageClient />;
 };
 
 export default AddressPage;

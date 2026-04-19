@@ -29,10 +29,15 @@ interface ITagResolverForFileView {
         address attester,
         bytes32 schema
     ) external view returns (uint256);
-    /// @notice O(1) per-attester active-tag lookup. Used for cross-attester dedup in multi-
-    ///         edition views: returns nonzero iff `attester` has an active applies=true tag on
-    ///         (targetID, definition).
+    /// @notice O(1) per-attester latest-tag lookup. Returns the latest TAG UID for the
+    ///         (attester, targetID, definition) singleton — may be applies=false. Callers that
+    ///         need "is this placement currently applied?" must use `isActivelyApplied`.
     function getActiveTagUID(address attester, bytes32 targetID, bytes32 definition) external view returns (bytes32);
+    /// @notice O(1) per-attester applied-state lookup. Returns true iff `attester`'s latest
+    ///         TAG on (targetID, definition) is applies=true. Used for cross-attester dedup in
+    ///         multi-edition views to avoid suppressing a later attester's still-active tag
+    ///         behind an earlier attester's superseding applies=false tag.
+    function isActivelyApplied(address attester, bytes32 targetID, bytes32 definition) external view returns (bool);
 }
 
 interface IEFSIndexer {
@@ -445,10 +450,14 @@ contract EFSFileView {
                 for (uint256 k = 0; k < batch.length; k++) {
                     targetIdx++; // advance for every inspected entry
                     bytes32 target = batch[k];
-                    // Cross-attester dedup: earlier attester already has an active tag on this target?
+                    // Cross-attester dedup: earlier attester already has an active applies=true
+                    // tag on this target? Must use `isActivelyApplied` (not `getActiveTagUID !=0`)
+                    // because `_activeTag` retains the latest TAG UID even when that TAG is
+                    // applies=false — an earlier attester's negation would otherwise suppress a
+                    // later attester's still-active placement and break ADR-0031 fallback.
                     bool taken = false;
                     for (uint256 prior = 0; prior < attesterIdx; prior++) {
-                        if (tagResolver.getActiveTagUID(attesters[prior], target, anchorUID) != bytes32(0)) {
+                        if (tagResolver.isActivelyApplied(attesters[prior], target, anchorUID)) {
                             taken = true;
                             break;
                         }

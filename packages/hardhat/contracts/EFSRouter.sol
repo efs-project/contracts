@@ -532,17 +532,19 @@ contract EFSRouter is IDecentralizedApp {
         return address(parsed);
     }
 
-    /// @dev Produce a lowercased copy of a string's ASCII A–F range. Used to normalize URL-supplied
-    ///      schema/attestation UIDs before alias-anchor name lookup — aliases are stored in lowercase
-    ///      hex (see 06_schema_aliases.ts), so `/0xABC…` must match `/0xabc…`. Non-hex bytes pass
-    ///      through unchanged; cheaper than full-string lowering and there's no need to handle the
-    ///      rest of the ASCII table here.
+    /// @dev Produce a lowercased copy of a string's ASCII A–F range plus the `X` used in the
+    ///      `0X` prefix. Used to normalize URL-supplied schema/attestation UIDs before alias-anchor
+    ///      name lookup — aliases are stored in lowercase hex (see 06_schema_aliases.ts), so
+    ///      `/0XABC…` must match `/0xabc…`. Non-hex / non-`X` bytes pass through unchanged;
+    ///      cheaper than full-string lowering and there's no need to handle the rest of the ASCII
+    ///      table here. Without the `X` branch, `/0X<uid>/…` URLs parsed correctly by the
+    ///      top-level classifier (which accepts `0x` and `0X`) would miss lowercase aliases.
     function _lowercaseHex(string memory str) private pure returns (string memory) {
         bytes memory sb = bytes(str);
         bytes memory out = new bytes(sb.length);
         for (uint i = 0; i < sb.length; i++) {
             bytes1 c = sb[i];
-            if (c >= 0x41 && c <= 0x46) {
+            if ((c >= 0x41 && c <= 0x46) || c == 0x58 /* 'X' */) {
                 out[i] = bytes1(uint8(c) + 32);
             } else {
                 out[i] = c;
