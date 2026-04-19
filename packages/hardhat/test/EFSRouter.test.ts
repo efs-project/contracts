@@ -1095,6 +1095,39 @@ describe("EFSRouter Web3 Capabilities", function () {
       expect(statusCode).to.equal(200);
       expect(Buffer.from(ethers.getBytes(body)).toString()).to.equal("version 2");
     });
+
+    it("Should serve the most recently attested contentType when an attester binds multiple PROPERTYs under the same key anchor", async function () {
+      // TAG singleton is per (attester, targetID, definition). Two TAGs from the same
+      // attester with different PROPERTY refUIDs under the same contentType key anchor
+      // are both active until one is explicitly revoked. _activeByAAS stores targetIDs
+      // in first-attestation order, so a naive reader at [0] would serve the stale
+      // value. _getContentType must scan all active targets and pick the newest by
+      // attestation timestamp. (Mirrors the DATA recency rule above.)
+      const targetAddress = ethers.getAddress("0x00000000000000000000000000000000000000E3");
+      await setCode(targetAddress, "0x00" + Buffer.from("content with updated mime").toString("hex"));
+
+      const fileAnchorUID = await createFileAnchor(ideasUID, "updated_ct.bin");
+      const dataUID = await createData("content with updated mime");
+
+      // First binding: application/octet-stream (the "stale" value).
+      await addProperty(dataUID, "contentType", "application/octet-stream");
+      await addMirror(dataUID, onchainTransportUID, `web3://${targetAddress}`);
+      await tagAtPath(dataUID, fileAnchorUID, true);
+
+      // Sanity: the first binding is what the router sees.
+      const [status1, , headers1] = await router.request(["ideas", "updated_ct.bin"], ownerParams());
+      expect(status1).to.equal(200);
+      expect(headers1.find((h: any) => h.key === "Content-Type")?.value).to.equal("application/octet-stream");
+
+      // Second binding from the SAME attester — newer PROPERTY + newer TAG, prior TAG
+      // left active (simulates a client that updated contentType without revoking).
+      await addProperty(dataUID, "contentType", "image/png");
+
+      // Router must now return the newer value, not position [0] in _activeByAAS.
+      const [status2, , headers2] = await router.request(["ideas", "updated_ct.bin"], ownerParams());
+      expect(status2).to.equal(200);
+      expect(headers2.find((h: any) => h.key === "Content-Type")?.value).to.equal("image/png");
+    });
   });
 
   // ADR-0033: top-level URL segment can be Address / Schema / Attestation / Anchor

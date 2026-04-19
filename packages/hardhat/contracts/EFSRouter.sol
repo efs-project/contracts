@@ -920,8 +920,17 @@ contract EFSRouter is IDecentralizedApp {
     //
     // Unified PROPERTY model: the value lives on a free-floating PROPERTY attestation,
     // bound to the DATA via TAG under `Anchor<PROPERTY>(parent=DATA, name="contentType")`.
-    // Per-attester singleton comes from TagResolver._activeByAAS — only the attester's
-    // current binding is considered, so third parties cannot displace the MIME type.
+    // Cross-attester protection comes from TagResolver._activeByAAS — only the target
+    // attester's active bindings are considered, so third parties cannot displace the
+    // MIME type.
+    //
+    // Recency disambiguation: TAG singleton is per (attester, targetID, definition), so
+    // two TAGs from the same attester with different PROPERTY refUIDs under the same
+    // key anchor can both be active when a caller updates contentType without first
+    // revoking the prior TAG. `_activeByAAS` stores targetIDs in first-attestation
+    // order, which is oldest-first — returning position [0] would serve a stale value.
+    // We fetch all active targets and pick the most recent by `attestation.time`,
+    // mirroring `_findDataAtPath`'s pattern for the analogous DATA case above.
     function _getContentType(bytes32 dataUID, address attester) private view returns (string memory) {
         bytes32 propertySchema = indexer.PROPERTY_SCHEMA_UID();
 
@@ -930,21 +939,35 @@ contract EFSRouter is IDecentralizedApp {
         bytes32 keyAnchor = indexer.resolveAnchor(dataUID, "contentType", propertySchema);
         if (keyAnchor == bytes32(0)) return "application/octet-stream";
 
-        // 2. Fetch the attester's active PROPERTY UID under that key anchor.
+        // 2. Fetch all of the attester's active PROPERTY targets under that key anchor.
+        uint256 count = tagResolver.getActiveTargetsByAttesterAndSchemaCount(
+            keyAnchor,
+            attester,
+            propertySchema
+        );
+        if (count == 0) return "application/octet-stream";
+
         bytes32[] memory targets = tagResolver.getActiveTargetsByAttesterAndSchema(
             keyAnchor,
             attester,
             propertySchema,
             0,
-            1
+            count
         );
-        if (targets.length == 0) return "application/octet-stream";
 
-        bytes32 propertyUID = targets[0];
-        if (indexer.isRevoked(propertyUID)) return "application/octet-stream";
+        // 3. Pick the most recent target by attestation timestamp.
+        bytes32 bestPropertyUID = targets[0];
+        uint64 bestTime = eas.getAttestation(targets[0]).time;
+        for (uint256 i = 1; i < targets.length; i++) {
+            uint64 t = eas.getAttestation(targets[i]).time;
+            if (t > bestTime) {
+                bestTime = t;
+                bestPropertyUID = targets[i];
+            }
+        }
 
-        // 3. Decode the value.
-        IEAS.Attestation memory propAtt = eas.getAttestation(propertyUID);
+        // 4. Decode the value.
+        IEAS.Attestation memory propAtt = eas.getAttestation(bestPropertyUID);
         string memory value = abi.decode(propAtt.data, (string));
         if (bytes(value).length == 0) return "application/octet-stream";
         return value;

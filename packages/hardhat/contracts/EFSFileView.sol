@@ -171,6 +171,16 @@ contract EFSFileView {
     ///      bounded while still amortizing external-call overhead.
     uint256 private constant _FOLDER_SCAN_CHUNK = 64;
 
+    /// @dev Hard cap on entries inspected in phase 0 per call. The append-only
+    ///      `_childrenTaggedWith[parent][schema]` list can grow unboundedly for a hot
+    ///      directory, and a page where most entries get filtered out (wrong attester,
+    ///      revoked) would otherwise loop `_childrenTaggedWith.length` times in a
+    ///      single eth_call — causing RPC timeouts or provider out-of-gas. The budget
+    ///      bounds per-call work; the opaque cursor continues progress across calls
+    ///      (same pattern as ADR-0020's `MAX_PAGES = 10` mirror-scan cap in
+    ///      `EFSRouter._getBestMirrorURI`).
+    uint256 private constant _FOLDER_SCAN_BUDGET_PER_CALL = 2048;
+
     /**
      * @notice Schema-aware directory listing with folder inclusion. Opaque-cursor paginated
      *         (ADR-0036). Walks two underlying sources in order, dedup-free because the
@@ -226,9 +236,12 @@ contract EFSFileView {
         // ───── Phase 0: qualifying tagged folders ─────
         if (phase == 0) {
             uint256 taggedTotal = tagResolver.getChildrenTaggedWithCount(parentAnchor, anchorSchema);
-            while (count < maxItems && folderIdx < taggedTotal) {
+            uint256 scanned = 0; // entries inspected this call — bounded by budget
+            while (count < maxItems && folderIdx < taggedTotal && scanned < _FOLDER_SCAN_BUDGET_PER_CALL) {
                 uint256 remainingSource = taggedTotal - folderIdx;
+                uint256 remainingBudget = _FOLDER_SCAN_BUDGET_PER_CALL - scanned;
                 uint256 chunk = remainingSource < _FOLDER_SCAN_CHUNK ? remainingSource : _FOLDER_SCAN_CHUNK;
+                if (chunk > remainingBudget) chunk = remainingBudget;
                 bytes32[] memory batch = tagResolver.getChildrenTaggedWith(
                     parentAnchor,
                     anchorSchema,
@@ -237,6 +250,7 @@ contract EFSFileView {
                 );
                 for (uint256 k = 0; k < batch.length; k++) {
                     folderIdx++; // advance walker for every inspected entry
+                    scanned++;
                     bytes32 uid = batch[k];
                     if (indexer.isRevoked(uid)) continue;
                     if (!tagResolver.isActivelyTaggedByAny(uid, anchorSchema, attesters)) continue;
@@ -249,6 +263,8 @@ contract EFSFileView {
                 // folder source exhausted — advance to phase 1
                 phase = 1;
             }
+            // If we hit the scan budget but not maxItems and folders aren't exhausted,
+            // we stay in phase=0 with folderIdx advanced — next call resumes mid-folders.
         }
 
         // ───── Phase 1: direct children by schema ─────
