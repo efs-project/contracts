@@ -1292,6 +1292,52 @@ describe("EFSRouter Web3 Capabilities", function () {
       const nonhex = "0xZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ";
       const [statusCode3] = await router.request([nonhex], []);
       expect(statusCode3).to.equal(404);
+
+      // 65 hex chars — not 40, not 64; _effectiveHexLength is 65, falls back to Anchor.
+      const over65 = "0x" + "c".repeat(65);
+      const [statusCode4] = await router.request([over65], []);
+      expect(statusCode4).to.equal(404);
+
+      // 64 hex chars but with a trailing non-hex char — effective hex length is 64 up to the
+      // bad char, but a non-whitespace tail makes _effectiveHexLength return 0. Falls back to Anchor.
+      const tailBad = "0x" + "a".repeat(64) + "!";
+      const [statusCode5] = await router.request([tailBad], []);
+      expect(statusCode5).to.equal(404);
+    });
+
+    it("Should accept a 64-hex schema UID with no 0x prefix (JSON fallback)", async function () {
+      // _parseBytes32 and _effectiveHexLength both tolerate a missing 0x prefix.
+      const noPrefix = dataSchemaUID.slice(2); // strip "0x"
+      expect(noPrefix.length).to.equal(64);
+      const [statusCode, , headers] = await router.request([noPrefix], []);
+      expect(statusCode).to.equal(200);
+      const ct = headers.find((h: any) => h.key === "Content-Type");
+      expect(ct?.value).to.equal("application/json");
+    });
+
+    it("Should JSON-fallback at uppercase schema UID when no alias anchor exists", async function () {
+      // No alias anchor is seeded in this beforeEach — uppercase hex should still classify as
+      // Schema (registration lookup is case-insensitive at the bytes32 level) and JSON-fallback.
+      const upper = "0x" + dataSchemaUID.slice(2).toUpperCase();
+      const [statusCode, body, headers] = await router.request([upper], []);
+      expect(statusCode).to.equal(200);
+      const ct = headers.find((h: any) => h.key === "Content-Type");
+      expect(ct?.value).to.equal("application/json");
+      const json = JSON.parse(Buffer.from(ethers.getBytes(body)).toString());
+      expect(json.uid.toLowerCase()).to.equal(dataSchemaUID.toLowerCase());
+    });
+
+    it("Should dedupe when caller == segmentAddr on address-container default editions", async function () {
+      // Default editions for address containers is [caller, segmentAddr]. When they match,
+      // the duplicate must be collapsed so the attester is not scanned twice.
+      const fileAnchor = await createAnchorUnderAddress(ownerAddr, "self.txt", dataSchemaUID);
+      const codeAddr = ethers.getAddress("0x00000000000000000000000000000000000000E4");
+      await uploadOnchain("self-file", "text/plain", codeAddr, fileAnchor);
+
+      // caller (eth_call sender) == owner; segmentAddr == ownerAddr → dedup → [ownerAddr].
+      const [statusCode, body] = await router.request([ownerAddr, "self.txt"], []);
+      expect(statusCode).to.equal(200);
+      expect(Buffer.from(ethers.getBytes(body)).toString()).to.equal("self-file");
     });
 
     // ADR-0033 §2: schema & attestation URLs prefer the alias anchor at root
