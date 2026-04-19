@@ -9,10 +9,15 @@
  * docs/FUTURE_WORK.md. Switching today means changing env vars and rebuilding,
  * which is fine for ops but not for casual visitors.
  *
- * Label inference:
- *   - rpc starts with http://127.0.0.1 or http://localhost → "Local"
- *   - rpc starts with "/"  → "Devnet"  (same-origin reverse proxy, e.g. /rpc)
- *   - anything else        → chain.name or "Custom"
+ * Label inference (this app only targets hardhat chain id 31337, so the split
+ * is "is the RPC URL pointing at localhost or somewhere else?"):
+ *   - hardhat chain + localhost/127.0.0.1 URL  → "Local"   (info)
+ *   - hardhat chain + any other URL            → "Devnet"  (success)
+ *   - any other chain id                       → chain.name (neutral ghost)
+ *
+ * Both Local and Devnet are rendered as positive states (info / success
+ * colors) because they're expected; the yellow/warning tone is reserved for
+ * truly unexpected configurations.
  *
  * The click surface reveals the full RPC URL + chain ID so operators can copy
  * them when triaging "why does nothing load" on the devnet.
@@ -21,20 +26,24 @@ import { useEffect, useState } from "react";
 import { useAccount, useConfig } from "wagmi";
 import { CheckIcon, DocumentDuplicateIcon, GlobeAltIcon } from "@heroicons/react/24/outline";
 
-type NetworkFlavor = "local" | "devnet" | "custom" | "unknown";
+const HARDHAT_CHAIN_ID = 31337;
 
-const flavorStyles: Record<NetworkFlavor, { badge: string; dot: string; label: string }> = {
-  local: { badge: "badge-info", dot: "bg-info-content", label: "Local" },
-  devnet: { badge: "badge-warning", dot: "bg-warning-content", label: "Devnet" },
-  custom: { badge: "badge-warning", dot: "bg-warning-content", label: "Custom" },
-  unknown: { badge: "badge-ghost", dot: "bg-base-content/50", label: "?" },
+type NetworkFlavor = "local" | "devnet" | "other" | "unknown";
+
+const flavorStyles: Record<NetworkFlavor, { badge: string; label: string }> = {
+  local: { badge: "badge-info", label: "Local" },
+  devnet: { badge: "badge-success", label: "Devnet" },
+  other: { badge: "badge-ghost", label: "" }, // label derived from chain.name
+  unknown: { badge: "badge-ghost", label: "?" },
 };
 
-function inferFlavor(rpcUrl: string | undefined): NetworkFlavor {
-  if (!rpcUrl) return "unknown";
-  if (rpcUrl.startsWith("http://127.0.0.1") || rpcUrl.startsWith("http://localhost")) return "local";
-  if (rpcUrl.startsWith("/")) return "devnet";
-  return "custom";
+function inferFlavor(rpcUrl: string | undefined, chainId: number | undefined): NetworkFlavor {
+  if (!rpcUrl || !chainId) return "unknown";
+  if (chainId === HARDHAT_CHAIN_ID) {
+    if (rpcUrl.startsWith("http://127.0.0.1") || rpcUrl.startsWith("http://localhost")) return "local";
+    return "devnet";
+  }
+  return "other";
 }
 
 export const NetworkChip = () => {
@@ -49,9 +58,9 @@ export const NetworkChip = () => {
   // still shows something useful before wallet connect.
   const activeChain = chain ?? config.chains[0];
   const rpcUrl = activeChain?.rpcUrls.default.http[0];
-  const flavor = inferFlavor(rpcUrl);
+  const flavor = inferFlavor(rpcUrl, activeChain?.id);
   const style = flavorStyles[flavor];
-  const label = flavor === "custom" || flavor === "unknown" ? (activeChain?.name ?? style.label) : style.label;
+  const label = flavor === "other" ? (activeChain?.name ?? "Unknown") : style.label;
 
   // Pre-hydration, render a skeleton to avoid mismatch (chain comes from wagmi hook).
   if (!mounted) {
