@@ -82,6 +82,16 @@ export async function seedDemoTree() {
   const rootUID = await indexer.rootAnchorUID();
   const encode = ethers.AbiCoder.defaultAbiCoder();
 
+  // Second fail-soft gate (ADR-0028): Indexer is deployed but rootUID is zero
+  // because earlier deploy-step attestations silently reverted (no EAS on this
+  // chain — CI vanilla hardhat). Seeding anchors would just hit the same
+  // silent-revert wall in `makeAnchor`; skip cleanly so the deploy exits 0.
+  if (rootUID === ethers.ZeroHash) {
+    console.log("⏭️  Seed skipped — root anchor is zero (earlier deploy steps had no EAS to attest against).");
+    console.log("   This is expected when deploy targeted a chain without EAS (e.g. CI without fork).");
+    return;
+  }
+
   // Resolve /transports/ anchors for MIRRORs. Registered by deploy script
   // 05_mirrors.ts (names: onchain, ipfs, arweave, magnet, https).
   const transportsUID = await indexer.resolvePath(rootUID, "transports");

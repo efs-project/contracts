@@ -104,8 +104,19 @@ const deployUserBrowsingDemo: DeployFunction = async function (hre: HardhatRunti
   const dataSchemaUID: string = await indexer.DATA_SCHEMA_UID();
   const propertySchemaUID: string = await indexer.PROPERTY_SCHEMA_UID();
   const mirrorSchemaUID: string = await indexer.MIRROR_SCHEMA_UID();
+
+  // ADR-0028 graceful degradation: bail cleanly when earlier deploy steps
+  // couldn't attest (CI vanilla hardhat without EAS → rootUID stays zero →
+  // every `createChildAnchor` call here would revert). Matches the
+  // skip-with-log pattern in 06_schema_aliases.ts and seed-impl.ts.
+  const rootUID: string = await indexer.rootAnchorUID();
+  if (rootUID === ethers.ZeroHash) {
+    console.log("⏭️  User-browsing demo skipped — root anchor is zero (no EAS on this chain).");
+    return;
+  }
+
   const httpsTransportUID: string = await indexer.resolvePath(
-    await indexer.resolvePath(await indexer.rootAnchorUID(), "transports"),
+    await indexer.resolvePath(rootUID, "transports"),
     "https",
   );
   const tagSchemaUID: string = await tagResolver.TAG_SCHEMA_UID();

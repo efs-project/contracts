@@ -51,13 +51,22 @@ const deploySchemaAliases: DeployFunction = async function (hre: HardhatRuntimeE
   const sortInfoSchemaUID: string = await indexer.SORT_INFO_SCHEMA_UID();
   const tagSchemaUID: string = await tagResolver.TAG_SCHEMA_UID();
 
+  // ADR-0028 graceful degradation: if earlier steps couldn't create anchors
+  // (e.g. CI deploying against vanilla hardhat with no EAS registered, where
+  // `eas.attest(...)` reverts silently and the try/catch in 01_indexer.ts
+  // swallows it), rootUID / tagsUID stay zero. Skip-with-log rather than throw
+  // so the rest of the deploy (07, 08, etc.) can still run — matching the
+  // "Failed to find Attested event / Failed to get naming anchor UID"
+  // skip-log pattern in 01_indexer.ts and 05_sort_functions.ts.
   const rootUID: string = await indexer.rootAnchorUID();
   if (rootUID === ethers.ZeroHash) {
-    throw new Error("Root anchor missing — 01_indexer.ts must run first.");
+    console.log("Skipping schema aliases — root anchor missing (likely no EAS in this environment).");
+    return;
   }
   const tagsUID: string = await indexer.resolvePath(rootUID, "tags");
   if (tagsUID === ethers.ZeroHash) {
-    throw new Error("'/tags/' anchor missing — 01_indexer.ts must run first.");
+    console.log("Skipping schema aliases — '/tags/' anchor missing (likely no EAS in this environment).");
+    return;
   }
 
   const extractUID = (receipt: any): string | undefined => {
