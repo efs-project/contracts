@@ -2,9 +2,9 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "nextjs-dev",
+      "name": "efs-fullstack",
       "runtimeExecutable": "yarn",
-      "runtimeArgs": ["workspace", "@se-2/nextjs", "dev"],
+      "runtimeArgs": ["preview"],
       "port": 3000,
       "autoPort": true
     }

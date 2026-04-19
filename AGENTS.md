@@ -41,6 +41,20 @@ If your task fits one of these categories, load the listed ADRs *before* writing
 
 ## Setup
 
+**One-command path (preferred — also what Claude Code's "Preview" button runs):**
+
+```bash
+yarn preview   # fork + deploy + next dev, with auto-port selection
+```
+
+This launches the hardhat Sepolia fork, deploys contracts, then starts Next.js dev,
+all wired together. If `8545` or `3000` are busy (another worktree / preview
+already running), it scans upward and picks free ports automatically and passes
+them through as `LOCALHOST_RPC_URL` / `NEXT_PUBLIC_HARDHAT_RPC_URL`. The hardhat
+fork is a child process and is torn down when `next dev` exits.
+
+**Three-terminal path (when you want each piece under separate control):**
+
 ```bash
 yarn fork     # Terminal 1 — local Sepolia fork (required, not plain hardhat node)
 yarn deploy   # Terminal 2 — deploy contracts (handles workspace + env)
