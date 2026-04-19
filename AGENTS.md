@@ -95,17 +95,25 @@ wagmi client. Set both to the same URL when running end-to-end.
 
 ### Seeding demo data (devnet + local first-run)
 
-`yarn deploy` now chains `yarn hardhat:seed` at the end, so a fresh deploy
-populates a small demo tree (`/docs/`, `/images/`, `/shared/`) with an editions
-demo on `shared/photo.png` automatically. The seed script is **idempotent** —
-each top-level subtree is guarded by a `resolveAnchor` call, so re-running after
-a partial failure only fills in what's missing, and re-running after a successful
-seed is a zero-write no-op. It is also **fail-soft**: if the Indexer contract
-isn't registered (e.g. CI deploy against a vanilla hardhat node with no EAS),
-seed logs a skip and exits 0 rather than failing the chain.
+Demo data is seeded as a hardhat-deploy step (`deploy/08_seed_demo_tree.ts`),
+so a fresh deploy populates a small demo tree (`/docs/`, `/images/`, `/shared/`)
+with an editions demo on `shared/photo.png` automatically. The step runs as
+part of `hardhat deploy` itself, not as a chained-after-deploy script —
+meaning **any** deploy entry point auto-seeds: root `yarn deploy`,
+`yarn workspace @se-2/hardhat deploy` (devnet VPS path), `yarn preview`, CI.
 
-Run seed by itself (e.g. after manual contract deployment or to re-seed after a
-data wipe) with `yarn hardhat:seed`.
+The seed is **idempotent** — each top-level subtree is guarded by a
+`resolveAnchor` call, so re-running after a partial failure only fills in
+what's missing, and re-running after a successful seed is a zero-write
+no-op. It is also **fail-soft**: if the Indexer contract isn't registered
+(e.g. CI deploy against a vanilla hardhat node with no EAS) the seed logs
+a skip and returns cleanly rather than failing the deploy.
+
+The step is **localhost/hardhat-only** — on real Sepolia or mainnet it
+short-circuits before any writes, matching the gate in `07_persona_names.ts`.
+
+Run seed by itself (e.g. after manual contract deployment or to re-seed
+after a data wipe) with `yarn hardhat:seed`.
 
 ### Pinned Sepolia fork (coordination unit for devnet / client)
 
