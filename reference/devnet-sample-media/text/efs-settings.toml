@@ -1,0 +1,10 @@
+title = "EFS Devnet Samples"
+version = "1.0"
+
+[routing]
+default_edition = "deployer"
+prefer_transport = "web3"
+
+[limits]
+small_media = true
+intended_for_testing = true

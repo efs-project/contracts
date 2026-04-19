@@ -37,6 +37,16 @@ For debugging and easily using the contracts:
 yarn start
 ```
 
+### 5. Optional: Seed The User-Browsing Demo Corpus
+To populate the James Carnley address container (`0x8626f6940E2eb28930eFb4CeF49B2d1F2C9C1199`) with the curated demo files under [`reference/devnet-sample-media/`](./reference/devnet-sample-media/README.md), run:
+
+```bash
+cd packages/hardhat
+npx hardhat deploy --tags UserBrowsingDemo --network localhost
+```
+
+This step is intentionally separate from `yarn deploy` so normal local deploys stay fast. It is idempotent: files already seeded for that address are skipped.
+
 
 
 ---
@@ -45,4 +55,3 @@ yarn start
 This project uses [Scaffold-ETH 2](https://scaffoldeth.io) as a base.
 - [Documentation](https://docs.scaffoldeth.io)
 - [Website](https://scaffoldeth.io)
-

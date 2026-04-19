@@ -1,0 +1,10 @@
+project: EFS
+environment: devnet
+browser:
+  showHidden: false
+  defaultSort: name
+fixtures:
+  images: 6
+  videos: 4
+  audio: 3
+  text: 8

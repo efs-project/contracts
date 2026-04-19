@@ -1,0 +1,11 @@
+{
+  "name": "Devnet Sample Corpus",
+  "project": "EFS",
+  "network": "devnet",
+  "categories": ["image", "video", "audio", "text", "archive", "binary"],
+  "flags": {
+    "small": true,
+    "browseable": true,
+    "safe_for_internal_testing": true
+  }
+}
