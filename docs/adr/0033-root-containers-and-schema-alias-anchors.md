@@ -80,6 +80,7 @@ After the walk, if `_findDataAtPath` returns no DATA AND the final container UID
 - Root naming conflict: a plain anchor at root literally named like `0xabc…` or `vitalik.eth` is URL-unreachable. Acceptable.
 - Six extra anchors seeded at deploy (system-schema aliases). Trivial gas.
 - EFSIndexer's ANCHOR `onAttest` gains one SchemaRegistry call + one conditional `eas.attest()` when a new root anchor's name matches a schema UID. Bounded by schemaRegistry lookup cost (~2k gas) and one attestation (~50k gas). Users attesting alias anchors pay; users creating normal anchors see no overhead (name length check fails fast).
+- **Router classification is O(2) external view calls per request on the Schema/Attestation branch.** Every `web3://` resolution whose top-level segment is 64 hex chars triggers `SchemaRegistry.getSchema(uid)` and, on miss, `EAS.getAttestation(uid)`. Unavoidable given ADR-0030's no-upgrade rule — once `EFSRouter` is on mainnet the cost is locked in. Clients that resolve the same URLs repeatedly (gateway caches, frontend routers) should cache the classification off-chain by URL segment. The on-chain `EFSRouter.classifyTopLevel(string)` external view is exposed so off-chain classifiers can parity-test against the authoritative implementation and thus safely cache its output.
 - Test surface grows: root-classification precedence, JSON fallback, kernel auto-tag edge cases.
 
 **Load-bearing**

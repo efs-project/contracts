@@ -403,6 +403,49 @@ describe("EFSFileView", function () {
     expect(p3.nextCursor).to.equal("0x");
   });
 
+  it("Malformed opaque cursors silently restart the walk (ADR-0036 defensive decode)", async function () {
+    // The cursor is caller-supplied opaque bytes (ADR-0036). A buggy or malicious client
+    // must not be able to brick the view with an `abi.decode` Panic or get stuck in a
+    // no-progress loop from an out-of-range `phase`. Both code paths (folder walker and
+    // file walker) length-check the cursor before decoding and range-check `phase` to
+    // keep the view safe.
+    const ownerAddr = await owner.getAddress();
+    const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32);
+    const folderUID = await createAnchor("folder", rootUID, ZERO_BYTES32);
+    await createTag(folderUID, dataSchemaUID, true);
+
+    // 1. Completely garbage bytes (not a multiple of 32). Must NOT revert with a Panic;
+    //    must start the walk fresh and return the one real folder.
+    const garbage = "0xdeadbeef";
+    const p1 = await fileView.getDirectoryPageBySchemaAndAddressList(rootUID, dataSchemaUID, [ownerAddr], garbage, 10);
+    expect(p1.items.length).to.equal(1);
+    expect(p1.items[0].name).to.equal("folder");
+
+    // 2. Right-shape (96 bytes) but with `phase=7` — out of the valid {0, 1} range.
+    //    A naive implementation would accept it, skip both phase-0 and phase-1 blocks,
+    //    and return empty items WITH an unchanged cursor — callers would loop forever.
+    //    The range-check must silently restart at phase=0.
+    const outOfRangeCursor = ethers.AbiCoder.defaultAbiCoder().encode(["uint256", "uint256", "uint256"], [7n, 0n, 0n]);
+    const p2 = await fileView.getDirectoryPageBySchemaAndAddressList(
+      rootUID,
+      dataSchemaUID,
+      [ownerAddr],
+      outOfRangeCursor,
+      10,
+    );
+    expect(p2.items.length).to.equal(1);
+    expect(p2.items[0].name).to.equal("folder");
+
+    // 3. getFilesAtPath cursor is `(uint256, uint256)` — 64 bytes. Feeding wrong-length
+    //    garbage must not revert. We don't care what it returns (the view walks active
+    //    TAGs targeting `anchorUID`, and this test hasn't placed any). The point is that
+    //    the defensive decode fresh-starts instead of panicking on abi.decode.
+    const garbageForFiles = "0xdeadbeef";
+    const p3 = await fileView.getFilesAtPath(folderUID, [ownerAddr], dataSchemaUID, garbageForFiles, 10);
+    // Empty page or full page, either is fine — the guarantee is no-revert.
+    expect(p3.nextCursor.length).to.be.greaterThanOrEqual(2); // at minimum "0x"
+  });
+
   it("Surfaces >10k tagged folders without silent truncation (ADR-0036)", async function () {
     // Regression for the old MAX_TAGGED_FOLDERS=10000 silent-cap landmine. The cursor-based
     // walker must continue past any arbitrary cap. We do NOT create 10k folders here (too

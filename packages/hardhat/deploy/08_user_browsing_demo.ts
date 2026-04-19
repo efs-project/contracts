@@ -67,6 +67,30 @@ function contentTypeFor(relPath: string): string {
   return MIME_BY_EXT[ext] ?? "application/octet-stream";
 }
 
+/**
+ * Seeds an example user-browsing demo corpus under the address container
+ * `TARGET_ADDRESS` on localhost/hardhat only.
+ *
+ * Idempotency model — **per-file, not per-corpus.** Re-running this step
+ * iterates every manifest entry and checks whether that specific file is
+ * already placed at its anchor (`TagResolver.getActiveTargetsByAttesterAndSchema`
+ * returns non-empty). If so: skip. If not: seed.
+ *
+ * Consequences of the per-file granularity:
+ *   - Adding a new file to `sample-media-manifest.json` and re-running
+ *     seeds only the new file; existing placements are untouched. This is
+ *     intentional — the manifest is editable between deploys.
+ *   - Removing a file from the manifest does NOT unseed it; the anchor +
+ *     placement TAG linger. If you need a clean slate, reset the chain.
+ *   - A partially-seeded run (node killed mid-corpus) resumes from where it
+ *     left off on the next deploy with no duplicates.
+ *   - There is no corpus-level "already fully seeded" short-circuit; every
+ *     re-run pays O(files) resolve + tagResolver lookups. Acceptable on a
+ *     local fork (~sub-second for a few dozen files).
+ *
+ * Fail-soft: skips cleanly when no EAS is available (CI vanilla hardhat),
+ * matching the ADR-0028 pattern in `seed-impl.ts` and `06_schema_aliases.ts`.
+ */
 const deployUserBrowsingDemo: DeployFunction = async function (hre: HardhatRuntimeEnvironment) {
   if (hre.network.name !== "localhost" && hre.network.name !== "hardhat") {
     console.log(`Skipping user-browsing demo seeding on network "${hre.network.name}" (localhost/hardhat only).`);

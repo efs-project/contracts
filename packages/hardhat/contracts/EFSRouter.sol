@@ -600,6 +600,20 @@ contract EFSRouter is IDecentralizedApp {
     ///      Precedence: Address (40 hex) → Schema (64 hex, registered) →
     ///      Attestation (64 hex, exists) → Anchor (anything else, including names).
     ///      See ADR-0033. ENS resolution is off-chain (frontend-only) per ADR-0030.
+    ///
+    ///      Zero-value fallthrough: a 40-hex all-zero URL (`/0x0000…0000/foo`) parses
+    ///      as address(0), fails the `a != address(0)` guard below, and falls through
+    ///      to the Anchor branch. Similarly a 64-hex all-zero UID fails the `uid !=
+    ///      bytes32(0)` guard. Both yield `(Anchor, bytes32(0))` — deliberately, per
+    ///      ADR-0033's zero-address-poisoning rationale: `address(0)` is not a valid
+    ///      container (it's EAS's "no recipient" sentinel, not a user), and `bytes32(0)`
+    ///      matches the root anchor UID before indexer wiring.
+    ///
+    ///      Cost note: on the Schema/Attestation branch this does up to two external
+    ///      view calls (`schemaRegistry.getSchema` and `eas.getAttestation`), paid on
+    ///      every `web3://` request whose first segment is 64-hex. Unavoidable given
+    ///      ADR-0030's no-upgrade rule; clients that resolve the same URLs repeatedly
+    ///      should cache the classification off-chain. See ADR-0033 Consequences.
     function _classifyTopLevel(string memory segment) private view returns (ContainerFlavor, bytes32) {
         if (bytes(segment).length == 0) return (ContainerFlavor.Anchor, bytes32(0));
 
@@ -610,6 +624,7 @@ contract EFSRouter is IDecentralizedApp {
             if (a != address(0)) {
                 return (ContainerFlavor.Address, bytes32(uint256(uint160(a))));
             }
+            // address(0) → Anchor fallthrough (ADR-0033 zero-address poisoning guard).
         }
 
         if (hexLen == 64) {
@@ -622,9 +637,20 @@ contract EFSRouter is IDecentralizedApp {
                     return (ContainerFlavor.Attestation, uid);
                 }
             }
+            // bytes32(0), malformed, or unregistered/non-existent UID → Anchor fallthrough.
         }
 
         return (ContainerFlavor.Anchor, bytes32(0));
+    }
+
+    /// @notice Public wrapper around the URL top-level classifier.
+    /// @dev    Exposed so off-chain clients can keep their own classifier byte-identical
+    ///         to the on-chain one (ADR-0033). Pure view; can be cached by clients. The
+    ///         returned flavor is a uint8-cast enum: 0 = Anchor, 1 = Address, 2 = Schema,
+    ///         3 = Attestation (order matches the ContainerFlavor enum declaration).
+    function classifyTopLevel(string calldata segment) external view returns (uint8 flavor, bytes32 uid) {
+        (ContainerFlavor f, bytes32 u) = _classifyTopLevel(segment);
+        return (uint8(f), u);
     }
 
     // Parses a string to uint256
@@ -940,11 +966,7 @@ contract EFSRouter is IDecentralizedApp {
         if (keyAnchor == bytes32(0)) return "application/octet-stream";
 
         // 2. Fetch all of the attester's active PROPERTY targets under that key anchor.
-        uint256 count = tagResolver.getActiveTargetsByAttesterAndSchemaCount(
-            keyAnchor,
-            attester,
-            propertySchema
-        );
+        uint256 count = tagResolver.getActiveTargetsByAttesterAndSchemaCount(keyAnchor, attester, propertySchema);
         if (count == 0) return "application/octet-stream";
 
         bytes32[] memory targets = tagResolver.getActiveTargetsByAttesterAndSchema(

@@ -222,12 +222,32 @@ contract EFSFileView {
         require(attesters.length <= MAX_ATTESTERS_PER_QUERY, "Too many attesters");
         require(maxItems > 0, "maxItems must be > 0");
 
-        // Decode cursor — empty = fresh start at (phase=0, folderIdx=0, fileIdx=0).
+        // Decode cursor — empty OR malformed = fresh start at (phase=0, folderIdx=0,
+        // fileIdx=0). ADR-0036 treats the cursor as opaque caller-supplied bytes, so a
+        // buggy or malicious client must not be able to brick the view with an
+        // `abi.decode` Panic or a silent no-progress loop.
+        //
+        // Two guards:
+        //   1. Wrong length → fresh walk. Encoded `(uint8, uint256, uint256)` is exactly
+        //      3 × 32 = 96 bytes (uint8 is padded). Anything else was not produced by
+        //      this contract.
+        //   2. Out-of-range `phase` → fresh walk. A decoded `phase > 1` would skip both
+        //      phase-0 and phase-1 blocks, return empty items with an unchanged cursor,
+        //      and the caller would loop forever with no forward progress.
+        //
+        // We decode as a uint256 triple (not `(uint8, ...)`) so that non-zero upper
+        // bits in the first word don't revert — the range-check below handles validity.
+        // The wire format is byte-identical because `abi.encode` pads uint8 to 32 bytes.
         uint8 phase = 0;
         uint256 folderIdx = 0;
         uint256 fileIdx = 0;
-        if (cursor.length > 0) {
-            (phase, folderIdx, fileIdx) = abi.decode(cursor, (uint8, uint256, uint256));
+        if (cursor.length == 96) {
+            (uint256 pRaw, uint256 fRaw, uint256 fiRaw) = abi.decode(cursor, (uint256, uint256, uint256));
+            if (pRaw <= 1) {
+                phase = uint8(pRaw);
+                folderIdx = fRaw;
+                fileIdx = fiRaw;
+            }
         }
 
         bytes32[] memory buf = new bytes32[](maxItems);
@@ -390,9 +410,14 @@ contract EFSFileView {
         require(attesters.length <= MAX_ATTESTERS_PER_QUERY, "Too many attesters");
         require(maxItems > 0, "maxItems must be > 0");
 
+        // Decode cursor — empty OR malformed = fresh start at (attesterIdx=0,
+        // targetIdx=0). Same defensive pattern as `getDirectoryPageBySchemaAndAddressList`
+        // above: length-check protects against `abi.decode` Panics on arbitrary
+        // caller-supplied bytes. If `attesterIdx` ends up >= `attesters.length` the
+        // outer while-loop simply exits with an empty page (no infinite loop).
         uint256 attesterIdx = 0;
         uint256 targetIdx = 0;
-        if (cursor.length > 0) {
+        if (cursor.length == 64) {
             (attesterIdx, targetIdx) = abi.decode(cursor, (uint256, uint256));
         }
 

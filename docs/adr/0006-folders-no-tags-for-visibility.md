@@ -1,8 +1,8 @@
 # ADR-0006: Folder visibility is tag-only
 
-**Status:** Accepted
+**Status:** Superseded by [ADR-0038](./0038-tag-only-folder-visibility.md)
 **Date:** 2026-04-16 (formalized retroactively)
-**Related:** ADR-0003, ADR-0008, ADR-0010, ADR-0031
+**Related:** ADR-0003, ADR-0008, ADR-0010, ADR-0031, ADR-0038
 
 > **Revised in place 2026-04-18 during pre-alpha refactor.** The original decision
 > ("folders don't need TAGs for visibility") made folder membership dual-sourced:

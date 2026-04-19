@@ -61,7 +61,8 @@ What else we looked at and why it lost.
 - [ADR-0003 — TAG-based file placement instead of refUID](./0003-tag-based-placement.md)
 - [ADR-0004 — Content dedup via `dataByContentKey`](./0004-content-dedup-via-dataByContentKey.md)
 - [ADR-0005 — ContentType moved from DATA to PROPERTY](./0005-content-type-moved-to-property.md)
-- [ADR-0006 — Folders don't need TAGs for visibility](./0006-folders-no-tags-for-visibility.md)
+- [ADR-0006 — Folders don't need TAGs for visibility](./0006-folders-no-tags-for-visibility.md) *(Superseded by ADR-0038)*
+- [ADR-0038 — Tag-only folder visibility (single-source)](./0038-tag-only-folder-visibility.md)
 
 ### Index Design
 - [ADR-0007 — `_activeByAttesterAndSchema`: swap-and-pop compact index](./0007-activeByAttesterAndSchema-swap-and-pop.md)
