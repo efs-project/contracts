@@ -64,7 +64,7 @@ describe("EFS Data Model — E2E Integration", function () {
 
   const encodeData = (contentHash: string, size: bigint) => enc.encode(["bytes32", "uint64"], [contentHash, size]);
 
-  const encodeProperty = (key: string, value: string) => enc.encode(["string", "string"], [key, value]);
+  const encodePropertyValue = (value: string) => enc.encode(["string"], [value]);
 
   const encodeTag = (definition: string, applies: boolean) => enc.encode(["bytes32", "bool"], [definition, applies]);
 
@@ -121,19 +121,58 @@ describe("EFS Data Model — E2E Integration", function () {
     return getUID(await tx.wait());
   }
 
-  async function createProperty(refUID: string, key: string, value: string, signer: Signer = owner): Promise<string> {
-    const tx = await eas.connect(signer).attest({
+  /**
+   * Attach a PROPERTY to a container using the unified free-floating model
+   * (ADR-0035): key anchor under the container, free-floating PROPERTY(value),
+   * and a TAG binding them. Returns the PROPERTY UID.
+   */
+  async function createProperty(
+    containerUID: string,
+    key: string,
+    value: string,
+    signer: Signer = owner,
+  ): Promise<string> {
+    let keyAnchorUID: string = await indexer.resolveAnchor(containerUID, key, propertySchemaUID);
+    if (keyAnchorUID === ZERO_BYTES32) {
+      const keyTx = await eas.connect(signer).attest({
+        schema: anchorSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: NO_EXPIRATION,
+          revocable: false,
+          refUID: containerUID,
+          data: encodeAnchor(key, propertySchemaUID),
+          value: 0n,
+        },
+      });
+      keyAnchorUID = getUID(await keyTx.wait());
+    }
+
+    const propTx = await eas.connect(signer).attest({
       schema: propertySchemaUID,
       data: {
         recipient: ZeroAddress,
         expirationTime: NO_EXPIRATION,
-        revocable: true,
-        refUID: refUID,
-        data: encodeProperty(key, value),
+        revocable: false,
+        refUID: ZERO_BYTES32,
+        data: encodePropertyValue(value),
         value: 0n,
       },
     });
-    return getUID(await tx.wait());
+    const propertyUID = getUID(await propTx.wait());
+
+    await eas.connect(signer).attest({
+      schema: tagSchemaUID,
+      data: {
+        recipient: ZeroAddress,
+        expirationTime: NO_EXPIRATION,
+        revocable: true,
+        refUID: propertyUID,
+        data: encodeTag(keyAnchorUID, true),
+        value: 0n,
+      },
+    });
+    return propertyUID;
   }
 
   async function tagTarget(
@@ -227,7 +266,7 @@ describe("EFS Data Model — E2E Integration", function () {
     );
     propertySchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
-      ["string key, string value", futureIndexerAddr, true],
+      ["string value", futureIndexerAddr, false],
     );
     dataSchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
@@ -260,7 +299,7 @@ describe("EFS Data Model — E2E Integration", function () {
 
     // Register schemas
     await (await registry.register("string name, bytes32 schemaUID", futureIndexerAddr, false)).wait();
-    await (await registry.register("string key, string value", futureIndexerAddr, true)).wait();
+    await (await registry.register("string value", futureIndexerAddr, false)).wait();
     await (await registry.register("bytes32 contentHash, uint64 size", futureIndexerAddr, false)).wait();
     await (await registry.register("bytes32 definition, bool applies", await tagResolver.getAddress(), true)).wait();
     await (
@@ -348,12 +387,20 @@ describe("EFS Data Model — E2E Integration", function () {
       // Verify dedup key
       expect(await indexer.dataByContentKey(contentHash)).to.equal(dataUID);
 
-      // Verify contentType PROPERTY exists
-      const props = await indexer.getReferencingAttestations(dataUID, propertySchemaUID, 0, 10, false);
-      expect(props.length).to.equal(1);
-      const propAtt = await eas.getAttestation(props[0]);
-      const [decodedKey, decodedValue] = enc.decode(["string", "string"], propAtt.data);
-      expect(decodedKey).to.equal("contentType");
+      // Verify contentType PROPERTY exists (unified free-floating model)
+      const ctKeyAnchor = await indexer.resolveAnchor(dataUID, "contentType", propertySchemaUID);
+      expect(ctKeyAnchor).to.not.equal(ZERO_BYTES32);
+      const ownerAddrForCT = await owner.getAddress();
+      const ctProps = await tagResolver.getActiveTargetsByAttesterAndSchema(
+        ctKeyAnchor,
+        ownerAddrForCT,
+        propertySchemaUID,
+        0,
+        10,
+      );
+      expect(ctProps.length).to.equal(1);
+      const propAtt = await eas.getAttestation(ctProps[0]);
+      const [decodedValue] = enc.decode(["string"], propAtt.data);
       expect(decodedValue).to.equal("text/markdown");
 
       // Verify onchain MIRROR exists
@@ -493,19 +540,28 @@ describe("EFS Data Model — E2E Integration", function () {
 
   describe("PROPERTY Metadata on DATA", function () {
     it("should store contentType as PROPERTY", async function () {
+      const ownerAddr = await owner.getAddress();
       const dataUID = await createData(hash("typed file"), 10n);
       await createProperty(dataUID, "contentType", "image/jpeg");
 
-      const props = await indexer.getReferencingAttestations(dataUID, propertySchemaUID, 0, 10, false);
+      const keyAnchor = await indexer.resolveAnchor(dataUID, "contentType", propertySchemaUID);
+      expect(keyAnchor).to.not.equal(ZERO_BYTES32);
+      const props = await tagResolver.getActiveTargetsByAttesterAndSchema(
+        keyAnchor,
+        ownerAddr,
+        propertySchemaUID,
+        0,
+        10,
+      );
       expect(props.length).to.equal(1);
 
       const propAtt = await eas.getAttestation(props[0]);
-      const [key, val] = enc.decode(["string", "string"], propAtt.data);
-      expect(key).to.equal("contentType");
+      const [val] = enc.decode(["string"], propAtt.data);
       expect(val).to.equal("image/jpeg");
     });
 
     it("should store previousVersion as PROPERTY linking two DATAs", async function () {
+      const ownerAddr = await owner.getAddress();
       const v1Hash = hash("version 1 content");
       const v1 = await createData(v1Hash, 17n);
 
@@ -515,21 +571,48 @@ describe("EFS Data Model — E2E Integration", function () {
       // Attach previousVersion PROPERTY to v2 referencing v1
       await createProperty(v2, "previousVersion", v1);
 
-      const props = await indexer.getReferencingAttestations(v2, propertySchemaUID, 0, 10, false);
+      const keyAnchor = await indexer.resolveAnchor(v2, "previousVersion", propertySchemaUID);
+      expect(keyAnchor).to.not.equal(ZERO_BYTES32);
+      const props = await tagResolver.getActiveTargetsByAttesterAndSchema(
+        keyAnchor,
+        ownerAddr,
+        propertySchemaUID,
+        0,
+        10,
+      );
       expect(props.length).to.equal(1);
       const propAtt = await eas.getAttestation(props[0]);
-      const [key, prevVersion] = enc.decode(["string", "string"], propAtt.data);
-      expect(key).to.equal("previousVersion");
+      const [prevVersion] = enc.decode(["string"], propAtt.data);
       expect(prevVersion).to.equal(v1);
     });
 
     it("should allow multiple PROPERTYs on same DATA (contentType + description)", async function () {
+      const ownerAddr = await owner.getAddress();
       const dataUID = await createData(hash("multi prop"), 10n);
       await createProperty(dataUID, "contentType", "text/html");
       await createProperty(dataUID, "description", "A cool webpage");
 
-      const props = await indexer.getReferencingAttestations(dataUID, propertySchemaUID, 0, 10, false);
-      expect(props.length).to.equal(2);
+      const ctAnchor = await indexer.resolveAnchor(dataUID, "contentType", propertySchemaUID);
+      const descAnchor = await indexer.resolveAnchor(dataUID, "description", propertySchemaUID);
+      expect(ctAnchor).to.not.equal(ZERO_BYTES32);
+      expect(descAnchor).to.not.equal(ZERO_BYTES32);
+
+      const ctProps = await tagResolver.getActiveTargetsByAttesterAndSchema(
+        ctAnchor,
+        ownerAddr,
+        propertySchemaUID,
+        0,
+        10,
+      );
+      const descProps = await tagResolver.getActiveTargetsByAttesterAndSchema(
+        descAnchor,
+        ownerAddr,
+        propertySchemaUID,
+        0,
+        10,
+      );
+      expect(ctProps.length).to.equal(1);
+      expect(descProps.length).to.equal(1);
     });
   });
 
@@ -728,9 +811,11 @@ describe("EFS Data Model — E2E Integration", function () {
       const v1Att = await eas.getAttestation(v1.dataUID);
       expect(v1Att.uid).to.equal(v1.dataUID);
 
-      // Version chain is traversable via PROPERTY
-      const v2Props = await indexer.getReferencingAttestations(v2DataUID, propertySchemaUID, 0, 10, false);
-      expect(v2Props.length).to.equal(2); // contentType + previousVersion
+      // Version chain is traversable via PROPERTY (unified model — two key anchors)
+      const v2ContentTypeAnchor = await indexer.resolveAnchor(v2DataUID, "contentType", propertySchemaUID);
+      const v2PrevVersionAnchor = await indexer.resolveAnchor(v2DataUID, "previousVersion", propertySchemaUID);
+      expect(v2ContentTypeAnchor).to.not.equal(ZERO_BYTES32);
+      expect(v2PrevVersionAnchor).to.not.equal(ZERO_BYTES32);
     });
 
     it("should handle three-version chain", async function () {
@@ -1302,8 +1387,9 @@ describe("EFS Data Model — E2E Integration", function () {
 
     it("DATA with no PROPERTY is valid (no contentType)", async function () {
       const dataUID = await createData(hash("raw bytes"), 9n);
-      const props = await indexer.getReferencingAttestations(dataUID, propertySchemaUID, 0, 10, false);
-      expect(props.length).to.equal(0);
+      // No key anchor was ever created under this DATA
+      const keyAnchor = await indexer.resolveAnchor(dataUID, "contentType", propertySchemaUID);
+      expect(keyAnchor).to.equal(ZERO_BYTES32);
     });
 
     it("mirror from different attester on someone else's DATA", async function () {

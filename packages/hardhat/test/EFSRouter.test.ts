@@ -71,7 +71,7 @@ describe("EFSRouter Web3 Capabilities", function () {
     );
     propertySchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
-      ["string key, string value", futureIndexerAddr, true],
+      ["string value", futureIndexerAddr, false],
     );
     dataSchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
@@ -105,7 +105,7 @@ describe("EFSRouter Web3 Capabilities", function () {
 
     // Register schemas
     await (await registry.register("string name, bytes32 schemaUID", futureIndexerAddr, false)).wait();
-    await (await registry.register("string key, string value", futureIndexerAddr, true)).wait();
+    await (await registry.register("string value", futureIndexerAddr, false)).wait();
     await (await registry.register("bytes32 contentHash, uint64 size", futureIndexerAddr, false)).wait();
     await (await registry.register("bytes32 definition, bool applies", await tagResolver.getAddress(), true)).wait();
     await (
@@ -135,12 +135,13 @@ describe("EFSRouter Web3 Capabilities", function () {
       await registry.getAddress(),
     );
 
-    // Deploy Router (4 args: indexer, eas, tagResolver, dataSchemaUID)
+    // Deploy Router (5 args: indexer, eas, tagResolver, schemaRegistry, dataSchemaUID)
     const RouterFactory = await ethers.getContractFactory("EFSRouter");
     router = await RouterFactory.deploy(
       await indexer.getAddress(),
       await eas.getAddress(),
       await tagResolver.getAddress(),
+      await registry.getAddress(),
       dataSchemaUID,
     );
     await router.waitForDeployment();
@@ -281,22 +282,67 @@ describe("EFSRouter Web3 Capabilities", function () {
     );
   }
 
-  async function addProperty(dataUID: string, key: string, value: string, signer: Signer = owner): Promise<string> {
-    return getUID(
+  /**
+   * Attach a PROPERTY to a container using the unified free-floating model
+   * (ADR-0035): key anchor under the container, free-floating PROPERTY(value),
+   * and a TAG binding them. Returns the PROPERTY UID.
+   */
+  async function addProperty(
+    containerUID: string,
+    key: string,
+    value: string,
+    signer: Signer = owner,
+  ): Promise<string> {
+    let keyAnchorUID: string = await indexer.resolveAnchor(containerUID, key, propertySchemaUID);
+    if (keyAnchorUID === ZERO_BYTES32) {
+      keyAnchorUID = getUID(
+        await (
+          await eas.connect(signer).attest({
+            schema: anchorSchemaUID,
+            data: {
+              recipient: ZeroAddress,
+              expirationTime: NO_EXPIRATION,
+              revocable: false,
+              refUID: containerUID,
+              data: enc.encode(["string", "bytes32"], [key, propertySchemaUID]),
+              value: 0n,
+            },
+          })
+        ).wait(),
+      );
+    }
+
+    const propertyUID = getUID(
       await (
         await eas.connect(signer).attest({
           schema: propertySchemaUID,
           data: {
             recipient: ZeroAddress,
             expirationTime: NO_EXPIRATION,
-            revocable: true,
-            refUID: dataUID,
-            data: enc.encode(["string", "string"], [key, value]),
+            revocable: false,
+            refUID: ZERO_BYTES32,
+            data: enc.encode(["string"], [value]),
             value: 0n,
           },
         })
       ).wait(),
     );
+
+    await (
+      await eas.connect(signer).attest({
+        schema: tagSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: NO_EXPIRATION,
+          revocable: true,
+          refUID: propertyUID,
+          data: enc.encode(["bytes32", "bool"], [keyAnchorUID, true]),
+          value: 0n,
+        },
+      })
+    ).wait();
+
+    return propertyUID;
   }
 
   async function addMirror(
@@ -955,9 +1001,10 @@ describe("EFSRouter Web3 Capabilities", function () {
       expect(Buffer.from(ethers.getBytes(body)).toString()).to.equal("user2 file content");
     });
 
-    it("Should return application/octet-stream when the contentType PROPERTY is revoked", async function () {
-      // _getContentType skips revoked PROPERTY attestations (isRevoked check).
-      // When the only contentType prop is revoked, the default MIME type must be returned.
+    it("Should return application/octet-stream when the contentType PROPERTY binding is removed", async function () {
+      // Under the unified free-floating model (ADR-0035), PROPERTY values are
+      // non-revocable; removing a contentType binding means revoking the TAG
+      // that places the PROPERTY under the key anchor.
       const targetAddress = ethers.getAddress("0x00000000000000000000000000000000000000E0");
       await setCode(targetAddress, "0x00" + Buffer.from("no content type").toString("hex"));
 
@@ -967,15 +1014,17 @@ describe("EFSRouter Web3 Capabilities", function () {
       await addMirror(dataUID, onchainTransportUID, `web3://${targetAddress}`);
       await tagAtPath(dataUID, fileAnchorUID, true);
 
-      // Sanity: text/plain before revocation
+      // Sanity: text/plain before binding removal
       const [statusBefore, , headersBefore] = await router.request(["ideas", "revoked_ct.txt"], ownerParams());
       expect(statusBefore).to.equal(200);
       expect(headersBefore.find((h: any) => h.key === "Content-Type")?.value).to.equal("text/plain");
 
-      // Revoke the PROPERTY
-      await eas.revoke({ schema: propertySchemaUID, data: { uid: propUID, value: 0n } });
+      // Look up the TAG binding and revoke it — the PROPERTY itself stays immutable.
+      const ctKeyAnchor = await indexer.resolveAnchor(dataUID, "contentType", propertySchemaUID);
+      const ctTagUID = await tagResolver.getActiveTagUID(ownerAddr, propUID, ctKeyAnchor);
+      await eas.revoke({ schema: tagSchemaUID, data: { uid: ctTagUID, value: 0n } });
 
-      // After revocation: falls back to application/octet-stream
+      // After TAG revocation: no active PROPERTY, falls back to default.
       const [statusAfter, , headersAfter] = await router.request(["ideas", "revoked_ct.txt"], ownerParams());
       expect(statusAfter).to.equal(200);
       expect(headersAfter.find((h: any) => h.key === "Content-Type")?.value).to.equal("application/octet-stream");
@@ -1045,6 +1094,266 @@ describe("EFSRouter Web3 Capabilities", function () {
       const [statusCode, body] = await router.request(["ideas", "versioned.txt"], ownerParams());
       expect(statusCode).to.equal(200);
       expect(Buffer.from(ethers.getBytes(body)).toString()).to.equal("version 2");
+    });
+  });
+
+  // ADR-0033: top-level URL segment can be Address / Schema / Attestation / Anchor
+  describe("Container flavors (ADR-0033)", function () {
+    /** Create an anchor whose parent is an Ethereum address (refUID=0, recipient=addr). */
+    async function createAnchorUnderAddress(parentAddr: string, name: string, schema: string): Promise<string> {
+      return getUID(
+        await (
+          await eas.attest({
+            schema: anchorSchemaUID,
+            data: {
+              recipient: parentAddr,
+              expirationTime: NO_EXPIRATION,
+              revocable: false,
+              refUID: ZERO_BYTES32,
+              data: enc.encode(["string", "bytes32"], [name, schema]),
+              value: 0n,
+            },
+          })
+        ).wait(),
+      );
+    }
+
+    /** Create an anchor whose parent is an arbitrary bytes32 (schema UID, attestation UID, etc). */
+    async function createAnchorUnderBytes32(parentUID: string, name: string, schema: string): Promise<string> {
+      return getUID(
+        await (
+          await eas.attest({
+            schema: anchorSchemaUID,
+            data: {
+              recipient: ZeroAddress,
+              expirationTime: NO_EXPIRATION,
+              revocable: false,
+              refUID: parentUID,
+              data: enc.encode(["string", "bytes32"], [name, schema]),
+              value: 0n,
+            },
+          })
+        ).wait(),
+      );
+    }
+
+    it("Should resolve a file under an address container (/0x…/memes/cat.jpg)", async function () {
+      const memesAnchor = await createAnchorUnderAddress(ownerAddr, "memes", ZERO_BYTES32);
+      const catAnchor = await createAnchorUnderBytes32(memesAnchor, "cat.jpg", dataSchemaUID);
+
+      const targetAddr = ethers.getAddress("0x00000000000000000000000000000000000000D0");
+      await uploadOnchain("cat picture", "image/jpeg", targetAddr, catAnchor);
+
+      const [statusCode, body, headers] = await router.request([ownerAddr, "memes", "cat.jpg"], ownerParams());
+      expect(statusCode).to.equal(200);
+      expect(Buffer.from(ethers.getBytes(body)).toString()).to.equal("cat picture");
+      const ct = headers.find((h: any) => h.key === "Content-Type");
+      expect(ct?.value).to.equal("image/jpeg");
+    });
+
+    it("Should 404 for an address container with no anchors underneath", async function () {
+      const emptyAddr = "0x00000000000000000000000000000000DeaDBeef";
+      const [statusCode] = await router.request([emptyAddr, "missing"], ownerParams());
+      expect(statusCode).to.equal(404);
+    });
+
+    it("Should default editions to [caller, addr] when browsing an address with no ?editions=", async function () {
+      // User1 attests a DATA at `/ownerAddr/onlyuser1.txt` — but queries come from owner (caller).
+      // With `[caller, addr]` default, owner sees the file because user1's TAG falls back to addr side.
+      // Wait — actually default is [caller, segmentAddr]. Here caller=owner, segmentAddr=ownerAddr (same).
+      // Use a different segmentAddr with content attested by that address (user1).
+      const segAddr = await _user1.getAddress();
+      const fileAnchor = await createAnchorUnderAddress(segAddr, "hello.txt", dataSchemaUID);
+
+      const codeAddr = ethers.getAddress("0x00000000000000000000000000000000000000E0");
+      await setCode(codeAddr, "0x00" + Buffer.from("hi from user1").toString("hex"));
+
+      // user1 creates DATA + mirror + tag, NOT owner.
+      const dataUID = await createData("hi from user1", _user1);
+      await addProperty(dataUID, "contentType", "text/plain", _user1);
+      await addMirror(dataUID, onchainTransportUID, `web3://${codeAddr}`, _user1);
+      await tagAtPath(dataUID, fileAnchor, true, _user1);
+
+      // No ?editions= passed — router should auto-default to [caller, segAddr].
+      // caller comes from msg.sender (owner calling via ethers), but eth_call from owner sets msg.sender=owner.
+      // The fallback [caller, segAddr] will try owner first (no match), then segAddr (=user1, match).
+      const [statusCode, body] = await router.request([segAddr, "hello.txt"], []);
+      expect(statusCode).to.equal(200);
+      expect(Buffer.from(ethers.getBytes(body)).toString()).to.equal("hi from user1");
+    });
+
+    it("Should explicit ?editions= override address-default", async function () {
+      const segAddr = await _user1.getAddress();
+      const fileAnchor = await createAnchorUnderAddress(segAddr, "onlyuser1.txt", dataSchemaUID);
+
+      const codeAddr = ethers.getAddress("0x00000000000000000000000000000000000000E1");
+      await setCode(codeAddr, "0x00" + Buffer.from("from user1").toString("hex"));
+      const dataUID = await createData("from user1", _user1);
+      await addProperty(dataUID, "contentType", "text/plain", _user1);
+      await addMirror(dataUID, onchainTransportUID, `web3://${codeAddr}`, _user1);
+      await tagAtPath(dataUID, fileAnchor, true, _user1);
+
+      // Explicit editions=owner (no match) should 404 — the default-[caller, segAddr] doesn't apply.
+      const [statusCode] = await router.request([segAddr, "onlyuser1.txt"], [{ key: "editions", value: ownerAddr }]);
+      expect(statusCode).to.equal(404);
+    });
+
+    it("Should return 200 / application/json for a bare schema container UID", async function () {
+      const [statusCode, body, headers] = await router.request([dataSchemaUID], []);
+      expect(statusCode).to.equal(200);
+      const ct = headers.find((h: any) => h.key === "Content-Type");
+      expect(ct?.value).to.equal("application/json");
+      const json = JSON.parse(Buffer.from(ethers.getBytes(body)).toString());
+      expect(json.uid.toLowerCase()).to.equal(dataSchemaUID.toLowerCase());
+      expect(json.schema).to.equal("bytes32 contentHash, uint64 size");
+      expect(json.revocable).to.equal(false);
+    });
+
+    it("Should return 200 / application/json for a bare attestation container UID", async function () {
+      // rootUID is an anchor attestation — use it as the attestation UID to resolve.
+      // Classification: schemaRegistry miss (it's an attestation, not a schema), EAS hit → Attestation flavor.
+      const [statusCode, body, headers] = await router.request([rootUID], []);
+      expect(statusCode).to.equal(200);
+      const ct = headers.find((h: any) => h.key === "Content-Type");
+      expect(ct?.value).to.equal("application/json");
+      const json = JSON.parse(Buffer.from(ethers.getBytes(body)).toString());
+      expect(json.uid.toLowerCase()).to.equal(rootUID.toLowerCase());
+      expect(json.schema.toLowerCase()).to.equal(anchorSchemaUID.toLowerCase());
+      expect(json.attester.toLowerCase()).to.equal(ownerAddr.toLowerCase());
+    });
+
+    it("Should serve a DATA tagged directly at a schema UID (no anchor in path)", async function () {
+      // Schema sub-anchors can't exist (EAS rejects refUID=schemaUID since it's not an attestation),
+      // but a TAG can place a DATA directly at a schema UID via definition=schemaUID. The router's
+      // _findDataAtPath calls tagResolver.getActiveTargetsByAttesterAndSchema(targetAnchor=schemaUID)
+      // which resolves the TAG and returns the DATA. This is how files "live at" a schema container.
+      const codeAddr = ethers.getAddress("0x00000000000000000000000000000000000000F0");
+      await setCode(codeAddr, "0x00" + Buffer.from("tagged at schema").toString("hex"));
+
+      const dataUID = await createData("tagged at schema");
+      await addProperty(dataUID, "contentType", "text/plain");
+      await addMirror(dataUID, onchainTransportUID, `web3://${codeAddr}`);
+      // Place DATA directly at the schema UID via TAG (definition = schemaUID).
+      await tagAtPath(dataUID, dataSchemaUID, true);
+
+      const [statusCode, body] = await router.request([dataSchemaUID], ownerParams());
+      expect(statusCode).to.equal(200);
+      expect(Buffer.from(ethers.getBytes(body)).toString()).to.equal("tagged at schema");
+    });
+
+    it("Should 404 for sub-paths under a bare schema UID (EAS blocks refUID=schemaUID)", async function () {
+      // Creating an anchor with refUID=schemaUID reverts in EAS (NotFound — refUID must be a
+      // valid attestation UID, and schemas are separate from attestations). The UI uses
+      // /schemas/<name>/ alias anchors instead, which have a real anchor parent.
+      const [statusCode] = await router.request([dataSchemaUID, "nonexistent"], []);
+      expect(statusCode).to.equal(404);
+    });
+
+    it("Should resolve a file under an attestation container (/attUID/foo)", async function () {
+      // ideasUID is an attestation (an anchor); create a sub-anchor under it via refUID.
+      const fooAnchor = await createAnchorUnderBytes32(ideasUID, "attfoo.txt", dataSchemaUID);
+
+      // Wait — ideasUID is already an anchor whose parent is root. The sub-anchor would be a
+      // duplicate registration collision at _nameToAnchor[ideasUID]["attfoo.txt"][dataSchemaUID].
+      // Use a different sub-name unique to this test.
+      // (The above already uses "attfoo.txt" — fine, it's unique.)
+
+      const codeAddr = ethers.getAddress("0x00000000000000000000000000000000000000F1");
+      await uploadOnchain("attestation-scoped file", "text/plain", codeAddr, fooAnchor);
+
+      // Classification: bytes32 → schema miss → EAS hit → Attestation flavor.
+      const [statusCode, body] = await router.request([ideasUID, "attfoo.txt"], ownerParams());
+      expect(statusCode).to.equal(200);
+      expect(Buffer.from(ethers.getBytes(body)).toString()).to.equal("attestation-scoped file");
+    });
+
+    it("Should preserve anchor-name resolution (regression: /ideas/file still works)", async function () {
+      const fileAnchor = await createFileAnchor(ideasUID, "regression.txt");
+      const codeAddr = ethers.getAddress("0x00000000000000000000000000000000000000F2");
+      await uploadOnchain("anchor-name regression", "text/plain", codeAddr, fileAnchor);
+
+      const [statusCode, body] = await router.request(["ideas", "regression.txt"], ownerParams());
+      expect(statusCode).to.equal(200);
+      expect(Buffer.from(ethers.getBytes(body)).toString()).to.equal("anchor-name regression");
+    });
+
+    it("Should 404 without reverting on malformed top-level segments", async function () {
+      // 63 hex chars (one short of bytes32) — classifies as Anchor (name), resolvePath misses.
+      const short63 = "0x" + "a".repeat(63);
+      const [statusCode1] = await router.request([short63], []);
+      expect(statusCode1).to.equal(404);
+
+      // 39 hex chars (one short of address) — classifies as Anchor (name), resolvePath misses.
+      const short39 = "0x" + "b".repeat(39);
+      const [statusCode2] = await router.request([short39], []);
+      expect(statusCode2).to.equal(404);
+
+      // Contains non-hex chars at position expected to be hex — classifies as Anchor.
+      const nonhex = "0xZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ";
+      const [statusCode3] = await router.request([nonhex], []);
+      expect(statusCode3).to.equal(404);
+    });
+
+    // ADR-0033 §2: schema & attestation URLs prefer the alias anchor at root
+    // (name = UID in lowercase 0x-hex) over the raw UID for directory walks.
+    describe("Alias anchors (ADR-0033 §2)", function () {
+      it("Should walk via the alias anchor when /<schemaUID>/sub exists under the alias", async function () {
+        // Seed an alias anchor at root whose NAME is the schema UID (lowercase hex).
+        const aliasName = dataSchemaUID.toLowerCase();
+        const aliasUID = await createFolder(rootUID, aliasName);
+        // Place a sub-anchor under the alias and a file under that.
+        const subAnchor = await createFolder(aliasUID, "notes");
+        const fileAnchor = await createFileAnchor(subAnchor, "a.txt");
+
+        const codeAddr = ethers.getAddress("0x0000000000000000000000000000000000000A01");
+        await uploadOnchain("alias walk", "text/plain", codeAddr, fileAnchor);
+
+        const [statusCode, body] = await router.request([dataSchemaUID, "notes", "a.txt"], ownerParams());
+        expect(statusCode).to.equal(200);
+        expect(Buffer.from(ethers.getBytes(body)).toString()).to.equal("alias walk");
+      });
+
+      it("Should match alias anchor when URL uses uppercase hex for the UID", async function () {
+        // Store alias in canonical lowercase form.
+        const aliasName = dataSchemaUID.toLowerCase();
+        const aliasUID = await createFolder(rootUID, aliasName);
+        const fileAnchor = await createFileAnchor(aliasUID, "u.txt");
+
+        const codeAddr = ethers.getAddress("0x0000000000000000000000000000000000000A02");
+        await uploadOnchain("case-insensitive", "text/plain", codeAddr, fileAnchor);
+
+        // User types uppercase variant — router must lowercase before name lookup.
+        const upper = "0x" + dataSchemaUID.slice(2).toUpperCase();
+        const [statusCode, body] = await router.request([upper, "u.txt"], ownerParams());
+        expect(statusCode).to.equal(200);
+        expect(Buffer.from(ethers.getBytes(body)).toString()).to.equal("case-insensitive");
+      });
+
+      it("Should fall through to raw-info JSON at /<schemaUID> when alias has no DATA", async function () {
+        // Alias anchor exists but no TAG/DATA under it. Router still returns raw schema JSON.
+        const aliasName = dataSchemaUID.toLowerCase();
+        await createFolder(rootUID, aliasName);
+
+        const [statusCode, , headers] = await router.request([dataSchemaUID], []);
+        expect(statusCode).to.equal(200);
+        const ct = headers.find((h: any) => h.key === "Content-Type");
+        expect(ct?.value).to.equal("application/json");
+      });
+
+      it("Should serve DATA tagged at the alias anchor itself (`/<schemaUID>` single-segment)", async function () {
+        const aliasName = dataSchemaUID.toLowerCase();
+        const aliasUID = await createFolder(rootUID, aliasName);
+
+        const codeAddr = ethers.getAddress("0x0000000000000000000000000000000000000A03");
+        await uploadOnchain("alias root data", "text/plain", codeAddr, aliasUID);
+
+        // Single-segment URL hits the alias directly — TAG at alias resolves, no JSON fallback.
+        const [statusCode, body, headers] = await router.request([dataSchemaUID], ownerParams());
+        expect(statusCode).to.equal(200);
+        const ct = headers.find((h: any) => h.key === "Content-Type");
+        expect(ct?.value).to.equal("text/plain");
+        expect(Buffer.from(ethers.getBytes(body)).toString()).to.equal("alias root data");
+      });
     });
   });
 });

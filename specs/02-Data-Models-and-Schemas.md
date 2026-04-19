@@ -19,13 +19,55 @@ Files are placed at paths via TAGs, not by direct `refUID` linking. This decoupl
 **Details**: An Anchor represents a name (like a folder name or a file name) within a specific context. It references (is a child of) an attestation in its EAS `refUID` field. Other attestations reference these Anchors in their `refUID` fields when they need to be associated with that specific name. Names are considered unique within their direct hierarchy level relative to the parent entity.
 
 ## 2. Property Schema
-**Purpose**: Key-value metadata attached to Anchors or DATA attestations.
+**Purpose**: Free-floating value attached to a container via TAG placement under a *key anchor*. Symmetric with DATA (see §3) — both are standalone values placed via TAG, not via `refUID`.
 **Structure**:
-`refUID = Anchor UID or DATA UID`
-- `key` (string) — e.g. `"contentType"`, `"previousVersion"`, `"description"`, `"icon"`
+`refUID = 0x0 (standalone — no parent reference)`
 - `value` (string)
 
-**Details**: A Property must reference either a PROPERTY-typed Anchor (for named settings on folders) or a DATA attestation (for file metadata). Common uses on DATA: `contentType` (MIME type like `image/jpeg`), `previousVersion` (DATA UID of the prior version), `description`. Singleton by convention — the newest Property from a given attester for a given key is the active one.
+**Revocable**: `false` — PROPERTY is permanent, like DATA. The *binding* (which container the value applies to, from which attester) lives in the TAG and is the only thing that can move.
+
+**Details**: Per ADR-0035, PROPERTY no longer carries a `key` field and no longer targets a container via `refUID`. Instead:
+
+1. The **key** is the `name` of a PROPERTY-typed anchor (`schemaUID = PROPERTY_SCHEMA_UID`) under the target container.
+2. The **value** is the PROPERTY attestation's sole field.
+3. The **binding** is a TAG with `definition = keyAnchorUID`, `refUID = propertyUID`, `applies = true`.
+
+`EFSIndexer.onAttest` enforces only that PROPERTY is standalone (`refUID = 0x0`) and non-revocable — no target-kind validation. Per-attester singleton comes from `TagResolver._activeByAAS[keyAnchor][attester][PROPERTY_SCHEMA_UID]` — re-TAGging the same key anchor from the same attester supersedes the previous binding (ADR-0003). Reads are edition-scoped per ADR-0014.
+
+### Example — contentType on a DATA
+
+```
+DATA(contentHash = …, size = 42)                            // free-floating content identity
+  ↑ refUID
+Anchor<PROPERTY>(name = "contentType", schemaUID = PROPERTY) // key anchor under the DATA
+  ↑ definition
+TAG(refUID = propertyUID, applies = true, attester = alice)  // binding
+  ↓
+PROPERTY(value = "image/jpeg")                               // free-floating value
+```
+
+### Example — display name on an address
+
+For address containers the key anchor is created with `recipient = addr` instead of `refUID` (specs/02 §1 permits this; ADR-0033 relies on it):
+
+```
+Anchor<PROPERTY>(recipient = 0xAbC…, name = "name", schemaUID = PROPERTY)
+  ↑ definition
+TAG(refUID = propertyUID, applies = true, attester = alice)
+  ↓
+PROPERTY(value = "Vitalik Buterin")
+```
+
+### Reserved key anchors
+
+- `"contentType"` — MIME type of a DATA (see ADR-0005 / superseded by ADR-0035).
+- `"name"` — human-readable display name for any container (see ADR-0034). Clients render the hierarchy `ENS reverse-lookup (addresses only) → "name" key anchor resolved via TAG + PROPERTY scoped to the active editions → short-hex fallback`.
+
+Other common (non-reserved) key anchors: `"previousVersion"` (value is a DATA UID of the prior version), `"description"`, `"icon"`.
+
+### Removal
+
+Revoke the TAG, or attest a new TAG with the same `(attester, definition, target)` and `applies=false`. Revocation of the PROPERTY itself is not supported (non-revocable).
 
 ## 3. Data Schema
 **Purpose**: Standalone file identity — content-addressed, non-revocable, location-independent.
@@ -70,9 +112,10 @@ The transport preference order for serving is: `web3://` (onchain) > `ar://` > `
 - `definition` (bytes32) - The Anchor UID that defines the label/location of the tag. For file placement, this is the path Anchor (e.g., the UID of the `cat.jpg` Anchor under `/memes/`). For labeling, this points to a tag definition Anchor (e.g., `/tags/nsfw`). By forcing tags to reference an Anchor UID (rather than a raw string), the tag namespace remains hierarchical, collision-resistant, and indexable.
 - `applies` (bool) - `true` means the tag is active and applies to the target. `false` means the tag is explicitly negated or removed.
 
-**Details**: Tags serve two primary roles:
+**Details**: Tags serve three primary roles:
 1. **File placement**: `TAG(refUID=DATA_UID, definition=path_Anchor, applies=true)` — places a DATA at a path. This is how files appear in directories. The definition is the Anchor UID of the file's name within its parent folder.
 2. **Labeling**: `TAG(refUID=DATA_UID, definition=label_Anchor, applies=true)` — applies a label like "nsfw" or "favorites" to a DATA. The definition is an Anchor under `/tags/`.
+3. **Folder visibility** (ADR-0006 revised 2026-04-18): `TAG(refUID=folder_Anchor, definition=schema_UID, applies=true)` — declares "this folder contains content of `schema_UID` type in my edition." Required for the folder to appear in `getDirectoryPageBySchemaAndAddressList(parent, schema_UID, ...)` results. The client upload flow walks the ancestor chain on every file upload and emits this TAG at every generic ancestor the attester hasn't already claimed.
 
 Tags create a graph layer that overlays the strict tree-like directory structure. A single DATA can be tagged into many paths and with many labels without duplication, enabling many-to-many relationships.
 
@@ -122,8 +165,8 @@ See [Lists and Collections](./06-Lists-and-Collections.md) for the full architec
 To represent a standard filesystem interaction where a file has a name within a folder:
 1. **Parent Folder** (e.g., Anchor "memes") →
 2. **File Anchor** (name: "vitalik.jpg", `refUID` points to Parent Folder) →
-3. **DATA** (standalone, `refUID = 0x0`, holds `contentHash` and `size`) — placed at the Anchor via TAG
-4. **PROPERTY** (`refUID` = DATA UID, `key = "contentType"`, `value = "image/jpeg"`) — metadata on the DATA
-5. **MIRROR** (`refUID` = DATA UID, `transportDefinition = /transports/onchain`, `uri = web3://0xABC`) — retrieval method
+3. **DATA** (standalone, `refUID = 0x0`, holds `contentHash` and `size`) — placed at the file Anchor via a TAG.
+4. **contentType key anchor + PROPERTY + TAG** (ADR-0035): `Anchor<PROPERTY>(refUID=DATA UID, name="contentType")` + `PROPERTY(value="image/jpeg")` + `TAG(definition=that anchor, refUID=that property)`.
+5. **MIRROR** (`refUID` = DATA UID, `transportDefinition = /transports/onchain`, `uri = web3://0xABC`) — retrieval method.
 
-All of steps 3–5 are typically batched into a single `multiAttest` transaction for atomicity.
+All of steps 3–5 are typically batched into a single `multiAttest` transaction for atomicity. The PROPERTY placement in step 4 is itself three attestations (anchor + property + tag) but all fit in the same batch.

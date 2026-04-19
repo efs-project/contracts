@@ -31,7 +31,9 @@ If your task fits one of these categories, load the listed ADRs *before* writing
 | Schema field change (ANCHOR, DATA, MIRROR, TAG, PROPERTY, SORT_INFO) | ADR-0005, ADR-0030, ADR-0032, `specs/02-Data-Models-and-Schemas.md` |
 | New transport type or priority change | ADR-0011, ADR-0012, ADR-0023, `specs/02` §Mirror |
 | Kernel index / indexing logic (EFSIndexer) | ADR-0007, ADR-0008, ADR-0009, ADR-0010, ADR-0021, `specs/03-Onchain-Indexing-Strategy.md` |
-| Editions / router resolution | ADR-0013, ADR-0014, ADR-0016, ADR-0017, ADR-0020, ADR-0031, `specs/04-Core-Workflows.md` |
+| Editions / router resolution | ADR-0013, ADR-0014, ADR-0016, ADR-0017, ADR-0020, ADR-0031, ADR-0033, `specs/04-Core-Workflows.md` |
+| Root URL classification / schema alias anchors | ADR-0033, ADR-0019, ADR-0025 |
+| Display-name / address-label rendering | ADR-0014, ADR-0034, `specs/02` §Property |
 | Security limits (MAX_*) | ADR-0021 through ADR-0026 |
 | Deploy / wiring / contract addresses | ADR-0027, ADR-0028, ADR-0030 |
 | Sort overlay | ADR-0011 (transports pattern analog), `specs/07-Sort-Overlay-Architecture.md` |
@@ -46,6 +48,34 @@ yarn start    # Terminal 3 — Next.js debug UI at http://localhost:3000
 ```
 
 Click the cash/faucet icon (top right of UI) to fund the burner wallet — attestations need gas.
+
+### Running alongside another project (parallel agents / worktrees)
+
+The default ports are `8545` (hardhat RPC) and `3000` (Next.js). When another agent or
+worktree is already bound to them, pick free ports and wire them through two env vars.
+**Nothing else changes** — yarn forwards trailing args to the underlying scripts, so
+`--port` / `-p` flags flow through unchanged.
+
+```bash
+# Terminal 1 — second hardhat node on 8546
+yarn fork --port 8546
+
+# Terminal 2 — deploy against it
+#   LOCALHOST_RPC_URL retargets hardhat's `localhost` network (deploy/simulate/seed)
+LOCALHOST_RPC_URL=http://127.0.0.1:8546 yarn deploy
+
+# Terminal 3 — Next.js on 3001, pointed at the same node
+#   NEXT_PUBLIC_HARDHAT_RPC_URL retargets wagmi's hardhat transport
+NEXT_PUBLIC_HARDHAT_RPC_URL=http://127.0.0.1:8546 yarn start -p 3001
+```
+
+Or (preferred for long-running agents) set them once in `packages/hardhat/.env` and
+`packages/nextjs/.env.local` — templates in the matching `.env.example` files. Leaving
+the vars unset keeps the original `127.0.0.1:8545` / `:3000` behavior.
+
+The two vars are **independent**: `LOCALHOST_RPC_URL` governs hardhat CLI (`yarn deploy`,
+`yarn simulate*`, `yarn seed`); `NEXT_PUBLIC_HARDHAT_RPC_URL` governs the in-browser
+wagmi client. Set both to the same URL when running end-to-end.
 
 **Smoke test**: navigate to `http://localhost:3000/debug/schemas`, submit a test TAG attestation via the Tag Schema form, and confirm it appears in the Attestation Viewer below. This verifies EAS is reachable, schemas are registered, and the resolver chain is wired correctly.
 

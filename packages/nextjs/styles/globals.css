@@ -204,7 +204,9 @@ p {
 [data-theme="dark"] main,
 [data-theme="dark"] main > div.flex.flex-col,
 [data-theme="dark"]
-  .bg-base-100:not(.card):not(.terminal-panel):not(.modal-box):not(.navbar):not(.rounded-3xl):not(.btn) {
+  .bg-base-100:not(.card):not(.terminal-panel):not(.modal-box):not(.navbar):not(.rounded-3xl):not(.btn):not(
+    .dropdown-content
+  ):not(.preview-pane) {
   background-color: transparent !important;
   background-image: none !important;
   backdrop-filter: none !important;

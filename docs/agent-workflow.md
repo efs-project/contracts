@@ -22,7 +22,7 @@ Triggers:
 Concrete examples (Tier 1 stops):
 - *"Add a field to the DATA schema"* — schema UIDs are immutable; adding a field creates a new schema on mainnet.
 - *"Add a transport type tor:// below https://"* — contradicts ADR-0012's accepted priority list; requires supersession, not edit.
-- *"Backfill the missing entries in `_qualifyingFolders`"* — writes to an append-only index (ADR-0009). No "small fix" is allowed here.
+- *"Backfill the missing entries in `_children` / `_childrenBySchema`"* — writes to an append-only index (ADR-0009). No "small fix" is allowed here.
 
 ### Tier 2 — ASK BEFORE NEXT COMMIT (semi-blocking, default for ambiguity)
 

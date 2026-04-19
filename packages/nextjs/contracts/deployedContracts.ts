@@ -7,7 +7,7 @@ import { GenericContractsDeclaration } from "~~/utils/scaffold-eth/contract";
 const deployedContracts = {
   31337: {
     EFSFileView: {
-      address: "0xEa0B6907ef230Ed392C5bEE9Bb67e733259AF204",
+      address: "0xC3a4c84270B4D3D282192F10b64a474c25A92cCe",
       abi: [
         {
           inputs: [
@@ -551,7 +551,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     EFSRouter: {
-      address: "0x712e6074297917e8570f8Bf5F9744632Ec4318DD",
+      address: "0x7BA0Ced2d18EDb582a89A88610c34DAE070a9917",
       abi: [
         {
           inputs: [
@@ -568,6 +568,11 @@ const deployedContracts = {
             {
               internalType: "address",
               name: "_tagResolver",
+              type: "address",
+            },
+            {
+              internalType: "address",
+              name: "_schemaRegistry",
               type: "address",
             },
             {
@@ -691,6 +696,19 @@ const deployedContracts = {
         },
         {
           inputs: [],
+          name: "schemaRegistry",
+          outputs: [
+            {
+              internalType: "contract ISchemaRegistry",
+              name: "",
+              type: "address",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [],
           name: "tagResolver",
           outputs: [
             {
@@ -706,7 +724,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     EFSSortOverlay: {
-      address: "0xe47245ED46985a2B0E60B24b9b5d699d9A7c3452",
+      address: "0x18367Cb6b11F34CFa2220768CC1BBe097E8E38aa",
       abi: [
         {
           inputs: [
@@ -1685,7 +1703,7 @@ const deployedContracts = {
       },
     },
     Indexer: {
-      address: "0xB123539Caf9B686A2E1D2960aD1C5F8F81d9f369",
+      address: "0x77D6f7F6199bA856ea5Ba5aBcb60262b1Ff432C7",
       abi: [
         {
           inputs: [
@@ -1741,6 +1759,11 @@ const deployedContracts = {
         {
           inputs: [],
           name: "InsufficientValue",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "InvalidAnchorName",
           type: "error",
         },
         {
@@ -1906,12 +1929,6 @@ const deployedContracts = {
         {
           anonymous: false,
           inputs: [
-            {
-              indexed: true,
-              internalType: "bytes32",
-              name: "anchorUID",
-              type: "bytes32",
-            },
             {
               indexed: true,
               internalType: "bytes32",
@@ -2127,6 +2144,24 @@ const deployedContracts = {
             },
           ],
           stateMutability: "payable",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "anchorUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+          ],
+          name: "clearContains",
+          outputs: [],
+          stateMutability: "nonpayable",
           type: "function",
         },
         {
@@ -3793,7 +3828,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     MirrorResolver: {
-      address: "0x834014652E8CF137e3702B62fBb01D55BB392006",
+      address: "0xab20A78A6Baf3FD22153F46FeB470a24b713cAEa",
       abi: [
         {
           inputs: [
@@ -3843,8 +3878,31 @@ const deployedContracts = {
         },
         {
           inputs: [],
+          name: "InvalidURIScheme",
+          type: "error",
+        },
+        {
+          inputs: [],
           name: "NotPayable",
           type: "error",
+        },
+        {
+          inputs: [],
+          name: "URITooLong",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "MAX_URI_LENGTH",
+          outputs: [
+            {
+              internalType: "uint256",
+              name: "",
+              type: "uint256",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
         },
         {
           inputs: [
@@ -4167,6 +4225,32 @@ const deployedContracts = {
           type: "function",
         },
         {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "uid",
+              type: "bytes32",
+            },
+          ],
+          name: "setTransportsAnchor",
+          outputs: [],
+          stateMutability: "nonpayable",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "transportsAnchorUID",
+          outputs: [
+            {
+              internalType: "bytes32",
+              name: "",
+              type: "bytes32",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
           inputs: [],
           name: "version",
           outputs: [
@@ -4200,7 +4284,7 @@ const deployedContracts = {
       },
     },
     NameSort: {
-      address: "0x33658305185fD06148F36346A70aDAc0728D5760",
+      address: "0xe9e0e645C145E9d99246aB522AFF724F31F95E00",
       abi: [
         {
           inputs: [
@@ -4286,7 +4370,7 @@ const deployedContracts = {
       },
     },
     SchemaNameIndex: {
-      address: "0x663E3D9828557530873A1b2f727c6A0CFA1F62F4",
+      address: "0x2a88C3373cD7D7CAc90420515614d5C43777A00c",
       abi: [
         {
           inputs: [
@@ -4391,7 +4475,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     TagResolver: {
-      address: "0x12b3898249687816ff5faABBA3cA844F3f9f138C",
+      address: "0x46F3C7dc5cA2a76e04860411A62f3daCc33fF8ae",
       abi: [
         {
           inputs: [
@@ -5143,7 +5227,7 @@ const deployedContracts = {
       },
     },
     TimestampSort: {
-      address: "0x40CEAaCffDf75ef85dF680DCc1734B39A20400dD",
+      address: "0xdAC7424d00eA6Fc56069f548049884E0b31316FD",
       abi: [
         {
           inputs: [

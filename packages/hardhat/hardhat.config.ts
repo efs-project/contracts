@@ -74,7 +74,10 @@ const config: HardhatUserConfig = {
       // },
     },
     localhost: {
-      url: "http://127.0.0.1:8545",
+      // Override via LOCALHOST_RPC_URL when running multiple chains concurrently (e.g. a
+      // second agent on port 8546). Keeps `yarn deploy` / `yarn simulate` pointed at the
+      // right node without editing this file. See AGENTS.md → "Running alongside another project".
+      url: process.env.LOCALHOST_RPC_URL ?? "http://127.0.0.1:8545",
       gasPrice: 2_000_000_000, // 2 gwei — comfortably above any forked baseFee
     },
     mainnet: {

@@ -59,18 +59,6 @@ interface IEFSIndexer {
     ) external view returns (bytes32[] memory results, uint256 nextCursor);
     function getChildrenCount(bytes32 anchorUID) external view returns (uint256);
     function getChildCountBySchema(bytes32 parentAnchor, bytes32 schema) external view returns (uint256);
-    function getQualifyingFolders(
-        bytes32 parentUID,
-        bytes32 contentSchema,
-        address attester,
-        uint256 start,
-        uint256 length
-    ) external view returns (bytes32[] memory);
-    function getQualifyingFolderCount(
-        bytes32 parentUID,
-        bytes32 contentSchema,
-        address attester
-    ) external view returns (uint256);
     function getReferencingAttestationCount(bytes32 targetUID, bytes32 schemaUID) external view returns (uint256);
     function containsAttestations(bytes32 targetUID, address attester) external view returns (bool);
     function isRevoked(bytes32 uid) external view returns (bool);
@@ -227,83 +215,41 @@ contract EFSFileView {
 
     /**
      * @dev Fetch generic folders (anchorSchema == 0) under parentAnchor that qualify for
-     *      schema-aware inclusion: either they contain children of the target schema OR
-     *      they've been tagged with it by a trusted attester (empty folder visibility).
-     *      Bounded by TagResolver's _childrenTaggedWith + Indexer's _childrenBySchema.
+     *      schema-aware inclusion. Single-source model (ADR-0006 revised, 2026-04-18):
+     *      a folder is visible in an edition iff at least one edition attester has an
+     *      active applies=true TAG on it with definition=anchorSchema.
+     *
+     *      Contrast with the prior dual-source model (write-time _qualifyingFolders index +
+     *      TAG): the write-time index was sticky on revocation and produced ghost folders
+     *      after delete. This single-source query matches the attester's actual intent —
+     *      revoke the TAG, folder leaves the edition.
+     *
+     *      Bounded by TagResolver._childrenTaggedWith.
      */
     function _getQualifyingTaggedFolders(
         bytes32 parentAnchor,
         bytes32 anchorSchema,
         address[] memory attesters
     ) internal view returns (bytes32[] memory) {
-        // Two sources of qualifying generic subfolders:
-        //
-        // A) Write-time index — EFSIndexer._qualifyingFolders[parent][schema][attester].
-        //    Populated at O(1) amortised cost when a file anchor (anchorSchema != 0) is first
-        //    placed inside a generic folder by a given attester. Read is O(m_qualifying) with
-        //    no scan of non-qualifying folders — scales to any directory size.
-        //
-        // B) Explicit tag index — tagResolver._childrenTaggedWith[parent][schema].
-        //    Covers empty folders the attester created but has not yet uploaded content into.
-        //    Populated when a TAG(definition=anchorSchema, refUID=folder) is attested.
-
-        // Upper bound on result size: sum of qualifying counts across all attesters for both sources.
-        uint256 MAX_TAGGED_FOLDERS = 1000;
-        uint256 maxSize = 0;
-        for (uint256 a = 0; a < attesters.length; a++) {
-            maxSize += indexer.getQualifyingFolderCount(parentAnchor, anchorSchema, attesters[a]);
-        }
         // Cap before using as allocation bound — an uncapped count could exhaust call gas/memory
         // before the safety limit is enforced later.
+        uint256 MAX_TAGGED_FOLDERS = 1000;
         uint256 taggedTotal = tagResolver.getChildrenTaggedWithCount(parentAnchor, anchorSchema);
         if (taggedTotal > MAX_TAGGED_FOLDERS) taggedTotal = MAX_TAGGED_FOLDERS;
-        maxSize += taggedTotal;
 
-        if (maxSize == 0) return new bytes32[](0);
+        if (taggedTotal == 0) return new bytes32[](0);
 
-        bytes32[] memory temp = new bytes32[](maxSize);
+        bytes32[] memory temp = new bytes32[](taggedTotal);
         uint256 count = 0;
 
-        // Source A: qualifying folders from the write-time index, one attester at a time.
-        for (uint256 a = 0; a < attesters.length; a++) {
-            uint256 n = indexer.getQualifyingFolderCount(parentAnchor, anchorSchema, attesters[a]);
-            if (n == 0) continue;
-            bytes32[] memory folders = indexer.getQualifyingFolders(parentAnchor, anchorSchema, attesters[a], 0, n);
-            for (uint256 i = 0; i < folders.length; i++) {
-                bytes32 uid = folders[i];
-                if (indexer.isRevoked(uid)) continue;
-                // Dedup across attesters (inner loop — typically n_attesters is small)
-                bool seen = false;
-                for (uint256 k = 0; k < count; k++) {
-                    if (temp[k] == uid) { seen = true; break; }
-                }
-                if (!seen) temp[count++] = uid;
-            }
-        }
-
-        // Source B: explicitly tagged folders (empty-folder visibility).
-        // Capped at MAX_TAGGED_FOLDERS — explicit tagging is a deliberate user action so
-        // counts are expected to be small. Spam tagging is on-chain write cost for the attacker
-        // but only read-side up to this cap.
-        uint256 taggedCount = taggedTotal; // already capped above
-        if (taggedCount > 0) {
-            bytes32[] memory tagged = tagResolver.getChildrenTaggedWith(parentAnchor, anchorSchema, 0, taggedCount);
-            for (uint256 i = 0; i < tagged.length; i++) {
-                bytes32 uid = tagged[i];
-                if (indexer.isRevoked(uid)) continue;
-                if (!tagResolver.isActivelyTaggedByAny(uid, anchorSchema, attesters)) continue;
-                bool qualifies = false;
-                for (uint256 j = 0; j < attesters.length; j++) {
-                    if (indexer.containsAttestations(uid, attesters[j])) { qualifies = true; break; }
-                }
-                if (!qualifies) continue;
-                // Dedup against source A
-                bool seen = false;
-                for (uint256 k = 0; k < count; k++) {
-                    if (temp[k] == uid) { seen = true; break; }
-                }
-                if (!seen) temp[count++] = uid;
-            }
+        // _childrenTaggedWith is append-only — any child ever tagged stays in the list.
+        // Filter to only those with an active applies=true TAG by some edition attester.
+        bytes32[] memory tagged = tagResolver.getChildrenTaggedWith(parentAnchor, anchorSchema, 0, taggedTotal);
+        for (uint256 i = 0; i < tagged.length; i++) {
+            bytes32 uid = tagged[i];
+            if (indexer.isRevoked(uid)) continue;
+            if (!tagResolver.isActivelyTaggedByAny(uid, anchorSchema, attesters)) continue;
+            temp[count++] = uid;
         }
 
         assembly {

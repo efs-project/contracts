@@ -100,3 +100,9 @@ What else we looked at and why it lost.
 - [ADR-0030 — Mainnet permanence (no upgradeability)](./0030-mainnet-permanence.md)
 - [ADR-0031 — Editions as URL query param with first-wins fallback](./0031-editions-url-param-model.md)
 - [ADR-0032 — EAS as foundational dependency](./0032-eas-as-foundation.md)
+
+### Navigation & Containers
+- [ADR-0033 — Root containers and schema alias anchors](./0033-root-containers-and-schema-alias-anchors.md)
+- [ADR-0034 — `name` PROPERTY as display-name fallback](./0034-display-name-property-convention.md)
+- [ADR-0035 — PROPERTY as free-floating value placed via TAG](./0035-property-free-floating-and-tag-placed.md)
+

@@ -60,8 +60,8 @@ describe("EFSFileView", function () {
     const rc1 = await tx1.wait();
     anchorSchemaUID = rc1!.logs[0].topics[1];
 
-    // Property
-    const tx2 = await registry.register("string key, string value", futureIndexerAddr, true);
+    // Property (unified free-floating model per ADR-0035, non-revocable)
+    const tx2 = await registry.register("string value", futureIndexerAddr, false);
     const rc2 = await tx2.wait();
     propertySchemaUID = rc2!.logs[0].topics[1];
 
@@ -147,29 +147,29 @@ describe("EFSFileView", function () {
     return getUIDFromReceipt(await tx.wait());
   };
 
-  it("Source A: folders with file-anchor children appear without explicit tagging", async function () {
-    // A generic subfolder qualifies in schema-filtered listings if it organically acquired
-    // children of the target schema (file Anchors with schemaUID=dataSchemaUID). No TAG needed.
+  it("Folder visibility requires an explicit TAG — untagged folders with file-anchor children do NOT appear", async function () {
+    // Post-refactor (ADR-0006 revised 2026-04-18): folder visibility is tag-only. A folder
+    // does NOT appear in a schema-filtered listing just because it contains file-anchor
+    // children; the attester must emit a TAG(definition=dataSchemaUID, refUID=folder)
+    // to claim that folder in their edition. The client upload flow walks the ancestor
+    // chain and emits any missing visibility TAGs.
     const ownerAddr = await owner.getAddress();
 
     const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32);
 
-    // Create a generic folder containing a file anchor — qualifies via source A
     const folderWithContentUID = await createAnchor("has-content", rootUID, ZERO_BYTES32);
-    await createAnchor("cat.jpg", folderWithContentUID, dataSchemaUID); // file anchor inside
+    await createAnchor("cat.jpg", folderWithContentUID, dataSchemaUID); // file anchor inside, but folder NOT tagged
 
-    // Create a generic folder with no children — should NOT appear
     await createAnchor("empty-untagged", rootUID, ZERO_BYTES32);
 
     const [items] = await fileView.getDirectoryPageBySchemaAndAddressList(rootUID, dataSchemaUID, [ownerAddr], 0, 10);
 
-    expect(items.length).to.equal(1);
-    expect(items[0].name).to.equal("has-content");
+    expect(items.length).to.equal(0);
   });
 
-  it("Source B: empty folders appear when explicitly tagged with the schema UID", async function () {
-    // Empty generic folders are invisible to source A (no children), but they appear via
-    // source B if explicitly tagged with definition=dataSchemaUID via TagResolver.
+  it("Empty folders appear when explicitly tagged with the schema UID", async function () {
+    // A folder is visible in an edition iff it has an active applies=true TAG with
+    // definition=dataSchemaUID by someone in the edition list.
     const ownerAddr = await owner.getAddress();
 
     const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32);
@@ -177,7 +177,6 @@ describe("EFSFileView", function () {
     const emptyTaggedUID = await createAnchor("empty-tagged", rootUID, ZERO_BYTES32);
     await createTag(emptyTaggedUID, dataSchemaUID, true);
 
-    // An empty folder with no tag — should NOT appear
     await createAnchor("empty-untagged", rootUID, ZERO_BYTES32);
 
     const [items] = await fileView.getDirectoryPageBySchemaAndAddressList(rootUID, dataSchemaUID, [ownerAddr], 0, 10);
@@ -186,11 +185,11 @@ describe("EFSFileView", function () {
     expect(items[0].name).to.equal("empty-tagged");
   });
 
-  it("Source A (deep): grandparent folder appears without explicit tagging when a nested file-anchor exists", async function () {
-    // root → /photos/ → /cats/ → cat.jpg (file anchor)
-    // Listing root with dataSchemaUID should return /photos/ even though the file is 2 hops down.
-    // Without the ancestor-chain walk this was a navigation-breaking bug — only /cats/ appeared
-    // when listing /photos/, but /photos/ never appeared when listing root.
+  it("Ancestor-chain visibility: only folders explicitly tagged appear, regardless of nested contents", async function () {
+    // root → /photos/ → /cats/ → cat.jpg (file anchor, with /photos/ and /cats/ explicitly tagged)
+    // In the tag-only model the client walks the ancestor chain on upload and emits a
+    // visibility TAG at every ancestor. A folder with no TAG never appears even if deeply
+    // nested content exists beneath it.
     const ownerAddr = await owner.getAddress();
 
     const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32);
@@ -198,7 +197,10 @@ describe("EFSFileView", function () {
     const catsUID = await createAnchor("cats", photosUID, ZERO_BYTES32);
     await createAnchor("cat.jpg", catsUID, dataSchemaUID);
 
-    // Root level: /photos/ must appear
+    // Simulate client ancestor-walk: tag every ancestor folder up to (but excluding) root.
+    await createTag(catsUID, dataSchemaUID, true);
+    await createTag(photosUID, dataSchemaUID, true);
+
     const [rootItems] = await fileView.getDirectoryPageBySchemaAndAddressList(
       rootUID,
       dataSchemaUID,
@@ -209,7 +211,6 @@ describe("EFSFileView", function () {
     expect(rootItems.length).to.equal(1);
     expect(rootItems[0].name).to.equal("photos");
 
-    // /photos/ level: /cats/ must appear
     const [photosItems] = await fileView.getDirectoryPageBySchemaAndAddressList(
       photosUID,
       dataSchemaUID,
@@ -219,6 +220,27 @@ describe("EFSFileView", function () {
     );
     expect(photosItems.length).to.equal(1);
     expect(photosItems[0].name).to.equal("cats");
+  });
+
+  it("Untagged ancestor is invisible even when a deeper descendant is tagged and populated", async function () {
+    // If the client skipped one ancestor in the walk, that ancestor is invisible.
+    // This is the intended property: folder visibility follows TAG, not content.
+    const ownerAddr = await owner.getAddress();
+
+    const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32);
+    const photosUID = await createAnchor("photos", rootUID, ZERO_BYTES32); // NOT tagged
+    const catsUID = await createAnchor("cats", photosUID, ZERO_BYTES32);
+    await createAnchor("cat.jpg", catsUID, dataSchemaUID);
+    await createTag(catsUID, dataSchemaUID, true);
+
+    const [rootItems] = await fileView.getDirectoryPageBySchemaAndAddressList(
+      rootUID,
+      dataSchemaUID,
+      [ownerAddr],
+      0,
+      10,
+    );
+    expect(rootItems.length).to.equal(0);
   });
 
   it("Should not return a tagged folder after its tag is set to applies=false", async function () {
@@ -234,6 +256,26 @@ describe("EFSFileView", function () {
     expect(before[0].name).to.equal("my-folder");
 
     await createTag(folderUID, dataSchemaUID, false);
+
+    const [after] = await fileView.getDirectoryPageBySchemaAndAddressList(rootUID, dataSchemaUID, [ownerAddr], 0, 10);
+    expect(after.length).to.equal(0);
+  });
+
+  it("Should not return a tagged folder after its tag is revoked via EAS multiRevoke", async function () {
+    // Regression: the client-driven folder delete flow issues EAS multiRevoke on the
+    // visibility TAG rather than attesting applies=false. This must produce the same
+    // outcome — folder disappears from the edition listing.
+    const ownerAddr = await owner.getAddress();
+
+    const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32);
+    const folderUID = await createAnchor("my-folder", rootUID, ZERO_BYTES32);
+
+    const visTagUID = await createTag(folderUID, dataSchemaUID, true);
+
+    const [before] = await fileView.getDirectoryPageBySchemaAndAddressList(rootUID, dataSchemaUID, [ownerAddr], 0, 10);
+    expect(before.length).to.equal(1);
+
+    await eas.multiRevoke([{ schema: tagSchemaUID, data: [{ uid: visTagUID, value: 0n }] }]);
 
     const [after] = await fileView.getDirectoryPageBySchemaAndAddressList(rootUID, dataSchemaUID, [ownerAddr], 0, 10);
     expect(after.length).to.equal(0);

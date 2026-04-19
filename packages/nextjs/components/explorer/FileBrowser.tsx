@@ -19,11 +19,13 @@ import {
   InformationCircleIcon,
   Square2StackIcon,
   TagIcon,
+  TrashIcon,
   XMarkIcon,
 } from "@heroicons/react/24/outline";
 import { useSortedData } from "~~/hooks/efs/useSortedData";
-import { useDeployedContractInfo, useScaffoldReadContract } from "~~/hooks/scaffold-eth";
+import { useDeployedContractInfo, useScaffoldReadContract, useScaffoldWriteContract } from "~~/hooks/scaffold-eth";
 import { useTargetNetwork } from "~~/hooks/scaffold-eth/useTargetNetwork";
+import { useBackgroundOps } from "~~/services/store/backgroundOps";
 import { isFile, isTopic } from "~~/utils/efs/efsTypes";
 import { SORT_OVERLAY_ABI } from "~~/utils/efs/sortOverlay";
 import { TAG_RESOLVER_ABI, getTagResolverAddress } from "~~/utils/efs/tagResolver";
@@ -171,6 +173,15 @@ export const FileBrowser = ({
   const [tagFilterVersion, setTagFilterVersion] = useState(0);
   const [tagResolverAddress, setTagResolverAddress] = useState<`0x${string}` | null>(null);
   const [tagsRoot, setTagsRoot] = useState<`0x${string}` | null>(null);
+  // Folder-delete confirmation. `tagUIDs` is populated by scanSubtree.
+  const [deleteConfirm, setDeleteConfirm] = useState<{
+    item: any;
+    status: "scanning" | "ready" | "revoking";
+    tagUIDs: `0x${string}`[];
+    folderCount: number;
+    fileCount: number;
+    error?: string;
+  } | null>(null);
   // Maps anchor UID → set of DATA UIDs for all relevant edition attesters.
   // Built when a tag filter is active; an item matches if ANY of its DATA UIDs is in the tag set.
   const [dataUIDMap, setDataUIDMap] = useState<Map<string, Set<string>>>(new Map());
@@ -178,9 +189,11 @@ export const FileBrowser = ({
   const { data: efsRouter } = useDeployedContractInfo({ contractName: "EFSRouter" });
 
   const { data: indexerInfo } = useDeployedContractInfo({ contractName: "Indexer" });
+  const { data: efsFileViewInfo } = useDeployedContractInfo({ contractName: "EFSFileView" });
   const { targetNetwork } = useTargetNetwork();
   const publicClient = usePublicClient();
   const { address: connectedAddress } = useAccount();
+  const { writeContractAsync: easWrite } = useScaffoldWriteContract("EAS");
 
   // Revoke blob URLs when fileContent changes to prevent memory leaks
   useEffect(() => {
@@ -813,7 +826,11 @@ export const FileBrowser = ({
   if (hasEditions) lockedToEditions.current = true;
   const useEditionsQuery = (hasEditions || lockedToEditions.current) && editionAddresses.length > 0;
 
-  const { data: standardItems, isLoading: isStandardLoading } = useScaffoldReadContract({
+  const {
+    data: standardItems,
+    isLoading: isStandardLoading,
+    refetch: refetchStandardItems,
+  } = useScaffoldReadContract({
     contractName: "EFSFileView",
     functionName: "getDirectoryPage",
     args: [
@@ -828,7 +845,11 @@ export const FileBrowser = ({
     },
   });
 
-  const { data: editionItemsRaw, isLoading: isEditionLoading } = useScaffoldReadContract({
+  const {
+    data: editionItemsRaw,
+    isLoading: isEditionLoading,
+    refetch: refetchEditionItems,
+  } = useScaffoldReadContract({
     contractName: "EFSFileView",
     functionName: "getDirectoryPageBySchemaAndAddressList",
     args: [
@@ -1052,6 +1073,244 @@ export const FileBrowser = ({
     fetchFileContent(nextItem);
   };
 
+  // Delete a file/folder by revoking the connected user's TAGs (ADR-0006 revised 2026-04-18,
+  // tag-only folder visibility).
+  // File: revoke TAG(target=DATA_UID, definition=fileAnchorUID) for every DATA the
+  //   user placed at this anchor. Removes the file from this edition's view; other
+  //   editions with their own placement TAGs are unaffected. DATA is permanent (ADR-0002).
+  // Folder: full subtree cascade. Walks the folder and every subfolder, revoking
+  //   (a) the user's visibility TAG on each folder (definition=dataSchemaUID, refUID=folder)
+  //   and (b) the user's file placement TAGs on every file child at any depth. Cascading
+  //   prevents orphaned file placements (files invisible in the folder listing but still
+  //   discoverable via "what files has this user placed?" queries).
+  const collectUserFilePlacementTags = async (fileAnchorUID: `0x${string}`): Promise<`0x${string}`[]> => {
+    if (!publicClient || !tagResolverAddress || !connectedAddress || !dataSchemaUID) return [];
+    const count = (await publicClient.readContract({
+      address: tagResolverAddress,
+      abi: TAG_RESOLVER_ABI,
+      functionName: "getActiveTargetsByAttesterAndSchemaCount",
+      args: [fileAnchorUID, connectedAddress as `0x${string}`, dataSchemaUID as `0x${string}`],
+    })) as bigint;
+    if (count === 0n) return [];
+    const dataUIDs = (await publicClient.readContract({
+      address: tagResolverAddress,
+      abi: TAG_RESOLVER_ABI,
+      functionName: "getActiveTargetsByAttesterAndSchema",
+      args: [fileAnchorUID, connectedAddress as `0x${string}`, dataSchemaUID as `0x${string}`, 0n, count],
+    })) as `0x${string}`[];
+    const tagUIDs: `0x${string}`[] = [];
+    for (const dataUID of dataUIDs) {
+      if (dataUID === zeroHash) continue;
+      const tagUID = (await publicClient.readContract({
+        address: tagResolverAddress,
+        abi: TAG_RESOLVER_ABI,
+        functionName: "getActiveTagUID",
+        args: [connectedAddress as `0x${string}`, dataUID, fileAnchorUID],
+      })) as `0x${string}`;
+      if (tagUID && tagUID !== zeroHash) tagUIDs.push(tagUID);
+    }
+    return tagUIDs;
+  };
+
+  const getTagSchemaUID = (): `0x${string}` =>
+    ethers.solidityPackedKeccak256(
+      ["string", "address", "bool"],
+      ["bytes32 definition, bool applies", tagResolverAddress, true],
+    ) as `0x${string}`;
+
+  // Recursively walks the subtree rooted at `rootFolderUID`, paginating getDirectoryPage (500/page).
+  // Returns every TAG UID the connected user would need to revoke to remove their visibility of the folder:
+  //   - file placements the user authored at any depth
+  //   - the visibility TAG the user authored on the root folder and every subfolder (if any)
+  // Skips `tagsRoot` and `sortsAnchorUID` (system anchors — never touch).
+  const scanSubtree = async (
+    rootFolderUID: `0x${string}`,
+  ): Promise<{ tagUIDs: `0x${string}`[]; folderCount: number; fileCount: number }> => {
+    if (!publicClient || !tagResolverAddress || !connectedAddress || !dataSchemaUID || !efsFileViewInfo) {
+      throw new Error("Not ready — reconnect wallet and try again.");
+    }
+    const me = connectedAddress as `0x${string}`;
+    const dataSchema = dataSchemaUID as `0x${string}`;
+    const propertySchema = (propertySchemaUID as `0x${string}` | undefined) ?? zeroHash;
+    const tagUIDs: `0x${string}`[] = [];
+    const visited = new Set<string>();
+    const queue: `0x${string}`[] = [rootFolderUID];
+    let folderCount = 0;
+    let fileCount = 0;
+
+    while (queue.length > 0) {
+      const folder = queue.shift() as `0x${string}`;
+      if (visited.has(folder.toLowerCase())) continue;
+      visited.add(folder.toLowerCase());
+      folderCount += 1;
+
+      // Folder's own visibility TAG (if the user authored one).
+      const visibilityTagUID = (await publicClient.readContract({
+        address: tagResolverAddress,
+        abi: TAG_RESOLVER_ABI,
+        functionName: "getActiveTagUID",
+        args: [me, folder, dataSchema],
+      })) as `0x${string}`;
+      if (visibilityTagUID && visibilityTagUID !== zeroHash) tagUIDs.push(visibilityTagUID);
+
+      // Walk direct children in 500-item pages.
+      let start = 0n;
+      const PAGE = 500n;
+      // Hard safety cap — 50 pages = 25K children per folder. If a folder is bigger than that
+      // we stop paginating (the user can delete remaining content by navigating in).
+      for (let page = 0; page < 50; page++) {
+        let children: any[] = [];
+        try {
+          children = (await publicClient.readContract({
+            address: efsFileViewInfo.address as `0x${string}`,
+            abi: efsFileViewInfo.abi,
+            functionName: "getDirectoryPage",
+            args: [folder, start, PAGE, dataSchema, propertySchema],
+          })) as any[];
+        } catch (e) {
+          console.warn("Subtree walk: getDirectoryPage failed at folder", folder, e);
+          break;
+        }
+        if (!children || children.length === 0) break;
+
+        for (const child of children) {
+          const childUID = child.uid as `0x${string}`;
+          if (!childUID || childUID === zeroHash) continue;
+          if (childUID === tagsRoot || childUID === sortsAnchorUID) continue;
+          const schema = (child.schema as string | undefined)?.toLowerCase();
+          if (schema === (dataSchema as string).toLowerCase()) {
+            // File anchor — collect placement TAGs under this file.
+            fileCount += 1;
+            const childTags = await collectUserFilePlacementTags(childUID);
+            tagUIDs.push(...childTags);
+          } else {
+            // Subfolder — queue for recursion.
+            queue.push(childUID);
+          }
+        }
+
+        if (BigInt(children.length) < PAGE) break;
+        start += PAGE;
+      }
+    }
+
+    return { tagUIDs, folderCount, fileCount };
+  };
+
+  const executeRevokes = async (
+    tagUIDs: `0x${string}`[],
+    ops: ReturnType<typeof useBackgroundOps.getState>,
+    opId: string,
+  ) => {
+    if (tagUIDs.length === 0 || !publicClient) return;
+    const tagSchemaUID = getTagSchemaUID();
+    const CHUNK_SIZE = 50;
+    const total = tagUIDs.length;
+    let done = 0;
+    for (let i = 0; i < total; i += CHUNK_SIZE) {
+      const chunk = tagUIDs.slice(i, i + CHUNK_SIZE);
+      ops.log(opId, `Revoking TAGs ${done + 1}–${done + chunk.length} of ${total}...`);
+      const txHash = await easWrite(
+        {
+          functionName: "multiRevoke",
+          args: [[{ schema: tagSchemaUID, data: chunk.map(uid => ({ uid, value: 0n })) }]],
+        },
+        { silent: true },
+      );
+      if (txHash) await publicClient.waitForTransactionReceipt({ hash: txHash });
+      done += chunk.length;
+    }
+  };
+
+  const handleDelete = async (item: any, isItemFile: boolean) => {
+    if (!publicClient || !tagResolverAddress || !connectedAddress || !dataSchemaUID) {
+      notification.error("Not ready — reconnect wallet and try again.");
+      return;
+    }
+    if (!isItemFile) {
+      // Folder → open confirm dialog and scan.
+      setDeleteConfirm({ item, status: "scanning", tagUIDs: [], folderCount: 0, fileCount: 0 });
+      try {
+        const scan = await scanSubtree(item.uid as `0x${string}`);
+        setDeleteConfirm(prev =>
+          prev && prev.item.uid === item.uid
+            ? {
+                ...prev,
+                status: "ready",
+                tagUIDs: scan.tagUIDs,
+                folderCount: scan.folderCount,
+                fileCount: scan.fileCount,
+              }
+            : prev,
+        );
+      } catch (e: any) {
+        console.error("Subtree scan failed:", e);
+        setDeleteConfirm(prev =>
+          prev && prev.item.uid === item.uid
+            ? { ...prev, status: "ready", error: e?.shortMessage ?? e?.message ?? "Scan failed." }
+            : prev,
+        );
+      }
+      return;
+    }
+
+    // File → immediate single-click delete, no confirm.
+    const ops = useBackgroundOps.getState();
+    const label = item.name || "item";
+    const opId = ops.start(`Delete: ${label}`);
+    try {
+      ops.log(opId, "Locating placement TAG...");
+      const placementTags = await collectUserFilePlacementTags(item.uid as `0x${string}`);
+      if (placementTags.length === 0) {
+        throw new Error("You have no active placement on this file — nothing to delete.");
+      }
+      await executeRevokes(placementTags, ops, opId);
+      ops.complete(opId, `Deleted ${label}.`);
+      if (selectedFile?.uid === item.uid) closePreview();
+      if (useEditionsQuery) {
+        await refetchEditionItems();
+      } else {
+        await refetchStandardItems();
+      }
+    } catch (e: any) {
+      console.error("Delete failed:", e);
+      const msg = e?.shortMessage ?? e?.message ?? "Delete failed.";
+      notification.error(msg);
+      ops.fail(opId, msg);
+    }
+  };
+
+  const confirmFolderDelete = async () => {
+    if (!deleteConfirm || deleteConfirm.status !== "ready") return;
+    const { item, tagUIDs } = deleteConfirm;
+    const label = item.name || "folder";
+    if (tagUIDs.length === 0) {
+      notification.info(`Nothing of yours to delete in "${label}". Anchors are permanent.`);
+      setDeleteConfirm(null);
+      return;
+    }
+    setDeleteConfirm({ ...deleteConfirm, status: "revoking" });
+    const ops = useBackgroundOps.getState();
+    const opId = ops.start(`Delete folder: ${label}`);
+    try {
+      await executeRevokes(tagUIDs, ops, opId);
+      ops.complete(opId, `Deleted ${label} — revoked ${tagUIDs.length} TAG${tagUIDs.length === 1 ? "" : "s"}.`);
+      if (selectedFile?.uid === item.uid) closePreview();
+      if (useEditionsQuery) {
+        await refetchEditionItems();
+      } else {
+        await refetchStandardItems();
+      }
+      setDeleteConfirm(null);
+    } catch (e: any) {
+      console.error("Folder delete failed:", e);
+      const msg = e?.shortMessage ?? e?.message ?? "Delete failed.";
+      notification.error(msg);
+      ops.fail(opId, msg);
+      setDeleteConfirm(prev => (prev ? { ...prev, status: "ready", error: msg } : prev));
+    }
+  };
+
   // Update the keyboard handler ref each render with fresh closure
   keyHandlerRef.current = (e: KeyboardEvent) => {
     if (!selectedFile) return;
@@ -1094,7 +1353,7 @@ export const FileBrowser = ({
             </span>
           </div>
         )}
-        <div className="grid grid-cols-4 gap-4 p-4">
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-4 p-4">
           {(sortedItems ?? items)
             ?.filter(
               (item: any) =>
@@ -1152,6 +1411,16 @@ export const FileBrowser = ({
                     >
                       <InformationCircleIcon className="w-3.5 h-3.5 text-base-content/50 hover:text-primary" />
                     </button>
+                    <button
+                      className="p-0.5 rounded bg-base-300/80 hover:bg-base-300 transition-colors"
+                      onClick={e => {
+                        e.stopPropagation();
+                        handleDelete(item, isItemFile);
+                      }}
+                      title={isItemFile ? "Delete file" : "Delete folder"}
+                    >
+                      <TrashIcon className="w-3.5 h-3.5 text-base-content/50 hover:text-error" />
+                    </button>
                   </div>
 
                   <div className="card-body items-center text-center p-4 pt-6 cursor-pointer">
@@ -1164,14 +1433,20 @@ export const FileBrowser = ({
                     </div>
                     <h2 className="card-title text-sm break-all text-center leading-tight">{item.name || "Unnamed"}</h2>
                     <div className="text-xs text-base-content/40">
-                      {isItemTopic ? (item.childCount > 0 ? `${item.childCount} items` : "Empty") : "File"}
+                      {isItemTopic
+                        ? useEditionsQuery
+                          ? "Folder"
+                          : item.childCount > 0
+                            ? `${item.childCount} items`
+                            : "Empty"
+                        : "File"}
                     </div>
                   </div>
                 </div>
               );
             })}
           {(sortedItems ?? items)?.length === 0 && (
-            <div className="col-span-4 text-center text-gray-500">
+            <div className="col-span-full text-center text-gray-500">
               {tagFilteredUIDs !== null
                 ? `No items match tag filter: "${tagFilter}"`
                 : tagExcludedUIDs.size > 0
@@ -1199,7 +1474,7 @@ export const FileBrowser = ({
 
       {/* File Preview Side Pane */}
       {selectedFile && !previewFullscreen && (
-        <div className="w-[400px] flex-shrink-0 border-l border-base-300 bg-base-100 flex flex-col overflow-hidden">
+        <div className="preview-pane absolute inset-0 z-10 max-lg:bg-base-200 lg:static lg:w-[400px] lg:flex-shrink-0 border-l border-base-300 flex flex-col overflow-hidden">
           <div className="flex items-center justify-between px-4 py-3 border-b border-base-300 shrink-0">
             <div className="flex items-center gap-2 min-w-0">
               {fileItems.length > 1 && (
@@ -1263,7 +1538,7 @@ export const FileBrowser = ({
                 <img
                   src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(fileContent)}`}
                   alt={selectedFile.name}
-                  className="max-w-full h-auto rounded cursor-pointer"
+                  className="max-w-full max-h-full w-auto h-auto object-contain rounded cursor-pointer mx-auto"
                   onClick={() => setPreviewFullscreen(true)}
                 />
               ) : fileContentType?.startsWith("image/") ? (
@@ -1271,7 +1546,7 @@ export const FileBrowser = ({
                 <img
                   src={fileContent.startsWith("blob:") ? fileContent : `data:${fileContentType};base64,${fileContent}`}
                   alt={selectedFile.name}
-                  className="max-w-full h-auto rounded cursor-pointer"
+                  className="max-w-full max-h-full w-auto h-auto object-contain rounded cursor-pointer mx-auto"
                   onClick={() => setPreviewFullscreen(true)}
                 />
               ) : fileContentType === "application/pdf" ? (
@@ -1280,7 +1555,6 @@ export const FileBrowser = ({
                   title={selectedFile.name}
                   className="w-full rounded cursor-pointer"
                   style={{ height: "60vh" }}
-                  sandbox="allow-same-origin"
                   onClick={() => setPreviewFullscreen(true)}
                 />
               ) : fileContentType?.startsWith("video/") ? (
@@ -1398,7 +1672,6 @@ export const FileBrowser = ({
                     title={selectedFile.name}
                     className="rounded"
                     style={{ width: "90vw", height: "85vh" }}
-                    sandbox="allow-same-origin"
                   />
                 ) : fileContentType?.startsWith("video/") ? (
                   <video src={fileContent} controls className="max-w-[90vw] max-h-[85vh] object-contain" />
@@ -1476,6 +1749,84 @@ export const FileBrowser = ({
           }}
           onTagChange={() => setTagFilterVersion(v => v + 1)}
         />
+      )}
+      {/* Folder delete confirmation */}
+      {deleteConfirm && (
+        <div className="fixed inset-0 z-50 bg-black bg-opacity-50 flex items-center justify-center p-4">
+          <div className="bg-base-100 rounded-lg shadow-xl max-w-md w-full p-6">
+            <h3 className="font-bold text-lg">Delete folder?</h3>
+            <p className="mt-2 text-sm text-base-content/70 break-all">
+              <span className="font-mono">{deleteConfirm.item.name || "folder"}</span>
+            </p>
+
+            {deleteConfirm.status === "scanning" && (
+              <div className="mt-4 flex items-center gap-3 text-sm">
+                <span className="loading loading-spinner loading-sm" />
+                <span>Scanning subtree for your content…</span>
+              </div>
+            )}
+
+            {deleteConfirm.status !== "scanning" && (
+              <div className="mt-4 space-y-2 text-sm">
+                {deleteConfirm.error && <div className="text-error">{deleteConfirm.error}</div>}
+                {deleteConfirm.tagUIDs.length === 0 ? (
+                  <div className="text-base-content/70">
+                    Nothing of yours to delete here. Anchors are permanent, and this folder contains no files or
+                    visibility TAGs you authored.
+                  </div>
+                ) : (
+                  <>
+                    <div>
+                      This will revoke{" "}
+                      <span className="font-semibold text-error">
+                        {deleteConfirm.tagUIDs.length} TAG{deleteConfirm.tagUIDs.length === 1 ? "" : "s"}
+                      </span>{" "}
+                      you authored across{" "}
+                      <span className="font-semibold">
+                        {deleteConfirm.folderCount} folder{deleteConfirm.folderCount === 1 ? "" : "s"}
+                      </span>{" "}
+                      and{" "}
+                      <span className="font-semibold">
+                        {deleteConfirm.fileCount} file{deleteConfirm.fileCount === 1 ? "" : "s"}
+                      </span>
+                      .
+                    </div>
+                    <div className="text-xs text-base-content/60">
+                      Batched in chunks of 50 per transaction — expect {Math.ceil(deleteConfirm.tagUIDs.length / 50)}{" "}
+                      wallet prompt
+                      {Math.ceil(deleteConfirm.tagUIDs.length / 50) === 1 ? "" : "s"}. Anchors themselves are permanent
+                      and cannot be deleted.
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
+            <div className="mt-6 flex justify-end gap-2">
+              <button
+                className="btn btn-ghost btn-sm"
+                onClick={() => setDeleteConfirm(null)}
+                disabled={deleteConfirm.status === "revoking"}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn btn-error btn-sm"
+                onClick={confirmFolderDelete}
+                disabled={deleteConfirm.status !== "ready" || deleteConfirm.tagUIDs.length === 0}
+              >
+                {deleteConfirm.status === "revoking" ? (
+                  <>
+                    <span className="loading loading-spinner loading-xs" />
+                    Deleting…
+                  </>
+                ) : (
+                  "Delete"
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

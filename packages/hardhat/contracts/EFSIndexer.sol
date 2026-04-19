@@ -32,7 +32,7 @@ contract EFSIndexer is SchemaResolver {
     event MirrorCreated(bytes32 indexed dataUID, bytes32 indexed mirrorUID, address indexed attester);
 
     /// @notice Emitted when a PROPERTY attestation is attached to an Anchor.
-    event PropertyCreated(bytes32 indexed anchorUID, bytes32 indexed propertyUID, address indexed attester);
+    event PropertyCreated(bytes32 indexed propertyUID, address indexed attester);
 
     /// @notice Emitted when any EFS-native attestation (ANCHOR, DATA, PROPERTY, BLOB) is revoked.
     event AttestationRevoked(bytes32 indexed uid, address indexed attester);
@@ -146,14 +146,6 @@ contract EFSIndexer is SchemaResolver {
     // Stored at creation so parent-type checks are O(1) without re-decoding EAS attestation data.
     mapping(bytes32 => bytes32) private _anchorSchemaOf;
 
-    // Qualifying-folder index: parentUID => contentSchema => attester => generic subfolder UIDs.
-    // A subfolder F is recorded here the first time attester A places a contentSchema anchor inside F.
-    // This gives O(m_qualifying) enumeration for _getQualifyingTaggedFolders instead of O(N_total).
-    // Append-only (same sticky semantics as _containsAttestations — revocation does not remove).
-    mapping(bytes32 => mapping(bytes32 => mapping(address => bytes32[]))) private _qualifyingFolders;
-    // Dedup guard: prevents the same subfolder from being pushed twice per (parent, schema, attester).
-    mapping(bytes32 => mapping(bytes32 => mapping(address => mapping(bytes32 => bool)))) private _hasQualifyingFolder;
-
     constructor(
         IEAS eas,
         bytes32 anchorSchemaUID,
@@ -244,26 +236,6 @@ contract EFSIndexer is SchemaResolver {
     }
 
     function _propagateContains(bytes32 anchorUID, address attester) private {
-        // If the starting anchor is a file-type anchor (e.g. called from TagResolver when a TAG
-        // places DATA there), populate _qualifyingFolders for any generic ancestor folders —
-        // same walk as ANCHOR creation.  Without this, tag-only contributors (who never created
-        // the anchor themselves) would never appear in getDirectoryPageBySchemaAndAddressList.
-        bytes32 anchorSchema = _anchorSchemaOf[anchorUID];
-        bytes32 startParent = _parents[anchorUID];
-        if (anchorSchema != bytes32(0) && startParent != bytes32(0)) {
-            bytes32 folder = startParent;
-            bytes32 ancestor = _parents[folder];
-            uint256 d = 0;
-            while (ancestor != bytes32(0) && _anchorSchemaOf[folder] == bytes32(0) && d++ < MAX_ANCHOR_DEPTH) {
-                if (!_hasQualifyingFolder[ancestor][anchorSchema][attester][folder]) {
-                    _qualifyingFolders[ancestor][anchorSchema][attester].push(folder);
-                    _hasQualifyingFolder[ancestor][anchorSchema][attester][folder] = true;
-                }
-                folder = ancestor;
-                ancestor = _parents[folder];
-            }
-        }
-
         bytes32 current = anchorUID;
         uint256 depth = 0;
         while (current != bytes32(0)) {
@@ -355,30 +327,6 @@ contract EFSIndexer is SchemaResolver {
                 }
             }
 
-            // Qualifying-folder index: walk up the ancestor chain recording each generic folder
-            // (anchorSchema == 0) under its parent's qualifying list so _getQualifyingTaggedFolders
-            // can enumerate without an O(N) scan at any nesting depth.
-            //
-            // Example: root → /photos/ → /cats/ → cat.jpg (anchorSchema=DATA)
-            //   Iteration 1: folder=/cats/, parent=/photos/ → record /cats/ under /photos/
-            //   Iteration 2: folder=/photos/, parent=root   → record /photos/ under root
-            //   Iteration 3: parent=0x0 → exit
-            //
-            // Fires at most once per (parent, anchorSchema, attester, folder) tuple — amortized O(1).
-            // Loop bounded by MAX_ANCHOR_DEPTH (validated above).
-            if (anchorSchema != bytes32(0) && parentUID != bytes32(0)) {
-                bytes32 folder = parentUID;
-                bytes32 ancestor = _parents[folder];
-                while (ancestor != bytes32(0) && _anchorSchemaOf[folder] == bytes32(0)) {
-                    if (!_hasQualifyingFolder[ancestor][anchorSchema][attestation.attester][folder]) {
-                        _qualifyingFolders[ancestor][anchorSchema][attestation.attester].push(folder);
-                        _hasQualifyingFolder[ancestor][anchorSchema][attestation.attester][folder] = true;
-                    }
-                    folder = ancestor;
-                    ancestor = _parents[folder];
-                }
-            }
-
             emit AnchorCreated(parentUID, attestation.uid, attestation.attester, anchorSchema);
             return true;
         } else if (schema == DATA_SCHEMA_UID) {
@@ -396,29 +344,13 @@ contract EFSIndexer is SchemaResolver {
             emit DataCreated(attestation.uid, attestation.attester, contentHash);
             return true;
         } else if (schema == PROPERTY_SCHEMA_UID) {
-            // Properties can target Anchors (PROPERTY-typed) or DATA attestations
-            if (attestation.refUID == EMPTY_UID) return false;
+            // PROPERTY is a standalone value (ADR-0035): refUID must be 0x0, non-revocable.
+            // Placement lives in a TAG under an Anchor<PROPERTY>(name="<key>"), symmetric
+            // with DATA. The TAG's _validateDefinition handles container-kind validation.
+            if (attestation.refUID != EMPTY_UID) return false;
+            if (attestation.revocable) return false;
 
-            Attestation memory target = _eas.getAttestation(attestation.refUID);
-
-            if (target.schema == DATA_SCHEMA_UID) {
-                // Properties on DATA: contentType, previousVersion, description, etc.
-                // No further validation needed — DATA is always valid standalone
-            } else if (target.schema == ANCHOR_SCHEMA_UID) {
-                // Properties on Anchors: must be PROPERTY-typed anchors
-                (, bytes32 targetAnchorSchema) = abi.decode(target.data, (string, bytes32));
-                if (targetAnchorSchema != PROPERTY_SCHEMA_UID) {
-                    return false;
-                }
-                // Ensure Anchor is valid (has parent or recipient)
-                if (target.refUID == EMPTY_UID && target.recipient == address(0)) {
-                    return false;
-                }
-            } else {
-                return false; // Properties only on DATA or PROPERTY Anchors
-            }
-
-            emit PropertyCreated(attestation.refUID, attestation.uid, attestation.attester);
+            emit PropertyCreated(attestation.uid, attestation.attester);
             return true;
         }
 
@@ -825,28 +757,6 @@ contract EFSIndexer is SchemaResolver {
         return _containsSchemaAttestations[targetUID][attester][schemaUID];
     }
 
-    /// @notice Paginated list of generic subfolders under `parentUID` that contain at least one
-    ///         anchor of `contentSchema` created by `attester`. Populated at write time — O(1) per
-    ///         file anchor creation, amortized once per (folder, schema, attester) triple.
-    function getQualifyingFolders(
-        bytes32 parentUID,
-        bytes32 contentSchema,
-        address attester,
-        uint256 start,
-        uint256 length
-    ) external view returns (bytes32[] memory) {
-        return _sliceUIDs(_qualifyingFolders[parentUID][contentSchema][attester], start, length, false);
-    }
-
-    /// @notice Count of qualifying subfolders for a given (parent, contentSchema, attester).
-    function getQualifyingFolderCount(
-        bytes32 parentUID,
-        bytes32 contentSchema,
-        address attester
-    ) external view returns (uint256) {
-        return _qualifyingFolders[parentUID][contentSchema][attester].length;
-    }
-
     // ============================================================================================
     // INTERNAL HELPERS
     // ============================================================================================
@@ -881,7 +791,7 @@ contract EFSIndexer is SchemaResolver {
                 c == 0x60 || // `
                 c == 0x7B || // {
                 c == 0x7C || // |
-                c == 0x7D    // }
+                c == 0x7D // }
             ) return false;
         }
         return true;
@@ -957,7 +867,9 @@ contract EFSIndexer is SchemaResolver {
         }
 
         // Truncate to actual count in-place — avoids a second allocation + copy loop.
-        assembly { mstore(temp, count) }
+        assembly {
+            mstore(temp, count)
+        }
         return temp;
     }
 

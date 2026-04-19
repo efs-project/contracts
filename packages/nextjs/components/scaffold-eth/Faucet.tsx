@@ -1,21 +1,17 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Address as AddressType, createWalletClient, http, parseEther } from "viem";
 import { hardhat } from "viem/chains";
 import { useAccount } from "wagmi";
 import { BanknotesIcon } from "@heroicons/react/24/outline";
 import { Address, AddressInput, Balance, EtherInput } from "~~/components/scaffold-eth";
 import { useTransactor } from "~~/hooks/scaffold-eth";
+import { useTargetNetwork } from "~~/hooks/scaffold-eth/useTargetNetwork";
 import { notification } from "~~/utils/scaffold-eth";
 
 // Account index to use from generated hardhat accounts.
 const FAUCET_ACCOUNT_INDEX = 0;
-
-const localWalletClient = createWalletClient({
-  chain: hardhat,
-  transport: http(),
-});
 
 /**
  * Faucet modal which lets you send ETH to any address.
@@ -27,6 +23,20 @@ export const Faucet = () => {
   const [sendValue, setSendValue] = useState("");
 
   const { chain: ConnectedChain } = useAccount();
+  const { targetNetwork } = useTargetNetwork();
+
+  // Build the wallet client against the *target* hardhat RPC — not viem's
+  // hardcoded `hardhat` default (127.0.0.1:8545). Multi-worktree setups point
+  // at alternate ports via NEXT_PUBLIC_HARDHAT_RPC_URL; scaffold.config.ts
+  // patches that into the chain's rpcUrls.
+  const localWalletClient = useMemo(
+    () =>
+      createWalletClient({
+        chain: targetNetwork.id === hardhat.id ? targetNetwork : hardhat,
+        transport: http(targetNetwork.id === hardhat.id ? targetNetwork.rpcUrls.default.http[0] : undefined),
+      }),
+    [targetNetwork],
+  );
 
   const faucetTxn = useTransactor(localWalletClient);
 
@@ -52,7 +62,7 @@ export const Faucet = () => {
       }
     };
     getFaucetAddress();
-  }, []);
+  }, [localWalletClient]);
 
   const sendETH = async () => {
     if (!faucetAddress || !inputAddress) {

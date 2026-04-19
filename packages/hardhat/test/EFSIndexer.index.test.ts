@@ -90,7 +90,7 @@ describe("EFSIndexer — public index() API", function () {
     // Register EFS schemas
     const tx1 = await registry.register("string name, bytes32 schemaUID", futureIndexerAddr, false);
     anchorSchemaUID = (await tx1.wait())!.logs[0].topics[1];
-    const tx2 = await registry.register("string key, string value", futureIndexerAddr, true);
+    const tx2 = await registry.register("string value", futureIndexerAddr, false);
     propertySchemaUID = (await tx2.wait())!.logs[0].topics[1];
     const tx3 = await registry.register("bytes32 contentHash, uint64 size", futureIndexerAddr, false);
     dataSchemaUID = (await tx3.wait())!.logs[0].topics[1];

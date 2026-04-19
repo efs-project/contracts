@@ -39,7 +39,7 @@ describe("EFS Transports & Data Model", function () {
 
   const encodeData = (contentHash: string, size: bigint) => enc.encode(["bytes32", "uint64"], [contentHash, size]);
 
-  const encodeProperty = (key: string, value: string) => enc.encode(["string", "string"], [key, value]);
+  const encodePropertyValue = (value: string) => enc.encode(["string"], [value]);
 
   const encodeTag = (definition: string, applies: boolean) => enc.encode(["bytes32", "bool"], [definition, applies]);
 
@@ -92,7 +92,7 @@ describe("EFS Transports & Data Model", function () {
     );
     propertySchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
-      ["string key, string value", futureIndexerAddr, true],
+      ["string value", futureIndexerAddr, false],
     );
     dataSchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
@@ -126,7 +126,7 @@ describe("EFS Transports & Data Model", function () {
 
     // Register schemas
     await (await registry.register("string name, bytes32 schemaUID", futureIndexerAddr, false)).wait();
-    await (await registry.register("string key, string value", futureIndexerAddr, true)).wait();
+    await (await registry.register("string value", futureIndexerAddr, false)).wait();
     await (await registry.register("bytes32 contentHash, uint64 size", futureIndexerAddr, false)).wait();
     await (await registry.register("bytes32 definition, bool applies", await tagResolver.getAddress(), true)).wait();
     await (
@@ -238,19 +238,58 @@ describe("EFS Transports & Data Model", function () {
     return getUID(await tx.wait());
   }
 
-  async function createProperty(refUID: string, key: string, value: string, signer: Signer = owner): Promise<string> {
-    const tx = await eas.connect(signer).attest({
+  /**
+   * Attach a PROPERTY to a container using the unified free-floating model
+   * (ADR-0035): key anchor under the container, free-floating PROPERTY(value),
+   * and a TAG binding them. Returns the PROPERTY UID.
+   */
+  async function createProperty(
+    containerUID: string,
+    key: string,
+    value: string,
+    signer: Signer = owner,
+  ): Promise<string> {
+    let keyAnchorUID: string = await indexer.resolveAnchor(containerUID, key, propertySchemaUID);
+    if (keyAnchorUID === ZERO_BYTES32) {
+      const keyTx = await eas.connect(signer).attest({
+        schema: anchorSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: NO_EXPIRATION,
+          revocable: false,
+          refUID: containerUID,
+          data: encodeAnchor(key, propertySchemaUID),
+          value: 0n,
+        },
+      });
+      keyAnchorUID = getUID(await keyTx.wait());
+    }
+
+    const propTx = await eas.connect(signer).attest({
       schema: propertySchemaUID,
       data: {
         recipient: ZeroAddress,
         expirationTime: NO_EXPIRATION,
-        revocable: true,
-        refUID: refUID,
-        data: encodeProperty(key, value),
+        revocable: false,
+        refUID: ZERO_BYTES32,
+        data: encodePropertyValue(value),
         value: 0n,
       },
     });
-    return getUID(await tx.wait());
+    const propertyUID = getUID(await propTx.wait());
+
+    await eas.connect(signer).attest({
+      schema: tagSchemaUID,
+      data: {
+        recipient: ZeroAddress,
+        expirationTime: NO_EXPIRATION,
+        revocable: true,
+        refUID: propertyUID,
+        data: encodeTag(keyAnchorUID, true),
+        value: 0n,
+      },
+    });
+    return propertyUID;
   }
 
   async function tagTarget(

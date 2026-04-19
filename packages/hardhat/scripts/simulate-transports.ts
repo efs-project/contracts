@@ -137,20 +137,54 @@ async function main() {
     return { uid: await getUID(tx), contentHash };
   };
 
+  /**
+   * Attach a PROPERTY to a container using the unified free-floating model
+   * (ADR-0035): key anchor under the container, free-floating PROPERTY(value),
+   * and a TAG binding them. Returns the PROPERTY UID.
+   */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const property = async (signer: any, targetUID: string, key: string, value: string) => {
-    const tx = await eas.connect(signer).attest({
+  const property = async (signer: any, containerUID: string, key: string, value: string) => {
+    let keyAnchorUID: string = await indexer.resolveAnchor(containerUID, key, propertySchemaUID);
+    if (keyAnchorUID === ethers.ZeroHash) {
+      const keyTx = await eas.connect(signer).attest({
+        schema: anchorSchemaUID,
+        data: {
+          recipient: ethers.ZeroAddress,
+          expirationTime: 0n,
+          revocable: false,
+          refUID: containerUID,
+          data: encode.encode(["string", "bytes32"], [key, propertySchemaUID]),
+          value: 0n,
+        },
+      });
+      keyAnchorUID = await getUID(keyTx);
+    }
+
+    const propTx = await eas.connect(signer).attest({
       schema: propertySchemaUID,
       data: {
         recipient: ethers.ZeroAddress,
         expirationTime: 0n,
-        revocable: true,
-        refUID: targetUID,
-        data: encode.encode(["string", "string"], [key, value]),
+        revocable: false,
+        refUID: ethers.ZeroHash,
+        data: encode.encode(["string"], [value]),
         value: 0n,
       },
     });
-    return getUID(tx);
+    const propertyUID: string = await getUID(propTx);
+
+    await eas.connect(signer).attest({
+      schema: tagSchemaUID,
+      data: {
+        recipient: ethers.ZeroAddress,
+        expirationTime: 0n,
+        revocable: true,
+        refUID: propertyUID,
+        data: encode.encode(["bytes32", "bool"], [keyAnchorUID, true]),
+        value: 0n,
+      },
+    });
+    return propertyUID;
   };
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -461,14 +495,21 @@ async function main() {
   // ======================================================================
   console.log("\n[12] contentType PROPERTY Resolution\n");
 
-  // Verify the _getContentType fix: it should return the PROPERTY value, not the key
-  // We already tested this indirectly through Router, but let's be explicit
-  const ctProps = await indexer.getReferencingAttestations(prefData.uid, propertySchemaUID, 0, 10, true);
-  assert("PROPERTY indexed on DATA", ctProps.length >= 1);
+  // Verify the _getContentType fix: it should return the PROPERTY value via
+  // the unified free-floating model — key anchor + attester-scoped TAG.
+  const ctKeyAnchor = await indexer.resolveAnchor(prefData.uid, "contentType", propertySchemaUID);
+  assert("contentType key anchor indexed under DATA", ctKeyAnchor !== ethers.ZeroHash, `got ${ctKeyAnchor}`);
+  const ctProps = await tagResolver.getActiveTargetsByAttesterAndSchema(
+    ctKeyAnchor,
+    ownerAddr,
+    propertySchemaUID,
+    0,
+    10,
+  );
+  assert("Owner has 1 active contentType PROPERTY", ctProps.length === 1, `got ${ctProps.length}`);
   const ctPropAtt = await eas.getAttestation(ctProps[0]);
-  const [propKey, propValue] = encode.decode(["string", "string"], ctPropAtt.data);
-  assert("PROPERTY key is 'contentType'", propKey === "contentType");
-  assert("PROPERTY value is 'text/plain'", propValue === "text/plain");
+  const [ctValue] = encode.decode(["string"], ctPropAtt.data);
+  assert("PROPERTY value is 'text/plain'", ctValue === "text/plain", `got ${ctValue}`);
 
   // ======================================================================
   // TEST 13: Router Resolution — Full Path Walk

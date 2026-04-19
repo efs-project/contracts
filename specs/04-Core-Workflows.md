@@ -6,12 +6,14 @@ This document maps the step-by-step execution for specific developer and user in
 - **Action**: Atomic upload via EAS `multiAttest` — all attestations in a single transaction.
 - **Step 1**: Read file bytes → compute `keccak256(bytes)` for `contentHash`, measure `size`.
 - **Step 2**: Check `dataByContentKey[contentHash]` — if DATA exists, reuse it (dedup).
-- **Step 3**: Build `multiAttest` batch:
+- **Step 3**: Walk the ancestor chain from `/memes/` up to root exclusive (ADR-0006 revised 2026-04-18). For each generic folder the attester hasn't already covered with an active `applies=true` `TAG(definition=DATA_SCHEMA_UID, refUID=folder)`, queue a visibility TAG for that folder. The walk short-circuits the first time an existing active TAG is found — steady-state cost is zero. Bounded by `MAX_ANCHOR_DEPTH = 32` (ADR-0021).
+- **Step 4**: Build `multiAttest` batch:
   1. `DATA(contentHash, size)` — standalone, non-revocable, `refUID = 0x0`
   2. `PROPERTY(key="contentType", value="image/jpeg")` — `refUID = DATA UID`
   3. `MIRROR(transportDef=/transports/onchain, uri=web3://0xABC)` — `refUID = DATA UID`
   4. `TAG(definition=cat.jpg Anchor, applies=true)` — `refUID = DATA UID` (places DATA at path)
-- **Result**: TagResolver indexes TAG in `_activeByAAS[catAnchor][alice][DATA_SCHEMA]`, calls `propagateContains` up to `/memes/` and root.
+  5. One visibility TAG per queued ancestor from Step 3: `TAG(definition=DATA_SCHEMA_UID, refUID=ancestorFolder, applies=true)`. Makes the folder appear in the attester's edition listing.
+- **Result**: TagResolver indexes the placement TAG in `_activeByAAS[catAnchor][alice][DATA_SCHEMA]` and each visibility TAG in `_childrenTaggedWith[ancestor][DATA_SCHEMA_UID]`. `EFSFileView._getQualifyingTaggedFolders` reads those visibility TAGs single-source — untagged folders, even ones containing the attester's files, do not appear in that attester's edition (tag-only model).
 
 ### 2. Paste an IPFS link to `/docs/paper.pdf`
 - **Action**: Same as upload but MIRROR uses a different transport.
@@ -32,6 +34,14 @@ This document maps the step-by-step execution for specific developer and user in
 - **Action**: Place an existing DATA at a second path (e.g., same cat.jpg at `/animals/cat.jpg`).
 - **Execution**: Single `TAG(definition=animals/cat.jpg Anchor, applies=true, refUID=same DATA UID)`.
 - **Result**: DATA, PROPERTYs, and MIRRORs are shared. Only one new TAG. Metadata on the canonical DATA is visible from both paths.
+
+### 4a. Browse an address home (`/vitalik.eth/memes/`)
+- **Action**: Resolve the top-level URL segment as an Ethereum address and walk anchors parented at that address (ADR-0033).
+- **Step 1**: Off-chain, the UI resolves `vitalik.eth` via `publicClient.getEnsAddress` → checksummed address `0xd8dA…6045`. The on-chain router accepts raw 40-char hex only; ENS stays in the client per ADR-0030.
+- **Step 2**: Classify the segment (address → schema → attestation → anchor precedence). An address turns into `seedUID = bytes32(uint160(addr))`.
+- **Step 3**: Walk `resolvePath(seedUID, "memes")` → `resolvePath(<that>, "cat.jpg")` using the existing anchor-walk loop. `_nameToAnchor[parentUID][name][schema]` already indexes anchors parented at an address (via `EFSIndexer.onAttest`'s `refUID=0 && recipient!=0` fallback).
+- **Step 4**: If no `?editions=` was given, the router defaults editions to `[caller, vitalikAddr]` — the connected wallet wins, vitalik's edition fills the gaps. Explicit `?editions=` overrides wholesale (ADR-0031).
+- **Result**: A file under vitalik's home resolves exactly like any anchor path, scoped to his editions. The UI renders a `ContainerInfoPanel` showing the ENS name, a "You" chip when connected matches, and an Etherscan link.
 
 ### 5. Navigate to `/memes/` and list files
 - **Action**: Query TagResolver for DATAs and sub-folders at an Anchor, filtered by attester.
@@ -62,6 +72,7 @@ This document maps the step-by-step execution for specific developer and user in
 EFS files are modified by issuing new attestations.
 - **Edit (new version)**: Create new DATA + PROPERTY + MIRROR. TAG new DATA at the path (`applies=true`). TAG old DATA at the path (`applies=false`). Link versions via `PROPERTY(key="previousVersion", value=oldDataUID)`. Batch in single `multiAttest`.
 - **Remove from folder**: `TAG(definition=path Anchor, applies=false, refUID=DATA)`. TagResolver swap-and-pops DATA from `_activeByAAS`. DATA + mirrors + metadata survive. Other paths unaffected.
+- **Delete a folder (client-driven cascade)**: Collect every active placement TAG the attester owns in the folder's subtree — their visibility TAG on the folder itself (from the upload ancestor-walk) plus every file-placement TAG on descendant anchors. Batch via EAS `multiRevoke` (chunked 50 per tx — ADR-0026 analog). TagResolver's `onRevoke` clears `_activeByAAS` entries for each revoked tag. The folder anchor itself is non-revocable and persists in the kernel forever; it simply stops appearing in the attester's edition listing because no visibility TAG is active. Ancestor folders higher in the chain remain visible if they still have other tagged content or explicit visibility TAGs.
 - **Cross-reference**: `TAG(definition=new path Anchor, applies=true, refUID=existing DATA)`. Same DATA appears at multiple locations.
 
 ### 9. Resolve Subjective File Content (Editions)

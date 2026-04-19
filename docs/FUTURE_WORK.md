@@ -10,6 +10,9 @@ Backlog of known improvements, scale concerns, and architectural enhancements th
 
 ## Architecture & Extensibility
 
+### Kernel auto-tag `/tags/schema` on alias anchor creation
+Per ADR-0033, schema alias anchors (root-child anchors whose name is a registered schema UID in lowercase 0x-hex) are today **only** tagged with `/tags/schema` for the six system schemas seeded at deploy (`06_schema_aliases.ts`). User-created aliases (when someone registers a custom schema and attests a root anchor at its UID) need a follow-up tx to attach the tag before the sidebar enumerator sees them. Proper fix: in `EFSIndexer.onAttest` (or a kernel hook on ANCHOR attestations with `refUID == rootAnchorUID`), detect when `name` is a registered schema UID via `SchemaRegistry.getSchema` and auto-attest the `/tags/schema` TAG from the kernel. Care needed to avoid gas griefing — only triggered when name parses as bytes32 AND the UID exists in SchemaRegistry.
+
 ### Schema extensibility escape hatch
 Mainnet schema UIDs are baked in (ADR-0030). Adding a field to ANCHOR or DATA requires full system redeploy. A minimal `mapping(bytes32 uid => bytes data) extensions` in EFSIndexer would let future versions store extra data per attestation without re-deploying everything. Worth considering before mainnet — once frozen, no longer possible.
 
@@ -36,7 +39,7 @@ EFSIndexer emits events for off-chain indexing. Adding a field to an event later
 Append-only indices (ADR-0009) grow monotonically. Most revocations leave dead entries forever. A compaction primitive (re-attest the same content with same UID? — no, not how EAS works) is theoretically possible but has no clean design. Worth thinking about for the >10-year horizon.
 
 ### `_containsAttestations` full de-propagation
-Currently sticky (ADR-0010): empty folders stay visible after all content is removed. Full reference-counted de-propagation would clean this up but costs gas at every untag. Consider as optional opt-in flag if user demand emerges.
+Currently sticky (ADR-0010). No longer affects folder visibility (that's tag-only post-2026-04-18), but still leaves stale flags on ancestors after file placements are revoked. Full reference-counted de-propagation would clean this up but costs gas at every untag. Low priority now that folder visibility has moved.
 
 ### Large directory pagination across attesters
 `getDirectoryPageBySchemaAndAddressList` works for 20 attesters max (ADR-0026). For "follow 100+ curators" use cases, requires either: relaxing the cap (gas concerns), client-side aggregation (complex but cheap), or a future merge endpoint.
@@ -63,6 +66,18 @@ Currently you must know attester addresses to query. An `attestersInFolder(uid, 
 ---
 
 ## UX & Frontend (internal devtools)
+
+### Per-container home pages ("Myspace mode")
+Every container (anchor / address / schema / attestation) is currently rendered with a minimal info panel + directory grid. A future enhancement is per-container user-defined "home pages" — e.g. a `description` / `icon` / `homeDataUID` PROPERTY attached to the container, which the panel picks up and expands into a rich header. Works for any container flavor. No schema changes needed; only PROPERTY keys + UI rendering.
+
+### Accurate edition-filtered child count on folder rows
+Folder rows in `FileBrowser.tsx` currently render the literal `"Folder"` in edition mode because `indexer.getChildrenCount(uid)` is a kernel-level count over permanent anchors and never shrinks when placements are revoked (see `docs/decisions.md` 2026-04-19). A true count would require either a per-row view call (file-placement TAGs active under this folder for this edition list + tagged subfolders) or a new counting helper in `EFSFileView`. Low priority — cosmetic — but worth wiring once a pattern exists.
+
+### Attestations section in sidebar
+The sidebar has Anchors, Addresses, and Schemas sections. An Attestations section would complete the set, but top-N-recent heuristics aren't obvious — skip until a usage pattern emerges.
+
+### ENS reverse lookup everywhere in the UI
+v1 does ENS reverse lookup only for the address in the URL bar and the Addresses sidebar list. Attester chips on file cards, mirror panels, etc. still show 0x… hex. A shared `useEnsName(addr)` hook with cache would make it ubiquitous at low cost.
 
 ### Empty-folder filtering in edition view
 Sticky `_containsAttestations` (ADR-0010) means empty folders appear in edition listings. The UI could cross-check with `containsAttestations()` to hide them — cosmetic improvement, no on-chain change.

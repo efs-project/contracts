@@ -10,9 +10,23 @@ export type ScaffoldConfig = {
 
 export const DEFAULT_ALCHEMY_API_KEY = "cR4WnXePioePZ5fFrnSiR";
 
+// Agents running a parallel hardhat node (e.g. on 8546) set NEXT_PUBLIC_HARDHAT_RPC_URL
+// so wagmi clients AND the burner-connector both target the same node. The burner
+// reads the chain object's rpcUrls directly, so overriding wagmiConfig's transport
+// alone isn't enough — patch the hardhat chain here.
+const HARDHAT_RPC_URL = process.env.NEXT_PUBLIC_HARDHAT_RPC_URL;
+const hardhatChain: chains.Chain = HARDHAT_RPC_URL
+  ? {
+      ...chains.hardhat,
+      rpcUrls: {
+        default: { http: [HARDHAT_RPC_URL] },
+      },
+    }
+  : chains.hardhat;
+
 const scaffoldConfig = {
   // The networks on which your DApp is live
-  targetNetworks: [chains.hardhat],
+  targetNetworks: [hardhatChain],
 
   // The interval at which your front-end polls the RPC servers for new data
   // it has no effect if you only target the local network (default is 4000)

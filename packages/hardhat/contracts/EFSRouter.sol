@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
+import { ISchemaRegistry, SchemaRecord } from "@ethereum-attestation-service/eas-contracts/contracts/ISchemaRegistry.sol";
+
 // Interfaces for Web3:// Resolution
 
 interface IDecentralizedApp {
@@ -97,12 +99,26 @@ contract EFSRouter is IDecentralizedApp {
     IEFSIndexer public indexer;
     IEAS public eas;
     ITagResolverForRouter public tagResolver;
+    ISchemaRegistry public schemaRegistry;
     bytes32 public dataSchemaUID;
 
-    constructor(address _indexer, address _eas, address _tagResolver, bytes32 _dataSchemaUID) {
+    /// @dev Top-level URL segment can resolve to four container flavors.
+    ///      Resolution precedence at classification: Address (40-hex) →
+    ///      Schema (64-hex registered) → Attestation (64-hex existing) → Anchor (name).
+    ///      All flavors share the same downstream walk logic — they just seed
+    ///      `currentParent` differently before `indexer.resolvePath` takes over.
+    enum ContainerFlavor {
+        Anchor,
+        Address,
+        Schema,
+        Attestation
+    }
+
+    constructor(address _indexer, address _eas, address _tagResolver, address _schemaRegistry, bytes32 _dataSchemaUID) {
         indexer = IEFSIndexer(_indexer);
         eas = IEAS(_eas);
         tagResolver = ITagResolverForRouter(_tagResolver);
+        schemaRegistry = ISchemaRegistry(_schemaRegistry);
         dataSchemaUID = _dataSchemaUID;
     }
 
@@ -162,15 +178,42 @@ contract EFSRouter is IDecentralizedApp {
         string[] memory resource,
         KeyValue[] memory params
     ) external view override returns (uint statusCode, bytes memory body, KeyValue[] memory headers) {
-        // 1. Path Resolution: Traverse directory from Root Anchor
-        bytes32 currentParent = indexer.rootAnchorUID();
-        bytes32 targetAnchor = currentParent;
-
-        // Empty path guard (must be before the loop)
+        // Empty path guard (must be before classification)
         if (resource.length == 0) return (404, bytes("Not Found: Empty path"), new KeyValue[](0));
 
-        for (uint i = 0; i < resource.length; i++) {
-            // Traverse down the hierarchy.
+        // 1. Classify top-level segment → seed parent per container flavor (ADR-0033).
+        //    Address / Schema / Attestation flavors skip segment 0 in the walk since it's the
+        //    container itself; Anchor flavor keeps the pre-existing full walk from rootAnchorUID.
+        //
+        //    Schema / Attestation additionally prefer an *alias anchor* at root whose name is
+        //    the UID's hex form — that's where EFS-native PROPERTYs / TAGs / sub-anchors live
+        //    (see ADR-0033 §2). Raw-UID seed is only used when no alias has been attested yet;
+        //    the JSON fallback below still serves raw EAS info for either case.
+        (ContainerFlavor flavor, bytes32 rawUID) = _classifyTopLevel(resource[0]);
+
+        bytes32 currentParent;
+        bytes32 targetAnchor;
+        uint256 startIdx;
+        if (flavor == ContainerFlavor.Anchor) {
+            currentParent = indexer.rootAnchorUID();
+            targetAnchor = currentParent;
+            startIdx = 0;
+        } else if (flavor == ContainerFlavor.Address) {
+            currentParent = rawUID;
+            targetAnchor = rawUID;
+            startIdx = 1;
+        } else {
+            // Schema or Attestation: prefer alias anchor at root if one exists.
+            // Alias names are stored in lowercase 0x-hex (see 06_schema_aliases.ts),
+            // so we lowercase the URL segment before the name lookup — otherwise
+            // `0xABC…` URLs would miss an alias attested as `0xabc…`.
+            bytes32 aliasUID = indexer.resolvePath(indexer.rootAnchorUID(), _lowercaseHex(resource[0]));
+            currentParent = aliasUID != bytes32(0) ? aliasUID : rawUID;
+            targetAnchor = currentParent;
+            startIdx = 1;
+        }
+
+        for (uint i = startIdx; i < resource.length; i++) {
             // Intermediate segments must be folders (generic schema).
             // Last segment: try data-schema anchor first (file), fall back to generic (folder).
             if (i == resource.length - 1) {
@@ -190,6 +233,7 @@ contract EFSRouter is IDecentralizedApp {
 
         // Combine parameter checks
         address[] memory editions;
+        bool editionsExplicit = false;
         address caller = msg.sender; // non-zero if web3:// client sets `from` on eth_call
         string memory chunkIndexStr = "";
         for (uint i = 0; i < params.length; i++) {
@@ -199,6 +243,7 @@ contract EFSRouter is IDecentralizedApp {
                 _stringsEqual(params[i].key, "curator")
             ) {
                 editions = _parseAddressList(params[i].value);
+                editionsExplicit = true;
             } else if (_stringsEqual(params[i].key, "chunk")) {
                 chunkIndexStr = params[i].value;
             } else if (_stringsEqual(params[i].key, "caller")) {
@@ -207,9 +252,33 @@ contract EFSRouter is IDecentralizedApp {
             }
         }
 
+        // Address-default editions: when browsing an address container with no explicit
+        // `?editions=`, default to `[caller, segmentAddr]` — "Vitalik's files, with my
+        // overrides on top". Consistent with ADR-0031 (explicit editions always override).
+        if (flavor == ContainerFlavor.Address && !editionsExplicit) {
+            address segmentAddr = address(uint160(uint256(rawUID)));
+            if (caller != address(0) && caller != segmentAddr) {
+                editions = new address[](2);
+                editions[0] = caller;
+                editions[1] = segmentAddr;
+            } else {
+                editions = new address[](1);
+                editions[0] = segmentAddr;
+            }
+        }
+
         // 2. Find DATA via TAG query: resolve editions → TAG → DATA → MIRROR
         (bytes32 dataUID, address dataAttester) = _findDataAtPath(targetAnchor, editions, caller);
         if (dataUID == bytes32(0)) {
+            // Schema/Attestation containers with no DATA attached fall back to raw-info JSON
+            // instead of 404. Only fires when the user typed the container itself (no sub-path)
+            // — for sub-paths under a schema/attestation, a missing file is still 404.
+            // `rawUID` is preserved from classification regardless of whether we walked via an
+            // alias anchor, so this responds with real EAS info either way.
+            if (resource.length == 1) {
+                if (flavor == ContainerFlavor.Schema) return _respondSchemaJSON(rawUID);
+                if (flavor == ContainerFlavor.Attestation) return _respondAttestationJSON(rawUID);
+            }
             return (404, "Not Found: No data attached or curator unset", new KeyValue[](0));
         }
 
@@ -242,10 +311,16 @@ contract EFSRouter is IDecentralizedApp {
             headers = new KeyValue[](1);
             headers[0] = KeyValue(
                 "Content-Type",
-                string(abi.encodePacked(
-                    'message/external-body; access-type=URL; URL="', uri, '"',
-                    bytes(safeContentType).length > 0 ? string(abi.encodePacked('; content-type="', safeContentType, '"')) : ""
-                ))
+                string(
+                    abi.encodePacked(
+                        'message/external-body; access-type=URL; URL="',
+                        uri,
+                        '"',
+                        bytes(safeContentType).length > 0
+                            ? string(abi.encodePacked('; content-type="', safeContentType, '"'))
+                            : ""
+                    )
+                )
             );
             return (200, bytes(""), headers);
         } else if (_startsWith(uri, "web3://")) {
@@ -457,6 +532,101 @@ contract EFSRouter is IDecentralizedApp {
         return address(parsed);
     }
 
+    /// @dev Produce a lowercased copy of a string's ASCII A–F range. Used to normalize URL-supplied
+    ///      schema/attestation UIDs before alias-anchor name lookup — aliases are stored in lowercase
+    ///      hex (see 06_schema_aliases.ts), so `/0xABC…` must match `/0xabc…`. Non-hex bytes pass
+    ///      through unchanged; cheaper than full-string lowering and there's no need to handle the
+    ///      rest of the ASCII table here.
+    function _lowercaseHex(string memory str) private pure returns (string memory) {
+        bytes memory sb = bytes(str);
+        bytes memory out = new bytes(sb.length);
+        for (uint i = 0; i < sb.length; i++) {
+            bytes1 c = sb[i];
+            if (c >= 0x41 && c <= 0x46) {
+                out[i] = bytes1(uint8(c) + 32);
+            } else {
+                out[i] = c;
+            }
+        }
+        return string(out);
+    }
+
+    /// @dev Non-reverting parser for 64-hex-char bytes32 (with optional 0x prefix and leading whitespace).
+    ///      Returns (bytes32(0), false) on any malformed input. Mirrors `_parseAddress` per ADR-0019.
+    function _parseBytes32(string memory str) private pure returns (bytes32, bool) {
+        bytes memory sb = bytes(str);
+        uint offset = 0;
+
+        while (offset < sb.length && sb[offset] == 0x20) {
+            offset++;
+        }
+
+        if (offset + 1 < sb.length && sb[offset] == "0" && (sb[offset + 1] == "x" || sb[offset + 1] == "X")) {
+            offset += 2;
+        }
+
+        if (sb.length < offset + 64) return (bytes32(0), false);
+
+        uint256 parsed = 0;
+        for (uint i = 0; i < 64; i++) {
+            uint8 nibble = _hexCharToByte(uint8(sb[offset + i]));
+            if (nibble == 0xFF) return (bytes32(0), false);
+            parsed = parsed * 16 + nibble;
+        }
+        return (bytes32(parsed), true);
+    }
+
+    /// @dev Returns the count of contiguous hex chars after an optional 0x prefix (with trailing
+    ///      whitespace allowed). Returns 0 for empty input or if any non-hex / non-whitespace char
+    ///      appears after the hex run. Used to disambiguate Address (40) vs Schema/Attestation (64).
+    function _effectiveHexLength(string memory s) private pure returns (uint256) {
+        bytes memory sb = bytes(s);
+        uint offset = 0;
+        while (offset < sb.length && sb[offset] == 0x20) offset++;
+        if (offset + 1 < sb.length && sb[offset] == "0" && (sb[offset + 1] == "x" || sb[offset + 1] == "X")) {
+            offset += 2;
+        }
+        uint count = 0;
+        while (offset + count < sb.length && _hexCharToByte(uint8(sb[offset + count])) != 0xFF) {
+            count++;
+        }
+        for (uint i = offset + count; i < sb.length; i++) {
+            if (sb[i] != 0x20) return 0;
+        }
+        return count;
+    }
+
+    /// @dev Classify the top-level URL segment into one of four container flavors.
+    ///      Precedence: Address (40 hex) → Schema (64 hex, registered) →
+    ///      Attestation (64 hex, exists) → Anchor (anything else, including names).
+    ///      See ADR-0033. ENS resolution is off-chain (frontend-only) per ADR-0030.
+    function _classifyTopLevel(string memory segment) private view returns (ContainerFlavor, bytes32) {
+        if (bytes(segment).length == 0) return (ContainerFlavor.Anchor, bytes32(0));
+
+        uint256 hexLen = _effectiveHexLength(segment);
+
+        if (hexLen == 40) {
+            address a = _parseAddress(segment);
+            if (a != address(0)) {
+                return (ContainerFlavor.Address, bytes32(uint256(uint160(a))));
+            }
+        }
+
+        if (hexLen == 64) {
+            (bytes32 uid, bool ok) = _parseBytes32(segment);
+            if (ok && uid != bytes32(0)) {
+                if (schemaRegistry.getSchema(uid).uid != bytes32(0)) {
+                    return (ContainerFlavor.Schema, uid);
+                }
+                if (eas.getAttestation(uid).uid != bytes32(0)) {
+                    return (ContainerFlavor.Attestation, uid);
+                }
+            }
+        }
+
+        return (ContainerFlavor.Anchor, bytes32(0));
+    }
+
     // Parses a string to uint256
     function _parseUint(string memory str) private pure returns (uint256) {
         bytes memory strBytes = bytes(str);
@@ -492,6 +662,129 @@ contract EFSRouter is IDecentralizedApp {
         return string(buffer);
     }
 
+    /// @dev Lowercase-hex encoding of a bytes32 with 0x prefix. Used to serialize UIDs in JSON
+    ///      responses for schema/attestation containers (see `_respondSchemaJSON` / `_respondAttestationJSON`).
+    function _bytes32ToHex(bytes32 v) private pure returns (string memory) {
+        bytes memory alphabet = "0123456789abcdef";
+        bytes memory buf = new bytes(66);
+        buf[0] = "0";
+        buf[1] = "x";
+        for (uint i = 0; i < 32; i++) {
+            uint8 b = uint8(v[i]);
+            buf[2 + i * 2] = alphabet[b >> 4];
+            buf[3 + i * 2] = alphabet[b & 0x0f];
+        }
+        return string(buf);
+    }
+
+    function _addressToHex(address a) private pure returns (string memory) {
+        bytes memory alphabet = "0123456789abcdef";
+        bytes memory buf = new bytes(42);
+        buf[0] = "0";
+        buf[1] = "x";
+        bytes20 b20 = bytes20(a);
+        for (uint i = 0; i < 20; i++) {
+            uint8 b = uint8(b20[i]);
+            buf[2 + i * 2] = alphabet[b >> 4];
+            buf[3 + i * 2] = alphabet[b & 0x0f];
+        }
+        return string(buf);
+    }
+
+    function _bytesToHex(bytes memory data) private pure returns (string memory) {
+        bytes memory alphabet = "0123456789abcdef";
+        bytes memory buf = new bytes(2 + data.length * 2);
+        buf[0] = "0";
+        buf[1] = "x";
+        for (uint i = 0; i < data.length; i++) {
+            uint8 b = uint8(data[i]);
+            buf[2 + i * 2] = alphabet[b >> 4];
+            buf[3 + i * 2] = alphabet[b & 0x0f];
+        }
+        return string(buf);
+    }
+
+    /// @dev Minimal JSON-string escaping: only backslash and double-quote are escaped.
+    ///      Control characters are rare in schema strings and are passed through — this matches
+    ///      the "best effort, never revert" spirit of the router. If an attester embeds raw
+    ///      control chars in a schema, the resulting JSON may be parser-hostile but the router
+    ///      still responds.
+    function _jsonEscape(string memory s) private pure returns (string memory) {
+        bytes memory sb = bytes(s);
+        uint256 extra = 0;
+        for (uint i = 0; i < sb.length; i++) {
+            if (sb[i] == '"' || sb[i] == "\\") extra++;
+        }
+        if (extra == 0) return s;
+        bytes memory out = new bytes(sb.length + extra);
+        uint256 j = 0;
+        for (uint i = 0; i < sb.length; i++) {
+            if (sb[i] == '"' || sb[i] == "\\") {
+                out[j++] = "\\";
+            }
+            out[j++] = sb[i];
+        }
+        return string(out);
+    }
+
+    /// @dev Build a 200 / application/json response for a schema container.
+    ///      Shape: `{"uid":"0x…","resolver":"0x…","revocable":true,"schema":"…"}`.
+    function _respondSchemaJSON(bytes32 uid) private view returns (uint, bytes memory, KeyValue[] memory) {
+        SchemaRecord memory s = schemaRegistry.getSchema(uid);
+        string memory json = string(
+            abi.encodePacked(
+                '{"uid":"',
+                _bytes32ToHex(s.uid),
+                '","resolver":"',
+                _addressToHex(address(s.resolver)),
+                '","revocable":',
+                s.revocable ? "true" : "false",
+                ',"schema":"',
+                _jsonEscape(s.schema),
+                '"}'
+            )
+        );
+        KeyValue[] memory h = new KeyValue[](1);
+        h[0] = KeyValue("Content-Type", "application/json");
+        return (200, bytes(json), h);
+    }
+
+    /// @dev Build a 200 / application/json response for an attestation container.
+    ///      Split into two encodePacked batches to keep the stack shallow.
+    function _respondAttestationJSON(bytes32 uid) private view returns (uint, bytes memory, KeyValue[] memory) {
+        IEAS.Attestation memory a = eas.getAttestation(uid);
+        bytes memory part1 = abi.encodePacked(
+            '{"uid":"',
+            _bytes32ToHex(a.uid),
+            '","schema":"',
+            _bytes32ToHex(a.schema),
+            '","attester":"',
+            _addressToHex(a.attester),
+            '","recipient":"',
+            _addressToHex(a.recipient),
+            '","refUID":"',
+            _bytes32ToHex(a.refUID),
+            '"'
+        );
+        bytes memory part2 = abi.encodePacked(
+            ',"time":',
+            _uintToString(a.time),
+            ',"expirationTime":',
+            _uintToString(a.expirationTime),
+            ',"revocationTime":',
+            _uintToString(a.revocationTime),
+            ',"revocable":',
+            a.revocable ? "true" : "false",
+            ',"data":"',
+            _bytesToHex(a.data),
+            '"}'
+        );
+        string memory json = string(abi.encodePacked(part1, part2));
+        KeyValue[] memory h = new KeyValue[](1);
+        h[0] = KeyValue("Content-Type", "application/json");
+        return (200, bytes(json), h);
+    }
+
     // Find DATA at a path anchor via TAG query — returns the most recent DATA by timestamp
     // and the attester whose TAG resolved it (used to scope mirror selection).
     // The _activeByAttesterAndSchema array uses swap-and-pop, so element order is not
@@ -500,7 +793,11 @@ contract EFSRouter is IDecentralizedApp {
     // Fallback priority when no ?editions= is specified:
     //   1. caller (from ?caller= param or msg.sender if non-zero) — user sees their own files
     //   2. EFS deployer — system-provided defaults (settings, docs, etc.)
-    function _findDataAtPath(bytes32 targetAnchor, address[] memory editions, address caller) private view returns (bytes32, address) {
+    function _findDataAtPath(
+        bytes32 targetAnchor,
+        address[] memory editions,
+        address caller
+    ) private view returns (bytes32, address) {
         bytes32 dataSchema = indexer.DATA_SCHEMA_UID();
 
         address[] memory attesters;
@@ -583,7 +880,12 @@ contract EFSRouter is IDecentralizedApp {
             uint256 remaining = total - offset;
             uint256 chunk = remaining < PAGE ? remaining : PAGE;
             bytes32[] memory mirrors = indexer.getReferencingBySchemaAndAttester(
-                dataUID, mirrorSchema, attester, offset, chunk, true
+                dataUID,
+                mirrorSchema,
+                attester,
+                offset,
+                chunk,
+                true
             );
 
             for (uint256 i = 0; i < mirrors.length; i++) {
@@ -614,21 +916,37 @@ contract EFSRouter is IDecentralizedApp {
         return (best, hadMirrors);
     }
 
-    // Get contentType from PROPERTY on DATA, scoped to the edition attester.
-    // Only properties authored by `attester` are considered — prevents third parties from
-    // overriding the MIME type by attaching a later PROPERTY to someone else's DATA.
+    // Get contentType from PROPERTY on DATA, scoped to the edition attester (ADR-0035).
+    //
+    // Unified PROPERTY model: the value lives on a free-floating PROPERTY attestation,
+    // bound to the DATA via TAG under `Anchor<PROPERTY>(parent=DATA, name="contentType")`.
+    // Per-attester singleton comes from TagResolver._activeByAAS — only the attester's
+    // current binding is considered, so third parties cannot displace the MIME type.
     function _getContentType(bytes32 dataUID, address attester) private view returns (string memory) {
         bytes32 propertySchema = indexer.PROPERTY_SCHEMA_UID();
-        // Use the per-(data,schema,attester) index so PROPERTY attestations from other
-        // addresses cannot displace the edition attester's contentType out of the window.
-        bytes32[] memory props = indexer.getReferencingBySchemaAndAttester(dataUID, propertySchema, attester, 0, 20, true);
 
-        for (uint256 i = 0; i < props.length; i++) {
-            if (indexer.isRevoked(props[i])) continue;
-            IEAS.Attestation memory propAtt = eas.getAttestation(props[i]);
-            (string memory key, string memory value) = abi.decode(propAtt.data, (string, string));
-            if (keccak256(bytes(key)) == keccak256("contentType") && bytes(value).length > 0) return value;
-        }
-        return "application/octet-stream";
+        // 1. Resolve the "contentType" key anchor under the DATA. Missing key anchor →
+        //    no one has ever labeled this DATA's contentType anywhere.
+        bytes32 keyAnchor = indexer.resolveAnchor(dataUID, "contentType", propertySchema);
+        if (keyAnchor == bytes32(0)) return "application/octet-stream";
+
+        // 2. Fetch the attester's active PROPERTY UID under that key anchor.
+        bytes32[] memory targets = tagResolver.getActiveTargetsByAttesterAndSchema(
+            keyAnchor,
+            attester,
+            propertySchema,
+            0,
+            1
+        );
+        if (targets.length == 0) return "application/octet-stream";
+
+        bytes32 propertyUID = targets[0];
+        if (indexer.isRevoked(propertyUID)) return "application/octet-stream";
+
+        // 3. Decode the value.
+        IEAS.Attestation memory propAtt = eas.getAttestation(propertyUID);
+        string memory value = abi.decode(propAtt.data, (string));
+        if (bytes(value).length == 0) return "application/octet-stream";
+        return value;
     }
 }

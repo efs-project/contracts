@@ -132,6 +132,11 @@ function EASExplorerContent() {
     }
   }, [uidParam]);
 
+  useEffect(() => {
+    const short = uidParam ? `${uidParam.slice(0, 10)}…` : null;
+    document.title = short ? `${short} - EFS` : "EAS Explorer - EFS";
+  }, [uidParam]);
+
   // 1. Get EAS Address from Indexer
   const { data: easAddress } = useScaffoldReadContract({
     contractName: "Indexer",

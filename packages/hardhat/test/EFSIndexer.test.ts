@@ -53,8 +53,8 @@ describe("EFSIndexer", function () {
     const rc1 = await tx1.wait();
     anchorSchemaUID = rc1!.logs[0].topics[1]; // Registered(bytes32 uid, ...)
 
-    // PROPERTY: string key, string value
-    const tx2 = await registry.register("string key, string value", futureIndexerAddr, true);
+    // PROPERTY: string value (unified free-floating model per ADR-0035, non-revocable)
+    const tx2 = await registry.register("string value", futureIndexerAddr, false);
     const rc2 = await tx2.wait();
     propertySchemaUID = rc2!.logs[0].topics[1];
 
@@ -285,7 +285,7 @@ describe("EFSIndexer", function () {
       ).to.be.revertedWithCustomError(eas, "InvalidAttestation");
     });
 
-    it("Should reject PROPERTY attached to non-Anchor", async function () {
+    it("Should reject revocable PROPERTY (schema is non-revocable per ADR-0035)", async function () {
       const schemaEncoder = new ethers.AbiCoder();
       await expect(
         eas.attest({
@@ -295,6 +295,36 @@ describe("EFSIndexer", function () {
             expirationTime: NO_EXPIRATION,
             revocable: true,
             refUID: ZERO_BYTES32,
+            data: schemaEncoder.encode(["string"], ["val"]),
+            value: 0n,
+          },
+        }),
+      ).to.be.revertedWithCustomError(eas, "Irrevocable");
+    });
+
+    it("Should reject PROPERTY with non-zero refUID (must be free-floating per ADR-0035)", async function () {
+      const schemaEncoder = new ethers.AbiCoder();
+      const rootTx = await eas.attest({
+        schema: anchorSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: NO_EXPIRATION,
+          revocable: false,
+          refUID: ZERO_BYTES32,
+          data: schemaEncoder.encode(["string", "bytes32"], ["root", ZERO_BYTES32]),
+          value: 0n,
+        },
+      });
+      const rootUID = getUIDFromReceipt(await rootTx.wait());
+
+      await expect(
+        eas.attest({
+          schema: propertySchemaUID,
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: NO_EXPIRATION,
+            revocable: false,
+            refUID: rootUID, // Must be 0x0 for standalone PROPERTY
             data: schemaEncoder.encode(["string"], ["val"]),
             value: 0n,
           },
@@ -1037,8 +1067,8 @@ describe("EFSIndexer", function () {
       parentUID = getUIDFromReceipt(receipt);
     });
 
-    it("Should resolve Property Value (Anchor -> Value)", async function () {
-      // 1. Create Property Anchor "theme"
+    it("Should resolve Property key anchor and accept free-floating PROPERTY value (ADR-0035)", async function () {
+      // 1. Create Property key anchor "theme" under parent
       const txAnchor = await eas.attest({
         schema: anchorSchemaUID,
         data: {
@@ -1053,29 +1083,26 @@ describe("EFSIndexer", function () {
       const receiptAnchor = await txAnchor.wait();
       const anchorUID = getUIDFromReceipt(receiptAnchor);
 
-      // 2. Attest Value "DarkMode"
+      // 2. Attest free-floating PROPERTY value "DarkMode" (refUID=0x0, non-revocable)
       const txValue = await eas.attest({
         schema: propertySchemaUID,
         data: {
           recipient: ZeroAddress,
           expirationTime: NO_EXPIRATION,
-          revocable: true,
-          refUID: anchorUID,
+          revocable: false,
+          refUID: ZERO_BYTES32,
           data: schemaEncoder.encode(["string"], ["DarkMode"]),
           value: 0n,
         },
       });
       const receiptValue = await txValue.wait();
       const valueUID = getUIDFromReceipt(receiptValue);
+      expect(valueUID).to.not.equal(ZERO_BYTES32);
 
-      // 3. Resolve Anchor first
+      // 3. Resolve key anchor (the placement binding happens via TAG in the full model,
+      //    which lives in TagResolver — this kernel-only test verifies attestation shape).
       const resolvedAnchor = await indexer.resolveAnchor(parentUID, "theme", propertySchemaUID);
       expect(resolvedAnchor).to.equal(anchorUID);
-
-      // 4. Get Property Values
-      const values = await indexer.getReferencingAttestations(anchorUID, propertySchemaUID, 0, 10, false);
-      expect(values.length).to.equal(1);
-      expect(values[0]).to.equal(valueUID);
     });
 
     it("Should resolve File Data (Anchor -> Data -> Blob)", async function () {
