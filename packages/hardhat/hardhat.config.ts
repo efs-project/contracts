@@ -66,6 +66,12 @@ const config: HardhatUserConfig = {
       gasMultiplier: 3,
       forking: {
         url: `https://eth-sepolia.g.alchemy.com/v2/${providerApiKey}`,
+        // Pinned Sepolia block — makes deployed contract addresses, EAS schema UIDs,
+        // and the resulting `deployedContracts.ts` byte-identical across environments
+        // (local hardhat fork, CI, the devnet VPS, the Vite client). See ADR-0037.
+        // Override with FORK_BLOCK=<n> to bump the pin (requires regenerating
+        // deployedContracts.ts and a new EFS commit SHA — that's the coordination unit).
+        blockNumber: Number(process.env.FORK_BLOCK ?? 10_691_000),
         enabled: process.env.MAINNET_FORKING_ENABLED === "true",
       },
       // forking: {

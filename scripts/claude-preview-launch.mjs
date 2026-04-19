@@ -116,7 +116,10 @@ async function main() {
     ["hardhat:fork", "--port", String(hardhatPort)],
     {
       stdio: ["ignore", "inherit", "inherit"],
-      env: process.env,
+      // MAINNET_FORKING_ENABLED=true makes hardhat actually fork Sepolia at the pinned
+      // FORK_BLOCK (see hardhat.config.ts, ADR-0037). Without it, `networks.hardhat.forking`
+      // is ignored and deployments land on a bare chain with no EAS state — broken.
+      env: { ...process.env, MAINNET_FORKING_ENABLED: "true" },
     },
   );
   children.push(fork);
