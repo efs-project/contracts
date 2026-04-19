@@ -55,8 +55,14 @@ const getContractData = async (address: string) => {
     "build-info",
   );
 
+  // On the VPS / devnet, the production Next.js build is shipped without the
+  // sibling `packages/hardhat/artifacts` tree — build-info only lives alongside
+  // the compiler, not alongside the app bundle. Degrade gracefully so
+  // `/blockexplorer/address/<any>` still renders; contract bytecode/assembly
+  // just won't be available in that deployment. Previously this threw, which
+  // 500'd every address page on devnet.
   if (!fs.existsSync(buildInfoDirectory)) {
-    throw new Error(`Directory ${buildInfoDirectory} not found.`);
+    return null;
   }
 
   const deployedContractsOnChain = contracts ? contracts[chainId] : {};

@@ -120,6 +120,12 @@ Track gas usage of hot paths (upload flow, directory listing, router resolution)
 
 ## Security & Audit
 
+### Devnet IPFS upload auth
+The public devnet's `POST /api/v0/add` endpoint is currently unauthenticated — any browser can pin arbitrary bytes into the devnet's IPFS daemon. Acceptable for an ephemeral "resets weekly" devnet and for alpha testing, but ship-blocking for any long-lived deployment that intends users to rely on pinned content persisting. Pre-launch work: add a token-gated auth layer (devnet operator whitelist, or EAS-attested uploader list) on the reverse proxy, or accept that uploads must originate from the app (which can sign them) rather than arbitrary clients.
+
+### Devnet Arweave write path
+Public ingress is gateway-only (`/arweave/<txid>` reads succeed; `POST /arweave/` returns 405). For the alpha that's fine — the dev flow puts content on IPFS primarily — but the production client must not attempt to publish ar:// mirrors to the devnet's arweave endpoint without a write path. Either provision a signed-upload route or document ar:// as read-only on this devnet. Cross-ref ADR-0011 (transport anchors).
+
 ### External audit on EFSIndexer
 Single most important pre-mainnet item. EFSIndexer is permanent and the kernel of the system — one external pass from a credentialed firm (Trail of Bits, OpenZeppelin, Code4rena contest) is worth the cost. See `docs/LAUNCH_CHECKLIST.md`.
 
