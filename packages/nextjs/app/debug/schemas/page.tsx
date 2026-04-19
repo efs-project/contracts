@@ -60,18 +60,21 @@ const EAS_ABI = [
   {
     inputs: [{ name: "uid", type: "bytes32" }],
     name: "getAttestation",
+    // Tuple order matches EAS `Attestation` struct in Common.sol exactly:
+    // uid, schema, time, expirationTime, revocationTime, refUID, recipient,
+    // attester, revocable, data. Reordering breaks viem decoding.
     outputs: [
       {
         components: [
           { name: "uid", type: "bytes32" },
           { name: "schema", type: "bytes32" },
-          { name: "refUID", type: "bytes32" },
           { name: "time", type: "uint64" },
           { name: "expirationTime", type: "uint64" },
           { name: "revocationTime", type: "uint64" },
-          { name: "revocable", type: "bool" },
+          { name: "refUID", type: "bytes32" },
           { name: "recipient", type: "address" },
           { name: "attester", type: "address" },
+          { name: "revocable", type: "bool" },
           { name: "data", type: "bytes" },
         ],
         name: "",

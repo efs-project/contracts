@@ -48,6 +48,14 @@ const SCHEMA_REGISTRY_ABI = [
   },
 ] as const;
 
+// NOTE: Tuple order MUST match EAS's on-chain `Attestation` struct in
+// `Common.sol` exactly: uid, schema, time, expirationTime, revocationTime,
+// refUID, recipient, attester, revocable, data. An earlier revision had
+// `refUID` before `time` and `revocable` before the two addresses, which
+// causes viem to reject `recipient` when decoding it as bool — so every
+// valid 64-byte attestation UID hit the `catch` branch and fell through
+// to the anchor fallback, breaking ADR-0033 `/0x<attestationUID>/…` URLs.
+// Keep field order locked to the Solidity struct.
 const EAS_ATTESTATION_ABI = [
   {
     inputs: [{ name: "uid", type: "bytes32" }],
@@ -57,13 +65,13 @@ const EAS_ATTESTATION_ABI = [
         components: [
           { name: "uid", type: "bytes32" },
           { name: "schema", type: "bytes32" },
-          { name: "refUID", type: "bytes32" },
           { name: "time", type: "uint64" },
           { name: "expirationTime", type: "uint64" },
           { name: "revocationTime", type: "uint64" },
-          { name: "revocable", type: "bool" },
+          { name: "refUID", type: "bytes32" },
           { name: "recipient", type: "address" },
           { name: "attester", type: "address" },
+          { name: "revocable", type: "bool" },
           { name: "data", type: "bytes" },
         ],
         name: "",

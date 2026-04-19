@@ -5,6 +5,12 @@ import { decodeAbiParameters, getAddress, zeroHash } from "viem";
 import { usePublicClient } from "wagmi";
 import type { ClassifiedContainer, ContainerKind } from "~~/utils/efs/containers";
 
+// Tuple order MUST match EAS's on-chain `Attestation` struct in `Common.sol`
+// exactly: uid, schema, time, expirationTime, revocationTime, refUID,
+// recipient, attester, revocable, data. A prior revision had `refUID` before
+// `time` and `revocable` before the two addresses, so viem failed to decode
+// `recipient` as bool and the whole read went to the catch path — leaving the
+// attestation info panel blank even when the UID was valid.
 const EAS_ABI = [
   {
     inputs: [{ name: "uid", type: "bytes32" }],
@@ -14,13 +20,13 @@ const EAS_ABI = [
         components: [
           { name: "uid", type: "bytes32" },
           { name: "schema", type: "bytes32" },
-          { name: "refUID", type: "bytes32" },
           { name: "time", type: "uint64" },
           { name: "expirationTime", type: "uint64" },
           { name: "revocationTime", type: "uint64" },
-          { name: "revocable", type: "bool" },
+          { name: "refUID", type: "bytes32" },
           { name: "recipient", type: "address" },
           { name: "attester", type: "address" },
+          { name: "revocable", type: "bool" },
           { name: "data", type: "bytes" },
         ],
         name: "",
@@ -63,13 +69,13 @@ const SCHEMA_REGISTRY_ABI = [
 type AttestationRow = {
   uid: `0x${string}`;
   schema: `0x${string}`;
-  refUID: `0x${string}`;
   time: bigint;
   expirationTime: bigint;
   revocationTime: bigint;
-  revocable: boolean;
+  refUID: `0x${string}`;
   recipient: `0x${string}`;
   attester: `0x${string}`;
+  revocable: boolean;
   data: `0x${string}`;
 };
 
