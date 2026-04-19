@@ -409,6 +409,11 @@ export const FileBrowser = ({
 
       let chainList = getDefaultChainList();
       if (targetNetwork.id === 31337) {
+        // RPC URL precedence: NEXT_PUBLIC_HARDHAT_RPC_URL (same var scaffold.config.ts
+        // uses for wagmi transports) → absolute localhost default. Devnet sets this to
+        // a same-origin path like "/rpc"; browsers resolve that relative to the page
+        // origin, keeping the reverse-proxy round-trip local. See .env.example.
+        const rpcUrl = process.env.NEXT_PUBLIC_HARDHAT_RPC_URL || "http://127.0.0.1:8545";
         chainList = [
           ...chainList,
           {
@@ -417,7 +422,7 @@ export const FileBrowser = ({
             shortName: "hht",
             chain: "ETH",
             network: "hardhat",
-            rpc: ["http://127.0.0.1:8545"],
+            rpc: [rpcUrl],
             faucets: [],
             nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
             infoURL: "https://hardhat.org",

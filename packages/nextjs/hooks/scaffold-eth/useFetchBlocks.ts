@@ -14,10 +14,32 @@ import { decodeTransactionData } from "~~/utils/scaffold-eth";
 
 const BLOCKS_PER_PAGE = 20;
 
+// WebSocket URL for the /blockexplorer debug page. Precedence:
+//   1. NEXT_PUBLIC_HARDHAT_WS_URL            (explicit override)
+//   2. NEXT_PUBLIC_HARDHAT_RPC_URL, with http(s) → ws(s) swap if it's absolute.
+//      A relative RPC URL ("/rpc") can't be converted server-side because we don't
+//      know the final origin at build time — leave it, browser may handle it or the
+//      page degrades gracefully. Devnet operators should set NEXT_PUBLIC_HARDHAT_WS_URL
+//      explicitly (e.g. wss://host/rpc-ws).
+//   3. ws://127.0.0.1:8545                    (local hardhat default)
+const resolveWsUrl = (): string => {
+  const explicit = process.env.NEXT_PUBLIC_HARDHAT_WS_URL;
+  if (explicit) return explicit;
+
+  const rpc = process.env.NEXT_PUBLIC_HARDHAT_RPC_URL;
+  if (rpc) {
+    if (rpc.startsWith("https://")) return "wss://" + rpc.slice("https://".length);
+    if (rpc.startsWith("http://")) return "ws://" + rpc.slice("http://".length);
+    return rpc; // relative path or ws(s) URL — pass through
+  }
+
+  return "ws://127.0.0.1:8545";
+};
+
 export const testClient = createTestClient({
   chain: hardhat,
   mode: "hardhat",
-  transport: webSocket("ws://127.0.0.1:8545"),
+  transport: webSocket(resolveWsUrl()),
 })
   .extend(publicActions)
   .extend(walletActions);
