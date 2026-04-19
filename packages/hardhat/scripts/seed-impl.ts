@@ -27,10 +27,18 @@
  *   - MIRROR (refUID=DATA, refs a /transports/* anchor, carries URI)
  *   - TAG (refUID=DATA, definition=fileAnchorUID, applies=true → placement)
  *
- * Idempotency: each top-level seed subtree (/docs/, /images/, /shared/) is
- * independently guarded via `resolveAnchor(rootUID, name, 0)`. Re-running after
- * a successful seed is a no-op (three read calls, zero writes). Re-running
- * after a partial failure mid-subtree will skip that whole subtree on retry.
+ * Idempotency: guards are per-file, not per-subtree. Folders are created via
+ * `getOrCreateFolder` (ADR-0008 append-only anchors — never rewritten), and
+ * each file goes through `makeFileIfMissing`, which checks both that the
+ * file-slot anchor exists AND that the attester has an active TAG placement on
+ * it (via `TagResolver.getActiveTargetsByAttesterAndSchemaCount`). Re-running
+ * after a successful seed is a no-op (one read per anchor, one read per file
+ * for the placement check). Re-running after a **partial** failure — say
+ * `/docs/` got created but `readme.txt`'s TAG never landed — fills in only
+ * the missing files; the fully-seeded ones are skipped. For the editions
+ * demo, the owner and user1 placements on `shared/photo.png` are guarded
+ * independently, so either edition can be backfilled without touching the
+ * other.
  *
  * Fail-soft at the top: if the Indexer contract isn't registered (e.g. CI
  * against vanilla hardhat without EAS), log a skip and return cleanly — don't
@@ -73,6 +81,12 @@ export async function seedDemoTree() {
     "@ethereum-attestation-service/eas-contracts/contracts/IEAS.sol:IEAS",
     easAddr,
   )) as any;
+  // TagResolver drives per-file idempotency: we look up whether the current
+  // attester has an active TAG placement at a file-slot anchor before redoing
+  // the DATA/PROPERTY/MIRROR/TAG work.
+  const tagResolverAddr = await indexer.tagResolver();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const tagResolver = (await ethers.getContractAt("TagResolver", tagResolverAddr)) as any;
 
   const anchorSchemaUID = await indexer.ANCHOR_SCHEMA_UID();
   const dataSchemaUID = await indexer.DATA_SCHEMA_UID();
@@ -254,30 +268,7 @@ export async function seedDemoTree() {
     return propertyUID;
   };
 
-  /**
-   * Full file creation: file-slot anchor + DATA + contentType + mirror + placement TAG.
-   * The "file slot" is an ANCHOR whose `schema` field is DATA_SCHEMA_UID (convention
-   * per `specs/02` §Anchor — marks the anchor as a placement target for DATA).
-   */
-  const makeFile = async (
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    signer: any,
-    parentUID: string,
-    name: string,
-    content: string,
-    contentType: string,
-    transportUID: string,
-    uri: string,
-  ): Promise<{ fileUID: string; dataUID: string }> => {
-    const fileUID = await makeAnchor(signer, name, parentUID, dataSchemaUID);
-    const dataUID = await makeData(signer, content);
-    await makeProperty(signer, dataUID, "contentType", contentType);
-    await makeMirror(signer, dataUID, transportUID, uri);
-    await makeTag(signer, dataUID, fileUID, true);
-    return { fileUID, dataUID };
-  };
-
-  // Per-subtree idempotency guard. Returns the existing UID (if any) or null.
+  // Lookup: returns the anchor UID for `(parent, name, schema)` or null.
   const findAnchor = async (
     parentUID: string,
     name: string,
@@ -287,89 +278,148 @@ export async function seedDemoTree() {
     return uid === ethers.ZeroHash ? null : uid;
   };
 
+  /**
+   * Return the folder anchor UID at `parent/name`, creating it if missing.
+   * Folders use `schema=0` per the convention in `specs/02` §Anchor.
+   * `created=true` means we wrote a new ANCHOR attestation this call.
+   */
+  const getOrCreateFolder = async (
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    signer: any,
+    parentUID: string,
+    name: string,
+  ): Promise<{ uid: string; created: boolean }> => {
+    const existing = await findAnchor(parentUID, name);
+    if (existing) return { uid: existing, created: false };
+    const uid = await makeAnchor(signer, name, parentUID);
+    return { uid, created: true };
+  };
+
+  /**
+   * "Has this attester placed any DATA at this file-slot?" — the idempotency
+   * primitive. Uses `TagResolver.getActiveTargetsByAttesterAndSchemaCount`:
+   * > 0 iff the attester currently has an active applies=true TAG where
+   * `definition == fileSlotAnchorUID` and the target is a DATA attestation.
+   * Read-only; no writes.
+   */
+  const hasActivePlacement = async (fileSlotUID: string, attester: string): Promise<boolean> => {
+    const count: bigint = await tagResolver.getActiveTargetsByAttesterAndSchemaCount(
+      fileSlotUID,
+      attester,
+      dataSchemaUID,
+    );
+    return count > 0n;
+  };
+
+  /**
+   * Per-file idempotent version of `makeFile`. Skips re-attesting when the
+   * file-slot anchor exists AND this attester already has a live placement
+   * on it; otherwise fills in whatever is missing (file-slot anchor first,
+   * then DATA+PROPERTY+MIRROR+TAG). Safe to re-run after any partial failure.
+   */
+  const makeFileIfMissing = async (
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    signer: any,
+    parentUID: string,
+    name: string,
+    content: string,
+    contentType: string,
+    transportUID: string,
+    uri: string,
+  ): Promise<{ fileUID: string; created: boolean }> => {
+    const attester = await signer.getAddress();
+    let fileUID = await findAnchor(parentUID, name, dataSchemaUID);
+    if (fileUID && (await hasActivePlacement(fileUID, attester))) {
+      console.log(`  File      "${name}" (exists, skipping) ${fileUID.slice(0, 10)}…`);
+      return { fileUID, created: false };
+    }
+    if (!fileUID) {
+      fileUID = await makeAnchor(signer, name, parentUID, dataSchemaUID);
+    }
+    const dataUID = await makeData(signer, content);
+    await makeProperty(signer, dataUID, "contentType", contentType);
+    await makeMirror(signer, dataUID, transportUID, uri);
+    await makeTag(signer, dataUID, fileUID, true);
+    return { fileUID, created: true };
+  };
+
   // ── Build tree ────────────────────────────────────────────────────────────────
+  //
+  // Idempotency is per-file, not per-subtree (see module docstring): each
+  // `getOrCreateFolder` / `makeFileIfMissing` call independently decides whether
+  // to write, so a partial seed (folder created, file's TAG never landed) is
+  // fully backfilled on retry.
 
-  let skipped = 0;
-  let docsUID: string;
-  let imagesUID: string;
-  let sharedUID: string;
+  console.log("── /docs/ ──");
+  const docs = await getOrCreateFolder(deployerSigner, rootUID, "docs");
+  const docsUID = docs.uid;
+  await makeFileIfMissing(
+    deployerSigner,
+    docsUID,
+    "readme.txt",
+    "Hello from EFS!",
+    "text/plain",
+    httpsTransportUID,
+    "https://example.com/efs/readme.txt",
+  );
+  await makeFileIfMissing(
+    deployerSigner,
+    docsUID,
+    "notes.txt",
+    "Some notes",
+    "text/plain",
+    httpsTransportUID,
+    "https://example.com/efs/notes.txt",
+  );
 
-  const existingDocs = await findAnchor(rootUID, "docs");
-  if (existingDocs) {
-    docsUID = existingDocs;
-    console.log(`── /docs/ (exists, skipping) ── ${docsUID.slice(0, 14)}…`);
-    skipped++;
-  } else {
-    console.log("── /docs/ ──");
-    docsUID = await makeAnchor(deployerSigner, "docs", rootUID);
-    await makeFile(
-      deployerSigner,
-      docsUID,
-      "readme.txt",
-      "Hello from EFS!",
-      "text/plain",
-      httpsTransportUID,
-      "https://example.com/efs/readme.txt",
-    );
-    await makeFile(
-      deployerSigner,
-      docsUID,
-      "notes.txt",
-      "Some notes",
-      "text/plain",
-      httpsTransportUID,
-      "https://example.com/efs/notes.txt",
-    );
+  console.log("\n── /images/ ──");
+  const images = await getOrCreateFolder(deployerSigner, rootUID, "images");
+  const imagesUID = images.uid;
+  await makeFileIfMissing(
+    deployerSigner,
+    imagesUID,
+    "cat.jpg",
+    "cat-jpeg-placeholder",
+    "image/jpeg",
+    httpsTransportUID,
+    "https://placecats.com/300/200",
+  );
+  await makeFileIfMissing(
+    deployerSigner,
+    imagesUID,
+    "dog.jpg",
+    "dog-jpeg-placeholder",
+    "image/jpeg",
+    httpsTransportUID,
+    "https://placedog.net/300/200",
+  );
+
+  console.log("\n── /shared/ (editions demo) ──");
+  const shared = await getOrCreateFolder(deployerSigner, rootUID, "shared");
+  const sharedUID = shared.uid;
+  // One file-slot anchor, two editions. The file-slot is created by whoever
+  // runs first (idempotent via findAnchor); each edition is then guarded by
+  // its own `hasActivePlacement` check so either can be backfilled
+  // independently after a partial failure.
+  let photoUID = await findAnchor(sharedUID, "photo.png", dataSchemaUID);
+  if (!photoUID) {
+    photoUID = await makeAnchor(deployerSigner, "photo.png", sharedUID, dataSchemaUID);
   }
 
-  const existingImages = await findAnchor(rootUID, "images");
-  if (existingImages) {
-    imagesUID = existingImages;
-    console.log(`\n── /images/ (exists, skipping) ── ${imagesUID.slice(0, 14)}…`);
-    skipped++;
+  const deployerAddr = await deployerSigner.getAddress();
+  if (await hasActivePlacement(photoUID, deployerAddr)) {
+    console.log(`  Edition   owner (exists, skipping)`);
   } else {
-    console.log("\n── /images/ ──");
-    imagesUID = await makeAnchor(deployerSigner, "images", rootUID);
-    await makeFile(
-      deployerSigner,
-      imagesUID,
-      "cat.jpg",
-      "cat-jpeg-placeholder",
-      "image/jpeg",
-      httpsTransportUID,
-      "https://placecats.com/300/200",
-    );
-    await makeFile(
-      deployerSigner,
-      imagesUID,
-      "dog.jpg",
-      "dog-jpeg-placeholder",
-      "image/jpeg",
-      httpsTransportUID,
-      "https://placedog.net/300/200",
-    );
-  }
-
-  const existingShared = await findAnchor(rootUID, "shared");
-  if (existingShared) {
-    sharedUID = existingShared;
-    console.log(`\n── /shared/ (exists, skipping) ── ${sharedUID.slice(0, 14)}…`);
-    skipped++;
-  } else {
-    console.log("\n── /shared/ (editions demo) ──");
-    sharedUID = await makeAnchor(deployerSigner, "shared", rootUID);
-    // Single file-slot anchor, two editions — deployer and user1 each attest their own
-    // DATA+PROPERTY+MIRROR+TAG triple. Router fallback (ADR-0031) picks whichever edition
-    // is first in the `?editions=` list.
-    const photoUID = await makeAnchor(deployerSigner, "photo.png", sharedUID, dataSchemaUID);
-
-    // Owner edition
     const ownerPhotoData = await makeData(deployerSigner, "owner-photo-png-bytes");
     await makeProperty(deployerSigner, ownerPhotoData, "contentType", "image/png");
     await makeMirror(deployerSigner, ownerPhotoData, ipfsTransportUID, "ipfs://owner-version-of-photo");
     await makeTag(deployerSigner, ownerPhotoData, photoUID, true);
+  }
 
-    // User1 edition
+  const user1Addr = await user1.getAddress();
+  if (await hasActivePlacement(photoUID, user1Addr)) {
+    console.log(`  Edition   user1 (exists, skipping)`);
+  } else {
     const user1PhotoData = await makeData(user1, "user1-photo-png-bytes");
     await makeProperty(user1, user1PhotoData, "contentType", "image/png");
     await makeMirror(user1, user1PhotoData, ipfsTransportUID, "ipfs://user1-version-of-photo");
@@ -379,13 +429,7 @@ export async function seedDemoTree() {
   // ── Summary ───────────────────────────────────────────────────────────────────
 
   console.log("\n═══════════════════════════════════════");
-  if (skipped === 3) {
-    console.log("  Seed already applied — no writes needed.");
-  } else if (skipped > 0) {
-    console.log(`  Seeding complete (${skipped}/3 subtrees already existed).`);
-  } else {
-    console.log("  Seeding complete!");
-  }
+  console.log("  Seeding complete.");
   console.log(`  docs/     ${docsUID.slice(0, 14)}…`);
   console.log(`  images/   ${imagesUID.slice(0, 14)}…`);
   console.log(`  shared/   ${sharedUID.slice(0, 14)}…`);

@@ -23,6 +23,13 @@ import { useDeployedContractInfo, useTargetNetwork } from "~~/hooks/scaffold-eth
  * internally converted to `bytes32(uint160(addr))` (ADR-0033 encoding).
  */
 
+// NOTE: Tuple order MUST match EAS's on-chain `Attestation` struct in
+// `Common.sol` exactly: uid, schema, time, expirationTime, revocationTime,
+// refUID, recipient, attester, revocable, data. An earlier revision had
+// `refUID` before `time`, which caused `att.time` to decode from refUID's
+// bytes — so the recency comparison below silently picked whichever target
+// the resolver returned first, exactly the stale-name bug this hook is
+// supposed to avoid. Keep field order locked to the Solidity struct.
 const EAS_GET_ATTESTATION_ABI = [
   {
     inputs: [{ name: "uid", type: "bytes32" }],
@@ -32,13 +39,13 @@ const EAS_GET_ATTESTATION_ABI = [
         components: [
           { name: "uid", type: "bytes32" },
           { name: "schema", type: "bytes32" },
-          { name: "refUID", type: "bytes32" },
           { name: "time", type: "uint64" },
           { name: "expirationTime", type: "uint64" },
           { name: "revocationTime", type: "uint64" },
-          { name: "revocable", type: "bool" },
+          { name: "refUID", type: "bytes32" },
           { name: "recipient", type: "address" },
           { name: "attester", type: "address" },
+          { name: "revocable", type: "bool" },
           { name: "data", type: "bytes" },
         ],
         name: "",
