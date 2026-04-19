@@ -95,16 +95,17 @@ wagmi client. Set both to the same URL when running end-to-end.
 
 ### Seeding demo data (devnet + local first-run)
 
-After `yarn deploy`, the file tree is empty. `yarn hardhat:seed` populates a small
-demo tree (`/docs/`, `/images/`, `/shared/`) with an editions demo on `shared/photo.png`.
-The script is **idempotent** — each top-level subtree is guarded by a `resolveAnchor`
-call, so re-running after a partial failure only fills in what's missing, and re-running
-after a successful seed is a zero-write no-op. Safe to wire unconditionally into a
-devnet reset flow:
+`yarn deploy` now chains `yarn hardhat:seed` at the end, so a fresh deploy
+populates a small demo tree (`/docs/`, `/images/`, `/shared/`) with an editions
+demo on `shared/photo.png` automatically. The seed script is **idempotent** —
+each top-level subtree is guarded by a `resolveAnchor` call, so re-running after
+a partial failure only fills in what's missing, and re-running after a successful
+seed is a zero-write no-op. It is also **fail-soft**: if the Indexer contract
+isn't registered (e.g. CI deploy against a vanilla hardhat node with no EAS),
+seed logs a skip and exits 0 rather than failing the chain.
 
-```bash
-yarn deploy && yarn hardhat:seed
-```
+Run seed by itself (e.g. after manual contract deployment or to re-seed after a
+data wipe) with `yarn hardhat:seed`.
 
 ### Pinned Sepolia fork (coordination unit for devnet / client)
 

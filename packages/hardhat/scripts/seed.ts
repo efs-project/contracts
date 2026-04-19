@@ -39,7 +39,20 @@ async function main() {
 
   // ── Connect to contracts ─────────────────────────────────────────────────────
 
-  const indexer = (await ethers.getContract("Indexer", deployerSigner)) as unknown as EFSIndexer;
+  // Fail-soft lookup: if deploy didn't register `Indexer` (e.g. CI running against
+  // a vanilla hardhat node with no Sepolia EAS), exit cleanly so that chaining
+  // seed after `yarn hardhat:deploy` doesn't break environments where the
+  // deploy itself is expected to be partial. Real deploys (local fork, devnet,
+  // mainnet) always register the Indexer → this branch never triggers there.
+  let indexer: EFSIndexer;
+  try {
+    indexer = (await ethers.getContract("Indexer", deployerSigner)) as unknown as EFSIndexer;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.log(`⏭️  Seed skipped — Indexer contract not found (${msg.split("\n")[0]}).`);
+    console.log("   This is expected when deploy targeted a chain without EAS (e.g. CI without fork).");
+    return;
+  }
   const easAddr = await indexer.getEAS();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const eas = (await ethers.getContractAt(
