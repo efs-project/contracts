@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDownIcon, XMarkIcon } from "@heroicons/react/24/outline";
+import { NetworkChip } from "~~/components/NetworkChip";
 import { BackgroundOp, LogLevel, useBackgroundOps } from "~~/services/store/backgroundOps";
 
 const AUTO_COLLAPSE_MS = 4000;
@@ -112,6 +113,10 @@ export const BackgroundOpsDrawer = () => {
 
   const open = forceOpen || autoOpen;
 
+  // This component owns the bottom-right corner. To avoid two fixed elements
+  // overlapping in the same space, NetworkChip is rendered as a sibling of
+  // the ops handle here — they share the same horizontal row (mirror of the
+  // bottom-left toolbar cluster in Footer.tsx).
   return (
     <div className="fixed bottom-2 right-2 z-40 pointer-events-none">
       <div className="pointer-events-auto flex flex-col items-end gap-1">
@@ -152,38 +157,43 @@ export const BackgroundOpsDrawer = () => {
           </div>
         )}
 
-        {/* Handle: always present. Subtle when idle, active when running. */}
-        <button
-          type="button"
-          className={`pointer-events-auto flex items-center gap-1.5 px-2 py-1 rounded-md border text-xs font-mono transition-colors ${
-            runningCount > 0
-              ? "bg-base-200 border-primary/60 text-primary"
-              : hasAnyOps
-                ? "bg-base-200/80 border-base-300 text-base-content/70 hover:border-primary/40"
-                : "bg-base-200/40 border-base-300/50 text-base-content/40 hover:text-base-content/70 hover:border-base-300"
-          }`}
-          onClick={() => setForceOpen(v => !v)}
-          title={
-            runningCount > 0
-              ? `${runningCount} background op${runningCount === 1 ? "" : "s"} running`
-              : hasAnyOps
-                ? "Background operations"
-                : "No background operations"
-          }
-        >
-          {runningCount > 0 ? (
-            <span className="loading loading-spinner loading-xs" />
-          ) : (
-            <span className="w-1.5 h-1.5 rounded-full bg-current opacity-60" />
-          )}
-          <span>
-            {runningCount > 0
-              ? `${runningCount} running${latestRunning ? ` — ${latestRunning.title.slice(0, 28)}` : ""}`
-              : hasAnyOps
-                ? `${ops.length} recent`
-                : "ops"}
-          </span>
-        </button>
+        {/* Status cluster: NetworkChip + ops handle share one horizontal row,
+            analogous to the Footer's bottom-left toolbar cluster. */}
+        <div className="flex items-center gap-2">
+          <NetworkChip />
+          {/* Handle: always present. Subtle when idle, active when running. */}
+          <button
+            type="button"
+            className={`pointer-events-auto flex items-center gap-1.5 px-2 py-1 rounded-md border text-xs font-mono transition-colors ${
+              runningCount > 0
+                ? "bg-base-200 border-primary/60 text-primary"
+                : hasAnyOps
+                  ? "bg-base-200/80 border-base-300 text-base-content/70 hover:border-primary/40"
+                  : "bg-base-200/40 border-base-300/50 text-base-content/40 hover:text-base-content/70 hover:border-base-300"
+            }`}
+            onClick={() => setForceOpen(v => !v)}
+            title={
+              runningCount > 0
+                ? `${runningCount} background op${runningCount === 1 ? "" : "s"} running`
+                : hasAnyOps
+                  ? "Background operations"
+                  : "No background operations"
+            }
+          >
+            {runningCount > 0 ? (
+              <span className="loading loading-spinner loading-xs" />
+            ) : (
+              <span className="w-1.5 h-1.5 rounded-full bg-current opacity-60" />
+            )}
+            <span>
+              {runningCount > 0
+                ? `${runningCount} running${latestRunning ? ` — ${latestRunning.title.slice(0, 28)}` : ""}`
+                : hasAnyOps
+                  ? `${ops.length} recent`
+                  : "ops"}
+            </span>
+          </button>
+        </div>
       </div>
     </div>
   );
