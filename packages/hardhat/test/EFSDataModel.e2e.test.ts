@@ -411,7 +411,7 @@ describe("EFS Data Model — E2E Integration", function () {
 
       // Verify TAG placement — DATA appears in /docs/ listing
       const ownerAddr = await owner.getAddress();
-      const items = await fileView.getFilesAtPath(docsUID, [ownerAddr], dataSchemaUID, 0, 50);
+      const items = (await fileView.getFilesAtPath(docsUID, [ownerAddr], dataSchemaUID, "0x", 50)).items;
       expect(items.length).to.equal(1);
       expect(items[0].uid).to.equal(dataUID);
       expect(items[0].hasData).to.equal(true);
@@ -635,7 +635,7 @@ describe("EFS Data Model — E2E Integration", function () {
       const f2 = await uploadFile("dog.png bytes", "image/png", onchainTransportUID, "web3://0xDog", memesUID);
       const f3 = await uploadFile("meme.gif bytes", "image/gif", onchainTransportUID, "web3://0xMeme", memesUID);
 
-      const items = await fileView.getFilesAtPath(memesUID, [ownerAddr], dataSchemaUID, 0, 50);
+      const items = (await fileView.getFilesAtPath(memesUID, [ownerAddr], dataSchemaUID, "0x", 50)).items;
       expect(items.length).to.equal(3);
 
       const uids = items.map((i: any) => i.uid);
@@ -661,7 +661,7 @@ describe("EFS Data Model — E2E Integration", function () {
       await tagTarget(funnyUID, memesUID, true);
       await tagTarget(catsUID, memesUID, true);
 
-      const items = await fileView.getFilesAtPath(memesUID, [ownerAddr], anchorSchemaUID, 0, 50);
+      const items = (await fileView.getFilesAtPath(memesUID, [ownerAddr], anchorSchemaUID, "0x", 50)).items;
       expect(items.length).to.equal(2);
 
       const names = items.map((i: any) => i.name);
@@ -686,11 +686,11 @@ describe("EFS Data Model — E2E Integration", function () {
       await tagTarget(subUID, memesUID, true);
 
       // Query DATAs
-      const dataItems = await fileView.getFilesAtPath(memesUID, [ownerAddr], dataSchemaUID, 0, 50);
+      const dataItems = (await fileView.getFilesAtPath(memesUID, [ownerAddr], dataSchemaUID, "0x", 50)).items;
       expect(dataItems.length).to.equal(2);
 
       // Query sub-folders
-      const folderItems = await fileView.getFilesAtPath(memesUID, [ownerAddr], anchorSchemaUID, 0, 50);
+      const folderItems = (await fileView.getFilesAtPath(memesUID, [ownerAddr], anchorSchemaUID, "0x", 50)).items;
       expect(folderItems.length).to.equal(1);
       expect(folderItems[0].name).to.equal("subfolder");
     });
@@ -700,14 +700,14 @@ describe("EFS Data Model — E2E Integration", function () {
       const { dataUID } = await uploadFile("removeme", "text/plain", onchainTransportUID, "web3://0x1", memesUID);
 
       // Verify it's listed
-      let items = await fileView.getFilesAtPath(memesUID, [ownerAddr], dataSchemaUID, 0, 50);
+      let items = (await fileView.getFilesAtPath(memesUID, [ownerAddr], dataSchemaUID, "0x", 50)).items;
       expect(items.length).to.equal(1);
 
       // Untag
       await tagTarget(dataUID, memesUID, false);
 
       // Verify it's gone
-      items = await fileView.getFilesAtPath(memesUID, [ownerAddr], dataSchemaUID, 0, 50);
+      items = (await fileView.getFilesAtPath(memesUID, [ownerAddr], dataSchemaUID, "0x", 50)).items;
       expect(items.length).to.equal(0);
 
       // DATA itself still exists
@@ -719,7 +719,7 @@ describe("EFS Data Model — E2E Integration", function () {
       const ownerAddr = await owner.getAddress();
       const emptyUID = await createAnchor(rootUID, "empty-folder");
 
-      const items = await fileView.getFilesAtPath(emptyUID, [ownerAddr], dataSchemaUID, 0, 50);
+      const items = (await fileView.getFilesAtPath(emptyUID, [ownerAddr], dataSchemaUID, "0x", 50)).items;
       expect(items.length).to.equal(0);
     });
   });
@@ -745,8 +745,8 @@ describe("EFS Data Model — E2E Integration", function () {
       await tagTarget(dataUID, animalsUID, true);
 
       // Both paths list the DATA
-      const memesItems = await fileView.getFilesAtPath(memesUID, [ownerAddr], dataSchemaUID, 0, 50);
-      const animalsItems = await fileView.getFilesAtPath(animalsUID, [ownerAddr], dataSchemaUID, 0, 50);
+      const memesItems = (await fileView.getFilesAtPath(memesUID, [ownerAddr], dataSchemaUID, "0x", 50)).items;
+      const animalsItems = (await fileView.getFilesAtPath(animalsUID, [ownerAddr], dataSchemaUID, "0x", 50)).items;
       expect(memesItems.length).to.equal(1);
       expect(animalsItems.length).to.equal(1);
       expect(memesItems[0].uid).to.equal(dataUID);
@@ -770,8 +770,8 @@ describe("EFS Data Model — E2E Integration", function () {
       // Remove from path1
       await tagTarget(dataUID, path1, false);
 
-      const items1 = await fileView.getFilesAtPath(path1, [ownerAddr], dataSchemaUID, 0, 50);
-      const items2 = await fileView.getFilesAtPath(path2, [ownerAddr], dataSchemaUID, 0, 50);
+      const items1 = (await fileView.getFilesAtPath(path1, [ownerAddr], dataSchemaUID, "0x", 50)).items;
+      const items2 = (await fileView.getFilesAtPath(path2, [ownerAddr], dataSchemaUID, "0x", 50)).items;
       expect(items1.length).to.equal(0);
       expect(items2.length).to.equal(1);
     });
@@ -803,7 +803,7 @@ describe("EFS Data Model — E2E Integration", function () {
       await tagTarget(v2DataUID, docsUID, true);
 
       // Only v2 should appear
-      const items = await fileView.getFilesAtPath(docsUID, [ownerAddr], dataSchemaUID, 0, 50);
+      const items = (await fileView.getFilesAtPath(docsUID, [ownerAddr], dataSchemaUID, "0x", 50)).items;
       expect(items.length).to.equal(1);
       expect(items[0].uid).to.equal(v2DataUID);
 
@@ -836,7 +836,7 @@ describe("EFS Data Model — E2E Integration", function () {
 
       // Only v3 should be in the folder
       const ownerAddr = await owner.getAddress();
-      const items = await fileView.getFilesAtPath(docsUID, [ownerAddr], dataSchemaUID, 0, 50);
+      const items = (await fileView.getFilesAtPath(docsUID, [ownerAddr], dataSchemaUID, "0x", 50)).items;
       expect(items.length).to.equal(1);
       expect(items[0].uid).to.equal(v3);
 
@@ -902,12 +902,12 @@ describe("EFS Data Model — E2E Integration", function () {
       await tagTarget(bobData, memesUID, true, bob);
 
       // Query Alice's edition
-      const aliceItems = await fileView.getFilesAtPath(memesUID, [aliceAddr], dataSchemaUID, 0, 50);
+      const aliceItems = (await fileView.getFilesAtPath(memesUID, [aliceAddr], dataSchemaUID, "0x", 50)).items;
       expect(aliceItems.length).to.equal(1);
       expect(aliceItems[0].uid).to.equal(aliceData);
 
       // Query Bob's edition
-      const bobItems = await fileView.getFilesAtPath(memesUID, [bobAddr], dataSchemaUID, 0, 50);
+      const bobItems = (await fileView.getFilesAtPath(memesUID, [bobAddr], dataSchemaUID, "0x", 50)).items;
       expect(bobItems.length).to.equal(1);
       expect(bobItems[0].uid).to.equal(bobData);
     });
@@ -926,7 +926,7 @@ describe("EFS Data Model — E2E Integration", function () {
       await tagTarget(aliceOnly, memesUID, true, alice);
 
       // Query both → should show 2 unique items (deduped shared + aliceOnly)
-      const items = await fileView.getFilesAtPath(memesUID, [aliceAddr, bobAddr], dataSchemaUID, 0, 50);
+      const items = (await fileView.getFilesAtPath(memesUID, [aliceAddr, bobAddr], dataSchemaUID, "0x", 50)).items;
       expect(items.length).to.equal(2);
 
       const uids = items.map((i: any) => i.uid);
@@ -946,11 +946,11 @@ describe("EFS Data Model — E2E Integration", function () {
       await tagTarget(data, memesUID, false, alice);
 
       // Bob still sees it
-      const bobItems = await fileView.getFilesAtPath(memesUID, [bobAddr], dataSchemaUID, 0, 50);
+      const bobItems = (await fileView.getFilesAtPath(memesUID, [bobAddr], dataSchemaUID, "0x", 50)).items;
       expect(bobItems.length).to.equal(1);
 
       // Alice doesn't
-      const aliceItems = await fileView.getFilesAtPath(memesUID, [aliceAddr], dataSchemaUID, 0, 50);
+      const aliceItems = (await fileView.getFilesAtPath(memesUID, [aliceAddr], dataSchemaUID, "0x", 50)).items;
       expect(aliceItems.length).to.equal(0);
     });
 
@@ -985,7 +985,8 @@ describe("EFS Data Model — E2E Integration", function () {
       );
 
       // Query all three → 3 unique items
-      const all = await fileView.getFilesAtPath(memesUID, [aliceAddr, bobAddr, charlieAddr], dataSchemaUID, 0, 50);
+      const all = (await fileView.getFilesAtPath(memesUID, [aliceAddr, bobAddr, charlieAddr], dataSchemaUID, "0x", 50))
+        .items;
       expect(all.length).to.equal(3);
     });
   });
@@ -1067,7 +1068,7 @@ describe("EFS Data Model — E2E Integration", function () {
       await tagTarget(nsfwData, nsfwUID, true);
 
       // Get all items in folder
-      const allItems = await fileView.getFilesAtPath(memesUID, [ownerAddr], dataSchemaUID, 0, 50);
+      const allItems = (await fileView.getFilesAtPath(memesUID, [ownerAddr], dataSchemaUID, "0x", 50)).items;
       expect(allItems.length).to.equal(3);
 
       // Client-side filter: for each item, check NSFW tag
@@ -1381,7 +1382,7 @@ describe("EFS Data Model — E2E Integration", function () {
 
       // But it still appears in folder listing
       const ownerAddr = await owner.getAddress();
-      const items = await fileView.getFilesAtPath(docsUID, [ownerAddr], dataSchemaUID, 0, 50);
+      const items = (await fileView.getFilesAtPath(docsUID, [ownerAddr], dataSchemaUID, "0x", 50)).items;
       expect(items.length).to.equal(1);
     });
 
@@ -1405,7 +1406,7 @@ describe("EFS Data Model — E2E Integration", function () {
       expect(mirrors[0].attester).to.equal(await bob.getAddress());
     });
 
-    it("pagination: getFilesAtPath with start offset", async function () {
+    it("pagination: getFilesAtPath via opaque cursor (ADR-0036)", async function () {
       const ownerAddr = await owner.getAddress();
       const folderUID = await createAnchor(rootUID, "paginate");
 
@@ -1416,16 +1417,18 @@ describe("EFS Data Model — E2E Integration", function () {
         datas.push(d);
       }
 
-      // First page: 3 items
-      const page1 = await fileView.getFilesAtPath(folderUID, [ownerAddr], dataSchemaUID, 0, 3);
-      expect(page1.length).to.equal(3);
+      // First page: maxItems=3
+      const page1 = await fileView.getFilesAtPath(folderUID, [ownerAddr], dataSchemaUID, "0x", 3);
+      expect(page1.items.length).to.equal(3);
+      expect(page1.nextCursor).to.not.equal("0x");
 
-      // Second page: 2 items
-      const page2 = await fileView.getFilesAtPath(folderUID, [ownerAddr], dataSchemaUID, 3, 3);
-      expect(page2.length).to.equal(2);
+      // Second page: resume with cursor
+      const page2 = await fileView.getFilesAtPath(folderUID, [ownerAddr], dataSchemaUID, page1.nextCursor, 3);
+      expect(page2.items.length).to.equal(2);
+      expect(page2.nextCursor).to.equal("0x");
 
       // All 5 unique UIDs across both pages
-      const allUIDs = [...page1.map((i: any) => i.uid), ...page2.map((i: any) => i.uid)];
+      const allUIDs = [...page1.items.map((i: any) => i.uid), ...page2.items.map((i: any) => i.uid)];
       const uniqueUIDs = new Set(allUIDs);
       expect(uniqueUIDs.size).to.equal(5);
     });
@@ -1484,13 +1487,13 @@ describe("EFS Data Model — E2E Integration", function () {
       );
 
       // ── Verify /photos/vacation/ shows 3 photos for Alice ──
-      let vacationItems = await fileView.getFilesAtPath(vacationUID, [aliceAddr], dataSchemaUID, 0, 50);
+      let vacationItems = (await fileView.getFilesAtPath(vacationUID, [aliceAddr], dataSchemaUID, "0x", 50)).items;
       expect(vacationItems.length).to.equal(3);
 
       // ── Alice cross-references photo1 into /photos/favorites/ ──
       await tagTarget(photo1.dataUID, favoritesUID, true, alice);
 
-      const favItems = await fileView.getFilesAtPath(favoritesUID, [aliceAddr], dataSchemaUID, 0, 50);
+      const favItems = (await fileView.getFilesAtPath(favoritesUID, [aliceAddr], dataSchemaUID, "0x", 50)).items;
       expect(favItems.length).to.equal(1);
       expect(favItems[0].uid).to.equal(photo1.dataUID);
 
@@ -1511,7 +1514,7 @@ describe("EFS Data Model — E2E Integration", function () {
       await tagTarget(photo2v2, vacationUID, true, alice);
 
       // Still 3 items (photo1, photo2v2, photo3)
-      vacationItems = await fileView.getFilesAtPath(vacationUID, [aliceAddr], dataSchemaUID, 0, 50);
+      vacationItems = (await fileView.getFilesAtPath(vacationUID, [aliceAddr], dataSchemaUID, "0x", 50)).items;
       expect(vacationItems.length).to.equal(3);
       const vacUIDs = vacationItems.map((i: any) => i.uid);
       expect(vacUIDs).to.include(photo2v2);
@@ -1521,7 +1524,7 @@ describe("EFS Data Model — E2E Integration", function () {
       await tagTarget(photo3.dataUID, nsfwUID, true, bob);
 
       // ── Client-side NSFW filter: only show non-NSFW items ──
-      const allVacation = await fileView.getFilesAtPath(vacationUID, [aliceAddr], dataSchemaUID, 0, 50);
+      const allVacation = (await fileView.getFilesAtPath(vacationUID, [aliceAddr], dataSchemaUID, "0x", 50)).items;
       const safeVacation = [];
       for (const item of allVacation) {
         const isNsfw = await tagResolver.isActivelyTagged(item.uid, nsfwUID);

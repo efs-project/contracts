@@ -856,7 +856,10 @@ export const FileBrowser = ({
       (currentAnchorUID ? currentAnchorUID : undefined) as `0x${string}` | undefined,
       dataSchemaUID as `0x${string}`,
       editionAddresses as string[],
-      0n,
+      // Opaque cursor (ADR-0036): empty bytes = start from beginning. FileBrowser is
+      // scoped to the first page for now; a future "load more" control will round-trip
+      // the returned nextCursor.
+      "0x" as `0x${string}`,
       pageSize,
     ],
     query: {
@@ -865,7 +868,12 @@ export const FileBrowser = ({
   });
 
   const isLoading = useEditionsQuery ? isEditionLoading : isStandardLoading;
-  const rawItems = useEditionsQuery ? (editionItemsRaw ? (editionItemsRaw as any)[0] : undefined) : standardItems;
+  // Opaque-cursor return shape (ADR-0036): { items, nextCursor }. First-page only for now.
+  const rawItems = useEditionsQuery
+    ? editionItemsRaw
+      ? ((editionItemsRaw as any).items ?? (editionItemsRaw as any)[0])
+      : undefined
+    : standardItems;
 
   // When a tag filter is active, resolve DATA UIDs for each file item.
   // DATA is standalone (refUID=0x0) and placed at anchors via TAGs, so we query

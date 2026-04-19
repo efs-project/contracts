@@ -432,14 +432,15 @@ async function main() {
   console.log("\n[9] EFSFileView.getFilesAtPath\n");
 
   // List DATAs at the gallery folder for owner
-  const galleryFiles = await fileView.getFilesAtPath(photo1UID, [ownerAddr], dataSchemaUID, 0, 10);
+  const galleryPage = await fileView.getFilesAtPath(photo1UID, [ownerAddr], dataSchemaUID, "0x", 10);
+  const galleryFiles = galleryPage.items;
   assert("getFilesAtPath returns 1 DATA at sunset.jpg anchor", galleryFiles.length === 1, `got ${galleryFiles.length}`);
   assert("returned item has correct contentHash", galleryFiles[0].contentHash === photo1Data.contentHash);
   assert("returned item hasData=true", galleryFiles[0].hasData);
 
   // Multi-attester query: owner + user2 at sunset anchor (owner tagged, user2 didn't)
-  const multiAttesterFiles = await fileView.getFilesAtPath(photo1UID, [ownerAddr, u2Addr], dataSchemaUID, 0, 10);
-  assert("multi-attester: only owner's DATA", multiAttesterFiles.length === 1);
+  const multiAttesterPage = await fileView.getFilesAtPath(photo1UID, [ownerAddr, u2Addr], dataSchemaUID, "0x", 10);
+  assert("multi-attester: only owner's DATA", multiAttesterPage.items.length === 1);
 
   // ======================================================================
   // TEST 10: Magnet Link Transport

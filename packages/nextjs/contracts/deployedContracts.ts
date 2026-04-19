@@ -7,7 +7,7 @@ import { GenericContractsDeclaration } from "~~/utils/scaffold-eth/contract";
 const deployedContracts = {
   31337: {
     EFSFileView: {
-      address: "0xC3a4c84270B4D3D282192F10b64a474c25A92cCe",
+      address: "0x29e8a042ea34B7EE720C12b52720027b5E9049C6",
       abi: [
         {
           inputs: [
@@ -342,13 +342,13 @@ const deployedContracts = {
               type: "address[]",
             },
             {
-              internalType: "uint256",
-              name: "startingCursor",
-              type: "uint256",
+              internalType: "bytes",
+              name: "cursor",
+              type: "bytes",
             },
             {
               internalType: "uint256",
-              name: "pageSize",
+              name: "maxItems",
               type: "uint256",
             },
           ],
@@ -357,69 +357,76 @@ const deployedContracts = {
             {
               components: [
                 {
-                  internalType: "bytes32",
-                  name: "uid",
-                  type: "bytes32",
+                  components: [
+                    {
+                      internalType: "bytes32",
+                      name: "uid",
+                      type: "bytes32",
+                    },
+                    {
+                      internalType: "string",
+                      name: "name",
+                      type: "string",
+                    },
+                    {
+                      internalType: "bytes32",
+                      name: "parentUID",
+                      type: "bytes32",
+                    },
+                    {
+                      internalType: "bool",
+                      name: "isFolder",
+                      type: "bool",
+                    },
+                    {
+                      internalType: "bool",
+                      name: "hasData",
+                      type: "bool",
+                    },
+                    {
+                      internalType: "uint256",
+                      name: "childCount",
+                      type: "uint256",
+                    },
+                    {
+                      internalType: "uint256",
+                      name: "propertyCount",
+                      type: "uint256",
+                    },
+                    {
+                      internalType: "uint64",
+                      name: "timestamp",
+                      type: "uint64",
+                    },
+                    {
+                      internalType: "address",
+                      name: "attester",
+                      type: "address",
+                    },
+                    {
+                      internalType: "bytes32",
+                      name: "schema",
+                      type: "bytes32",
+                    },
+                    {
+                      internalType: "bytes32",
+                      name: "contentHash",
+                      type: "bytes32",
+                    },
+                  ],
+                  internalType: "struct EFSFileView.FileSystemItem[]",
+                  name: "items",
+                  type: "tuple[]",
                 },
                 {
-                  internalType: "string",
-                  name: "name",
-                  type: "string",
-                },
-                {
-                  internalType: "bytes32",
-                  name: "parentUID",
-                  type: "bytes32",
-                },
-                {
-                  internalType: "bool",
-                  name: "isFolder",
-                  type: "bool",
-                },
-                {
-                  internalType: "bool",
-                  name: "hasData",
-                  type: "bool",
-                },
-                {
-                  internalType: "uint256",
-                  name: "childCount",
-                  type: "uint256",
-                },
-                {
-                  internalType: "uint256",
-                  name: "propertyCount",
-                  type: "uint256",
-                },
-                {
-                  internalType: "uint64",
-                  name: "timestamp",
-                  type: "uint64",
-                },
-                {
-                  internalType: "address",
-                  name: "attester",
-                  type: "address",
-                },
-                {
-                  internalType: "bytes32",
-                  name: "schema",
-                  type: "bytes32",
-                },
-                {
-                  internalType: "bytes32",
-                  name: "contentHash",
-                  type: "bytes32",
+                  internalType: "bytes",
+                  name: "nextCursor",
+                  type: "bytes",
                 },
               ],
-              internalType: "struct EFSFileView.FileSystemItem[]",
-              name: "items",
-              type: "tuple[]",
-            },
-            {
-              internalType: "uint256",
-              name: "nextCursor",
-              type: "uint256",
+              internalType: "struct EFSFileView.DirectoryPage",
+              name: "page",
+              type: "tuple",
             },
           ],
           stateMutability: "view",
@@ -443,13 +450,13 @@ const deployedContracts = {
               type: "bytes32",
             },
             {
-              internalType: "uint256",
-              name: "start",
-              type: "uint256",
+              internalType: "bytes",
+              name: "cursor",
+              type: "bytes",
             },
             {
               internalType: "uint256",
-              name: "length",
+              name: "maxItems",
               type: "uint256",
             },
           ],
@@ -458,64 +465,76 @@ const deployedContracts = {
             {
               components: [
                 {
-                  internalType: "bytes32",
-                  name: "uid",
-                  type: "bytes32",
+                  components: [
+                    {
+                      internalType: "bytes32",
+                      name: "uid",
+                      type: "bytes32",
+                    },
+                    {
+                      internalType: "string",
+                      name: "name",
+                      type: "string",
+                    },
+                    {
+                      internalType: "bytes32",
+                      name: "parentUID",
+                      type: "bytes32",
+                    },
+                    {
+                      internalType: "bool",
+                      name: "isFolder",
+                      type: "bool",
+                    },
+                    {
+                      internalType: "bool",
+                      name: "hasData",
+                      type: "bool",
+                    },
+                    {
+                      internalType: "uint256",
+                      name: "childCount",
+                      type: "uint256",
+                    },
+                    {
+                      internalType: "uint256",
+                      name: "propertyCount",
+                      type: "uint256",
+                    },
+                    {
+                      internalType: "uint64",
+                      name: "timestamp",
+                      type: "uint64",
+                    },
+                    {
+                      internalType: "address",
+                      name: "attester",
+                      type: "address",
+                    },
+                    {
+                      internalType: "bytes32",
+                      name: "schema",
+                      type: "bytes32",
+                    },
+                    {
+                      internalType: "bytes32",
+                      name: "contentHash",
+                      type: "bytes32",
+                    },
+                  ],
+                  internalType: "struct EFSFileView.FileSystemItem[]",
+                  name: "items",
+                  type: "tuple[]",
                 },
                 {
-                  internalType: "string",
-                  name: "name",
-                  type: "string",
-                },
-                {
-                  internalType: "bytes32",
-                  name: "parentUID",
-                  type: "bytes32",
-                },
-                {
-                  internalType: "bool",
-                  name: "isFolder",
-                  type: "bool",
-                },
-                {
-                  internalType: "bool",
-                  name: "hasData",
-                  type: "bool",
-                },
-                {
-                  internalType: "uint256",
-                  name: "childCount",
-                  type: "uint256",
-                },
-                {
-                  internalType: "uint256",
-                  name: "propertyCount",
-                  type: "uint256",
-                },
-                {
-                  internalType: "uint64",
-                  name: "timestamp",
-                  type: "uint64",
-                },
-                {
-                  internalType: "address",
-                  name: "attester",
-                  type: "address",
-                },
-                {
-                  internalType: "bytes32",
-                  name: "schema",
-                  type: "bytes32",
-                },
-                {
-                  internalType: "bytes32",
-                  name: "contentHash",
-                  type: "bytes32",
+                  internalType: "bytes",
+                  name: "nextCursor",
+                  type: "bytes",
                 },
               ],
-              internalType: "struct EFSFileView.FileSystemItem[]",
-              name: "items",
-              type: "tuple[]",
+              internalType: "struct EFSFileView.DirectoryPage",
+              name: "page",
+              type: "tuple",
             },
           ],
           stateMutability: "view",
@@ -551,7 +570,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     EFSRouter: {
-      address: "0x7BA0Ced2d18EDb582a89A88610c34DAE070a9917",
+      address: "0xa498a50aADa7790F5d3EFD594365E797c947eece",
       abi: [
         {
           inputs: [
@@ -724,7 +743,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     EFSSortOverlay: {
-      address: "0x18367Cb6b11F34CFa2220768CC1BBe097E8E38aa",
+      address: "0x04fD5Ee60B015B6EfD21a54D1E662D68868683c5",
       abi: [
         {
           inputs: [
@@ -1703,7 +1722,7 @@ const deployedContracts = {
       },
     },
     Indexer: {
-      address: "0x77D6f7F6199bA856ea5Ba5aBcb60262b1Ff432C7",
+      address: "0x85554083b691219C1F2556bA52D4fDEe5d76a01f",
       abi: [
         {
           inputs: [
@@ -3828,7 +3847,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     MirrorResolver: {
-      address: "0xab20A78A6Baf3FD22153F46FeB470a24b713cAEa",
+      address: "0x19C7dAeb1828942DeBf60FB78FF70292300E7800",
       abi: [
         {
           inputs: [
@@ -4284,7 +4303,7 @@ const deployedContracts = {
       },
     },
     NameSort: {
-      address: "0xe9e0e645C145E9d99246aB522AFF724F31F95E00",
+      address: "0x6e2D4b9fABb3A1Cbec42bb38c51Ff421D4dD4b5A",
       abi: [
         {
           inputs: [
@@ -4475,7 +4494,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     TagResolver: {
-      address: "0x46F3C7dc5cA2a76e04860411A62f3daCc33fF8ae",
+      address: "0xC64700624b2129C81288e7Bd4d5Ec9DD006eb2D0",
       abi: [
         {
           inputs: [
@@ -5227,7 +5246,7 @@ const deployedContracts = {
       },
     },
     TimestampSort: {
-      address: "0xdAC7424d00eA6Fc56069f548049884E0b31316FD",
+      address: "0x9B12dD81a01DCA303722286DE8DC659C38B95486",
       abi: [
         {
           inputs: [

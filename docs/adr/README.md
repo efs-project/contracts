@@ -106,3 +106,6 @@ What else we looked at and why it lost.
 - [ADR-0034 — `name` PROPERTY as display-name fallback](./0034-display-name-property-convention.md)
 - [ADR-0035 — PROPERTY as free-floating value placed via TAG](./0035-property-free-floating-and-tag-placed.md)
 
+### View APIs
+- [ADR-0036 — Opaque-cursor pagination for multi-source views](./0036-opaque-cursor-pagination.md)
+

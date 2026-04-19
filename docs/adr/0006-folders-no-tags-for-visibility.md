@@ -52,6 +52,7 @@ Folder visibility is **single-source**: a folder appears in an edition-scoped li
 - Client-side logic is concentrated in `CreateItemModal` (upload + ancestor walk) and `FileBrowser` (delete cascade).
 - `_qualifyingFolders` storage and ancestor-walk code removed from `EFSIndexer`. `_containsAttestations` is preserved — still used by file-anchor filtering in `getChildrenByAddressList` / `getAnchorsBySchemaAndAddressList`.
 - Cross-edition visibility: if Alice uploads `/a/b/file.txt`, her visibility TAG on `/a` and `/b` doesn't make those folders visible to Bob's edition — Bob has to tag them himself. Matches ADR-0031's first-attester-wins edition model.
+- **Silent truncation at `MAX_TAGGED_FOLDERS`.** `EFSFileView._getQualifyingTaggedFolders` caps its scan of `_childrenTaggedWith` at 10,000 subfolders per-parent, per-definition. Folders beyond that cap are invisible in the listing with no external signal. The cap is a gas ceiling for the view call, not a design goal — 10,000 is well above realistic single-parent fan-out. Surfacing truncation would require a third return value from `getDirectoryPageBySchemaAndAddressList` (a breaking API change) or a sibling `truncated` flag; both deferred to FUTURE_WORK.
 
 ## Alternatives considered
 
@@ -74,3 +75,11 @@ Folder visibility is **single-source**: a folder appears in an edition-scoped li
 > - Folder visibility in schema-filtered listings comes from two sources (ADR-0008): the write-time qualifying-folder index (folders containing files), and explicit TAG (for empty folders the user wants visible).
 > - Empty folders that need to appear in schema-filtered listings can still be explicitly tagged (Source B in `_getQualifyingTaggedFolders`). This is a deliberate user action; the UI doesn't do it automatically.
 > - Symmetry is lost: files use TAGs, folders don't. Worth documenting in the production client's mental model.
+
+---
+
+## Correction 2026-04-19
+
+The Consequences bullet added on 2026-04-18 describing **silent truncation at `MAX_TAGGED_FOLDERS = 10,000`** in `EFSFileView._getQualifyingTaggedFolders` is obsolete. [ADR-0036](./0036-opaque-cursor-pagination.md) rewrote `getDirectoryPageBySchemaAndAddressList` (and `getFilesAtPath`) to use opaque-cursor pagination, which structurally eliminates the cap: the walker processes whatever `_childrenTaggedWith` / `_childrenBySchema` contain across as many paginated calls as needed, with an empty `nextCursor` as the only end signal. The helper `_getQualifyingTaggedFolders` has been removed.
+
+The rest of the 2026-04-18 revision (single-source tag-only folder visibility; delete cascade; ancestor-walk visibility TAGs) is unchanged and still in force.

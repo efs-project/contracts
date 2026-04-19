@@ -13,6 +13,8 @@ describe("EFSFileView", function () {
   let eas: EAS;
   let registry: SchemaRegistry;
   let owner: Signer;
+  let alice: Signer;
+  let bob: Signer;
 
   let anchorSchemaUID: string;
   let dataSchemaUID: string;
@@ -20,7 +22,7 @@ describe("EFSFileView", function () {
   let tagSchemaUID: string;
 
   beforeEach(async function () {
-    [owner] = await ethers.getSigners();
+    [owner, alice, bob] = await ethers.getSigners();
 
     const RegistryFactory = await ethers.getContractFactory("SchemaRegistry");
     registry = await RegistryFactory.deploy();
@@ -132,8 +134,13 @@ describe("EFSFileView", function () {
   };
 
   /** Create a TAG attestation (goes through TagResolver). */
-  const createTag = async (targetUID: string, definition: string, applies: boolean): Promise<string> => {
-    const tx = await eas.attest({
+  const createTag = async (
+    targetUID: string,
+    definition: string,
+    applies: boolean,
+    attester: Signer = owner,
+  ): Promise<string> => {
+    const tx = await eas.connect(attester).attest({
       schema: tagSchemaUID,
       data: {
         recipient: ZeroAddress,
@@ -162,7 +169,13 @@ describe("EFSFileView", function () {
 
     await createAnchor("empty-untagged", rootUID, ZERO_BYTES32);
 
-    const [items] = await fileView.getDirectoryPageBySchemaAndAddressList(rootUID, dataSchemaUID, [ownerAddr], 0, 10);
+    const { items } = await fileView.getDirectoryPageBySchemaAndAddressList(
+      rootUID,
+      dataSchemaUID,
+      [ownerAddr],
+      "0x",
+      10,
+    );
 
     expect(items.length).to.equal(0);
   });
@@ -179,7 +192,13 @@ describe("EFSFileView", function () {
 
     await createAnchor("empty-untagged", rootUID, ZERO_BYTES32);
 
-    const [items] = await fileView.getDirectoryPageBySchemaAndAddressList(rootUID, dataSchemaUID, [ownerAddr], 0, 10);
+    const { items } = await fileView.getDirectoryPageBySchemaAndAddressList(
+      rootUID,
+      dataSchemaUID,
+      [ownerAddr],
+      "0x",
+      10,
+    );
 
     expect(items.length).to.equal(1);
     expect(items[0].name).to.equal("empty-tagged");
@@ -201,21 +220,21 @@ describe("EFSFileView", function () {
     await createTag(catsUID, dataSchemaUID, true);
     await createTag(photosUID, dataSchemaUID, true);
 
-    const [rootItems] = await fileView.getDirectoryPageBySchemaAndAddressList(
+    const { items: rootItems } = await fileView.getDirectoryPageBySchemaAndAddressList(
       rootUID,
       dataSchemaUID,
       [ownerAddr],
-      0,
+      "0x",
       10,
     );
     expect(rootItems.length).to.equal(1);
     expect(rootItems[0].name).to.equal("photos");
 
-    const [photosItems] = await fileView.getDirectoryPageBySchemaAndAddressList(
+    const { items: photosItems } = await fileView.getDirectoryPageBySchemaAndAddressList(
       photosUID,
       dataSchemaUID,
       [ownerAddr],
-      0,
+      "0x",
       10,
     );
     expect(photosItems.length).to.equal(1);
@@ -233,11 +252,11 @@ describe("EFSFileView", function () {
     await createAnchor("cat.jpg", catsUID, dataSchemaUID);
     await createTag(catsUID, dataSchemaUID, true);
 
-    const [rootItems] = await fileView.getDirectoryPageBySchemaAndAddressList(
+    const { items: rootItems } = await fileView.getDirectoryPageBySchemaAndAddressList(
       rootUID,
       dataSchemaUID,
       [ownerAddr],
-      0,
+      "0x",
       10,
     );
     expect(rootItems.length).to.equal(0);
@@ -251,13 +270,25 @@ describe("EFSFileView", function () {
 
     await createTag(folderUID, dataSchemaUID, true);
 
-    const [before] = await fileView.getDirectoryPageBySchemaAndAddressList(rootUID, dataSchemaUID, [ownerAddr], 0, 10);
+    const { items: before } = await fileView.getDirectoryPageBySchemaAndAddressList(
+      rootUID,
+      dataSchemaUID,
+      [ownerAddr],
+      "0x",
+      10,
+    );
     expect(before.length).to.equal(1);
     expect(before[0].name).to.equal("my-folder");
 
     await createTag(folderUID, dataSchemaUID, false);
 
-    const [after] = await fileView.getDirectoryPageBySchemaAndAddressList(rootUID, dataSchemaUID, [ownerAddr], 0, 10);
+    const { items: after } = await fileView.getDirectoryPageBySchemaAndAddressList(
+      rootUID,
+      dataSchemaUID,
+      [ownerAddr],
+      "0x",
+      10,
+    );
     expect(after.length).to.equal(0);
   });
 
@@ -272,12 +303,142 @@ describe("EFSFileView", function () {
 
     const visTagUID = await createTag(folderUID, dataSchemaUID, true);
 
-    const [before] = await fileView.getDirectoryPageBySchemaAndAddressList(rootUID, dataSchemaUID, [ownerAddr], 0, 10);
+    const { items: before } = await fileView.getDirectoryPageBySchemaAndAddressList(
+      rootUID,
+      dataSchemaUID,
+      [ownerAddr],
+      "0x",
+      10,
+    );
     expect(before.length).to.equal(1);
 
     await eas.multiRevoke([{ schema: tagSchemaUID, data: [{ uid: visTagUID, value: 0n }] }]);
 
-    const [after] = await fileView.getDirectoryPageBySchemaAndAddressList(rootUID, dataSchemaUID, [ownerAddr], 0, 10);
+    const { items: after } = await fileView.getDirectoryPageBySchemaAndAddressList(
+      rootUID,
+      dataSchemaUID,
+      [ownerAddr],
+      "0x",
+      10,
+    );
     expect(after.length).to.equal(0);
+  });
+
+  it("Should return a folder once in a multi-attester listing even when both attesters tagged it", async function () {
+    // `_childrenTaggedWith` is keyed by (parent, definition) not (parent, definition, attester),
+    // so a folder appears in the discovery list once regardless of how many attesters tagged it.
+    // `isActivelyTaggedByAny` short-circuits on the first match. Verify the folder is not double-counted.
+    const aliceAddr = await alice.getAddress();
+    const bobAddr = await bob.getAddress();
+
+    const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32);
+    const sharedFolder = await createAnchor("shared", rootUID, ZERO_BYTES32);
+    const aliceOnlyFolder = await createAnchor("alice-only", rootUID, ZERO_BYTES32);
+
+    await createTag(sharedFolder, dataSchemaUID, true, alice);
+    await createTag(sharedFolder, dataSchemaUID, true, bob);
+    await createTag(aliceOnlyFolder, dataSchemaUID, true, alice);
+
+    const { items } = await fileView.getDirectoryPageBySchemaAndAddressList(
+      rootUID,
+      dataSchemaUID,
+      [aliceAddr, bobAddr],
+      "0x",
+      10,
+    );
+
+    expect(items.length).to.equal(2);
+    const names = items.map((i: any) => i.name).sort();
+    expect(names).to.deep.equal(["alice-only", "shared"]);
+  });
+
+  it("Paginates folders + files across multiple calls via opaque cursor", async function () {
+    // Regression: page-1 contains folders only; page-2 contains content items; nextCursor
+    // empty iff both sources exhausted. Exercises the phase-0 → phase-1 transition.
+    const ownerAddr = await owner.getAddress();
+
+    const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32);
+
+    // 3 tagged folders
+    const folderA = await createAnchor("folder-a", rootUID, ZERO_BYTES32);
+    const folderB = await createAnchor("folder-b", rootUID, ZERO_BYTES32);
+    const folderC = await createAnchor("folder-c", rootUID, ZERO_BYTES32);
+    await createTag(folderA, dataSchemaUID, true);
+    await createTag(folderB, dataSchemaUID, true);
+    await createTag(folderC, dataSchemaUID, true);
+
+    // 4 content items
+    await createAnchor("file-1.txt", rootUID, dataSchemaUID);
+    await createAnchor("file-2.txt", rootUID, dataSchemaUID);
+    await createAnchor("file-3.txt", rootUID, dataSchemaUID);
+    await createAnchor("file-4.txt", rootUID, dataSchemaUID);
+
+    // Page 1: request 2 items — expect 2 folders, cursor nonempty
+    const p1 = await fileView.getDirectoryPageBySchemaAndAddressList(rootUID, dataSchemaUID, [ownerAddr], "0x", 2);
+    expect(p1.items.length).to.equal(2);
+    expect(p1.items.every((i: any) => i.isFolder)).to.equal(true);
+    expect(p1.nextCursor).to.not.equal("0x");
+
+    // Page 2: request 2 more — expect remaining folder + 1 content item
+    const p2 = await fileView.getDirectoryPageBySchemaAndAddressList(
+      rootUID,
+      dataSchemaUID,
+      [ownerAddr],
+      p1.nextCursor,
+      2,
+    );
+    expect(p2.items.length).to.equal(2);
+    expect(p2.nextCursor).to.not.equal("0x");
+
+    // Page 3: request 10 — expect remaining content items, cursor empty
+    const p3 = await fileView.getDirectoryPageBySchemaAndAddressList(
+      rootUID,
+      dataSchemaUID,
+      [ownerAddr],
+      p2.nextCursor,
+      10,
+    );
+    // Remaining items = 7 total - 4 already returned = 3
+    expect(p3.items.length).to.equal(3);
+    expect(p3.nextCursor).to.equal("0x");
+  });
+
+  it("Surfaces >10k tagged folders without silent truncation (ADR-0036)", async function () {
+    // Regression for the old MAX_TAGGED_FOLDERS=10000 silent-cap landmine. The cursor-based
+    // walker must continue past any arbitrary cap. We do NOT create 10k folders here (too
+    // slow for CI); instead, verify that paginating through 50 folders with page size 7
+    // returns every folder exactly once — proving the walker advances correctly across
+    // chunked fetches with no cap-based drop.
+    const ownerAddr = await owner.getAddress();
+    const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32);
+
+    const names: string[] = [];
+    for (let i = 0; i < 50; i++) {
+      const name = `folder-${String(i).padStart(3, "0")}`;
+      const uid = await createAnchor(name, rootUID, ZERO_BYTES32);
+      await createTag(uid, dataSchemaUID, true);
+      names.push(name);
+    }
+
+    const seen = new Set<string>();
+    let cursor: string = "0x";
+    let callCount = 0;
+    while (true) {
+      callCount++;
+      if (callCount > 20) throw new Error("pagination did not terminate");
+      const page = await fileView.getDirectoryPageBySchemaAndAddressList(
+        rootUID,
+        dataSchemaUID,
+        [ownerAddr],
+        cursor,
+        7,
+      );
+      for (const item of page.items) seen.add(item.name);
+      if (page.nextCursor === "0x") break;
+      cursor = page.nextCursor;
+    }
+
+    expect(seen.size).to.equal(50);
+    expect([...seen].sort()).to.deep.equal(names.slice().sort());
   });
 });

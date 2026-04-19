@@ -80,14 +80,23 @@ const TreeNode = ({
   const { data: editionChildrenRaw, isLoading: isEditionLoading } = useScaffoldReadContract({
     contractName: "EFSFileView",
     functionName: "getDirectoryPageBySchemaAndAddressList",
-    args: [uid as `0x${string}`, dataSchemaUID as `0x${string}`, editionAddresses as string[], 0n, 50n],
+    // Opaque cursor (ADR-0036): empty bytes = start from beginning. Sidebar shows first
+    // page only; this is a UI summary, not a complete directory listing.
+    args: [
+      uid as `0x${string}`,
+      dataSchemaUID as `0x${string}`,
+      editionAddresses as string[],
+      "0x" as `0x${string}`,
+      50n,
+    ],
     query: { enabled: useEditionsQuery && editionAddresses.length > 0 },
   });
 
   const isLoading = useEditionsQuery ? isEditionLoading : isStandardLoading;
+  // Opaque-cursor return shape (ADR-0036): { items, nextCursor }.
   const children = useEditionsQuery
     ? editionChildrenRaw
-      ? (editionChildrenRaw as any)[0]
+      ? ((editionChildrenRaw as any).items ?? (editionChildrenRaw as any)[0])
       : undefined
     : standardChildren;
 

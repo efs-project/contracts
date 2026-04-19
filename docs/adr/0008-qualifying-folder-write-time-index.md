@@ -14,7 +14,7 @@
 
 ## Current state (2026-04-18 onward)
 
-`EFSFileView._getQualifyingTaggedFolders` reads only `TagResolver._childrenTaggedWith[parent][dataSchemaUID]` and filters for active applies=true TAGs by any edition attester. No write-time index. No ancestor walk in `EFSIndexer.onAttest`.
+`EFSFileView.getDirectoryPageBySchemaAndAddressList` paginates `TagResolver._childrenTaggedWith[parent][dataSchemaUID]` via opaque cursor ([ADR-0036](./0036-opaque-cursor-pagination.md)) and filters for active applies=true TAGs by any edition attester. No write-time index. No ancestor walk in `EFSIndexer.onAttest`. The earlier `_getQualifyingTaggedFolders` helper that pre-materialized the whole folder set has been removed along with its `MAX_TAGGED_FOLDERS = 10000` silent-truncation cap.
 
 The ancestor walk has moved to the client (`CreateItemModal` on file upload), where it emits visibility TAGs at each generic ancestor the attester hasn't already claimed. This keeps kernel gas costs predictable and makes the "is this my folder" claim a per-attester, revocable statement rather than an append-only write-time index.
 

@@ -13,7 +13,7 @@ This document maps the step-by-step execution for specific developer and user in
   3. `MIRROR(transportDef=/transports/onchain, uri=web3://0xABC)` — `refUID = DATA UID`
   4. `TAG(definition=cat.jpg Anchor, applies=true)` — `refUID = DATA UID` (places DATA at path)
   5. One visibility TAG per queued ancestor from Step 3: `TAG(definition=DATA_SCHEMA_UID, refUID=ancestorFolder, applies=true)`. Makes the folder appear in the attester's edition listing.
-- **Result**: TagResolver indexes the placement TAG in `_activeByAAS[catAnchor][alice][DATA_SCHEMA]` and each visibility TAG in `_childrenTaggedWith[ancestor][DATA_SCHEMA_UID]`. `EFSFileView._getQualifyingTaggedFolders` reads those visibility TAGs single-source — untagged folders, even ones containing the attester's files, do not appear in that attester's edition (tag-only model).
+- **Result**: TagResolver indexes the placement TAG in `_activeByAAS[catAnchor][alice][DATA_SCHEMA]` and each visibility TAG in `_childrenTaggedWith[ancestor][DATA_SCHEMA_UID]`. `EFSFileView.getDirectoryPageBySchemaAndAddressList` paginates those visibility TAGs via opaque cursor (ADR-0036) and filters single-source — untagged folders, even ones containing the attester's files, do not appear in that attester's edition (tag-only model).
 
 ### 2. Paste an IPFS link to `/docs/paper.pdf`
 - **Action**: Same as upload but MIRROR uses a different transport.

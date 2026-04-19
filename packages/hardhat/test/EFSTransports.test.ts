@@ -629,7 +629,7 @@ describe("EFS Transports & Data Model", function () {
       await tagTarget(dataUID, memesUID, true);
 
       const ownerAddr = await owner.getAddress();
-      const items = await fileView.getFilesAtPath(memesUID, [ownerAddr], dataSchemaUID, 0, 10);
+      const { items } = await fileView.getFilesAtPath(memesUID, [ownerAddr], dataSchemaUID, "0x", 10);
 
       expect(items.length).to.equal(1);
       expect(items[0].uid).to.equal(dataUID);
