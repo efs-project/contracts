@@ -236,6 +236,31 @@ export async function classifyTopLevelSegment(raw: string, deps: ClassifyDeps): 
 }
 
 /**
+ * Build the path-segment array consumed by `EFSRouter.request([...])` and
+ * `web3://` URLs. The head segment must match what `EFSRouter._classifyTopLevel`
+ * accepts — ENS names do not resolve on-chain (ADR-0033: "ENS resolution stays
+ * off-chain"), so an address container must present its *resolved* hex address
+ * at the head, not the typed ENS label.
+ *
+ * - Anchor (no container): path names verbatim (root is implicit).
+ * - Address: head = resolved checksummed address; router hex-parses it.
+ * - Schema / Attestation: head = rawSegment (already a 0x-prefixed 64-hex UID
+ *   because the classifier only reached this branch on hex input).
+ *
+ * The returned array is distinct from the UI path (which keeps `rawSegment` so
+ * the displayed breadcrumb says `vitalik.eth`, not `0x8626…1199`).
+ */
+export function buildRouterPathNames(
+  container: ClassifiedContainer | null,
+  currentPath: { uid: string; name: string }[],
+): string[] {
+  const tail = currentPath.slice(1).map(p => p.name);
+  if (!container) return tail;
+  const head = container.kind === "address" && container.address ? container.address : container.rawSegment;
+  return [head, ...tail];
+}
+
+/**
  * Compute the effective editions list for a container.
  *
  * Anchor / schema / attestation: `[connectedAddress]` when connected, else `[]`.

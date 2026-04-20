@@ -14,7 +14,12 @@ import type { PathItem } from "~~/components/explorer/types";
 import deployedContracts from "~~/contracts/deployedContracts";
 import { useContainerName } from "~~/hooks/efs/useContainerName";
 import { useDeployedContractInfo, useScaffoldReadContract } from "~~/hooks/scaffold-eth";
-import { ClassifiedContainer, classifyTopLevelSegment, defaultEditionsForContainer } from "~~/utils/efs/containers";
+import {
+  ClassifiedContainer,
+  buildRouterPathNames,
+  classifyTopLevelSegment,
+  defaultEditionsForContainer,
+} from "~~/utils/efs/containers";
 
 export default function ExplorerClient() {
   const [currentPath, setCurrentPath] = useState<PathItem[]>([]);
@@ -525,11 +530,7 @@ export default function ExplorerClient() {
                     editionAddresses={editionAddresses}
                     tagFilter={searchParams.get("tags") || ""}
                     drawerTagFilters={drawerTagFilters}
-                    currentPathNames={
-                      currentContainer
-                        ? [currentContainer.rawSegment, ...currentPath.slice(1).map(p => p.name)]
-                        : currentPath.slice(1).map(p => p.name)
-                    }
+                    currentPathNames={buildRouterPathNames(currentContainer, currentPath)}
                     activeSortInfoUID={activeSortInfoUID}
                     sortOverlayAddress={sortOverlayAddress}
                     sortRefreshKey={sortRefreshKey}
