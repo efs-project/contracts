@@ -22,6 +22,7 @@ import {
   TrashIcon,
   XMarkIcon,
 } from "@heroicons/react/24/outline";
+import { useEditionDirectoryPage } from "~~/hooks/efs/useEditionDirectoryPage";
 import { useSortedData } from "~~/hooks/efs/useSortedData";
 import { useDeployedContractInfo, useScaffoldReadContract, useScaffoldWriteContract } from "~~/hooks/scaffold-eth";
 import { useTargetNetwork } from "~~/hooks/scaffold-eth/useTargetNetwork";
@@ -850,35 +851,30 @@ export const FileBrowser = ({
     },
   });
 
+  // Edition-scoped directory listing iterates the opaque cursor (ADR-0036) across
+  // pages. The contract's phase-0 folder scan can return zero items with a
+  // non-empty `nextCursor` when the 2048-entry per-call budget is burned on
+  // revoked / wrong-attester entries; without cursor replay the UI would show
+  // "Topic is empty" even when phase-1 has matches. `useEditionDirectoryPage`
+  // auto-advances on empty pages and exposes `loadMore` for user-triggered paging.
   const {
-    data: editionItemsRaw,
+    items: editionItems,
     isLoading: isEditionLoading,
-    refetch: refetchEditionItems,
-  } = useScaffoldReadContract({
-    contractName: "EFSFileView",
-    functionName: "getDirectoryPageBySchemaAndAddressList",
-    args: [
-      (currentAnchorUID ? currentAnchorUID : undefined) as `0x${string}` | undefined,
-      dataSchemaUID as `0x${string}`,
-      editionAddresses as string[],
-      // Opaque cursor (ADR-0036): empty bytes = start from beginning. FileBrowser is
-      // scoped to the first page for now; a future "load more" control will round-trip
-      // the returned nextCursor.
-      "0x" as `0x${string}`,
-      pageSize,
-    ],
-    query: {
-      enabled: useEditionsQuery && editionAddresses.length > 0,
-    },
+    hasMore: hasMoreEditions,
+    loadMore: loadMoreEditions,
+    refresh: refetchEditionItems,
+  } = useEditionDirectoryPage({
+    parentAnchor: (currentAnchorUID ?? undefined) as `0x${string}` | undefined,
+    dataSchemaUID: dataSchemaUID as `0x${string}` | undefined,
+    editionAddresses: editionAddresses as string[],
+    fileViewAddress: efsFileViewInfo?.address as `0x${string}` | undefined,
+    fileViewAbi: efsFileViewInfo?.abi as any,
+    pageSize,
+    enabled: useEditionsQuery && editionAddresses.length > 0,
   });
 
   const isLoading = useEditionsQuery ? isEditionLoading : isStandardLoading;
-  // Opaque-cursor return shape (ADR-0036): { items, nextCursor }. First-page only for now.
-  const rawItems = useEditionsQuery
-    ? editionItemsRaw
-      ? ((editionItemsRaw as any).items ?? (editionItemsRaw as any)[0])
-      : undefined
-    : standardItems;
+  const rawItems = useEditionsQuery ? editionItems : standardItems;
 
   // When a tag filter is active, resolve DATA UIDs for each file item.
   // DATA is standalone (refUID=0x0) and placed at anchors via TAGs, so we query
@@ -1468,20 +1464,33 @@ export const FileBrowser = ({
             </div>
           )}
         </div>
-        {/* Load more: kernel items when page is full, or sorted pages when more exist */}
-        {items && items.length > 0 && items.length >= Number(pageSize) && (
-          <div className="flex justify-center py-4">
-            <button
-              className="btn btn-sm btn-outline"
-              onClick={() => {
-                setPageSize(prev => prev + 50n);
-                if (hasSortMore) loadMoreSorted();
-              }}
-            >
-              Load more
-            </button>
-          </div>
-        )}
+        {/* Load more: edition-scoped mode keys on the opaque cursor (ADR-0036);
+            standard mode keys on the kernel page heuristic + sort overlay. */}
+        {(() => {
+          const showLoadMore = useEditionsQuery
+            ? hasMoreEditions
+            : items && items.length > 0 && items.length >= Number(pageSize);
+          if (!showLoadMore) return null;
+          return (
+            <div className="flex justify-center py-4">
+              <button
+                className="btn btn-sm btn-outline"
+                onClick={() => {
+                  if (useEditionsQuery) {
+                    // Iterate the opaque cursor via the hook; `pageSize` is the
+                    // per-fetch target, not a cumulative cap.
+                    loadMoreEditions();
+                  } else {
+                    setPageSize(prev => prev + 50n);
+                    if (hasSortMore) loadMoreSorted();
+                  }
+                }}
+              >
+                Load more
+              </button>
+            </div>
+          );
+        })()}
       </div>
       {/* end scrollable grid wrapper */}
 
