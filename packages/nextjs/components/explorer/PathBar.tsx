@@ -52,6 +52,30 @@ export type PathBarProps = {
   disabled?: boolean;
 };
 
+/**
+ * Idempotent segment encoder.
+ *
+ * The URL bar displays segments straight from `urlSegment`, which is the
+ * verbatim (already percent-encoded) string from the URL — e.g. `my%20file`
+ * for a file literally named "my file". When the user submits the bar
+ * unchanged, or edits a *different* segment, we must not re-encode segments
+ * that are already properly encoded, or `%` becomes `%25` and a round-trip
+ * submission of `my%20file` navigates to `my%2520file` (a file nobody has).
+ *
+ * A segment is considered already-encoded iff `encodeURIComponent(decoded)`
+ * equals it byte-for-byte. Anything else — raw spaces, non-ASCII, lone `%`,
+ * malformed escapes — falls through to a fresh `encodeURIComponent`, which
+ * is still idempotent for unreserved ASCII.
+ */
+function encodeSegmentIdempotent(raw: string): string {
+  try {
+    if (encodeURIComponent(decodeURIComponent(raw)) === raw) return raw;
+  } catch {
+    // Malformed escape (e.g. a bare `%`) → fall through to re-encode.
+  }
+  return encodeURIComponent(raw);
+}
+
 function buildUrlFromPath(currentPath: PathItem[], containerKind: ContainerKind): string {
   // currentPath[0] is the container root. For anchor walks the head is the root
   // anchor (display label "Topics") and should NOT appear in the URL bar. For
@@ -120,7 +144,7 @@ export const PathBar = ({
       .split("/")
       .map(s => s.trim())
       .filter(Boolean)
-      .map(encodeURIComponent);
+      .map(encodeSegmentIdempotent);
     const query = searchParams.toString();
     const url = `/explorer/${segments.join("/")}${query ? `?${query}` : ""}`;
     router.push(url);
