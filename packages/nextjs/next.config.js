@@ -28,10 +28,21 @@
  * paths would resolve against the eth.limo origin and 404.
  */
 
+// `output: "export"` is a build-only flag. In `next dev` it forces every
+// dynamic route — including our `[[...path]]` catch-alls — to resolve against
+// `generateStaticParams()`, which only returns the root shell. Hard-refreshing
+// a deep URL like `/explorer/memes/cat.jpg` then throws
+//   "Error: Page ... is missing param ... in generateStaticParams()".
+// In production `public/_redirects` serves the static shell for all deeper
+// URLs (see file comments), so the constraint only matters at build time.
+// Turn the flag off for dev; the runtime behavior is identical either way
+// because every page is a client component with no server-side data fetching.
+const isProdBuild = process.env.NODE_ENV === "production";
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  output: "export",
+  ...(isProdBuild ? { output: "export" } : {}),
   trailingSlash: true,
   images: { unoptimized: true },
   typescript: {
