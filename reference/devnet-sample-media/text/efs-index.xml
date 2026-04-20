@@ -1,7 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<efs>
-  <entry kind="image" path="/images/ethereum-logo-public-domain.png" />
-  <entry kind="video" path="/video/what-is-bitcoin-clip.webm" />
-  <entry kind="audio" path="/audio/blockchain-pronunciation.ogg" />
-  <entry kind="text" path="/text/efs-readme.md" />
-</efs>

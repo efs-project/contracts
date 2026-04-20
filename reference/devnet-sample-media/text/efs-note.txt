@@ -1,7 +1,0 @@
-EFS devnet sample corpus
-
-This file exists to test plain text rendering, downloads, previews, and hashing.
-Themes: Ethereum, cypherpunk, archival permanence, and weird-but-valid fixtures.
-
-Suggested path:
-/devnet/notes/efs-note.txt

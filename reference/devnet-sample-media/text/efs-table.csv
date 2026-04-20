@@ -1,6 +1,0 @@
-kind,filename,theme,notes
-image,ethereum-logo-public-domain.png,ethereum,public-domain logo image
-image,visual-cryptography.gif,cypherpunk,animated cryptography example
-video,efs-devnet-demo.mp4,efs,short local slideshow for UI testing
-audio,efs-beacon.ogg,efs,synthetic beacon tone for audio fixture coverage
-text,efs-readme.md,efs,markdown preview test

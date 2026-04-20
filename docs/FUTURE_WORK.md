@@ -101,9 +101,6 @@ File browser cards aren't fully keyboard-navigable. Modal dialogs (TagModal) lac
 
 ## Tooling & Process
 
-### Upgrade the user-browsing demo corpus seeder
-`deploy/08_user_browsing_demo.ts` is intentionally the "works for devnet today" version: it seeds James's address container from `reference/devnet-sample-media/` as an **optional** step, and creates HTTPS MIRRORs pointing at the checked-in assets. We should upgrade this after launch into a reusable upload helper that can seed a mix of transports (`web3://` on-chain uploads, `ipfs://`, `ar://`, `https://`, eventually `magnet:`) without slowing down the default `yarn deploy` path. Ideally the helper is generic enough for scripts, tests, and future apps — if deploy scripts cannot create a real on-chain EFS file, that's a product gap.
-
 ### GitHub Action: auto-trigger Claude review on PR open
 Currently agent reviews are manual. A `.github/workflows/agent-review.yml` triggering Claude on PR open would close that loop. Cross-review with Codex similarly automatable.
 
