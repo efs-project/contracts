@@ -77,11 +77,22 @@ export function useEditionDirectoryPage({
   const [hasMore, setHasMore] = useState(false);
   const [loadTrigger, setLoadTrigger] = useState(0);
   const cursorRef = useRef<`0x${string}`>(EMPTY_CURSOR);
-  const inFlightRef = useRef(false);
 
   const editionsKey = editionAddresses.join(",").toLowerCase();
   const depsKey = `${enabled ? "1" : "0"}|${parentAnchor ?? ""}|${dataSchemaUID ?? ""}|${editionsKey}|${pageSize.toString()}`;
   const lastDepsRef = useRef<string>("");
+  // NOTE: There was previously an `inFlightRef` guard at the top of the fetch
+  // effect (`if (inFlightRef.current) return;`) intended to prevent concurrent
+  // reads. It silently dropped `loadTrigger` bumps that landed while a prior
+  // fetch was still settling — including refresh() bumps — so callers awaiting
+  // `await refetchEditionItems()` after a delete could hang forever with the
+  // resolver never installed. See P1 review on #9.
+  //
+  // The `cancelled` closure flag + the `ownedResolver` identity check already
+  // prevent stale fetches from committing state or prematurely resolving a
+  // newer refresh's awaiter, so the guard was redundant safety masquerading
+  // as correctness. Removed; every loadTrigger advance triggers a fresh fetch,
+  // and the old fetch bails on `cancelled` without clobbering the new one.
 
   // When callers `await refresh()` they expect to see the post-delete result
   // before re-rendering logic runs. We resolve this promise when the next
@@ -129,10 +140,8 @@ export function useEditionDirectoryPage({
     if (!publicClient || !fileViewAddress || !fileViewAbi) return;
     if (!parentAnchor || !dataSchemaUID) return;
     if (editionAddresses.length === 0) return;
-    if (inFlightRef.current) return;
 
     let cancelled = false;
-    inFlightRef.current = true;
 
     // Snapshot the refresh resolver (if any) that this fetch is responsible
     // for. A later `refresh()` call resolves the previous resolver
@@ -199,7 +208,6 @@ export function useEditionDirectoryPage({
         console.error("useEditionDirectoryPage: fetch failed", err);
         if (!cancelled) setHasMore(false);
       } finally {
-        inFlightRef.current = false;
         if (!cancelled) setIsLoading(false);
         // Resolve the awaiter from `refresh()` so callers that do
         // `await refetchEditionItems()` see the post-fetch state before
@@ -220,7 +228,6 @@ export function useEditionDirectoryPage({
 
     return () => {
       cancelled = true;
-      inFlightRef.current = false;
     };
     // cursorRef is mutable-ref; editionsKey stands in for editionAddresses equality.
     // eslint-disable-next-line react-hooks/exhaustive-deps

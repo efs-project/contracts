@@ -306,7 +306,16 @@ export function defaultEditionsForContainer(args: {
    *  indexer. */
   systemEditions?: string[];
 }): string[] {
-  if (args.explicitEditions && args.explicitEditions.length > 0) return args.explicitEditions;
+  // `explicitEditions !== null` means the URL carried `?editions=` — preserve
+  // that intent as a wholesale override even when the resolved list is empty.
+  // An explicit `?editions=alice.eth,bob.eth` whose tokens all fail to resolve
+  // (ENS outage, invalid hex, unregistered name) must NOT silently fall back
+  // to the default chain — that would change the meaning of a shared link and
+  // surface unintended content. Empty explicit = show nothing; the caller's
+  // directory hook early-returns on a zero-length list, so the user sees an
+  // empty grid until the URL is fixed, not someone else's edition.
+  // See ADR-0031 (wholesale override) + P2 review on #9.
+  if (args.explicitEditions !== null) return args.explicitEditions;
 
   const out: string[] = [];
   const push = (addr: string | undefined) => {
