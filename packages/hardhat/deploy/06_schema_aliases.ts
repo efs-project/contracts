@@ -103,21 +103,42 @@ const deploySchemaAliases: DeployFunction = async function (hre: HardhatRuntimeE
       if (keyAnchorUID === ethers.ZeroHash) throw new Error("Failed to create 'name' key anchor");
     }
 
-    // 2. If the deployer has an active PROPERTY bound under this key anchor whose value matches, skip.
+    // 2. If the deployer's *newest* active PROPERTY under this key anchor has
+    //    the target label, skip. `_activeByAAS` is append-only per rebind
+    //    (compositeHash is keyed on targetID, not schema), so asking for index
+    //    0 returns the *oldest* push — which would make this upsert re-attest
+    //    on every deploy after any label change, breaking the stated
+    //    idempotency. Fetch up to 50 active targets, walk them, pick newest by
+    //    EAS `time`. Matches the defensive read in `PropertiesModal` and the
+    //    companion fix in `07_persona_names.ts`. See docs/QUESTIONS.md for the
+    //    Tier 2 on making the write path genuinely singleton per ADR-0035.
     const existing: string[] = await tagResolver.getActiveTargetsByAttesterAndSchema(
       keyAnchorUID,
       deployer,
       propertySchemaUID,
       0,
-      1,
+      50,
     );
     if (existing.length > 0) {
-      try {
-        const att = await eas.getAttestation(existing[0]);
-        const [value] = ethers.AbiCoder.defaultAbiCoder().decode(["string"], att.data);
-        if (value === label) return { keyAnchorUID, propertyUID: existing[0], skipped: true };
-      } catch {
-        // fall through and re-attest
+      let newestTime: bigint = -1n;
+      let newestUID: string | undefined;
+      let newestValue: string | undefined;
+      for (const uid of existing) {
+        try {
+          const att = await eas.getAttestation(uid);
+          const t = att.time as bigint;
+          if (t > newestTime) {
+            newestTime = t;
+            newestUID = uid;
+            const [decoded] = ethers.AbiCoder.defaultAbiCoder().decode(["string"], att.data);
+            newestValue = decoded as string;
+          }
+        } catch {
+          // Unresolvable entry — skip; another loop iter may still find the winner.
+        }
+      }
+      if (newestUID && newestValue === label) {
+        return { keyAnchorUID, propertyUID: newestUID, skipped: true };
       }
     }
 

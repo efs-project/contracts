@@ -109,24 +109,40 @@ const deployPersonaNames: DeployFunction = async function (hre: HardhatRuntimeEn
       }
     }
 
-    // 2. Skip if the deployer's active PROPERTY under this key anchor already matches.
+    // 2. Skip if the deployer's *newest* active PROPERTY under this key anchor
+    //    already matches. `_activeByAAS` is append-only per rebind (compositeHash
+    //    is keyed on targetID, not schema), so asking for index 0 returns the
+    //    *oldest* push — which would make this step re-attest on every deploy
+    //    after a value change, breaking idempotency. Fetch up to 50 active
+    //    targets, walk them, and pick the newest by EAS `time`. ADR-0035 §3
+    //    assumed _activeByAAS provided singleton semantics; see docs/QUESTIONS.md
+    //    for the Tier 2 follow-up on making the write path genuinely singleton.
     const existing: string[] = await tagResolver.getActiveTargetsByAttesterAndSchema(
       keyAnchorUID,
       deployer,
       propertySchemaUID,
       0,
-      1,
+      50,
     );
     if (existing.length > 0) {
-      try {
-        const att = await eas.getAttestation(existing[0]);
-        const [value] = ethers.AbiCoder.defaultAbiCoder().decode(["string"], att.data);
-        if (value === persona.name) {
-          console.log(`  ${persona.name} — already seeded`);
-          continue;
+      let newestTime: bigint = -1n;
+      let newestValue: string | undefined;
+      for (const uid of existing) {
+        try {
+          const att = await eas.getAttestation(uid);
+          const t = att.time as bigint;
+          if (t > newestTime) {
+            newestTime = t;
+            const [decoded] = ethers.AbiCoder.defaultAbiCoder().decode(["string"], att.data);
+            newestValue = decoded as string;
+          }
+        } catch {
+          // Unresolvable entry — skip; another loop iter may still find the winner.
         }
-      } catch {
-        // fall through and re-attest
+      }
+      if (newestValue === persona.name) {
+        console.log(`  ${persona.name} — already seeded`);
+        continue;
       }
     }
 
