@@ -261,18 +261,50 @@ export function buildRouterPathNames(
 }
 
 /**
- * Compute the effective editions list for a container.
+ * Devnet bootstrap curator address — included in the default `system` fallback
+ * tier so fresh users see seeded content before any web-of-trust is configured.
+ * Devnet-only; the mainnet build replaces this with a user-configurable seed
+ * list (see ADR-0039 and `docs/FUTURE_WORK.md`).
+ */
+export const DEVNET_BOOTSTRAP_CURATOR = "0xaCf4C2950107eF9b1C37faA1F9a866C8F0da88b9" as const;
+
+/**
+ * Compute the effective editions list for a container. Implements the default
+ * editions priority chain from ADR-0039:
  *
- * Anchor / schema / attestation: `[connectedAddress]` when connected, else `[]`.
- * Address container: `[connectedAddress, viewedAddress]` (connected overrides,
- * viewed user's edition as fallback). Dedupes; drops zero addresses.
+ *   explicit ?editions=  →  wholesale override (ADR-0031 / ADR-0033 invariant).
+ *   otherwise:            connected → viewed (address container) → webOfTrust → system
  *
- * Explicit `?editions=<…>` always overrides via `explicitEditions`.
+ * `explicitEditions` preserves URL shareability — a link with `?editions=…`
+ * means exactly what it says to every viewer. The default chain only applies
+ * when the URL carries no editions param.
+ *
+ * The tiers themselves:
+ *   - **connected**: the user's own wallet. Their attestations always win
+ *     over anyone else's when they're logged in.
+ *   - **viewed**: the address in the URL segment when the container is an
+ *     address ("Vitalik's memes, with my overrides on top"); empty otherwise.
+ *   - **webOfTrust** (future, ADR-0039): attesters the user has explicitly
+ *     trusted. Empty until the web-of-trust UX ships.
+ *   - **system**: a global tail fallback so unseeded users still see some
+ *     content. On devnet: a bootstrap curator address + the EFS deployer.
+ *     End-users will eventually be able to configure this tier themselves.
+ *
+ * Dedupes case-insensitively; drops zero addresses; preserves order so
+ * first-attester-wins semantics (ADR-0031) still apply inside the chain.
  */
 export function defaultEditionsForContainer(args: {
   container: ClassifiedContainer | null;
   connectedAddress: string | undefined;
   explicitEditions: string[] | null;
+  /** Future web-of-trust attesters (user-configured). Empty array until the
+   *  WoT UX ships — the param exists so callers don't need plumbing changes
+   *  when it does. */
+  webOfTrust?: string[];
+  /** System tail attesters (devnet: bootstrap curator + deployer). Populated
+   *  by the caller because the deployer address is a runtime read from the
+   *  indexer. */
+  systemEditions?: string[];
 }): string[] {
   if (args.explicitEditions && args.explicitEditions.length > 0) return args.explicitEditions;
 
@@ -288,5 +320,7 @@ export function defaultEditionsForContainer(args: {
   if (args.container?.kind === "address" && args.container.address) {
     push(args.container.address);
   }
+  (args.webOfTrust ?? []).forEach(push);
+  (args.systemEditions ?? []).forEach(push);
   return out;
 }

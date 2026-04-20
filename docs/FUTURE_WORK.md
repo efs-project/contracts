@@ -10,6 +10,9 @@ Backlog of known improvements, scale concerns, and architectural enhancements th
 
 ## Architecture & Extensibility
 
+### Web-of-trust UX + user-configurable system editions
+ADR-0039 reserves two tiers in the default editions chain — `webOfTrust[]` and `systemEditions[]` — that are hardcoded / empty today. Shipping needs: (a) a Settings UI for users to add/remove WoT attesters (address + optional label), stored in localStorage; (b) user override of the system tier (defaults to a project-blessed seed list that ships in the repo); (c) an Editions chip in the toolbar that surfaces the effective chain so users can see "why am I seeing this file?" Client-side only — no contract changes. Critical pre-mainnet, because the devnet's hardcoded bootstrap curator + deployer system tier isn't appropriate once real users are attesting.
+
 ### Kernel auto-tag `/tags/schema` on alias anchor creation
 Per ADR-0033, schema alias anchors (root-child anchors whose name is a registered schema UID in lowercase 0x-hex) are today **only** tagged with `/tags/schema` for the six system schemas seeded at deploy (`06_schema_aliases.ts`). User-created aliases (when someone registers a custom schema and attests a root anchor at its UID) need a follow-up tx to attach the tag before the sidebar enumerator sees them. Proper fix: in `EFSIndexer.onAttest` (or a kernel hook on ANCHOR attestations with `refUID == rootAnchorUID`), detect when `name` is a registered schema UID via `SchemaRegistry.getSchema` and auto-attest the `/tags/schema` TAG from the kernel. Care needed to avoid gas griefing — only triggered when name parses as bytes32 AND the UID exists in SchemaRegistry.
 

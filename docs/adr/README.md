@@ -107,6 +107,7 @@ What else we looked at and why it lost.
 - [ADR-0033 — Root containers and schema alias anchors](./0033-root-containers-and-schema-alias-anchors.md)
 - [ADR-0034 — `name` PROPERTY as display-name fallback](./0034-display-name-property-convention.md)
 - [ADR-0035 — PROPERTY as free-floating value placed via TAG](./0035-property-free-floating-and-tag-placed.md)
+- [ADR-0039 — Default editions priority chain](./0039-default-editions-priority-chain.md)
 
 ### View APIs
 - [ADR-0036 — Opaque-cursor pagination for multi-source views](./0036-opaque-cursor-pagination.md)

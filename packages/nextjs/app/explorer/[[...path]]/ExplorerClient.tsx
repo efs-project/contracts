@@ -16,6 +16,7 @@ import { useContainerName } from "~~/hooks/efs/useContainerName";
 import { useDeployedContractInfo, useScaffoldReadContract } from "~~/hooks/scaffold-eth";
 import {
   ClassifiedContainer,
+  DEVNET_BOOTSTRAP_CURATOR,
   buildRouterPathNames,
   classifyTopLevelSegment,
   defaultEditionsForContainer,
@@ -55,13 +56,33 @@ export default function ExplorerClient() {
 
   const editionsParam = searchParams.get("editions");
 
+  // System tail-fallback tier (ADR-0039). On devnet: a bootstrap curator
+  // address + the EFS deployer, so fresh users see seeded content before
+  // configuring any web of trust. Deployer is a runtime read from the indexer;
+  // `Indexer.DEPLOYER` is an immutable set in its constructor. Mainnet will
+  // replace both with a user-configurable list.
+  const { data: deployerAddress } = useScaffoldReadContract({
+    contractName: "Indexer",
+    functionName: "DEPLOYER",
+  });
+
+  const systemEditions = useMemo(() => {
+    const out: string[] = [DEVNET_BOOTSTRAP_CURATOR];
+    if (deployerAddress && typeof deployerAddress === "string") out.push(deployerAddress);
+    return out;
+  }, [deployerAddress]);
+
   const editionAddresses = useMemo(() => {
     return defaultEditionsForContainer({
       container: currentContainer,
       connectedAddress,
       explicitEditions: editionsParam ? resolvedEditionAddresses : null,
+      // Web of trust is not yet designed (ADR-0039). Empty array today;
+      // slot exists so adding it later is a config-only change.
+      webOfTrust: [],
+      systemEditions,
     });
-  }, [editionsParam, connectedAddress, resolvedEditionAddresses, currentContainer]);
+  }, [editionsParam, connectedAddress, resolvedEditionAddresses, currentContainer, systemEditions]);
 
   const { data: rootUID } = useScaffoldReadContract({
     contractName: "Indexer",
