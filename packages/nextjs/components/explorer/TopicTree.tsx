@@ -42,6 +42,7 @@ const TreeNode = ({
   defaultOpen,
   expandedUIDs,
   editionAddresses,
+  explicitEditions,
   systemTagsUID,
   systemSortsUID,
   hideAliasAnchors,
@@ -58,6 +59,8 @@ const TreeNode = ({
   defaultOpen?: boolean;
   expandedUIDs?: Set<string>;
   editionAddresses: string[];
+  /** True when the URL carries an explicit `?editions=` param (even empty). Keeps the tree edition-scoped for deliberately-empty lists per ADR-0031. */
+  explicitEditions?: boolean;
   systemTagsUID?: string;
   systemSortsUID?: string;
   /** When true, filters out child anchors whose name looks like a schema/attestation UID alias. Applied only at root per ADR-0033. */
@@ -69,7 +72,12 @@ const TreeNode = ({
   const hasEditions = editionAddresses && editionAddresses.length > 0;
   const lockedToEditions = useRef(false);
   if (hasEditions) lockedToEditions.current = true;
-  const useEditionsQuery = (hasEditions || lockedToEditions.current) && editionAddresses.length > 0;
+  // `explicitEditions` keeps the tree in edition-scoped mode even when the
+  // resolved list is empty, so `?editions=` (or a failed ENS lookup) renders
+  // an empty tree instead of silently falling back to the unscoped query.
+  // Codex P2 on PR #9, ADR-0031 "explicit param must not widen results".
+  const useEditionsQuery =
+    explicitEditions || ((hasEditions || lockedToEditions.current) && editionAddresses.length > 0);
 
   const { data: efsFileViewInfo } = useDeployedContractInfo({ contractName: "EFSFileView" });
 
@@ -92,11 +100,15 @@ const TreeNode = ({
     fileViewAddress: efsFileViewInfo?.address as `0x${string}` | undefined,
     fileViewAbi: efsFileViewInfo?.abi as any,
     pageSize: 50n,
-    enabled: useEditionsQuery,
+    // Skip the hook entirely when edition mode is explicit but the resolved
+    // list is empty — the result is trivially `[]` with no loading state.
+    // Without this guard the hook would sit in `isLoading` forever and the
+    // tree would render spinners for a deliberately-empty scope.
+    enabled: useEditionsQuery && editionAddresses.length > 0,
   });
 
   const isLoading = useEditionsQuery ? isEditionLoading : isStandardLoading;
-  const children = useEditionsQuery ? editionChildren : standardChildren;
+  const children = useEditionsQuery ? (editionAddresses.length === 0 ? [] : editionChildren) : standardChildren;
 
   const { sortedUIDs } = useSortedData({
     sortInfoUID: activeSortInfoUID ?? null,
@@ -185,6 +197,7 @@ const TreeNode = ({
                 propertySchemaUID={propertySchemaUID}
                 expandedUIDs={expandedUIDs}
                 editionAddresses={editionAddresses}
+                explicitEditions={explicitEditions}
                 systemTagsUID={systemTagsUID}
                 systemSortsUID={systemSortsUID}
                 activeSortInfoUID={activeSortInfoUID}
@@ -555,6 +568,8 @@ export type TopicTreeProps = {
   onSelect: (uid: string, path: PathItem[]) => void;
   expandedUIDs?: Set<string>;
   editionAddresses: string[];
+  /** True when the URL carries an explicit `?editions=` param (even empty or unresolvable). Keeps the tree edition-scoped per ADR-0031. */
+  explicitEditions?: boolean;
   activeSortInfoUID?: string | null;
   sortOverlayAddress?: `0x${string}`;
   sortRefreshKey?: number;
@@ -567,6 +582,7 @@ export const TopicTree = ({
   onSelect,
   expandedUIDs,
   editionAddresses,
+  explicitEditions,
   activeSortInfoUID,
   sortOverlayAddress,
   sortRefreshKey,
@@ -620,6 +636,7 @@ export const TopicTree = ({
               defaultOpen
               expandedUIDs={expandedUIDs}
               editionAddresses={editionAddresses}
+              explicitEditions={explicitEditions}
               systemTagsUID={systemTagsUID as string | undefined}
               systemSortsUID={systemSortsUID as string | undefined}
               hideAliasAnchors

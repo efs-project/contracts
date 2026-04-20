@@ -72,6 +72,14 @@ export default function ExplorerClient() {
   const { address: connectedAddress } = useAccount();
 
   const editionsParam = searchParams.get("editions");
+  // `URLSearchParams.get` returns `null` when the param is absent, `""` when
+  // present with empty value (`?editions=`), and the string otherwise. A
+  // truthy check collapses `null` and `""` into the same branch, but they
+  // mean different things under ADR-0031: `null` = "no explicit editions,
+  // use defaults"; `""` = "explicitly scope to nothing" (e.g. a share-link
+  // stripped of edition addresses — must NOT widen to default content).
+  // Use `!== null` everywhere we care about the parameter's presence.
+  const hasEditionsParam = editionsParam !== null;
 
   // System tail-fallback tier (ADR-0039). On devnet: a bootstrap curator
   // address + the EFS deployer, so fresh users see seeded content before
@@ -93,13 +101,13 @@ export default function ExplorerClient() {
     return defaultEditionsForContainer({
       container: currentContainer,
       connectedAddress,
-      explicitEditions: editionsParam ? resolvedEditionAddresses : null,
+      explicitEditions: hasEditionsParam ? resolvedEditionAddresses : null,
       // Web of trust is not yet designed (ADR-0039). Empty array today;
       // slot exists so adding it later is a config-only change.
       webOfTrust: [],
       systemEditions,
     });
-  }, [editionsParam, connectedAddress, resolvedEditionAddresses, currentContainer, systemEditions]);
+  }, [hasEditionsParam, connectedAddress, resolvedEditionAddresses, currentContainer, systemEditions]);
 
   const { data: rootUID } = useScaffoldReadContract({
     contractName: "Indexer",
@@ -162,7 +170,14 @@ export default function ExplorerClient() {
   // resolution could overwrite a newer one's addresses (or its "done" signal),
   // leaving the explorer rendering with the wrong editions until the next nav.
   useEffect(() => {
-    if (!editionsParam) {
+    // Skip ONLY when the param is absent. An empty string (`?editions=`) is
+    // an explicit "scope to nothing" signal under ADR-0031 and must continue
+    // through the resolver loop — `.split(",").filter(Boolean)` naturally
+    // produces an empty name list, the loop is a no-op, and the resolver
+    // writes `resolvedEditionAddresses = []` at the bottom. Without this
+    // distinction, navigating from `?editions=alice.eth` to `?editions=` would
+    // leave a stale resolved list in state and silently broaden results.
+    if (editionsParam === null) {
       setIsResolvingEditions(false);
       return;
     }
@@ -538,6 +553,11 @@ export default function ExplorerClient() {
               selectedUID={currentAnchorUID}
               activeContainer={currentContainer}
               editionAddresses={editionAddresses}
+              // Same semantics as FileBrowser.explicitEditions — whenever the
+              // URL carries `?editions=` (even empty), the sidebar must stay
+              // edition-scoped so it doesn't silently render the unscoped tree.
+              // ADR-0031 "explicit param must not widen results".
+              explicitEditions={hasEditionsParam}
               activeSortInfoUID={activeSortInfoUID}
               sortOverlayAddress={sortOverlayAddress}
               sortRefreshKey={sortRefreshKey}
@@ -592,13 +612,17 @@ export default function ExplorerClient() {
                     currentAnchorUID={currentAnchorUID}
                     dataSchemaUID={dataSchemaUID}
                     editionAddresses={editionAddresses}
-                    // True whenever the URL carries `?editions=…`, even if every
-                    // token failed to resolve and `editionAddresses` is `[]`.
-                    // FileBrowser keeps the view edition-scoped in that case so
-                    // unresolved explicit links render empty instead of silently
-                    // falling back to the unscoped default — Codex P2 on PR #9,
-                    // ADR-0031 "explicit param must not widen results".
-                    explicitEditions={Boolean(editionsParam)}
+                    // True whenever the URL carries `?editions=…`, INCLUDING
+                    // `?editions=` with an empty value (explicit "scope to
+                    // nothing") and any failed-resolution case. FileBrowser
+                    // keeps the view edition-scoped so unresolved or
+                    // deliberately-empty explicit links render empty instead
+                    // of silently falling back to the unscoped default —
+                    // Codex P2 on PR #9, ADR-0031 "explicit param must not
+                    // widen results". `hasEditionsParam` uses `!== null`
+                    // because `URLSearchParams.get` returns `""` for
+                    // `?editions=` and `null` only for the absent case.
+                    explicitEditions={hasEditionsParam}
                     tagFilter={searchParams.get("tags") || ""}
                     drawerTagFilters={drawerTagFilters}
                     currentPathNames={buildRouterPathNames(currentContainer, currentPath)}
