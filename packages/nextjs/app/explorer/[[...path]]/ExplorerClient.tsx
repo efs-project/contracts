@@ -238,8 +238,14 @@ export default function ExplorerClient() {
           // (`strict: false`) — users hand-typing URLs won't have a correct
           // EIP-55 checksum — and normalize via getAddress so downstream
           // dedup / comparison is case-stable.
-          if (isAddress(name, { strict: false })) {
-            resolvedAddresses.push(getAddress(name as `0x${string}`));
+          //
+          // Validate against `classifier` (lowercased prefix) rather than the
+          // original `name`: viem rejects `0X…`-prefixed strings as invalid,
+          // so an explicit token like `?editions=0X1a2b…` would silently drop
+          // despite the classifier check accepting it. `getAddress` normalizes
+          // to checksummed form regardless of input case.
+          if (isAddress(classifier, { strict: false })) {
+            resolvedAddresses.push(getAddress(classifier as `0x${string}`));
           } else {
             console.warn(`Ignoring invalid edition address in ?editions=: ${name}`);
           }

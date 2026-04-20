@@ -201,7 +201,15 @@ export async function classifyTopLevelSegment(raw: string, deps: ClassifyDeps): 
 
   if (looksHex && hexBody.length === 40) {
     const candidate = `0x${hexBody}` as `0x${string}`;
-    if (isAddress(candidate)) {
+    // `strict: false` — accept any valid 40-hex regardless of checksum case.
+    // Users hand-typing URLs or copying addresses from external sources
+    // (block explorers, messages) won't carry a correct EIP-55 checksum, and
+    // `EFSRouter._classifyTopLevel` has no checksum concept — it just parses
+    // 40 hex chars. Enforcing checksum here would silently fall mixed-case
+    // addresses through to the anchor branch, splitting UI/router routing
+    // invisibly. `getAddress` below re-derives the canonical checksum for
+    // downstream dedup / display.
+    if (isAddress(candidate, { strict: false })) {
       const checksummed = getAddress(candidate);
       if (checksummed !== zeroAddress) {
         return {
