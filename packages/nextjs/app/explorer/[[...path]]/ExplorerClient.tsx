@@ -278,11 +278,15 @@ export default function ExplorerClient() {
     // Wait for easAddress too — the top-level classifier needs it to
     // distinguish schema / attestation UIDs from anchor names. Running
     // before it loads misclassifies 64-hex segments as anchors.
+    // `dataSchemaUID` is needed for last-segment file-leaf resolution
+    // (mirrors EFSRouter.request: file anchors live under DATA_SCHEMA_UID,
+    // not the default generic schema that `resolvePath` queries).
     if (
       !rootUID ||
       rootUID === "0x0000000000000000000000000000000000000000000000000000000000000000" ||
       !publicClient ||
-      !easAddress
+      !easAddress ||
+      !dataSchemaUID
     ) {
       return;
     }
@@ -363,17 +367,42 @@ export default function ExplorerClient() {
         ];
         let currentUID: `0x${string}` = seedUID;
 
-        for (const segment of walkSegments) {
-          const childUID = (await publicClient.readContract({
-            address: indexerConfig.address as `0x${string}`,
-            abi: indexerConfig.abi,
-            functionName: "resolvePath",
-            args: [currentUID, segment],
-          })) as `0x${string}`;
-          if (cancelled) return;
+        const ZERO_UID = "0x0000000000000000000000000000000000000000000000000000000000000000";
+        for (let i = 0; i < walkSegments.length; i++) {
+          const segment = walkSegments[i];
+          const isLast = i === walkSegments.length - 1;
 
-          if (childUID === "0x0000000000000000000000000000000000000000000000000000000000000000") {
-            const errorMsg = `Folder '${decodeURIComponent(segment)}' not found in path.`;
+          // Mirror EFSRouter.request (EFSRouter.sol §container walk):
+          //   - intermediate segments must be folders (generic-schema anchors) → resolvePath
+          //   - the last segment may be a file leaf (DATA-schema anchor) OR a folder; try
+          //     DATA first, fall back to generic. Without this fallback, deep-linking to
+          //     `/explorer/docs/readme.txt` 404s even though the router serves the same
+          //     URL correctly — the debug UI and the public router would silently disagree.
+          let childUID: `0x${string}` = ZERO_UID;
+          if (isLast) {
+            childUID = (await publicClient.readContract({
+              address: indexerConfig.address as `0x${string}`,
+              abi: indexerConfig.abi,
+              functionName: "resolveAnchor",
+              args: [currentUID, segment, dataSchemaUID as `0x${string}`],
+            })) as `0x${string}`;
+            if (cancelled) return;
+          }
+          if (childUID === ZERO_UID) {
+            childUID = (await publicClient.readContract({
+              address: indexerConfig.address as `0x${string}`,
+              abi: indexerConfig.abi,
+              functionName: "resolvePath",
+              args: [currentUID, segment],
+            })) as `0x${string}`;
+            if (cancelled) return;
+          }
+
+          if (childUID === ZERO_UID) {
+            // "Folder" in the error text kept deliberately for intermediate segments;
+            // for the last segment we checked both folder and file so the user's path
+            // is genuinely missing either way.
+            const errorMsg = `'${decodeURIComponent(segment)}' not found in path.`;
             console.warn(errorMsg);
             setPathError(errorMsg);
             setIsResolving(false);
@@ -434,7 +463,7 @@ export default function ExplorerClient() {
     return () => {
       cancelled = true;
     };
-  }, [rootUID, params?.path, publicClient, mainnetPublicClient, easAddress]);
+  }, [rootUID, params?.path, publicClient, mainnetPublicClient, easAddress, dataSchemaUID]);
 
   // Keep the browser tab title in sync with the deepest path segment. When
   // the container has a resolved display name (ENS / persona / property)
