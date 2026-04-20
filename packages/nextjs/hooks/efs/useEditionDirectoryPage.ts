@@ -134,6 +134,21 @@ export function useEditionDirectoryPage({
     let cancelled = false;
     inFlightRef.current = true;
 
+    // Snapshot the refresh resolver (if any) that this fetch is responsible
+    // for. A later `refresh()` call resolves the previous resolver
+    // synchronously and installs a *new* one before bumping `loadTrigger`,
+    // which cancels this fetch and schedules a fresh one. Without this
+    // snapshot, a cancelled older fetch's `finally` block would see the
+    // newer resolver in `refreshPendingRef.current` and resolve it
+    // prematurely — before the fresh fetch has populated `items`. Awaiters
+    // of the newer `refresh()` would then observe stale directory state.
+    //
+    // Pairing the snapshot with an identity check on resolve ensures
+    // exactly one fetch instance — the one whose `refresh()` installed
+    // this resolver — can clear it, and only when it actually committed
+    // state (i.e. wasn't cancelled).
+    const ownedResolver = refreshPendingRef.current;
+
     (async () => {
       setIsLoading(true);
       const collected: any[] = [];
@@ -186,12 +201,20 @@ export function useEditionDirectoryPage({
       } finally {
         inFlightRef.current = false;
         if (!cancelled) setIsLoading(false);
-        // Resolve any awaiter from `refresh()` so callers that do
+        // Resolve the awaiter from `refresh()` so callers that do
         // `await refetchEditionItems()` see the post-fetch state before
-        // continuing (delete-then-refresh flow).
-        const pending = refreshPendingRef.current;
-        refreshPendingRef.current = null;
-        pending?.();
+        // continuing (delete-then-refresh flow). Two gates:
+        //   1. `!cancelled` — a cancelled fetch never committed state,
+        //      so resolving here would hand stale data to the awaiter.
+        //      The successor fetch will resolve it instead.
+        //   2. Identity check — if a later `refresh()` already replaced
+        //      the resolver (meaning our owner was previously resolved
+        //      by `refresh()` itself), do nothing. The newer fetch owns
+        //      the newer resolver.
+        if (!cancelled && ownedResolver && refreshPendingRef.current === ownedResolver) {
+          refreshPendingRef.current = null;
+          ownedResolver();
+        }
       }
     })();
 

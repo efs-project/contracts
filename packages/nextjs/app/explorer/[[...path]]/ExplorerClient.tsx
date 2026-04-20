@@ -98,7 +98,20 @@ export default function ExplorerClient() {
   // PROPERTY cascade with deployer fallback (ADR-0016). Surfaces persona /
   // ENS / property-bound labels in PathBar, ContainerInfoPanel, and the tab
   // title.
-  const { name: containerDisplayName } = useContainerName(currentContainer, connectedAddress, currentAnchorUID);
+  //
+  // The third arg is the *container root* UID, not the leaf. For schema /
+  // attestation containers the `name` PROPERTY is attached to the alias
+  // anchor at root (ADR-0033 §2); navigating into a sub-path would otherwise
+  // cause `useContainerName` to resolve labels off a descendant anchor and
+  // mislabel the header with whatever short-hex or PROPERTY happens to live
+  // there. `currentPath[0].uid` is the seed UID set during path resolution
+  // (alias anchor when one exists, else the raw container UID), so it stays
+  // stable across sub-path navigation within the same container.
+  const { name: containerDisplayName } = useContainerName(
+    currentContainer,
+    connectedAddress,
+    currentPath[0]?.uid ?? null,
+  );
 
   // Editions Resolution Effect — only needed for ENS name resolution in explicit ?editions= param.
   // Cancel-guarded: ENS lookups are slow and a rapid `?editions=` change can
