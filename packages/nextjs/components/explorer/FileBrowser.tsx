@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { MirrorsPanel } from "./MirrorsPanel";
 import { PropertiesModal } from "./PropertiesModal";
@@ -127,6 +127,7 @@ export const FileBrowser = ({
   dataSchemaUID,
   currentPathNames,
   editionAddresses,
+  explicitEditions = false,
   onNavigate,
   tagFilter = "",
   drawerTagFilters = {},
@@ -140,6 +141,18 @@ export const FileBrowser = ({
   dataSchemaUID: string;
   currentPathNames: string[];
   editionAddresses: string[];
+  /**
+   * True when the caller passed `?editions=…` explicitly — including the case
+   * where every token in the list failed ENS / hex parsing and
+   * `editionAddresses` ended up empty. Distinguishes "user asked for nothing"
+   * (stay edition-scoped, render empty) from "nothing available to scope to"
+   * (wallet disconnected, no default set — fall through to unscoped). Without
+   * this flag, explicit-but-unresolved URLs like `?editions=doesnotexist.eth`
+   * silently leak default/unfiltered content into a view the user told us to
+   * scope down. Defaults false for back-compat with callers that don't know
+   * about `editionsParam`.
+   */
+  explicitEditions?: boolean;
   onNavigate: (uid: string, name: string) => void;
   tagFilter?: string;
   drawerTagFilters?: Record<string, DrawerTagFilterState>;
@@ -782,12 +795,19 @@ export const FileBrowser = ({
   // Once we've ever been in editions mode, stay there — prevents the standard (show-all) query
   // from firing its cached result during the brief window when editionAddresses is transitioning
   // to a new address (e.g. wallet account switch causes a momentary empty array).
-  // BUT: if editionAddresses is empty (wallet disconnect, unresolved ENS), fall through to the
+  // BUT: if editionAddresses is empty (wallet disconnect, no default set), fall through to the
   // standard query rather than leaving both queries disabled — showing unfiltered data is better
   // than an indefinitely blank directory.
+  //
+  // `explicitEditions` overrides that fallthrough: when the user passed
+  // `?editions=…` but every token failed to resolve, we STAY in edition mode
+  // (against an empty address list → empty grid) rather than silently
+  // broadening the view to unscoped default content the URL never asked for.
+  // See Codex P2 on PR #9 and ADR-0031 (explicit param must not widen results).
   const lockedToEditions = useRef(false);
   if (hasEditions) lockedToEditions.current = true;
-  const useEditionsQuery = (hasEditions || lockedToEditions.current) && editionAddresses.length > 0;
+  const useEditionsQuery =
+    explicitEditions || ((hasEditions || lockedToEditions.current) && editionAddresses.length > 0);
 
   const {
     data: standardItems,
@@ -854,7 +874,17 @@ export const FileBrowser = ({
   }, [directoryRefreshKey]);
 
   const isLoading = useEditionsQuery ? isEditionLoading : isStandardLoading;
-  const rawItems = useEditionsQuery ? editionItems : standardItems;
+  // When explicit-editions requested an empty list (all tokens unresolved), the
+  // edition hook is disabled and `editionItems` is undefined — without this
+  // coercion, the grid would render neither items nor the "Topic is empty"
+  // string (the empty-state check uses `items?.length === 0`, which is false
+  // for undefined). Coerce to a stable `[]` so the user sees an explicit
+  // empty result instead of a silently-blank pane. Memoized so downstream
+  // effects that depend on `rawItems` identity don't refire every render.
+  const rawItems = useMemo(() => {
+    if (useEditionsQuery) return editionAddresses.length === 0 ? [] : editionItems;
+    return standardItems;
+  }, [useEditionsQuery, editionAddresses.length, editionItems, standardItems]);
 
   // When a tag filter is active, resolve DATA UIDs for each file item.
   // DATA is standalone (refUID=0x0) and placed at anchors via TAGs, so we query

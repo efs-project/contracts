@@ -1,5 +1,6 @@
 import type { PublicClient } from "viem";
 import { getAddress, isAddress, isHex, zeroAddress, zeroHash } from "viem";
+import { normalize } from "viem/ens";
 
 export type ContainerKind = "anchor" | "address" | "schema" | "attestation";
 
@@ -150,21 +151,39 @@ export async function classifyTopLevelSegment(raw: string, deps: ClassifyDeps): 
   // container contract from ADR-0033. If the mainnet client isn't wired up
   // (e.g. a unit-test context), skip the ENS branch entirely and let the
   // classifier fall through to the raw-hex / UID / anchor branches below.
-  if (segment.toLowerCase().endsWith(".eth") && deps.mainnetPublicClient) {
+  //
+  // Normalize per ENSIP-15 via viem's `normalize()` before both the
+  // `.eth`-suffix check and the resolver call. `segment.toLowerCase()` alone
+  // is not sufficient: viem's `getEnsAddress` requires a canonical name and
+  // rejects mixed-case inputs, so `/explorer/Vitalik.ETH` previously resolved
+  // to null and fell through to the anchor classifier even though the name
+  // was valid. `normalize()` also handles non-ASCII edge cases (emoji,
+  // punycode) that pure lowercasing would miss. Throws on structurally
+  // invalid names — catch and fall through in that case.
+  if (deps.mainnetPublicClient) {
+    let ensName: string | null = null;
     try {
-      const resolved = await deps.mainnetPublicClient.getEnsAddress({ name: segment });
-      if (resolved && resolved !== zeroAddress) {
-        const checksummed = getAddress(resolved);
-        return {
-          kind: "address",
-          uid: addressToBytes32(checksummed),
-          displayName: segment,
-          address: checksummed,
-          rawSegment,
-        };
-      }
+      const candidate = normalize(segment);
+      if (candidate.endsWith(".eth")) ensName = candidate;
     } catch {
-      // fall through to other classifiers
+      // not a valid ENS label — fall through
+    }
+    if (ensName) {
+      try {
+        const resolved = await deps.mainnetPublicClient.getEnsAddress({ name: ensName });
+        if (resolved && resolved !== zeroAddress) {
+          const checksummed = getAddress(resolved);
+          return {
+            kind: "address",
+            uid: addressToBytes32(checksummed),
+            displayName: ensName,
+            address: checksummed,
+            rawSegment,
+          };
+        }
+      } catch {
+        // fall through to other classifiers
+      }
     }
   }
 

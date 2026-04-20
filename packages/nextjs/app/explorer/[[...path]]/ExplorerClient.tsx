@@ -592,6 +592,13 @@ export default function ExplorerClient() {
                     currentAnchorUID={currentAnchorUID}
                     dataSchemaUID={dataSchemaUID}
                     editionAddresses={editionAddresses}
+                    // True whenever the URL carries `?editions=…`, even if every
+                    // token failed to resolve and `editionAddresses` is `[]`.
+                    // FileBrowser keeps the view edition-scoped in that case so
+                    // unresolved explicit links render empty instead of silently
+                    // falling back to the unscoped default — Codex P2 on PR #9,
+                    // ADR-0031 "explicit param must not widen results".
+                    explicitEditions={Boolean(editionsParam)}
                     tagFilter={searchParams.get("tags") || ""}
                     drawerTagFilters={drawerTagFilters}
                     currentPathNames={buildRouterPathNames(currentContainer, currentPath)}
