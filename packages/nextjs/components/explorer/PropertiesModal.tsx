@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { decodeEventLog, encodeAbiParameters, parseAbiItem, parseAbiParameters, zeroAddress, zeroHash } from "viem";
-import { useAccount, usePublicClient } from "wagmi";
+import { useAccount, usePublicClient, useReadContracts } from "wagmi";
 import { PlusIcon, XMarkIcon } from "@heroicons/react/24/outline";
 import { useDeployedContractInfo, useScaffoldReadContract, useScaffoldWriteContract } from "~~/hooks/scaffold-eth";
 import { useBackgroundOps } from "~~/services/store/backgroundOps";
@@ -322,10 +322,28 @@ export const PropertiesModal = ({ uid, onClose }: PropertiesModalProps) => {
   );
 };
 
+// Cap on active PROPERTY entries scanned per key anchor when picking the
+// "current" value. Practical values are 1-3 (one per rebind without revoke);
+// 50 is a guardrail against a pathological accumulation. Reads are batched
+// through a single multicall so the cost is linear in active targets, not in
+// the cap.
+const MAX_ACTIVE_PROPERTY_TARGETS = 50n;
+
 // Item Component: renders "Key: ConnectedUserValue" on a single line.
 // Walks TagResolver._activeByAAS[keyAnchor][viewer][PROPERTY_SCHEMA] to get the
 // viewer's current PROPERTY under this key. Edition-scoped lookups (non-viewer
 // attesters) belong on the read-side viewing UIs, not this write-side modal.
+//
+// Multi-active-target handling: `_activeByAAS[def][attester][schema]` is an
+// array, not a singleton. ADR-0035 §3 claims re-TAGging replaces the previous
+// value via `_activeByAAS` "singleton semantics", but that's only true when the
+// new TAG references the SAME propertyUID — and a value change necessarily
+// uses a new PROPERTY attestation (new UID). The contract treats each
+// (attester, targetID, definition) triple as a separate compositeHash, so
+// rebinds with different values accumulate in the array until the stale TAGs
+// are explicitly revoked. Until the write path is hardened to revoke prior
+// TAGs (tracked as a Tier 2 question referencing ADR-0035), we defend on read:
+// fetch every active target and surface the newest by EAS `time`.
 const PropertyAnchorItem = ({
   item,
   propertySchemaUID,
@@ -337,7 +355,11 @@ const PropertyAnchorItem = ({
   tagResolverAddress: `0x${string}` | undefined;
   viewer: `0x${string}` | undefined;
 }) => {
-  const { data: activeTargets, isLoading } = useScaffoldReadContract({
+  const { data: easInfo } = useDeployedContractInfo({ contractName: "EAS" });
+  const easAddress = easInfo?.address as `0x${string}` | undefined;
+  const easAbi = easInfo?.abi;
+
+  const { data: activeTargets, isLoading: isTargetsLoading } = useScaffoldReadContract({
     contractName: "TagResolver",
     functionName: "getActiveTargetsByAttesterAndSchema",
     args: [
@@ -345,14 +367,58 @@ const PropertyAnchorItem = ({
       (viewer ?? zeroAddress) as `0x${string}`,
       (propertySchemaUID || zeroHash) as `0x${string}`,
       0n,
-      1n,
+      MAX_ACTIVE_PROPERTY_TARGETS,
     ],
     query: {
       enabled: !!item.uid && !!propertySchemaUID && !!tagResolverAddress && !!viewer,
     },
   });
 
-  const activeUID = activeTargets && activeTargets.length > 0 ? (activeTargets[0] as `0x${string}`) : null;
+  // Stable array reference — wagmi's `useReadContracts` re-runs whenever the
+  // `contracts` identity changes, and the raw `activeTargets` from wagmi is
+  // recreated each render even when values are unchanged. Memoizing on the
+  // joined hex string keeps the batched fetch from thrashing.
+  const targetUIDs = useMemo(() => {
+    if (!activeTargets || activeTargets.length === 0) return [] as `0x${string}`[];
+    return [...activeTargets] as `0x${string}`[];
+  }, [activeTargets?.join(",")]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Batched attestation fetch (single multicall). Only engages when there are
+  // 2+ active targets — the single-target case is the overwhelming common
+  // case and skips the extra RPC entirely.
+  const { data: attestations, isLoading: isAttestationsLoading } = useReadContracts({
+    contracts: targetUIDs.map(uid => ({
+      address: easAddress,
+      abi: easAbi as any,
+      functionName: "getAttestation",
+      args: [uid],
+    })),
+    query: {
+      enabled: targetUIDs.length > 1 && !!easAddress && !!easAbi,
+    },
+  });
+
+  const activeUID = useMemo<`0x${string}` | null>(() => {
+    if (targetUIDs.length === 0) return null;
+    if (targetUIDs.length === 1) return targetUIDs[0];
+    // Newest-by-time wins. Falls back to last-pushed (array tail) when the
+    // batched fetch hasn't landed yet — still strictly better than picking
+    // the head, because in push-only steady state the tail IS the newest.
+    if (!attestations) return targetUIDs[targetUIDs.length - 1];
+    let bestIdx = 0;
+    let bestTime: bigint = -1n;
+    attestations.forEach((res, idx) => {
+      if (res.status !== "success" || !res.result) return;
+      const t = (res.result as any).time as bigint;
+      if (t > bestTime) {
+        bestTime = t;
+        bestIdx = idx;
+      }
+    });
+    return targetUIDs[bestIdx];
+  }, [targetUIDs, attestations]);
+
+  const isLoading = isTargetsLoading || (targetUIDs.length > 1 && isAttestationsLoading);
 
   return (
     <li className="bg-base-200 p-2 rounded text-sm mb-1 flex items-center justify-between">

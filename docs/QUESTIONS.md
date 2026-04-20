@@ -17,6 +17,22 @@ Questions agents have flagged for human decision. Review and resolve before agen
 
 ## Open
 
+### [tier-2, 2026-04-20, claude] ADR-0035 PROPERTY singleton claim does not hold — write-side rebind accumulates
+
+ADR-0035 §3 states: "re-TAGging replaces the previous value" via `_activeByAAS` "per-attester singleton semantics", and calls this out as **load-bearing** (§Consequences). **The claim is incorrect.** `TagResolver._activeByAAS[definition][attester][targetSchema]` is an append-only array, not a singleton; entries are keyed by `compositeHash = keccak256(attester, targetID, definition)`. A value *change* necessarily uses a new PROPERTY attestation (new UID → new `targetID`), so the new TAG fires a fresh compositeHash and PUSHES a new entry rather than superseding the old one. Observed today: `PropertiesModal` rendered whichever entry happened to sit at index 0, which in steady state is the oldest push.
+
+I shipped a defensive read-side fix in this PR's follow-up (fetch all active targets, pick newest by EAS `time`). That stops users from seeing stale values in the modal immediately, but the underlying accumulation is still present and it leaks: `_activeTotalByDefAndAttester` grows with each rebind, and any other consumer that walks `_activeByAAS` for PROPERTY keys sees ghosts.
+
+Which of these do you want:
+
+- **A**: Harden the write path in `PropertiesModal` (and any other PROPERTY writer) to look up and `applies=false`-supersede the prior TAG for the same `(attester, keyAnchor)` before attesting the new one. Restores actual singleton semantics at the index level. ~1 extra tx per rebind. ADR-0035 stays as-written.
+- **B**: Change the TAG resolver's compositeHash to key on `(attester, definition, targetSchema)` instead of `(attester, targetID, definition)` so the new TAG genuinely supersedes prior active entries without needing a revoke. Matches ADR-0035's claim at the contract level but changes hot-path semantics for *all* TAG consumers (DATA placements, etc.) and is effectively a schema-adjacent change — likely Tier 1.
+- **C**: Supersede ADR-0035 with a new ADR that acknowledges PROPERTY rebinds are append-only at the index level and consumers must filter by newest `time`. Cheapest; formalizes current behavior.
+
+**Default if not answered:** ship the defensive read-side fix (already done), note the mismatch in `decisions.md`, revisit before mainnet.
+
+**Blocks:** doesn't block this PR. Does block any future consumer that relies on ADR-0035's singleton claim (e.g. a gas-optimized on-chain read of "the one current PROPERTY value for attester X under key K").
+
 ### [tier-2, 2026-04-16, claude] Devnet upgradeability proxy pattern
 
 You said you plan to add upgradeability for devnet/Sepolia. Which proxy pattern?
