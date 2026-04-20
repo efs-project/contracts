@@ -8,6 +8,14 @@ Informal dated log of small decisions agents made while working. Lighter than AD
 
 ---
 
+### 2026-04-20 — [claude] `yarn preview` now group-kills its children on shutdown
+
+Problem: every `yarn preview` cycle was leaking a `hardhat node` process. User accumulated 7 stale forks over a day, enough to spin the fans visibly. Root cause: `scripts/claude-preview-launch.mjs` spawned `yarn hardhat:fork` and `yarn workspace @se-2/nextjs dev`, then on SIGINT/SIGTERM called `child.kill()` on the top-level yarn. Yarn doesn't forward signals to its descendants, so the outer yarn exited but left `hardhat node` (two `yarn` layers deeper) reparented to launchd and running forever.
+
+Fix: spawn both children with `detached: true` (new process-group leader) and swap `child.kill()` for `process.kill(-child.pid, signal)` to signal the whole group. One transparent knock-on: detached children aren't in the terminal's foreground group anymore, so they don't receive Ctrl+C directly — but the launcher's SIGINT handler already fans signals out via `killTree`, and neither child reads stdin, so the end-to-end behavior is unchanged for the user.
+
+---
+
 ### 2026-04-20 — [claude] Removed `web3protocol` preview path in `FileBrowser.tsx`
 
 On devnet (app hosted at `*.nip.io` / eth.limo origin), clicking a file preview triggered Chrome's **Local Network Access** permission prompt ("Access other apps and services on this device — Block / Allow"). Root cause: `FileBrowser.fetchFileContent` dynamically imported `web3protocol`, which bundles WASM, constructs its own `Client` with an RPC URL from `NEXT_PUBLIC_HARDHAT_RPC_URL`, and fetches outside wagmi's configured transport. That out-of-band fetcher crosses the public→private-IP boundary on first preview click and trips LNA, which users read as malware and bounce from.

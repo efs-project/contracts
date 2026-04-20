@@ -13,7 +13,9 @@
  *   EFS_PREVIEW_NEXT_PORT     (default 3000) — starting port for next dev scan
  *
  * Foreground process follows the lifetime of `next dev`. The hardhat fork
- * runs as a child process and is torn down on SIGINT / SIGTERM / exit.
+ * runs as a child process and is torn down on SIGINT / SIGTERM / exit — see
+ * `killTree` for how signal propagation reaches `hardhat node` through the
+ * yarn layers above it.
  */
 
 import net from "node:net";
@@ -112,17 +114,39 @@ function prewarm(port, path = "/", timeoutMs = 45_000) {
 const children = [];
 let shuttingDown = false;
 
+/**
+ * Kill a child AND all of its descendants.
+ *
+ * Each `yarn` invocation here fans out to a longer process tree than you'd
+ * guess: `yarn hardhat:fork` → `yarn workspace @se-2/hardhat fork` → `hardhat
+ * node`. `yarn` does NOT forward signals to its children, so `child.kill()`
+ * on the outer yarn exits yarn but leaves `hardhat node` orphaned under
+ * launchd — which is why previous preview runs left zombie forks eating CPU
+ * across reboots (the user noticed fans spinning hard with 7 stale forks
+ * accumulated).
+ *
+ * The workaround is `detached: true` at spawn time — it makes each child the
+ * leader of a new process group — paired with `process.kill(-pid, signal)`
+ * here, which signals the *whole group* (negative pid == group id). Every
+ * descendant inherits the group, so yarn + hardhat + any grandchildren go
+ * together. Same pattern applies to `next dev`, which itself spawns
+ * `next-server`.
+ */
+function killTree(child, signal) {
+  if (child.killed || child.exitCode !== null || child.pid == null) return;
+  try {
+    process.kill(-child.pid, signal);
+  } catch {
+    // ESRCH = group already gone; any other error we can't recover from
+    // inside a shutdown path, so swallow.
+  }
+}
+
 function shutdown(signal, exitCode) {
   if (shuttingDown) return;
   shuttingDown = true;
   for (const child of children) {
-    if (!child.killed && child.exitCode === null) {
-      try {
-        child.kill(signal ?? "SIGTERM");
-      } catch {
-        /* child already gone */
-      }
-    }
+    killTree(child, signal ?? "SIGTERM");
   }
   if (typeof exitCode === "number") {
     // Give children a tick to flush before exit.
@@ -152,6 +176,9 @@ async function main() {
       // FORK_BLOCK (see hardhat.config.ts, ADR-0037). Without it, `networks.hardhat.forking`
       // is ignored and deployments land on a bare chain with no EAS state — broken.
       env: { ...process.env, MAINNET_FORKING_ENABLED: "true" },
+      // Own process group so `killTree` can reach `hardhat node` through the
+      // `yarn → yarn workspace → hardhat` chain. See `killTree` doc for why.
+      detached: true,
     },
   );
   children.push(fork);
@@ -191,6 +218,10 @@ async function main() {
         ...process.env,
         NEXT_PUBLIC_HARDHAT_RPC_URL: rpcUrl,
       },
+      // Own process group for the same reason as the fork: yarn spawns
+      // `next dev`, which spawns `next-server`. Without detached+group kill,
+      // stopping the launcher leaves `next-server` orphaned on the port.
+      detached: true,
     },
   );
   children.push(next);
