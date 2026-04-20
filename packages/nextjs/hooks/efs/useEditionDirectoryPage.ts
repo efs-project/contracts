@@ -135,11 +135,37 @@ export function useEditionDirectoryPage({
   // across budget-exhausted pages until we either hit `pageSize` items or the
   // cursor returns empty (ADR-0036 terminator).
   useEffect(() => {
-    if (!enabled) return;
+    // Settle any pending `refresh()` awaiter on early-return so callers doing
+    // `await refetchEditionItems()` can't hang when preconditions go false
+    // (enabled flipped, editions emptied, wagmi deps transiently undefined).
+    // The fetch will re-fire if preconditions restore, but the awaiter has
+    // already moved on — matching the "at most one render cycle of stale UI"
+    // semantic used elsewhere in this hook.
+    const settlePending = () => {
+      const pending = refreshPendingRef.current;
+      if (pending) {
+        refreshPendingRef.current = null;
+        pending();
+      }
+    };
+
+    if (!enabled) {
+      settlePending();
+      return;
+    }
     if (loadTrigger === 0) return;
-    if (!publicClient || !fileViewAddress || !fileViewAbi) return;
-    if (!parentAnchor || !dataSchemaUID) return;
-    if (editionAddresses.length === 0) return;
+    if (!publicClient || !fileViewAddress || !fileViewAbi) {
+      settlePending();
+      return;
+    }
+    if (!parentAnchor || !dataSchemaUID) {
+      settlePending();
+      return;
+    }
+    if (editionAddresses.length === 0) {
+      settlePending();
+      return;
+    }
 
     let cancelled = false;
 
