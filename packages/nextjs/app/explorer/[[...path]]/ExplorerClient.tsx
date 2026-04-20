@@ -36,6 +36,13 @@ export default function ExplorerClient() {
   const [drawerTagFilters, setDrawerTagFilters] = useState<Record<string, DrawerTagFilterState>>({ nsfw: "exclude" });
 
   const [sortRefreshKey, setSortRefreshKey] = useState(0);
+  // Bumped when out-of-FileBrowser mutations add items to the current directory
+  // (file upload, folder create). `CreateItemModal` lives under FileActionsBar,
+  // not FileBrowser, so it can't call FileBrowser's internal `refetch*` hooks
+  // directly. Delete is in-component and uses those directly; this key is the
+  // parallel escape hatch for create. Without it, users had to hard-refresh to
+  // see a newly-created file/folder appear.
+  const [directoryRefreshKey, setDirectoryRefreshKey] = useState(0);
   const [reverseOrder, setReverseOrder] = useState(false);
   const [autoProcessKey, setAutoProcessKey] = useState(0);
   const [autoProcessSortUIDs, setAutoProcessSortUIDs] = useState<string[]>([]);
@@ -549,8 +556,12 @@ export default function ExplorerClient() {
                 onFileCreated={sortUIDs => {
                   setAutoProcessSortUIDs(sortUIDs);
                   setAutoProcessKey(k => k + 1);
+                  setDirectoryRefreshKey(k => k + 1);
                 }}
-                onFolderCreated={() => setSortRefreshKey(k => k + 1)}
+                onFolderCreated={() => {
+                  setSortRefreshKey(k => k + 1);
+                  setDirectoryRefreshKey(k => k + 1);
+                }}
               />
             )}
 
@@ -567,6 +578,7 @@ export default function ExplorerClient() {
                     activeSortInfoUID={activeSortInfoUID}
                     sortOverlayAddress={sortOverlayAddress}
                     sortRefreshKey={sortRefreshKey}
+                    directoryRefreshKey={directoryRefreshKey}
                     reverseOrder={reverseOrder}
                     onNavigate={(uid, name) => navigateToPath([...currentPath, { uid, name }])}
                   />

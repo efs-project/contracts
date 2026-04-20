@@ -133,6 +133,7 @@ export const FileBrowser = ({
   activeSortInfoUID = null,
   sortOverlayAddress,
   sortRefreshKey = 0,
+  directoryRefreshKey = 0,
   reverseOrder = false,
 }: {
   currentAnchorUID: string | null;
@@ -145,6 +146,19 @@ export const FileBrowser = ({
   activeSortInfoUID?: string | null;
   sortOverlayAddress?: `0x${string}`;
   sortRefreshKey?: number;
+  /**
+   * Bumped by the parent (ExplorerClient) after any out-of-component mutation
+   * that adds/removes items in the current directory — today: file upload and
+   * folder creation, which land via `CreateItemModal` → `FileActionsBar` and
+   * therefore can't call the internal `refetch*` functions directly. Delete is
+   * in-component and calls `refetchEditionItems` / `refetchStandardItems`
+   * inline; this key is the parallel escape hatch for create.
+   *
+   * Each bump triggers exactly one refetch of whichever query is active
+   * (edition-scoped or standard). Initial mount is skipped — the hooks fetch
+   * on their own when deps settle.
+   */
+  directoryRefreshKey?: number;
   reverseOrder?: boolean;
 }) => {
   const [selectedDebugItem, setSelectedDebugItem] = useState<any | null>(null);
@@ -815,6 +829,29 @@ export const FileBrowser = ({
     pageSize,
     enabled: useEditionsQuery && editionAddresses.length > 0,
   });
+
+  // Parent-driven refetch for out-of-component mutations (create file/folder).
+  // Skip the initial render — the queries fire on their own when deps settle.
+  // Subsequent bumps route to whichever query is currently live. We snapshot
+  // `useEditionsQuery` at call time so a mid-flight mode switch (e.g. wallet
+  // disconnect between the create and the refetch) still hits the right
+  // refetcher rather than racing the mode-flip.
+  const firstRefreshRun = useRef(true);
+  useEffect(() => {
+    if (firstRefreshRun.current) {
+      firstRefreshRun.current = false;
+      return;
+    }
+    if (directoryRefreshKey === 0) return;
+    if (useEditionsQuery) {
+      refetchEditionItems().catch(e => console.error("Directory refetch (editions) failed", e));
+    } else {
+      refetchStandardItems();
+    }
+    // refetch* identities are stable per query; useEditionsQuery is the
+    // dispatch key and changes rarely. Intentionally scoped to the bump.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [directoryRefreshKey]);
 
   const isLoading = useEditionsQuery ? isEditionLoading : isStandardLoading;
   const rawItems = useEditionsQuery ? editionItems : standardItems;
