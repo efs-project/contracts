@@ -25,7 +25,6 @@ import {
 import { useEditionDirectoryPage } from "~~/hooks/efs/useEditionDirectoryPage";
 import { useSortedData } from "~~/hooks/efs/useSortedData";
 import { useDeployedContractInfo, useScaffoldReadContract, useScaffoldWriteContract } from "~~/hooks/scaffold-eth";
-import { useTargetNetwork } from "~~/hooks/scaffold-eth/useTargetNetwork";
 import { useBackgroundOps } from "~~/services/store/backgroundOps";
 import { isFile, isTopic } from "~~/utils/efs/efsTypes";
 import { SORT_OVERLAY_ABI } from "~~/utils/efs/sortOverlay";
@@ -191,7 +190,6 @@ export const FileBrowser = ({
 
   const { data: indexerInfo } = useDeployedContractInfo({ contractName: "Indexer" });
   const { data: efsFileViewInfo } = useDeployedContractInfo({ contractName: "EFSFileView" });
-  const { targetNetwork } = useTargetNetwork();
   const publicClient = usePublicClient();
   const { address: connectedAddress } = useAccount();
   const { writeContractAsync: easWrite } = useScaffoldWriteContract("EAS");
@@ -391,173 +389,118 @@ export const FileBrowser = ({
     setFileTransportType("onchain");
     setFetchError(null);
     try {
-      // In a real implementation we might pass the full path from the Toolbar/Page.
-      // EFS Router expects the path elements. For now, we'll just request the item.name
-      // assuming the router can resolve from root if we pass the right path.
-      // Wait, the router resolve expects the full path from the root Anchor.
-      // Since we don't have the breadcrumbs in FileBrowser, we might just try fetching by UID directly,
-      // but EFSRouter requests take `web3://<router>/path/to/file`.
-      // Let's pass the item name and assume it's at the root for this test,
-      // or we can pass `currentPath` from page.tsx to FileBrowser and build it.
-      // For the test files `/debug/test.txt`, path is `debug/test.txt`.
-      // The frontend currently doesn't pass the full path string array to FileBrowser,
-      // so for now, we'll try to just guess it's `debug/${item.name}` as a quick hack for the test,
-      // or if we can't, we should add `currentPath` as a prop.
-
-      // Let's fetch using web3protocol dynamically to avoid SSR WASM errors
-      const { Client } = await import("web3protocol");
-      const { getDefaultChainList } = await import("web3protocol/chains");
-
-      let chainList = getDefaultChainList();
-      if (targetNetwork.id === 31337) {
-        // RPC URL precedence: NEXT_PUBLIC_HARDHAT_RPC_URL (same var scaffold.config.ts
-        // uses for wagmi transports) → absolute localhost default. Devnet sets this to
-        // a same-origin path like "/rpc"; browsers resolve that relative to the page
-        // origin, keeping the reverse-proxy round-trip local. See .env.example.
-        const rpcUrl = process.env.NEXT_PUBLIC_HARDHAT_RPC_URL || "http://127.0.0.1:8545";
-        chainList = [
-          ...chainList,
-          {
-            id: 31337,
-            name: "Hardhat",
-            shortName: "hht",
-            chain: "ETH",
-            network: "hardhat",
-            rpc: [rpcUrl],
-            faucets: [],
-            nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
-            infoURL: "https://hardhat.org",
-          },
-        ];
+      // Preview reads go straight through the same-origin wagmi transport:
+      //   EFSRouter.request([...pathSegs], [{key:"editions",value:csv}, ...]) via publicClient
+      // plus gateway fetches for external-body mirrors (IPFS/Arweave/HTTPS).
+      //
+      // We used to try `web3protocol.Client.fetchUrl(uri)` first and fall back
+      // to this direct path on error. Removed 2026-04-20:
+      //   1. On devnet (app on `*.nip.io` / an eth.limo origin), `web3protocol`
+      //      bundles WASM + its own fetcher and constructs RPC connections
+      //      outside wagmi's configured transport. On first preview click the
+      //      browser raised a **Local Network Access** permission prompt
+      //      ("Access other apps and services on this device — Block / Allow")
+      //      — users read that as malware and bounce. See
+      //      `docs/decisions.md` entry for 2026-04-20.
+      //   2. The direct path already covers every content shape: on-chain
+      //      SSTORE2 chunks via `web3-next-chunk` pagination, and
+      //      `message/external-body` delegation to a gateway. The
+      //      web3protocol branch collapsed duplicate Content-Type headers
+      //      (breaking external-body detection) and fell through on empty
+      //      bodies anyway — strictly extra surface area.
+      //   3. A future "native transport helper" (e.g. an opt-in local IPFS
+      //      node) must be an explicit user toggle, never automatic from a
+      //      preview click.
+      if (!publicClient) {
+        throw new Error("Public client not available");
       }
-
-      const web3Client = new Client(chainList);
-
-      // In a real app, `currentPath` and its string names should be passed to `FileBrowser`.
-      const joinedPath = currentPathNames.length > 0 ? currentPathNames.join("/") + "/" : "";
-      const editionParams =
-        editionAddresses.length > 0 ? `?editions=${editionAddresses.map(a => a.trim()).join(",")}` : "";
-      const uri = `web3://${efsRouter.address}:${targetNetwork.id}/${joinedPath}${item.name}${editionParams}`;
 
       let result: number[] = [];
       let contentTypeStr = "text/plain";
 
-      try {
-        const fetchedWeb3Url = await web3Client.fetchUrl(uri);
-        if (fetchedWeb3Url.httpCode !== 200) {
-          throw new Error(`HTTP ${fetchedWeb3Url.httpCode}`);
+      let hasMoreChunks = true;
+      let currentChunkHeader = "";
+
+      while (hasMoreChunks) {
+        const queryParams: any[] = [];
+        if (editionAddresses.length > 0) {
+          queryParams.push({ key: "editions", value: editionAddresses.join(",") });
         }
 
-        const reader = fetchedWeb3Url.output.getReader();
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          result.push(...value);
-        }
-
-        // web3protocol collapses duplicate headers, so we can't reliably detect
-        // message/external-body here. If body is empty, fall through to the
-        // direct contract call which preserves both raw Content-Type headers.
-        if (result.length === 0) {
-          throw new Error("Empty body — likely external URI delegation, trying direct fallback");
-        }
-
-        const contentTypeInfo = Object.entries(fetchedWeb3Url.httpHeaders || {}).find(
-          ([k]) => k.toLowerCase() === "content-type",
-        );
-        contentTypeStr = contentTypeInfo ? (contentTypeInfo[1] as string) : "text/plain";
-      } catch (protocolErr) {
-        console.warn("web3protocol failed or empty response, using direct fallback", protocolErr);
-        // Direct Router Fallback — also handles external-body delegation (IPFS, Arweave, etc.)
-        if (!publicClient) throw protocolErr;
-
-        result = [];
-
-        let hasMoreChunks = true;
-        let currentChunkHeader = "";
-
-        while (hasMoreChunks) {
-          const queryParams: any[] = [];
-          if (editionAddresses.length > 0) {
-            queryParams.push({ key: "editions", value: editionAddresses.join(",") });
+        // Chunk pagination: after the first response, `web3-next-chunk` header
+        // carries the next chunk index (format "?chunk=N"); forward it back.
+        if (currentChunkHeader) {
+          const chunkIndex = currentChunkHeader.split("=")[1];
+          if (chunkIndex !== undefined) {
+            queryParams.push({ key: "chunk", value: chunkIndex });
           }
+        }
 
-          // Mimic web3protocol query formatting for chunk queries if not the first chunk
-          // In EFSRouter, `request(string[] memory path, KeyValue[] memory queries)` takes queries.
-          if (currentChunkHeader) {
-            // currentChunkHeader is "?chunk=1"
-            const chunkIndex = currentChunkHeader.split("=")[1];
-            if (chunkIndex !== undefined) {
-              queryParams.push({ key: "chunk", value: chunkIndex });
-            }
-          }
+        const args: any[] = [[...currentPathNames, item.name], queryParams];
 
-          const args: any[] = [[...currentPathNames, item.name], queryParams];
+        const response = (await publicClient.readContract({
+          address: efsRouter.address as `0x${string}`,
+          abi: efsRouter.abi,
+          functionName: "request",
+          args: args as any,
+        })) as any;
 
-          const response = (await publicClient.readContract({
-            address: efsRouter.address as `0x${string}`,
-            abi: efsRouter.abi,
-            functionName: "request",
-            args: args as any,
-          })) as any;
+        if (response[0] === 200n || response[0] === 200) {
+          const outHeaders = response[2] as any[];
+          const ctHeaders = outHeaders.filter((h: any) => h.key.toLowerCase() === "content-type");
 
-          if (response[0] === 200n || response[0] === 200) {
-            const outHeaders = response[2] as any[];
-            const ctHeaders = outHeaders.filter((h: any) => h.key.toLowerCase() === "content-type");
+          // Detect external-body delegation (IPFS, Arweave, HTTPS mirrors)
+          const externalHeader = ctHeaders.find((h: any) => h.value.includes("message/external-body"));
+          if (externalHeader) {
+            // Extract the original URI from: message/external-body; access-type=URL; URL="ipfs://..."
+            const urlMatch = externalHeader.value.match(/URL="([^"]+)"/);
+            const externalUri = urlMatch?.[1];
+            // Extract the actual MIME type from the content-type= parameter in the
+            // message/external-body header (router embeds it as a quoted parameter).
+            const ctParam = externalHeader.value.match(/content-type="([^"]+)"/);
+            if (ctParam?.[1]) contentTypeStr = ctParam[1];
 
-            // Detect external-body delegation (IPFS, Arweave, HTTPS mirrors)
-            const externalHeader = ctHeaders.find((h: any) => h.value.includes("message/external-body"));
-            if (externalHeader) {
-              // Extract the original URI from: message/external-body; access-type=URL; URL="ipfs://..."
-              const urlMatch = externalHeader.value.match(/URL="([^"]+)"/);
-              const externalUri = urlMatch?.[1];
-              // Extract the actual MIME type from the content-type= parameter in the
-              // message/external-body header (router embeds it as a quoted parameter).
-              const ctParam = externalHeader.value.match(/content-type="([^"]+)"/);
-              if (ctParam?.[1]) contentTypeStr = ctParam[1];
-
-              if (externalUri) {
-                setFileTransportType(detectTransport(externalUri));
-                const gatewayUrl = resolveGatewayUrl(externalUri);
-                if (gatewayUrl) {
-                  // Fetch from gateway
-                  const gatewayResp = await globalThis.fetch(gatewayUrl);
-                  if (!gatewayResp.ok) throw new Error(`Gateway returned ${gatewayResp.status} for ${gatewayUrl}`);
-                  const buf = await gatewayResp.arrayBuffer();
-                  const bytes = new Uint8Array(buf);
-                  for (let i = 0; i < bytes.length; i++) result.push(bytes[i]);
-                  // Use gateway content-type as fallback if we didn't get one from the contract
-                  if (contentTypeStr === "text/plain") {
-                    const gwCt = gatewayResp.headers.get("content-type");
-                    if (gwCt) contentTypeStr = gwCt.split(";")[0].trim();
-                  }
+            if (externalUri) {
+              setFileTransportType(detectTransport(externalUri));
+              const gatewayUrl = resolveGatewayUrl(externalUri);
+              if (gatewayUrl) {
+                // Fetch from gateway
+                const gatewayResp = await globalThis.fetch(gatewayUrl);
+                if (!gatewayResp.ok) throw new Error(`Gateway returned ${gatewayResp.status} for ${gatewayUrl}`);
+                const buf = await gatewayResp.arrayBuffer();
+                const bytes = new Uint8Array(buf);
+                for (let i = 0; i < bytes.length; i++) result.push(bytes[i]);
+                // Use gateway content-type as fallback if we didn't get one from the contract
+                if (contentTypeStr === "text/plain") {
+                  const gwCt = gatewayResp.headers.get("content-type");
+                  if (gwCt) contentTypeStr = gwCt.split(";")[0].trim();
                 }
-                hasMoreChunks = false;
-                break;
               }
-            }
-
-            // On-chain body
-            const bodyHex = response[1] as `0x${string}`;
-            if (bodyHex && bodyHex !== "0x") {
-              const bodyBytes = ethers.getBytes(bodyHex);
-              for (let i = 0; i < bodyBytes.length; i++) {
-                result.push(bodyBytes[i]);
-              }
-            }
-            // Use first content-type header for on-chain responses
-            if (ctHeaders.length > 0) contentTypeStr = ctHeaders[0].value;
-
-            // Check for next chunk
-            const nextChunkHeader = outHeaders.find((h: any) => h.key.toLowerCase() === "web3-next-chunk");
-            if (nextChunkHeader) {
-              currentChunkHeader = nextChunkHeader.value;
-            } else {
               hasMoreChunks = false;
+              break;
             }
-          } else {
-            throw protocolErr; // Re-throw if fallback also fails
           }
+
+          // On-chain body
+          const bodyHex = response[1] as `0x${string}`;
+          if (bodyHex && bodyHex !== "0x") {
+            const bodyBytes = ethers.getBytes(bodyHex);
+            for (let i = 0; i < bodyBytes.length; i++) {
+              result.push(bodyBytes[i]);
+            }
+          }
+          // Use first content-type header for on-chain responses
+          if (ctHeaders.length > 0) contentTypeStr = ctHeaders[0].value;
+
+          // Check for next chunk
+          const nextChunkHeader = outHeaders.find((h: any) => h.key.toLowerCase() === "web3-next-chunk");
+          if (nextChunkHeader) {
+            currentChunkHeader = nextChunkHeader.value;
+          } else {
+            hasMoreChunks = false;
+          }
+        } else {
+          throw new Error(`Router returned HTTP ${response[0]}`);
         }
       }
 
