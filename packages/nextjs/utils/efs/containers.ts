@@ -109,7 +109,22 @@ function normalizeSegment(raw: string): string {
 }
 
 export type ClassifyDeps = {
+  /**
+   * Target-chain client (hardhat on devnet, per `scaffold.config.ts`). Used for
+   * EAS `getAttestation` / SchemaRegistry `getSchema` — those contracts live on
+   * the same chain the rest of EFS is deployed on.
+   */
   publicClient: PublicClient | undefined;
+  /**
+   * Mainnet client (wagmi's `usePublicClient({ chainId: 1 })`). Used **only**
+   * for ENS `getEnsAddress`. ENS lives on mainnet; calling `getEnsAddress` on
+   * the hardhat client throws because hardhat has no ENS registry, and the
+   * catch path would silently drop the token. Without this client the ENS
+   * branch is skipped and `.eth` segments fall through to the anchor
+   * classifier — matching ADR-0033's off-chain-ENS expectation while keeping
+   * devnet-without-mainnet-RPC cases functional.
+   */
+  mainnetPublicClient?: PublicClient | undefined;
   easAddress: `0x${string}` | undefined;
   /** Optional: if known, avoids an extra RPC round-trip for `getSchemaRegistry`. */
   schemaRegistryAddress?: `0x${string}`;
@@ -129,10 +144,15 @@ export async function classifyTopLevelSegment(raw: string, deps: ClassifyDeps): 
     return { kind: "anchor", uid: zeroHash as `0x${string}`, displayName: rawSegment, rawSegment };
   }
 
-  // 1. ENS names (*.eth) — resolve to an address.
-  if (segment.toLowerCase().endsWith(".eth") && deps.publicClient) {
+  // 1. ENS names (*.eth) — resolve to an address on MAINNET. Do not fall back
+  // to `deps.publicClient`: on hardhat that throws and the catch would
+  // silently treat `/vitalik.eth/…` as an anchor path, breaking the address
+  // container contract from ADR-0033. If the mainnet client isn't wired up
+  // (e.g. a unit-test context), skip the ENS branch entirely and let the
+  // classifier fall through to the raw-hex / UID / anchor branches below.
+  if (segment.toLowerCase().endsWith(".eth") && deps.mainnetPublicClient) {
     try {
-      const resolved = await deps.publicClient.getEnsAddress({ name: segment });
+      const resolved = await deps.mainnetPublicClient.getEnsAddress({ name: segment });
       if (resolved && resolved !== zeroAddress) {
         const checksummed = getAddress(resolved);
         return {

@@ -59,6 +59,16 @@ export default function ExplorerClient() {
   const sortParam = searchParams.get("sort");
   const activeSortInfoUID = sortParam || null;
   const publicClient = usePublicClient();
+  // Mainnet client for ENS resolution only. `targetNetworks` in
+  // `scaffold.config.ts` is `[hardhat]`, so the active `publicClient` above is
+  // hardhat and has no ENS registry — `getEnsAddress` / `getEnsName` against
+  // it throws and the catch branch silently drops the name, which is exactly
+  // what the two P1 Codex comments flagged. `services/web3/wagmiConfig.tsx`
+  // always adds mainnet to `enabledChains` for this reason; pulling the
+  // `chainId: 1` client here is the same pattern `useDisplayName` uses. If
+  // mainnet isn't reachable (offline, bad Alchemy key) the ENS lookup catches
+  // and we fall through — no worse than the current behavior on hardhat.
+  const mainnetPublicClient = usePublicClient({ chainId: 1 });
   const { address: connectedAddress } = useAccount();
 
   const editionsParam = searchParams.get("editions");
@@ -184,7 +194,16 @@ export default function ExplorerClient() {
             // but some upstream libraries fail-closed on mixed case. A proper
             // UTS-46 `normalize()` is correct-er but lowercase covers the
             // `?editions=Vitalik.ETH` class of regressions at zero cost.
-            const addr = await publicClient?.getEnsAddress({ name: classifier });
+            //
+            // Resolve on MAINNET, not the active (hardhat) chain — hardhat has
+            // no ENS registry, so using `publicClient` throws and the catch
+            // silently drops the token, leaving the explorer to render the
+            // wrong fallback edition. `mainnetPublicClient` is always present
+            // (mainnet is unconditionally added in wagmiConfig for this
+            // purpose); guard + skip if somehow absent.
+            const addr = mainnetPublicClient
+              ? await mainnetPublicClient.getEnsAddress({ name: classifier })
+              : undefined;
             if (cancelled) return;
             // viem returns a checksummed address on success; normalize defensively
             // in case a future wagmi/viem version relaxes this.
@@ -224,7 +243,7 @@ export default function ExplorerClient() {
     return () => {
       cancelled = true;
     };
-  }, [editionsParam, publicClient]);
+  }, [editionsParam, mainnetPublicClient]);
 
   // Path Resolution Effect — cancel-guarded.
   //
@@ -279,6 +298,7 @@ export default function ExplorerClient() {
         if (segments.length > 0) {
           const classified = await classifyTopLevelSegment(segments[0], {
             publicClient,
+            mainnetPublicClient,
             easAddress,
           });
           if (cancelled) return;
@@ -399,7 +419,7 @@ export default function ExplorerClient() {
     return () => {
       cancelled = true;
     };
-  }, [rootUID, params?.path, publicClient, easAddress]);
+  }, [rootUID, params?.path, publicClient, mainnetPublicClient, easAddress]);
 
   // Keep the browser tab title in sync with the deepest path segment. When
   // the container has a resolved display name (ENS / persona / property)

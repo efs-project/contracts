@@ -173,6 +173,12 @@ export const ContainerInfoPanel = ({
   expanded,
 }: ContainerInfoPanelProps) => {
   const publicClient = usePublicClient();
+  // ENS lives on mainnet; calling `getEnsName` on the active (hardhat) client
+  // throws because hardhat has no ENS registry. Same fix as the two Codex P1s
+  // on the editions resolver + top-level container classifier — pull the
+  // mainnet client explicitly. wagmiConfig always registers mainnet for this
+  // purpose (see `services/web3/wagmiConfig.tsx`).
+  const mainnetPublicClient = usePublicClient({ chainId: 1 });
   const [ensName, setEnsName] = useState<string | null>(null);
   const [schemaInfo, setSchemaInfo] = useState<SchemaRow | null>(null);
   const [attestationInfo, setAttestationInfo] = useState<AttestationRow | null>(null);
@@ -182,11 +188,11 @@ export const ContainerInfoPanel = ({
 
   useEffect(() => {
     setEnsName(null);
-    if (kind !== "address" || !container?.address || !publicClient) return;
+    if (kind !== "address" || !container?.address || !mainnetPublicClient) return;
     let cancelled = false;
     (async () => {
       try {
-        const name = await publicClient.getEnsName({ address: container.address as `0x${string}` });
+        const name = await mainnetPublicClient.getEnsName({ address: container.address as `0x${string}` });
         if (!cancelled) setEnsName(name ?? null);
       } catch {
         /* ignore */
@@ -195,7 +201,7 @@ export const ContainerInfoPanel = ({
     return () => {
       cancelled = true;
     };
-  }, [kind, container?.address, publicClient]);
+  }, [kind, container?.address, mainnetPublicClient]);
 
   useEffect(() => {
     setSchemaInfo(null);
