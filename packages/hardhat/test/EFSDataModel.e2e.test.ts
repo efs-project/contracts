@@ -1157,6 +1157,62 @@ describe("EFS Data Model — E2E Integration", function () {
       const items = await tagResolver.getActiveTargetsByAttesterAndSchema(folderUID, aliceAddr, dataSchemaUID, 0, 10);
       expect(items.length).to.equal(2);
     });
+
+    it("remove-then-readd does not duplicate entries in _childrenByAttester", async function () {
+      // Regression: TagResolver.onAttest for applies=false calls indexer.clearContains(folder, attester),
+      // which flips _containsAttestations[folder][attester] to false. If _propagateContains subsequently
+      // ran on an applies=true re-add and used _containsAttestations as its dedup guard, it would push
+      // `folder` into _childrenByAttester[parent][attester] a second time — inflating
+      // getChildrenByAttesterCount and producing duplicate entries in
+      // getChildrenByAttester/getChildrenByAddressList.
+      //
+      // The fix is a dedicated append-only dedup flag (_childInChildrenByAttester) that is set on push
+      // and never cleared by clearContains.
+      const aliceAddr = await alice.getAddress();
+      const folderUID = await createAnchor(rootUID, "readd-dup-test");
+
+      const d1 = await createData(hash("readd-d1"), 2n);
+      await tagTarget(d1, folderUID, true, alice);
+
+      // After first tag, folder is in alice's root children-by-attester exactly once.
+      expect(await indexer.getChildrenByAttesterCount(rootUID, aliceAddr)).to.equal(1n);
+      let children = await indexer["getChildrenByAttester(bytes32,address,uint256,uint256,bool,bool)"](
+        rootUID,
+        aliceAddr,
+        0,
+        10,
+        false,
+        false,
+      );
+      expect(children).to.deep.equal([folderUID]);
+
+      // Supersede with applies=false. This triggers clearContains(folder, alice), flipping
+      // _containsAttestations[folder][alice] to false while leaving _containsAttestations[root][alice]
+      // intact (sticky at higher levels).
+      await tagTarget(d1, folderUID, false, alice);
+      expect(await indexer.containsAttestations(folderUID, aliceAddr)).to.equal(false);
+      expect(await indexer.containsAttestations(rootUID, aliceAddr)).to.equal(true);
+
+      // Re-add under the same folder. _propagateContains walks: folder (flag cleared, re-enters loop;
+      // BEFORE fix, pushes folder into root's children array AGAIN) → root (flag still true, break).
+      const d2 = await createData(hash("readd-d2"), 2n);
+      await tagTarget(d2, folderUID, true, alice);
+
+      // Count and contents must remain 1/[folder] — the fix's guard prevents the second push.
+      expect(await indexer.getChildrenByAttesterCount(rootUID, aliceAddr)).to.equal(1n);
+      children = await indexer["getChildrenByAttester(bytes32,address,uint256,uint256,bool,bool)"](
+        rootUID,
+        aliceAddr,
+        0,
+        10,
+        false,
+        false,
+      );
+      expect(children).to.deep.equal([folderUID]);
+
+      // Sanity: folder's flag is restored so it shows up in edition-filtered views again.
+      expect(await indexer.containsAttestations(folderUID, aliceAddr)).to.equal(true);
+    });
   });
 
   // =========================================================================

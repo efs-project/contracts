@@ -967,14 +967,22 @@ export const CreateItemModal = ({
               current !== (ethers.ZeroHash as `0x${string}`) &&
               current.toLowerCase() !== rootUID.toLowerCase()
             ) {
-              const existing = (await publicClient.readContract({
+              // MUST use `isActivelyApplied`, not `getActiveTagUID != 0`: TagResolver
+              // writes `_activeTag` unconditionally for both applies=true AND
+              // applies=false TAGs, so a prior "remove" (applies=false) would make
+              // `getActiveTagUID` return a nonzero UID and we'd skip emitting the
+              // required visibility TAG — leaving the ancestor hidden in edition
+              // listings after a remove→re-add cycle. `_isApplied` flips off when
+              // the latest TAG from this attester is applies=false. See
+              // TagResolver.sol: `isActivelyApplied` vs `getActiveTagUID` NatSpec.
+              const applied = (await publicClient.readContract({
                 address: tagResolverAddress,
                 abi: TAG_RESOLVER_ABI,
-                functionName: "getActiveTagUID",
+                functionName: "isActivelyApplied",
                 args: [attester, current, dataSchemaUID as `0x${string}`],
-              })) as `0x${string}`;
+              })) as boolean;
 
-              if (existing === (ethers.ZeroHash as `0x${string}`)) {
+              if (!applied) {
                 ops.log(opId, `Tagging ancestor folder ${current.slice(0, 10)}... for visibility`);
                 const encodedVisTag = ethers.AbiCoder.defaultAbiCoder().encode(
                   ["bytes32", "bool"],

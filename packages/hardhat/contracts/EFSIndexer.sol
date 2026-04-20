@@ -99,6 +99,14 @@ contract EFSIndexer is SchemaResolver {
     // Attester Index: parentAnchorUID => attester => childAnchorUIDs
     mapping(bytes32 => mapping(address => bytes32[])) private _childrenByAttester;
 
+    // Dedup set for `_childrenByAttester`: parent => attester => child => pushed-ever.
+    // Separate from `_containsAttestations` because `clearContains` flips the latter
+    // to false (to make empty folders disappear from directory views) — but
+    // `_childrenByAttester` is append-only per ADR-0009, and re-pushing the same
+    // child on a remove-then-readd cycle would produce duplicates and inflate
+    // `getChildrenByAttesterCount`. This flag is SET-ONLY, never cleared.
+    mapping(bytes32 => mapping(address => mapping(bytes32 => bool))) private _childInChildrenByAttester;
+
     // ============================================================================================
     // STORAGE: GENERIC INDICES (SOCIAL LAYER)
     // ============================================================================================
@@ -227,6 +235,13 @@ contract EFSIndexer is SchemaResolver {
      *         both check _containsAttestations[child][attester] on the direct children, so
      *         clearing it makes an empty folder disappear from the attester's directory view.
      *
+     *         Note: this does NOT clear `_childInChildrenByAttester` — that mapping is the
+     *         append-only dedup set for `_childrenByAttester`. If we cleared it, a subsequent
+     *         `_propagateContains` on re-add would push the child a second time, inflating
+     *         `getChildrenByAttesterCount`. Readers that need "is this folder currently
+     *         non-empty for this attester?" must check `_containsAttestations`; the child
+     *         array is a historical-membership index per ADR-0009.
+     *
      * @param anchorUID The folder anchor to clear.
      * @param attester  The attester whose flag to clear.
      */
@@ -243,8 +258,13 @@ contract EFSIndexer is SchemaResolver {
             if (depth++ > MAX_ANCHOR_DEPTH) break;
             _containsAttestations[current][attester] = true;
             bytes32 parentUID = _parents[current];
-            if (parentUID != bytes32(0)) {
+            // Guard the append-only push with a dedicated dedup flag (not
+            // `_containsAttestations`, which `clearContains` toggles off).
+            // Without this guard, a remove-then-readd cycle would push `current`
+            // twice and inflate `getChildrenByAttesterCount`.
+            if (parentUID != bytes32(0) && !_childInChildrenByAttester[parentUID][attester][current]) {
                 _childrenByAttester[parentUID][attester].push(current);
+                _childInChildrenByAttester[parentUID][attester][current] = true;
             }
             current = parentUID;
         }
@@ -320,10 +340,16 @@ contract EFSIndexer is SchemaResolver {
             // Attester Index (My Files)
             // Note: Since _childrenByAttester is now natively tracking collaborative interactions deeply via the recursion loop above,
             // we only push to it here IF it's the very first time this creator has interacted with this parent, to prevent duplicates.
+            // Set `_childInChildrenByAttester` as well so any later `_propagateContains(uid, attester)` after a
+            // `clearContains` cycle doesn't re-push and duplicate the entry.
             if (!_containsAttestations[attestation.uid][attestation.attester]) {
                 _containsAttestations[attestation.uid][attestation.attester] = true;
-                if (parentUID != bytes32(0)) {
+                if (
+                    parentUID != bytes32(0) &&
+                    !_childInChildrenByAttester[parentUID][attestation.attester][attestation.uid]
+                ) {
                     _childrenByAttester[parentUID][attestation.attester].push(attestation.uid);
+                    _childInChildrenByAttester[parentUID][attestation.attester][attestation.uid] = true;
                 }
             }
 
@@ -928,10 +954,14 @@ contract EFSIndexer is SchemaResolver {
 
                 _containsAttestations[currentUID][attester] = true;
 
-                // Drive the structural index: push this child into the parent's Edition array
+                // Drive the structural index: push this child into the parent's
+                // Edition array, guarded by the append-only dedup flag so a
+                // remove-then-readd cycle doesn't duplicate (`clearContains`
+                // resets `_containsAttestations` but never this flag).
                 bytes32 parentUID = _parents[currentUID];
-                if (parentUID != bytes32(0)) {
+                if (parentUID != bytes32(0) && !_childInChildrenByAttester[parentUID][attester][currentUID]) {
                     _childrenByAttester[parentUID][attester].push(currentUID);
+                    _childInChildrenByAttester[parentUID][attester][currentUID] = true;
                 }
 
                 currentUID = parentUID;
