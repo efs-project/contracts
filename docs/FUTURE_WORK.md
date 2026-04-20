@@ -10,6 +10,12 @@ Backlog of known improvements, scale concerns, and architectural enhancements th
 
 ## Architecture & Extensibility
 
+### Web-of-trust UX + user-configurable system editions
+ADR-0039 reserves two tiers in the default editions chain — `webOfTrust[]` and `systemEditions[]` — that are hardcoded / empty today. Shipping needs: (a) a Settings UI for users to add/remove WoT attesters (address + optional label), stored in localStorage; (b) user override of the system tier (defaults to a project-blessed seed list that ships in the repo); (c) an Editions chip in the toolbar that surfaces the effective chain so users can see "why am I seeing this file?" Client-side only — no contract changes. Critical pre-mainnet, because the devnet's hardcoded bootstrap curator + deployer system tier isn't appropriate once real users are attesting.
+
+### Kernel auto-tag `/tags/schema` on alias anchor creation
+Per ADR-0033, schema alias anchors (root-child anchors whose name is a registered schema UID in lowercase 0x-hex) are today **only** tagged with `/tags/schema` for the six system schemas seeded at deploy (`06_schema_aliases.ts`). User-created aliases (when someone registers a custom schema and attests a root anchor at its UID) need a follow-up tx to attach the tag before the sidebar enumerator sees them. Proper fix: in `EFSIndexer.onAttest` (or a kernel hook on ANCHOR attestations with `refUID == rootAnchorUID`), detect when `name` is a registered schema UID via `SchemaRegistry.getSchema` and auto-attest the `/tags/schema` TAG from the kernel. Care needed to avoid gas griefing — only triggered when name parses as bytes32 AND the UID exists in SchemaRegistry.
+
 ### Schema extensibility escape hatch
 Mainnet schema UIDs are baked in (ADR-0030). Adding a field to ANCHOR or DATA requires full system redeploy. A minimal `mapping(bytes32 uid => bytes data) extensions` in EFSIndexer would let future versions store extra data per attestation without re-deploying everything. Worth considering before mainnet — once frozen, no longer possible.
 
@@ -36,7 +42,7 @@ EFSIndexer emits events for off-chain indexing. Adding a field to an event later
 Append-only indices (ADR-0009) grow monotonically. Most revocations leave dead entries forever. A compaction primitive (re-attest the same content with same UID? — no, not how EAS works) is theoretically possible but has no clean design. Worth thinking about for the >10-year horizon.
 
 ### `_containsAttestations` full de-propagation
-Currently sticky (ADR-0010): empty folders stay visible after all content is removed. Full reference-counted de-propagation would clean this up but costs gas at every untag. Consider as optional opt-in flag if user demand emerges.
+Currently sticky (ADR-0010). No longer affects folder visibility (that's tag-only post-2026-04-18), but still leaves stale flags on ancestors after file placements are revoked. Full reference-counted de-propagation would clean this up but costs gas at every untag. Low priority now that folder visibility has moved.
 
 ### Large directory pagination across attesters
 `getDirectoryPageBySchemaAndAddressList` works for 20 attesters max (ADR-0026). For "follow 100+ curators" use cases, requires either: relaxing the cap (gas concerns), client-side aggregation (complex but cheap), or a future merge endpoint.
@@ -63,6 +69,21 @@ Currently you must know attester addresses to query. An `attestersInFolder(uid, 
 ---
 
 ## UX & Frontend (internal devtools)
+
+### Runtime-switchable NetworkChip (auto-probe local + dropdown switcher)
+The current `NetworkChip` in the header is **read-only**: it displays the active chain + RPC URL inferred from `NEXT_PUBLIC_HARDHAT_RPC_URL` at build time and a copy button, but doesn't let the user switch. A future enhancement: (a) on first visit, probe `http://127.0.0.1:8545` with a short-timeout `eth_chainId` call — if reachable, prefer local; otherwise use the build-time devnet URL. (b) Dropdown with "Local / Devnet / Custom URL…" that saves preference to localStorage and reloads. Requires bootstrapping wagmi config from localStorage before `scaffold.config.ts` evaluates, so this is a refactor rather than a tack-on. Alpha ships without it because the build-time env var covers the two primary deploy targets (local + devnet) unambiguously.
+
+### Per-container home pages ("Myspace mode")
+Every container (anchor / address / schema / attestation) is currently rendered with a minimal info panel + directory grid. A future enhancement is per-container user-defined "home pages" — e.g. a `description` / `icon` / `homeDataUID` PROPERTY attached to the container, which the panel picks up and expands into a rich header. Works for any container flavor. No schema changes needed; only PROPERTY keys + UI rendering.
+
+### Accurate edition-filtered child count on folder rows
+Folder rows in `FileBrowser.tsx` currently render the literal `"Folder"` in edition mode because `indexer.getChildrenCount(uid)` is a kernel-level count over permanent anchors and never shrinks when placements are revoked (see `docs/decisions.md` 2026-04-19). A true count would require either a per-row view call (file-placement TAGs active under this folder for this edition list + tagged subfolders) or a new counting helper in `EFSFileView`. Low priority — cosmetic — but worth wiring once a pattern exists.
+
+### Attestations section in sidebar
+The sidebar has Anchors, Addresses, and Schemas sections. An Attestations section would complete the set, but top-N-recent heuristics aren't obvious — skip until a usage pattern emerges.
+
+### ENS reverse lookup everywhere in the UI
+v1 does ENS reverse lookup only for the address in the URL bar and the Addresses sidebar list. Attester chips on file cards, mirror panels, etc. still show 0x… hex. A shared `useEnsName(addr)` hook with cache would make it ubiquitous at low cost.
 
 ### Empty-folder filtering in edition view
 Sticky `_containsAttestations` (ADR-0010) means empty folders appear in edition listings. The UI could cross-check with `containsAttestations()` to hide them — cosmetic improvement, no on-chain change.
@@ -101,6 +122,12 @@ Track gas usage of hot paths (upload flow, directory listing, router resolution)
 ---
 
 ## Security & Audit
+
+### Devnet IPFS upload auth
+The public devnet's `POST /api/v0/add` endpoint is currently unauthenticated — any browser can pin arbitrary bytes into the devnet's IPFS daemon. Acceptable for an ephemeral "resets weekly" devnet and for alpha testing, but ship-blocking for any long-lived deployment that intends users to rely on pinned content persisting. Pre-launch work: add a token-gated auth layer (devnet operator whitelist, or EAS-attested uploader list) on the reverse proxy, or accept that uploads must originate from the app (which can sign them) rather than arbitrary clients.
+
+### Devnet Arweave write path
+Public ingress is gateway-only (`/arweave/<txid>` reads succeed; `POST /arweave/` returns 405). For the alpha that's fine — the dev flow puts content on IPFS primarily — but the production client must not attempt to publish ar:// mirrors to the devnet's arweave endpoint without a write path. Either provision a signed-upload route or document ar:// as read-only on this devnet. Cross-ref ADR-0011 (transport anchors).
 
 ### External audit on EFSIndexer
 Single most important pre-mainnet item. EFSIndexer is permanent and the kernel of the system — one external pass from a credentialed firm (Trail of Bits, OpenZeppelin, Code4rena contest) is worth the cost. See `docs/LAUNCH_CHECKLIST.md`.

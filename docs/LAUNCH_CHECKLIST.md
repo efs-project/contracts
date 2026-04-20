@@ -58,6 +58,7 @@ Update statuses with `[x]` as items land. Add notes inline if blocked.
 - [ ] All P1/P2 items in PR review history confirmed resolved
 - [ ] Test suite >270 passing (current state preserved)
 - [ ] Gas snapshot captured for hot paths (upload, directory listing, web3:// resolution) — baseline for regression detection
+- [ ] **Classifier parity test** — off-chain URL classifier (`packages/nextjs/utils/efs/containers.ts#classifyTopLevelSegment` and the production Vite/Lit client's equivalent) produces byte-identical `(flavor, uid)` tuples to `EFSRouter.classifyTopLevel(string)` across a fixture table: valid 40-hex address, all-zero address, ENS name (off-chain only — contract rejects), unregistered 64-hex, registered schema UID, attestation UID, malformed hex (odd-length, non-hex chars), empty string, plain anchor name, and anchor name that happens to look like `0x…`. ADR-0030 locks classifier semantics at mainnet deploy, so any off-chain drift becomes a permanent interop bug. `classifyTopLevel` is a pure external view — the parity test can run against a local hardhat deployment with no state required. Tracked as review comment #8 on PR #9.
 
 ### Mainnet Deploy Readiness
 

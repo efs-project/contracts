@@ -10,6 +10,21 @@ export type TransportType = "onchain" | "ipfs" | "arweave" | "magnet" | "https" 
  */
 export const TRANSPORT_PREFERENCE: TransportType[] = ["onchain", "arweave", "ipfs", "magnet", "https"];
 
+/**
+ * Gateway bases for content-addressed transports. Both defaults are public third-party
+ * gateways — fine for local dev, wrong for a self-hosted devnet (forces browsers to
+ * leave the devnet's origin and trust an external service).
+ *
+ * Override with `NEXT_PUBLIC_IPFS_GATEWAY` / `NEXT_PUBLIC_ARWEAVE_GATEWAY` at build
+ * time. The VPS reverse-proxies its own IPFS + Arweave daemons under the same origin
+ * it serves this app, so the devnet sets these to `/ipfs/` / `/arweave/` and stays
+ * same-origin.
+ *
+ * Trailing `/` matters — we concatenate `${gateway}${cid}` without inserting one.
+ */
+const IPFS_GATEWAY = process.env.NEXT_PUBLIC_IPFS_GATEWAY || "https://dweb.link/ipfs/";
+const ARWEAVE_GATEWAY = process.env.NEXT_PUBLIC_ARWEAVE_GATEWAY || "https://arweave.net/";
+
 /** Detect transport type from a URI string. */
 export function detectTransport(uri: string): TransportType {
   if (uri.startsWith("web3://")) return "onchain";
@@ -26,11 +41,11 @@ export function resolveGatewayUrl(uri: string): string | null {
   switch (transport) {
     case "ipfs": {
       const cid = uri.replace("ipfs://", "");
-      return `https://dweb.link/ipfs/${cid}`;
+      return `${IPFS_GATEWAY}${cid}`;
     }
     case "arweave": {
       const id = uri.replace("ar://", "");
-      return `https://arweave.net/${id}`;
+      return `${ARWEAVE_GATEWAY}${id}`;
     }
     case "https":
       return uri;

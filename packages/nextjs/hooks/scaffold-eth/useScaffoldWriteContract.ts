@@ -104,7 +104,7 @@ export function useScaffoldWriteContract<TContractName extends ContractName>(
 
     try {
       setIsMining(true);
-      const { blockConfirmations, onBlockConfirmation, ...mutateOptions } = options || {};
+      const { blockConfirmations, onBlockConfirmation, silent, ...mutateOptions } = options || {};
       const makeWriteWithParams = () =>
         wagmiContractWrite.writeContractAsync(
           {
@@ -121,7 +121,7 @@ export function useScaffoldWriteContract<TContractName extends ContractName>(
               >
             | undefined,
         );
-      const writeTxResult = await writeTx(makeWriteWithParams, { blockConfirmations, onBlockConfirmation });
+      const writeTxResult = await writeTx(makeWriteWithParams, { blockConfirmations, onBlockConfirmation, silent });
 
       return writeTxResult;
     } catch (e: any) {

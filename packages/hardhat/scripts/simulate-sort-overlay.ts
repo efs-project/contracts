@@ -137,20 +137,53 @@ async function main() {
     return { uid: await getUID(tx), contentHash };
   };
 
-  /** Create a PROPERTY on a DATA or Anchor */
-  const property = async (signer: any, targetUID: string, key: string, value: string): Promise<string> => {
-    const tx = await eas.connect(signer).attest({
+  /**
+   * Attach a PROPERTY to a container using the unified free-floating model
+   * (ADR-0035): key anchor under the container, free-floating PROPERTY(value),
+   * and a TAG binding them. Returns the PROPERTY UID.
+   */
+  const property = async (signer: any, containerUID: string, key: string, value: string): Promise<string> => {
+    let keyAnchorUID: string = await indexer.resolveAnchor(containerUID, key, propertySchemaUID);
+    if (keyAnchorUID === ethers.ZeroHash) {
+      const keyTx = await eas.connect(signer).attest({
+        schema: anchorSchemaUID,
+        data: {
+          recipient: ethers.ZeroAddress,
+          expirationTime: 0n,
+          revocable: false,
+          refUID: containerUID,
+          data: encode.encode(["string", "bytes32"], [key, propertySchemaUID]),
+          value: 0n,
+        },
+      });
+      keyAnchorUID = await getUID(keyTx);
+    }
+
+    const propTx = await eas.connect(signer).attest({
       schema: propertySchemaUID,
       data: {
         recipient: ethers.ZeroAddress,
         expirationTime: 0n,
-        revocable: true,
-        refUID: targetUID,
-        data: encode.encode(["string", "string"], [key, value]),
+        revocable: false,
+        refUID: ethers.ZeroHash,
+        data: encode.encode(["string"], [value]),
         value: 0n,
       },
     });
-    return getUID(tx);
+    const propertyUID: string = await getUID(propTx);
+
+    await eas.connect(signer).attest({
+      schema: tagSchemaUID,
+      data: {
+        recipient: ethers.ZeroAddress,
+        expirationTime: 0n,
+        revocable: true,
+        refUID: propertyUID,
+        data: encode.encode(["bytes32", "bool"], [keyAnchorUID, true]),
+        value: 0n,
+      },
+    });
+    return propertyUID;
   };
 
   /** Create a MIRROR on a DATA */
@@ -662,17 +695,28 @@ async function main() {
   const appleAfterV2 = await resolveEdition(aliceApple, [aliceAddr]);
   assert("After version swap, v2 resolves", appleAfterV2?.uri === "ipfs://alice-apple-v2", appleAfterV2?.uri ?? "null");
 
-  // Verify previousVersion PROPERTY chain
-  const v2Props = await indexer.getReferencingAttestations(aliceAppleV2.uid, propertySchemaUID, 0, 10, false);
-  let foundPrevVersion = false;
-  for (const propUID of v2Props) {
-    const propAtt = await eas.getAttestation(propUID);
-    const [key, value] = encode.decode(["string", "string"], propAtt.data);
-    if (key === "previousVersion" && value === aliceAppleData.uid) {
-      foundPrevVersion = true;
-    }
-  }
-  assert("previousVersion PROPERTY links v2 → v1", foundPrevVersion);
+  // Verify previousVersion PROPERTY chain (unified free-floating model)
+  const prevVersionKeyAnchor = await indexer.resolveAnchor(aliceAppleV2.uid, "previousVersion", propertySchemaUID);
+  assert(
+    "previousVersion key anchor exists on v2",
+    prevVersionKeyAnchor !== ethers.ZeroHash,
+    `got ${prevVersionKeyAnchor}`,
+  );
+  const prevVersionProps = await tagResolver.getActiveTargetsByAttesterAndSchema(
+    prevVersionKeyAnchor,
+    aliceAddr,
+    propertySchemaUID,
+    0,
+    1,
+  );
+  assert(
+    "Alice has 1 active previousVersion PROPERTY",
+    prevVersionProps.length === 1,
+    `got ${prevVersionProps.length}`,
+  );
+  const prevPropAtt = await eas.getAttestation(prevVersionProps[0]);
+  const [prevValue] = encode.decode(["string"], prevPropAtt.data);
+  assert("previousVersion PROPERTY links v2 → v1", prevValue === aliceAppleData.uid, `got ${prevValue}`);
 
   // ════════════════════════════════════════════════════════════════════════════════
   // PHASE 12: Tags on list items (labels, not file placement)

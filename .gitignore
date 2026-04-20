@@ -21,3 +21,6 @@ node_modules
 
 # cli
 dist
+# Claude Code per-session state
+.claude/settings.local.json
+.claude/scheduled_tasks.lock

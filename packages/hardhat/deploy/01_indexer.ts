@@ -33,7 +33,7 @@ const deployEFSIndexer: DeployFunction = async function (hre: HardhatRuntimeEnvi
   // 2. Define Schemas
   const schemas = [
     { name: "ANCHOR", definition: "string name, bytes32 schemaUID", revocable: false },
-    { name: "PROPERTY", definition: "string key, string value", revocable: true },
+    { name: "PROPERTY", definition: "string value", revocable: false },
     { name: "DATA", definition: "bytes32 contentHash, uint64 size", revocable: false },
     {
       name: "BLOB",
@@ -259,7 +259,7 @@ const deployEFSIndexer: DeployFunction = async function (hre: HardhatRuntimeEnvi
       console.log("'tags' Anchor already exists:", existingTagsUID);
     }
   } catch (e) {
-    console.error("Failed to create Root / 'tags' Anchor:", e);
+    console.error("Failed to create Root / 'tags' Anchors:", e);
   }
 };
 

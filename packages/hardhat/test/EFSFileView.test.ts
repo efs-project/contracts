@@ -13,6 +13,8 @@ describe("EFSFileView", function () {
   let eas: EAS;
   let registry: SchemaRegistry;
   let owner: Signer;
+  let alice: Signer;
+  let bob: Signer;
 
   let anchorSchemaUID: string;
   let dataSchemaUID: string;
@@ -20,7 +22,7 @@ describe("EFSFileView", function () {
   let tagSchemaUID: string;
 
   beforeEach(async function () {
-    [owner] = await ethers.getSigners();
+    [owner, alice, bob] = await ethers.getSigners();
 
     const RegistryFactory = await ethers.getContractFactory("SchemaRegistry");
     registry = await RegistryFactory.deploy();
@@ -60,8 +62,8 @@ describe("EFSFileView", function () {
     const rc1 = await tx1.wait();
     anchorSchemaUID = rc1!.logs[0].topics[1];
 
-    // Property
-    const tx2 = await registry.register("string key, string value", futureIndexerAddr, true);
+    // Property (unified free-floating model per ADR-0035, non-revocable)
+    const tx2 = await registry.register("string value", futureIndexerAddr, false);
     const rc2 = await tx2.wait();
     propertySchemaUID = rc2!.logs[0].topics[1];
 
@@ -97,6 +99,21 @@ describe("EFSFileView", function () {
     const FileViewFactory = await ethers.getContractFactory("EFSFileView");
     fileView = await FileViewFactory.deploy(await indexer.getAddress(), await tagResolver.getAddress());
     await fileView.waitForDeployment();
+
+    // Wire the indexer -> tagResolver link so TagResolver.onAttest can call
+    // indexer.propagateContains without reverting Unauthorized. The sort/mirror
+    // slots aren't exercised here, so passing zero addresses for them is fine
+    // (only the tagResolver + TAG_SCHEMA_UID + schemaRegistry fields are read
+    // on the file-view paths these tests cover).
+    await indexer.wireContracts(
+      await tagResolver.getAddress(),
+      tagSchemaUID,
+      ZeroAddress,
+      ZERO_BYTES32,
+      ZeroAddress,
+      ZERO_BYTES32,
+      await registry.getAddress(),
+    );
   });
 
   const getUIDFromReceipt = (receipt: any) => {
@@ -132,8 +149,13 @@ describe("EFSFileView", function () {
   };
 
   /** Create a TAG attestation (goes through TagResolver). */
-  const createTag = async (targetUID: string, definition: string, applies: boolean): Promise<string> => {
-    const tx = await eas.attest({
+  const createTag = async (
+    targetUID: string,
+    definition: string,
+    applies: boolean,
+    attester: Signer = owner,
+  ): Promise<string> => {
+    const tx = await eas.connect(attester).attest({
       schema: tagSchemaUID,
       data: {
         recipient: ZeroAddress,
@@ -147,29 +169,35 @@ describe("EFSFileView", function () {
     return getUIDFromReceipt(await tx.wait());
   };
 
-  it("Source A: folders with file-anchor children appear without explicit tagging", async function () {
-    // A generic subfolder qualifies in schema-filtered listings if it organically acquired
-    // children of the target schema (file Anchors with schemaUID=dataSchemaUID). No TAG needed.
+  it("Folder visibility requires an explicit TAG — untagged folders with file-anchor children do NOT appear", async function () {
+    // Post-refactor (ADR-0006 revised 2026-04-18): folder visibility is tag-only. A folder
+    // does NOT appear in a schema-filtered listing just because it contains file-anchor
+    // children; the attester must emit a TAG(definition=dataSchemaUID, refUID=folder)
+    // to claim that folder in their edition. The client upload flow walks the ancestor
+    // chain and emits any missing visibility TAGs.
     const ownerAddr = await owner.getAddress();
 
     const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32);
 
-    // Create a generic folder containing a file anchor — qualifies via source A
     const folderWithContentUID = await createAnchor("has-content", rootUID, ZERO_BYTES32);
-    await createAnchor("cat.jpg", folderWithContentUID, dataSchemaUID); // file anchor inside
+    await createAnchor("cat.jpg", folderWithContentUID, dataSchemaUID); // file anchor inside, but folder NOT tagged
 
-    // Create a generic folder with no children — should NOT appear
     await createAnchor("empty-untagged", rootUID, ZERO_BYTES32);
 
-    const [items] = await fileView.getDirectoryPageBySchemaAndAddressList(rootUID, dataSchemaUID, [ownerAddr], 0, 10);
+    const { items } = await fileView.getDirectoryPageBySchemaAndAddressList(
+      rootUID,
+      dataSchemaUID,
+      [ownerAddr],
+      "0x",
+      10,
+    );
 
-    expect(items.length).to.equal(1);
-    expect(items[0].name).to.equal("has-content");
+    expect(items.length).to.equal(0);
   });
 
-  it("Source B: empty folders appear when explicitly tagged with the schema UID", async function () {
-    // Empty generic folders are invisible to source A (no children), but they appear via
-    // source B if explicitly tagged with definition=dataSchemaUID via TagResolver.
+  it("Empty folders appear when explicitly tagged with the schema UID", async function () {
+    // A folder is visible in an edition iff it has an active applies=true TAG with
+    // definition=dataSchemaUID by someone in the edition list.
     const ownerAddr = await owner.getAddress();
 
     const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32);
@@ -177,20 +205,25 @@ describe("EFSFileView", function () {
     const emptyTaggedUID = await createAnchor("empty-tagged", rootUID, ZERO_BYTES32);
     await createTag(emptyTaggedUID, dataSchemaUID, true);
 
-    // An empty folder with no tag — should NOT appear
     await createAnchor("empty-untagged", rootUID, ZERO_BYTES32);
 
-    const [items] = await fileView.getDirectoryPageBySchemaAndAddressList(rootUID, dataSchemaUID, [ownerAddr], 0, 10);
+    const { items } = await fileView.getDirectoryPageBySchemaAndAddressList(
+      rootUID,
+      dataSchemaUID,
+      [ownerAddr],
+      "0x",
+      10,
+    );
 
     expect(items.length).to.equal(1);
     expect(items[0].name).to.equal("empty-tagged");
   });
 
-  it("Source A (deep): grandparent folder appears without explicit tagging when a nested file-anchor exists", async function () {
-    // root → /photos/ → /cats/ → cat.jpg (file anchor)
-    // Listing root with dataSchemaUID should return /photos/ even though the file is 2 hops down.
-    // Without the ancestor-chain walk this was a navigation-breaking bug — only /cats/ appeared
-    // when listing /photos/, but /photos/ never appeared when listing root.
+  it("Ancestor-chain visibility: only folders explicitly tagged appear, regardless of nested contents", async function () {
+    // root → /photos/ → /cats/ → cat.jpg (file anchor, with /photos/ and /cats/ explicitly tagged)
+    // In the tag-only model the client walks the ancestor chain on upload and emits a
+    // visibility TAG at every ancestor. A folder with no TAG never appears even if deeply
+    // nested content exists beneath it.
     const ownerAddr = await owner.getAddress();
 
     const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32);
@@ -198,27 +231,50 @@ describe("EFSFileView", function () {
     const catsUID = await createAnchor("cats", photosUID, ZERO_BYTES32);
     await createAnchor("cat.jpg", catsUID, dataSchemaUID);
 
-    // Root level: /photos/ must appear
-    const [rootItems] = await fileView.getDirectoryPageBySchemaAndAddressList(
+    // Simulate client ancestor-walk: tag every ancestor folder up to (but excluding) root.
+    await createTag(catsUID, dataSchemaUID, true);
+    await createTag(photosUID, dataSchemaUID, true);
+
+    const { items: rootItems } = await fileView.getDirectoryPageBySchemaAndAddressList(
       rootUID,
       dataSchemaUID,
       [ownerAddr],
-      0,
+      "0x",
       10,
     );
     expect(rootItems.length).to.equal(1);
     expect(rootItems[0].name).to.equal("photos");
 
-    // /photos/ level: /cats/ must appear
-    const [photosItems] = await fileView.getDirectoryPageBySchemaAndAddressList(
+    const { items: photosItems } = await fileView.getDirectoryPageBySchemaAndAddressList(
       photosUID,
       dataSchemaUID,
       [ownerAddr],
-      0,
+      "0x",
       10,
     );
     expect(photosItems.length).to.equal(1);
     expect(photosItems[0].name).to.equal("cats");
+  });
+
+  it("Untagged ancestor is invisible even when a deeper descendant is tagged and populated", async function () {
+    // If the client skipped one ancestor in the walk, that ancestor is invisible.
+    // This is the intended property: folder visibility follows TAG, not content.
+    const ownerAddr = await owner.getAddress();
+
+    const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32);
+    const photosUID = await createAnchor("photos", rootUID, ZERO_BYTES32); // NOT tagged
+    const catsUID = await createAnchor("cats", photosUID, ZERO_BYTES32);
+    await createAnchor("cat.jpg", catsUID, dataSchemaUID);
+    await createTag(catsUID, dataSchemaUID, true);
+
+    const { items: rootItems } = await fileView.getDirectoryPageBySchemaAndAddressList(
+      rootUID,
+      dataSchemaUID,
+      [ownerAddr],
+      "0x",
+      10,
+    );
+    expect(rootItems.length).to.equal(0);
   });
 
   it("Should not return a tagged folder after its tag is set to applies=false", async function () {
@@ -229,13 +285,270 @@ describe("EFSFileView", function () {
 
     await createTag(folderUID, dataSchemaUID, true);
 
-    const [before] = await fileView.getDirectoryPageBySchemaAndAddressList(rootUID, dataSchemaUID, [ownerAddr], 0, 10);
+    const { items: before } = await fileView.getDirectoryPageBySchemaAndAddressList(
+      rootUID,
+      dataSchemaUID,
+      [ownerAddr],
+      "0x",
+      10,
+    );
     expect(before.length).to.equal(1);
     expect(before[0].name).to.equal("my-folder");
 
     await createTag(folderUID, dataSchemaUID, false);
 
-    const [after] = await fileView.getDirectoryPageBySchemaAndAddressList(rootUID, dataSchemaUID, [ownerAddr], 0, 10);
+    const { items: after } = await fileView.getDirectoryPageBySchemaAndAddressList(
+      rootUID,
+      dataSchemaUID,
+      [ownerAddr],
+      "0x",
+      10,
+    );
     expect(after.length).to.equal(0);
+  });
+
+  it("Should not return a tagged folder after its tag is revoked via EAS multiRevoke", async function () {
+    // Regression: the client-driven folder delete flow issues EAS multiRevoke on the
+    // visibility TAG rather than attesting applies=false. This must produce the same
+    // outcome — folder disappears from the edition listing.
+    const ownerAddr = await owner.getAddress();
+
+    const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32);
+    const folderUID = await createAnchor("my-folder", rootUID, ZERO_BYTES32);
+
+    const visTagUID = await createTag(folderUID, dataSchemaUID, true);
+
+    const { items: before } = await fileView.getDirectoryPageBySchemaAndAddressList(
+      rootUID,
+      dataSchemaUID,
+      [ownerAddr],
+      "0x",
+      10,
+    );
+    expect(before.length).to.equal(1);
+
+    await eas.multiRevoke([{ schema: tagSchemaUID, data: [{ uid: visTagUID, value: 0n }] }]);
+
+    const { items: after } = await fileView.getDirectoryPageBySchemaAndAddressList(
+      rootUID,
+      dataSchemaUID,
+      [ownerAddr],
+      "0x",
+      10,
+    );
+    expect(after.length).to.equal(0);
+  });
+
+  it("Should return a folder once in a multi-attester listing even when both attesters tagged it", async function () {
+    // `_childrenTaggedWith` is keyed by (parent, definition) not (parent, definition, attester),
+    // so a folder appears in the discovery list once regardless of how many attesters tagged it.
+    // `isActivelyTaggedByAny` short-circuits on the first match. Verify the folder is not double-counted.
+    const aliceAddr = await alice.getAddress();
+    const bobAddr = await bob.getAddress();
+
+    const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32);
+    const sharedFolder = await createAnchor("shared", rootUID, ZERO_BYTES32);
+    const aliceOnlyFolder = await createAnchor("alice-only", rootUID, ZERO_BYTES32);
+
+    await createTag(sharedFolder, dataSchemaUID, true, alice);
+    await createTag(sharedFolder, dataSchemaUID, true, bob);
+    await createTag(aliceOnlyFolder, dataSchemaUID, true, alice);
+
+    const { items } = await fileView.getDirectoryPageBySchemaAndAddressList(
+      rootUID,
+      dataSchemaUID,
+      [aliceAddr, bobAddr],
+      "0x",
+      10,
+    );
+
+    expect(items.length).to.equal(2);
+    const names = items.map((i: any) => i.name).sort();
+    expect(names).to.deep.equal(["alice-only", "shared"]);
+  });
+
+  it("Paginates folders + files across multiple calls via opaque cursor", async function () {
+    // Regression: page-1 contains folders only; page-2 contains content items; nextCursor
+    // empty iff both sources exhausted. Exercises the phase-0 → phase-1 transition.
+    const ownerAddr = await owner.getAddress();
+
+    const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32);
+
+    // 3 tagged folders
+    const folderA = await createAnchor("folder-a", rootUID, ZERO_BYTES32);
+    const folderB = await createAnchor("folder-b", rootUID, ZERO_BYTES32);
+    const folderC = await createAnchor("folder-c", rootUID, ZERO_BYTES32);
+    await createTag(folderA, dataSchemaUID, true);
+    await createTag(folderB, dataSchemaUID, true);
+    await createTag(folderC, dataSchemaUID, true);
+
+    // 4 content items
+    await createAnchor("file-1.txt", rootUID, dataSchemaUID);
+    await createAnchor("file-2.txt", rootUID, dataSchemaUID);
+    await createAnchor("file-3.txt", rootUID, dataSchemaUID);
+    await createAnchor("file-4.txt", rootUID, dataSchemaUID);
+
+    // Page 1: request 2 items — expect 2 folders, cursor nonempty
+    const p1 = await fileView.getDirectoryPageBySchemaAndAddressList(rootUID, dataSchemaUID, [ownerAddr], "0x", 2);
+    expect(p1.items.length).to.equal(2);
+    expect(p1.items.every((i: any) => i.isFolder)).to.equal(true);
+    expect(p1.nextCursor).to.not.equal("0x");
+
+    // Page 2: request 2 more — expect remaining folder + 1 content item
+    const p2 = await fileView.getDirectoryPageBySchemaAndAddressList(
+      rootUID,
+      dataSchemaUID,
+      [ownerAddr],
+      p1.nextCursor,
+      2,
+    );
+    expect(p2.items.length).to.equal(2);
+    expect(p2.nextCursor).to.not.equal("0x");
+
+    // Page 3: request 10 — expect remaining content items, cursor empty
+    const p3 = await fileView.getDirectoryPageBySchemaAndAddressList(
+      rootUID,
+      dataSchemaUID,
+      [ownerAddr],
+      p2.nextCursor,
+      10,
+    );
+    // Remaining items = 7 total - 4 already returned = 3
+    expect(p3.items.length).to.equal(3);
+    expect(p3.nextCursor).to.equal("0x");
+  });
+
+  it("Malformed opaque cursors silently restart the walk (ADR-0036 defensive decode)", async function () {
+    // The cursor is caller-supplied opaque bytes (ADR-0036). A buggy or malicious client
+    // must not be able to brick the view with an `abi.decode` Panic or get stuck in a
+    // no-progress loop from an out-of-range `phase`. Both code paths (folder walker and
+    // file walker) length-check the cursor before decoding and range-check `phase` to
+    // keep the view safe.
+    const ownerAddr = await owner.getAddress();
+    const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32);
+    const folderUID = await createAnchor("folder", rootUID, ZERO_BYTES32);
+    await createTag(folderUID, dataSchemaUID, true);
+
+    // 1. Completely garbage bytes (not a multiple of 32). Must NOT revert with a Panic;
+    //    must start the walk fresh and return the one real folder.
+    const garbage = "0xdeadbeef";
+    const p1 = await fileView.getDirectoryPageBySchemaAndAddressList(rootUID, dataSchemaUID, [ownerAddr], garbage, 10);
+    expect(p1.items.length).to.equal(1);
+    expect(p1.items[0].name).to.equal("folder");
+
+    // 2. Right-shape (96 bytes) but with `phase=7` — out of the valid {0, 1} range.
+    //    A naive implementation would accept it, skip both phase-0 and phase-1 blocks,
+    //    and return empty items WITH an unchanged cursor — callers would loop forever.
+    //    The range-check must silently restart at phase=0.
+    const outOfRangeCursor = ethers.AbiCoder.defaultAbiCoder().encode(["uint256", "uint256", "uint256"], [7n, 0n, 0n]);
+    const p2 = await fileView.getDirectoryPageBySchemaAndAddressList(
+      rootUID,
+      dataSchemaUID,
+      [ownerAddr],
+      outOfRangeCursor,
+      10,
+    );
+    expect(p2.items.length).to.equal(1);
+    expect(p2.items[0].name).to.equal("folder");
+
+    // 3. getFilesAtPath cursor is `(uint256, uint256)` — 64 bytes. Feeding wrong-length
+    //    garbage must not revert. We don't care what it returns (the view walks active
+    //    TAGs targeting `anchorUID`, and this test hasn't placed any). The point is that
+    //    the defensive decode fresh-starts instead of panicking on abi.decode.
+    const garbageForFiles = "0xdeadbeef";
+    const p3 = await fileView.getFilesAtPath(folderUID, [ownerAddr], dataSchemaUID, garbageForFiles, 10);
+    // Empty page or full page, either is fine — the guarantee is no-revert.
+    expect(p3.nextCursor.length).to.be.greaterThanOrEqual(2); // at minimum "0x"
+  });
+
+  it("getFilesAtPath dedup must filter earlier attester's applies=false tag (ADR-0031 fallback)", async function () {
+    // Regression: the cross-attester dedup in `getFilesAtPath` previously relied on
+    // `getActiveTagUID != 0`. But `TagResolver._activeTag` retains the latest TAG UID
+    // even when that TAG is applies=false (a "negation" that supersedes a prior
+    // applies=true). So if Alice first tags then negates a target, her active-tag
+    // UID stays nonzero — the dedup would incorrectly treat Bob's still-active tag
+    // as "claimed by Alice" and suppress it. ADR-0031's first-attester-wins fallback
+    // must only fall through on an applies=true claim; a negation should yield to
+    // later attesters.
+    const aliceAddr = await alice.getAddress();
+    const bobAddr = await bob.getAddress();
+
+    const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32);
+    const folderUID = await createAnchor("folder", rootUID, ZERO_BYTES32);
+
+    // Create a DATA attestation (its UID is what Alice/Bob will TAG against `folderUID`).
+    const dataTx = await eas.attest({
+      schema: dataSchemaUID,
+      data: {
+        recipient: ZeroAddress,
+        expirationTime: NO_EXPIRATION,
+        revocable: false,
+        refUID: ZERO_BYTES32,
+        data: enc.encode(["bytes32", "uint64"], [ethers.keccak256(ethers.toUtf8Bytes("payload")), 7n]),
+        value: 0n,
+      },
+    });
+    const dataUID = getUIDFromReceipt(await dataTx.wait());
+
+    // Alice places it, then negates.
+    await createTag(dataUID, folderUID, true, alice);
+    await createTag(dataUID, folderUID, false, alice);
+
+    // Bob still has it applied.
+    await createTag(dataUID, folderUID, true, bob);
+
+    // Sanity: after negation, Alice's _activeTag UID is NONZERO (points at the
+    // applies=false tag) but her applies-state is false. Bob's is true. This is
+    // the exact configuration that broke the old dedup.
+    expect(await tagResolver.getActiveTagUID(aliceAddr, dataUID, folderUID)).to.not.equal(ZERO_BYTES32);
+    expect(await tagResolver.isActivelyApplied(aliceAddr, dataUID, folderUID)).to.equal(false);
+    expect(await tagResolver.isActivelyApplied(bobAddr, dataUID, folderUID)).to.equal(true);
+
+    // Multi-attester fallback: Alice first, Bob second. With the bug, Alice's
+    // nonzero active-UID suppresses Bob's entry → 0 items. With the fix, Bob's
+    // DATA is returned.
+    const page = await fileView.getFilesAtPath(folderUID, [aliceAddr, bobAddr], dataSchemaUID, "0x", 10);
+    expect(page.items.length).to.equal(1);
+    // getFilesAtPath returns the DATA UID inside `items[].uid`.
+    expect(page.items[0].uid).to.equal(dataUID);
+  });
+
+  it("Surfaces >10k tagged folders without silent truncation (ADR-0036)", async function () {
+    // Regression for the old MAX_TAGGED_FOLDERS=10000 silent-cap landmine. The cursor-based
+    // walker must continue past any arbitrary cap. We do NOT create 10k folders here (too
+    // slow for CI); instead, verify that paginating through 50 folders with page size 7
+    // returns every folder exactly once — proving the walker advances correctly across
+    // chunked fetches with no cap-based drop.
+    const ownerAddr = await owner.getAddress();
+    const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32);
+
+    const names: string[] = [];
+    for (let i = 0; i < 50; i++) {
+      const name = `folder-${String(i).padStart(3, "0")}`;
+      const uid = await createAnchor(name, rootUID, ZERO_BYTES32);
+      await createTag(uid, dataSchemaUID, true);
+      names.push(name);
+    }
+
+    const seen = new Set<string>();
+    let cursor: string = "0x";
+    let callCount = 0;
+    while (true) {
+      callCount++;
+      if (callCount > 20) throw new Error("pagination did not terminate");
+      const page = await fileView.getDirectoryPageBySchemaAndAddressList(
+        rootUID,
+        dataSchemaUID,
+        [ownerAddr],
+        cursor,
+        7,
+      );
+      for (const item of page.items) seen.add(item.name);
+      if (page.nextCursor === "0x") break;
+      cursor = page.nextCursor;
+    }
+
+    expect(seen.size).to.equal(50);
+    expect([...seen].sort()).to.deep.equal(names.slice().sort());
   });
 });

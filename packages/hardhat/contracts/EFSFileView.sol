@@ -29,6 +29,15 @@ interface ITagResolverForFileView {
         address attester,
         bytes32 schema
     ) external view returns (uint256);
+    /// @notice O(1) per-attester latest-tag lookup. Returns the latest TAG UID for the
+    ///         (attester, targetID, definition) singleton — may be applies=false. Callers that
+    ///         need "is this placement currently applied?" must use `isActivelyApplied`.
+    function getActiveTagUID(address attester, bytes32 targetID, bytes32 definition) external view returns (bytes32);
+    /// @notice O(1) per-attester applied-state lookup. Returns true iff `attester`'s latest
+    ///         TAG on (targetID, definition) is applies=true. Used for cross-attester dedup in
+    ///         multi-edition views to avoid suppressing a later attester's still-active tag
+    ///         behind an earlier attester's superseding applies=false tag.
+    function isActivelyApplied(address attester, bytes32 targetID, bytes32 definition) external view returns (bool);
 }
 
 interface IEFSIndexer {
@@ -59,18 +68,6 @@ interface IEFSIndexer {
     ) external view returns (bytes32[] memory results, uint256 nextCursor);
     function getChildrenCount(bytes32 anchorUID) external view returns (uint256);
     function getChildCountBySchema(bytes32 parentAnchor, bytes32 schema) external view returns (uint256);
-    function getQualifyingFolders(
-        bytes32 parentUID,
-        bytes32 contentSchema,
-        address attester,
-        uint256 start,
-        uint256 length
-    ) external view returns (bytes32[] memory);
-    function getQualifyingFolderCount(
-        bytes32 parentUID,
-        bytes32 contentSchema,
-        address attester
-    ) external view returns (uint256);
     function getReferencingAttestationCount(bytes32 targetUID, bytes32 schemaUID) external view returns (uint256);
     function containsAttestations(bytes32 targetUID, address attester) external view returns (bool);
     function isRevoked(bytes32 uid) external view returns (bool);
@@ -110,6 +107,17 @@ contract EFSFileView {
         string uri;
         address attester;
         uint64 timestamp;
+    }
+
+    /// @notice Opaque-cursor page result for multi-source views. See ADR-0036.
+    /// @dev    Callers treat `nextCursor` as opaque bytes: pass it back verbatim for the next
+    ///         page, or treat `nextCursor.length == 0` as "fully walked, no more pages."
+    ///         The internal encoding is documented in ADR-0036 but may change across
+    ///         `EFSFileView` deploys; clients must not introspect it. Round-trips only within
+    ///         a single deploy are guaranteed.
+    struct DirectoryPage {
+        FileSystemItem[] items;
+        bytes nextCursor;
     }
 
     IEFSIndexer public immutable indexer;
@@ -158,158 +166,174 @@ contract EFSFileView {
         return (items, nextCur);
     }
 
-    /**
-     * @notice Schema-aware directory listing with folder inclusion.
-     *         Returns:
-     *           1. On page 1 (startingCursor == 0): qualifying generic folders (tagged with
-     *              anchorSchema or containing children of anchorSchema) are prepended.
-     *           2. Child anchors with `anchorSchema == requestedSchema` (matching attesters),
-     *              paginated via the _childrenBySchema index (O(pageSize), not O(totalChildren)).
-     *
-     *         Cursor tracks position in _childrenBySchema[parentAnchor][anchorSchema].
-     *         Tagged folders appear only on the first page and do not affect the cursor.
-     *
-     * @param parentAnchor   Directory Anchor UID.
-     * @param anchorSchema   Schema to filter on. Generic folders containing this schema are
-     *                       also included (schema-aware folder inclusion).
-     * @param attesters      Edition addresses to filter by. An anchor qualifies if ANY attester
-     *                       contributed (checked via containsAttestations). Also scopes tag
-     *                       visibility via isActivelyTaggedByAny.
-     * @param startingCursor Index into _childrenBySchema to resume from (0 = first page).
-     * @param pageSize       Max content items per page (folders are additional on page 1).
-     */
-    /// @dev Maximum attesters per schema-filtered listing call.
-    ///      Prevents quadratic memory allocation in getFilesAtPath and O(n²) dedup.
+    /// @dev Maximum attesters per multi-edition view call.
+    ///      Bounds per-call gas on the attester-scoped walkers; does not bound returned items.
+    ///      Callers wanting more than this many editions need a different aggregation model.
     uint256 private constant MAX_ATTESTERS_PER_QUERY = 20;
 
+    /// @dev Internal batch size for `_childrenTaggedWith` chunk fetches during the folder
+    ///      phase of `getDirectoryPageBySchemaAndAddressList`. Chosen to keep memory use
+    ///      bounded while still amortizing external-call overhead.
+    uint256 private constant _FOLDER_SCAN_CHUNK = 64;
+
+    /// @dev Hard cap on entries inspected in phase 0 per call. The append-only
+    ///      `_childrenTaggedWith[parent][schema]` list can grow unboundedly for a hot
+    ///      directory, and a page where most entries get filtered out (wrong attester,
+    ///      revoked) would otherwise loop `_childrenTaggedWith.length` times in a
+    ///      single eth_call — causing RPC timeouts or provider out-of-gas. The budget
+    ///      bounds per-call work; the opaque cursor continues progress across calls
+    ///      (same pattern as ADR-0020's `MAX_PAGES = 10` mirror-scan cap in
+    ///      `EFSRouter._getBestMirrorURI`).
+    uint256 private constant _FOLDER_SCAN_BUDGET_PER_CALL = 2048;
+
+    /**
+     * @notice Schema-aware directory listing with folder inclusion. Opaque-cursor paginated
+     *         (ADR-0036). Walks two underlying sources in order, dedup-free because the
+     *         sources are disjoint (tagged folders vs. direct children of `anchorSchema`):
+     *
+     *           Phase 0: qualifying generic folders — subfolders under `parentAnchor` that
+     *                    at least one `attesters[]` entry has an active applies=true TAG on
+     *                    with `definition = anchorSchema` (ADR-0006 revised, single-source
+     *                    tag-only folder visibility).
+     *           Phase 1: direct child anchors of `anchorSchema` under `parentAnchor`, scoped
+     *                    to `attesters[]` via `_childrenBySchema` + `containsAttestations`.
+     *
+     *         Each call advances internal walkers by whatever it takes to produce up to
+     *         `maxItems` items or exhaust both sources. Filtered-out entries (revoked,
+     *         edition-out-of-scope) still advance the walker — `maxItems` bounds result
+     *         size, not work.
+     *
+     * @param parentAnchor  Directory Anchor UID.
+     * @param anchorSchema  Schema to filter on. Generic folders with an active tag of this
+     *                      schema are included in phase 0; direct children of this schema
+     *                      are included in phase 1.
+     * @param attesters     Edition addresses (ADR-0031). An entry qualifies if ANY listed
+     *                      attester has contributed it.
+     * @param cursor        Opaque token from a prior call. Empty bytes = start from the
+     *                      beginning. Never introspected by callers; encoding is an
+     *                      implementation detail (see ADR-0036).
+     * @param maxItems      Target result size. Must be > 0.
+     * @return page         `items` + `nextCursor`. `nextCursor.length == 0` iff both phases
+     *                      are fully walked; otherwise pass `nextCursor` back verbatim.
+     */
     function getDirectoryPageBySchemaAndAddressList(
         bytes32 parentAnchor,
         bytes32 anchorSchema,
         address[] memory attesters,
-        uint256 startingCursor,
-        uint256 pageSize
-    ) external view returns (FileSystemItem[] memory items, uint256 nextCursor) {
+        bytes memory cursor,
+        uint256 maxItems
+    ) external view returns (DirectoryPage memory page) {
         require(attesters.length > 0, "Attesters list cannot be empty");
         require(attesters.length <= MAX_ATTESTERS_PER_QUERY, "Too many attesters");
-        require(pageSize > 0, "Page size must be > 0");
+        require(maxItems > 0, "maxItems must be > 0");
 
-        // 1. Content items — paginated via _childrenBySchema index (O(pageSize))
-        (bytes32[] memory contentUIDs, uint256 contentCursor) = indexer.getAnchorsBySchemaAndAddressList(
-            parentAnchor,
-            anchorSchema,
-            attesters,
-            startingCursor,
-            pageSize,
-            true, // reverseOrder (newest first)
-            false // showRevoked
-        );
-
-        // 2. Tagged folders — first page only (typically a small set)
-        bytes32[] memory folderUIDs;
-        uint256 folderCount = 0;
-        if (startingCursor == 0) {
-            folderUIDs = _getQualifyingTaggedFolders(parentAnchor, anchorSchema, attesters);
-            folderCount = folderUIDs.length;
-        }
-
-        // 3. Merge: folders at top of page 1, content items paginate normally
-        bytes32[] memory merged = new bytes32[](folderCount + contentUIDs.length);
-        for (uint256 i = 0; i < folderCount; i++) {
-            merged[i] = folderUIDs[i];
-        }
-        for (uint256 i = 0; i < contentUIDs.length; i++) {
-            merged[folderCount + i] = contentUIDs[i];
-        }
-
-        items = _buildFileSystemItems(merged, parentAnchor, indexer.DATA_SCHEMA_UID(), indexer.PROPERTY_SCHEMA_UID());
-        return (items, contentCursor);
-    }
-
-    /**
-     * @dev Fetch generic folders (anchorSchema == 0) under parentAnchor that qualify for
-     *      schema-aware inclusion: either they contain children of the target schema OR
-     *      they've been tagged with it by a trusted attester (empty folder visibility).
-     *      Bounded by TagResolver's _childrenTaggedWith + Indexer's _childrenBySchema.
-     */
-    function _getQualifyingTaggedFolders(
-        bytes32 parentAnchor,
-        bytes32 anchorSchema,
-        address[] memory attesters
-    ) internal view returns (bytes32[] memory) {
-        // Two sources of qualifying generic subfolders:
+        // Decode cursor — empty OR malformed = fresh start at (phase=0, folderIdx=0,
+        // fileIdx=0). ADR-0036 treats the cursor as opaque caller-supplied bytes, so a
+        // buggy or malicious client must not be able to brick the view with an
+        // `abi.decode` Panic or a silent no-progress loop.
         //
-        // A) Write-time index — EFSIndexer._qualifyingFolders[parent][schema][attester].
-        //    Populated at O(1) amortised cost when a file anchor (anchorSchema != 0) is first
-        //    placed inside a generic folder by a given attester. Read is O(m_qualifying) with
-        //    no scan of non-qualifying folders — scales to any directory size.
+        // Two guards:
+        //   1. Wrong length → fresh walk. Encoded `(uint8, uint256, uint256)` is exactly
+        //      3 × 32 = 96 bytes (uint8 is padded). Anything else was not produced by
+        //      this contract.
+        //   2. Out-of-range `phase` → fresh walk. A decoded `phase > 1` would skip both
+        //      phase-0 and phase-1 blocks, return empty items with an unchanged cursor,
+        //      and the caller would loop forever with no forward progress.
         //
-        // B) Explicit tag index — tagResolver._childrenTaggedWith[parent][schema].
-        //    Covers empty folders the attester created but has not yet uploaded content into.
-        //    Populated when a TAG(definition=anchorSchema, refUID=folder) is attested.
-
-        // Upper bound on result size: sum of qualifying counts across all attesters for both sources.
-        uint256 MAX_TAGGED_FOLDERS = 1000;
-        uint256 maxSize = 0;
-        for (uint256 a = 0; a < attesters.length; a++) {
-            maxSize += indexer.getQualifyingFolderCount(parentAnchor, anchorSchema, attesters[a]);
+        // We decode as a uint256 triple (not `(uint8, ...)`) so that non-zero upper
+        // bits in the first word don't revert — the range-check below handles validity.
+        // The wire format is byte-identical because `abi.encode` pads uint8 to 32 bytes.
+        uint8 phase = 0;
+        uint256 folderIdx = 0;
+        uint256 fileIdx = 0;
+        if (cursor.length == 96) {
+            (uint256 pRaw, uint256 fRaw, uint256 fiRaw) = abi.decode(cursor, (uint256, uint256, uint256));
+            if (pRaw <= 1) {
+                phase = uint8(pRaw);
+                folderIdx = fRaw;
+                fileIdx = fiRaw;
+            }
         }
-        // Cap before using as allocation bound — an uncapped count could exhaust call gas/memory
-        // before the safety limit is enforced later.
-        uint256 taggedTotal = tagResolver.getChildrenTaggedWithCount(parentAnchor, anchorSchema);
-        if (taggedTotal > MAX_TAGGED_FOLDERS) taggedTotal = MAX_TAGGED_FOLDERS;
-        maxSize += taggedTotal;
 
-        if (maxSize == 0) return new bytes32[](0);
-
-        bytes32[] memory temp = new bytes32[](maxSize);
+        bytes32[] memory buf = new bytes32[](maxItems);
         uint256 count = 0;
 
-        // Source A: qualifying folders from the write-time index, one attester at a time.
-        for (uint256 a = 0; a < attesters.length; a++) {
-            uint256 n = indexer.getQualifyingFolderCount(parentAnchor, anchorSchema, attesters[a]);
-            if (n == 0) continue;
-            bytes32[] memory folders = indexer.getQualifyingFolders(parentAnchor, anchorSchema, attesters[a], 0, n);
-            for (uint256 i = 0; i < folders.length; i++) {
-                bytes32 uid = folders[i];
-                if (indexer.isRevoked(uid)) continue;
-                // Dedup across attesters (inner loop — typically n_attesters is small)
-                bool seen = false;
-                for (uint256 k = 0; k < count; k++) {
-                    if (temp[k] == uid) { seen = true; break; }
+        // ───── Phase 0: qualifying tagged folders ─────
+        if (phase == 0) {
+            uint256 taggedTotal = tagResolver.getChildrenTaggedWithCount(parentAnchor, anchorSchema);
+            uint256 scanned = 0; // entries inspected this call — bounded by budget
+            while (count < maxItems && folderIdx < taggedTotal && scanned < _FOLDER_SCAN_BUDGET_PER_CALL) {
+                uint256 remainingSource = taggedTotal - folderIdx;
+                uint256 remainingBudget = _FOLDER_SCAN_BUDGET_PER_CALL - scanned;
+                uint256 chunk = remainingSource < _FOLDER_SCAN_CHUNK ? remainingSource : _FOLDER_SCAN_CHUNK;
+                if (chunk > remainingBudget) chunk = remainingBudget;
+                bytes32[] memory batch = tagResolver.getChildrenTaggedWith(
+                    parentAnchor,
+                    anchorSchema,
+                    folderIdx,
+                    chunk
+                );
+                for (uint256 k = 0; k < batch.length; k++) {
+                    folderIdx++; // advance walker for every inspected entry
+                    scanned++;
+                    bytes32 uid = batch[k];
+                    if (indexer.isRevoked(uid)) continue;
+                    if (!tagResolver.isActivelyTaggedByAny(uid, anchorSchema, attesters)) continue;
+                    buf[count++] = uid;
+                    if (count == maxItems) break;
                 }
-                if (!seen) temp[count++] = uid;
+                if (batch.length < chunk) break; // defensive: resolver returned short batch
+            }
+            if (folderIdx >= taggedTotal) {
+                // folder source exhausted — advance to phase 1
+                phase = 1;
+            }
+            // If we hit the scan budget but not maxItems and folders aren't exhausted,
+            // we stay in phase=0 with folderIdx advanced — next call resumes mid-folders.
+        }
+
+        // ───── Phase 1: direct children by schema ─────
+        bool fileSourceDone = false;
+        if (phase == 1) {
+            while (count < maxItems) {
+                uint256 want = maxItems - count;
+                (bytes32[] memory batch, uint256 nextFileCur) = indexer.getAnchorsBySchemaAndAddressList(
+                    parentAnchor,
+                    anchorSchema,
+                    attesters,
+                    fileIdx,
+                    want,
+                    true, // reverseOrder (newest first)
+                    false // showRevoked
+                );
+                for (uint256 k = 0; k < batch.length; k++) {
+                    buf[count++] = batch[k];
+                    if (count == maxItems) break;
+                }
+                fileIdx = nextFileCur;
+                if (nextFileCur == 0) {
+                    fileSourceDone = true;
+                    break;
+                }
+                if (batch.length == 0) {
+                    // defensive: indexer returned no items but nonzero cursor — avoid infinite loop
+                    break;
+                }
             }
         }
 
-        // Source B: explicitly tagged folders (empty-folder visibility).
-        // Capped at MAX_TAGGED_FOLDERS — explicit tagging is a deliberate user action so
-        // counts are expected to be small. Spam tagging is on-chain write cost for the attacker
-        // but only read-side up to this cap.
-        uint256 taggedCount = taggedTotal; // already capped above
-        if (taggedCount > 0) {
-            bytes32[] memory tagged = tagResolver.getChildrenTaggedWith(parentAnchor, anchorSchema, 0, taggedCount);
-            for (uint256 i = 0; i < tagged.length; i++) {
-                bytes32 uid = tagged[i];
-                if (indexer.isRevoked(uid)) continue;
-                if (!tagResolver.isActivelyTaggedByAny(uid, anchorSchema, attesters)) continue;
-                bool qualifies = false;
-                for (uint256 j = 0; j < attesters.length; j++) {
-                    if (indexer.containsAttestations(uid, attesters[j])) { qualifies = true; break; }
-                }
-                if (!qualifies) continue;
-                // Dedup against source A
-                bool seen = false;
-                for (uint256 k = 0; k < count; k++) {
-                    if (temp[k] == uid) { seen = true; break; }
-                }
-                if (!seen) temp[count++] = uid;
-            }
+        // Trim buffer to actual count
+        assembly ("memory-safe") {
+            mstore(buf, count)
         }
+        page.items = _buildFileSystemItems(buf, parentAnchor, indexer.DATA_SCHEMA_UID(), indexer.PROPERTY_SCHEMA_UID());
 
-        assembly {
-            mstore(temp, count)
+        // Emit cursor: empty iff both sources exhausted, else encoded state.
+        if (phase == 1 && fileSourceDone) {
+            page.nextCursor = "";
+        } else {
+            page.nextCursor = abi.encode(phase, folderIdx, fileIdx);
         }
-        return temp;
     }
 
     function _buildFileSystemItems(
@@ -352,56 +376,115 @@ contract EFSFileView {
         return result;
     }
 
+    /// @dev Internal batch size for per-attester `_activeByAAS` chunk fetches during
+    ///      `getFilesAtPath`. Bounds memory per external call; walker advances through all
+    ///      attesters regardless.
+    uint256 private constant _TARGETS_SCAN_CHUNK = 64;
+
     /**
-     * @notice Tag-based file listing: get DATAs placed at an anchor by specific attesters.
-     *         Uses TagResolver's _activeByAttesterAndSchema compact index.
-     * @param anchorUID  The path anchor (e.g. /memes/)
-     * @param attesters  Edition addresses to query
-     * @param schema     Target schema to filter (DATA_SCHEMA_UID for files, ANCHOR_SCHEMA_UID for sub-folders)
-     * @param start      Pagination offset
-     * @param length     Page size
-     * @return items     DATA/Anchor attestation details with contentHash populated for DATAs
+     * @notice Tag-based file listing with cross-attester dedup. Opaque-cursor paginated
+     *         (ADR-0036). Walks each attester's `_activeByAAS[anchorUID][attester][schema]`
+     *         slice in order; earlier attesters win on duplicate targets (ADR-0031
+     *         first-attester-wins).
+     *
+     *         Filtered-out entries (targets claimed by an earlier attester) still advance
+     *         the walker; `maxItems` bounds result size, not work.
+     *
+     * @param anchorUID  The path anchor (e.g. /memes/).
+     * @param attesters  Edition addresses to query, in precedence order.
+     * @param schema     Target schema to filter (DATA_SCHEMA_UID for files,
+     *                   ANCHOR_SCHEMA_UID for sub-folders).
+     * @param cursor     Opaque token from a prior call. Empty = start from the beginning.
+     * @param maxItems   Target result size. Must be > 0.
+     * @return page      `items` + `nextCursor`. `nextCursor.length == 0` iff every
+     *                   attester's slice has been walked to completion.
+     *
+     * @dev Concurrent-mutation caveat: `_activeByAAS` is a swap-and-pop compact index. A
+     *      revocation between calls can shift later entries up by one slot, causing the
+     *      resumed page to skip or repeat an item. This is a best-effort pagination
+     *      guarantee typical of non-snapshotting paginators.
      */
     function getFilesAtPath(
         bytes32 anchorUID,
         address[] calldata attesters,
         bytes32 schema,
-        uint256 start,
-        uint256 length
-    ) external view returns (FileSystemItem[] memory items) {
+        bytes memory cursor,
+        uint256 maxItems
+    ) external view returns (DirectoryPage memory page) {
+        require(attesters.length > 0, "Attesters list cannot be empty");
         require(attesters.length <= MAX_ATTESTERS_PER_QUERY, "Too many attesters");
-        // Collect from all attesters, dedup by UID
-        bytes32[] memory temp = new bytes32[](length * attesters.length);
+        require(maxItems > 0, "maxItems must be > 0");
+
+        // Decode cursor — empty OR malformed = fresh start at (attesterIdx=0,
+        // targetIdx=0). Same defensive pattern as `getDirectoryPageBySchemaAndAddressList`
+        // above: length-check protects against `abi.decode` Panics on arbitrary
+        // caller-supplied bytes. If `attesterIdx` ends up >= `attesters.length` the
+        // outer while-loop simply exits with an empty page (no infinite loop).
+        uint256 attesterIdx = 0;
+        uint256 targetIdx = 0;
+        if (cursor.length == 64) {
+            (attesterIdx, targetIdx) = abi.decode(cursor, (uint256, uint256));
+        }
+
+        bytes32[] memory buf = new bytes32[](maxItems);
         uint256 count = 0;
 
-        for (uint256 a = 0; a < attesters.length; a++) {
-            bytes32[] memory targets = tagResolver.getActiveTargetsByAttesterAndSchema(
+        while (attesterIdx < attesters.length && count < maxItems) {
+            address currentAttester = attesters[attesterIdx];
+            uint256 totalForAttester = tagResolver.getActiveTargetsByAttesterAndSchemaCount(
                 anchorUID,
-                attesters[a],
-                schema,
-                start,
-                length
+                currentAttester,
+                schema
             );
-            for (uint256 i = 0; i < targets.length; i++) {
-                // Dedup
-                bool exists = false;
-                for (uint256 j = 0; j < count; j++) {
-                    if (temp[j] == targets[i]) {
-                        exists = true;
-                        break;
+
+            while (targetIdx < totalForAttester && count < maxItems) {
+                uint256 remainingSource = totalForAttester - targetIdx;
+                uint256 chunk = remainingSource < _TARGETS_SCAN_CHUNK ? remainingSource : _TARGETS_SCAN_CHUNK;
+                bytes32[] memory batch = tagResolver.getActiveTargetsByAttesterAndSchema(
+                    anchorUID,
+                    currentAttester,
+                    schema,
+                    targetIdx,
+                    chunk
+                );
+                for (uint256 k = 0; k < batch.length; k++) {
+                    targetIdx++; // advance for every inspected entry
+                    bytes32 target = batch[k];
+                    // Cross-attester dedup: earlier attester already has an active applies=true
+                    // tag on this target? Must use `isActivelyApplied` (not `getActiveTagUID !=0`)
+                    // because `_activeTag` retains the latest TAG UID even when that TAG is
+                    // applies=false — an earlier attester's negation would otherwise suppress a
+                    // later attester's still-active placement and break ADR-0031 fallback.
+                    bool taken = false;
+                    for (uint256 prior = 0; prior < attesterIdx; prior++) {
+                        if (tagResolver.isActivelyApplied(attesters[prior], target, anchorUID)) {
+                            taken = true;
+                            break;
+                        }
                     }
+                    if (taken) continue;
+                    buf[count++] = target;
+                    if (count == maxItems) break;
                 }
-                if (!exists && count < temp.length) {
-                    temp[count++] = targets[i];
-                }
+                if (batch.length < chunk) break; // defensive: resolver returned short batch
+            }
+
+            if (targetIdx >= totalForAttester) {
+                // Attester exhausted; advance to next attester's slice.
+                attesterIdx++;
+                targetIdx = 0;
             }
         }
 
-        items = new FileSystemItem[](count);
-        bytes32 dataSchemaUID = indexer.DATA_SCHEMA_UID();
+        // Trim buffer, build items.
+        assembly ("memory-safe") {
+            mstore(buf, count)
+        }
 
+        bytes32 dataSchemaUID = indexer.DATA_SCHEMA_UID();
+        FileSystemItem[] memory items = new FileSystemItem[](count);
         for (uint256 i = 0; i < count; i++) {
-            Attestation memory att = eas.getAttestation(temp[i]);
+            Attestation memory att = eas.getAttestation(buf[i]);
 
             bytes32 contentHash;
             string memory name = "";
@@ -416,7 +499,7 @@ contract EFSFileView {
             }
 
             items[i] = FileSystemItem({
-                uid: temp[i],
+                uid: buf[i],
                 name: name,
                 parentUID: anchorUID,
                 isFolder: att.schema != dataSchemaUID,
@@ -428,6 +511,14 @@ contract EFSFileView {
                 schema: att.schema,
                 contentHash: contentHash
             });
+        }
+        page.items = items;
+
+        // Cursor: empty iff every attester's slice has been walked to completion.
+        if (attesterIdx >= attesters.length) {
+            page.nextCursor = "";
+        } else {
+            page.nextCursor = abi.encode(attesterIdx, targetIdx);
         }
     }
 

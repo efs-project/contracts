@@ -122,20 +122,53 @@ async function main() {
     return { uid: await getUID(tx), contentHash };
   };
 
-  /** Create a PROPERTY attestation on a DATA or Anchor */
-  const property = async (signer: any, targetUID: string, key: string, value: string) => {
-    const tx = await eas.connect(signer).attest({
+  /**
+   * Attach a PROPERTY to a container using the unified free-floating model
+   * (ADR-0035): key anchor under the container, free-floating PROPERTY(value),
+   * and a TAG binding them. Returns the PROPERTY UID.
+   */
+  const property = async (signer: any, containerUID: string, key: string, value: string) => {
+    let keyAnchorUID: string = await indexer.resolveAnchor(containerUID, key, propertySchemaUID);
+    if (keyAnchorUID === ethers.ZeroHash) {
+      const tx = await eas.connect(signer).attest({
+        schema: anchorSchemaUID,
+        data: {
+          recipient: ethers.ZeroAddress,
+          expirationTime: 0n,
+          revocable: false,
+          refUID: containerUID,
+          data: encode.encode(["string", "bytes32"], [key, propertySchemaUID]),
+          value: 0n,
+        },
+      });
+      keyAnchorUID = await getUID(tx);
+    }
+
+    const propTx = await eas.connect(signer).attest({
       schema: propertySchemaUID,
       data: {
         recipient: ethers.ZeroAddress,
         expirationTime: 0n,
-        revocable: true,
-        refUID: targetUID,
-        data: encode.encode(["string", "string"], [key, value]),
+        revocable: false,
+        refUID: ethers.ZeroHash,
+        data: encode.encode(["string"], [value]),
         value: 0n,
       },
     });
-    return getUID(tx);
+    const propertyUID = await getUID(propTx);
+
+    await eas.connect(signer).attest({
+      schema: tagSchemaUID,
+      data: {
+        recipient: ethers.ZeroAddress,
+        expirationTime: 0n,
+        revocable: true,
+        refUID: propertyUID,
+        data: encode.encode(["bytes32", "bool"], [keyAnchorUID, true]),
+        value: 0n,
+      },
+    });
+    return propertyUID;
   };
 
   /** Create a MIRROR attestation on a DATA */
@@ -501,14 +534,26 @@ async function main() {
     `fwd[0]=${fwd[0].slice(0, 10)}… rev[0]=${rev[0].slice(0, 10)}…`,
   );
 
-  // ── Test 17: PROPERTY metadata on DATA ──
+  // ── Test 17: PROPERTY metadata on DATA (unified free-floating model) ──
   console.log("\n[17] PROPERTY on DATA");
-  const propRefs = await indexer.getReferencingAttestations(ownerBestData.uid, propertySchemaUID, 0, 10, false);
-  assert("Owner's DATA has 1 PROPERTY (contentType)", propRefs.length === 1, `got ${propRefs.length}`);
+  const contentTypeKeyAnchor = await indexer.resolveAnchor(ownerBestData.uid, "contentType", propertySchemaUID);
+  assert(
+    "contentType key anchor exists on owner's DATA",
+    contentTypeKeyAnchor !== ethers.ZeroHash,
+    `got ${contentTypeKeyAnchor}`,
+  );
+
+  const propRefs = await tagResolver.getActiveTargetsByAttesterAndSchema(
+    contentTypeKeyAnchor,
+    ownerAddr,
+    propertySchemaUID,
+    0,
+    10,
+  );
+  assert("Owner has 1 active contentType PROPERTY", propRefs.length === 1, `got ${propRefs.length}`);
 
   const propAtt = await eas.getAttestation(propRefs[0]);
-  const [propKey, propValue] = encode.decode(["string", "string"], propAtt.data);
-  assert("PROPERTY key is contentType", propKey === "contentType");
+  const [propValue] = encode.decode(["string"], propAtt.data);
   assert("PROPERTY value is image/jpeg", propValue === "image/jpeg");
 
   // ══════════════════════════════════════════════════════════════

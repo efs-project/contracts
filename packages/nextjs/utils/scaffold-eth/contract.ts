@@ -84,7 +84,11 @@ type IsContractDeclarationMissing<TYes, TNo> = typeof contractsData extends { [k
 
 type ContractsDeclaration = IsContractDeclarationMissing<GenericContractsDeclaration, typeof contractsData>;
 
-type Contracts = ContractsDeclaration[ConfiguredChainId];
+// `ConfiguredChainId` may widen to `number` (scaffold.config.ts annotates hardhatChain as
+// `chains.Chain`), while `ContractsDeclaration` keeps literal keys like `31337`. Intersect
+// with the actual declared keys so the index type resolves to the concrete chain record
+// and `keyof Contracts` produces real contract names instead of `string | number | symbol`.
+type Contracts = ContractsDeclaration[Extract<keyof ContractsDeclaration, ConfiguredChainId>];
 
 export type ContractName = keyof Contracts;
 
@@ -209,6 +213,12 @@ type WriteVariables = WriteContractVariables<Abi, string, any[], Config, number>
 export type TransactorFuncOptions = {
   onBlockConfirmation?: (txnReceipt: TransactionReceipt) => void;
   blockConfirmations?: number;
+  /**
+   * Suppress the default success/loading/error toasts. Callers that report
+   * progress via a different channel (e.g. backgroundOps drawer) can set this
+   * to avoid double-notifying the user. Errors are still thrown to the caller.
+   */
+  silent?: boolean;
 };
 
 export type ScaffoldWriteContractOptions = MutateOptions<

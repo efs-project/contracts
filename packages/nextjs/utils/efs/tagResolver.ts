@@ -18,6 +18,21 @@ export const TAG_RESOLVER_ABI = [
     stateMutability: "view",
     type: "function",
   },
+  // `isActivelyApplied` must be preferred over `getActiveTagUID != 0` for
+  // visibility / dedup checks: `_activeTag` is written for both applies=true
+  // AND applies=false TAGs, so a nonzero UID does NOT imply an applied
+  // placement. See TagResolver.sol NatSpec.
+  {
+    inputs: [
+      { internalType: "address", name: "attester", type: "address" },
+      { internalType: "bytes32", name: "targetID", type: "bytes32" },
+      { internalType: "bytes32", name: "definition", type: "bytes32" },
+    ],
+    name: "isActivelyApplied",
+    outputs: [{ internalType: "bool", name: "", type: "bool" }],
+    stateMutability: "view",
+    type: "function",
+  },
   {
     inputs: [{ internalType: "bytes32", name: "targetID", type: "bytes32" }],
     name: "getTagDefinitionCount",

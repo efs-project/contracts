@@ -34,8 +34,9 @@ const Home: NextPage = () => {
         </div>
 
         <div className="flex-grow bg-base-300 w-full mt-16 px-8 py-12">
-          <div className="flex justify-center items-center gap-8 flex-col sm:flex-row flex-wrap">
-            <div className="flex flex-col bg-base-100 px-10 py-10 text-center items-center max-w-xs rounded-3xl">
+          {/* Grid (not flex) so all three cards share the same width *and* stretch to the tallest card's height — previously the middle card's extra line of wrapped text made it visibly taller than its neighbors. `auto-rows-fr` equalizes row height; cards use h-full to fill the cell. */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-8 auto-rows-fr max-w-5xl mx-auto">
+            <div className="flex flex-col h-full bg-base-100 px-10 py-10 text-center items-center rounded-3xl">
               <FolderOpenIcon className="h-8 w-8 fill-secondary" />
               <p className="mt-3 font-semibold">File Explorer</p>
               <p className="mt-1 text-sm opacity-70">
@@ -46,7 +47,7 @@ const Home: NextPage = () => {
                 .
               </p>
             </div>
-            <div className="flex flex-col bg-base-100 px-10 py-10 text-center items-center max-w-xs rounded-3xl">
+            <div className="flex flex-col h-full bg-base-100 px-10 py-10 text-center items-center rounded-3xl">
               <BugAntIcon className="h-8 w-8 fill-secondary" />
               <p className="mt-3 font-semibold">Debug &amp; Dev Tools</p>
               <p className="mt-1 text-sm opacity-70">
@@ -61,7 +62,7 @@ const Home: NextPage = () => {
                 page.
               </p>
             </div>
-            <div className="flex flex-col bg-base-100 px-10 py-10 text-center items-center max-w-xs rounded-3xl">
+            <div className="flex flex-col h-full bg-base-100 px-10 py-10 text-center items-center rounded-3xl">
               <MagnifyingGlassIcon className="h-8 w-8 fill-secondary" />
               <p className="mt-3 font-semibold">Explorers</p>
               <p className="mt-1 text-sm opacity-70">

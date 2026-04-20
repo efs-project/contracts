@@ -5,6 +5,7 @@ import { ethers } from "ethers";
 import { decodeEventLog, parseAbiItem } from "viem";
 import { usePublicClient, useWalletClient } from "wagmi";
 import { useScaffoldWriteContract } from "~~/hooks/scaffold-eth";
+import { useBackgroundOps } from "~~/services/store/backgroundOps";
 import { notification } from "~~/utils/scaffold-eth";
 
 interface CreateSortModalProps {
@@ -75,26 +76,32 @@ export const CreateSortModal = ({
     }
 
     setIsSubmitting(true);
+    const ops = useBackgroundOps.getState();
+    const opId = ops.start(`Create sort: ${name}`);
     try {
       // Step 1: Create the naming anchor under the target parent
       const encodedAnchor = ethers.AbiCoder.defaultAbiCoder().encode(["string", "bytes32"], [name, sortInfoSchemaUID]);
 
-      const anchorTxHash = await attest({
-        functionName: "attest",
-        args: [
-          {
-            schema: anchorSchemaUID as `0x${string}`,
-            data: {
-              recipient: ethers.ZeroAddress,
-              expirationTime: 0n,
-              revocable: false,
-              refUID: targetParent as `0x${string}`,
-              data: encodedAnchor as `0x${string}`,
-              value: 0n,
+      ops.log(opId, "Creating naming anchor...");
+      const anchorTxHash = await attest(
+        {
+          functionName: "attest",
+          args: [
+            {
+              schema: anchorSchemaUID as `0x${string}`,
+              data: {
+                recipient: ethers.ZeroAddress,
+                expirationTime: 0n,
+                revocable: false,
+                refUID: targetParent as `0x${string}`,
+                data: encodedAnchor as `0x${string}`,
+                value: 0n,
+              },
             },
-          },
-        ],
-      });
+          ],
+        },
+        { silent: true },
+      );
 
       if (!anchorTxHash) throw new Error("Naming anchor creation failed.");
 
@@ -132,33 +139,40 @@ export const CreateSortModal = ({
         [selectedSortFunc, targetSchema, sourceType],
       );
 
-      const sortInfoTxHash = await attest({
-        functionName: "attest",
-        args: [
-          {
-            schema: sortInfoSchemaUID as `0x${string}`,
-            data: {
-              recipient: ethers.ZeroAddress,
-              expirationTime: 0n,
-              revocable: true,
-              refUID: namingAnchorUID as `0x${string}`,
-              data: encodedSortInfo as `0x${string}`,
-              value: 0n,
+      ops.log(opId, "Attesting SORT_INFO...");
+      const sortInfoTxHash = await attest(
+        {
+          functionName: "attest",
+          args: [
+            {
+              schema: sortInfoSchemaUID as `0x${string}`,
+              data: {
+                recipient: ethers.ZeroAddress,
+                expirationTime: 0n,
+                revocable: true,
+                refUID: namingAnchorUID as `0x${string}`,
+                data: encodedSortInfo as `0x${string}`,
+                value: 0n,
+              },
             },
-          },
-        ],
-      });
+          ],
+        },
+        { silent: true },
+      );
 
       if (sortInfoTxHash) {
         await publicClient.waitForTransactionReceipt({ hash: sortInfoTxHash });
       }
 
       notification.success(`Sort "${name}" created successfully.`);
+      ops.complete(opId, `Sort "${name}" created.`);
       onCreated?.();
       handleClose();
     } catch (e: any) {
       console.error("Sort creation failed:", e);
-      notification.error(e?.shortMessage ?? e?.message ?? "Sort creation failed.");
+      const msg = e?.shortMessage ?? e?.message ?? "Sort creation failed.";
+      notification.error(msg);
+      ops.fail(opId, msg);
     } finally {
       setIsSubmitting(false);
     }

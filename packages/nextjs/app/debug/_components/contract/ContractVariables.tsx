@@ -35,12 +35,12 @@ export const ContractVariables = ({
 
   return (
     <>
-      {functionsToDisplay.map(({ fn, inheritedFrom }) => (
+      {functionsToDisplay.map(({ fn, inheritedFrom }, idx) => (
         <DisplayVariable
           abi={deployedContractData.abi as Abi}
           abiFunction={fn}
           contractAddress={deployedContractData.address}
-          key={fn.name}
+          key={`${fn.name}-${idx}`}
           refreshDisplayVariables={refreshDisplayVariables}
           inheritedFrom={inheritedFrom}
         />

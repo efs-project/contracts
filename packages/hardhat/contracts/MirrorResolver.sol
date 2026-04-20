@@ -109,11 +109,11 @@ contract MirrorResolver is SchemaResolver {
     /// executed or misinterpreted by clients.
     function _isAllowedScheme(string memory uri) private pure returns (bool) {
         bytes memory u = bytes(uri);
-        if (_startsWith(u, "web3://"))  return true;
-        if (_startsWith(u, "ipfs://"))  return true;
-        if (_startsWith(u, "ar://"))    return true;
+        if (_startsWith(u, "web3://")) return true;
+        if (_startsWith(u, "ipfs://")) return true;
+        if (_startsWith(u, "ar://")) return true;
         if (_startsWith(u, "https://")) return true;
-        if (_startsWith(u, "magnet:"))  return true;
+        if (_startsWith(u, "magnet:")) return true;
         return false;
     }
 

@@ -84,6 +84,8 @@ EFSFileView is the read-side wrapper most client code should call rather than co
 
 Use `getDirectoryPageBySchemaAndAddressList(folderUID, DATA_SCHEMA_UID, [alice, bob], 0, 50)` to list files in `/memes/` from Alice and Bob's editions. EFSFileView also exposes `getFilesAtPath(fileAnchorUID, attesters, schema, start, length)` for the narrower case of "what DATA attestations are on this specific anchor" — callers pass a file anchor, not a folder.
 
+**Subfolder visibility in edition listings is tag-only** (ADR-0006 revised 2026-04-18). `getDirectoryPageBySchemaAndAddressList` returns generic subfolders iff at least one edition attester has an active applies=true `TAG(definition=anchorSchema, refUID=folder)`. There is no write-time folder-qualifying index. The upload flow (client side) walks the ancestor chain from the immediate parent up to root exclusive and emits a visibility TAG at every generic ancestor the attester hasn't already claimed; this keeps every folder on the path to an uploaded file visible in the uploader's edition. `_containsAttestations` is still populated (used below for file-anchor child filtering), but is no longer consulted for folder visibility.
+
 ### `propagateContains` (Tree Visibility)
 When a TAG with `applies=true` places a DATA at a structural Anchor, the TagResolver calls `indexer.propagateContains(definition, attester)`. This walks up the `_parents` chain from the definition Anchor, setting `_containsAttestations[ancestor][attester] = true` at each level. Early-exit on already-flagged ancestors makes repeated contributions amortized O(1). This enables the sidebar tree to show which folders contain content from a given attester without scanning their children.
 

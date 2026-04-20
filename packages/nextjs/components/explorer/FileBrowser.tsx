@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { MirrorsPanel } from "./MirrorsPanel";
 import { PropertiesModal } from "./PropertiesModal";
@@ -19,11 +19,13 @@ import {
   InformationCircleIcon,
   Square2StackIcon,
   TagIcon,
+  TrashIcon,
   XMarkIcon,
 } from "@heroicons/react/24/outline";
+import { useEditionDirectoryPage } from "~~/hooks/efs/useEditionDirectoryPage";
 import { useSortedData } from "~~/hooks/efs/useSortedData";
-import { useDeployedContractInfo, useScaffoldReadContract } from "~~/hooks/scaffold-eth";
-import { useTargetNetwork } from "~~/hooks/scaffold-eth/useTargetNetwork";
+import { useDeployedContractInfo, useScaffoldReadContract, useScaffoldWriteContract } from "~~/hooks/scaffold-eth";
+import { useBackgroundOps } from "~~/services/store/backgroundOps";
 import { isFile, isTopic } from "~~/utils/efs/efsTypes";
 import { SORT_OVERLAY_ABI } from "~~/utils/efs/sortOverlay";
 import { TAG_RESOLVER_ABI, getTagResolverAddress } from "~~/utils/efs/tagResolver";
@@ -125,24 +127,51 @@ export const FileBrowser = ({
   dataSchemaUID,
   currentPathNames,
   editionAddresses,
+  explicitEditions = false,
   onNavigate,
   tagFilter = "",
   drawerTagFilters = {},
   activeSortInfoUID = null,
   sortOverlayAddress,
   sortRefreshKey = 0,
+  directoryRefreshKey = 0,
   reverseOrder = false,
 }: {
   currentAnchorUID: string | null;
   dataSchemaUID: string;
   currentPathNames: string[];
   editionAddresses: string[];
+  /**
+   * True when the caller passed `?editions=…` explicitly — including the case
+   * where every token in the list failed ENS / hex parsing and
+   * `editionAddresses` ended up empty. Distinguishes "user asked for nothing"
+   * (stay edition-scoped, render empty) from "nothing available to scope to"
+   * (wallet disconnected, no default set — fall through to unscoped). Without
+   * this flag, explicit-but-unresolved URLs like `?editions=doesnotexist.eth`
+   * silently leak default/unfiltered content into a view the user told us to
+   * scope down. Defaults false for back-compat with callers that don't know
+   * about `editionsParam`.
+   */
+  explicitEditions?: boolean;
   onNavigate: (uid: string, name: string) => void;
   tagFilter?: string;
   drawerTagFilters?: Record<string, DrawerTagFilterState>;
   activeSortInfoUID?: string | null;
   sortOverlayAddress?: `0x${string}`;
   sortRefreshKey?: number;
+  /**
+   * Bumped by the parent (ExplorerClient) after any out-of-component mutation
+   * that adds/removes items in the current directory — today: file upload and
+   * folder creation, which land via `CreateItemModal` → `FileActionsBar` and
+   * therefore can't call the internal `refetch*` functions directly. Delete is
+   * in-component and calls `refetchEditionItems` / `refetchStandardItems`
+   * inline; this key is the parallel escape hatch for create.
+   *
+   * Each bump triggers exactly one refetch of whichever query is active
+   * (edition-scoped or standard). Initial mount is skipped — the hooks fetch
+   * on their own when deps settle.
+   */
+  directoryRefreshKey?: number;
   reverseOrder?: boolean;
 }) => {
   const [selectedDebugItem, setSelectedDebugItem] = useState<any | null>(null);
@@ -171,6 +200,15 @@ export const FileBrowser = ({
   const [tagFilterVersion, setTagFilterVersion] = useState(0);
   const [tagResolverAddress, setTagResolverAddress] = useState<`0x${string}` | null>(null);
   const [tagsRoot, setTagsRoot] = useState<`0x${string}` | null>(null);
+  // Folder-delete confirmation. `tagUIDs` is populated by scanSubtree.
+  const [deleteConfirm, setDeleteConfirm] = useState<{
+    item: any;
+    status: "scanning" | "ready" | "revoking";
+    tagUIDs: `0x${string}`[];
+    folderCount: number;
+    fileCount: number;
+    error?: string;
+  } | null>(null);
   // Maps anchor UID → set of DATA UIDs for all relevant edition attesters.
   // Built when a tag filter is active; an item matches if ANY of its DATA UIDs is in the tag set.
   const [dataUIDMap, setDataUIDMap] = useState<Map<string, Set<string>>>(new Map());
@@ -178,9 +216,10 @@ export const FileBrowser = ({
   const { data: efsRouter } = useDeployedContractInfo({ contractName: "EFSRouter" });
 
   const { data: indexerInfo } = useDeployedContractInfo({ contractName: "Indexer" });
-  const { targetNetwork } = useTargetNetwork();
+  const { data: efsFileViewInfo } = useDeployedContractInfo({ contractName: "EFSFileView" });
   const publicClient = usePublicClient();
   const { address: connectedAddress } = useAccount();
+  const { writeContractAsync: easWrite } = useScaffoldWriteContract("EAS");
 
   // Revoke blob URLs when fileContent changes to prevent memory leaks
   useEffect(() => {
@@ -377,168 +416,118 @@ export const FileBrowser = ({
     setFileTransportType("onchain");
     setFetchError(null);
     try {
-      // In a real implementation we might pass the full path from the Toolbar/Page.
-      // EFS Router expects the path elements. For now, we'll just request the item.name
-      // assuming the router can resolve from root if we pass the right path.
-      // Wait, the router resolve expects the full path from the root Anchor.
-      // Since we don't have the breadcrumbs in FileBrowser, we might just try fetching by UID directly,
-      // but EFSRouter requests take `web3://<router>/path/to/file`.
-      // Let's pass the item name and assume it's at the root for this test,
-      // or we can pass `currentPath` from page.tsx to FileBrowser and build it.
-      // For the test files `/debug/test.txt`, path is `debug/test.txt`.
-      // The frontend currently doesn't pass the full path string array to FileBrowser,
-      // so for now, we'll try to just guess it's `debug/${item.name}` as a quick hack for the test,
-      // or if we can't, we should add `currentPath` as a prop.
-
-      // Let's fetch using web3protocol dynamically to avoid SSR WASM errors
-      const { Client } = await import("web3protocol");
-      const { getDefaultChainList } = await import("web3protocol/chains");
-
-      let chainList = getDefaultChainList();
-      if (targetNetwork.id === 31337) {
-        chainList = [
-          ...chainList,
-          {
-            id: 31337,
-            name: "Hardhat",
-            shortName: "hht",
-            chain: "ETH",
-            network: "hardhat",
-            rpc: ["http://127.0.0.1:8545"],
-            faucets: [],
-            nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
-            infoURL: "https://hardhat.org",
-          },
-        ];
+      // Preview reads go straight through the same-origin wagmi transport:
+      //   EFSRouter.request([...pathSegs], [{key:"editions",value:csv}, ...]) via publicClient
+      // plus gateway fetches for external-body mirrors (IPFS/Arweave/HTTPS).
+      //
+      // We used to try `web3protocol.Client.fetchUrl(uri)` first and fall back
+      // to this direct path on error. Removed 2026-04-20:
+      //   1. On devnet (app on `*.nip.io` / an eth.limo origin), `web3protocol`
+      //      bundles WASM + its own fetcher and constructs RPC connections
+      //      outside wagmi's configured transport. On first preview click the
+      //      browser raised a **Local Network Access** permission prompt
+      //      ("Access other apps and services on this device — Block / Allow")
+      //      — users read that as malware and bounce. See
+      //      `docs/decisions.md` entry for 2026-04-20.
+      //   2. The direct path already covers every content shape: on-chain
+      //      SSTORE2 chunks via `web3-next-chunk` pagination, and
+      //      `message/external-body` delegation to a gateway. The
+      //      web3protocol branch collapsed duplicate Content-Type headers
+      //      (breaking external-body detection) and fell through on empty
+      //      bodies anyway — strictly extra surface area.
+      //   3. A future "native transport helper" (e.g. an opt-in local IPFS
+      //      node) must be an explicit user toggle, never automatic from a
+      //      preview click.
+      if (!publicClient) {
+        throw new Error("Public client not available");
       }
 
-      const web3Client = new Client(chainList);
-
-      // In a real app, `currentPath` and its string names should be passed to `FileBrowser`.
-      const joinedPath = currentPathNames.length > 0 ? currentPathNames.join("/") + "/" : "";
-      const editionParams =
-        editionAddresses.length > 0 ? `?editions=${editionAddresses.map(a => a.trim()).join(",")}` : "";
-      const uri = `web3://${efsRouter.address}:${targetNetwork.id}/${joinedPath}${item.name}${editionParams}`;
-
-      let result: number[] = [];
+      const result: number[] = [];
       let contentTypeStr = "text/plain";
 
-      try {
-        const fetchedWeb3Url = await web3Client.fetchUrl(uri);
-        if (fetchedWeb3Url.httpCode !== 200) {
-          throw new Error(`HTTP ${fetchedWeb3Url.httpCode}`);
+      let hasMoreChunks = true;
+      let currentChunkHeader = "";
+
+      while (hasMoreChunks) {
+        const queryParams: any[] = [];
+        if (editionAddresses.length > 0) {
+          queryParams.push({ key: "editions", value: editionAddresses.join(",") });
         }
 
-        const reader = fetchedWeb3Url.output.getReader();
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          result.push(...value);
-        }
-
-        // web3protocol collapses duplicate headers, so we can't reliably detect
-        // message/external-body here. If body is empty, fall through to the
-        // direct contract call which preserves both raw Content-Type headers.
-        if (result.length === 0) {
-          throw new Error("Empty body — likely external URI delegation, trying direct fallback");
-        }
-
-        const contentTypeInfo = Object.entries(fetchedWeb3Url.httpHeaders || {}).find(
-          ([k]) => k.toLowerCase() === "content-type",
-        );
-        contentTypeStr = contentTypeInfo ? (contentTypeInfo[1] as string) : "text/plain";
-      } catch (protocolErr) {
-        console.warn("web3protocol failed or empty response, using direct fallback", protocolErr);
-        // Direct Router Fallback — also handles external-body delegation (IPFS, Arweave, etc.)
-        if (!publicClient) throw protocolErr;
-
-        result = [];
-
-        let hasMoreChunks = true;
-        let currentChunkHeader = "";
-
-        while (hasMoreChunks) {
-          const queryParams: any[] = [];
-          if (editionAddresses.length > 0) {
-            queryParams.push({ key: "editions", value: editionAddresses.join(",") });
+        // Chunk pagination: after the first response, `web3-next-chunk` header
+        // carries the next chunk index (format "?chunk=N"); forward it back.
+        if (currentChunkHeader) {
+          const chunkIndex = currentChunkHeader.split("=")[1];
+          if (chunkIndex !== undefined) {
+            queryParams.push({ key: "chunk", value: chunkIndex });
           }
+        }
 
-          // Mimic web3protocol query formatting for chunk queries if not the first chunk
-          // In EFSRouter, `request(string[] memory path, KeyValue[] memory queries)` takes queries.
-          if (currentChunkHeader) {
-            // currentChunkHeader is "?chunk=1"
-            const chunkIndex = currentChunkHeader.split("=")[1];
-            if (chunkIndex !== undefined) {
-              queryParams.push({ key: "chunk", value: chunkIndex });
-            }
-          }
+        const args: any[] = [[...currentPathNames, item.name], queryParams];
 
-          const args: any[] = [[...currentPathNames, item.name], queryParams];
+        const response = (await publicClient.readContract({
+          address: efsRouter.address as `0x${string}`,
+          abi: efsRouter.abi,
+          functionName: "request",
+          args: args as any,
+        })) as any;
 
-          const response = (await publicClient.readContract({
-            address: efsRouter.address as `0x${string}`,
-            abi: efsRouter.abi,
-            functionName: "request",
-            args: args as any,
-          })) as any;
+        if (response[0] === 200n || response[0] === 200) {
+          const outHeaders = response[2] as any[];
+          const ctHeaders = outHeaders.filter((h: any) => h.key.toLowerCase() === "content-type");
 
-          if (response[0] === 200n || response[0] === 200) {
-            const outHeaders = response[2] as any[];
-            const ctHeaders = outHeaders.filter((h: any) => h.key.toLowerCase() === "content-type");
+          // Detect external-body delegation (IPFS, Arweave, HTTPS mirrors)
+          const externalHeader = ctHeaders.find((h: any) => h.value.includes("message/external-body"));
+          if (externalHeader) {
+            // Extract the original URI from: message/external-body; access-type=URL; URL="ipfs://..."
+            const urlMatch = externalHeader.value.match(/URL="([^"]+)"/);
+            const externalUri = urlMatch?.[1];
+            // Extract the actual MIME type from the content-type= parameter in the
+            // message/external-body header (router embeds it as a quoted parameter).
+            const ctParam = externalHeader.value.match(/content-type="([^"]+)"/);
+            if (ctParam?.[1]) contentTypeStr = ctParam[1];
 
-            // Detect external-body delegation (IPFS, Arweave, HTTPS mirrors)
-            const externalHeader = ctHeaders.find((h: any) => h.value.includes("message/external-body"));
-            if (externalHeader) {
-              // Extract the original URI from: message/external-body; access-type=URL; URL="ipfs://..."
-              const urlMatch = externalHeader.value.match(/URL="([^"]+)"/);
-              const externalUri = urlMatch?.[1];
-              // Extract the actual MIME type from the content-type= parameter in the
-              // message/external-body header (router embeds it as a quoted parameter).
-              const ctParam = externalHeader.value.match(/content-type="([^"]+)"/);
-              if (ctParam?.[1]) contentTypeStr = ctParam[1];
-
-              if (externalUri) {
-                setFileTransportType(detectTransport(externalUri));
-                const gatewayUrl = resolveGatewayUrl(externalUri);
-                if (gatewayUrl) {
-                  // Fetch from gateway
-                  const gatewayResp = await globalThis.fetch(gatewayUrl);
-                  if (!gatewayResp.ok) throw new Error(`Gateway returned ${gatewayResp.status} for ${gatewayUrl}`);
-                  const buf = await gatewayResp.arrayBuffer();
-                  const bytes = new Uint8Array(buf);
-                  for (let i = 0; i < bytes.length; i++) result.push(bytes[i]);
-                  // Use gateway content-type as fallback if we didn't get one from the contract
-                  if (contentTypeStr === "text/plain") {
-                    const gwCt = gatewayResp.headers.get("content-type");
-                    if (gwCt) contentTypeStr = gwCt.split(";")[0].trim();
-                  }
+            if (externalUri) {
+              setFileTransportType(detectTransport(externalUri));
+              const gatewayUrl = resolveGatewayUrl(externalUri);
+              if (gatewayUrl) {
+                // Fetch from gateway
+                const gatewayResp = await globalThis.fetch(gatewayUrl);
+                if (!gatewayResp.ok) throw new Error(`Gateway returned ${gatewayResp.status} for ${gatewayUrl}`);
+                const buf = await gatewayResp.arrayBuffer();
+                const bytes = new Uint8Array(buf);
+                for (let i = 0; i < bytes.length; i++) result.push(bytes[i]);
+                // Use gateway content-type as fallback if we didn't get one from the contract
+                if (contentTypeStr === "text/plain") {
+                  const gwCt = gatewayResp.headers.get("content-type");
+                  if (gwCt) contentTypeStr = gwCt.split(";")[0].trim();
                 }
-                hasMoreChunks = false;
-                break;
               }
-            }
-
-            // On-chain body
-            const bodyHex = response[1] as `0x${string}`;
-            if (bodyHex && bodyHex !== "0x") {
-              const bodyBytes = ethers.getBytes(bodyHex);
-              for (let i = 0; i < bodyBytes.length; i++) {
-                result.push(bodyBytes[i]);
-              }
-            }
-            // Use first content-type header for on-chain responses
-            if (ctHeaders.length > 0) contentTypeStr = ctHeaders[0].value;
-
-            // Check for next chunk
-            const nextChunkHeader = outHeaders.find((h: any) => h.key.toLowerCase() === "web3-next-chunk");
-            if (nextChunkHeader) {
-              currentChunkHeader = nextChunkHeader.value;
-            } else {
               hasMoreChunks = false;
+              break;
             }
-          } else {
-            throw protocolErr; // Re-throw if fallback also fails
           }
+
+          // On-chain body
+          const bodyHex = response[1] as `0x${string}`;
+          if (bodyHex && bodyHex !== "0x") {
+            const bodyBytes = ethers.getBytes(bodyHex);
+            for (let i = 0; i < bodyBytes.length; i++) {
+              result.push(bodyBytes[i]);
+            }
+          }
+          // Use first content-type header for on-chain responses
+          if (ctHeaders.length > 0) contentTypeStr = ctHeaders[0].value;
+
+          // Check for next chunk
+          const nextChunkHeader = outHeaders.find((h: any) => h.key.toLowerCase() === "web3-next-chunk");
+          if (nextChunkHeader) {
+            currentChunkHeader = nextChunkHeader.value;
+          } else {
+            hasMoreChunks = false;
+          }
+        } else {
+          throw new Error(`Router returned HTTP ${response[0]}`);
         }
       }
 
@@ -806,14 +795,25 @@ export const FileBrowser = ({
   // Once we've ever been in editions mode, stay there — prevents the standard (show-all) query
   // from firing its cached result during the brief window when editionAddresses is transitioning
   // to a new address (e.g. wallet account switch causes a momentary empty array).
-  // BUT: if editionAddresses is empty (wallet disconnect, unresolved ENS), fall through to the
+  // BUT: if editionAddresses is empty (wallet disconnect, no default set), fall through to the
   // standard query rather than leaving both queries disabled — showing unfiltered data is better
   // than an indefinitely blank directory.
+  //
+  // `explicitEditions` overrides that fallthrough: when the user passed
+  // `?editions=…` but every token failed to resolve, we STAY in edition mode
+  // (against an empty address list → empty grid) rather than silently
+  // broadening the view to unscoped default content the URL never asked for.
+  // See Codex P2 on PR #9 and ADR-0031 (explicit param must not widen results).
   const lockedToEditions = useRef(false);
   if (hasEditions) lockedToEditions.current = true;
-  const useEditionsQuery = (hasEditions || lockedToEditions.current) && editionAddresses.length > 0;
+  const useEditionsQuery =
+    explicitEditions || ((hasEditions || lockedToEditions.current) && editionAddresses.length > 0);
 
-  const { data: standardItems, isLoading: isStandardLoading } = useScaffoldReadContract({
+  const {
+    data: standardItems,
+    isLoading: isStandardLoading,
+    refetch: refetchStandardItems,
+  } = useScaffoldReadContract({
     contractName: "EFSFileView",
     functionName: "getDirectoryPage",
     args: [
@@ -828,23 +828,63 @@ export const FileBrowser = ({
     },
   });
 
-  const { data: editionItemsRaw, isLoading: isEditionLoading } = useScaffoldReadContract({
-    contractName: "EFSFileView",
-    functionName: "getDirectoryPageBySchemaAndAddressList",
-    args: [
-      (currentAnchorUID ? currentAnchorUID : undefined) as `0x${string}` | undefined,
-      dataSchemaUID as `0x${string}`,
-      editionAddresses as string[],
-      0n,
-      pageSize,
-    ],
-    query: {
-      enabled: useEditionsQuery && editionAddresses.length > 0,
-    },
+  // Edition-scoped directory listing iterates the opaque cursor (ADR-0036) across
+  // pages. The contract's phase-0 folder scan can return zero items with a
+  // non-empty `nextCursor` when the 2048-entry per-call budget is burned on
+  // revoked / wrong-attester entries; without cursor replay the UI would show
+  // "Topic is empty" even when phase-1 has matches. `useEditionDirectoryPage`
+  // auto-advances on empty pages and exposes `loadMore` for user-triggered paging.
+  const {
+    items: editionItems,
+    isLoading: isEditionLoading,
+    hasMore: hasMoreEditions,
+    loadMore: loadMoreEditions,
+    refresh: refetchEditionItems,
+  } = useEditionDirectoryPage({
+    parentAnchor: (currentAnchorUID ?? undefined) as `0x${string}` | undefined,
+    dataSchemaUID: dataSchemaUID as `0x${string}` | undefined,
+    editionAddresses: editionAddresses as string[],
+    fileViewAddress: efsFileViewInfo?.address as `0x${string}` | undefined,
+    fileViewAbi: efsFileViewInfo?.abi as any,
+    pageSize,
+    enabled: useEditionsQuery && editionAddresses.length > 0,
   });
 
+  // Parent-driven refetch for out-of-component mutations (create file/folder).
+  // Skip the initial render — the queries fire on their own when deps settle.
+  // Subsequent bumps route to whichever query is currently live. We snapshot
+  // `useEditionsQuery` at call time so a mid-flight mode switch (e.g. wallet
+  // disconnect between the create and the refetch) still hits the right
+  // refetcher rather than racing the mode-flip.
+  const firstRefreshRun = useRef(true);
+  useEffect(() => {
+    if (firstRefreshRun.current) {
+      firstRefreshRun.current = false;
+      return;
+    }
+    if (directoryRefreshKey === 0) return;
+    if (useEditionsQuery) {
+      refetchEditionItems().catch(e => console.error("Directory refetch (editions) failed", e));
+    } else {
+      refetchStandardItems();
+    }
+    // refetch* identities are stable per query; useEditionsQuery is the
+    // dispatch key and changes rarely. Intentionally scoped to the bump.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [directoryRefreshKey]);
+
   const isLoading = useEditionsQuery ? isEditionLoading : isStandardLoading;
-  const rawItems = useEditionsQuery ? (editionItemsRaw ? (editionItemsRaw as any)[0] : undefined) : standardItems;
+  // When explicit-editions requested an empty list (all tokens unresolved), the
+  // edition hook is disabled and `editionItems` is undefined — without this
+  // coercion, the grid would render neither items nor the "Topic is empty"
+  // string (the empty-state check uses `items?.length === 0`, which is false
+  // for undefined). Coerce to a stable `[]` so the user sees an explicit
+  // empty result instead of a silently-blank pane. Memoized so downstream
+  // effects that depend on `rawItems` identity don't refire every render.
+  const rawItems = useMemo(() => {
+    if (useEditionsQuery) return editionAddresses.length === 0 ? [] : editionItems;
+    return standardItems;
+  }, [useEditionsQuery, editionAddresses.length, editionItems, standardItems]);
 
   // When a tag filter is active, resolve DATA UIDs for each file item.
   // DATA is standalone (refUID=0x0) and placed at anchors via TAGs, so we query
@@ -1052,6 +1092,244 @@ export const FileBrowser = ({
     fetchFileContent(nextItem);
   };
 
+  // Delete a file/folder by revoking the connected user's TAGs (ADR-0006 revised 2026-04-18,
+  // tag-only folder visibility).
+  // File: revoke TAG(target=DATA_UID, definition=fileAnchorUID) for every DATA the
+  //   user placed at this anchor. Removes the file from this edition's view; other
+  //   editions with their own placement TAGs are unaffected. DATA is permanent (ADR-0002).
+  // Folder: full subtree cascade. Walks the folder and every subfolder, revoking
+  //   (a) the user's visibility TAG on each folder (definition=dataSchemaUID, refUID=folder)
+  //   and (b) the user's file placement TAGs on every file child at any depth. Cascading
+  //   prevents orphaned file placements (files invisible in the folder listing but still
+  //   discoverable via "what files has this user placed?" queries).
+  const collectUserFilePlacementTags = async (fileAnchorUID: `0x${string}`): Promise<`0x${string}`[]> => {
+    if (!publicClient || !tagResolverAddress || !connectedAddress || !dataSchemaUID) return [];
+    const count = (await publicClient.readContract({
+      address: tagResolverAddress,
+      abi: TAG_RESOLVER_ABI,
+      functionName: "getActiveTargetsByAttesterAndSchemaCount",
+      args: [fileAnchorUID, connectedAddress as `0x${string}`, dataSchemaUID as `0x${string}`],
+    })) as bigint;
+    if (count === 0n) return [];
+    const dataUIDs = (await publicClient.readContract({
+      address: tagResolverAddress,
+      abi: TAG_RESOLVER_ABI,
+      functionName: "getActiveTargetsByAttesterAndSchema",
+      args: [fileAnchorUID, connectedAddress as `0x${string}`, dataSchemaUID as `0x${string}`, 0n, count],
+    })) as `0x${string}`[];
+    const tagUIDs: `0x${string}`[] = [];
+    for (const dataUID of dataUIDs) {
+      if (dataUID === zeroHash) continue;
+      const tagUID = (await publicClient.readContract({
+        address: tagResolverAddress,
+        abi: TAG_RESOLVER_ABI,
+        functionName: "getActiveTagUID",
+        args: [connectedAddress as `0x${string}`, dataUID, fileAnchorUID],
+      })) as `0x${string}`;
+      if (tagUID && tagUID !== zeroHash) tagUIDs.push(tagUID);
+    }
+    return tagUIDs;
+  };
+
+  const getTagSchemaUID = (): `0x${string}` =>
+    ethers.solidityPackedKeccak256(
+      ["string", "address", "bool"],
+      ["bytes32 definition, bool applies", tagResolverAddress, true],
+    ) as `0x${string}`;
+
+  // Recursively walks the subtree rooted at `rootFolderUID`, paginating getDirectoryPage (500/page).
+  // Returns every TAG UID the connected user would need to revoke to remove their visibility of the folder:
+  //   - file placements the user authored at any depth
+  //   - the visibility TAG the user authored on the root folder and every subfolder (if any)
+  // Skips `tagsRoot` and `sortsAnchorUID` (system anchors — never touch).
+  const scanSubtree = async (
+    rootFolderUID: `0x${string}`,
+  ): Promise<{ tagUIDs: `0x${string}`[]; folderCount: number; fileCount: number }> => {
+    if (!publicClient || !tagResolverAddress || !connectedAddress || !dataSchemaUID || !efsFileViewInfo) {
+      throw new Error("Not ready — reconnect wallet and try again.");
+    }
+    const me = connectedAddress as `0x${string}`;
+    const dataSchema = dataSchemaUID as `0x${string}`;
+    const propertySchema = (propertySchemaUID as `0x${string}` | undefined) ?? zeroHash;
+    const tagUIDs: `0x${string}`[] = [];
+    const visited = new Set<string>();
+    const queue: `0x${string}`[] = [rootFolderUID];
+    let folderCount = 0;
+    let fileCount = 0;
+
+    while (queue.length > 0) {
+      const folder = queue.shift() as `0x${string}`;
+      if (visited.has(folder.toLowerCase())) continue;
+      visited.add(folder.toLowerCase());
+      folderCount += 1;
+
+      // Folder's own visibility TAG (if the user authored one).
+      const visibilityTagUID = (await publicClient.readContract({
+        address: tagResolverAddress,
+        abi: TAG_RESOLVER_ABI,
+        functionName: "getActiveTagUID",
+        args: [me, folder, dataSchema],
+      })) as `0x${string}`;
+      if (visibilityTagUID && visibilityTagUID !== zeroHash) tagUIDs.push(visibilityTagUID);
+
+      // Walk direct children in 500-item pages.
+      let start = 0n;
+      const PAGE = 500n;
+      // Hard safety cap — 50 pages = 25K children per folder. If a folder is bigger than that
+      // we stop paginating (the user can delete remaining content by navigating in).
+      for (let page = 0; page < 50; page++) {
+        let children: any[] = [];
+        try {
+          children = (await publicClient.readContract({
+            address: efsFileViewInfo.address as `0x${string}`,
+            abi: efsFileViewInfo.abi,
+            functionName: "getDirectoryPage",
+            args: [folder, start, PAGE, dataSchema, propertySchema],
+          })) as any[];
+        } catch (e) {
+          console.warn("Subtree walk: getDirectoryPage failed at folder", folder, e);
+          break;
+        }
+        if (!children || children.length === 0) break;
+
+        for (const child of children) {
+          const childUID = child.uid as `0x${string}`;
+          if (!childUID || childUID === zeroHash) continue;
+          if (childUID === tagsRoot || childUID === sortsAnchorUID) continue;
+          const schema = (child.schema as string | undefined)?.toLowerCase();
+          if (schema === (dataSchema as string).toLowerCase()) {
+            // File anchor — collect placement TAGs under this file.
+            fileCount += 1;
+            const childTags = await collectUserFilePlacementTags(childUID);
+            tagUIDs.push(...childTags);
+          } else {
+            // Subfolder — queue for recursion.
+            queue.push(childUID);
+          }
+        }
+
+        if (BigInt(children.length) < PAGE) break;
+        start += PAGE;
+      }
+    }
+
+    return { tagUIDs, folderCount, fileCount };
+  };
+
+  const executeRevokes = async (
+    tagUIDs: `0x${string}`[],
+    ops: ReturnType<typeof useBackgroundOps.getState>,
+    opId: string,
+  ) => {
+    if (tagUIDs.length === 0 || !publicClient) return;
+    const tagSchemaUID = getTagSchemaUID();
+    const CHUNK_SIZE = 50;
+    const total = tagUIDs.length;
+    let done = 0;
+    for (let i = 0; i < total; i += CHUNK_SIZE) {
+      const chunk = tagUIDs.slice(i, i + CHUNK_SIZE);
+      ops.log(opId, `Revoking TAGs ${done + 1}–${done + chunk.length} of ${total}...`);
+      const txHash = await easWrite(
+        {
+          functionName: "multiRevoke",
+          args: [[{ schema: tagSchemaUID, data: chunk.map(uid => ({ uid, value: 0n })) }]],
+        },
+        { silent: true },
+      );
+      if (txHash) await publicClient.waitForTransactionReceipt({ hash: txHash });
+      done += chunk.length;
+    }
+  };
+
+  const handleDelete = async (item: any, isItemFile: boolean) => {
+    if (!publicClient || !tagResolverAddress || !connectedAddress || !dataSchemaUID) {
+      notification.error("Not ready — reconnect wallet and try again.");
+      return;
+    }
+    if (!isItemFile) {
+      // Folder → open confirm dialog and scan.
+      setDeleteConfirm({ item, status: "scanning", tagUIDs: [], folderCount: 0, fileCount: 0 });
+      try {
+        const scan = await scanSubtree(item.uid as `0x${string}`);
+        setDeleteConfirm(prev =>
+          prev && prev.item.uid === item.uid
+            ? {
+                ...prev,
+                status: "ready",
+                tagUIDs: scan.tagUIDs,
+                folderCount: scan.folderCount,
+                fileCount: scan.fileCount,
+              }
+            : prev,
+        );
+      } catch (e: any) {
+        console.error("Subtree scan failed:", e);
+        setDeleteConfirm(prev =>
+          prev && prev.item.uid === item.uid
+            ? { ...prev, status: "ready", error: e?.shortMessage ?? e?.message ?? "Scan failed." }
+            : prev,
+        );
+      }
+      return;
+    }
+
+    // File → immediate single-click delete, no confirm.
+    const ops = useBackgroundOps.getState();
+    const label = item.name || "item";
+    const opId = ops.start(`Delete: ${label}`);
+    try {
+      ops.log(opId, "Locating placement TAG...");
+      const placementTags = await collectUserFilePlacementTags(item.uid as `0x${string}`);
+      if (placementTags.length === 0) {
+        throw new Error("You have no active placement on this file — nothing to delete.");
+      }
+      await executeRevokes(placementTags, ops, opId);
+      ops.complete(opId, `Deleted ${label}.`);
+      if (selectedFile?.uid === item.uid) closePreview();
+      if (useEditionsQuery) {
+        await refetchEditionItems();
+      } else {
+        await refetchStandardItems();
+      }
+    } catch (e: any) {
+      console.error("Delete failed:", e);
+      const msg = e?.shortMessage ?? e?.message ?? "Delete failed.";
+      notification.error(msg);
+      ops.fail(opId, msg);
+    }
+  };
+
+  const confirmFolderDelete = async () => {
+    if (!deleteConfirm || deleteConfirm.status !== "ready") return;
+    const { item, tagUIDs } = deleteConfirm;
+    const label = item.name || "folder";
+    if (tagUIDs.length === 0) {
+      notification.info(`Nothing of yours to delete in "${label}". Anchors are permanent.`);
+      setDeleteConfirm(null);
+      return;
+    }
+    setDeleteConfirm({ ...deleteConfirm, status: "revoking" });
+    const ops = useBackgroundOps.getState();
+    const opId = ops.start(`Delete folder: ${label}`);
+    try {
+      await executeRevokes(tagUIDs, ops, opId);
+      ops.complete(opId, `Deleted ${label} — revoked ${tagUIDs.length} TAG${tagUIDs.length === 1 ? "" : "s"}.`);
+      if (selectedFile?.uid === item.uid) closePreview();
+      if (useEditionsQuery) {
+        await refetchEditionItems();
+      } else {
+        await refetchStandardItems();
+      }
+      setDeleteConfirm(null);
+    } catch (e: any) {
+      console.error("Folder delete failed:", e);
+      const msg = e?.shortMessage ?? e?.message ?? "Delete failed.";
+      notification.error(msg);
+      ops.fail(opId, msg);
+      setDeleteConfirm(prev => (prev ? { ...prev, status: "ready", error: msg } : prev));
+    }
+  };
+
   // Update the keyboard handler ref each render with fresh closure
   keyHandlerRef.current = (e: KeyboardEvent) => {
     if (!selectedFile) return;
@@ -1094,7 +1372,7 @@ export const FileBrowser = ({
             </span>
           </div>
         )}
-        <div className="grid grid-cols-4 gap-4 p-4">
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-4 p-4">
           {(sortedItems ?? items)
             ?.filter(
               (item: any) =>
@@ -1152,6 +1430,16 @@ export const FileBrowser = ({
                     >
                       <InformationCircleIcon className="w-3.5 h-3.5 text-base-content/50 hover:text-primary" />
                     </button>
+                    <button
+                      className="p-0.5 rounded bg-base-300/80 hover:bg-base-300 transition-colors"
+                      onClick={e => {
+                        e.stopPropagation();
+                        handleDelete(item, isItemFile);
+                      }}
+                      title={isItemFile ? "Delete file" : "Delete folder"}
+                    >
+                      <TrashIcon className="w-3.5 h-3.5 text-base-content/50 hover:text-error" />
+                    </button>
                   </div>
 
                   <div className="card-body items-center text-center p-4 pt-6 cursor-pointer">
@@ -1164,14 +1452,20 @@ export const FileBrowser = ({
                     </div>
                     <h2 className="card-title text-sm break-all text-center leading-tight">{item.name || "Unnamed"}</h2>
                     <div className="text-xs text-base-content/40">
-                      {isItemTopic ? (item.childCount > 0 ? `${item.childCount} items` : "Empty") : "File"}
+                      {isItemTopic
+                        ? useEditionsQuery
+                          ? "Folder"
+                          : item.childCount > 0
+                            ? `${item.childCount} items`
+                            : "Empty"
+                        : "File"}
                     </div>
                   </div>
                 </div>
               );
             })}
           {(sortedItems ?? items)?.length === 0 && (
-            <div className="col-span-4 text-center text-gray-500">
+            <div className="col-span-full text-center text-gray-500">
               {tagFilteredUIDs !== null
                 ? `No items match tag filter: "${tagFilter}"`
                 : tagExcludedUIDs.size > 0
@@ -1180,26 +1474,39 @@ export const FileBrowser = ({
             </div>
           )}
         </div>
-        {/* Load more: kernel items when page is full, or sorted pages when more exist */}
-        {items && items.length > 0 && items.length >= Number(pageSize) && (
-          <div className="flex justify-center py-4">
-            <button
-              className="btn btn-sm btn-outline"
-              onClick={() => {
-                setPageSize(prev => prev + 50n);
-                if (hasSortMore) loadMoreSorted();
-              }}
-            >
-              Load more
-            </button>
-          </div>
-        )}
+        {/* Load more: edition-scoped mode keys on the opaque cursor (ADR-0036);
+            standard mode keys on the kernel page heuristic + sort overlay. */}
+        {(() => {
+          const showLoadMore = useEditionsQuery
+            ? hasMoreEditions
+            : items && items.length > 0 && items.length >= Number(pageSize);
+          if (!showLoadMore) return null;
+          return (
+            <div className="flex justify-center py-4">
+              <button
+                className="btn btn-sm btn-outline"
+                onClick={() => {
+                  if (useEditionsQuery) {
+                    // Iterate the opaque cursor via the hook; `pageSize` is the
+                    // per-fetch target, not a cumulative cap.
+                    loadMoreEditions();
+                  } else {
+                    setPageSize(prev => prev + 50n);
+                    if (hasSortMore) loadMoreSorted();
+                  }
+                }}
+              >
+                Load more
+              </button>
+            </div>
+          );
+        })()}
       </div>
       {/* end scrollable grid wrapper */}
 
       {/* File Preview Side Pane */}
       {selectedFile && !previewFullscreen && (
-        <div className="w-[400px] flex-shrink-0 border-l border-base-300 bg-base-100 flex flex-col overflow-hidden">
+        <div className="preview-pane absolute inset-0 z-10 max-lg:bg-base-200 lg:static lg:w-[400px] lg:flex-shrink-0 border-l border-base-300 flex flex-col overflow-hidden">
           <div className="flex items-center justify-between px-4 py-3 border-b border-base-300 shrink-0">
             <div className="flex items-center gap-2 min-w-0">
               {fileItems.length > 1 && (
@@ -1263,7 +1570,7 @@ export const FileBrowser = ({
                 <img
                   src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(fileContent)}`}
                   alt={selectedFile.name}
-                  className="max-w-full h-auto rounded cursor-pointer"
+                  className="max-w-full max-h-full w-auto h-auto object-contain rounded cursor-pointer mx-auto"
                   onClick={() => setPreviewFullscreen(true)}
                 />
               ) : fileContentType?.startsWith("image/") ? (
@@ -1271,7 +1578,7 @@ export const FileBrowser = ({
                 <img
                   src={fileContent.startsWith("blob:") ? fileContent : `data:${fileContentType};base64,${fileContent}`}
                   alt={selectedFile.name}
-                  className="max-w-full h-auto rounded cursor-pointer"
+                  className="max-w-full max-h-full w-auto h-auto object-contain rounded cursor-pointer mx-auto"
                   onClick={() => setPreviewFullscreen(true)}
                 />
               ) : fileContentType === "application/pdf" ? (
@@ -1280,7 +1587,6 @@ export const FileBrowser = ({
                   title={selectedFile.name}
                   className="w-full rounded cursor-pointer"
                   style={{ height: "60vh" }}
-                  sandbox="allow-same-origin"
                   onClick={() => setPreviewFullscreen(true)}
                 />
               ) : fileContentType?.startsWith("video/") ? (
@@ -1398,7 +1704,6 @@ export const FileBrowser = ({
                     title={selectedFile.name}
                     className="rounded"
                     style={{ width: "90vw", height: "85vh" }}
-                    sandbox="allow-same-origin"
                   />
                 ) : fileContentType?.startsWith("video/") ? (
                   <video src={fileContent} controls className="max-w-[90vw] max-h-[85vh] object-contain" />
@@ -1476,6 +1781,84 @@ export const FileBrowser = ({
           }}
           onTagChange={() => setTagFilterVersion(v => v + 1)}
         />
+      )}
+      {/* Folder delete confirmation */}
+      {deleteConfirm && (
+        <div className="fixed inset-0 z-50 bg-black bg-opacity-50 flex items-center justify-center p-4">
+          <div className="bg-base-100 rounded-lg shadow-xl max-w-md w-full p-6">
+            <h3 className="font-bold text-lg">Delete folder?</h3>
+            <p className="mt-2 text-sm text-base-content/70 break-all">
+              <span className="font-mono">{deleteConfirm.item.name || "folder"}</span>
+            </p>
+
+            {deleteConfirm.status === "scanning" && (
+              <div className="mt-4 flex items-center gap-3 text-sm">
+                <span className="loading loading-spinner loading-sm" />
+                <span>Scanning subtree for your content…</span>
+              </div>
+            )}
+
+            {deleteConfirm.status !== "scanning" && (
+              <div className="mt-4 space-y-2 text-sm">
+                {deleteConfirm.error && <div className="text-error">{deleteConfirm.error}</div>}
+                {deleteConfirm.tagUIDs.length === 0 ? (
+                  <div className="text-base-content/70">
+                    Nothing of yours to delete here. Anchors are permanent, and this folder contains no files or
+                    visibility TAGs you authored.
+                  </div>
+                ) : (
+                  <>
+                    <div>
+                      This will revoke{" "}
+                      <span className="font-semibold text-error">
+                        {deleteConfirm.tagUIDs.length} TAG{deleteConfirm.tagUIDs.length === 1 ? "" : "s"}
+                      </span>{" "}
+                      you authored across{" "}
+                      <span className="font-semibold">
+                        {deleteConfirm.folderCount} folder{deleteConfirm.folderCount === 1 ? "" : "s"}
+                      </span>{" "}
+                      and{" "}
+                      <span className="font-semibold">
+                        {deleteConfirm.fileCount} file{deleteConfirm.fileCount === 1 ? "" : "s"}
+                      </span>
+                      .
+                    </div>
+                    <div className="text-xs text-base-content/60">
+                      Batched in chunks of 50 per transaction — expect {Math.ceil(deleteConfirm.tagUIDs.length / 50)}{" "}
+                      wallet prompt
+                      {Math.ceil(deleteConfirm.tagUIDs.length / 50) === 1 ? "" : "s"}. Anchors themselves are permanent
+                      and cannot be deleted.
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
+            <div className="mt-6 flex justify-end gap-2">
+              <button
+                className="btn btn-ghost btn-sm"
+                onClick={() => setDeleteConfirm(null)}
+                disabled={deleteConfirm.status === "revoking"}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn btn-error btn-sm"
+                onClick={confirmFolderDelete}
+                disabled={deleteConfirm.status !== "ready" || deleteConfirm.tagUIDs.length === 0}
+              >
+                {deleteConfirm.status === "revoking" ? (
+                  <>
+                    <span className="loading loading-spinner loading-xs" />
+                    Deleting…
+                  </>
+                ) : (
+                  "Delete"
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

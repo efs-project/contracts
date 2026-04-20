@@ -7,7 +7,7 @@ import { GenericContractsDeclaration } from "~~/utils/scaffold-eth/contract";
 const deployedContracts = {
   31337: {
     EFSFileView: {
-      address: "0xEa0B6907ef230Ed392C5bEE9Bb67e733259AF204",
+      address: "0x29e8a042ea34B7EE720C12b52720027b5E9049C6",
       abi: [
         {
           inputs: [
@@ -342,13 +342,13 @@ const deployedContracts = {
               type: "address[]",
             },
             {
-              internalType: "uint256",
-              name: "startingCursor",
-              type: "uint256",
+              internalType: "bytes",
+              name: "cursor",
+              type: "bytes",
             },
             {
               internalType: "uint256",
-              name: "pageSize",
+              name: "maxItems",
               type: "uint256",
             },
           ],
@@ -357,69 +357,76 @@ const deployedContracts = {
             {
               components: [
                 {
-                  internalType: "bytes32",
-                  name: "uid",
-                  type: "bytes32",
+                  components: [
+                    {
+                      internalType: "bytes32",
+                      name: "uid",
+                      type: "bytes32",
+                    },
+                    {
+                      internalType: "string",
+                      name: "name",
+                      type: "string",
+                    },
+                    {
+                      internalType: "bytes32",
+                      name: "parentUID",
+                      type: "bytes32",
+                    },
+                    {
+                      internalType: "bool",
+                      name: "isFolder",
+                      type: "bool",
+                    },
+                    {
+                      internalType: "bool",
+                      name: "hasData",
+                      type: "bool",
+                    },
+                    {
+                      internalType: "uint256",
+                      name: "childCount",
+                      type: "uint256",
+                    },
+                    {
+                      internalType: "uint256",
+                      name: "propertyCount",
+                      type: "uint256",
+                    },
+                    {
+                      internalType: "uint64",
+                      name: "timestamp",
+                      type: "uint64",
+                    },
+                    {
+                      internalType: "address",
+                      name: "attester",
+                      type: "address",
+                    },
+                    {
+                      internalType: "bytes32",
+                      name: "schema",
+                      type: "bytes32",
+                    },
+                    {
+                      internalType: "bytes32",
+                      name: "contentHash",
+                      type: "bytes32",
+                    },
+                  ],
+                  internalType: "struct EFSFileView.FileSystemItem[]",
+                  name: "items",
+                  type: "tuple[]",
                 },
                 {
-                  internalType: "string",
-                  name: "name",
-                  type: "string",
-                },
-                {
-                  internalType: "bytes32",
-                  name: "parentUID",
-                  type: "bytes32",
-                },
-                {
-                  internalType: "bool",
-                  name: "isFolder",
-                  type: "bool",
-                },
-                {
-                  internalType: "bool",
-                  name: "hasData",
-                  type: "bool",
-                },
-                {
-                  internalType: "uint256",
-                  name: "childCount",
-                  type: "uint256",
-                },
-                {
-                  internalType: "uint256",
-                  name: "propertyCount",
-                  type: "uint256",
-                },
-                {
-                  internalType: "uint64",
-                  name: "timestamp",
-                  type: "uint64",
-                },
-                {
-                  internalType: "address",
-                  name: "attester",
-                  type: "address",
-                },
-                {
-                  internalType: "bytes32",
-                  name: "schema",
-                  type: "bytes32",
-                },
-                {
-                  internalType: "bytes32",
-                  name: "contentHash",
-                  type: "bytes32",
+                  internalType: "bytes",
+                  name: "nextCursor",
+                  type: "bytes",
                 },
               ],
-              internalType: "struct EFSFileView.FileSystemItem[]",
-              name: "items",
-              type: "tuple[]",
-            },
-            {
-              internalType: "uint256",
-              name: "nextCursor",
-              type: "uint256",
+              internalType: "struct EFSFileView.DirectoryPage",
+              name: "page",
+              type: "tuple",
             },
           ],
           stateMutability: "view",
@@ -443,13 +450,13 @@ const deployedContracts = {
               type: "bytes32",
             },
             {
-              internalType: "uint256",
-              name: "start",
-              type: "uint256",
+              internalType: "bytes",
+              name: "cursor",
+              type: "bytes",
             },
             {
               internalType: "uint256",
-              name: "length",
+              name: "maxItems",
               type: "uint256",
             },
           ],
@@ -458,64 +465,76 @@ const deployedContracts = {
             {
               components: [
                 {
-                  internalType: "bytes32",
-                  name: "uid",
-                  type: "bytes32",
+                  components: [
+                    {
+                      internalType: "bytes32",
+                      name: "uid",
+                      type: "bytes32",
+                    },
+                    {
+                      internalType: "string",
+                      name: "name",
+                      type: "string",
+                    },
+                    {
+                      internalType: "bytes32",
+                      name: "parentUID",
+                      type: "bytes32",
+                    },
+                    {
+                      internalType: "bool",
+                      name: "isFolder",
+                      type: "bool",
+                    },
+                    {
+                      internalType: "bool",
+                      name: "hasData",
+                      type: "bool",
+                    },
+                    {
+                      internalType: "uint256",
+                      name: "childCount",
+                      type: "uint256",
+                    },
+                    {
+                      internalType: "uint256",
+                      name: "propertyCount",
+                      type: "uint256",
+                    },
+                    {
+                      internalType: "uint64",
+                      name: "timestamp",
+                      type: "uint64",
+                    },
+                    {
+                      internalType: "address",
+                      name: "attester",
+                      type: "address",
+                    },
+                    {
+                      internalType: "bytes32",
+                      name: "schema",
+                      type: "bytes32",
+                    },
+                    {
+                      internalType: "bytes32",
+                      name: "contentHash",
+                      type: "bytes32",
+                    },
+                  ],
+                  internalType: "struct EFSFileView.FileSystemItem[]",
+                  name: "items",
+                  type: "tuple[]",
                 },
                 {
-                  internalType: "string",
-                  name: "name",
-                  type: "string",
-                },
-                {
-                  internalType: "bytes32",
-                  name: "parentUID",
-                  type: "bytes32",
-                },
-                {
-                  internalType: "bool",
-                  name: "isFolder",
-                  type: "bool",
-                },
-                {
-                  internalType: "bool",
-                  name: "hasData",
-                  type: "bool",
-                },
-                {
-                  internalType: "uint256",
-                  name: "childCount",
-                  type: "uint256",
-                },
-                {
-                  internalType: "uint256",
-                  name: "propertyCount",
-                  type: "uint256",
-                },
-                {
-                  internalType: "uint64",
-                  name: "timestamp",
-                  type: "uint64",
-                },
-                {
-                  internalType: "address",
-                  name: "attester",
-                  type: "address",
-                },
-                {
-                  internalType: "bytes32",
-                  name: "schema",
-                  type: "bytes32",
-                },
-                {
-                  internalType: "bytes32",
-                  name: "contentHash",
-                  type: "bytes32",
+                  internalType: "bytes",
+                  name: "nextCursor",
+                  type: "bytes",
                 },
               ],
-              internalType: "struct EFSFileView.FileSystemItem[]",
-              name: "items",
-              type: "tuple[]",
+              internalType: "struct EFSFileView.DirectoryPage",
+              name: "page",
+              type: "tuple",
             },
           ],
           stateMutability: "view",
@@ -551,7 +570,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     EFSRouter: {
-      address: "0x712e6074297917e8570f8Bf5F9744632Ec4318DD",
+      address: "0xa498a50aADa7790F5d3EFD594365E797c947eece",
       abi: [
         {
           inputs: [
@@ -571,6 +590,11 @@ const deployedContracts = {
               type: "address",
             },
             {
+              internalType: "address",
+              name: "_schemaRegistry",
+              type: "address",
+            },
+            {
               internalType: "bytes32",
               name: "_dataSchemaUID",
               type: "bytes32",
@@ -578,6 +602,30 @@ const deployedContracts = {
           ],
           stateMutability: "nonpayable",
           type: "constructor",
+        },
+        {
+          inputs: [
+            {
+              internalType: "string",
+              name: "segment",
+              type: "string",
+            },
+          ],
+          name: "classifyTopLevel",
+          outputs: [
+            {
+              internalType: "uint8",
+              name: "flavor",
+              type: "uint8",
+            },
+            {
+              internalType: "bytes32",
+              name: "uid",
+              type: "bytes32",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
         },
         {
           inputs: [],
@@ -691,6 +739,19 @@ const deployedContracts = {
         },
         {
           inputs: [],
+          name: "schemaRegistry",
+          outputs: [
+            {
+              internalType: "contract ISchemaRegistry",
+              name: "",
+              type: "address",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [],
           name: "tagResolver",
           outputs: [
             {
@@ -706,7 +767,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     EFSSortOverlay: {
-      address: "0xe47245ED46985a2B0E60B24b9b5d699d9A7c3452",
+      address: "0x04fD5Ee60B015B6EfD21a54D1E662D68868683c5",
       abi: [
         {
           inputs: [
@@ -1685,7 +1746,7 @@ const deployedContracts = {
       },
     },
     Indexer: {
-      address: "0xB123539Caf9B686A2E1D2960aD1C5F8F81d9f369",
+      address: "0x85554083b691219C1F2556bA52D4fDEe5d76a01f",
       abi: [
         {
           inputs: [
@@ -1741,6 +1802,11 @@ const deployedContracts = {
         {
           inputs: [],
           name: "InsufficientValue",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "InvalidAnchorName",
           type: "error",
         },
         {
@@ -1906,12 +1972,6 @@ const deployedContracts = {
         {
           anonymous: false,
           inputs: [
-            {
-              indexed: true,
-              internalType: "bytes32",
-              name: "anchorUID",
-              type: "bytes32",
-            },
             {
               indexed: true,
               internalType: "bytes32",
@@ -2127,6 +2187,24 @@ const deployedContracts = {
             },
           ],
           stateMutability: "payable",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "anchorUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+          ],
+          name: "clearContains",
+          outputs: [],
+          stateMutability: "nonpayable",
           type: "function",
         },
         {
@@ -3793,7 +3871,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     MirrorResolver: {
-      address: "0x834014652E8CF137e3702B62fBb01D55BB392006",
+      address: "0x19C7dAeb1828942DeBf60FB78FF70292300E7800",
       abi: [
         {
           inputs: [
@@ -3843,8 +3921,31 @@ const deployedContracts = {
         },
         {
           inputs: [],
+          name: "InvalidURIScheme",
+          type: "error",
+        },
+        {
+          inputs: [],
           name: "NotPayable",
           type: "error",
+        },
+        {
+          inputs: [],
+          name: "URITooLong",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "MAX_URI_LENGTH",
+          outputs: [
+            {
+              internalType: "uint256",
+              name: "",
+              type: "uint256",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
         },
         {
           inputs: [
@@ -4167,6 +4268,32 @@ const deployedContracts = {
           type: "function",
         },
         {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "uid",
+              type: "bytes32",
+            },
+          ],
+          name: "setTransportsAnchor",
+          outputs: [],
+          stateMutability: "nonpayable",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "transportsAnchorUID",
+          outputs: [
+            {
+              internalType: "bytes32",
+              name: "",
+              type: "bytes32",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
           inputs: [],
           name: "version",
           outputs: [
@@ -4200,7 +4327,7 @@ const deployedContracts = {
       },
     },
     NameSort: {
-      address: "0x33658305185fD06148F36346A70aDAc0728D5760",
+      address: "0x6e2D4b9fABb3A1Cbec42bb38c51Ff421D4dD4b5A",
       abi: [
         {
           inputs: [
@@ -4286,7 +4413,7 @@ const deployedContracts = {
       },
     },
     SchemaNameIndex: {
-      address: "0x663E3D9828557530873A1b2f727c6A0CFA1F62F4",
+      address: "0x2a88C3373cD7D7CAc90420515614d5C43777A00c",
       abi: [
         {
           inputs: [
@@ -4391,7 +4518,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     TagResolver: {
-      address: "0x12b3898249687816ff5faABBA3cA844F3f9f138C",
+      address: "0xC64700624b2129C81288e7Bd4d5Ec9DD006eb2D0",
       abi: [
         {
           inputs: [
@@ -4810,6 +4937,35 @@ const deployedContracts = {
         {
           inputs: [
             {
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+            {
+              internalType: "bytes32",
+              name: "targetID",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "definition",
+              type: "bytes32",
+            },
+          ],
+          name: "isActivelyApplied",
+          outputs: [
+            {
+              internalType: "bool",
+              name: "",
+              type: "bool",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
               internalType: "bytes32",
               name: "targetID",
               type: "bytes32",
@@ -5143,7 +5299,7 @@ const deployedContracts = {
       },
     },
     TimestampSort: {
-      address: "0x40CEAaCffDf75ef85dF680DCc1734B39A20400dD",
+      address: "0x9B12dD81a01DCA303722286DE8DC659C38B95486",
       abi: [
         {
           inputs: [

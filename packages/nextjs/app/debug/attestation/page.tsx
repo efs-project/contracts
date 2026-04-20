@@ -8,7 +8,10 @@ import { Address } from "~~/components/scaffold-eth";
 import { useSchemaRegistry } from "~~/hooks/efs/useSchemaRegistry";
 import { useScaffoldReadContract } from "~~/hooks/scaffold-eth";
 
-// Minimal EAS ABI for getAttestation
+// Minimal EAS ABI for getAttestation. Tuple order matches EAS's on-chain
+// `Attestation` struct in `Common.sol` exactly: uid, schema, time,
+// expirationTime, revocationTime, refUID, recipient, attester, revocable,
+// data. Reordering breaks viem decoding (recipient gets decoded as bool).
 const EAS_ABI = [
   {
     inputs: [{ name: "uid", type: "bytes32" }],
@@ -18,13 +21,13 @@ const EAS_ABI = [
         components: [
           { name: "uid", type: "bytes32" },
           { name: "schema", type: "bytes32" },
-          { name: "refUID", type: "bytes32" },
           { name: "time", type: "uint64" },
           { name: "expirationTime", type: "uint64" },
           { name: "revocationTime", type: "uint64" },
-          { name: "revocable", type: "bool" },
+          { name: "refUID", type: "bytes32" },
           { name: "recipient", type: "address" },
           { name: "attester", type: "address" },
+          { name: "revocable", type: "bool" },
           { name: "data", type: "bytes" },
         ],
         name: "",

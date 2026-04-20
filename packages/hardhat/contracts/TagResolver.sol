@@ -233,10 +233,24 @@ contract TagResolver is SchemaResolver {
     // READ FUNCTIONS
     // ============================================================================================
 
-    /// @notice Get the active tag attestation UID for a specific (attester, target, definition) triple
+    /// @notice Get the active tag attestation UID for a specific (attester, target, definition) triple.
+    ///         NOTE: `onAttest` writes `_activeTag` unconditionally, so the returned UID may be a
+    ///         superseding applies=false TAG that logically "negates" an earlier applies=true one.
+    ///         Callers that need "is this (attester, target, definition) currently *applied*?" must
+    ///         use `isActivelyApplied` — a nonzero UID here is NOT equivalent to an active placement.
     function getActiveTagUID(address attester, bytes32 targetID, bytes32 definition) external view returns (bytes32) {
         bytes32 compositeHash = keccak256(abi.encodePacked(attester, targetID, definition));
         return _activeTag[compositeHash];
+    }
+
+    /// @notice Returns true iff `attester` currently has an active applies=true TAG on
+    ///         (targetID, definition) — i.e. the binding hasn't been revoked or superseded by an
+    ///         applies=false TAG. Prefer this over `getActiveTagUID != 0` for visibility / dedup
+    ///         checks, since `_activeTag` is written for both applies=true and applies=false and a
+    ///         nonzero UID does not mean the placement is in force.
+    function isActivelyApplied(address attester, bytes32 targetID, bytes32 definition) external view returns (bool) {
+        bytes32 compositeHash = keccak256(abi.encodePacked(attester, targetID, definition));
+        return _isApplied[compositeHash];
     }
 
     /// @notice Returns true if any attester currently has an active applies=true tag on this

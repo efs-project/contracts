@@ -1,8 +1,8 @@
 # ADR-0005: ContentType moved from DATA to PROPERTY
 
-**Status:** Accepted
+**Status:** Superseded by ADR-0035
 **Date:** 2026-04-16 (formalized retroactively)
-**Related:** ADR-0001, ADR-0014
+**Related:** ADR-0001, ADR-0014, ADR-0035 (unified free-floating PROPERTY model)
 
 ## Context
 

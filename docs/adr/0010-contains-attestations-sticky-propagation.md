@@ -1,8 +1,23 @@
 # ADR-0010: `_containsAttestations` propagation is one-way (sticky)
 
-**Status:** Accepted
+**Status:** Accepted (scope narrowed 2026-04-18; see clarification below)
 **Date:** 2026-04-16 (formalized retroactively, with partial de-propagation added in PR #8)
-**Related:** ADR-0008, ADR-0009
+**Related:** ADR-0006 (revised 2026-04-18), ADR-0008 (superseded in place), ADR-0009
+
+> **Clarification 2026-04-18.** `_containsAttestations` remains in force but its
+> scope is narrower than the original ADR implied. After the tag-only
+> folder-visibility refactor (ADR-0006 revised), this index is **no longer a
+> source of folder visibility** in edition-scoped directory listings. It is used
+> only to filter file-anchor children in `getChildrenByAddressList` /
+> `getAnchorsBySchemaAndAddressList` / `containsSchemaAttestations`. Folder
+> visibility in edition listings comes exclusively from an active applies=true
+> `TAG(definition=dataSchemaUID, refUID=folder)` by an edition attester.
+>
+> The sticky-on-revoke property described below still holds — it's just no
+> longer user-visible in the "does this folder appear" sense (that's per-TAG
+> now, and TAGs are revocable).
+>
+> Permission for in-place edit: confirmed by project owner 2026-04-18.
 
 ## Context
 

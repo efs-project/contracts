@@ -44,7 +44,7 @@ Reads are edition-scoped beyond just TAG resolution: mirrors and PROPERTYs on a 
 | DATA | no | Content identity (`contentHash`, `size`). Standalone (`refUID = 0x0`). |
 | MIRROR | yes | Retrieval URI for a DATA. Multiple allowed per DATA. |
 | TAG | yes | Places a DATA at a path. Singleton per `(attester, target, definition)` — a new TAG on the same triple supersedes the old. |
-| PROPERTY | yes | Key/value metadata on a DATA or Anchor (e.g. `contentType = "image/png"`). |
+| PROPERTY | no | Free-floating string value, placed on a container via TAG under a PROPERTY-typed "key" anchor (ADR-0035). Symmetric with DATA. Reserved key anchor names: `contentType` (ADR-0005/ADR-0035), `name` (ADR-0034). |
 | SORT_INFO | yes | Declares a sort scheme for a folder (sort function + target schema). |
 
 Full field definitions and resolver wiring: `02-Data-Models-and-Schemas.md`.
@@ -53,7 +53,7 @@ Full field definitions and resolver wiring: `02-Data-Models-and-Schemas.md`.
 
 | Contract | Role | State | Redeployable |
 |---|---|---|---|
-| EFSIndexer | Append-only kernel. All indices, path resolution, revocation tracking, qualifying-folder index. | Yes (heavy) | No — schema UIDs encode its address |
+| EFSIndexer | Append-only kernel. All indices, path resolution, revocation tracking. | Yes (heavy) | No — schema UIDs encode its address |
 | EFSRouter | `web3://` URI resolution (ERC-5219). Edition-scoped content serving. | No | Yes — but URIs change |
 | EFSFileView | Directory listing views over EFSIndexer. | No | Yes — fully stateless |
 | TagResolver | TAG schema hook. Singleton placement via `_activeByAAS` swap-and-pop index. | Yes | No — wired into EFSIndexer |
@@ -69,22 +69,25 @@ For a new file:
 1. **Chunk the bytes.** SSTORE2 — content split into ~24KB chunks, each deployed as a raw-bytecode contract. A chunk-manager contract is deployed that knows how to reassemble them.
 2. **Attest the DATA** (`contentHash`, `size`). If the hash already exists in `dataByContentKey`, reuse the canonical DATA — skip this step.
 3. **Attest a MIRROR** pointing `web3://<chunkManager>:<chainId>` at the DATA. Additional MIRRORs (ipfs://, ar://, etc.) may be added for redundancy.
-4. **Attest a PROPERTY** with `key="contentType"` on the DATA (e.g. `"image/png"`).
+4. **Attest contentType** — three attestations batched (ADR-0035): `Anchor<PROPERTY>(refUID=DATA, name="contentType")` (skipped if already exists), a free-floating `PROPERTY(value="image/png")`, and a `TAG(definition=that anchor, refUID=that property)`.
 5. **Attest an ANCHOR** for the filename under the target folder (if the name slot doesn't already exist).
 6. **Attest a TAG** linking the DATA to the file Anchor under the uploader's address.
+7. **Ancestor-walk visibility TAGs** (ADR-0006 revised) — for every generic folder on the path from the immediate parent up to root exclusive, if the uploader has no active applies=true `TAG(definition=dataSchemaUID, refUID=folder)` yet, emit one. Ensures the uploader's edition listing shows the folders that contain their content. Steady-state zero cost (walk exits once an existing TAG is found); pays 1 TAG per untagged ancestor on the first upload into a new subtree.
 
-Typical new upload: ~8 transactions. Gas-heavy by design — this is archival, not a commodity file service.
+Typical new upload: ~10 transactions. Gas-heavy by design — this is archival, not a commodity file service.
 
 ## Read flow (what `web3://<router>/path/file.png` does)
 
 1. Router parses the URL: path segments + `?editions=`, `?caller=`.
-2. Walks path segments from root using `EFSIndexer.resolvePath`, reaching the leaf Anchor.
-3. For each edition attester in order, queries `TagResolver` for active TAGs at that Anchor → DATA. First attester with a match wins. Returns the DATA UID plus that attester's address.
-4. Finds the best MIRROR for the DATA **from the same attester**, by transport priority: `web3:// > ar:// > ipfs:// > magnet: > https://`. Skips revoked mirrors and invalid URIs. Capped at 500 mirror scans per request.
-5. Finds the `contentType` PROPERTY **from the same attester** on the DATA. Falls back to `application/octet-stream`.
-6. Serves:
+2. **Top-level segment is classified** into one of four container flavors (ADR-0033): Ethereum address, EAS schema UID, EAS attestation UID, or anchor name. Address seeds `currentParent` with `bytes32(uint160(addr))`; anchor names seed `rootAnchorUID`. For schema and attestation UIDs, the router first checks for an **alias anchor** — a root-child anchor whose name is the UID in lowercase 0x-hex — and seeds `currentParent` with the alias if present; otherwise it seeds the raw UID. Alias anchors let schemas and attestations carry EFS-native metadata (human label PROPERTY, sub-anchors, TAGs) without conflating with the raw EAS record. When the container is an address and `?editions=` wasn't given, the router defaults editions to `[caller, segmentAddr]`.
+3. Walks the remaining path segments using `EFSIndexer.resolvePath` — every flavor reduces to a bytes32 parent, so the walk is the same code path.
+4. For each edition attester in order, queries `TagResolver` for active TAGs at that Anchor → DATA. First attester with a match wins. Returns the DATA UID plus that attester's address.
+5. Finds the best MIRROR for the DATA **from the same attester**, by transport priority: `web3:// > ar:// > ipfs:// > magnet: > https://`. Skips revoked mirrors and invalid URIs. Capped at 500 mirror scans per request.
+6. Finds the `contentType` PROPERTY **from the same attester** on the DATA. Falls back to `application/octet-stream`.
+7. Serves:
    - **`web3://` mirror** → reads SSTORE2 chunks via `extcodecopy`, concatenates, returns the bytes. Multi-chunk files use EIP-7617 chunk pagination.
    - **Other transports** → returns HTTP 200 with `Content-Type: message/external-body; access-type=URL; URL="<mirror>"; content-type="<mime>"`. Clients follow the redirect.
+   - **No DATA + schema/attestation container** → returns HTTP 200 `application/json` with the raw schema or attestation fields (useful for `web3://<router>/<schemaUID>` discovery).
 
 ## Load-bearing invariants
 

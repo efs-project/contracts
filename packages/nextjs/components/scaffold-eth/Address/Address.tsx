@@ -4,8 +4,9 @@ import { AddressCopyIcon } from "./AddressCopyIcon";
 import { AddressLinkWrapper } from "./AddressLinkWrapper";
 import { Address as AddressType, getAddress, isAddress } from "viem";
 import { normalize } from "viem/ens";
-import { useEnsAvatar, useEnsName } from "wagmi";
+import { useAccount, useEnsAvatar } from "wagmi";
 import { BlockieAvatar } from "~~/components/scaffold-eth";
+import { useDisplayName } from "~~/hooks/efs/useDisplayName";
 import { useTargetNetwork } from "~~/hooks/scaffold-eth/useTargetNetwork";
 import { getBlockExplorerAddressLink } from "~~/utils/scaffold-eth";
 
@@ -73,6 +74,12 @@ type AddressProps = {
   format?: "short" | "long";
   size?: "xs" | "sm" | "base" | "lg" | "xl" | "2xl" | "3xl";
   onlyEnsOrAddress?: boolean;
+  /**
+   * Attester precedence for `name` PROPERTY resolution (ADR-0034).
+   * Defaults to `[connectedAddress, viewedAddress]` — the viewer's own attestations
+   * take precedence, with the viewed user's self-attestation as fallback.
+   */
+  editions?: readonly string[];
 };
 
 export const Address = ({
@@ -81,18 +88,29 @@ export const Address = ({
   format,
   size = "base",
   onlyEnsOrAddress = false,
+  editions,
 }: AddressProps) => {
   const checkSumAddress = address ? getAddress(address) : undefined;
 
   const { targetNetwork } = useTargetNetwork();
+  const { address: connectedAddress } = useAccount();
 
-  const { data: ens, isLoading: isEnsNameLoading } = useEnsName({
-    address: checkSumAddress,
-    chainId: 1,
-    query: {
-      enabled: isAddress(checkSumAddress ?? ""),
-    },
+  const effectiveEditions =
+    editions ?? (checkSumAddress ? ([connectedAddress, checkSumAddress].filter(Boolean) as string[]) : []);
+
+  const {
+    displayName: resolvedName,
+    source: nameSource,
+    isLoading: isNameLoading,
+  } = useDisplayName({
+    target: checkSumAddress,
+    editions: effectiveEditions,
   });
+
+  const ens = nameSource === "ens" ? resolvedName : undefined;
+  const propertyName = nameSource === "property" ? resolvedName : undefined;
+  const richName = ens ?? propertyName;
+
   const { data: ensAvatar } = useEnsAvatar({
     name: ens ? normalize(ens) : undefined,
     chainId: 1,
@@ -104,9 +122,9 @@ export const Address = ({
 
   const shortAddress = checkSumAddress?.slice(0, 6) + "..." + checkSumAddress?.slice(-4);
   const displayAddress = format === "long" ? checkSumAddress : shortAddress;
-  const displayEnsOrAddress = ens || displayAddress;
+  const displayEnsOrAddress = richName || displayAddress;
 
-  const showSkeleton = !checkSumAddress || (!onlyEnsOrAddress && (ens || isEnsNameLoading));
+  const showSkeleton = !checkSumAddress || (!onlyEnsOrAddress && (richName || isNameLoading));
 
   const addressSize = showSkeleton && !onlyEnsOrAddress ? getPrevSize(textSizeMap, size, 2) : size;
   const ensSize = getNextSize(textSizeMap, addressSize);
@@ -153,7 +171,7 @@ export const Address = ({
       </div>
       <div className="flex flex-col">
         {showSkeleton &&
-          (isEnsNameLoading ? (
+          (isNameLoading ? (
             <div className={`ml-1.5 skeleton rounded-lg font-bold ${textSizeMap[ensSize]}`}>
               <span className="invisible">{shortAddress}</span>
             </div>
@@ -163,7 +181,7 @@ export const Address = ({
                 disableAddressLink={disableAddressLink}
                 blockExplorerAddressLink={blockExplorerAddressLink}
               >
-                {ens}
+                {richName}
               </AddressLinkWrapper>
             </span>
           ))}

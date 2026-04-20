@@ -8,7 +8,6 @@ import {
   MagnifyingGlassIcon,
 } from "@heroicons/react/24/outline";
 import { HeartIcon } from "@heroicons/react/24/outline";
-import { SwitchTheme } from "~~/components/SwitchTheme";
 import { BuidlGuidlLogo } from "~~/components/assets/BuidlGuidlLogo";
 import { Faucet } from "~~/components/scaffold-eth";
 import { useTargetNetwork } from "~~/hooks/scaffold-eth/useTargetNetwork";
@@ -61,7 +60,10 @@ export const Footer = () => {
               )}
             </div>
           </div>
-          <SwitchTheme className={`pointer-events-auto ${isLocalNetwork ? "self-end md:self-auto" : ""}`} />
+          {/* The bottom-right corner is owned by BackgroundOpsDrawer (mounted
+              in ScaffoldEthAppWithProviders) which also hosts the NetworkChip
+              alongside its ops handle — one fixed cluster so the two don't
+              fight for the same corner. */}
         </div>
       </div>
       <div className="w-full">

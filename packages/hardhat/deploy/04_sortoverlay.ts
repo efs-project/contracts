@@ -1,6 +1,7 @@
 import { HardhatRuntimeEnvironment } from "hardhat/types";
 import { DeployFunction } from "hardhat-deploy/types";
 import { Contract } from "ethers";
+import { redeployIfArgsChanged } from "../deploy-utils";
 
 // EAS Addresses (Sepolia) — same as 01_indexer.ts
 const EAS_ADDRESS = "0xC2679fBD37d54388Ce493F1DB75320D236e1815e";
@@ -63,10 +64,13 @@ const deployEFSSortOverlay: DeployFunction = async function (hre: HardhatRuntime
   }
 
   // 5. Deploy EFSSortOverlay
+  const sortOverlayArgs = [EAS_ADDRESS, sortInfoSchemaUID, indexerAddress];
+  await redeployIfArgsChanged(hre, "EFSSortOverlay", sortOverlayArgs);
+
   await deploy("EFSSortOverlay", {
     contract: "EFSSortOverlay",
     from: deployer,
-    args: [EAS_ADDRESS, sortInfoSchemaUID, indexerAddress],
+    args: sortOverlayArgs,
     log: true,
     autoMine: true,
   });

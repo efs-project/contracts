@@ -17,6 +17,10 @@ export const wagmiConfig = createConfig({
   connectors: wagmiConnectors,
   ssr: true,
   client({ chain }) {
+    // `http()` with no arg reads `chain.rpcUrls.default.http[0]`. The hardhat chain is
+    // patched in `scaffold.config.ts` to honour NEXT_PUBLIC_HARDHAT_RPC_URL, so both
+    // the public client (here) and the burner wallet (which reads chain.rpcUrls) stay
+    // pinned to the same node. See AGENTS.md → "Running alongside another project".
     let rpcFallbacks = [http()];
 
     const alchemyHttpUrl = getAlchemyHttpUrl(chain.id);

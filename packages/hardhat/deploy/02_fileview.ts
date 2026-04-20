@@ -1,6 +1,7 @@
 import { HardhatRuntimeEnvironment } from "hardhat/types";
 import { DeployFunction } from "hardhat-deploy/types";
 import { Contract } from "ethers";
+import { redeployIfArgsChanged } from "../deploy-utils";
 
 const deployEFSFileView: DeployFunction = async function (hre: HardhatRuntimeEnvironment) {
   const { deployer } = await hre.getNamedAccounts();
@@ -19,6 +20,8 @@ const deployEFSFileView: DeployFunction = async function (hre: HardhatRuntimeEnv
   if (!tagResolver) {
     throw new Error("TagResolver not found! Make sure 01_indexer.ts ran.");
   }
+
+  await redeployIfArgsChanged(hre, "EFSFileView", [indexer.target, tagResolver.target]);
 
   await deploy("EFSFileView", {
     from: deployer,

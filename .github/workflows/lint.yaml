@@ -10,6 +10,10 @@ on:
 
 jobs:
   ci:
+    # Lint + typecheck + docs reference check. Runs a local hardhat node + deploy to
+    # populate `deployedContracts.ts` so the typecheck sees the right ABIs. Separate
+    # from the fork-pin deploy check below because this flow has historically been
+    # green without fork — kept in place to avoid regressions in the lint surface.
     runs-on: ${{ matrix.os }}
 
     strategy:
@@ -29,7 +33,7 @@ jobs:
 
       - name: Install dependencies
         run: yarn install --immutable
-      
+
       - name: Run hardhat node, deploy contracts (& generate contracts typescript output)
         run: yarn chain & yarn deploy
 
@@ -44,3 +48,87 @@ jobs:
 
       - name: Check docs references
         run: yarn docs:check
+
+  contract-tests:
+    # Runs the hardhat unit test suite. The tests deploy their own EAS +
+    # SchemaRegistry + Indexer fresh in `beforeEach`, so they don't need a Sepolia
+    # fork. FORK_BLOCK is set at the job level anyway so any future test that
+    # *does* need the fork gets the pinned block (ADR-0037) automatically.
+    runs-on: ubuntu-latest
+    env:
+      FORK_BLOCK: "10691000"
+    steps:
+      - uses: actions/checkout@master
+
+      - uses: actions/setup-node@v3
+        with:
+          node-version: lts/*
+          cache: yarn
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Run contract tests
+        run: yarn hardhat:test
+
+  deploy-pin-check:
+    # Deploys against a Sepolia fork at the pinned block (ADR-0037) and asserts
+    # `packages/nextjs/contracts/deployedContracts.ts` is byte-identical to the
+    # committed version. Catches the "forgot to regenerate after bumping
+    # FORK_BLOCK" regression and guarantees the commit SHA remains a valid
+    # cross-environment coordination unit (AGENTS.md → Pinned Sepolia fork).
+    #
+    # Graceful degradation (ADR-0028): if Alchemy free-tier rate-limits fetching
+    # the fork state, `continue-on-error` prevents this job from blocking the
+    # rest of CI. Drift is still visible as a failure in the job's own status.
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    env:
+      MAINNET_FORKING_ENABLED: "true"
+      FORK_BLOCK: "10691000"
+    steps:
+      - uses: actions/checkout@master
+
+      - uses: actions/setup-node@v3
+        with:
+          node-version: lts/*
+          cache: yarn
+
+      # Cache hardhat's Sepolia state fetches. First CI run at a new FORK_BLOCK
+      # hits Alchemy to download state; subsequent runs at the same pin reuse
+      # the cache. Keyed on FORK_BLOCK so bumping the pin invalidates cleanly.
+      - name: Cache hardhat fork state
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/hardhat-nodejs
+          key: hardhat-fork-${{ env.FORK_BLOCK }}
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Deploy against pinned Sepolia fork; assert deployedContracts.ts committed
+        run: |
+          set -e
+          yarn fork &
+          FORK_PID=$!
+          # Poll RPC until ready (hardhat fork startup includes Alchemy fetches).
+          for i in $(seq 1 60); do
+            if curl -s -X POST -H "Content-Type: application/json" \
+                --data '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}' \
+                http://127.0.0.1:8545 | grep -q '"result"'; then
+              echo "Hardhat fork ready after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+          LOCALHOST_RPC_URL=http://127.0.0.1:8545 yarn deploy
+          kill $FORK_PID 2>/dev/null || true
+          # `deployedContracts.ts` is committed (see AGENTS.md invariant). If this
+          # deploy produced a different file, the pin was bumped without a regen
+          # commit, or the deploy scripts changed without updating the checked-in
+          # output — fail loudly so the PR author can regenerate + commit.
+          if ! git diff --exit-code packages/nextjs/contracts/deployedContracts.ts; then
+            echo "::error::deployedContracts.ts drifted from the committed version."
+            echo "::error::Regenerate locally with 'yarn fork && yarn deploy' at FORK_BLOCK=${FORK_BLOCK} and commit."
+            exit 1
+          fi

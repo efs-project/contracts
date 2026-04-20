@@ -61,7 +61,8 @@ What else we looked at and why it lost.
 - [ADR-0003 — TAG-based file placement instead of refUID](./0003-tag-based-placement.md)
 - [ADR-0004 — Content dedup via `dataByContentKey`](./0004-content-dedup-via-dataByContentKey.md)
 - [ADR-0005 — ContentType moved from DATA to PROPERTY](./0005-content-type-moved-to-property.md)
-- [ADR-0006 — Folders don't need TAGs for visibility](./0006-folders-no-tags-for-visibility.md)
+- [ADR-0006 — Folders don't need TAGs for visibility](./0006-folders-no-tags-for-visibility.md) *(Superseded by ADR-0038)*
+- [ADR-0038 — Tag-only folder visibility (single-source)](./0038-tag-only-folder-visibility.md)
 
 ### Index Design
 - [ADR-0007 — `_activeByAttesterAndSchema`: swap-and-pop compact index](./0007-activeByAttesterAndSchema-swap-and-pop.md)
@@ -95,8 +96,19 @@ What else we looked at and why it lost.
 - [ADR-0027 — Deploy-before-register pattern](./0027-deploy-before-register.md)
 - [ADR-0028 — CI graceful degradation](./0028-ci-graceful-degradation.md)
 - [ADR-0029 — MIT license for EFS contracts (web client license deferred)](./0029-dual-licensing-mit-agpl.md)
+- [ADR-0037 — Pinned Sepolia fork for cross-environment determinism](./0037-pinned-sepolia-fork.md)
 
 ### Architectural Foundations
 - [ADR-0030 — Mainnet permanence (no upgradeability)](./0030-mainnet-permanence.md)
 - [ADR-0031 — Editions as URL query param with first-wins fallback](./0031-editions-url-param-model.md)
 - [ADR-0032 — EAS as foundational dependency](./0032-eas-as-foundation.md)
+
+### Navigation & Containers
+- [ADR-0033 — Root containers and schema alias anchors](./0033-root-containers-and-schema-alias-anchors.md)
+- [ADR-0034 — `name` PROPERTY as display-name fallback](./0034-display-name-property-convention.md)
+- [ADR-0035 — PROPERTY as free-floating value placed via TAG](./0035-property-free-floating-and-tag-placed.md)
+- [ADR-0039 — Default editions priority chain](./0039-default-editions-priority-chain.md)
+
+### View APIs
+- [ADR-0036 — Opaque-cursor pagination for multi-source views](./0036-opaque-cursor-pagination.md)
+

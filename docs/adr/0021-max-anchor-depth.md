@@ -6,7 +6,7 @@
 
 ## Context
 
-Several functions walk the ancestor chain: `propagateContains`, the qualifying-folder index, depth validation on Anchor creation. Without a cap, a malicious user could create a deeply nested chain and trigger expensive gas consumption on subsequent operations.
+Several functions walk the ancestor chain: `propagateContains`, depth validation on Anchor creation, and (client-side) the visibility-TAG ancestor walk on upload. Without a cap, a malicious user could create a deeply nested chain and trigger expensive gas consumption on subsequent operations.
 
 ## Decision
 
@@ -15,7 +15,7 @@ Several functions walk the ancestor chain: `propagateContains`, the qualifying-f
 Enforced at:
 - Anchor creation (`onAttest`): rejects with `AnchorTooDeep()` if creation would exceed depth 32.
 - `_propagateContains`: breaks the loop after MAX_ANCHOR_DEPTH iterations as defense-in-depth (creation cap should make this unreachable).
-- `_qualifyingFolders` walk: same defense-in-depth.
+- Client-side visibility-TAG ancestor walk (ADR-0006 revised 2026-04-18) applies the same cap for predictable gas on upload.
 
 ## Consequences
 
