@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { getAddress, isAddress } from "viem";
 import { useAccount, usePublicClient } from "wagmi";
 import { ContainerInfoPanel } from "~~/components/explorer/ContainerInfoPanel";
 import { FileActionsBar } from "~~/components/explorer/FileActionsBar";
@@ -119,12 +120,30 @@ export default function ExplorerClient() {
         if (name.endsWith(".eth")) {
           try {
             const addr = await publicClient?.getEnsAddress({ name });
-            if (addr) resolvedAddresses.push(addr);
+            // viem returns a checksummed address on success; normalize defensively
+            // in case a future wagmi/viem version relaxes this.
+            if (addr && isAddress(addr, { strict: false })) {
+              resolvedAddresses.push(getAddress(addr));
+            }
           } catch (e) {
             console.error(`Failed to resolve ENS name ${name}`, e);
           }
         } else if (name.startsWith("0x") && name.length === 42) {
-          resolvedAddresses.push(name);
+          // Validate raw-hex before forwarding downstream: wagmi/viem contract
+          // reads pass edition addresses as an `address[]` and throw
+          // InvalidAddressError on malformed entries, which would break
+          // edition-scoped browsing wholesale rather than ignoring the bad
+          // token. Accept any valid hex regardless of checksum case
+          // (`strict: false`) — users hand-typing URLs won't have a correct
+          // EIP-55 checksum — and normalize via getAddress so downstream
+          // dedup / comparison is case-stable.
+          if (isAddress(name, { strict: false })) {
+            resolvedAddresses.push(getAddress(name as `0x${string}`));
+          } else {
+            console.warn(`Ignoring invalid edition address in ?editions=: ${name}`);
+          }
+        } else {
+          console.warn(`Ignoring unrecognized edition token in ?editions=: ${name}`);
         }
       }
 
