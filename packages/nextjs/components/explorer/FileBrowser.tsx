@@ -415,7 +415,7 @@ export const FileBrowser = ({
         throw new Error("Public client not available");
       }
 
-      let result: number[] = [];
+      const result: number[] = [];
       let contentTypeStr = "text/plain";
 
       let hasMoreChunks = true;
