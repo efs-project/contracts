@@ -163,9 +163,21 @@ export default function ExplorerClient() {
 
       for (const name of editionNames) {
         if (cancelled) return;
-        if (name.endsWith(".eth")) {
+        // Lowercase once for suffix/prefix classification. ENS is
+        // case-insensitive by spec (ENSIP-15 requires canonicalization before
+        // resolution), and 0x/0X are equivalent for hex addresses. A URL like
+        // `?editions=Vitalik.ETH,0X1a2b…` must resolve identically to the
+        // lowercase version — otherwise `resolvedEditionAddresses` silently
+        // drops the mixed-case tokens and the explorer falls back to the
+        // default chain, breaking URL shareability (ADR-0031 / ADR-0033).
+        const classifier = name.toLowerCase();
+        if (classifier.endsWith(".eth")) {
           try {
-            const addr = await publicClient?.getEnsAddress({ name });
+            // Pass the lowercased label to viem; ENS resolution is insensitive
+            // but some upstream libraries fail-closed on mixed case. A proper
+            // UTS-46 `normalize()` is correct-er but lowercase covers the
+            // `?editions=Vitalik.ETH` class of regressions at zero cost.
+            const addr = await publicClient?.getEnsAddress({ name: classifier });
             if (cancelled) return;
             // viem returns a checksummed address on success; normalize defensively
             // in case a future wagmi/viem version relaxes this.
@@ -176,7 +188,7 @@ export default function ExplorerClient() {
             if (cancelled) return;
             console.error(`Failed to resolve ENS name ${name}`, e);
           }
-        } else if (name.startsWith("0x") && name.length === 42) {
+        } else if (classifier.startsWith("0x") && name.length === 42) {
           // Validate raw-hex before forwarding downstream: wagmi/viem contract
           // reads pass edition addresses as an `address[]` and throw
           // InvalidAddressError on malformed entries, which would break
