@@ -88,14 +88,17 @@ export function useEditionDirectoryPage({
   // fetch triggered by refresh completes.
   const refreshPendingRef = useRef<(() => void) | null>(null);
 
-  // Reset accumulator whenever the identity of the query changes.
+  // Reset accumulator whenever the identity of the query changes. We eagerly
+  // set `isLoading=true` when scheduling the first fetch so the brief render
+  // gap between this effect and the fetch effect (below) doesn't flash a
+  // "no results" state to the caller.
   useEffect(() => {
     if (lastDepsRef.current === depsKey) return;
     lastDepsRef.current = depsKey;
     cursorRef.current = EMPTY_CURSOR;
     setItems(enabled ? [] : undefined);
     setHasMore(enabled);
-    setIsLoading(false);
+    setIsLoading(enabled);
     if (enabled) setLoadTrigger(t => t + 1);
   }, [depsKey, enabled]);
 

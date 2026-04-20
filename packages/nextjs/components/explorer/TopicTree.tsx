@@ -14,6 +14,7 @@ import {
   UserCircleIcon,
 } from "@heroicons/react/24/outline";
 import { useDisplayName } from "~~/hooks/efs/useDisplayName";
+import { useEditionDirectoryPage } from "~~/hooks/efs/useEditionDirectoryPage";
 import { useSortedData } from "~~/hooks/efs/useSortedData";
 import { useDeployedContractInfo, useScaffoldReadContract } from "~~/hooks/scaffold-eth";
 import { useTargetNetwork } from "~~/hooks/scaffold-eth/useTargetNetwork";
@@ -70,6 +71,8 @@ const TreeNode = ({
   if (hasEditions) lockedToEditions.current = true;
   const useEditionsQuery = (hasEditions || lockedToEditions.current) && editionAddresses.length > 0;
 
+  const { data: efsFileViewInfo } = useDeployedContractInfo({ contractName: "EFSFileView" });
+
   const { data: standardChildren, isLoading: isStandardLoading } = useScaffoldReadContract({
     contractName: "EFSFileView",
     functionName: "getDirectoryPage",
@@ -77,28 +80,23 @@ const TreeNode = ({
     query: { enabled: !useEditionsQuery },
   });
 
-  const { data: editionChildrenRaw, isLoading: isEditionLoading } = useScaffoldReadContract({
-    contractName: "EFSFileView",
-    functionName: "getDirectoryPageBySchemaAndAddressList",
-    // Opaque cursor (ADR-0036): empty bytes = start from beginning. Sidebar shows first
-    // page only; this is a UI summary, not a complete directory listing.
-    args: [
-      uid as `0x${string}`,
-      dataSchemaUID as `0x${string}`,
-      editionAddresses as string[],
-      "0x" as `0x${string}`,
-      50n,
-    ],
-    query: { enabled: useEditionsQuery && editionAddresses.length > 0 },
+  // Edition mode: iterate the opaque cursor so a phase-0 scan-budget burn doesn't
+  // render the node as empty when phase-1 has matches. The hook auto-advances
+  // on empty pages until at least one page of children is collected or the
+  // cursor is exhausted (ADR-0036). The tree is a navigation summary, not a
+  // complete listing — `loadMore` is intentionally unused here.
+  const { items: editionChildren, isLoading: isEditionLoading } = useEditionDirectoryPage({
+    parentAnchor: uid as `0x${string}`,
+    dataSchemaUID: dataSchemaUID as `0x${string}`,
+    editionAddresses,
+    fileViewAddress: efsFileViewInfo?.address as `0x${string}` | undefined,
+    fileViewAbi: efsFileViewInfo?.abi as any,
+    pageSize: 50n,
+    enabled: useEditionsQuery,
   });
 
   const isLoading = useEditionsQuery ? isEditionLoading : isStandardLoading;
-  // Opaque-cursor return shape (ADR-0036): { items, nextCursor }.
-  const children = useEditionsQuery
-    ? editionChildrenRaw
-      ? ((editionChildrenRaw as any).items ?? (editionChildrenRaw as any)[0])
-      : undefined
-    : standardChildren;
+  const children = useEditionsQuery ? editionChildren : standardChildren;
 
   const { sortedUIDs } = useSortedData({
     sortInfoUID: activeSortInfoUID ?? null,
