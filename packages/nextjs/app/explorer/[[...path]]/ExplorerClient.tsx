@@ -101,11 +101,17 @@ export default function ExplorerClient() {
   const { name: containerDisplayName } = useContainerName(currentContainer, connectedAddress, currentAnchorUID);
 
   // Editions Resolution Effect — only needed for ENS name resolution in explicit ?editions= param.
+  // Cancel-guarded: ENS lookups are slow and a rapid `?editions=` change can
+  // complete out of order. Without the `cancelled` flag a stale query's
+  // resolution could overwrite a newer one's addresses (or its "done" signal),
+  // leaving the explorer rendering with the wrong editions until the next nav.
   useEffect(() => {
     if (!editionsParam) {
       setIsResolvingEditions(false);
       return;
     }
+
+    let cancelled = false;
 
     const resolveEditions = async () => {
       setIsResolvingEditions(true);
@@ -117,15 +123,18 @@ export default function ExplorerClient() {
       const resolvedAddresses: string[] = [];
 
       for (const name of editionNames) {
+        if (cancelled) return;
         if (name.endsWith(".eth")) {
           try {
             const addr = await publicClient?.getEnsAddress({ name });
+            if (cancelled) return;
             // viem returns a checksummed address on success; normalize defensively
             // in case a future wagmi/viem version relaxes this.
             if (addr && isAddress(addr, { strict: false })) {
               resolvedAddresses.push(getAddress(addr));
             }
           } catch (e) {
+            if (cancelled) return;
             console.error(`Failed to resolve ENS name ${name}`, e);
           }
         } else if (name.startsWith("0x") && name.length === 42) {
@@ -147,38 +156,59 @@ export default function ExplorerClient() {
         }
       }
 
+      if (cancelled) return;
       setResolvedEditionAddresses(resolvedAddresses);
       setIsResolvingEditions(false);
     };
 
     resolveEditions();
+
+    return () => {
+      cancelled = true;
+    };
   }, [editionsParam, publicClient]);
 
-  // Path Resolution Effect
+  // Path Resolution Effect — cancel-guarded.
+  //
+  // Path resolution fires an arbitrary number of async `resolvePath` RPC reads
+  // (one per segment, plus classifier + optional alias lookup). Rapid navigation
+  // — especially on slow RPC — can leave an older resolution in flight after
+  // the URL has already moved on; without cancellation, that stale resolution
+  // would clobber `currentPath` / `currentAnchorUID` / `currentContainer` and
+  // the UI would silently mutate a different folder than the URL indicates.
+  // That's a create/delete correctness hazard, not just a cosmetic glitch.
+  //
+  // We flip `cancelled` in the effect cleanup and short-circuit before every
+  // `setState` after an `await`. `setIsResolving(true)` at the top is the only
+  // pre-await mutation; the cleanup itself overlaps with React's commit of the
+  // next effect run, which will re-assert `setIsResolving(true)` immediately.
   useEffect(() => {
+    // Wait for easAddress too — the top-level classifier needs it to
+    // distinguish schema / attestation UIDs from anchor names. Running
+    // before it loads misclassifies 64-hex segments as anchors.
+    if (
+      !rootUID ||
+      rootUID === "0x0000000000000000000000000000000000000000000000000000000000000000" ||
+      !publicClient ||
+      !easAddress
+    ) {
+      return;
+    }
+
+    const chainId = publicClient.chain.id;
+    const indexerConfig = deployedContracts[chainId as keyof typeof deployedContracts]?.Indexer;
+
+    if (!indexerConfig) {
+      console.error("Indexer contract not found for chain", chainId);
+      return;
+    }
+
+    const pathSegments = params?.path;
+    const segments = Array.isArray(pathSegments) ? pathSegments : pathSegments ? [pathSegments] : [];
+
+    let cancelled = false;
+
     const resolveUrlPath = async () => {
-      // Wait for easAddress too — the top-level classifier needs it to
-      // distinguish schema / attestation UIDs from anchor names. Running
-      // before it loads misclassifies 64-hex segments as anchors.
-      if (
-        !rootUID ||
-        rootUID === "0x0000000000000000000000000000000000000000000000000000000000000000" ||
-        !publicClient ||
-        !easAddress
-      )
-        return;
-
-      const chainId = publicClient.chain.id;
-      const indexerConfig = deployedContracts[chainId as keyof typeof deployedContracts]?.Indexer;
-
-      if (!indexerConfig) {
-        console.error("Indexer contract not found for chain", chainId);
-        return;
-      }
-
-      const pathSegments = params?.path;
-      const segments = Array.isArray(pathSegments) ? pathSegments : pathSegments ? [pathSegments] : [];
-
       setIsResolving(true);
       setPathError(null);
 
@@ -193,6 +223,7 @@ export default function ExplorerClient() {
             publicClient,
             easAddress,
           });
+          if (cancelled) return;
           if (classified.kind !== "anchor") {
             container = classified;
             seedUID = classified.uid;
@@ -213,10 +244,12 @@ export default function ExplorerClient() {
                   functionName: "resolvePath",
                   args: [rootUID as `0x${string}`, classified.uid.toLowerCase()],
                 })) as `0x${string}`;
+                if (cancelled) return;
                 if (aliasUID && aliasUID !== "0x0000000000000000000000000000000000000000000000000000000000000000") {
                   seedUID = aliasUID;
                 }
               } catch (e) {
+                if (cancelled) return;
                 console.warn("Alias anchor lookup failed; falling back to raw UID", e);
               }
             }
@@ -244,6 +277,7 @@ export default function ExplorerClient() {
             functionName: "resolvePath",
             args: [currentUID, segment],
           })) as `0x${string}`;
+          if (cancelled) return;
 
           if (childUID === "0x0000000000000000000000000000000000000000000000000000000000000000") {
             const errorMsg = `Folder '${decodeURIComponent(segment)}' not found in path.`;
@@ -260,10 +294,14 @@ export default function ExplorerClient() {
           currentUID = childUID;
         }
 
+        if (cancelled) return;
         setCurrentPath(resolvedPath);
         setCurrentAnchorUID(currentUID);
         setCurrentContainer(container);
 
+        // localStorage writes are side-effects on global state; keep them
+        // inside the cancel guard so a stale resolution can't promote a
+        // revisited address/attestation to the top of the "recent" list.
         if (container?.kind === "address" && container.address) {
           try {
             const KEY = "efs.recentAddresses";
@@ -290,14 +328,19 @@ export default function ExplorerClient() {
           }
         }
       } catch (err) {
+        if (cancelled) return;
         console.error("Failed to resolve path", err);
         setPathError("Failed to resolve path due to an error.");
       } finally {
-        setIsResolving(false);
+        if (!cancelled) setIsResolving(false);
       }
     };
 
     resolveUrlPath();
+
+    return () => {
+      cancelled = true;
+    };
   }, [rootUID, params?.path, publicClient, easAddress]);
 
   // Keep the browser tab title in sync with the deepest path segment. When
