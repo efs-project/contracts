@@ -32,12 +32,26 @@ function log(msg) {
 }
 
 function isFree(port) {
-  return new Promise(resolve => {
-    const srv = net.createServer();
-    srv.once("error", () => resolve(false));
-    srv.once("listening", () => srv.close(() => resolve(true)));
-    srv.listen(port, "127.0.0.1");
-  });
+  // Probe the same binding footprint Next.js uses. A naive
+  // `listen(port, "127.0.0.1")` check reports 3000 as free on macOS even when
+  // another dev server already holds `*:3000` on IPv6 only — Next then dies
+  // with EADDRINUSE on first boot and trips the fork-teardown path, which
+  // cascades into a deploy HH108.
+  //
+  // Check v6 then v4 sequentially: Node's default `listen(port, "::")` is
+  // dual-stack on macOS (IPV6_V6ONLY=0), so running in parallel would
+  // self-collide (v6 probe grabs v4 too). One probe at a time.
+  const probe = host =>
+    new Promise(resolve => {
+      const srv = net.createServer();
+      srv.once("error", () => resolve(false));
+      srv.once("listening", () => srv.close(() => resolve(true)));
+      srv.listen(port, host);
+    });
+  return (async () => {
+    if (!(await probe("::"))) return false;
+    return probe("0.0.0.0");
+  })();
 }
 
 async function findFreePort(start, attempts = PORT_SCAN_ATTEMPTS) {

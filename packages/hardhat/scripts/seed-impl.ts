@@ -312,6 +312,33 @@ export async function seedDemoTree() {
   };
 
   /**
+   * Ancestor-walk visibility TAGs (ADR-0038).
+   *
+   * After placing a file at a file-slot anchor, every generic folder from the
+   * file-slot's parent up to root (exclusive) must have an active applies=true
+   * TAG(definition=dataSchemaUID, refUID=folder) so EFSFileView phase-0 includes
+   * it in edition-scoped directory listings. Walk stops early when an already-
+   * tagged ancestor is found — steady-state cost is zero extra writes.
+   */
+  const walkAncestorVisibility = async (
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    signer: any,
+    fileSlotUID: string,
+  ): Promise<void> => {
+    const attester = await signer.getAddress();
+    let current = fileSlotUID;
+    for (let depth = 0; depth < 32; depth++) {
+      const parent: string = await indexer.getParent(current);
+      if (!parent || parent === ethers.ZeroHash || parent === rootUID) break;
+      const alreadyTagged = await tagResolver.isActivelyTaggedByAny(parent, dataSchemaUID, [attester]);
+      if (alreadyTagged) break;
+      console.log(`  Visibility ${parent.slice(0, 10)}… (${attester.slice(0, 10)}…)`);
+      await makeTag(signer, parent, dataSchemaUID, true);
+      current = parent;
+    }
+  };
+
+  /**
    * Per-file idempotent version of `makeFile`. Skips re-attesting when the
    * file-slot anchor exists AND this attester already has a live placement
    * on it; otherwise fills in whatever is missing (file-slot anchor first,
@@ -331,6 +358,7 @@ export async function seedDemoTree() {
     let fileUID = await findAnchor(parentUID, name, dataSchemaUID);
     if (fileUID && (await hasActivePlacement(fileUID, attester))) {
       console.log(`  File      "${name}" (exists, skipping) ${fileUID.slice(0, 10)}…`);
+      await walkAncestorVisibility(signer, fileUID);
       return { fileUID, created: false };
     }
     if (!fileUID) {
@@ -340,6 +368,7 @@ export async function seedDemoTree() {
     await makeProperty(signer, dataUID, "contentType", contentType);
     await makeMirror(signer, dataUID, transportUID, uri);
     await makeTag(signer, dataUID, fileUID, true);
+    await walkAncestorVisibility(signer, fileUID);
     return { fileUID, created: true };
   };
 
@@ -415,6 +444,7 @@ export async function seedDemoTree() {
     await makeMirror(deployerSigner, ownerPhotoData, ipfsTransportUID, "ipfs://owner-version-of-photo");
     await makeTag(deployerSigner, ownerPhotoData, photoUID, true);
   }
+  await walkAncestorVisibility(deployerSigner, photoUID);
 
   const user1Addr = await user1.getAddress();
   if (await hasActivePlacement(photoUID, user1Addr)) {
@@ -425,6 +455,7 @@ export async function seedDemoTree() {
     await makeMirror(user1, user1PhotoData, ipfsTransportUID, "ipfs://user1-version-of-photo");
     await makeTag(user1, user1PhotoData, photoUID, true);
   }
+  await walkAncestorVisibility(user1, photoUID);
 
   // ── Summary ───────────────────────────────────────────────────────────────────
 

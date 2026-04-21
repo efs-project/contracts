@@ -307,6 +307,7 @@ const AddressesBranch = ({ activeAddress }: { activeAddress?: string | null }) =
     functionName: "DEPLOYER",
   });
   const [recent, setRecent] = useState<string[]>([]);
+  const [input, setInput] = useState("");
 
   // Re-read localStorage when the active address changes so addresses freshly
   // written by the page's route-resolution effect show up immediately.
@@ -339,6 +340,24 @@ const AddressesBranch = ({ activeAddress }: { activeAddress?: string | null }) =
 
   return (
     <>
+      <li className="px-2 py-1">
+        <div className="flex gap-1">
+          <input
+            type="text"
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === "Enter") go(input.trim());
+            }}
+            placeholder="0x… address or ENS"
+            className="input input-bordered input-xs w-full font-mono text-xs"
+            spellCheck={false}
+          />
+          <button className="btn btn-xs btn-primary" onClick={() => go(input.trim())} disabled={!input.trim()}>
+            Go
+          </button>
+        </div>
+      </li>
       {connectedAddress && (
         <AddressEntry
           address={connectedAddress}
