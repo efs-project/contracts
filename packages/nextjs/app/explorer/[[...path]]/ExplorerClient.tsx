@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import { getAddress, isAddress } from "viem";
 import { useAccount, usePublicClient } from "wagmi";
 import { ContainerInfoPanel } from "~~/components/explorer/ContainerInfoPanel";
@@ -54,7 +54,38 @@ export default function ExplorerClient() {
 
   const router = useRouter();
   const params = useParams();
+  const pathname = usePathname();
   const searchParams = useSearchParams();
+
+  // Static-export gotcha: with `output: "export"` every `/explorer/*` URL is
+  // served by the single pre-rendered shell at `/explorer/index.html`
+  // (generated from `generateStaticParams` returning the empty catch-all).
+  // Reverse-proxies (Caddy on the devnet VPS, IPFS gateways honoring our
+  // `public/_redirects`) rewrite deep URLs to that shell transparently — the
+  // browser URL stays `/explorer/0xAbCd…/` but the HTML is the empty-path
+  // shell. Next's `useParams()` then returns the pre-rendered params
+  // (`path: undefined`) even though `window.location` clearly shows segments,
+  // so the whole classifier path silently short-circuits to the root anchor.
+  //
+  // `usePathname()` is URL-derived — it always reflects `window.location`
+  // after hydration — so it's the reliable source. We keep `params` as a
+  // secondary signal (in dev it updates on `router.push` slightly before
+  // `pathname`, though both converge within a tick) and prefer whichever
+  // has segments. See the PR that introduced this comment for the
+  // reproducing test (curl + static `spa-serve` + Chromium = same bug).
+  const pathSegmentsFromParams = (() => {
+    const p = params?.path;
+    return Array.isArray(p) ? p : p ? [p] : [];
+  })();
+  const pathSegmentsFromPathname = (() => {
+    if (!pathname) return [] as string[];
+    // strip leading/trailing slashes, peel off the leading `/explorer/` prefix
+    const trimmed = pathname.replace(/^\/+|\/+$/g, "");
+    if (trimmed === "explorer") return [];
+    if (!trimmed.startsWith("explorer/")) return [];
+    return trimmed.slice("explorer/".length).split("/").map(decodeURIComponent).filter(Boolean);
+  })();
+  const pathSegments = pathSegmentsFromPathname.length > 0 ? pathSegmentsFromPathname : pathSegmentsFromParams;
 
   const sortParam = searchParams.get("sort");
   const activeSortInfoUID = sortParam || null;
@@ -305,8 +336,9 @@ export default function ExplorerClient() {
       return;
     }
 
-    const pathSegments = params?.path;
-    const segments = Array.isArray(pathSegments) ? pathSegments : pathSegments ? [pathSegments] : [];
+    // `pathSegments` is derived above from pathname ∪ params; see the comment
+    // next to the hooks for why useParams alone isn't reliable in static export.
+    const segments = pathSegments;
 
     let cancelled = false;
 
@@ -469,7 +501,12 @@ export default function ExplorerClient() {
     return () => {
       cancelled = true;
     };
-  }, [rootUID, params?.path, publicClient, mainnetPublicClient, easAddress, dataSchemaUID]);
+    // Depend on the pathname string directly — it's stable across renders
+    // and covers both the dev (`useParams`) and static-export (`usePathname`)
+    // code paths. The derived `pathSegments` array would change identity
+    // every render and thrash the effect, so we intentionally exclude it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rootUID, pathname, publicClient, mainnetPublicClient, easAddress, dataSchemaUID]);
 
   // Keep the browser tab title in sync with the deepest path segment. When
   // the container has a resolved display name (ENS / persona / property)
