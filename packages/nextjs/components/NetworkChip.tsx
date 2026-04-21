@@ -27,13 +27,21 @@
  * opening the popover — the #1 source of "why doesn't my change appear?"
  * confusion is stale JS served from a CDN / ServiceWorker cache.
  *
- * Popover surfaces (Chain, RPC URL, Build, Contracts) are each one-click-copy
- * so a bug report can paste the exact commit + RPC URL + contract addresses
- * the user was looking at when something went wrong.
+ * Popover surfaces (Chain, RPC URL, Client build, Server build, Contracts)
+ * are each one-click-copy so a bug report can paste the exact commit + RPC
+ * URL + contract addresses the user was looking at when something went wrong.
+ *
+ * Server build is fetched lazily from `<rpc-origin>/version.json` when the
+ * active flavor is `devnet` (see `useServerVersion`). When client and server
+ * SHAs differ, a warning triangle joins the pill — the #1 cause of
+ * confusion during devnet iteration is loading a stale client JS bundle
+ * against a newer server (or vice versa), and this surfaces it at a glance.
+ * On static IPFS clients pointed at arbitrary RPC providers the fetch is
+ * skipped / silently fails, so nothing renders.
  */
 import { useEffect, useState } from "react";
 import { useAccount, useConfig } from "wagmi";
-import { CheckIcon, DocumentDuplicateIcon, GlobeAltIcon } from "@heroicons/react/24/outline";
+import { CheckIcon, DocumentDuplicateIcon, ExclamationTriangleIcon, GlobeAltIcon } from "@heroicons/react/24/outline";
 import deployedContracts from "~~/contracts/deployedContracts";
 
 const HARDHAT_CHAIN_ID = 31337;
@@ -61,6 +69,100 @@ function inferFlavor(rpcUrl: string | undefined, chainId: number | undefined): N
 // Build-time constants baked by next.config.js.
 const GIT_SHA: string = process.env.NEXT_PUBLIC_GIT_SHA ?? "";
 const FORK_BLOCK: string = process.env.NEXT_PUBLIC_FORK_BLOCK ?? "";
+
+/**
+ * Shape of the `/version.json` served by the devnet VPS (published by the
+ * devnet agent's rebuild pipeline). All fields are optional on the client side
+ * — if the server ever stops emitting one, we just hide that line.
+ */
+type ServerVersion = {
+  server_build?: string;
+  server_build_short?: string;
+  repo_branch?: string;
+  published_at_utc?: string;
+  site_url?: string;
+};
+
+/**
+ * Fetches `/version.json` from the origin that serves the RPC URL.
+ *
+ * **Why it's safe to call unconditionally in a static IPFS build.** The chip
+ * ships in `app.efs.eth.limo` / `eth.link` and any IPFS gateway mirror. Those
+ * deployments may point at arbitrary RPC providers (Alchemy, Infura,
+ * self-hosted hardhat) that have no `/version.json` endpoint and no CORS
+ * headers for this origin. We therefore:
+ *
+ * 1. Gate on `flavor === "devnet"` — skip the fetch entirely for `local`
+ *    (hardhat serves JSON-RPC only, no HTTP routes) and `other` (real
+ *    networks won't have the endpoint).
+ * 2. Swallow every failure silently — missing route, CORS block, timeout,
+ *    aborted request, malformed JSON. The popover just omits the server
+ *    build line. **Never crash.** The chip is informational.
+ * 3. Abort on unmount / rpcUrl change / 3s timeout so a slow network doesn't
+ *    leave the component in a permanent loading state.
+ */
+function useServerVersion(rpcUrl: string | undefined, flavor: NetworkFlavor): { data: ServerVersion | null } {
+  const [data, setData] = useState<ServerVersion | null>(null);
+
+  useEffect(() => {
+    if (flavor !== "devnet" || !rpcUrl) {
+      setData(null);
+      return;
+    }
+
+    let cancelled = false;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3000);
+
+    (async () => {
+      try {
+        // Derive from the RPC URL's origin, not `window.location` — a
+        // statically-hosted client on `app.efs.eth.limo` pointed at a
+        // devnet VPS must fetch from the VPS, not from its own origin.
+        const url = new URL("/version.json", rpcUrl).toString();
+        const res = await fetch(url, { signal: controller.signal, cache: "no-store" });
+        if (!res.ok) return;
+        const json = (await res.json()) as ServerVersion;
+        if (!cancelled && json && typeof json === "object") {
+          setData(json);
+        }
+      } catch {
+        // Expected for anything except a correctly-configured devnet VPS.
+        // Network error, CORS block, 404, abort, JSON parse failure — all
+        // land here and should result in the line simply not rendering.
+      } finally {
+        clearTimeout(timer);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [rpcUrl, flavor]);
+
+  return { data };
+}
+
+/** Formats an ISO timestamp as a short relative phrase (e.g. "3h ago").
+ * Returns undefined for invalid / future / missing input so the caller can
+ * skip rendering. Keeps the popover terse — we'd rather show nothing than
+ * `Invalid Date`. */
+function formatRelative(iso: string | undefined): string | undefined {
+  if (!iso) return undefined;
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return undefined;
+  const delta = Date.now() - t;
+  if (delta < 0) return undefined; // clock skew — skip
+  const s = Math.floor(delta / 1000);
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 48) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
 
 // Core contracts to surface in the popover. Chosen to cover the three-layer
 // model users ask about: the kernel (Indexer), the read path (FileView), and
@@ -109,6 +211,18 @@ export const NetworkChip = () => {
   const label = flavor === "other" ? (activeChain?.name ?? "Unknown") : flavorLabels[flavor];
   const shortSha = GIT_SHA ? GIT_SHA.slice(0, 7) : "";
 
+  // Fetches `/version.json` from the RPC origin when we're on devnet — silent
+  // no-op otherwise. Safe to call unconditionally; see `useServerVersion` for
+  // why the static-SPA-on-IPFS-with-arbitrary-RPC case doesn't crash here.
+  const { data: serverVersion } = useServerVersion(rpcUrl, flavor);
+  const serverFullSha = serverVersion?.server_build ?? "";
+  const serverShortSha = serverVersion?.server_build_short || (serverFullSha ? serverFullSha.slice(0, 7) : "");
+  // Compare by 7-char short SHA — avoids false-positive mismatches when one
+  // side sends short and the other full. Only meaningful when both sides
+  // provided a SHA; otherwise `null` (skip the warning).
+  const buildsMatch = shortSha && serverShortSha ? shortSha.toLowerCase() === serverShortSha.toLowerCase() : null;
+  const serverPublishedRelative = formatRelative(serverVersion?.published_at_utc);
+
   // Pre-hydration, render a skeleton to avoid mismatch (chain comes from wagmi hook).
   if (!mounted) {
     return <div className="badge badge-ghost h-6 w-16 opacity-40" aria-hidden />;
@@ -124,13 +238,29 @@ export const NetworkChip = () => {
       <div
         tabIndex={0}
         role="button"
-        aria-label={`Active network: ${label}${shortSha ? `, build ${shortSha}` : ""}`}
-        title={shortSha ? `${label} — build ${GIT_SHA}` : label}
+        aria-label={
+          `Active network: ${label}${shortSha ? `, build ${shortSha}` : ""}` +
+          (buildsMatch === false ? ` — server build ${serverShortSha} differs` : "")
+        }
+        title={
+          buildsMatch === false
+            ? `${label} — client ${GIT_SHA || "?"} · server ${serverFullSha || serverShortSha} (mismatch)`
+            : shortSha
+              ? `${label} — build ${GIT_SHA}`
+              : label
+        }
         className="badge badge-ghost gap-1 cursor-pointer h-6 px-2 text-xs font-normal opacity-50 hover:opacity-100 transition-opacity"
       >
         <GlobeAltIcon className="h-3 w-3" aria-hidden />
         <span>{label}</span>
         {shortSha && <span className="opacity-60 font-mono text-[10px]">· {shortSha}</span>}
+        {buildsMatch === false && (
+          <ExclamationTriangleIcon
+            className="h-3 w-3 text-warning"
+            aria-hidden
+            title="Client and server builds differ"
+          />
+        )}
       </div>
       <div
         tabIndex={0}
@@ -153,7 +283,9 @@ export const NetworkChip = () => {
           </div>
           {(GIT_SHA || FORK_BLOCK) && (
             <div>
-              <div className="text-[10px] uppercase tracking-wide opacity-60">Build</div>
+              <div className="text-[10px] uppercase tracking-wide opacity-60">
+                {serverVersion ? "Client build" : "Build"}
+              </div>
               {GIT_SHA && (
                 <div className="flex items-center gap-1.5">
                   <div className="font-mono text-xs flex-1 min-w-0 truncate" title={GIT_SHA}>
@@ -168,6 +300,36 @@ export const NetworkChip = () => {
                   Fork block: <span className="font-mono">{Number(FORK_BLOCK).toLocaleString()}</span>
                 </div>
               )}
+            </div>
+          )}
+          {serverVersion && (serverFullSha || serverShortSha) && (
+            <div>
+              <div className="text-[10px] uppercase tracking-wide opacity-60 flex items-center gap-1">
+                Server build
+                {buildsMatch === false && (
+                  <span
+                    className="text-warning normal-case tracking-normal text-[10px] font-medium"
+                    title="Client and server are on different commits"
+                  >
+                    · mismatch
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-1.5">
+                <div className="font-mono text-xs flex-1 min-w-0 truncate" title={serverFullSha || serverShortSha}>
+                  {(serverFullSha || serverShortSha).slice(0, 12)}
+                  {(serverFullSha || serverShortSha).length > 12 && "…"}
+                </div>
+                <CopyButton value={serverFullSha || serverShortSha} label="Copy server commit SHA" />
+              </div>
+              <div className="text-[11px] opacity-60 mt-0.5 flex gap-2">
+                {serverVersion.repo_branch && (
+                  <span>
+                    Branch: <span className="font-mono">{serverVersion.repo_branch}</span>
+                  </span>
+                )}
+                {serverPublishedRelative && <span>Published {serverPublishedRelative}</span>}
+              </div>
             </div>
           )}
           {Object.keys(chainContracts).length > 0 && (
