@@ -162,15 +162,66 @@ function shutdown(signal, exitCode) {
   for (const child of children) {
     killTree(child, signal ?? "SIGTERM");
   }
-  if (typeof exitCode === "number") {
-    // Give children a tick to flush before exit.
-    setTimeout(() => process.exit(exitCode), 100);
-  }
+  if (typeof exitCode !== "number") return; // `exit` event path — Node is already unwinding
+
+  // Wait up to 5s for children's full process trees to exit before terminating
+  // the launcher ourselves. Next.js can take 2–3s to flush its compiler state
+  // after SIGTERM; the previous 100ms grace routinely orphaned `next-server`
+  // on :3000 when Claude Code sent SIGTERM at session close. After the
+  // deadline, escalate any stragglers to SIGKILL — at shutdown, port release
+  // trumps clean teardown.
+  const DEADLINE_MS = 5000;
+  const startedAt = Date.now();
+  const poll = setInterval(() => {
+    const alive = children.filter(c => c.exitCode === null && c.signalCode === null);
+    const elapsed = Date.now() - startedAt;
+    if (alive.length === 0 || elapsed >= DEADLINE_MS) {
+      clearInterval(poll);
+      for (const child of alive) {
+        log(`child pid ${child.pid} still alive after ${elapsed}ms; escalating to SIGKILL`);
+        killTree(child, "SIGKILL");
+      }
+      process.exit(exitCode);
+    }
+  }, 200);
 }
 
 process.on("SIGINT", () => shutdown("SIGINT", 130));
 process.on("SIGTERM", () => shutdown("SIGTERM", 143));
 process.on("exit", () => shutdown("SIGTERM"));
+
+/**
+ * Parent-death watchdog.
+ *
+ * Claude Code can exit abruptly (SIGKILL on quit, crash, OS shutdown) without
+ * giving this launcher a chance to run its SIGTERM handler. When that happens,
+ * our detached child groups survive as launchd-reparented orphans — the
+ * hardhat fork stays bound to :8545, `next-server` stays bound to :3000, and
+ * the ports are only freed on manual `kill -- -<pgid>`.
+ *
+ * Poll PPID every 2s: the moment it changes (parent died, OS reparented us to
+ * launchd/init = pid 1), run the normal shutdown path. `shutdown()` is
+ * idempotent — if a SIGTERM *did* reach us, the guard short-circuits here.
+ *
+ * Design notes:
+ *   - Closing only the Claude Code preview *pane* (iframe hide) does not kill
+ *     the MCP bridge process that spawned us, so PPID stays stable and this
+ *     watchdog stays silent. That's intentional: users often want to keep
+ *     testing in their own browser after closing the pane for screen space.
+ *   - We can't solve this by dropping `detached:true` on the children —
+ *     `yarn` doesn't forward signals, so without a dedicated process group we
+ *     have no way to reach `hardhat node` or `next-server` through the yarn
+ *     wrapper layers. See `killTree` doc for the full story.
+ *   - `.unref()` so this interval doesn't hold the event loop open on its own
+ *     once the children exit under normal shutdown.
+ */
+const originalPpid = process.ppid;
+setInterval(() => {
+  if (!shuttingDown && process.ppid !== originalPpid) {
+    log(`parent pid ${originalPpid} gone (reparented to ${process.ppid}); shutting down`);
+    shutdown("SIGTERM", 143);
+  }
+}, 2000).unref();
 
 async function main() {
   const hardhatPort = await findFreePort(HARDHAT_START);
