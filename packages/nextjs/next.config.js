@@ -1,5 +1,35 @@
 // @ts-check
 
+const { execSync } = require("node:child_process");
+
+/**
+ * Build-time constants baked into `process.env` for client-side consumption.
+ *
+ * Static export → `NEXT_PUBLIC_*` are inlined at build time, so any "what
+ * commit is this?" / "what fork block is this?" info the UI shows must be
+ * captured here. Runtime lookup isn't available (no server, no file reads).
+ *
+ * `NEXT_PUBLIC_GIT_SHA`: commit SHA at build time. Lets users paste a precise
+ * pointer into bug reports. Respect an externally-provided value (CI often
+ * sets it) before shelling out to git — git may not be available in some
+ * hermetic build envs.
+ *
+ * `NEXT_PUBLIC_FORK_BLOCK`: pinned Sepolia block number the devnet chain forks
+ * from (ADR-0037). Surfaced in the NetworkChip so operators can verify the
+ * devnet VPS and local hardhat are on the same pin — mismatch here is the
+ * #1 cause of "my local looks broken but CI is fine" confusion.
+ */
+const gitSha = (() => {
+  if (process.env.NEXT_PUBLIC_GIT_SHA) return process.env.NEXT_PUBLIC_GIT_SHA;
+  try {
+    return execSync("git rev-parse HEAD", { encoding: "utf8" }).trim();
+  } catch {
+    return "";
+  }
+})();
+process.env.NEXT_PUBLIC_GIT_SHA = gitSha;
+process.env.NEXT_PUBLIC_FORK_BLOCK = process.env.NEXT_PUBLIC_FORK_BLOCK ?? process.env.FORK_BLOCK ?? "10691000";
+
 /**
  * Next.js config.
  *
