@@ -114,12 +114,10 @@ export async function seedDemoTree() {
   // 05_mirrors.ts (names: onchain, ipfs, arweave, magnet, https).
   const transportsUID = await indexer.resolvePath(rootUID, "transports");
   const httpsTransportUID = await indexer.resolvePath(transportsUID, "https");
-  const ipfsTransportUID = await indexer.resolvePath(transportsUID, "ipfs");
 
   console.log(`Indexer:  ${indexer.target}`);
   console.log(`Root:     ${rootUID}`);
-  console.log(`/transports/https:  ${httpsTransportUID.slice(0, 14)}…`);
-  console.log(`/transports/ipfs:   ${ipfsTransportUID.slice(0, 14)}…\n`);
+  console.log(`/transports/https:  ${httpsTransportUID.slice(0, 14)}…\n`);
 
   // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -482,7 +480,9 @@ export async function seedDemoTree() {
   } else {
     const ownerPhotoData = await makeData(deployerSigner, "owner-photo-png-bytes");
     await makeProperty(deployerSigner, ownerPhotoData, "contentType", "image/png");
-    await makeMirror(deployerSigner, ownerPhotoData, ipfsTransportUID, "ipfs://owner-version-of-photo");
+    // Real HTTPS URLs so the editions demo loads in the browser.
+    // Two different picsum seeds give visually distinct images for owner vs user1.
+    await makeMirror(deployerSigner, ownerPhotoData, httpsTransportUID, "https://picsum.photos/seed/efs-owner/400/300");
     await makePin(deployerSigner, ownerPhotoData, photoUID);
   }
   await walkAncestorVisibility(deployerSigner, photoUID);
@@ -493,7 +493,7 @@ export async function seedDemoTree() {
   } else {
     const user1PhotoData = await makeData(user1, "user1-photo-png-bytes");
     await makeProperty(user1, user1PhotoData, "contentType", "image/png");
-    await makeMirror(user1, user1PhotoData, ipfsTransportUID, "ipfs://user1-version-of-photo");
+    await makeMirror(user1, user1PhotoData, httpsTransportUID, "https://picsum.photos/seed/efs-user1/400/300");
     await makePin(user1, user1PhotoData, photoUID);
   }
   await walkAncestorVisibility(user1, photoUID);
