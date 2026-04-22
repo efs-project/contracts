@@ -2,6 +2,57 @@
 
 Rules for any AI agent working in this repo — Claude Code, Codex CLI, Cursor, Gemini, GitHub Actions, etc. Read this before any non-trivial task.
 
+## Permanence tiers — what can you unship?
+
+EFS code lives on three surfaces with different unship-cost. Identify which before you start; the principles below scope to the tier.
+
+**Etched — mathematically irreversible state.** Mainnet contracts (ADR-0030), schema field definitions (field strings hash into UIDs — any change orphans prior attestations), append-only index shapes (ADR-0009), ADR-codified invariants, mainnet ABI-visible function and event signatures (downstream subgraphs and clients bind to these once deployed), and anything hashed into permanent identity (e.g., contract addresses that become part of schema UIDs at registration).
+
+*Not Etched* — these go through the existing trivial-changes fast path in the Escalation tiers section below, even if they technically live in a deployed artifact: revert strings, log messages, comments, internal/private function and variable names, commit-level renames of file-local symbols with no external references.
+
+- Frame: *minimum irreversible assumptions*, not minimum code. An abstraction that keeps an invariant loose-coupled earns its keep.
+- **50-year test.** Before finalizing: *will the intent be legible to a reader inheriting this cold in 50 years? Would they make this choice fresh today? Does an ADR reconstruct why?* If any answer is "unclear," escalate — the decision isn't ready.
+- **Pushback is part of the task.** If a human request on an Etched surface looks short-horizon or narrowly framed, raising the concern in chat before acting is part of what counts as doing the task — not an optional addition.
+- When torn between two Etched choices, pick the one that leaves more future options open.
+
+**Durable — expensive but fixable.** Code/interface surfaces: devnet contracts (pre-mainnet; become Etched at launch), public TS APIs that cross package or repo boundaries (notably those the Vite client at `github.com/efs-project/client` consumes), committed `deployedContracts.ts` shape, seed conventions. Process surfaces: spec / ADR / QUESTIONS formats. Karpathy's principles apply; permanence wins ties. Devnet contracts approaching mainnet should progressively adopt Etched discipline — don't leave Etched-grade review for the week of launch.
+
+*Break-glass for hotfixes*: if a critical bug threatens a near-term devnet deadline, a short-form ADR (3 bullets — context, decision, consequences) is acceptable and full discipline (the 50-year test, invariant testing) can be retroactive. Mark the PR as a break-glass fix and open a follow-up issue to complete the discipline. Do not use this path for planned feature work.
+
+**Ephemeral — change next commit.** `packages/nextjs/` debug UI, deploy scripts, dev tooling, tests, docs prose, CI glue that isn't contract-adjacent. Karpathy's principles apply cleanly; ship the simple version.
+
+**When uncertain.** Surface the classification question before acting — don't silently escalate to be safe. If the human isn't reachable, lean one tier more permanent than your guess and flag the assumption loudly in the PR. Never lean the other way.
+
+## Working principles
+
+These apply to all work, scoped by the permanence tiers above. Escalation tiers below handle *when to stop*; these handle *how to proceed*.
+
+**Governance override.** Specs and accepted ADRs outrank every heuristic here. If a principle seems to conflict with an ADR, the ADR wins — surface the conflict as Tier 2 rather than override it.
+
+**Simplicity first — scoped by surface.**
+
+- *Ephemeral / Durable*: minimum code that solves the *stated* problem. No speculative abstractions, no unrequested configurability, no error handling for impossible cases, no "while I'm here" cleanups. If you wrote 200 lines and 50 would do, rewrite it.
+- *Etched*: simplicity means *conceptual clarity* and *minimum irreversible assumptions*, not minimum line count. An abstraction that keeps an invariant loose-coupled earns its keep. Never remove an existing abstraction on Etched because you'd code it differently — escalate if it looks vestigial.
+- Everywhere: **minimum ≠ incomplete.** The floor is everything the request asks for; simplicity is about not doing *more*, never doing *less*.
+- Sanity check: Ephemeral/Durable — *overbuilt or underbuilt?* Etched — the 50-year test.
+
+**Surgical changes.** Touch only what the task requires. Match surrounding style even when you'd do it differently. Note adjacent observations (`// AGENT-NOTE:`, `docs/FUTURE_WORK.md`, `docs/decisions.md`); don't delete or rewrite in this PR.
+
+- *Orphan exception*: remove imports/variables/helpers that *your* changes orphaned.
+- On *Etched*, before removing a pre-existing orphan, grep `specs/`, `docs/adr/`, and — where relevant — `github.com/efs-project/client`. **Show your work**: quote the commands and their output in the PR. If your tooling can't search remote repos, say so and ask the human to verify — do not treat a null result from an unrun check as confirmation. Hallucinated verification on Etched is a 50-year mistake.
+- *Architectural-observation exception*: if surgical work uncovers an invariant violation, index corruption, or ADR contradiction, escalate — don't silently patch around it. On Etched this is mandatory.
+
+Every changed line should trace to the user's request, or to orphans your changes created.
+
+**Goal-driven execution.** Before multi-step work, state a brief numbered plan with a verification step per item.
+
+- For *Durable* or *Etched* work, open the plan with `Permanence tier: <Etched|Durable>`. This anchors the frame durably across a long context.
+- Bug fixes where a test path exists: write the failing test first, then make it pass. For UI paths without test coverage, describe reproduction steps. Match effort to risk — a typo doesn't need a test.
+- Refactors: confirm the suite passes before and after.
+- *Etched* work that introduces or changes an Etched design decision: write (or update) the ADR *before* the code — if a 50-year reader can't reconstruct *why* from the ADR, the decision isn't ready. Small fixes on Etched surfaces that don't change an Etched decision (bug fixes, gas optimizations within an existing invariant) don't need a new ADR. On all Etched contract work, consider invariant / property-based tests beyond unit coverage.
+
+**State assumptions proactively.** For one-sentence ambiguities, name your reading before acting: *"taking this as X — say if you meant Y."* Catches small misreadings cheaply. For design-level ambiguity with divergent consequences, stop and ask per Tier 2 — don't caveat and proceed.
+
 ## Escalation tiers — when to ask the human
 
 The human runs several agents in parallel. Wrong-direction work compounds expensively. **When in doubt, default to Tier 2.**

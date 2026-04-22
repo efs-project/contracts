@@ -210,6 +210,7 @@ cd packages/hardhat && npx hardhat test test/EFSIndexer.test.ts --network hardha
 
 - **Specs are authoritative.** If specs and code disagree, surface it (likely Tier 2). Don't guess which is right.
 - **ADRs are immutable once Accepted.** Don't edit historical ones. Supersede instead.
+- **Permanence-tier awareness.** Before any non-trivial work, identify whether you're on an Etched, Durable, or Ephemeral surface (see `docs/agent-workflow.md` → Permanence tiers). On Etched surfaces (mainnet contracts, schema UIDs, append-only index shapes, ADR-codified invariants), the frame is "minimum irreversible assumptions" and the 50-year test applies. Simplicity heuristics that bias toward "minimum code" are subordinate to future-proofing on these surfaces.
 
 ---
 
