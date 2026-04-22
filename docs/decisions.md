@@ -8,6 +8,10 @@ Informal dated log of small decisions agents made while working. Lighter than AD
 
 ---
 
+### 2026-04-22 — [claude-sonnet-4.6 · dev] PIN/TAG schema split resolves ADR-0035 PROPERTY-singleton flaw
+
+Closed `docs/QUESTIONS.md` Tier-2 entry "ADR-0035 PROPERTY singleton claim does not hold." Resolution: ADR-0041 (Etched) supersedes ADR-0035 with two sibling schemas — PIN (cardinality 1) and TAG (cardinality N with `int256 weight`). PROPERTY value binding becomes a PIN under the key anchor; the new schema-aware `_edgeHash(attester, targetID, definition, schema)` and per-slot `_activeBySlot` storage give PROPERTY rebinds genuine O(1) supersede semantics on-chain — no more newest-by-time read-side workaround. Removal is `eas.revoke()` only (no `applies=false`). Cardinality lives in the schema UID, the only permanent globally-coordinated coordination point in EFS. Touches all six existing data-model ADRs by reframing TAG-the-singleton as PIN; out-of-scope items (DATA deprecation, kernel layer-2/layer-3 split, layer-3 audit of `containsAttestations`) recorded in the plan and `specs/01-System-Architecture.md` working sketch.
+
 ### 2026-04-21 — [claude] Commit / PR / agent-attribution conventions
 
 Adopted GitHub-native multi-agent conventions: area-prefix + imperative commit subjects (not strict Conventional Commits — matches OpenZeppelin/Uniswap/Go house style); sentence-case kernel trailers (`Co-authored-by:`, `Reviewed-by:`, `Suggested-by:`, `Tested-by:`) plus an invented `Permanence-tier:`; PR template with required Permanence tier + Specs/ADRs fields; GitHub-native Review via `gh pr review` with GraphQL `resolveReviewThread` for thread resolution; per-comment speaker prefix `[model · role]` for attribution hygiene. AI-disclosure norm follows Foundry/TypeScript (2024) lifted to per-comment granularity. Logged in `docs/agent-workflow.md` § Commits, PRs, and agent attribution; template at `.github/PULL_REQUEST_TEMPLATE.md`. Historical commits keep existing `Co-Authored-By:` title case — the sentence-case fix is prospective only.

@@ -1,6 +1,6 @@
 # ADR-0035: PROPERTY as free-floating value placed via TAG
 
-**Status:** Accepted
+**Status:** Superseded by ADR-0041
 **Date:** 2026-04-18
 **Related:** ADR-0002 (DATA standalone), ADR-0003 (TAG-based placement), ADR-0005 (superseded — contentType moved to PROPERTY), ADR-0014 (edition-scoped PROPERTY lookup), ADR-0034 (`name` PROPERTY)
 

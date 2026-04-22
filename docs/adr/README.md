@@ -106,9 +106,13 @@ What else we looked at and why it lost.
 ### Navigation & Containers
 - [ADR-0033 — Root containers and schema alias anchors](./0033-root-containers-and-schema-alias-anchors.md)
 - [ADR-0034 — `name` PROPERTY as display-name fallback](./0034-display-name-property-convention.md)
-- [ADR-0035 — PROPERTY as free-floating value placed via TAG](./0035-property-free-floating-and-tag-placed.md)
+- [ADR-0035 — PROPERTY as free-floating value placed via TAG](./0035-property-free-floating-and-tag-placed.md) *(Superseded by ADR-0041)*
 - [ADR-0039 — Default editions priority chain](./0039-default-editions-priority-chain.md)
+- [ADR-0041 — PIN/TAG schema split for cardinality, with weighted edges](./0041-pin-tag-schema-split-for-cardinality.md)
 
 ### View APIs
 - [ADR-0036 — Opaque-cursor pagination for multi-source views](./0036-opaque-cursor-pagination.md)
+
+### Frontend / Static Export
+- [ADR-0040 — Read dynamic route params from `usePathname`, not `useParams`, in static-exported dynamic routes](./0040-static-export-usepathname-over-useparams.md)
 
