@@ -169,15 +169,15 @@ contract EFSFileView {
     ///      Callers wanting more than this many editions need a different aggregation model.
     uint256 private constant MAX_ATTESTERS_PER_QUERY = 20;
 
-    /// @dev Internal batch size for `_childrenTaggedWith` chunk fetches during the folder
+    /// @dev Internal batch size for `_childrenWithEdge` chunk fetches during the folder
     ///      phase of `getDirectoryPageBySchemaAndAddressList`. Chosen to keep memory use
     ///      bounded while still amortizing external-call overhead.
     uint256 private constant _FOLDER_SCAN_CHUNK = 64;
 
     /// @dev Hard cap on entries inspected in phase 0 per call. The append-only
-    ///      `_childrenTaggedWith[parent][schema]` list can grow unboundedly for a hot
+    ///      `_childrenWithEdge[parent][schema]` list can grow unboundedly for a hot
     ///      directory, and a page where most entries get filtered out (wrong attester,
-    ///      revoked) would otherwise loop `_childrenTaggedWith.length` times in a
+    ///      revoked) would otherwise loop `_childrenWithEdge.length` times in a
     ///      single eth_call — causing RPC timeouts or provider out-of-gas. The budget
     ///      bounds per-call work; the opaque cursor continues progress across calls
     ///      (same pattern as ADR-0020's `MAX_PAGES = 10` mirror-scan cap in
@@ -190,9 +190,10 @@ contract EFSFileView {
      *         sources are disjoint (tagged folders vs. direct children of `anchorSchema`):
      *
      *           Phase 0: qualifying generic folders — subfolders under `parentAnchor` that
-     *                    at least one `attesters[]` entry has an active applies=true TAG on
-     *                    with `definition = anchorSchema` (ADR-0006 revised, single-source
-     *                    tag-only folder visibility).
+     *                    at least one `attesters[]` entry has an active TAG on with
+     *                    `definition = anchorSchema` (ADR-0006 revised, ADR-0038, ADR-0041:
+     *                    single-source tag-only folder visibility under the cardinality-N
+     *                    TAG schema).
      *           Phase 1: direct child anchors of `anchorSchema` under `parentAnchor`, scoped
      *                    to `attesters[]` via `_childrenBySchema` + `containsAttestations`.
      *

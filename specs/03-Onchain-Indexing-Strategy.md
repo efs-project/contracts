@@ -88,7 +88,7 @@ To support subjective file resolution natively onchain, two coordinated index sy
 **Do not use raw `_activeByAAS` queries for folder listing.** The index is keyed per file anchor, not per folder. Listing the files inside `/memes/` requires iterating the folder's child anchors. Use `EFSFileView` (next section) — it handles the iteration, pagination, edition merge, and revocation filtering for you.
 
 ### EFSFileView: High-level directory views
-EFSFileView is the read-side wrapper most client code should call rather than composing EFSIndexer + TagResolver queries by hand. Three variants:
+EFSFileView is the read-side wrapper most client code should call rather than composing EFSIndexer + EdgeResolver queries by hand. Three variants:
 
 - `getDirectoryPage(parent, start, length, dataSchemaUID, propertySchemaUID)` — all children, insertion order.
 - `getDirectoryPageByAddressList(parent, attesters, startingCursor, pageSize)` — attester-filtered directory listing.

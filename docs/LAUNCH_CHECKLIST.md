@@ -25,7 +25,7 @@ Update statuses with `[x]` as items land. Add notes inline if blocked.
 - [ ] Devnet contracts deployed behind upgradeable proxy (resolved in `docs/QUESTIONS.md`: which proxy pattern)
 - [ ] Upgrade procedure documented (storage layout enforcement via OpenZeppelin's `hardhat-upgrades`)
 - [ ] Reset procedure includes redeploying all contracts and clearing all on-chain state
-- [ ] EFSIndexer wired to TagResolver, MirrorResolver, EFSSortOverlay
+- [ ] EFSIndexer wired to EdgeResolver, MirrorResolver, EFSSortOverlay
 - [ ] System anchors created: root, `/transports/onchain`, `/transports/ipfs`, `/transports/arweave`, `/transports/magnet`, `/transports/https`
 - [ ] `setTransportsAnchor()` called on MirrorResolver
 

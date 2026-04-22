@@ -77,10 +77,10 @@ For a new file:
 1. **Chunk the bytes.** SSTORE2 — content split into ~24KB chunks, each deployed as a raw-bytecode contract. A chunk-manager contract is deployed that knows how to reassemble them.
 2. **Attest the DATA** (`contentHash`, `size`). If the hash already exists in `dataByContentKey`, reuse the canonical DATA — skip this step.
 3. **Attest a MIRROR** pointing `web3://<chunkManager>:<chainId>` at the DATA. Additional MIRRORs (ipfs://, ar://, etc.) may be added for redundancy.
-4. **Attest contentType** — three attestations batched (ADR-0035): `Anchor<PROPERTY>(refUID=DATA, name="contentType")` (skipped if already exists), a free-floating `PROPERTY(value="image/png")`, and a `TAG(definition=that anchor, refUID=that property)`.
+4. **Attest contentType** — three attestations batched (ADR-0041 supersedes ADR-0035): `Anchor<PROPERTY>(refUID=DATA, name="contentType")` (skipped if already exists), a free-floating `PROPERTY(value="image/png")`, and a `PIN(definition=that anchor, refUID=that property)` that binds the value into the cardinality-1 slot.
 5. **Attest an ANCHOR** for the filename under the target folder (if the name slot doesn't already exist).
-6. **Attest a TAG** linking the DATA to the file Anchor under the uploader's address.
-7. **Ancestor-walk visibility TAGs** (ADR-0006 revised) — for every generic folder on the path from the immediate parent up to root exclusive, if the uploader has no active applies=true `TAG(definition=dataSchemaUID, refUID=folder)` yet, emit one. Ensures the uploader's edition listing shows the folders that contain their content. Steady-state zero cost (walk exits once an existing TAG is found); pays 1 TAG per untagged ancestor on the first upload into a new subtree.
+6. **Attest a PIN** linking the DATA to the file Anchor under the uploader's address. Cardinality 1 — re-attesting at the same `(attester, definition, targetSchema)` slot supersedes the prior placement in O(1).
+7. **Ancestor-walk visibility TAGs** (ADR-0006 revised, ADR-0038, ADR-0041) — for every generic folder on the path from the immediate parent up to root exclusive, if the uploader has no active `TAG(definition=dataSchemaUID, refUID=folder, weight=1)` yet, emit one. Ensures the uploader's edition listing shows the folders that contain their content. Steady-state zero cost (walk exits once an existing TAG is found); pays 1 TAG per untagged ancestor on the first upload into a new subtree.
 
 Typical new upload: ~10 transactions. Gas-heavy by design — this is archival, not a commodity file service.
 
@@ -89,7 +89,7 @@ Typical new upload: ~10 transactions. Gas-heavy by design — this is archival, 
 1. Router parses the URL: path segments + `?editions=`, `?caller=`.
 2. **Top-level segment is classified** into one of four container flavors (ADR-0033): Ethereum address, EAS schema UID, EAS attestation UID, or anchor name. Address seeds `currentParent` with `bytes32(uint160(addr))`; anchor names seed `rootAnchorUID`. For schema and attestation UIDs, the router first checks for an **alias anchor** — a root-child anchor whose name is the UID in lowercase 0x-hex — and seeds `currentParent` with the alias if present; otherwise it seeds the raw UID. Alias anchors let schemas and attestations carry EFS-native metadata (human label PROPERTY, sub-anchors, TAGs) without conflating with the raw EAS record. When the container is an address and `?editions=` wasn't given, the router defaults editions to `[caller, segmentAddr]`.
 3. Walks the remaining path segments using `EFSIndexer.resolvePath` — every flavor reduces to a bytes32 parent, so the walk is the same code path.
-4. For each edition attester in order, queries `TagResolver` for active TAGs at that Anchor → DATA. First attester with a match wins. Returns the DATA UID plus that attester's address.
+4. For each edition attester in order, queries `EdgeResolver` for the active placement PIN at that Anchor → DATA (cardinality-1, O(1) read). First attester with a match wins. Returns the DATA UID plus that attester's address.
 5. Finds the best MIRROR for the DATA **from the same attester**, by transport priority: `web3:// > ar:// > ipfs:// > magnet: > https://`. Skips revoked mirrors and invalid URIs. Capped at 500 mirror scans per request.
 6. Finds the `contentType` PROPERTY **from the same attester** on the DATA. Falls back to `application/octet-stream`.
 7. Serves:
