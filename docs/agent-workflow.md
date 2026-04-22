@@ -53,6 +53,89 @@ Every changed line should trace to the user's request, or to orphans your change
 
 **State assumptions proactively.** For one-sentence ambiguities, name your reading before acting: *"taking this as X — say if you meant Y."* Catches small misreadings cheaply. For design-level ambiguity with divergent consequences, stop and ask per Tier 2 — don't caveat and proceed.
 
+## Commits, PRs, and agent attribution
+
+EFS is built through you (and several other agents) acting via the human's GitHub account. Without discipline, the git log collapses — everything looks like it came from the human, and reading agents mis-attribute. These conventions keep the audit trail intact while leaning on GitHub-native primitives.
+
+**AI assistance is expected and must be disclosed** at three granularities: commit trailers, PR template fields, and comment speaker prefixes. Disclosure is what makes the audit trail honest.
+
+### Commit messages
+
+- **Subject**: `<area>: <imperative ≤72 chars>`. Area is either a Conventional-Commits-style type (`fix`, `docs`, `refactor`) when it fits, or a subsystem name (`router`, `indexer`, `schemas`) when the subsystem is more informative. Both are legal in the same log — don't convert between them in review. No `feat(router):` double-prefixing.
+- **Body**: wrap at 72 chars. Answer *what problem existed / why this approach / what was verified / what tradeoff was accepted*. Don't summarize the diff — the diff summarizes itself.
+- **No Conventional Commits enforcement, no commitlint.** The `feat:`/`fix:` visual grep is useful; the spec's release-automation payload is not (EFS has no release pipeline). This matches OpenZeppelin / Uniswap / Hardhat / Go house style.
+
+### Commit trailers
+
+Use kernel-blessed trailer keys (parseable by `git interpret-trailers`, rendered by GitHub). **Sentence case exactly** — GitHub's avatar-linking is case-sensitive; `Co-Authored-By:` (title case) renders as text, `Co-authored-by:` links the avatar.
+
+| When | Trailer | Example |
+|---|---|---|
+| Agent wrote code that landed | `Co-authored-by:` | `Co-authored-by: Claude Sonnet 4.6 <noreply@anthropic.com>` |
+| Agent reviewed the PR | `Reviewed-by:` | `Reviewed-by: Codex GPT-5 <noreply@openai.com>` |
+| Agent flagged an issue, didn't implement the fix | `Suggested-by:` | `Suggested-by: Gemini 2.5 Pro <noreply@google.com>` |
+| Agent ran verification / tests | `Tested-by:` | `Tested-by: Claude Sonnet 4.6 <noreply@anthropic.com>` |
+| Etched or Durable commits (mandatory) | `Permanence-tier:` | `Permanence-tier: Etched` |
+| When applicable | `Refs:` / `Fixes:` | `Refs: ADR-0033, specs/03-Onchain-Indexing-Strategy.md` |
+
+Vendor emails: `noreply@anthropic.com`, `noreply@openai.com`, `noreply@google.com`. These don't link to GitHub user profiles — accepted trade; the trailer documents *what* participated, not *whom*. Put the model's name + version in the value (`Claude Sonnet 4.6`, not just `Claude`).
+
+### PR template
+
+`.github/PULL_REQUEST_TEMPLATE.md` is auto-injected by GitHub on PR creation. Required fields: **Summary, Why, Permanence tier, Specs/ADRs touched, Test plan, Agents involved.** The Agents-involved field is load-bearing — it tells a reader (human or future agent) who actually produced this PR, so downstream work doesn't attribute intent to the human account by default.
+
+### PR comments and reviews — use GitHub's native Review feature
+
+For review passes, use `gh pr review` (creates a real Review object, participates in the request-changes flow), not `gh pr comment` (inline discussion only).
+
+- General review: `gh pr review <N> --comment --body "..."`
+- Approve: `gh pr review <N> --approve --body "..."`
+- Request changes: `gh pr review <N> --request-changes --body "..."`
+
+When fixing issues raised in review, resolve the conversation thread natively:
+
+```bash
+gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: "THREAD_ID"}) { thread { isResolved } } }'
+```
+
+Find thread IDs: `gh api graphql -f query='query { repository(owner:"OWNER",name:"REPO") { pullRequest(number:N) { reviewThreads(first:50) { nodes { id isResolved comments(first:1) { nodes { body } } } } } } }'`. If the mutation fails, reply inline with `fixed in <sha>` and move on — don't block on tooling friction.
+
+### Speaker prefix on agent-authored comments
+
+Every comment, review, and issue reply an agent writes opens with a bracketed prefix on its own line, then the content:
+
+```
+[claude-sonnet-4.6 · review]
+
+The edition-scope check at L42 misses the case where...
+```
+
+Role vocabulary (start minimal; extend only when a new role earns its keep):
+- `dev` — wrote the code
+- `review` — code review pass
+- `adversarial-review` — explicit try-to-break pass
+- `spec-auditor` — check spec/ADR alignment specifically
+- `plan` — plan-mode output (rare in PRs; mostly chat)
+
+The human writing from the GitHub UI does not prefix. Agents default-assume unprefixed comments are from the human. If a comment without prefix reads too technical or agent-shaped to be a quick human glance, ask rather than assume.
+
+*This per-comment prefix is an EFS-specific convention* — Foundry (CONTRIBUTING.md) and TypeScript (PR #63366, Oct 2024) require AI disclosure at PR level only. The finer granularity here exists because EFS actively runs multiple agents against each other through one GitHub account, and attribution drift across long PR conversations is a real failure mode.
+
+### Attribution hygiene — don't mis-attribute to the human
+
+Before replying to any PR or comment, read:
+1. The PR description's "Agents involved" field — who opened this and why.
+2. The speaker prefix on each comment being referenced.
+
+**When naming participants, name the agent, not the GitHub account.** Not *"James asked …"* if the question came from Codex. Not *"the human said …"* if it was a `[claude-review]` comment. When in doubt, read the prefix; when still in doubt, ask.
+
+### Non-requirements (explicit)
+
+- No commitlint, no pre-commit hooks enforcing commit grammar.
+- No per-agent GitHub Apps (accept "no avatar on co-author trailers" as the trade).
+- No separate `docs/style-guide.md` — this section is the guide.
+- No required CI check on the PR template (ship first; harden only if fields get skipped in practice).
+
 ## Escalation tiers — when to ask the human
 
 The human runs several agents in parallel. Wrong-direction work compounds expensively. **When in doubt, default to Tier 2.**

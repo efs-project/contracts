@@ -8,6 +8,10 @@ Informal dated log of small decisions agents made while working. Lighter than AD
 
 ---
 
+### 2026-04-21 — [claude] Commit / PR / agent-attribution conventions
+
+Adopted GitHub-native multi-agent conventions: area-prefix + imperative commit subjects (not strict Conventional Commits — matches OpenZeppelin/Uniswap/Go house style); sentence-case kernel trailers (`Co-authored-by:`, `Reviewed-by:`, `Suggested-by:`, `Tested-by:`) plus an invented `Permanence-tier:`; PR template with required Permanence tier + Specs/ADRs fields; GitHub-native Review via `gh pr review` with GraphQL `resolveReviewThread` for thread resolution; per-comment speaker prefix `[model · role]` for attribution hygiene. AI-disclosure norm follows Foundry/TypeScript (2024) lifted to per-comment granularity. Logged in `docs/agent-workflow.md` § Commits, PRs, and agent attribution; template at `.github/PULL_REQUEST_TEMPLATE.md`. Historical commits keep existing `Co-Authored-By:` title case — the sentence-case fix is prospective only.
+
 ### 2026-04-20 — [claude] `yarn preview` now group-kills its children on shutdown
 
 Problem: every `yarn preview` cycle was leaking a `hardhat node` process. User accumulated 7 stale forks over a day, enough to spin the fans visibly. Root cause: `scripts/claude-preview-launch.mjs` spawned `yarn hardhat:fork` and `yarn workspace @se-2/nextjs dev`, then on SIGINT/SIGTERM called `child.kill()` on the top-level yarn. Yarn doesn't forward signals to its descendants, so the outer yarn exited but left `hardhat node` (two `yarn` layers deeper) reparented to launchd and running forever.
