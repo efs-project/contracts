@@ -160,8 +160,14 @@ function EASExplorerContent() {
     contractName: "Indexer",
     functionName: "BLOB_SCHEMA_UID",
   });
+  // Edge schemas (PIN + TAG, ADR-0041) live on the EdgeResolver — they were
+  // registered with EdgeResolver as their resolver address, not the Indexer.
+  const { data: pinSchemaUid } = useScaffoldReadContract({
+    contractName: "EdgeResolver",
+    functionName: "PIN_SCHEMA_UID",
+  });
   const { data: tagSchemaUid } = useScaffoldReadContract({
-    contractName: "TagResolver",
+    contractName: "EdgeResolver",
     functionName: "TAG_SCHEMA_UID",
   });
 
@@ -345,6 +351,7 @@ function EASExplorerContent() {
     if (schemaUid === propertySchemaUid) return "Referencing Properties";
     if (schemaUid === dataSchemaUid) return "Linked Data";
     if (schemaUid === blobSchemaUid) return "Linked Blobs";
+    if (schemaUid === pinSchemaUid) return "Pins";
     if (schemaUid === tagSchemaUid) return "Tags";
 
     // ideally we would fetch the name for each schema in the list, but that requires a multi-read or sub-component.

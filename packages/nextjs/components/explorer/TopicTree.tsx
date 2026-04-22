@@ -393,7 +393,10 @@ const SchemasBranch = ({ activeUID }: { activeUID?: string | null }) => {
     functionName: "PROPERTY_SCHEMA_UID",
   });
   const { data: dataUID } = useScaffoldReadContract({ contractName: "Indexer", functionName: "DATA_SCHEMA_UID" });
-  const { data: tagUID } = useScaffoldReadContract({ contractName: "TagResolver", functionName: "TAG_SCHEMA_UID" });
+  // PIN and TAG schema UIDs live on EdgeResolver (ADR-0041) — they share one resolver
+  // contract but have distinct UIDs because the field strings differ.
+  const { data: pinUID } = useScaffoldReadContract({ contractName: "EdgeResolver", functionName: "PIN_SCHEMA_UID" });
+  const { data: tagUID } = useScaffoldReadContract({ contractName: "EdgeResolver", functionName: "TAG_SCHEMA_UID" });
   const { data: mirrorUID } = useScaffoldReadContract({ contractName: "Indexer", functionName: "MIRROR_SCHEMA_UID" });
   const { data: sortInfoUID } = useScaffoldReadContract({
     contractName: "Indexer",
@@ -408,6 +411,7 @@ const SchemasBranch = ({ activeUID }: { activeUID?: string | null }) => {
     { label: "ANCHOR", uid: anchorUID as string | undefined },
     { label: "DATA", uid: dataUID as string | undefined },
     { label: "PROPERTY", uid: propertyUID as string | undefined },
+    { label: "PIN", uid: pinUID as string | undefined },
     { label: "TAG", uid: tagUID as string | undefined },
     { label: "MIRROR", uid: mirrorUID as string | undefined },
     { label: "SORT_INFO", uid: sortInfoUID as string | undefined },

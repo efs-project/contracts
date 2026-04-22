@@ -14,6 +14,9 @@ export type FileActionsBarProps = {
   anchorSchemaUID: string;
   dataSchemaUID: string;
   propertySchemaUID: string;
+  // PIN/TAG schema split (ADR-0041): PIN is cardinality 1 (file placement, PROPERTY value
+  // binding), TAG is cardinality N (descriptive labels, folder visibility).
+  pinSchemaUID: string;
   tagSchemaUID: string;
   mirrorSchemaUID: string;
 
@@ -47,6 +50,7 @@ export const FileActionsBar = ({
   anchorSchemaUID,
   dataSchemaUID,
   propertySchemaUID,
+  pinSchemaUID,
   tagSchemaUID,
   mirrorSchemaUID,
   indexerAddress,
@@ -115,6 +119,7 @@ export const FileActionsBar = ({
         anchorSchemaUID={anchorSchemaUID}
         dataSchemaUID={dataSchemaUID}
         propertySchemaUID={propertySchemaUID}
+        pinSchemaUID={pinSchemaUID}
         tagSchemaUID={tagSchemaUID}
         mirrorSchemaUID={mirrorSchemaUID}
         indexerAddress={indexerAddress}

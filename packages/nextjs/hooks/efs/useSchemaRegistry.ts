@@ -26,10 +26,12 @@ export const useSchemaRegistry = () => {
   const { data: dataUID } = useScaffoldReadContract({ contractName: "Indexer", functionName: "DATA_SCHEMA_UID" });
   const { data: blobUID } = useScaffoldReadContract({ contractName: "Indexer", functionName: "BLOB_SCHEMA_UID" });
 
-  // TAG_SCHEMA_UID lives on TagResolver (not Indexer) — it was registered with
-  // the TagResolver address as its resolver. Debug flows use this to attest and
-  // decode tag payloads via the schemas.TAG key.
-  const { data: tagUID } = useScaffoldReadContract({ contractName: "TagResolver", functionName: "TAG_SCHEMA_UID" });
+  // PIN_SCHEMA_UID and TAG_SCHEMA_UID live on EdgeResolver (not Indexer) — they
+  // were registered with the EdgeResolver address as their resolver (ADR-0041).
+  // Debug flows use these to attest and decode edge payloads via the schemas.PIN
+  // and schemas.TAG keys.
+  const { data: pinUID } = useScaffoldReadContract({ contractName: "EdgeResolver", functionName: "PIN_SCHEMA_UID" });
+  const { data: tagUID } = useScaffoldReadContract({ contractName: "EdgeResolver", functionName: "TAG_SCHEMA_UID" });
 
   const schemas = useMemo(() => {
     if (!anchorUID) return null;
@@ -38,9 +40,10 @@ export const useSchemaRegistry = () => {
       PROPERTY: propertyUID,
       DATA: dataUID,
       BLOB: blobUID,
+      PIN: pinUID,
       TAG: tagUID,
     };
-  }, [anchorUID, propertyUID, dataUID, blobUID, tagUID]);
+  }, [anchorUID, propertyUID, dataUID, blobUID, pinUID, tagUID]);
 
   return {
     schemas,

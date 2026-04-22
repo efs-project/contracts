@@ -3,38 +3,10 @@
 import { useEffect, useState } from "react";
 import { decodeAbiParameters, encodeAbiParameters, parseAbiParameters, zeroHash } from "viem";
 import { useAccount, usePublicClient } from "wagmi";
-import { MinusIcon, PlusIcon, XMarkIcon } from "@heroicons/react/24/outline";
+import { PlusIcon, XMarkIcon } from "@heroicons/react/24/outline";
 import { useDeployedContractInfo, useScaffoldReadContract, useScaffoldWriteContract } from "~~/hooks/scaffold-eth";
-import { TAG_RESOLVER_ABI, getTagResolverAddress } from "~~/utils/efs/tagResolver";
+import { EDGE_RESOLVER_ABI, getEdgeResolverAddress } from "~~/utils/efs/edgeResolver";
 import { notification } from "~~/utils/scaffold-eth";
-
-const EAS_GET_ATTESTATION_ABI = [
-  {
-    inputs: [{ internalType: "bytes32", name: "uid", type: "bytes32" }],
-    name: "getAttestation",
-    outputs: [
-      {
-        components: [
-          { internalType: "bytes32", name: "uid", type: "bytes32" },
-          { internalType: "bytes32", name: "schema", type: "bytes32" },
-          { internalType: "uint64", name: "time", type: "uint64" },
-          { internalType: "uint64", name: "expirationTime", type: "uint64" },
-          { internalType: "uint64", name: "revocationTime", type: "uint64" },
-          { internalType: "bytes32", name: "refUID", type: "bytes32" },
-          { internalType: "address", name: "recipient", type: "address" },
-          { internalType: "address", name: "attester", type: "address" },
-          { internalType: "bool", name: "revocable", type: "bool" },
-          { internalType: "bytes", name: "data", type: "bytes" },
-        ],
-        internalType: "struct Attestation",
-        name: "",
-        type: "tuple",
-      },
-    ],
-    stateMutability: "view",
-    type: "function",
-  },
-] as const;
 
 interface TagModalProps {
   uid: string; // The anchor UID of the item being tagged
@@ -49,15 +21,17 @@ interface UserTag {
   definitionUID: `0x${string}`;
   tagName: string;
   activeTagUID: `0x${string}` | null; // null = no active tag by connected user
-  applies: boolean; // current applies value (false if no active tag)
 }
 
+// AGENT-NOTE (ADR-0041): TAGs are cardinality-N with `int256 weight`. There is no longer
+// an `applies` boolean and no "negate" semantic — removal is solely via eas.revoke().
+// Default weight=1 mirrors the test idioms.
 export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagChange }: TagModalProps) => {
   const [tagName, setTagName] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [userTags, setUserTags] = useState<UserTag[]>([]);
   const [isLoadingTags, setIsLoadingTags] = useState(false);
-  const [tagResolverAddress, setTagResolverAddress] = useState<`0x${string}` | undefined>();
+  const [edgeResolverAddress, setEdgeResolverAddress] = useState<`0x${string}` | undefined>();
   const [tagsRoot, setTagsRoot] = useState<`0x${string}` | undefined>();
   const [refreshKey, setRefreshKey] = useState(0);
 
@@ -90,15 +64,26 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
     functionName: "DATA_SCHEMA_UID",
   });
 
+  // Pull PIN/TAG schema UIDs directly from EdgeResolver (single source of truth).
+  const { data: pinSchemaUID } = useScaffoldReadContract({
+    contractName: "EdgeResolver",
+    functionName: "PIN_SCHEMA_UID",
+  });
+  const { data: tagSchemaUID } = useScaffoldReadContract({
+    contractName: "EdgeResolver",
+    functionName: "TAG_SCHEMA_UID",
+  });
+
   // For file items: resolve the DATA attestation UID to tag.
-  // DATA is standalone (refUID=0x0) and placed at anchors via TAGs, so we query
-  // TagResolver's _activeByAAS index: getActiveTargetsByAttesterAndSchema(anchor, attester, DATA_SCHEMA).
-  // The TagModal targets the DATA that the user is actually *viewing*:
+  // AGENT-NOTE (ADR-0041): DATA placement is now PIN (cardinality 1) — there's at most one
+  // active DATA per (attester, anchor) so we can use the O(1) `getActivePinTarget` reader
+  // instead of the old TAG count → enumerate → newest-by-time scan.
+  // The TagModal targets the DATA the user is actually *viewing*:
   //   - editions set → resolve via editionAddresses (what's on screen)
   //   - no editions → resolve via connectedAddress (own-files default view)
   //   - neither resolves → fall back to anchor UID (folder-level semantics)
   useEffect(() => {
-    if (!isFile || !publicClient || !tagResolverAddress || !dataSchemaUID) {
+    if (!isFile || !publicClient || !edgeResolverAddress || !dataSchemaUID || !pinSchemaUID) {
       setEffectiveUID(uid);
       if (!isFile) setIsResolvingDataUID(false);
       return;
@@ -124,51 +109,25 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
           return;
         }
 
-        // Query TagResolver for DATAs placed at this anchor by each attester (most recent first)
+        // First-attester-wins fallback per ADR-0031.
         for (const attester of viewAttesters) {
-          const count = (await publicClient.readContract({
-            address: tagResolverAddress,
-            abi: TAG_RESOLVER_ABI,
-            functionName: "getActiveTargetsByAttesterAndSchemaCount",
+          const target = (await publicClient.readContract({
+            address: edgeResolverAddress,
+            abi: EDGE_RESOLVER_ABI,
+            functionName: "getActivePinTarget",
             args: [uid as `0x${string}`, attester, dataSchemaUID as `0x${string}`],
-          })) as bigint;
+          })) as `0x${string}`;
 
-          if (count > 0n) {
-            // Scan all active targets and pick the one with the highest attestation timestamp.
-            // The swap-and-pop array is NOT chronologically ordered after removals.
-            const targets = (await publicClient.readContract({
-              address: tagResolverAddress,
-              abi: TAG_RESOLVER_ABI,
-              functionName: "getActiveTargetsByAttesterAndSchema",
-              args: [uid as `0x${string}`, attester, dataSchemaUID as `0x${string}`, 0n, count],
-            })) as `0x${string}`[];
-
-            if (targets.length > 0 && easInfo) {
-              let best = targets[0];
-              let bestTime = 0n;
-              for (const target of targets) {
-                if (!target || target === zeroHash) continue;
-                const att = (await publicClient.readContract({
-                  address: easInfo.address as `0x${string}`,
-                  abi: EAS_GET_ATTESTATION_ABI,
-                  functionName: "getAttestation",
-                  args: [target],
-                })) as { time: bigint };
-                if (att.time > bestTime) {
-                  bestTime = att.time;
-                  best = target;
-                }
-              }
-              if (!cancelled && best && best !== zeroHash) {
-                setEffectiveUID(best);
-                setIsResolvingDataUID(false);
-                return;
-              }
+          if (target && target !== zeroHash) {
+            if (!cancelled) {
+              setEffectiveUID(target);
+              setIsResolvingDataUID(false);
             }
+            return;
           }
         }
 
-        // No DATA found via tags — fall back to anchor UID
+        // No DATA found — fall back to anchor UID
         if (!cancelled) {
           setEffectiveUID(uid);
           setIsResolvingDataUID(false);
@@ -185,14 +144,14 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
     return () => {
       cancelled = true;
     };
-  }, [uid, isFile, publicClient, connectedAddress, editionAddresses, tagResolverAddress, dataSchemaUID, easInfo]);
+  }, [uid, isFile, publicClient, connectedAddress, editionAddresses, edgeResolverAddress, dataSchemaUID, pinSchemaUID]);
 
-  // Load TagResolver address and the "tags" anchor UID (discovered from the normal tree).
+  // Load EdgeResolver address and the "tags" anchor UID (discovered from the normal tree).
   useEffect(() => {
     if (!publicClient || !rootAnchorUID) return;
-    getTagResolverAddress(publicClient.chain.id).then(async addr => {
+    getEdgeResolverAddress(publicClient.chain.id).then(async addr => {
       if (!addr) return;
-      setTagResolverAddress(addr);
+      setEdgeResolverAddress(addr);
       // "tags" is a normal anchor under root — discovered the same way any folder is.
       const indexer = await import("~~/contracts/deployedContracts").then(m => {
         return (m.default as any)[publicClient.chain.id]?.Indexer;
@@ -211,9 +170,9 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
   }, [publicClient, rootAnchorUID]);
 
   // Load tag definitions on this target and check the connected user's active tags.
-  // Only shows tags where the connected user has an active tag (applied or negated).
+  // Only shows tags where the connected user has an active TAG.
   useEffect(() => {
-    if (!publicClient || !tagResolverAddress || !effectiveUID || !connectedAddress || !easInfo) {
+    if (!publicClient || !edgeResolverAddress || !effectiveUID || !connectedAddress || !easInfo || !tagSchemaUID) {
       setUserTags([]);
       return;
     }
@@ -231,10 +190,13 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
 
     const load = async () => {
       try {
+        // AGENT-NOTE: under EdgeResolver, definitions are recorded once per (target, definition)
+        // across PIN+TAG. Use getEdgeDefinitions to enumerate all definitions, then filter to
+        // those that resolve to a user-facing tag in the active TAG set.
         const count = (await publicClient.readContract({
-          address: tagResolverAddress,
-          abi: TAG_RESOLVER_ABI,
-          functionName: "getTagDefinitionCount",
+          address: edgeResolverAddress,
+          abi: EDGE_RESOLVER_ABI,
+          functionName: "getEdgeDefinitionCount",
           args: [effectiveUID as `0x${string}`],
         })) as bigint;
 
@@ -251,25 +213,30 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
         const allDefs: `0x${string}`[] = [];
         for (let cursor = 0n; cursor < count; cursor += PAGE_SIZE) {
           const page = (await publicClient.readContract({
-            address: tagResolverAddress,
-            abi: TAG_RESOLVER_ABI,
-            functionName: "getTagDefinitions",
+            address: edgeResolverAddress,
+            abi: EDGE_RESOLVER_ABI,
+            functionName: "getEdgeDefinitions",
             args: [effectiveUID as `0x${string}`, cursor, PAGE_SIZE],
           })) as `0x${string}`[];
           allDefs.push(...page);
         }
 
-        // For each definition, check if the connected user has an active tag and resolve the name.
-        // Only show tags whose definition anchor lives under /tags/ — file placement TAGs
+        // For each definition, check if the connected user has an active TAG and resolve the name.
+        // Only show tags whose definition anchor lives under /tags/ — file placement edges
         // (where definition is a file/folder anchor) are internal bookkeeping, not user-facing.
         const tags = await Promise.all(
           allDefs.map(async defUID => {
             const [activeTagUID, defAttestation] = await Promise.all([
               publicClient.readContract({
-                address: tagResolverAddress,
-                abi: TAG_RESOLVER_ABI,
-                functionName: "getActiveTagUID",
-                args: [connectedAddress as `0x${string}`, effectiveUID as `0x${string}`, defUID],
+                address: edgeResolverAddress,
+                abi: EDGE_RESOLVER_ABI,
+                functionName: "getActiveEdgeUID",
+                args: [
+                  connectedAddress as `0x${string}`,
+                  effectiveUID as `0x${string}`,
+                  defUID,
+                  tagSchemaUID as `0x${string}`,
+                ],
               }) as Promise<`0x${string}`>,
               getEASAttestation(defUID) as Promise<any>,
             ]);
@@ -307,26 +274,10 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
 
             const hasUserTag = activeTagUID && activeTagUID !== zeroHash;
 
-            // If user has an active tag, decode applies from the tag attestation
-            let applies = false;
-            if (hasUserTag) {
-              try {
-                const tagAtt = (await getEASAttestation(activeTagUID)) as any;
-                const [, tagApplies] = decodeAbiParameters(
-                  parseAbiParameters("bytes32 definition, bool applies"),
-                  tagAtt.data as `0x${string}`,
-                );
-                applies = tagApplies;
-              } catch {
-                applies = true; // default to true if decode fails
-              }
-            }
-
             return {
               definitionUID: defUID,
               tagName,
               activeTagUID: hasUserTag ? activeTagUID : null,
-              applies,
             } as UserTag;
           }),
         );
@@ -349,10 +300,10 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
     return () => {
       cancelled = true;
     };
-  }, [publicClient, tagResolverAddress, effectiveUID, connectedAddress, easInfo, refreshKey, tagsRoot]);
+  }, [publicClient, edgeResolverAddress, effectiveUID, connectedAddress, easInfo, refreshKey, tagsRoot, tagSchemaUID]);
 
-  const handleAddTag = async (applies: boolean) => {
-    if (!anchorSchemaUID || !connectedAddress || !publicClient || !tagResolverAddress || !tagsRoot) return;
+  const handleAddTag = async () => {
+    if (!anchorSchemaUID || !connectedAddress || !publicClient || !tagsRoot || !tagSchemaUID) return;
     setIsSubmitting(true);
 
     // Normalize tag names to lowercase so filter lookups (which also lowercase) always match
@@ -432,17 +383,12 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
         notification.info(`Tag definition "${normalizedTagName}" created.`);
       }
 
-      // Compute TAG schema UID from TagResolver address
-      const tagSchemaDefinition = "bytes32 definition, bool applies";
-      const { ethers } = await import("ethers");
-      const computedTagSchemaUID = ethers.solidityPackedKeccak256(
-        ["string", "address", "bool"],
-        [tagSchemaDefinition, tagResolverAddress, true],
-      );
-
-      const encodedTagData = encodeAbiParameters(parseAbiParameters("bytes32 definition, bool applies"), [
+      // AGENT-NOTE (ADR-0041): TAG payload is `(bytes32 definition, int256 weight)`. Default
+      // weight=1 — sign/magnitude is consumer-defined sort/score metadata. There is no
+      // applies bool and no negate path; removal is via eas.revoke().
+      const encodedTagData = encodeAbiParameters(parseAbiParameters("bytes32 definition, int256 weight"), [
         definitionUID as `0x${string}`,
-        applies,
+        1n,
       ]);
 
       // Tag the effectiveUID (DATA attestation for files, anchor for folders)
@@ -450,7 +396,7 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
         functionName: "attest",
         args: [
           {
-            schema: computedTagSchemaUID as `0x${string}`,
+            schema: tagSchemaUID as `0x${string}`,
             data: {
               recipient: "0x0000000000000000000000000000000000000000",
               expirationTime: 0n,
@@ -467,7 +413,7 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
         await publicClient.waitForTransactionReceipt({ hash: tagTxHash });
       }
 
-      notification.success(applies ? "Tag applied!" : "Tag negated!");
+      notification.success("Tag applied!");
       setTagName("");
       setRefreshKey(prev => prev + 1);
       onTagChange?.();
@@ -480,20 +426,15 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
   };
 
   // Remove a tag by revoking its active attestation on EAS.
-  // Revoking clears the active UID in TagResolver without creating extra attestations.
+  // AGENT-NOTE (ADR-0041): revocation is the ONLY removal mechanism — the old
+  // negate-via-applies-false path no longer exists.
   const handleRemoveTag = async (activeTagUID: `0x${string}`) => {
-    if (!tagResolverAddress || !publicClient) return;
+    if (!publicClient || !tagSchemaUID) return;
     setIsSubmitting(true);
     try {
-      const { ethers } = await import("ethers");
-      const tagSchemaUID = ethers.solidityPackedKeccak256(
-        ["string", "address", "bool"],
-        ["bytes32 definition, bool applies", tagResolverAddress, true],
-      ) as `0x${string}`;
-
       const txHash = await easWrite({
         functionName: "revoke",
-        args: [{ schema: tagSchemaUID, data: { uid: activeTagUID, value: 0n } }],
+        args: [{ schema: tagSchemaUID as `0x${string}`, data: { uid: activeTagUID, value: 0n } }],
       });
       if (txHash) await publicClient.waitForTransactionReceipt({ hash: txHash });
       notification.success("Tag removed!");
@@ -540,12 +481,7 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
                   className="bg-base-200 p-2 rounded text-sm flex items-center justify-between"
                 >
                   <div className="flex items-center gap-2">
-                    <span className={`badge badge-sm ${tag.applies ? "badge-primary" : "badge-warning"}`}>
-                      {tag.tagName}
-                    </span>
-                    <span className={`text-xs ${tag.applies ? "text-success" : "text-warning"}`}>
-                      {tag.applies ? "applies" : "negated"}
-                    </span>
+                    <span className="badge badge-sm badge-primary">{tag.tagName}</span>
                   </div>
                   {tag.activeTagUID && (
                     <button
@@ -573,26 +509,17 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
             value={tagName}
             onChange={e => setTagName(e.target.value)}
             onKeyDown={e => {
-              if (e.key === "Enter" && tagName.trim() && !isResolvingDataUID) handleAddTag(true);
+              if (e.key === "Enter" && tagName.trim() && !isResolvingDataUID) handleAddTag();
             }}
           />
           <div className="flex gap-2">
             <button
               className="btn btn-primary btn-sm flex-1"
-              onClick={() => handleAddTag(true)}
+              onClick={() => handleAddTag()}
               disabled={!tagName.trim() || isSubmitting || isResolvingDataUID}
             >
               <PlusIcon className="w-4 h-4 mr-1" />
               {isSubmitting ? "..." : "Apply"}
-            </button>
-            <button
-              className="btn btn-warning btn-sm flex-1"
-              onClick={() => handleAddTag(false)}
-              disabled={!tagName.trim() || isSubmitting || isResolvingDataUID}
-              title="Negate: explicitly mark this tag as NOT applying to this item"
-            >
-              <MinusIcon className="w-4 h-4 mr-1" />
-              {isSubmitting ? "..." : "Negate"}
             </button>
           </div>
           <p className="text-xs text-opacity-50 text-base-content mt-1">

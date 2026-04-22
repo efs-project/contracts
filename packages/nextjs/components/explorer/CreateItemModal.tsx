@@ -10,8 +10,8 @@ import { useDeployedContractInfo, useScaffoldWriteContract } from "~~/hooks/scaf
 import { useTargetNetwork } from "~~/hooks/scaffold-eth/useTargetNetwork";
 import { useBackgroundOps } from "~~/services/store/backgroundOps";
 import type { ClassifiedContainer } from "~~/utils/efs/containers";
+import { EDGE_RESOLVER_ABI, getEdgeResolverAddress } from "~~/utils/efs/edgeResolver";
 import { SORT_OVERLAY_ABI } from "~~/utils/efs/sortOverlay";
-import { TAG_RESOLVER_ABI, getTagResolverAddress } from "~~/utils/efs/tagResolver";
 import { TRANSPORT_LABELS, computeContentHash, detectTransport, resolveGatewayUrl } from "~~/utils/efs/transports";
 import { notification } from "~~/utils/scaffold-eth";
 
@@ -129,6 +129,9 @@ export type CreateItemModalProps = {
   anchorSchemaUID: string;
   dataSchemaUID: string;
   propertySchemaUID: string;
+  // PIN/TAG schema split (ADR-0041): file placement and PROPERTY value bindings
+  // are PIN (cardinality 1); descriptive labels and folder visibility are TAG (cardinality N).
+  pinSchemaUID: string;
   tagSchemaUID: string;
   mirrorSchemaUID: string;
 
@@ -151,6 +154,7 @@ export const CreateItemModal = ({
   anchorSchemaUID,
   dataSchemaUID,
   propertySchemaUID,
+  pinSchemaUID,
   tagSchemaUID,
   mirrorSchemaUID,
   indexerAddress,
@@ -464,10 +468,11 @@ export const CreateItemModal = ({
           newAnchorUID = extractUIDFromReceipt(receipt);
           if (!newAnchorUID) throw new Error("Could not extract new Anchor UID");
 
-          // Visibility TAG — folder visibility is tag-only (ADR-0006 revised 2026-04-18).
+          // Visibility TAG — folder visibility is tag-only (ADR-0038 / ADR-0041).
           // A folder appears in an edition-scoped listing iff at least one edition attester
-          // has an active applies=true TAG(definition=dataSchemaUID, refUID=folder).
-          const encodedTag = ethers.AbiCoder.defaultAbiCoder().encode(["bytes32", "bool"], [dataSchemaUID, true]);
+          // has an active TAG(definition=dataSchemaUID, refUID=folder, weight>0).
+          // AGENT-NOTE: weight=1n is the default; consumers may store sort/score metadata here.
+          const encodedTag = ethers.AbiCoder.defaultAbiCoder().encode(["bytes32", "int256"], [dataSchemaUID, 1n]);
           try {
             const tagTx = await attest(
               {
@@ -852,23 +857,23 @@ export const CreateItemModal = ({
       const contentTypePropertyUID = extractUIDFromReceipt(propReceipt);
       if (!contentTypePropertyUID) throw new Error("Could not extract contentType PROPERTY UID");
 
-      ops.log(opId, "Binding contentType TAG...");
-      const encodedContentTypeTag = ethers.AbiCoder.defaultAbiCoder().encode(
-        ["bytes32", "bool"],
-        [contentTypeKeyAnchorUID, true],
-      );
-      const contentTypeTagTxHash = await attest(
+      ops.log(opId, "Binding contentType PROPERTY via PIN...");
+      // AGENT-NOTE: PROPERTY value binding is a PIN under ADR-0041 (cardinality 1).
+      // Re-binding (changing contentType) at the same key anchor supersedes the prior PIN
+      // in O(1) — no revoke-then-attest dance.
+      const encodedContentTypePin = ethers.AbiCoder.defaultAbiCoder().encode(["bytes32"], [contentTypeKeyAnchorUID]);
+      const contentTypePinTxHash = await attest(
         {
           functionName: "attest",
           args: [
             {
-              schema: tagSchemaUID as `0x${string}`,
+              schema: pinSchemaUID as `0x${string}`,
               data: {
                 recipient: ethers.ZeroAddress,
                 expirationTime: 0n,
                 revocable: true,
                 refUID: contentTypePropertyUID,
-                data: encodedContentTypeTag as `0x${string}`,
+                data: encodedContentTypePin as `0x${string}`,
                 value: 0n,
               },
             },
@@ -876,7 +881,7 @@ export const CreateItemModal = ({
         },
         { silent: true },
       );
-      if (contentTypeTagTxHash) await publicClient.waitForTransactionReceipt({ hash: contentTypeTagTxHash });
+      if (contentTypePinTxHash) await publicClient.waitForTransactionReceipt({ hash: contentTypePinTxHash });
       checkCancelled();
 
       const transportAnchorUID = await resolveTransportAnchor(transportName);
@@ -917,20 +922,22 @@ export const CreateItemModal = ({
       }
       checkCancelled();
 
-      ops.log(opId, "Placing file in folder via TAG...");
-      const encodedTag = ethers.AbiCoder.defaultAbiCoder().encode(["bytes32", "bool"], [fileAnchorUID, true]);
-      const tagTxHash = await attest(
+      ops.log(opId, "Placing file in folder via PIN...");
+      // AGENT-NOTE: File placement is a PIN under ADR-0041 (cardinality 1). Re-uploading
+      // a different DATA at the same file anchor supersedes the prior PIN in O(1).
+      const encodedPin = ethers.AbiCoder.defaultAbiCoder().encode(["bytes32"], [fileAnchorUID]);
+      const pinTxHash = await attest(
         {
           functionName: "attest",
           args: [
             {
-              schema: tagSchemaUID as `0x${string}`,
+              schema: pinSchemaUID as `0x${string}`,
               data: {
                 recipient: ethers.ZeroAddress,
                 expirationTime: 0n,
                 revocable: true,
                 refUID: dataUID,
-                data: encodedTag as `0x${string}`,
+                data: encodedPin as `0x${string}`,
                 value: 0n,
               },
             },
@@ -938,18 +945,18 @@ export const CreateItemModal = ({
         },
         { silent: true },
       );
-      if (tagTxHash) await publicClient.waitForTransactionReceipt({ hash: tagTxHash });
+      if (pinTxHash) await publicClient.waitForTransactionReceipt({ hash: pinTxHash });
       checkCancelled();
 
-      // Ancestor-walk visibility TAGs (tag-only folder-visibility model, ADR-0006 revised
-      // 2026-04-18). A folder appears in an edition listing iff at least one edition
-      // attester has an active applies=true TAG(definition=dataSchemaUID, refUID=folder).
-      // On upload, the uploader must emit that TAG at every generic-folder ancestor from
-      // the immediate parent up to (but excluding) root, or those folders stay hidden in
-      // the uploader's edition. Skip ancestors already tagged by this attester.
+      // Ancestor-walk visibility TAGs (tag-only folder-visibility model, ADR-0038 / ADR-0041).
+      // A folder appears in an edition listing iff at least one edition attester has an
+      // active TAG(definition=dataSchemaUID, refUID=folder, weight>0). On upload, the
+      // uploader must emit that TAG at every generic-folder ancestor from the immediate
+      // parent up to (but excluding) root, or those folders stay hidden in the uploader's
+      // edition. Skip ancestors already tagged by this attester.
       if (indexer) {
-        const tagResolverAddress = await getTagResolverAddress(targetNetwork.id);
-        if (tagResolverAddress) {
+        const edgeResolverAddress = await getEdgeResolverAddress(targetNetwork.id);
+        if (edgeResolverAddress) {
           try {
             const rootUID = (await publicClient.readContract({
               address: indexer.address as `0x${string}`,
@@ -967,26 +974,22 @@ export const CreateItemModal = ({
               current !== (ethers.ZeroHash as `0x${string}`) &&
               current.toLowerCase() !== rootUID.toLowerCase()
             ) {
-              // MUST use `isActivelyApplied`, not `getActiveTagUID != 0`: TagResolver
-              // writes `_activeTag` unconditionally for both applies=true AND
-              // applies=false TAGs, so a prior "remove" (applies=false) would make
-              // `getActiveTagUID` return a nonzero UID and we'd skip emitting the
-              // required visibility TAG — leaving the ancestor hidden in edition
-              // listings after a remove→re-add cycle. `_isApplied` flips off when
-              // the latest TAG from this attester is applies=false. See
-              // TagResolver.sol: `isActivelyApplied` vs `getActiveTagUID` NatSpec.
-              const applied = (await publicClient.readContract({
-                address: tagResolverAddress,
-                abi: TAG_RESOLVER_ABI,
-                functionName: "isActivelyApplied",
-                args: [attester, current, dataSchemaUID as `0x${string}`],
+              // Schema-aware check on the TAG slot. Under ADR-0041 there is no
+              // `applies=false` and no supersede-via-negative-weight; an active TAG either
+              // exists (slot is non-empty) or it doesn't (revoked / never created), so a
+              // simple `isActiveEdge(... TAG_SCHEMA_UID)` is the correct check.
+              const tagged = (await publicClient.readContract({
+                address: edgeResolverAddress,
+                abi: EDGE_RESOLVER_ABI,
+                functionName: "isActiveEdge",
+                args: [attester, current, dataSchemaUID as `0x${string}`, tagSchemaUID as `0x${string}`],
               })) as boolean;
 
-              if (!applied) {
+              if (!tagged) {
                 ops.log(opId, `Tagging ancestor folder ${current.slice(0, 10)}... for visibility`);
                 const encodedVisTag = ethers.AbiCoder.defaultAbiCoder().encode(
-                  ["bytes32", "bool"],
-                  [dataSchemaUID, true],
+                  ["bytes32", "int256"],
+                  [dataSchemaUID, 1n],
                 );
                 const visTxHash = await attest(
                   {

@@ -156,6 +156,12 @@ export default function ExplorerClient() {
     contractName: "Indexer",
     functionName: "PROPERTY_SCHEMA_UID",
   });
+  // PIN (cardinality 1) and TAG (cardinality N) are sibling schemas served by EdgeResolver
+  // (ADR-0041). Both UIDs are mirrored on the Indexer for convenient one-source reads.
+  const { data: pinSchemaUID } = useScaffoldReadContract({
+    contractName: "Indexer",
+    functionName: "PIN_SCHEMA_UID",
+  });
   const { data: tagSchemaUID } = useScaffoldReadContract({
     contractName: "Indexer",
     functionName: "TAG_SCHEMA_UID",
@@ -543,7 +549,15 @@ export default function ExplorerClient() {
     router.push(`/explorer/${urlSegments.join("/")}${queryPart}`);
   };
 
-  if (!rootUID || !dataSchemaUID || !anchorSchemaUID || !propertySchemaUID || !tagSchemaUID || !mirrorSchemaUID)
+  if (
+    !rootUID ||
+    !dataSchemaUID ||
+    !anchorSchemaUID ||
+    !propertySchemaUID ||
+    !pinSchemaUID ||
+    !tagSchemaUID ||
+    !mirrorSchemaUID
+  )
     return <div>Loading System...</div>;
   if (isResolvingEditions) return <div>Resolving Editions...</div>;
 
@@ -650,6 +664,7 @@ export default function ExplorerClient() {
                 anchorSchemaUID={anchorSchemaUID}
                 dataSchemaUID={dataSchemaUID}
                 propertySchemaUID={propertySchemaUID}
+                pinSchemaUID={pinSchemaUID}
                 tagSchemaUID={tagSchemaUID}
                 mirrorSchemaUID={mirrorSchemaUID}
                 indexerAddress={indexerAddress}

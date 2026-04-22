@@ -92,6 +92,9 @@ export default function DebugSchemas() {
   const registry = useSchemaRegistry();
 
   // State for forms
+  const [pinRef, setPinRef] = useState("");
+  const [pinDef, setPinDef] = useState("");
+
   const [tagRef, setTagRef] = useState("");
   const [tagDef, setTagDef] = useState("");
   const [tagWeight, setTagWeight] = useState("1");
@@ -118,6 +121,7 @@ export default function DebugSchemas() {
   // Initialize/Update form refs when rootTopicUid loads
   useEffect(() => {
     if (registry.rootTopicUid && registry.rootTopicUid !== zeroHash) {
+      if (!pinRef || pinRef === zeroHash) setPinRef(registry.rootTopicUid);
       if (!tagRef || tagRef === zeroHash) setTagRef(registry.rootTopicUid);
       if (!propRef || propRef === zeroHash) setPropRef(registry.rootTopicUid);
       if (!dataRef || dataRef === zeroHash) setDataRef(registry.rootTopicUid);
@@ -272,10 +276,78 @@ export default function DebugSchemas() {
           </div>
         </div>
 
-        {/* TAG FORM */}
+        {/* PIN FORM (cardinality 1, ADR-0041) */}
+        <div className="card w-96 bg-base-100 shadow-xl border border-base-200">
+          <div className="card-body">
+            <h2 className="card-title">Pin Schema</h2>
+            <div className="text-xs opacity-50 mb-2">
+              Cardinality 1 — re-attesting at the same (attester, definition, targetSchema) supersedes the prior PIN in
+              O(1). Removal is via eas.revoke().
+            </div>
+            <div className="form-control">
+              <label className="label">
+                <span className="label-text">Ref UID (Target)</span>
+              </label>
+              <input
+                type="text"
+                value={pinRef}
+                onChange={e => setPinRef(e.target.value)}
+                className="input input-bordered"
+              />
+            </div>
+            <div className="form-control">
+              <label className="label">
+                <span className="label-text">Definition (String/Hex)</span>
+              </label>
+              <input
+                type="text"
+                value={pinDef}
+                onChange={e => setPinDef(e.target.value)}
+                className="input input-bordered"
+                placeholder="e.g. anchor UID, or 'contentType'"
+              />
+            </div>
+            <div className="card-actions justify-end mt-4">
+              <button
+                className="btn btn-primary"
+                disabled={isPending}
+                onClick={() => {
+                  try {
+                    let defBytes;
+                    if (pinDef.startsWith("0x")) {
+                      defBytes = pinDef as `0x${string}`;
+                    } else {
+                      defBytes = stringToHex(pinDef, { size: 32 });
+                    }
+                    // Schema: bytes32 definition (via EdgeResolver, ADR-0041)
+                    const pinSchema = (schemas as any).PIN as string | undefined;
+                    if (!pinSchema) {
+                      notification.error("PIN schema not available.");
+                      return;
+                    }
+                    const encoded = encodeAbiParameters(parseAbiParameters("bytes32"), [defBytes]);
+                    attest(pinSchema, pinRef, encoded);
+                  } catch (e) {
+                    console.error(e);
+                    notification.error("Encoding failed");
+                  }
+                }}
+              >
+                Attest Pin
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* TAG FORM (cardinality N, ADR-0041) */}
         <div className="card w-96 bg-base-100 shadow-xl border border-base-200">
           <div className="card-body">
             <h2 className="card-title">Tag Schema</h2>
+            <div className="text-xs opacity-50 mb-2">
+              Cardinality N — entries accumulate at the same (attester, definition, targetSchema) slot. Each carries an
+              int256 weight (sort/score metadata; weight &gt; 0 = active, &le; 0 = supersede). Removal is via
+              eas.revoke().
+            </div>
             <div className="form-control">
               <label className="label">
                 <span className="label-text">Ref UID (Target)</span>
@@ -289,7 +361,7 @@ export default function DebugSchemas() {
             </div>
             <div className="form-control">
               <label className="label">
-                <span className="label-text">Label (String/Hex)</span>
+                <span className="label-text">Definition (String/Hex)</span>
               </label>
               <input
                 type="text"
@@ -316,24 +388,26 @@ export default function DebugSchemas() {
                 disabled={isPending}
                 onClick={() => {
                   try {
-                    let labelBytes;
+                    let defBytes;
                     if (tagDef.startsWith("0x")) {
-                      labelBytes = tagDef as `0x${string}`;
+                      defBytes = tagDef as `0x${string}`;
                     } else {
-                      labelBytes = stringToHex(tagDef, { size: 32 });
+                      defBytes = stringToHex(tagDef, { size: 32 });
                     }
-                    // Schema: bytes32 definition, bool applies (via TagResolver)
-                    // NOTE: TAG attestations now go through the TagResolver contract.
-                    // Use the TagModal in the File Explorer for proper tag management.
-                    const tagSchema = (schemas as any).TAG as string | undefined;
-                    if (!tagSchema) {
-                      notification.error("TAG schema not available. Use TagModal in File Explorer.");
+                    let weight: bigint;
+                    try {
+                      weight = BigInt(tagWeight);
+                    } catch {
+                      notification.error("Weight must be a valid integer");
                       return;
                     }
-                    const encoded = encodeAbiParameters(parseAbiParameters("bytes32, bool"), [
-                      labelBytes,
-                      true, // applies
-                    ]);
+                    // Schema: bytes32 definition, int256 weight (via EdgeResolver, ADR-0041)
+                    const tagSchema = (schemas as any).TAG as string | undefined;
+                    if (!tagSchema) {
+                      notification.error("TAG schema not available.");
+                      return;
+                    }
+                    const encoded = encodeAbiParameters(parseAbiParameters("bytes32, int256"), [defBytes, weight]);
                     attest(tagSchema, tagRef, encoded);
                   } catch (e) {
                     console.error(e);

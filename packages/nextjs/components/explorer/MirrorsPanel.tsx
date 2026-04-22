@@ -7,7 +7,7 @@ import { useAccount, usePublicClient, useWalletClient } from "wagmi";
 import { ArrowUpTrayIcon, LinkIcon, PlusIcon, TrashIcon } from "@heroicons/react/24/outline";
 import { useDeployedContractInfo, useScaffoldReadContract, useScaffoldWriteContract } from "~~/hooks/scaffold-eth";
 import { useTargetNetwork } from "~~/hooks/scaffold-eth/useTargetNetwork";
-import { TAG_RESOLVER_ABI } from "~~/utils/efs/tagResolver";
+import { EDGE_RESOLVER_ABI } from "~~/utils/efs/edgeResolver";
 import { TRANSPORT_LABELS, detectTransport, resolveGatewayUrl } from "~~/utils/efs/transports";
 import { notification } from "~~/utils/scaffold-eth";
 
@@ -29,34 +29,6 @@ interface MirrorItem {
   attester: string;
   timestamp: bigint;
 }
-
-const EAS_GET_ATTESTATION_ABI = [
-  {
-    inputs: [{ internalType: "bytes32", name: "uid", type: "bytes32" }],
-    name: "getAttestation",
-    outputs: [
-      {
-        components: [
-          { internalType: "bytes32", name: "uid", type: "bytes32" },
-          { internalType: "bytes32", name: "schema", type: "bytes32" },
-          { internalType: "uint64", name: "time", type: "uint64" },
-          { internalType: "uint64", name: "expirationTime", type: "uint64" },
-          { internalType: "uint64", name: "revocationTime", type: "uint64" },
-          { internalType: "bytes32", name: "refUID", type: "bytes32" },
-          { internalType: "address", name: "recipient", type: "address" },
-          { internalType: "address", name: "attester", type: "address" },
-          { internalType: "bool", name: "revocable", type: "bool" },
-          { internalType: "bytes", name: "data", type: "bytes" },
-        ],
-        internalType: "struct Attestation",
-        name: "",
-        type: "tuple",
-      },
-    ],
-    stateMutability: "view",
-    type: "function",
-  },
-] as const;
 
 const FILE_VIEW_MIRRORS_ABI = [
   {
@@ -108,7 +80,7 @@ export const MirrorsPanel = ({
   const { targetNetwork } = useTargetNetwork();
   const { data: indexerInfo } = useDeployedContractInfo({ contractName: "Indexer" });
   const { data: fileViewInfo } = useDeployedContractInfo({ contractName: "EFSFileView" });
-  const { data: tagResolverInfo } = useDeployedContractInfo({ contractName: "TagResolver" });
+  const { data: edgeResolverInfo } = useDeployedContractInfo({ contractName: "EdgeResolver" });
   const { writeContractAsync: attest } = useScaffoldWriteContract({ contractName: "EAS" });
 
   const { data: dataSchemaUID } = useScaffoldReadContract({
@@ -119,16 +91,14 @@ export const MirrorsPanel = ({
     contractName: "Indexer",
     functionName: "MIRROR_SCHEMA_UID",
   });
-  const { data: easInfo } = useDeployedContractInfo({ contractName: "EAS" });
-
   // Monotonic request ID to prevent stale async results from overwriting current state.
   const resolveIdRef = useRef(0);
 
-  // Resolve DATA UID from file anchor via TAG query.
-  // Scans all active targets and picks the one with the highest attestation timestamp
-  // because the swap-and-pop array is not chronologically ordered.
+  // Resolve DATA UID from file anchor via PIN query (cardinality 1, ADR-0041).
+  // Each attester has at most one active PIN at the (fileAnchor, dataSchema) slot, so
+  // `getActivePinTarget` returns the placed DATA in O(1) — no enumeration / timestamp scan needed.
   const resolveDataUID = useCallback(async () => {
-    if (!publicClient || !tagResolverInfo || !easInfo || !dataSchemaUID || !fileAnchorUID) return;
+    if (!publicClient || !edgeResolverInfo || !dataSchemaUID || !fileAnchorUID) return;
 
     const requestId = ++resolveIdRef.current;
 
@@ -138,64 +108,30 @@ export const MirrorsPanel = ({
       return;
     }
 
+    // First-attester-wins fallback (ADR-0031): walk the edition list in order; the first
+    // attester with an active PIN at this slot supplies the DATA.
     for (const attester of attesters) {
       try {
-        const count = (await publicClient.readContract({
-          address: tagResolverInfo.address as `0x${string}`,
-          abi: TAG_RESOLVER_ABI,
-          functionName: "getActiveTargetsByAttesterAndSchemaCount",
+        const target = (await publicClient.readContract({
+          address: edgeResolverInfo.address as `0x${string}`,
+          abi: EDGE_RESOLVER_ABI,
+          functionName: "getActivePinTarget",
           args: [fileAnchorUID as `0x${string}`, attester as `0x${string}`, dataSchemaUID as `0x${string}`],
-        })) as bigint;
+        })) as `0x${string}`;
 
         if (requestId !== resolveIdRef.current) return; // stale
 
-        if (count > 0n) {
-          const targets = (await publicClient.readContract({
-            address: tagResolverInfo.address as `0x${string}`,
-            abi: TAG_RESOLVER_ABI,
-            functionName: "getActiveTargetsByAttesterAndSchema",
-            args: [
-              fileAnchorUID as `0x${string}`,
-              attester as `0x${string}`,
-              dataSchemaUID as `0x${string}`,
-              0n,
-              count,
-            ],
-          })) as `0x${string}`[];
-
-          if (requestId !== resolveIdRef.current) return; // stale
-          if (targets.length === 0) continue;
-
-          // Pick the most recent DATA by attestation timestamp
-          let best = targets[0];
-          let bestTime = 0n;
-          for (const uid of targets) {
-            if (!uid || uid === zeroHash) continue;
-            const att = (await publicClient.readContract({
-              address: easInfo.address as `0x${string}`,
-              abi: EAS_GET_ATTESTATION_ABI,
-              functionName: "getAttestation",
-              args: [uid],
-            })) as { time: bigint };
-            if (att.time > bestTime) {
-              bestTime = att.time;
-              best = uid;
-            }
-          }
-
-          if (requestId !== resolveIdRef.current) return; // stale
-          if (best && best !== zeroHash) {
-            setDataUID(best);
-            return;
-          }
+        if (target && target !== zeroHash) {
+          setDataUID(target);
+          return;
         }
       } catch (e) {
-        console.warn("Failed to resolve DATA for attester", attester, e);
+        console.warn("Failed to resolve DATA PIN for attester", attester, e);
       }
     }
-    // No active DATA found for any attester — clear stale value
+    // No active PIN found for any attester — clear stale value
     if (requestId === resolveIdRef.current) setDataUID(null);
-  }, [publicClient, tagResolverInfo, easInfo, dataSchemaUID, fileAnchorUID, editionAddresses, connectedAddress]);
+  }, [publicClient, edgeResolverInfo, dataSchemaUID, fileAnchorUID, editionAddresses, connectedAddress]);
 
   // Monotonic request ID to prevent stale mirror fetch results from overwriting current state.
   const fetchMirrorsIdRef = useRef(0);
