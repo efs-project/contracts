@@ -103,11 +103,8 @@ export default function DebugSchemas() {
   const [propName, setPropName] = useState("");
   const [propVal, setPropVal] = useState("");
 
-  const [dataRef, setDataRef] = useState("");
-  const [dataName, setDataName] = useState("");
-  const [dataBlobUID, setDataBlobUID] = useState("");
-
-  const [dataFileMode, setDataFileMode] = useState("100644"); // Default file mode
+  const [dataContentHash, setDataContentHash] = useState("");
+  const [dataSize, setDataSize] = useState("0");
 
   const [anchorRef, setAnchorRef] = useState("");
   const [anchorName, setAnchorName] = useState("");
@@ -124,7 +121,6 @@ export default function DebugSchemas() {
       if (!pinRef || pinRef === zeroHash) setPinRef(registry.rootTopicUid);
       if (!tagRef || tagRef === zeroHash) setTagRef(registry.rootTopicUid);
       if (!propRef || propRef === zeroHash) setPropRef(registry.rootTopicUid);
-      if (!dataRef || dataRef === zeroHash) setDataRef(registry.rootTopicUid);
       if (!blobRef || blobRef === zeroHash) setBlobRef(registry.rootTopicUid);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -512,109 +508,63 @@ export default function DebugSchemas() {
           </div>
         </div>
 
-        {/* DATA FORM (Smart) */}
+        {/* DATA FORM — standalone non-revocable content identity (ADR-0002) */}
         <div className="card w-96 bg-base-100 shadow-xl border border-base-200">
           <div className="card-body">
             <h2 className="card-title">Data Schema</h2>
-            <div className="text-xs opacity-50 mb-2">Creates Anchor(Name) -&gt; Data(Blob)</div>
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text">Ref UID (Target)</span>
-              </label>
-              <input
-                type="text"
-                value={dataRef}
-                onChange={e => setDataRef(e.target.value)}
-                className="input input-bordered"
-              />
+            <div className="text-xs opacity-50 mb-2">
+              Standalone, non-revocable content identity. refUID=0x0. Schema: bytes32 contentHash, uint64 size.
             </div>
             <div className="form-control">
               <label className="label">
-                <span className="label-text">Name (New Anchor)</span>
+                <span className="label-text">Content Hash (bytes32)</span>
               </label>
               <input
                 type="text"
-                value={dataName}
-                onChange={e => setDataName(e.target.value)}
-                className="input input-bordered"
-                placeholder="e.g. 'avatar' or 'document'"
-              />
-            </div>
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text">Blob UID (bytes32)</span>
-              </label>
-              <input
-                type="text"
-                value={dataBlobUID}
-                onChange={e => setDataBlobUID(e.target.value)}
+                value={dataContentHash}
+                onChange={e => setDataContentHash(e.target.value)}
                 className="input input-bordered font-mono text-xs"
                 placeholder="0x..."
               />
             </div>
             <div className="form-control">
               <label className="label">
-                <span className="label-text">File Mode (string)</span>
+                <span className="label-text">Size (uint64, bytes)</span>
               </label>
               <input
-                type="text"
-                value={dataFileMode}
-                onChange={e => setDataFileMode(e.target.value)}
+                type="number"
+                value={dataSize}
+                onChange={e => setDataSize(e.target.value)}
                 className="input input-bordered"
-                placeholder="100644"
+                placeholder="0"
               />
             </div>
             <div className="card-actions justify-end mt-4">
               <button
                 className="btn btn-primary"
                 disabled={isPending}
-                onClick={async () => {
-                  if (!dataName) {
-                    notification.error("Name required");
+                onClick={() => {
+                  if (!dataContentHash.startsWith("0x")) {
+                    notification.error("Content hash must be 0x hex");
                     return;
                   }
-                  if (!dataBlobUID.startsWith("0x")) {
-                    notification.error("Blob UID must be 0x hex");
+                  let size: bigint;
+                  try {
+                    size = BigInt(dataSize);
+                  } catch {
+                    notification.error("Size must be a valid integer");
                     return;
                   }
-
-                  // Step 1: Create Anchor
-                  notification.info("Step 1/2: Creating Anchor...");
-                  const anchorArgs = {
-                    schema: schemas.ANCHOR as `0x${string}`,
-                    data: {
-                      recipient: zeroAddress,
-                      expirationTime: 0n,
-                      revocable: false,
-                      refUID: (dataRef || zeroHash) as `0x${string}`,
-                      data: encodeAbiParameters(parseAbiParameters("string, bytes32"), [
-                        dataName,
-                        (schemas.DATA || zeroHash) as `0x${string}`,
-                      ]),
-                      value: 0n,
-                    },
-                  };
-
-                  const anchorUID = await attestWithArgs(anchorArgs);
-                  if (!anchorUID) return;
-
-                  // Step 2: Create Data
-                  notification.info("Step 2/2: Attaching Data...");
-                  const dataArgs = {
-                    schema: schemas.DATA as `0x${string}`,
-                    data: {
-                      recipient: zeroAddress,
-                      expirationTime: 0n,
-                      revocable: true,
-                      refUID: anchorUID as `0x${string}`,
-                      data: encodeAbiParameters(parseAbiParameters("bytes32, string"), [
-                        dataBlobUID as `0x${string}`,
-                        dataFileMode,
-                      ]),
-                      value: 0n,
-                    },
-                  };
-                  await attestWithArgs(dataArgs);
+                  if (!schemas.DATA) {
+                    notification.error("DATA schema not available.");
+                    return;
+                  }
+                  // Schema: bytes32 contentHash, uint64 size — standalone, non-revocable (ADR-0002)
+                  const encoded = encodeAbiParameters(parseAbiParameters("bytes32, uint64"), [
+                    dataContentHash as `0x${string}`,
+                    size,
+                  ]);
+                  attest(schemas.DATA, zeroHash, encoded, false);
                 }}
               >
                 Attest Data
@@ -665,11 +615,12 @@ export default function DebugSchemas() {
                 disabled={isPending}
                 onClick={() => {
                   const bytes = toHex(blobData);
-                  // Schema: bytes data, string contentType
+                  // Schema: string mimeType, uint8 storageType, bytes location (ADR-0041)
+                  // storageType 0 = inline; location = raw bytes of the content
                   attest(
                     schemas.BLOB as string,
                     blobRef,
-                    encodeAbiParameters(parseAbiParameters("bytes, string"), [bytes, blobType]),
+                    encodeAbiParameters(parseAbiParameters("string, uint8, bytes"), [blobType, 0, bytes]),
                   );
                 }}
               >
@@ -715,11 +666,18 @@ function AttestationViewer({ rootUid, schemas, easAddress }: { rootUid: string; 
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
         {/* Added Anchors Column */}
         <SchemaList
           title="Anchors"
           schemaUID={schemas.ANCHOR}
+          targetRef={targetUID}
+          easAddress={easAddress}
+          onFocus={setTargetUID}
+        />
+        <SchemaList
+          title="Pins"
+          schemaUID={(schemas as any).PIN}
           targetRef={targetUID}
           easAddress={easAddress}
           onFocus={setTargetUID}
@@ -840,23 +798,42 @@ function AttestationItem({
       const [val] = decodeAbiParameters(parseAbiParameters("string"), attestation.data);
       decodedValue = <span>{val}</span>;
     } else if (title === "Data") {
-      // bytes32 blobUID, string fileMode
-      const [blobId, mode] = decodeAbiParameters(parseAbiParameters("bytes32, string"), attestation.data);
+      // bytes32 contentHash, uint64 size (standalone non-revocable, ADR-0002)
+      const [contentHash, size] = decodeAbiParameters(parseAbiParameters("bytes32, uint64"), attestation.data);
       decodedValue = (
         <div className="flex flex-col gap-1">
-          <div className="badge badge-sm badge-neutral">Mode: {mode}</div>
-          <div className="text-xs break-all font-mono bg-base-300 p-1 rounded">Blob: {blobId.slice(0, 10)}...</div>
+          <div className="badge badge-sm badge-neutral">Size: {size.toString()} bytes</div>
+          <div className="text-xs break-all font-mono bg-base-300 p-1 rounded">Hash: {contentHash.slice(0, 14)}…</div>
         </div>
       );
+    } else if (title === "Pins") {
+      // bytes32 definition (cardinality-1 edge, ADR-0041)
+      const [definition] = decodeAbiParameters(parseAbiParameters("bytes32"), attestation.data);
+      try {
+        const asString = hexToString(definition, { size: 32 }).replace(/\0/g, "");
+        decodedValue = (
+          <div className="flex flex-col gap-1">
+            <span className="font-bold">{asString || definition.slice(0, 14) + "…"}</span>
+            <span className="text-xs opacity-50 font-mono">{definition.slice(0, 14)}…</span>
+          </div>
+        );
+      } catch {
+        decodedValue = <span className="font-mono text-xs">{definition.slice(0, 14)}…</span>;
+      }
     } else if (title === "Blobs") {
-      // bytes data, string contentType
-      const [data, contentType] = decodeAbiParameters(parseAbiParameters("bytes, string"), attestation.data);
+      // string mimeType, uint8 storageType, bytes location (ADR-0041)
+      const [mimeType, storageType, location] = decodeAbiParameters(
+        parseAbiParameters("string, uint8, bytes"),
+        attestation.data,
+      );
       decodedValue = (
         <div className="flex flex-col gap-1">
-          <div className="badge badge-sm badge-info">{contentType}</div>
-          <div className="text-xs opacity-50">{(data.length - 2) / 2} bytes</div>
+          <div className="badge badge-sm badge-info">{mimeType}</div>
+          <div className="text-xs opacity-50">
+            storageType: {storageType}, {(location.length - 2) / 2} bytes
+          </div>
           <div className="text-xs break-all font-mono bg-base-300 p-1 rounded max-h-20 overflow-auto">
-            {contentType.includes("text") ? hexToString(data) : data.slice(0, 50) + "..."}
+            {mimeType.includes("text") ? hexToString(location) : location.slice(0, 50) + "…"}
           </div>
         </div>
       );
