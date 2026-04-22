@@ -222,19 +222,31 @@ function DecodedData({ schemaUID, data, schemas }: { schemaUID: string; data: st
     if (!schemas) return <div className="text-sm italic opacity-60">Schemas loading...</div>;
 
     if ((schemas as any).TAG && schemaUID === (schemas as any).TAG) {
-      // TAG schema: "bytes32 definition, bool applies"
-      const [definition, applies] = decodeAbiParameters(
-        parseAbiParameters("bytes32 definition, bool applies"),
+      // TAG schema (ADR-0041): "bytes32 definition, int256 weight".
+      // Removal is via eas.revoke() — the weight value carries no
+      // assert/supersede semantics; it's metadata for sort/score consumers.
+      const [definition, weight] = decodeAbiParameters(
+        parseAbiParameters("bytes32 definition, int256 weight"),
         data as `0x${string}`,
       );
       return (
         <div className="p-4 bg-primary/10 rounded-lg border border-primary/20">
           <div className="text-xs font-bold uppercase mb-1">Tag</div>
           <div className="flex items-center gap-2">
-            <span className={`badge ${applies ? "badge-primary" : "badge-ghost"}`}>
-              {applies ? "applied" : "removed"}
-            </span>
+            <span className="badge badge-primary">weight: {weight.toString()}</span>
           </div>
+          <div className="text-xs font-mono opacity-50 mt-1">definition: {definition}</div>
+        </div>
+      );
+    }
+    if ((schemas as any).PIN && schemaUID === (schemas as any).PIN) {
+      // PIN schema (ADR-0041): "bytes32 definition". Cardinality-1 edge —
+      // re-attesting at the same (attester, definition, targetSchema) slot
+      // supersedes the prior PIN in O(1). Removal is via eas.revoke().
+      const [definition] = decodeAbiParameters(parseAbiParameters("bytes32 definition"), data as `0x${string}`);
+      return (
+        <div className="p-4 bg-primary/10 rounded-lg border border-primary/20">
+          <div className="text-xs font-bold uppercase mb-1">Pin</div>
           <div className="text-xs font-mono opacity-50 mt-1">definition: {definition}</div>
         </div>
       );
@@ -311,6 +323,9 @@ function ReferencingAttestations({
     <div className="flex flex-col gap-4">
       <h3 className="text-xl font-bold px-1">Referencing Attestations</h3>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        {(registry.schemas as any)?.PIN && (
+          <ReferencingList title="Pins" schema={(registry.schemas as any).PIN} target={uid} onNavigate={onNavigate} />
+        )}
         {(registry.schemas as any)?.TAG && (
           <ReferencingList title="Tags" schema={(registry.schemas as any).TAG} target={uid} onNavigate={onNavigate} />
         )}

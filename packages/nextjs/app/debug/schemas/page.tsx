@@ -345,8 +345,8 @@ export default function DebugSchemas() {
             <h2 className="card-title">Tag Schema</h2>
             <div className="text-xs opacity-50 mb-2">
               Cardinality N — entries accumulate at the same (attester, definition, targetSchema) slot. Each carries an
-              int256 weight (sort/score metadata; weight &gt; 0 = active, &le; 0 = supersede). Removal is via
-              eas.revoke().
+              int256 weight as opaque sort/score/ranking metadata for consumers (overlays, subgraphs). The weight has no
+              kernel-level meaning — it does not assert/supersede. Removal is via eas.revoke().
             </div>
             <div className="form-control">
               <label className="label">

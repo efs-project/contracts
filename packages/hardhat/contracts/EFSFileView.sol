@@ -382,8 +382,12 @@ contract EFSFileView {
      *
      * @param anchorUID  The path anchor (e.g. /memes/).
      * @param attesters  Edition addresses to query, in precedence order.
-     * @param schema     Target schema to filter (typically DATA_SCHEMA_UID for files,
-     *                   PROPERTY_SCHEMA_UID for property values — any PIN-shaped schema).
+     * @param schema     Target schema to filter. **Must be DATA_SCHEMA_UID or
+     *                   ANCHOR_SCHEMA_UID** — those are the only two payload shapes
+     *                   the per-item decode below understands. Calling with any other
+     *                   schema (e.g. PROPERTY_SCHEMA_UID) will produce decode reverts
+     *                   or garbage `name`/`contentHash` fields. A separate, schema-aware
+     *                   listing view is the right home for non-file PIN-shaped reads.
      * @param cursor     Opaque token from a prior call. Empty = start from the beginning.
      * @param maxItems   Target result size. Must be > 0.
      * @return page      `items` + `nextCursor`. `nextCursor.length == 0` iff every attester
