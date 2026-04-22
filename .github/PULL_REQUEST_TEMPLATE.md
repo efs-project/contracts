@@ -22,3 +22,8 @@
 <!-- - Dev: <model + version, e.g. Claude Sonnet 4.6>
      - Review: <model + version>, <model + version>
      - Orchestrator: <human> -->
+
+## Break-glass (delete this section if not used)
+<!-- Only fill if invoking the Durable break-glass hotfix path (see docs/agent-workflow.md § Permanence tiers).
+     - Reason: <critical bug + deadline pressure forcing the shortcut>
+     - Follow-up issue: <#NNN> to retroactively complete the full discipline (50-year test, invariant testing, full ADR) -->

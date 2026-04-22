@@ -61,13 +61,13 @@ EFS is built through you (and several other agents) acting via the human's GitHu
 
 ### Commit messages
 
-- **Subject**: `<area>: <imperative ≤72 chars>`. Area is either a Conventional-Commits-style type (`fix`, `docs`, `refactor`) when it fits, or a subsystem name (`router`, `indexer`, `schemas`) when the subsystem is more informative. Both are legal in the same log — don't convert between them in review. No `feat(router):` double-prefixing.
+- **Subject**: `<area>: <imperative ≤72 chars>`. Area is either a Conventional-Commits-style type (`fix`, `docs`, `refactor`), a subsystem name (`router`, `indexer`, `schemas`), or a type-with-scope (`fix(router)`, `docs(agent-process)`, `lint(nextjs)`) — all three are already in the repo's history and all are legal. Don't re-convert between them in review. The one thing to avoid is redundant double-naming (`fix(router): router reverts on …`) — pick one place to name the subsystem, not both.
 - **Body**: wrap at 72 chars. Answer *what problem existed / why this approach / what was verified / what tradeoff was accepted*. Don't summarize the diff — the diff summarizes itself.
 - **No Conventional Commits enforcement, no commitlint.** The `feat:`/`fix:` visual grep is useful; the spec's release-automation payload is not (EFS has no release pipeline). This matches OpenZeppelin / Uniswap / Hardhat / Go house style.
 
 ### Commit trailers
 
-Use kernel-blessed trailer keys (parseable by `git interpret-trailers`, rendered by GitHub). **Sentence case exactly** — GitHub's avatar-linking is case-sensitive; `Co-Authored-By:` (title case) renders as text, `Co-authored-by:` links the avatar.
+Use kernel-blessed trailer keys (parseable by `git interpret-trailers`, rendered by GitHub). **Sentence case exactly** — GitHub's trailer parser expects it. `Co-Authored-By:` (title case) tends to render as plain text in the commit body; `Co-authored-by:` is recognized as a structured co-author trailer and shown in the commit UI. With our vendor `noreply@…` emails the trailer renders with a generic avatar, not a linked GitHub profile — that's an accepted trade. What sentence case buys us is the trailer being recognized at all.
 
 | When | Trailer | Example |
 |---|---|---|
@@ -78,7 +78,9 @@ Use kernel-blessed trailer keys (parseable by `git interpret-trailers`, rendered
 | Etched or Durable commits (mandatory) | `Permanence-tier:` | `Permanence-tier: Etched` |
 | When applicable | `Refs:` / `Fixes:` | `Refs: ADR-0033, specs/03-Onchain-Indexing-Strategy.md` |
 
-Vendor emails: `noreply@anthropic.com`, `noreply@openai.com`, `noreply@google.com`. These don't link to GitHub user profiles — accepted trade; the trailer documents *what* participated, not *whom*. Put the model's name + version in the value (`Claude Sonnet 4.6`, not just `Claude`).
+Vendor emails: `noreply@anthropic.com`, `noreply@openai.com`, `noreply@google.com`. For vendors not listed, prefer `noreply@<vendor-domain>` when the domain is obvious (e.g., `noreply@deepseek.com`); otherwise invent a stable placeholder and log it in `docs/decisions.md` so the next agent uses the same one. These don't link to GitHub user profiles — accepted trade; the trailer documents *what* participated, not *whom*. Put the model's name + version in the value (`Claude Sonnet 4.6`, not just `Claude`).
+
+**`Reviewed-by:`, `Suggested-by:`, and `Tested-by:` describe the *final reviewed state* of the PR** — put them on the final commit only (or on the merge/squash commit if using that strategy), not on every intermediate commit. Applying them to commits the reviewer never saw produces a lying history. `Co-authored-by:` and `Permanence-tier:` describe the commit itself and belong on every commit they apply to.
 
 ### PR template
 
