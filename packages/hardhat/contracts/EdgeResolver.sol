@@ -288,24 +288,30 @@ contract EdgeResolver is SchemaResolver {
             bytes32 targetDefHash = _targetDefHash(targetID, definition);
             _activeCount[targetDefHash]--;
 
+            // Resolve targetSchema symmetrically to onAttest: for a real target attestation,
+            // read its schema; for an address target (refUID = 0), the sentinel is bytes32(0).
+            // The slot/AAS write path uses the same sentinel, so cleanup must too — otherwise
+            // address-target edges would never be removed from `_activeBySlot` / `_activeByAAS`
+            // even after a successful revoke (ADR-0041 §2: recipient targeting is first-class).
+            bytes32 targetSchema;
             if (attestation.refUID != EMPTY_UID) {
                 Attestation memory target = _eas.getAttestation(attestation.refUID);
-                bytes32 targetSchema = target.schema;
+                targetSchema = target.schema;
+            }
 
-                if (attestation.schema == PIN_SCHEMA_UID) {
-                    _clearPinSlot(definition, attestation.attester, targetSchema, attestation.uid);
-                } else {
-                    _swapAndPopTag(definition, attestation.attester, targetSchema, edgeHash);
-                }
+            if (attestation.schema == PIN_SCHEMA_UID) {
+                _clearPinSlot(definition, attestation.attester, targetSchema, attestation.uid);
+            } else {
+                _swapAndPopTag(definition, attestation.attester, targetSchema, edgeHash);
+            }
 
-                if (_activeTotalByDefAndAttester[definition][attestation.attester] > 0) {
-                    _activeTotalByDefAndAttester[definition][attestation.attester]--;
-                }
-                if (_activeTotalByDefAndAttester[definition][attestation.attester] == 0) {
-                    Attestation memory defAtt = _eas.getAttestation(definition);
-                    if (defAtt.schema == indexer.ANCHOR_SCHEMA_UID()) {
-                        indexer.clearContains(definition, attestation.attester);
-                    }
+            if (_activeTotalByDefAndAttester[definition][attestation.attester] > 0) {
+                _activeTotalByDefAndAttester[definition][attestation.attester]--;
+            }
+            if (_activeTotalByDefAndAttester[definition][attestation.attester] == 0) {
+                Attestation memory defAtt = _eas.getAttestation(definition);
+                if (defAtt.schema == indexer.ANCHOR_SCHEMA_UID()) {
+                    indexer.clearContains(definition, attestation.attester);
                 }
             }
 
@@ -326,6 +332,13 @@ contract EdgeResolver is SchemaResolver {
     ///      A new PIN at the same (attester, def, schema) slot but different target supersedes
     ///      the prior one — the prior edgeHash is cleared from _activeEdge so a later
     ///      revoke of the prior PIN is a no-op.
+    ///
+    ///      `targetSchema = bytes32(0)` is the canonical sentinel for address-target edges
+    ///      (refUID = 0, recipient = the target address). ADR-0041 §2 lists the recipient
+    ///      route as a first-class targeting mode, so address-target PINs occupy
+    ///      `_activeBySlot[def][attester][bytes32(0)]` like any other slot. Reads remain
+    ///      O(1) — `getActivePinTarget(def, attester, bytes32(0))` returns the active
+    ///      address target (encoded as `bytes32(uint160(addr))` per `_resolveTargetID`).
     function _onAttestPin(
         bytes32 definition,
         address attester,
@@ -334,9 +347,6 @@ contract EdgeResolver is SchemaResolver {
         bytes32 targetSchema,
         bool wasActive
     ) private {
-        // Only meaningful when the attestation has a concrete target attestation.
-        if (targetSchema == bytes32(0)) return;
-
         SlotEntry storage slot = _activeBySlot[definition][attester][targetSchema];
 
         // If a different prior PIN occupied this slot, supersede it.
@@ -367,6 +377,11 @@ contract EdgeResolver is SchemaResolver {
 
     /// @dev Write path for a TAG attestation. Updates _activeByAAS list. New edgeHash
     ///      appends; existing edgeHash updates UID + weight in place.
+    ///
+    ///      `targetSchema = bytes32(0)` is the canonical sentinel for address-target TAGs
+    ///      (refUID = 0, recipient = the target address) — per ADR-0041 §2 the recipient
+    ///      route is a first-class targeting mode, so these accumulate at
+    ///      `_activeByAAS[def][attester][bytes32(0)]` like any other slot.
     function _onAttestTag(
         bytes32 definition,
         address attester,
@@ -376,8 +391,6 @@ contract EdgeResolver is SchemaResolver {
         int256 weight,
         bool wasActive
     ) private {
-        if (targetSchema == bytes32(0)) return;
-
         TagEntry[] storage arr = _activeByAAS[definition][attester][targetSchema];
         uint256 indexPlusOne = _activeByAASIndex[definition][attester][targetSchema][edgeHash];
 

@@ -191,6 +191,22 @@ describe("EdgeResolver — PIN", function () {
     return getUID(await tx.wait());
   };
 
+  /** Attest a PIN (via recipient address) from a specific signer. */
+  const pinByAddress = async (signer: Signer, recipientAddr: string, definition: string): Promise<string> => {
+    const tx = await eas.connect(signer).attest({
+      schema: pinSchemaUID,
+      data: {
+        recipient: recipientAddr,
+        expirationTime: NO_EXPIRATION,
+        revocable: true,
+        refUID: ZERO_BYTES32,
+        data: encodePin(definition),
+        value: 0n,
+      },
+    });
+    return getUID(await tx.wait());
+  };
+
   const revokePin = async (signer: Signer, uid: string) => {
     const tx = await eas.connect(signer).revoke({ schema: pinSchemaUID, data: { uid, value: 0n } });
     await tx.wait();
@@ -243,6 +259,63 @@ describe("EdgeResolver — PIN", function () {
           },
         }),
       ).to.be.revertedWithCustomError(edgeResolver, "MustTargetSomething");
+    });
+
+    it("Should resolve target via recipient address when refUID is zero", async function () {
+      // ADR-0041 §2: recipient targeting is first-class. The kernel uses
+      // `targetSchema = bytes32(0)` as the canonical sentinel for address targets
+      // (addresses don't have an attestation UID, so there is no real schema to
+      // record). PIN reads at the address-target slot are O(1) like any other slot.
+      const definition = await createDefinition("addr-target-pin");
+      const recipientAddr = await user2.getAddress();
+      const u1Addr = await user1.getAddress();
+
+      const pinUID = await pinByAddress(user1, recipientAddr, definition);
+      expect(pinUID).to.not.equal(ZERO_BYTES32);
+
+      const targetID = ethers.zeroPadValue(recipientAddr, 32);
+      // Schema-blind aggregate reads see the edge.
+      expect(await edgeResolver.hasActiveEdge(targetID, definition)).to.be.true;
+      expect(await edgeResolver.isActiveEdge(u1Addr, targetID, definition, pinSchemaUID)).to.be.true;
+      // Cardinality-1 read at the address-target slot returns the active PIN UID and target.
+      expect(await edgeResolver.getActivePin(definition, u1Addr, ZERO_BYTES32)).to.equal(pinUID);
+      expect(await edgeResolver.getActivePinTarget(definition, u1Addr, ZERO_BYTES32)).to.equal(targetID);
+    });
+
+    it("Should supersede a prior address-target PIN at the same slot in O(1)", async function () {
+      // PIN cardinality-1 supersede semantics also apply when targeting addresses.
+      // Re-attesting at (definition, attester, bytes32(0)) with a different recipient
+      // replaces the prior address-target PIN.
+      const definition = await createDefinition("addr-supersede");
+      const addrA = await user2.getAddress();
+      const addrB = await owner.getAddress();
+      const u1Addr = await user1.getAddress();
+
+      await pinByAddress(user1, addrA, definition);
+      const targetA = ethers.zeroPadValue(addrA, 32);
+      expect(await edgeResolver.getActivePinTarget(definition, u1Addr, ZERO_BYTES32)).to.equal(targetA);
+
+      const uidB = await pinByAddress(user1, addrB, definition);
+      const targetB = ethers.zeroPadValue(addrB, 32);
+      expect(await edgeResolver.getActivePin(definition, u1Addr, ZERO_BYTES32)).to.equal(uidB);
+      expect(await edgeResolver.getActivePinTarget(definition, u1Addr, ZERO_BYTES32)).to.equal(targetB);
+      // Prior address-target PIN is no longer active anywhere.
+      expect(await edgeResolver.hasActiveEdge(targetA, definition)).to.be.false;
+    });
+
+    it("Should clear the address-target PIN slot on revoke", async function () {
+      const definition = await createDefinition("addr-revoke");
+      const recipientAddr = await user2.getAddress();
+      const u1Addr = await user1.getAddress();
+
+      const pinUID = await pinByAddress(user1, recipientAddr, definition);
+      const targetID = ethers.zeroPadValue(recipientAddr, 32);
+      expect(await edgeResolver.getActivePinTarget(definition, u1Addr, ZERO_BYTES32)).to.equal(targetID);
+
+      await revokePin(user1, pinUID);
+      expect(await edgeResolver.getActivePin(definition, u1Addr, ZERO_BYTES32)).to.equal(ZERO_BYTES32);
+      expect(await edgeResolver.getActivePinTarget(definition, u1Addr, ZERO_BYTES32)).to.equal(ZERO_BYTES32);
+      expect(await edgeResolver.hasActiveEdge(targetID, definition)).to.be.false;
     });
 
     it("Should reject arbitrary bytes32 that is not an attestation, schema, or address", async function () {

@@ -271,13 +271,21 @@ describe("EdgeResolver — TAG", function () {
       const u1Addr = await user1.getAddress();
 
       const tagUID = await tagByAddress(user1, recipientAddr, definition, 9n);
-      // When targeting via recipient, targetSchema is bytes32(0) (no real attestation),
-      // so the entry does NOT land in _activeByAAS (which requires a concrete target schema).
-      // What it DOES do: increment the _activeCount and discovery indices.
+      // ADR-0041 §2: recipient targeting is first-class. The kernel uses
+      // `targetSchema = bytes32(0)` as the canonical sentinel for address targets
+      // (addresses don't have an attestation UID, so there is no real schema to
+      // record). All cardinality-specific reads — `_activeBySlot`/`_activeByAAS` —
+      // accept this sentinel and route address-target entries to it.
       const targetID = ethers.zeroPadValue(recipientAddr, 32);
       expect(await edgeResolver.hasActiveEdge(targetID, definition)).to.be.true;
       // Schema-aware existence read sees the edge.
       expect(await edgeResolver.isActiveEdge(u1Addr, targetID, definition, tagSchemaUID)).to.be.true;
+      // Cardinality-N read at the address-target slot returns the entry with its weight.
+      const entries = await edgeResolver.getActiveTagEntries(definition, u1Addr, ZERO_BYTES32, 0n, 10n);
+      expect(entries.length).to.equal(1);
+      expect(entries[0].tagUID).to.equal(tagUID);
+      expect(entries[0].weight).to.equal(9n);
+      expect(await edgeResolver.getActiveTagsCount(definition, u1Addr, ZERO_BYTES32)).to.equal(1n);
       // tagUID returned by attestation is non-zero.
       expect(tagUID).to.not.equal(ZERO_BYTES32);
     });
