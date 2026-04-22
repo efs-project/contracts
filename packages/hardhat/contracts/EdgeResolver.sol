@@ -299,19 +299,32 @@ contract EdgeResolver is SchemaResolver {
                 targetSchema = target.schema;
             }
 
+            // Slot/AAS cleanup is unconditional — address-target edges live in
+            // `_activeBySlot[def][attester][bytes32(0)]` and need their slot cleared too.
             if (attestation.schema == PIN_SCHEMA_UID) {
                 _clearPinSlot(definition, attestation.attester, targetSchema, attestation.uid);
             } else {
                 _swapAndPopTag(definition, attestation.attester, targetSchema, edgeHash);
             }
 
-            if (_activeTotalByDefAndAttester[definition][attestation.attester] > 0) {
-                _activeTotalByDefAndAttester[definition][attestation.attester]--;
-            }
-            if (_activeTotalByDefAndAttester[definition][attestation.attester] == 0) {
-                Attestation memory defAtt = _eas.getAttestation(definition);
-                if (defAtt.schema == indexer.ANCHOR_SCHEMA_UID()) {
-                    indexer.clearContains(definition, attestation.attester);
+            // The contains-flag bookkeeping (`_activeTotalByDefAndAttester` +
+            // `indexer.clearContains`) is the SYMMETRIC pair of `propagateContains` in
+            // onAttest, which only fires for structural edges (`refUID != EMPTY_UID`).
+            // Address-target edges never propagate up the anchor tree, so they must not
+            // drive contains state on revoke either — otherwise revoking an attester's
+            // address-target edge under an anchor they themselves created would clear
+            // their own contains bit (set at anchor creation by EFSIndexer).
+            // Increment in `_onAttestPin` / `_onAttestTag` is gated on the same condition
+            // (`targetSchema != bytes32(0)`), so increment and decrement compose correctly.
+            if (attestation.refUID != EMPTY_UID) {
+                if (_activeTotalByDefAndAttester[definition][attestation.attester] > 0) {
+                    _activeTotalByDefAndAttester[definition][attestation.attester]--;
+                }
+                if (_activeTotalByDefAndAttester[definition][attestation.attester] == 0) {
+                    Attestation memory defAtt = _eas.getAttestation(definition);
+                    if (defAtt.schema == indexer.ANCHOR_SCHEMA_UID()) {
+                        indexer.clearContains(definition, attestation.attester);
+                    }
                 }
             }
 
@@ -361,7 +374,10 @@ contract EdgeResolver is SchemaResolver {
                 if (_activeCount[priorTargetDefHash] > 0) {
                     _activeCount[priorTargetDefHash]--;
                 }
-                if (_activeTotalByDefAndAttester[definition][attester] > 0) {
+                // _activeTotalByDefAndAttester only counts STRUCTURAL edges (paired with
+                // propagateContains/clearContains). Address-target PINs (targetSchema == 0)
+                // never contributed on attest, so don't decrement on supersede either.
+                if (targetSchema != bytes32(0) && _activeTotalByDefAndAttester[definition][attester] > 0) {
                     _activeTotalByDefAndAttester[definition][attester]--;
                 }
             }
@@ -370,7 +386,8 @@ contract EdgeResolver is SchemaResolver {
         slot.pinUID = pinUID;
         slot.targetID = targetID;
 
-        if (!wasActive) {
+        // Structural edges only — see counter-purpose note above and onRevoke comment.
+        if (!wasActive && targetSchema != bytes32(0)) {
             _activeTotalByDefAndAttester[definition][attester]++;
         }
     }
@@ -398,7 +415,11 @@ contract EdgeResolver is SchemaResolver {
             // First TAG at this edgeHash — append.
             arr.push(TagEntry({ tagUID: tagUID, weight: weight }));
             _activeByAASIndex[definition][attester][targetSchema][edgeHash] = arr.length;
-            if (!wasActive) {
+            // Structural edges only — `_activeTotalByDefAndAttester` is paired with
+            // `propagateContains` (gated on `refUID != EMPTY_UID` in onAttest), so
+            // address-target TAGs (targetSchema == 0) must not contribute or revoke
+            // would over-clear the contains flag (see onRevoke comment).
+            if (!wasActive && targetSchema != bytes32(0)) {
                 _activeTotalByDefAndAttester[definition][attester]++;
             }
         } else {
