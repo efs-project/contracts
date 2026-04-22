@@ -1,11 +1,16 @@
 import { ethers } from "hardhat";
-import { EFSIndexer, TagResolver } from "../typechain-types";
+import { EFSIndexer, EdgeResolver } from "../typechain-types";
 
 /**
  * EFS File Browser Simulation
  *
  * Exercises the full file browser workflow against a deployed EFS stack,
  * using the three-layer data model: paths (Anchors) → data (DATA) → retrieval (MIRRORs).
+ *
+ * Edge model (ADR-0041):
+ *   - File placement → PIN (cardinality 1) under (definition=fileAnchor, attester, schema=DATA)
+ *   - PROPERTY value binding → PIN under (definition=keyAnchor, attester, schema=PROPERTY)
+ *   - Labels (favorite, funny, etc.) → TAG (cardinality N) with optional int256 weight
  *
  * Run: npx hardhat run scripts/simulate-file-browser.ts --network localhost
  *
@@ -29,7 +34,7 @@ async function main() {
 
   console.log("════════════════════════════════════════");
   console.log("  EFS File Browser Simulation");
-  console.log("  Paths · DATA · MIRRORs · TAGs");
+  console.log("  Paths · DATA · MIRRORs · PINs · TAGs");
   console.log("════════════════════════════════════════\n");
 
   const [deployer, user1, user2] = await ethers.getSigners();
@@ -53,14 +58,16 @@ async function main() {
   const dataSchemaUID = await indexer.DATA_SCHEMA_UID();
   const propertySchemaUID = await indexer.PROPERTY_SCHEMA_UID();
   const mirrorSchemaUID = await indexer.MIRROR_SCHEMA_UID();
+  const pinSchemaUID = await indexer.PIN_SCHEMA_UID();
   const tagSchemaUID = await indexer.TAG_SCHEMA_UID();
-  const tagResolverAddr = await indexer.tagResolver();
-  const tagResolver = (await ethers.getContractAt("TagResolver", tagResolverAddr)) as unknown as TagResolver;
+  const edgeResolverAddr = await indexer.edgeResolver();
+  const edgeResolver = (await ethers.getContractAt("EdgeResolver", edgeResolverAddr)) as unknown as EdgeResolver;
   const rootUID = await indexer.rootAnchorUID();
 
-  console.log(`Indexer: ${indexer.target}`);
-  console.log(`EAS:     ${eas.target}`);
-  console.log(`Root:    ${rootUID}\n`);
+  console.log(`Indexer:      ${indexer.target}`);
+  console.log(`EAS:          ${eas.target}`);
+  console.log(`EdgeResolver: ${edgeResolverAddr}`);
+  console.log(`Root:         ${rootUID}\n`);
 
   // Resolve /transports/ anchors for MIRRORs
   const transportsUID = await indexer.resolvePath(rootUID, "transports");
@@ -87,6 +94,14 @@ async function main() {
 
   const encode = ethers.AbiCoder.defaultAbiCoder();
 
+  /**
+   * Tracker: (target, definition, attester) → active PIN UID. Needed because
+   * revoking a PIN takes its UID and we want O(1) lookup at unpin time.
+   */
+  const activePinIndex = new Map<string, string>();
+  const pinKey = (target: string, definition: string, attester: string) =>
+    `${target}|${definition}|${attester.toLowerCase()}`;
+
   /** Create an Anchor attestation */
   const anchor = async (signer: any, name: string, parent: string, schema = ethers.ZeroHash) => {
     const tx = await eas.connect(signer).attest({
@@ -103,7 +118,7 @@ async function main() {
     return getUID(tx);
   };
 
-  /** Create a standalone DATA attestation (new model: contentHash + size, non-revocable) */
+  /** Create a standalone DATA attestation (contentHash + size, non-revocable, standalone) */
   const createData = async (signer: any, content: string) => {
     const contentBytes = ethers.toUtf8Bytes(content);
     const contentHash = ethers.keccak256(contentBytes);
@@ -122,10 +137,39 @@ async function main() {
     return { uid: await getUID(tx), contentHash };
   };
 
+  /** Place a PIN edge (cardinality 1). New PIN at the same slot supersedes the prior in O(1). */
+  const pin = async (signer: any, targetUID: string, definitionUID: string) => {
+    const tx = await eas.connect(signer).attest({
+      schema: pinSchemaUID,
+      data: {
+        recipient: ethers.ZeroAddress,
+        expirationTime: 0n,
+        revocable: true,
+        refUID: targetUID,
+        data: encode.encode(["bytes32"], [definitionUID]),
+        value: 0n,
+      },
+    });
+    const uid = await getUID(tx);
+    const attesterAddr = await signer.getAddress();
+    activePinIndex.set(pinKey(targetUID, definitionUID, attesterAddr), uid);
+    return uid;
+  };
+
+  /** Revoke the active PIN at (target, definition, signer). */
+  const unpin = async (signer: any, targetUID: string, definitionUID: string) => {
+    const attesterAddr = await signer.getAddress();
+    const key = pinKey(targetUID, definitionUID, attesterAddr);
+    const uid = activePinIndex.get(key);
+    if (uid === undefined) throw new Error(`no active PIN tracked for ${key}`);
+    await eas.connect(signer).revoke({ schema: pinSchemaUID, data: { uid, value: 0n } });
+    activePinIndex.delete(key);
+  };
+
   /**
    * Attach a PROPERTY to a container using the unified free-floating model
-   * (ADR-0035): key anchor under the container, free-floating PROPERTY(value),
-   * and a TAG binding them. Returns the PROPERTY UID.
+   * (ADR-0035 + ADR-0041): key anchor under the container, free-floating
+   * PROPERTY(value), and a PIN binding them. Returns the PROPERTY UID.
    */
   const property = async (signer: any, containerUID: string, key: string, value: string) => {
     let keyAnchorUID: string = await indexer.resolveAnchor(containerUID, key, propertySchemaUID);
@@ -157,17 +201,8 @@ async function main() {
     });
     const propertyUID = await getUID(propTx);
 
-    await eas.connect(signer).attest({
-      schema: tagSchemaUID,
-      data: {
-        recipient: ethers.ZeroAddress,
-        expirationTime: 0n,
-        revocable: true,
-        refUID: propertyUID,
-        data: encode.encode(["bytes32", "bool"], [keyAnchorUID, true]),
-        value: 0n,
-      },
-    });
+    // Bind PROPERTY value to key anchor with a PIN — re-binding supersedes O(1).
+    await pin(signer, propertyUID, keyAnchorUID);
     return propertyUID;
   };
 
@@ -187,8 +222,16 @@ async function main() {
     return getUID(tx);
   };
 
-  /** Create a TAG attestation (file placement or labeling) */
-  const tag = async (signer: any, targetUID: string, definition: string, applies: boolean) => {
+  /**
+   * Place a DATA at a file Anchor via PIN (file placement is cardinality 1 — ADR-0041).
+   * Returns the PIN UID.
+   */
+  const placeData = async (signer: any, dataUID: string, anchorUID: string) => {
+    return pin(signer, dataUID, anchorUID);
+  };
+
+  /** Apply a TAG label (cardinality N). Optional int256 weight for sort/score metadata. */
+  const tagLabel = async (signer: any, targetUID: string, definitionUID: string, weight: bigint = 1n) => {
     const tx = await eas.connect(signer).attest({
       schema: tagSchemaUID,
       data: {
@@ -196,7 +239,7 @@ async function main() {
         expirationTime: 0n,
         revocable: true,
         refUID: targetUID,
-        data: encode.encode(["bytes32", "bool"], [definition, applies]),
+        data: encode.encode(["bytes32", "int256"], [definitionUID, weight]),
         value: 0n,
       },
     });
@@ -212,28 +255,28 @@ async function main() {
   const petsUID = await anchor(owner, `pets_${S}`, rootUID);
   console.log(`  /pets_${S}/  created`);
 
-  // /pets/best.jpg — 3 editions via TAG-based placement
+  // /pets/best.jpg — 3 editions via PIN-based placement
   const bestUID = await anchor(owner, "best.jpg", petsUID, dataSchemaUID);
 
-  // Owner's edition: DATA + PROPERTY(contentType) + MIRROR + TAG
+  // Owner's edition: DATA + PROPERTY(contentType) + MIRROR + PIN
   const ownerBestData = await createData(owner, "owner-best-jpeg-bytes");
   await property(owner, ownerBestData.uid, "contentType", "image/jpeg");
   await mirror(owner, ownerBestData.uid, ipfsTransportUID, "ipfs://owner-best");
-  await tag(owner, ownerBestData.uid, bestUID, true);
+  await placeData(owner, ownerBestData.uid, bestUID);
 
   // User1's edition
   const u1BestData = await createData(user1, "user1-best-jpeg-bytes");
   await property(user1, u1BestData.uid, "contentType", "image/jpeg");
   await mirror(user1, u1BestData.uid, ipfsTransportUID, "ipfs://user1-best");
-  await tag(user1, u1BestData.uid, bestUID, true);
+  await placeData(user1, u1BestData.uid, bestUID);
 
   // User2's edition
   const u2BestData = await createData(user2, "user2-best-jpeg-bytes");
   await property(user2, u2BestData.uid, "contentType", "image/jpeg");
   await mirror(user2, u2BestData.uid, ipfsTransportUID, "ipfs://user2-best");
-  await tag(user2, u2BestData.uid, bestUID, true);
+  await placeData(user2, u2BestData.uid, bestUID);
 
-  console.log(`  /pets/best.jpg  3 editions (TAG-placed)`);
+  console.log(`  /pets/best.jpg  3 editions (PIN-placed)`);
 
   // /pets/cats/
   const catsUID = await anchor(owner, "cats", petsUID);
@@ -241,13 +284,13 @@ async function main() {
   const fluffyData = await createData(user1, "fluffy-png-bytes");
   await property(user1, fluffyData.uid, "contentType", "image/png");
   await mirror(user1, fluffyData.uid, ipfsTransportUID, "ipfs://fluffy");
-  await tag(user1, fluffyData.uid, fluffyUID, true);
+  await placeData(user1, fluffyData.uid, fluffyUID);
 
   const garfieldUID = await anchor(user2, "garfield.gif", catsUID, dataSchemaUID);
   const garfieldData = await createData(user2, "garfield-gif-bytes");
   await property(user2, garfieldData.uid, "contentType", "image/gif");
   await mirror(user2, garfieldData.uid, ipfsTransportUID, "ipfs://garfield");
-  await tag(user2, garfieldData.uid, garfieldUID, true);
+  await placeData(user2, garfieldData.uid, garfieldUID);
   console.log(`  /pets/cats/  2 files`);
 
   // /pets/dogs/
@@ -256,7 +299,7 @@ async function main() {
   const rexData = await createData(owner, "rex-jpeg-bytes");
   await property(owner, rexData.uid, "contentType", "image/jpeg");
   await mirror(owner, rexData.uid, ipfsTransportUID, "ipfs://rex");
-  await tag(owner, rexData.uid, rexUID, true);
+  await placeData(owner, rexData.uid, rexUID);
   console.log(`  /pets/dogs/  1 file`);
 
   // /memes/
@@ -266,12 +309,12 @@ async function main() {
   const ownerVitalikData = await createData(owner, "owner-vitalik-bytes");
   await property(owner, ownerVitalikData.uid, "contentType", "image/jpeg");
   await mirror(owner, ownerVitalikData.uid, ipfsTransportUID, "ipfs://owner-vitalik");
-  await tag(owner, ownerVitalikData.uid, vitalikUID, true);
+  await placeData(owner, ownerVitalikData.uid, vitalikUID);
 
   const u1VitalikData = await createData(user1, "user1-vitalik-bytes");
   await property(user1, u1VitalikData.uid, "contentType", "image/jpeg");
   await mirror(user1, u1VitalikData.uid, ipfsTransportUID, "ipfs://user1-vitalik");
-  await tag(user1, u1VitalikData.uid, vitalikUID, true);
+  await placeData(user1, u1VitalikData.uid, vitalikUID);
 
   console.log(`  /memes_${S}/vitalik.jpg  2 editions`);
   console.log("\n  Tree built successfully.\n");
@@ -321,28 +364,24 @@ async function main() {
   );
   assert("First item is best.jpg (insertion order)", editionList[0] === bestUID);
 
-  // ── Test 4: TAG-based File Placement + Folder Listing ──
-  console.log("\n[4] TAG-based File Placement (getActiveTargetsByAttesterAndSchema)");
+  // ── Test 4: PIN-based File Placement + Folder Listing ──
+  console.log("\n[4] PIN-based File Placement (getActivePinTarget — O(1))");
 
-  // Owner placed ownerBestData at bestUID
-  const ownerDatasAtBest = await tagResolver.getActiveTargetsByAttesterAndSchema(
-    bestUID,
-    ownerAddr,
-    dataSchemaUID,
-    0,
-    10,
+  // Owner placed ownerBestData at bestUID via PIN
+  const ownerDataAtBest = await edgeResolver.getActivePinTarget(bestUID, ownerAddr, dataSchemaUID);
+  assert("Owner's PIN target at best.jpg matches", ownerDataAtBest === ownerBestData.uid);
+
+  // User1 placed u1BestData at bestUID via PIN
+  const u1DataAtBest = await edgeResolver.getActivePinTarget(bestUID, u1Addr, dataSchemaUID);
+  assert("User1's PIN target at best.jpg matches", u1DataAtBest === u1BestData.uid);
+
+  // isActiveEdge: schema-aware check (PIN slot). The owner's PIN at best.jpg
+  // has target=ownerBestData.uid, definition=bestUID — matches the placement
+  // performed at line ~265 (placeData(owner, ownerBestData.uid, bestUID)).
+  assert(
+    "Owner has an active PIN edge at best.jpg",
+    await edgeResolver.isActiveEdge(ownerAddr, ownerBestData.uid, bestUID, pinSchemaUID),
   );
-  assert("Owner has 1 DATA placed at best.jpg", ownerDatasAtBest.length === 1, `got ${ownerDatasAtBest.length}`);
-  assert("Owner's DATA UID matches", ownerDatasAtBest[0] === ownerBestData.uid);
-
-  // User1 placed u1BestData at bestUID
-  const u1DatasAtBest = await tagResolver.getActiveTargetsByAttesterAndSchema(bestUID, u1Addr, dataSchemaUID, 0, 10);
-  assert("User1 has 1 DATA placed at best.jpg", u1DatasAtBest.length === 1);
-  assert("User1's DATA UID matches", u1DatasAtBest[0] === u1BestData.uid);
-
-  // Count function
-  const ownerCount = await tagResolver.getActiveTargetsByAttesterAndSchemaCount(bestUID, ownerAddr, dataSchemaUID);
-  assert("Count matches for owner at best.jpg", ownerCount === 1n);
 
   // ── Test 5: MIRROR Resolution ──
   console.log("\n[5] MIRROR Resolution");
@@ -367,34 +406,37 @@ async function main() {
   assert("Canonical still points to first DATA (dedup)", dupCanonical === ownerBestData.uid);
   assert("Duplicate DATA has different UID", dupData.uid !== ownerBestData.uid);
 
-  // ── Test 7: TAG Removal (applies=false) ──
-  console.log("\n[7] TAG Removal (applies=false)");
-  // Remove User1's placement of their DATA at best.jpg
-  await tag(user1, u1BestData.uid, bestUID, false);
+  // ── Test 7: PIN Removal (eas.revoke under ADR-0041) ──
+  console.log("\n[7] PIN Removal (eas.revoke)");
+  // Revoke User1's PIN placing their DATA at best.jpg
+  await unpin(user1, u1BestData.uid, bestUID);
 
-  const u1AfterRemoval = await tagResolver.getActiveTargetsByAttesterAndSchema(bestUID, u1Addr, dataSchemaUID, 0, 10);
-  assert("User1's DATA removed from best.jpg after TAG applies=false", u1AfterRemoval.length === 0);
+  const u1AfterRemoval = await edgeResolver.getActivePinTarget(bestUID, u1Addr, dataSchemaUID);
+  assert("User1's PIN cleared after revoke", u1AfterRemoval === ethers.ZeroHash);
 
-  // Re-tag it back
-  await tag(user1, u1BestData.uid, bestUID, true);
-  const u1AfterRetag = await tagResolver.getActiveTargetsByAttesterAndSchema(bestUID, u1Addr, dataSchemaUID, 0, 10);
-  assert("User1's DATA re-placed at best.jpg after re-tag", u1AfterRetag.length === 1);
+  // Re-place via new PIN
+  await placeData(user1, u1BestData.uid, bestUID);
+  const u1AfterRetag = await edgeResolver.getActivePinTarget(bestUID, u1Addr, dataSchemaUID);
+  assert("User1's PIN re-placed at best.jpg", u1AfterRetag === u1BestData.uid);
 
-  // ── Test 8: Cross-Reference (same DATA at multiple paths) ──
-  console.log("\n[8] Cross-Reference (same DATA at two paths)");
-  // Place owner's best DATA also at /memes/vitalik.jpg anchor (cross-reference)
-  await tag(owner, ownerBestData.uid, vitalikUID, true);
+  // ── Test 8: Cross-Reference (same DATA at multiple paths via supersede) ──
+  console.log("\n[8] PIN Cross-Reference (supersede O(1))");
+  // PIN owner's best DATA also at /memes/vitalik.jpg anchor.
+  // Note: PIN is cardinality 1 per (def=anchor, attester, schema), so this *supersedes*
+  // the prior ownerVitalikData PIN at that anchor — only one DATA per attester per anchor.
+  // (Multiple anchors can each PIN the same DATA — that's the cross-reference.)
+  await placeData(owner, ownerBestData.uid, vitalikUID);
 
-  const crossRefAtVitalik = await tagResolver.getActiveTargetsByAttesterAndSchema(
-    vitalikUID,
-    ownerAddr,
-    dataSchemaUID,
-    0,
-    10,
+  const crossRefAtVitalik = await edgeResolver.getActivePinTarget(vitalikUID, ownerAddr, dataSchemaUID);
+  assert(
+    "Owner's PIN at vitalik.jpg now points to ownerBestData (supersede)",
+    crossRefAtVitalik === ownerBestData.uid,
+    `got ${crossRefAtVitalik}`,
   );
-  // Owner already placed ownerVitalikData there, now also ownerBestData
-  assert("Owner has 2 DATAs at vitalik.jpg (original + cross-ref)", crossRefAtVitalik.length === 2);
-  assert("Cross-referenced DATA appears at second path", crossRefAtVitalik.includes(ownerBestData.uid));
+
+  // The same DATA is pinned at two anchors by the same attester — cross-reference works:
+  const stillAtBest = await edgeResolver.getActivePinTarget(bestUID, ownerAddr, dataSchemaUID);
+  assert("Owner's PIN at best.jpg still points to ownerBestData (cross-ref)", stillAtBest === ownerBestData.uid);
 
   // ── Test 9: Multiple MIRRORs per DATA ──
   console.log("\n[9] Multiple MIRRORs (multi-transport)");
@@ -412,35 +454,37 @@ async function main() {
   const dogsChildren = await indexer["getChildren(bytes32,uint256,uint256,bool)"](dogsUID, 0, 10, false);
   assert("/pets/dogs/ has 1 file", dogsChildren.length === 1);
 
-  // ── Test 11: Tagging (labels, not file placement) ──
-  console.log("\n[11] Tagging (labels)");
+  // ── Test 11: Tagging (labels — cardinality N) ──
+  console.log("\n[11] Tagging (labels — TAG with weight)");
   const funnyDef = await anchor(owner, `funny_${S}`, rootUID);
 
-  // User1 labels ownerVitalikData as "funny"
-  const tagUID1 = await tag(user1, ownerVitalikData.uid, funnyDef, true);
-  // User2 negates it
-  const tagUID2 = await tag(user2, ownerVitalikData.uid, funnyDef, false);
+  // User1 labels ownerVitalikData as "funny" (weight=1)
+  const tagUID1 = await tagLabel(user1, ownerVitalikData.uid, funnyDef);
+  // User2 ALSO labels it (multiple TAGs coexist — cardinality N)
+  const tagUID2 = await tagLabel(user2, ownerVitalikData.uid, funnyDef, 5n); // higher score
 
-  const activeUID1 = await tagResolver.getActiveTagUID(u1Addr, ownerVitalikData.uid, funnyDef);
-  assert("User1's active tag UID matches", activeUID1 === tagUID1);
+  const activeUID1 = await edgeResolver.getActiveEdgeUID(u1Addr, ownerVitalikData.uid, funnyDef, tagSchemaUID);
+  assert("User1's active TAG UID matches", activeUID1 === tagUID1);
 
-  const activeUID2 = await tagResolver.getActiveTagUID(u2Addr, ownerVitalikData.uid, funnyDef);
-  assert("User2's active tag UID matches (negation)", activeUID2 === tagUID2);
+  const activeUID2 = await edgeResolver.getActiveEdgeUID(u2Addr, ownerVitalikData.uid, funnyDef, tagSchemaUID);
+  assert("User2's active TAG UID matches", activeUID2 === tagUID2);
 
-  const tagged = await tagResolver.isActivelyTagged(ownerVitalikData.uid, funnyDef);
-  assert("isActivelyTagged true (user1 applied it)", tagged === true);
+  assert(
+    "hasActiveEdge(funny) true (user1 + user2 both applied)",
+    await edgeResolver.hasActiveEdge(ownerVitalikData.uid, funnyDef),
+  );
 
   // ── Test 12: propagateContains (tree visibility) ──
   console.log("\n[12] propagateContains (tree visibility)");
-  // After TAG placement, the _containsAttestations flag should propagate up
+  // After PIN placement, the _containsAttestations flag should propagate up
   const u1ContainsPets = await indexer.containsAttestations(petsUID, u1Addr);
-  assert("User1 containsAttestations in /pets/ (via fluffy.png TAG)", u1ContainsPets === true);
+  assert("User1 containsAttestations in /pets/ (via fluffy.png PIN)", u1ContainsPets === true);
 
   const u2ContainsPets = await indexer.containsAttestations(petsUID, u2Addr);
-  assert("User2 containsAttestations in /pets/ (via garfield.gif TAG)", u2ContainsPets === true);
+  assert("User2 containsAttestations in /pets/ (via garfield.gif PIN)", u2ContainsPets === true);
 
   const ownerContainsPets = await indexer.containsAttestations(petsUID, ownerAddr);
-  assert("Owner containsAttestations in /pets/ (via rex.jpg TAG)", ownerContainsPets === true);
+  assert("Owner containsAttestations in /pets/ (via rex.jpg PIN)", ownerContainsPets === true);
 
   // ── Test 13: Schema-filtered Anchor listing ──
   console.log("\n[13] Schema-filtered Anchor Listing");
@@ -482,14 +526,13 @@ async function main() {
   assert("Layer 5 resolved", deepRes5 === l5);
   assert("Layer 6 resolved", deepRes6 === l6);
 
-  // Place DATA at L6 via TAG
+  // Place DATA at L6 via PIN
   const deepData = await createData(owner, "deep-layer-6-content");
   await mirror(owner, deepData.uid, ipfsTransportUID, "ipfs://deep-layer-6");
-  await tag(owner, deepData.uid, l6, true);
+  await placeData(owner, deepData.uid, l6);
 
-  const deepDatas = await tagResolver.getActiveTargetsByAttesterAndSchema(l6, ownerAddr, dataSchemaUID, 0, 10);
-  assert("Data placed at Layer 6 via TAG", deepDatas.length === 1);
-  assert("DATA UID matches at Layer 6", deepDatas[0] === deepData.uid);
+  const deepData6 = await edgeResolver.getActivePinTarget(l6, ownerAddr, dataSchemaUID);
+  assert("Data placed at Layer 6 via PIN", deepData6 === deepData.uid);
 
   // ── Test 15: Dedup Pagination ──
   console.log("\n[15] Dedup Pagination (30 files × 3 users, getChildrenByAddressList)");
@@ -534,7 +577,7 @@ async function main() {
     `fwd[0]=${fwd[0].slice(0, 10)}… rev[0]=${rev[0].slice(0, 10)}…`,
   );
 
-  // ── Test 17: PROPERTY metadata on DATA (unified free-floating model) ──
+  // ── Test 17: PROPERTY metadata on DATA (PIN-bound under ADR-0041) ──
   console.log("\n[17] PROPERTY on DATA");
   const contentTypeKeyAnchor = await indexer.resolveAnchor(ownerBestData.uid, "contentType", propertySchemaUID);
   assert(
@@ -543,16 +586,11 @@ async function main() {
     `got ${contentTypeKeyAnchor}`,
   );
 
-  const propRefs = await tagResolver.getActiveTargetsByAttesterAndSchema(
-    contentTypeKeyAnchor,
-    ownerAddr,
-    propertySchemaUID,
-    0,
-    10,
-  );
-  assert("Owner has 1 active contentType PROPERTY", propRefs.length === 1, `got ${propRefs.length}`);
+  // PROPERTY value binding is a PIN: getActivePinTarget returns the PROPERTY UID directly (O(1)).
+  const propUID = await edgeResolver.getActivePinTarget(contentTypeKeyAnchor, ownerAddr, propertySchemaUID);
+  assert("Owner has an active contentType PROPERTY binding", propUID !== ethers.ZeroHash, `got ${propUID}`);
 
-  const propAtt = await eas.getAttestation(propRefs[0]);
+  const propAtt = await eas.getAttestation(propUID);
   const [propValue] = encode.decode(["string"], propAtt.data);
   assert("PROPERTY value is image/jpeg", propValue === "image/jpeg");
 

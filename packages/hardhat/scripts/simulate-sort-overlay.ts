@@ -1,15 +1,21 @@
 import { ethers } from "hardhat";
-import { EFSIndexer, EFSSortOverlay, NameSort, TimestampSort, TagResolver } from "../typechain-types";
+import { EFSIndexer, EFSSortOverlay, NameSort, TimestampSort, EdgeResolver } from "../typechain-types";
 
 /**
- * EFS Sort Overlay + Editions + Tags Simulation
+ * EFS Sort Overlay + Editions + PINs/TAGs Simulation
  *
  * Exercises everything the UI will need against a deployed EFS stack using the
  * three-layer data model: paths (Anchors) → data (DATA) → retrieval (MIRRORs).
  *
  * Two users (Alice, Bob) build a shared /music/ directory, sort it independently,
- * place DATAs via TAGs, add MIRRORs, label items with tag definitions, and exercise
- * every read path the UI will call.
+ * place DATAs via PINs (cardinality 1), add MIRRORs, label items with TAGs
+ * (cardinality N), and exercise every read path the UI will call.
+ *
+ * Edge model (ADR-0041):
+ *   - File placement → PIN under (definition=fileAnchor, attester, schema=DATA).
+ *     A new PIN supersedes the prior one in O(1). Removal is via eas.revoke().
+ *   - PROPERTY value binding → PIN under (definition=keyAnchor, attester, schema=PROPERTY).
+ *   - Labels (favorite/classic) → TAG with optional int256 weight; multiple coexist per slot.
  *
  * Run: npx hardhat run scripts/simulate-sort-overlay.ts --network localhost
  *
@@ -34,7 +40,7 @@ function assert(label: string, condition: boolean, detail: string = "") {
 async function main() {
   console.log("════════════════════════════════════════════════════════════");
   console.log("  EFS Full Integration Simulation");
-  console.log("  Sorts · DATA · MIRRORs · TAGs · Editions");
+  console.log("  Sorts · DATA · MIRRORs · PINs · TAGs · Editions");
   console.log("════════════════════════════════════════════════════════════\n");
 
   const [deployer, alice, bob] = await ethers.getSigners();
@@ -59,20 +65,21 @@ async function main() {
   const propertySchemaUID = await indexer.PROPERTY_SCHEMA_UID();
   const mirrorSchemaUID = await indexer.MIRROR_SCHEMA_UID();
   const sortInfoSchemaUID = await indexer.SORT_INFO_SCHEMA_UID();
+  const pinSchemaUID = await indexer.PIN_SCHEMA_UID();
   const tagSchemaUID = await indexer.TAG_SCHEMA_UID();
-  const tagResolverAddr = await indexer.tagResolver();
-  const tagResolver = (await ethers.getContractAt("TagResolver", tagResolverAddr)) as unknown as TagResolver;
+  const edgeResolverAddr = await indexer.edgeResolver();
+  const edgeResolver = (await ethers.getContractAt("EdgeResolver", edgeResolverAddr)) as unknown as EdgeResolver;
   const rootUID = await indexer.rootAnchorUID();
 
   // Resolve /transports/ for MIRRORs
   const transportsUID = await indexer.resolvePath(rootUID, "transports");
   const ipfsTransportUID = await indexer.resolvePath(transportsUID, "ipfs");
 
-  console.log(`Indexer:     ${indexer.target}`);
-  console.log(`Overlay:     ${overlay.target}`);
-  console.log(`TagResolver: ${tagResolverAddr}`);
-  console.log(`EAS:         ${easAddress}`);
-  console.log(`Root:        ${rootUID}\n`);
+  console.log(`Indexer:      ${indexer.target}`);
+  console.log(`Overlay:      ${overlay.target}`);
+  console.log(`EdgeResolver: ${edgeResolverAddr}`);
+  console.log(`EAS:          ${easAddress}`);
+  console.log(`Root:         ${rootUID}\n`);
 
   // ── Deploy sort implementations inline ───────────────────────────────────────
   const NameSortFactory = await ethers.getContractFactory("NameSort");
@@ -90,6 +97,14 @@ async function main() {
 
   const S = Date.now().toString(36);
   const encode = ethers.AbiCoder.defaultAbiCoder();
+
+  /**
+   * Index of currently active PINs by (target, definition, attester) — needed
+   * because revoking a PIN requires its UID and we don't want a per-revoke scan.
+   */
+  const activePinIndex = new Map<string, string>();
+  const pinKey = (target: string, definition: string, attester: string) =>
+    `${target}|${definition}|${attester.toLowerCase()}`;
 
   const getUID = async (tx: any): Promise<string> => {
     const receipt = await tx.wait();
@@ -138,9 +153,43 @@ async function main() {
   };
 
   /**
+   * Place a PIN edge: target ← (definition, attester, schema) singleton (cardinality 1).
+   * Used for file placement (target=DATA, definition=fileAnchor) and PROPERTY value
+   * binding (target=PROPERTY, definition=keyAnchor). A new PIN at the same slot
+   * supersedes the prior one in O(1) via _activeBySlot.
+   */
+  const pin = async (signer: any, targetUID: string, definitionUID: string): Promise<string> => {
+    const tx = await eas.connect(signer).attest({
+      schema: pinSchemaUID,
+      data: {
+        recipient: ethers.ZeroAddress,
+        expirationTime: 0n,
+        revocable: true,
+        refUID: targetUID,
+        data: encode.encode(["bytes32"], [definitionUID]),
+        value: 0n,
+      },
+    });
+    const uid = await getUID(tx);
+    const attesterAddr = await signer.getAddress();
+    activePinIndex.set(pinKey(targetUID, definitionUID, attesterAddr), uid);
+    return uid;
+  };
+
+  /** Revoke the active PIN at (target, definition, attester). */
+  const unpin = async (signer: any, targetUID: string, definitionUID: string): Promise<void> => {
+    const attesterAddr = await signer.getAddress();
+    const key = pinKey(targetUID, definitionUID, attesterAddr);
+    const uid = activePinIndex.get(key);
+    if (uid === undefined) throw new Error(`no active PIN tracked for ${key}`);
+    await eas.connect(signer).revoke({ schema: pinSchemaUID, data: { uid, value: 0n } });
+    activePinIndex.delete(key);
+  };
+
+  /**
    * Attach a PROPERTY to a container using the unified free-floating model
-   * (ADR-0035): key anchor under the container, free-floating PROPERTY(value),
-   * and a TAG binding them. Returns the PROPERTY UID.
+   * (ADR-0035 + ADR-0041): key anchor under the container, free-floating
+   * PROPERTY(value), and a PIN binding them. Returns the PROPERTY UID.
    */
   const property = async (signer: any, containerUID: string, key: string, value: string): Promise<string> => {
     let keyAnchorUID: string = await indexer.resolveAnchor(containerUID, key, propertySchemaUID);
@@ -172,17 +221,9 @@ async function main() {
     });
     const propertyUID: string = await getUID(propTx);
 
-    await eas.connect(signer).attest({
-      schema: tagSchemaUID,
-      data: {
-        recipient: ethers.ZeroAddress,
-        expirationTime: 0n,
-        revocable: true,
-        refUID: propertyUID,
-        data: encode.encode(["bytes32", "bool"], [keyAnchorUID, true]),
-        value: 0n,
-      },
-    });
+    // Bind the PROPERTY value to the key anchor with a PIN. Re-binding under the
+    // same key supersedes O(1) — readers always see the current value.
+    await pin(signer, propertyUID, keyAnchorUID);
     return propertyUID;
   };
 
@@ -224,24 +265,31 @@ async function main() {
     return getUID(tx);
   };
 
-  /** Place a DATA at an Anchor via TAG */
-  const placeData = async (signer: any, dataUID: string, anchorUID: string, applies = true): Promise<string> => {
-    const tx = await eas.connect(signer).attest({
-      schema: tagSchemaUID,
-      data: {
-        recipient: ethers.ZeroAddress,
-        expirationTime: 0n,
-        revocable: true,
-        refUID: dataUID,
-        data: encode.encode(["bytes32", "bool"], [anchorUID, applies]),
-        value: 0n,
-      },
-    });
-    return getUID(tx);
+  /**
+   * Place a DATA at an Anchor via PIN (ADR-0041: file placement is cardinality 1).
+   * Returns the PIN attestation UID. A subsequent placeData at the same anchor by
+   * the same attester (with a different DATA) supersedes the prior PIN in O(1).
+   */
+  const placeData = async (signer: any, dataUID: string, anchorUID: string): Promise<string> => {
+    return pin(signer, dataUID, anchorUID);
   };
 
-  /** Attest a TAG (definition, applies) targeting an anchor (for labels) */
-  const tagLabel = async (signer: any, targetUID: string, definitionUID: string, applies = true): Promise<string> => {
+  /** Revoke the active file-placement PIN. Removes the placement. */
+  const unplaceData = async (signer: any, dataUID: string, anchorUID: string): Promise<void> => {
+    return unpin(signer, dataUID, anchorUID);
+  };
+
+  /**
+   * Apply a TAG label (cardinality N): edge from `targetUID` under `definitionUID`
+   * with optional sort/score weight. Multiple labels coexist per (attester, target).
+   * Re-attesting the same (attester, target, definition) updates the weight in place.
+   */
+  const tagLabel = async (
+    signer: any,
+    targetUID: string,
+    definitionUID: string,
+    weight: bigint = 1n,
+  ): Promise<string> => {
     const tx = await eas.connect(signer).attest({
       schema: tagSchemaUID,
       data: {
@@ -249,11 +297,23 @@ async function main() {
         expirationTime: 0n,
         revocable: true,
         refUID: targetUID,
-        data: encode.encode(["bytes32", "bool"], [definitionUID, applies]),
+        data: encode.encode(["bytes32", "int256"], [definitionUID, weight]),
         value: 0n,
       },
     });
     return getUID(tx);
+  };
+
+  /**
+   * Remove a TAG label by revoking the active TAG attestation. Looks the active
+   * UID up via EdgeResolver.getActiveEdgeUID — under TAG semantics there is at
+   * most one active edge per (attester, target, definition).
+   */
+  const untagLabel = async (signer: any, targetUID: string, definitionUID: string): Promise<void> => {
+    const attesterAddr = await signer.getAddress();
+    const activeUID = await edgeResolver.getActiveEdgeUID(attesterAddr, targetUID, definitionUID, tagSchemaUID);
+    if (activeUID === ethers.ZeroHash) throw new Error(`no active TAG for ${targetUID} / ${definitionUID}`);
+    await eas.connect(signer).revoke({ schema: tagSchemaUID, data: { uid: activeUID, value: 0n } });
   };
 
   /** Drain all sorted items for a (sortInfoUID, parentAnchor) pair using cursor pagination */
@@ -276,18 +336,18 @@ async function main() {
   };
 
   /**
-   * Resolve the first DATA placed at an anchor by a prioritized list of attesters.
-   * Uses TagResolver.getActiveTargetsByAttesterAndSchema — the new edition resolution path.
-   * Returns {uid, uri} from the first attester that has a TAG placement.
+   * Resolve the active DATA placed at an anchor by a prioritized list of attesters.
+   * Uses EdgeResolver.getActivePinTarget — the O(1) read for cardinality-1 edges
+   * (file placement under ADR-0041).
+   * Returns {uid, uri} from the first attester that has an active PIN at the anchor.
    */
   const resolveEdition = async (
     anchorUID: string,
     addressList: string[],
   ): Promise<{ uid: string; uri: string } | null> => {
     for (const attester of addressList) {
-      const targets = await tagResolver.getActiveTargetsByAttesterAndSchema(anchorUID, attester, dataSchemaUID, 0, 1);
-      if (targets.length > 0) {
-        const dataUID = targets[0];
+      const dataUID = await edgeResolver.getActivePinTarget(anchorUID, attester, dataSchemaUID);
+      if (dataUID !== ethers.ZeroHash) {
         // Resolve the MIRROR URI for this DATA
         const mirrors = await indexer.getReferencingAttestations(dataUID, mirrorSchemaUID, 0, 1, false);
         if (mirrors.length > 0) {
@@ -487,11 +547,11 @@ async function main() {
   assert("Pagination order matches direct read", pagedNames.join(",") === finalNames.join(","));
 
   // ════════════════════════════════════════════════════════════════════════════════
-  // PHASE 7: DATA editions — place content at anchors via TAGs
+  // PHASE 7: DATA editions — place content at anchors via PINs
   // ════════════════════════════════════════════════════════════════════════════════
-  console.log("\n── Phase 7: DATA editions (three-layer: DATA + MIRROR + TAG) ──\n");
+  console.log("\n── Phase 7: DATA editions (three-layer: DATA + MIRROR + PIN) ──\n");
 
-  // Helper: create DATA + MIRROR + TAG (place at anchor) in sequence
+  // Helper: create DATA + MIRROR + PIN (place at anchor) in sequence
   const uploadFile = async (
     signer: any,
     anchorUID: string,
@@ -550,28 +610,29 @@ async function main() {
   assert("carrot.mp3 [bob only] → null (no edition)", carrotBob === null);
 
   // ════════════════════════════════════════════════════════════════════════════════
-  // PHASE 8: Edition removal via TAG applies=false + fallback
+  // PHASE 8: Edition removal via PIN revoke + fallback
   // ════════════════════════════════════════════════════════════════════════════════
   console.log("\n── Phase 8: Edition removal + fallback ──\n");
 
-  // Alice removes her zebra placement (TAG applies=false)
-  await placeData(alice, aliceZebraData.uid, aliceZebra, false);
+  // Alice removes her zebra placement (eas.revoke on the active PIN — ADR-0041
+  // replaces the old applies=false supersede signal with a clean revoke).
+  await unplaceData(alice, aliceZebraData.uid, aliceZebra);
 
   // Bob's edition should now win
   const zebraAfterRemoval = await resolveEdition(aliceZebra, [aliceAddr, bobAddr]);
   assert(
-    "zebra.mp3 [alice,bob]: falls back to bob after alice removes placement",
+    "zebra.mp3 [alice,bob]: falls back to bob after alice revokes PIN",
     zebraAfterRemoval?.uri === "ipfs://bob-zebra-v1",
     zebraAfterRemoval?.uri ?? "null",
   );
 
   // If both remove placement → null
-  await placeData(bob, bobZebraData.uid, aliceZebra, false);
+  await unplaceData(bob, bobZebraData.uid, aliceZebra);
   const zebraAllRemoved = await resolveEdition(aliceZebra, [aliceAddr, bobAddr]);
   assert("zebra.mp3: all placements removed → null", zebraAllRemoved === null);
 
-  // Re-place Alice's zebra (TAG applies=true again)
-  await placeData(alice, aliceZebraData.uid, aliceZebra, true);
+  // Re-place Alice's zebra (new PIN)
+  await placeData(alice, aliceZebraData.uid, aliceZebra);
   const zebraReplaced = await resolveEdition(aliceZebra, [aliceAddr]);
   assert(
     "zebra.mp3: re-placed after removal",
@@ -642,11 +703,15 @@ async function main() {
   const [aliceOnly] = await indexer.getChildrenByAddressList(musicUID, [aliceAddr], 0n, 50, false, false);
   assert("Alice-only dedup = 6 unique anchors", aliceOnly.length === 6, `got ${aliceOnly.length}`);
 
-  // Bob-only: 3 anchors he created + anchors where he placed DATA via TAG
+  // Bob-only: 3 anchors he created + anchors where he still has an active PIN.
+  // He uploaded PINs at apple, banana, zebra in Phase 7, then revoked his zebra
+  // PIN in Phase 8. EdgeResolver's onRevoke calls indexer.clearContains() once
+  // an attester's active-edge count at an anchor drops to zero, so zebra is no
+  // longer in Bob's _containsAttestations set: 3 created + 2 still-active = 5.
   const [bobOnly] = await indexer.getChildrenByAddressList(musicUID, [bobAddr], 0n, 50, false, false);
   assert(
-    "Bob-only dedup = 6 unique anchors (3 created + 3 with TAG placement)",
-    bobOnly.length === 6,
+    "Bob-only dedup = 5 unique anchors (3 created + 2 active PIN placements after zebra revoke)",
+    bobOnly.length === 5,
     `got ${bobOnly.length}`,
   );
 
@@ -679,100 +744,98 @@ async function main() {
   console.log(`  dedup: ${dedupResults.length} unique items`);
 
   // ════════════════════════════════════════════════════════════════════════════════
-  // PHASE 11: Version history — new DATA + TAG swap
+  // PHASE 11: Version history — new DATA + PIN supersede
   // ════════════════════════════════════════════════════════════════════════════════
-  console.log("\n── Phase 11: Version history (new DATA + TAG swap) ──\n");
+  console.log("\n── Phase 11: Version history (PIN supersede O(1)) ──\n");
 
-  // Alice uploads a v2 of apple.mp3: new DATA, untag old, tag new
+  // Alice uploads a v2 of apple.mp3: new DATA, then a new PIN at the same anchor.
+  // Under ADR-0041, the new PIN supersedes the v1 PIN automatically — no untag needed.
+  // (uploadFile internally calls placeData → pin, which writes _activeBySlot in O(1).)
   const aliceAppleV2 = await uploadFile(alice, aliceApple, "alice-apple-v2-bytes", "ipfs://alice-apple-v2");
+  // Note on activePinIndex: pin() keys by (target, definition, attester) so the v1 and v2
+  // PINs are tracked under different keys — both stay in the local map. On-chain, the v2
+  // PIN supersedes v1 in O(1) via _activeBySlot. The stale v1 entry in the map is harmless
+  // because nothing in this script revokes it.
+
   // Link v2 → v1 via previousVersion PROPERTY
   await property(alice, aliceAppleV2.uid, "previousVersion", aliceAppleData.uid);
-  // Remove old placement
-  await placeData(alice, aliceAppleData.uid, aliceApple, false);
-  console.log("  Alice uploaded apple.mp3 v2, untagged v1");
+  console.log("  Alice uploaded apple.mp3 v2 — PIN supersedes v1 in O(1)");
 
   // Now only v2 should resolve
   const appleAfterV2 = await resolveEdition(aliceApple, [aliceAddr]);
   assert("After version swap, v2 resolves", appleAfterV2?.uri === "ipfs://alice-apple-v2", appleAfterV2?.uri ?? "null");
 
-  // Verify previousVersion PROPERTY chain (unified free-floating model)
+  // Verify previousVersion PROPERTY chain (PIN-bound under ADR-0041)
   const prevVersionKeyAnchor = await indexer.resolveAnchor(aliceAppleV2.uid, "previousVersion", propertySchemaUID);
   assert(
     "previousVersion key anchor exists on v2",
     prevVersionKeyAnchor !== ethers.ZeroHash,
     `got ${prevVersionKeyAnchor}`,
   );
-  const prevVersionProps = await tagResolver.getActiveTargetsByAttesterAndSchema(
-    prevVersionKeyAnchor,
-    aliceAddr,
-    propertySchemaUID,
-    0,
-    1,
-  );
+  // PROPERTY value binding is a PIN: getActivePinTarget returns the PROPERTY UID directly.
+  const prevVersionPropUID = await edgeResolver.getActivePinTarget(prevVersionKeyAnchor, aliceAddr, propertySchemaUID);
   assert(
-    "Alice has 1 active previousVersion PROPERTY",
-    prevVersionProps.length === 1,
-    `got ${prevVersionProps.length}`,
+    "Alice has an active previousVersion PROPERTY binding",
+    prevVersionPropUID !== ethers.ZeroHash,
+    `got ${prevVersionPropUID}`,
   );
-  const prevPropAtt = await eas.getAttestation(prevVersionProps[0]);
+  const prevPropAtt = await eas.getAttestation(prevVersionPropUID);
   const [prevValue] = encode.decode(["string"], prevPropAtt.data);
   assert("previousVersion PROPERTY links v2 → v1", prevValue === aliceAppleData.uid, `got ${prevValue}`);
 
   // ════════════════════════════════════════════════════════════════════════════════
-  // PHASE 12: Tags on list items (labels, not file placement)
+  // PHASE 12: Tags on list items (labels — cardinality N)
   // ════════════════════════════════════════════════════════════════════════════════
-  console.log("\n── Phase 12: Tags on list items ──\n");
+  console.log("\n── Phase 12: Tags on list items (cardinality N) ──\n");
 
   // Create tag definition anchors
   const favoriteDefUID = await anchor(deployer, `favorite_${S}`, rootUID);
   const classicDefUID = await anchor(deployer, `classic_${S}`, rootUID);
   console.log("  Tag definitions: favorite, classic");
 
-  // Alice tags apple and banana DATA as "favorite"
+  // Alice tags apple v2 and v1 DATA as "favorite" (different DATAs at same label coexist)
   await tagLabel(alice, aliceAppleV2.uid, favoriteDefUID);
   await tagLabel(alice, aliceAppleData.uid, favoriteDefUID); // tag v1 too (both versions labeled)
-  const aliceBananaData = (
-    await tagResolver.getActiveTargetsByAttesterAndSchema(aliceBanana, aliceAddr, dataSchemaUID, 0, 1)
-  )[0];
+  // Resolve Alice's banana DATA via the now-O(1) PIN read.
+  const aliceBananaData = await edgeResolver.getActivePinTarget(aliceBanana, aliceAddr, dataSchemaUID);
   await tagLabel(alice, aliceBananaData, favoriteDefUID);
 
   // Bob tags apple DATA as "favorite" and mango DATA as "classic"
-  const bobAppleData = (
-    await tagResolver.getActiveTargetsByAttesterAndSchema(aliceApple, bobAddr, dataSchemaUID, 0, 1)
-  )[0];
+  const bobAppleData = await edgeResolver.getActivePinTarget(aliceApple, bobAddr, dataSchemaUID);
   await tagLabel(bob, bobAppleData, favoriteDefUID);
 
-  const aliceMangoData = (
-    await tagResolver.getActiveTargetsByAttesterAndSchema(aliceMango, aliceAddr, dataSchemaUID, 0, 1)
-  )[0];
+  const aliceMangoData = await edgeResolver.getActivePinTarget(aliceMango, aliceAddr, dataSchemaUID);
   await tagLabel(bob, aliceMangoData, classicDefUID);
   console.log("  Alice: favorite(apple v1+v2, banana); Bob: favorite(apple), classic(mango)");
 
-  // isActivelyTagged: O(1) counter
+  // hasActiveEdge: O(1) cross-attester check via shared aggregate counter
   assert(
-    "apple v2 DATA is actively tagged as favorite",
-    await tagResolver.isActivelyTagged(aliceAppleV2.uid, favoriteDefUID),
+    "apple v2 DATA has an active favorite edge (any attester)",
+    await edgeResolver.hasActiveEdge(aliceAppleV2.uid, favoriteDefUID),
   );
-  assert(
-    "banana DATA is actively tagged as favorite",
-    await tagResolver.isActivelyTagged(aliceBananaData, favoriteDefUID),
-  );
-  assert("mango DATA is actively tagged as classic", await tagResolver.isActivelyTagged(aliceMangoData, classicDefUID));
+  assert("banana DATA has an active favorite edge", await edgeResolver.hasActiveEdge(aliceBananaData, favoriteDefUID));
+  assert("mango DATA has an active classic edge", await edgeResolver.hasActiveEdge(aliceMangoData, classicDefUID));
 
-  // getActiveTagUID: specific attester's active tag
-  const aliceAppleTagUID = await tagResolver.getActiveTagUID(aliceAddr, aliceAppleV2.uid, favoriteDefUID);
-  assert("Alice has an active tag UID on apple v2 DATA", aliceAppleTagUID !== ethers.ZeroHash);
-
-  // Negate a tag: Alice un-favorites banana
-  await tagLabel(alice, aliceBananaData, favoriteDefUID, false);
-  assert(
-    "banana DATA: no longer actively tagged after Alice negates",
-    !(await tagResolver.isActivelyTagged(aliceBananaData, favoriteDefUID)),
+  // getActiveEdgeUID: specific attester's active TAG (schema-aware)
+  const aliceAppleTagUID = await edgeResolver.getActiveEdgeUID(
+    aliceAddr,
+    aliceAppleV2.uid,
+    favoriteDefUID,
+    tagSchemaUID,
   );
-  // apple v2 still active
+  assert("Alice has an active TAG UID on apple v2 DATA", aliceAppleTagUID !== ethers.ZeroHash);
+
+  // Negate a tag: Alice un-favorites banana (revoke the active TAG attestation)
+  await untagLabel(alice, aliceBananaData, favoriteDefUID);
+  // Bob's tags on banana? None — so the cross-attester counter goes to zero.
   assert(
-    "apple v2 still actively tagged as favorite",
-    await tagResolver.isActivelyTagged(aliceAppleV2.uid, favoriteDefUID),
+    "banana DATA: no longer has an active favorite edge after Alice revokes",
+    !(await edgeResolver.hasActiveEdge(aliceBananaData, favoriteDefUID)),
+  );
+  // apple v2 still active (alice's TAG plus bob's TAG on bobAppleData; we check alice's slot)
+  assert(
+    "apple v2 still actively tagged as favorite by Alice",
+    await edgeResolver.isActiveEdge(aliceAddr, aliceAppleV2.uid, favoriteDefUID, tagSchemaUID),
   );
 
   // ════════════════════════════════════════════════════════════════════════════════
@@ -900,6 +963,11 @@ async function main() {
     appleEditionAfterSortRevoke?.uri === "ipfs://alice-apple-v2",
     appleEditionAfterSortRevoke?.uri ?? "null",
   );
+
+  // Suppress unused-var lint on aliceMangoData / bobAppleData — they are used above.
+  void aliceMangoData;
+  void bobAppleData;
+  void _bobWaterfall;
 
   // ════════════════════════════════════════════════════════════════════════════════
   // Summary

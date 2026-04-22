@@ -54,10 +54,15 @@ contract EFSIndexer is SchemaResolver {
 
     // Partner contract references — set once via wireContracts() after full deployment
     // These are bytes32 storage (not immutable) because partner contracts deploy after EFSIndexer.
+    //
+    // PIN_SCHEMA_UID and TAG_SCHEMA_UID are sibling edge schemas served by a single
+    // EdgeResolver contract; cardinality lives in the schema UID itself (PIN = singleton,
+    // TAG = list). See ADR-0041.
+    bytes32 public PIN_SCHEMA_UID;
     bytes32 public TAG_SCHEMA_UID;
     bytes32 public SORT_INFO_SCHEMA_UID;
     bytes32 public MIRROR_SCHEMA_UID;
-    address public tagResolver;
+    address public edgeResolver;
     address public sortOverlay;
     address public mirrorResolver;
     address public schemaRegistry;
@@ -145,7 +150,7 @@ contract EFSIndexer is SchemaResolver {
     // `_containsAttestations[uid][attester]` means "attester has EVER contributed under this anchor",
     // not "attester currently has active/unrevoked data here". This is intentional:
     //   - Clearing on revoke would require expensive decrement logic on every revocation
-    //   - The UI filters active content via TagResolver's _activeByAAS compact index
+    //   - The UI filters active content via EdgeResolver's _activeBySlot (PIN) and _activeByAAS (TAG) indices
     //   - The early-break optimization in the recursive loop depends on monotonic set-only behavior
     mapping(bytes32 => mapping(address => bool)) private _containsAttestations;
     mapping(bytes32 => mapping(address => mapping(bytes32 => bool))) private _containsSchemaAttestations;
@@ -170,13 +175,14 @@ contract EFSIndexer is SchemaResolver {
 
     /**
      * @notice Wire partner contracts after full deployment.
-     *         Call once from the deploy script after TagResolver and EFSSortOverlay are deployed.
-     *         After calling, TAG_SCHEMA_UID, SORT_INFO_SCHEMA_UID, tagResolver, sortOverlay,
-     *         and schemaRegistry are all queryable from a single entry point (this contract).
-     * @dev Can only be called by DEPLOYER and only once (tagResolver address guards re-entry).
+     *         Call once from the deploy script after EdgeResolver and EFSSortOverlay are deployed.
+     *         After calling, PIN_SCHEMA_UID, TAG_SCHEMA_UID, SORT_INFO_SCHEMA_UID, edgeResolver,
+     *         sortOverlay, and schemaRegistry are all queryable from a single entry point.
+     * @dev Can only be called by DEPLOYER and only once (edgeResolver address guards re-entry).
      */
     function wireContracts(
-        address _tagResolver,
+        address _edgeResolver,
+        bytes32 _pinSchemaUID,
         bytes32 _tagSchemaUID,
         address _sortOverlay,
         bytes32 _sortInfoSchemaUID,
@@ -185,8 +191,9 @@ contract EFSIndexer is SchemaResolver {
         address _schemaRegistry
     ) external {
         require(msg.sender == DEPLOYER, "EFSIndexer: not deployer");
-        require(tagResolver == address(0), "EFSIndexer: already wired");
-        tagResolver = _tagResolver;
+        require(edgeResolver == address(0), "EFSIndexer: already wired");
+        edgeResolver = _edgeResolver;
+        PIN_SCHEMA_UID = _pinSchemaUID;
         TAG_SCHEMA_UID = _tagSchemaUID;
         sortOverlay = _sortOverlay;
         SORT_INFO_SCHEMA_UID = _sortInfoSchemaUID;
@@ -208,8 +215,8 @@ contract EFSIndexer is SchemaResolver {
 
     /**
      * @notice Propagate "contains attestations by attester" flags from an anchor up the tree.
-     *         Called by TagResolver when a TAG with applies=true places content at an anchor,
-     *         and by SortOverlay for sort-related propagation.
+     *         Called by EdgeResolver when a PIN or TAG with weight > 0 places content at an
+     *         anchor, and by SortOverlay for sort-related propagation.
      *
      *         Walks _parents from anchorUID to root, flagging _containsAttestations and
      *         building _childrenByAttester. Early-exits if already flagged (amortized O(1)).
@@ -218,7 +225,7 @@ contract EFSIndexer is SchemaResolver {
      * @param attester  The attester whose presence to propagate.
      */
     function propagateContains(bytes32 anchorUID, address attester) external {
-        if (msg.sender != tagResolver && msg.sender != sortOverlay) {
+        if (msg.sender != edgeResolver && msg.sender != sortOverlay) {
             revert Unauthorized();
         }
         _propagateContains(anchorUID, attester);
@@ -226,9 +233,9 @@ contract EFSIndexer is SchemaResolver {
 
     /**
      * @notice Clear the "contains attestations by attester" flag at a single anchor.
-     *         Called by TagResolver when the last active item placed at an anchor by an
-     *         attester is removed (TAG applies=false). Only clears the immediate anchor —
-     *         ancestor flags remain set (optimistic / sticky).
+     *         Called by EdgeResolver when the last active item placed at an anchor by an
+     *         attester is removed (PIN or TAG with weight <= 0). Only clears the immediate
+     *         anchor — ancestor flags remain set (optimistic / sticky).
      *
      *         Clearing the immediate folder flag is O(1) and sufficient for accurate
      *         subfolder listing: getDirectoryByAddressList and getAnchorsBySchemaAndAddressList
@@ -246,7 +253,7 @@ contract EFSIndexer is SchemaResolver {
      * @param attester  The attester whose flag to clear.
      */
     function clearContains(bytes32 anchorUID, address attester) external {
-        if (msg.sender != tagResolver) revert Unauthorized();
+        if (msg.sender != edgeResolver) revert Unauthorized();
         _containsAttestations[anchorUID][attester] = false;
     }
 

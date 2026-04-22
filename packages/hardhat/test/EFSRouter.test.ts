@@ -8,7 +8,7 @@ const NO_EXPIRATION = 0n;
 
 describe("EFSRouter Web3 Capabilities", function () {
   let indexer: any;
-  let tagResolver: any;
+  let edgeResolver: any;
   let mirrorResolver: any;
   let eas: any;
   let registry: any;
@@ -20,6 +20,7 @@ describe("EFSRouter Web3 Capabilities", function () {
   let anchorSchemaUID: string;
   let dataSchemaUID: string;
   let propertySchemaUID: string;
+  let pinSchemaUID: string;
   let tagSchemaUID: string;
   let mirrorSchemaUID: string;
   let blobSchemaUID: string;
@@ -33,7 +34,14 @@ describe("EFSRouter Web3 Capabilities", function () {
   let httpsTransportUID: string;
   let magnetTransportUID: string;
 
+  // Per-test active-edge index. Routes file placements / PROPERTY bindings (PIN, cardinality 1)
+  // separately from descriptive labels (TAG, cardinality N). The router exercises both reads.
+  // Key: `${target}|${definition}|${attester}` → live attestation UID.
+  let activePinIndex: Map<string, string>;
+  let activeTagIndex: Map<string, string>;
+
   const enc = new ethers.AbiCoder();
+  const DEFAULT_TAG_WEIGHT = 1n;
 
   const getUID = (receipt: any): string => {
     for (const log of receipt.logs) {
@@ -49,6 +57,9 @@ describe("EFSRouter Web3 Capabilities", function () {
     [owner, _user1, _user2] = await ethers.getSigners();
     ownerAddr = await owner.getAddress();
 
+    activePinIndex = new Map();
+    activeTagIndex = new Map();
+
     // Deploy EAS infrastructure
     const RegistryFactory = await ethers.getContractFactory("SchemaRegistry");
     registry = await RegistryFactory.deploy();
@@ -58,11 +69,15 @@ describe("EFSRouter Web3 Capabilities", function () {
     eas = await EASFactory.deploy(await registry.getAddress());
     await eas.waitForDeployment();
 
-    // Nonce prediction (same as EFSTransports.test.ts)
+    // Nonce prediction. Deployment order:
+    //   currentNonce+0: EdgeResolver
+    //   currentNonce+1: MirrorResolver
+    //   currentNonce+2..8: 7 schema registrations (anchor, property, data, PIN, TAG, mirror, blob)
+    //   currentNonce+9: EFSIndexer
     const currentNonce = await ethers.provider.getTransactionCount(ownerAddr);
-    const futureTagResolverAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce });
+    const futureEdgeResolverAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce });
     const futureMirrorResolverAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce + 1 });
-    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce + 8 });
+    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce + 9 });
 
     // Pre-compute schema UIDs
     anchorSchemaUID = ethers.solidityPackedKeccak256(
@@ -77,9 +92,13 @@ describe("EFSRouter Web3 Capabilities", function () {
       ["string", "address", "bool"],
       ["bytes32 contentHash, uint64 size", futureIndexerAddr, false],
     );
+    pinSchemaUID = ethers.solidityPackedKeccak256(
+      ["string", "address", "bool"],
+      ["bytes32 definition", futureEdgeResolverAddr, true],
+    );
     tagSchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
-      ["bytes32 definition, bool applies", futureTagResolverAddr, true],
+      ["bytes32 definition, int256 weight", futureEdgeResolverAddr, true],
     );
     mirrorSchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
@@ -90,10 +109,11 @@ describe("EFSRouter Web3 Capabilities", function () {
       ["string mimeType, uint8 storageType, bytes location", ZeroAddress, true],
     );
 
-    // Deploy TagResolver
-    const TagResolverFactory = await ethers.getContractFactory("TagResolver");
-    tagResolver = await TagResolverFactory.deploy(
+    // Deploy EdgeResolver (handles both PIN and TAG schemas, dispatched by attestation.schema)
+    const EdgeResolverFactory = await ethers.getContractFactory("EdgeResolver");
+    edgeResolver = await EdgeResolverFactory.deploy(
       await eas.getAddress(),
+      pinSchemaUID,
       tagSchemaUID,
       futureIndexerAddr,
       await registry.getAddress(),
@@ -107,7 +127,8 @@ describe("EFSRouter Web3 Capabilities", function () {
     await (await registry.register("string name, bytes32 schemaUID", futureIndexerAddr, false)).wait();
     await (await registry.register("string value", futureIndexerAddr, false)).wait();
     await (await registry.register("bytes32 contentHash, uint64 size", futureIndexerAddr, false)).wait();
-    await (await registry.register("bytes32 definition, bool applies", await tagResolver.getAddress(), true)).wait();
+    await (await registry.register("bytes32 definition", await edgeResolver.getAddress(), true)).wait();
+    await (await registry.register("bytes32 definition, int256 weight", await edgeResolver.getAddress(), true)).wait();
     await (
       await registry.register("bytes32 transportDefinition, string uri", await mirrorResolver.getAddress(), true)
     ).wait();
@@ -124,9 +145,10 @@ describe("EFSRouter Web3 Capabilities", function () {
     );
     expect(await indexer.getAddress()).to.equal(futureIndexerAddr);
 
-    // Wire contracts
+    // Wire contracts (EdgeResolver gets both PIN and TAG schema UIDs)
     await indexer.wireContracts(
-      await tagResolver.getAddress(),
+      await edgeResolver.getAddress(),
+      pinSchemaUID,
       tagSchemaUID,
       ZeroAddress, // no sort overlay
       ZERO_BYTES32,
@@ -135,12 +157,13 @@ describe("EFSRouter Web3 Capabilities", function () {
       await registry.getAddress(),
     );
 
-    // Deploy Router (5 args: indexer, eas, tagResolver, schemaRegistry, dataSchemaUID)
+    // Deploy Router. EFSRouter takes the EdgeResolver address — it calls
+    // `edgeResolver.getActivePinTarget` for both file placement and PROPERTY value lookups.
     const RouterFactory = await ethers.getContractFactory("EFSRouter");
     router = await RouterFactory.deploy(
       await indexer.getAddress(),
       await eas.getAddress(),
-      await tagResolver.getAddress(),
+      await edgeResolver.getAddress(),
       await registry.getAddress(),
       dataSchemaUID,
     );
@@ -284,8 +307,11 @@ describe("EFSRouter Web3 Capabilities", function () {
 
   /**
    * Attach a PROPERTY to a container using the unified free-floating model
-   * (ADR-0035): key anchor under the container, free-floating PROPERTY(value),
-   * and a TAG binding them. Returns the PROPERTY UID.
+   * (ADR-0035 / ADR-0041): key anchor under the container, free-floating
+   * PROPERTY(value), and a PIN binding them. Returns the PROPERTY UID.
+   *
+   * Binding cardinality is 1 (a key has one current value) — therefore PIN, not TAG.
+   * Re-binding the same key auto-supersedes the prior PIN in O(1).
    */
   async function addProperty(
     containerUID: string,
@@ -328,20 +354,7 @@ describe("EFSRouter Web3 Capabilities", function () {
       ).wait(),
     );
 
-    await (
-      await eas.connect(signer).attest({
-        schema: tagSchemaUID,
-        data: {
-          recipient: ZeroAddress,
-          expirationTime: NO_EXPIRATION,
-          revocable: true,
-          refUID: propertyUID,
-          data: enc.encode(["bytes32", "bool"], [keyAnchorUID, true]),
-          value: 0n,
-        },
-      })
-    ).wait();
-
+    await pinAtPath(propertyUID, keyAnchorUID, signer);
     return propertyUID;
   }
 
@@ -368,13 +381,42 @@ describe("EFSRouter Web3 Capabilities", function () {
     );
   }
 
+  /**
+   * PIN a target to a definition (file placement, PROPERTY value binding).
+   * Cardinality 1: re-attesting on the same (def, attester, schema) slot
+   * supersedes the prior PIN automatically.
+   */
+  async function pinAtPath(targetUID: string, definitionUID: string, signer: Signer = owner): Promise<string> {
+    const uid = getUID(
+      await (
+        await eas.connect(signer).attest({
+          schema: pinSchemaUID,
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: NO_EXPIRATION,
+            revocable: true,
+            refUID: targetUID,
+            data: enc.encode(["bytes32"], [definitionUID]),
+            value: 0n,
+          },
+        })
+      ).wait(),
+    );
+    activePinIndex.set(`${targetUID}|${definitionUID}|${await signer.getAddress()}`, uid);
+    return uid;
+  }
+
+  /**
+   * TAG a target with a definition (descriptive labels, sub-folder visibility).
+   * Cardinality N: each new attestation accumulates in the active set.
+   */
   async function tagAtPath(
-    dataUID: string,
-    anchorUID: string,
-    applies: boolean,
+    targetUID: string,
+    definitionUID: string,
     signer: Signer = owner,
+    weight: bigint = DEFAULT_TAG_WEIGHT,
   ): Promise<string> {
-    return getUID(
+    const uid = getUID(
       await (
         await eas.connect(signer).attest({
           schema: tagSchemaUID,
@@ -382,14 +424,21 @@ describe("EFSRouter Web3 Capabilities", function () {
             recipient: ZeroAddress,
             expirationTime: NO_EXPIRATION,
             revocable: true,
-            refUID: dataUID,
-            data: enc.encode(["bytes32", "bool"], [anchorUID, applies]),
+            refUID: targetUID,
+            data: enc.encode(["bytes32", "int256"], [definitionUID, weight]),
             value: 0n,
           },
         })
       ).wait(),
     );
+    activeTagIndex.set(`${targetUID}|${definitionUID}|${await signer.getAddress()}`, uid);
+    return uid;
   }
+  // Silence unused warning for `tagAtPath` if only used in some tests later.
+  // Note: don't `void activeTagIndex` here — at describe-block evaluation time it's
+  // unassigned (set in beforeEach), and TS strict mode flags it as used-before-assigned.
+  // The reference inside tagAtPath's body counts as usage and keeps the compiler happy.
+  void tagAtPath;
 
   /** Full upload: DATA + PROPERTY(contentType) + MIRROR + TAG placement */
   async function uploadOnchain(
@@ -406,7 +455,7 @@ describe("EFSRouter Web3 Capabilities", function () {
     const dataUID = await createData(content, signer);
     await addProperty(dataUID, "contentType", contentType, signer);
     await addMirror(dataUID, onchainTransportUID, `web3://${targetAddress}`, signer);
-    await tagAtPath(dataUID, anchorUID, true, signer);
+    await pinAtPath(dataUID, anchorUID, signer);
     return dataUID;
   }
 
@@ -451,7 +500,7 @@ describe("EFSRouter Web3 Capabilities", function () {
       const dataUID = await createData("binary-png-content");
       await addProperty(dataUID, "contentType", "image/png");
       await addMirror(dataUID, onchainTransportUID, `web3://${targetAddress}`);
-      await tagAtPath(dataUID, fileAnchorUID, true);
+      await pinAtPath(dataUID, fileAnchorUID);
 
       const [statusCode, body] = await router.request(["ideas", "bin_test.png"], ownerParams());
       expect(statusCode).to.equal(200);
@@ -471,7 +520,7 @@ describe("EFSRouter Web3 Capabilities", function () {
       const dataUID = await createData("raw-binary-content");
       await addProperty(dataUID, "contentType", "application/octet-stream");
       await addMirror(dataUID, onchainTransportUID, `web3://${targetAddress}`);
-      await tagAtPath(dataUID, fileAnchorUID, true);
+      await pinAtPath(dataUID, fileAnchorUID);
 
       const [statusCode, body] = await router.request(["ideas", "raw_binary.bin"], ownerParams());
       expect(statusCode).to.equal(200);
@@ -488,7 +537,7 @@ describe("EFSRouter Web3 Capabilities", function () {
       const dataUID = await createData("ipfs-content");
       await addProperty(dataUID, "contentType", "image/png");
       await addMirror(dataUID, ipfsTransportUID, "ipfs://QmXxxx");
-      await tagAtPath(dataUID, fileAnchorUID, true);
+      await pinAtPath(dataUID, fileAnchorUID);
 
       const [statusCode, , headers] = await router.request(["ideas", "ipfs.png"], ownerParams());
       expect(statusCode).to.equal(200);
@@ -503,7 +552,7 @@ describe("EFSRouter Web3 Capabilities", function () {
       const dataUID = await createData("arweave-content");
       await addProperty(dataUID, "contentType", "text/plain");
       await addMirror(dataUID, arweaveTransportUID, "ar://abc123XYZ");
-      await tagAtPath(dataUID, fileAnchorUID, true);
+      await pinAtPath(dataUID, fileAnchorUID);
 
       const [statusCode, , headers] = await router.request(["ideas", "arweave.md"], ownerParams());
       expect(statusCode).to.equal(200);
@@ -516,7 +565,7 @@ describe("EFSRouter Web3 Capabilities", function () {
       const dataUID = await createData("https-content");
       await addProperty(dataUID, "contentType", "text/html");
       await addMirror(dataUID, httpsTransportUID, "https://example.com/file.txt");
-      await tagAtPath(dataUID, fileAnchorUID, true);
+      await pinAtPath(dataUID, fileAnchorUID);
 
       const [statusCode, , headers] = await router.request(["ideas", "https_file.md"], ownerParams());
       expect(statusCode).to.equal(200);
@@ -529,7 +578,7 @@ describe("EFSRouter Web3 Capabilities", function () {
       const dataUID = await createData("magnet-content");
       await addProperty(dataUID, "contentType", "application/x-iso9660-image");
       await addMirror(dataUID, magnetTransportUID, "magnet:?xt=urn:btih:ABCDEF123456");
-      await tagAtPath(dataUID, fileAnchorUID, true);
+      await pinAtPath(dataUID, fileAnchorUID);
 
       const [statusCode, , headers] = await router.request(["ideas", "torrent.iso"], ownerParams());
       expect(statusCode).to.equal(200);
@@ -561,7 +610,7 @@ describe("EFSRouter Web3 Capabilities", function () {
       const dataUID = await createData("chunked-file-content");
       await addProperty(dataUID, "contentType", "application/octet-stream");
       await addMirror(dataUID, onchainTransportUID, `web3://${mgr}`);
-      await tagAtPath(dataUID, fileAnchorUID, true);
+      await pinAtPath(dataUID, fileAnchorUID);
 
       // Chunk 0: should have web3-next-chunk=?chunk=1
       const [s0, b0, h0] = await router.request(["ideas", "chunked.bin"], ownerParams({ key: "chunk", value: "0" }));
@@ -600,7 +649,7 @@ describe("EFSRouter Web3 Capabilities", function () {
       const dataUID = await createData("oob-content");
       await addProperty(dataUID, "contentType", "application/octet-stream");
       await addMirror(dataUID, onchainTransportUID, `web3://${mgr}`);
-      await tagAtPath(dataUID, fileAnchorUID, true);
+      await pinAtPath(dataUID, fileAnchorUID);
 
       const [statusCode] = await router.request(["ideas", "oob.bin"], ownerParams({ key: "chunk", value: "99" }));
       expect(statusCode).to.equal(404);
@@ -632,7 +681,7 @@ describe("EFSRouter Web3 Capabilities", function () {
       const dataUID = await createData("full-concat-content");
       await addProperty(dataUID, "contentType", "image/png");
       await addMirror(dataUID, onchainTransportUID, `web3://${mgr}`);
-      await tagAtPath(dataUID, fileAnchorUID, true);
+      await pinAtPath(dataUID, fileAnchorUID);
 
       const result: number[] = [];
       for (let i = 0; i < chunks.length; i++) {
@@ -677,7 +726,7 @@ describe("EFSRouter Web3 Capabilities", function () {
       const dataUID = await createData(fileContent);
       await addProperty(dataUID, "contentType", "text/markdown");
       await addMirror(dataUID, onchainTransportUID, `web3://${targetAddress}`);
-      await tagAtPath(dataUID, fileAnchorUID, true);
+      await pinAtPath(dataUID, fileAnchorUID);
 
       const [statusCode, body, headers] = await router.request(
         ["ideas", "deep", "nested", "deep_test.md"],
@@ -710,7 +759,7 @@ describe("EFSRouter Web3 Capabilities", function () {
       const data1UID = await createData("User 1 Data", signer1);
       await addProperty(data1UID, "contentType", "text/plain", signer1);
       await addMirror(data1UID, onchainTransportUID, `web3://${targetAddress1}`, signer1);
-      await tagAtPath(data1UID, fileAnchorUID, true, signer1);
+      await pinAtPath(data1UID, fileAnchorUID, signer1);
 
       // User 2 uploads
       await ethers.provider.send("hardhat_impersonateAccount", [u2]);
@@ -720,7 +769,7 @@ describe("EFSRouter Web3 Capabilities", function () {
       const data2UID = await createData("User 2 Data", signer2);
       await addProperty(data2UID, "contentType", "text/plain", signer2);
       await addMirror(data2UID, onchainTransportUID, `web3://${targetAddress2}`, signer2);
-      await tagAtPath(data2UID, fileAnchorUID, true, signer2);
+      await pinAtPath(data2UID, fileAnchorUID, signer2);
 
       // Request with ONLY User 2
       const [statusCode2, body2] = await router.request(["ideas", "shared.txt"], [{ key: "editions", value: u2 }]);
@@ -754,7 +803,7 @@ describe("EFSRouter Web3 Capabilities", function () {
       const dataUID = await createData("no-mirror-content");
       await addProperty(dataUID, "contentType", "text/plain");
       // No mirror created
-      await tagAtPath(dataUID, fileAnchorUID, true);
+      await pinAtPath(dataUID, fileAnchorUID);
 
       const [statusCode, body] = await router.request(["ideas", "no_mirror.txt"], ownerParams());
       expect(statusCode).to.equal(404);
@@ -769,7 +818,7 @@ describe("EFSRouter Web3 Capabilities", function () {
       const dataUID = await createData("malformed-chunk-content");
       await addProperty(dataUID, "contentType", "application/octet-stream");
       await addMirror(dataUID, onchainTransportUID, `web3://${targetAddress}`);
-      await tagAtPath(dataUID, fileAnchorUID, true);
+      await pinAtPath(dataUID, fileAnchorUID);
 
       // "abc" is not numeric, _parseUint returns 0
       const [statusCode, body] = await router.request(
@@ -787,7 +836,7 @@ describe("EFSRouter Web3 Capabilities", function () {
       const dataUID = await createData("bad-uri-content");
       await addProperty(dataUID, "contentType", "application/octet-stream");
       await addMirror(dataUID, onchainTransportUID, "web3://short"); // too short to parse an address
-      await tagAtPath(dataUID, fileAnchorUID, true);
+      await pinAtPath(dataUID, fileAnchorUID);
 
       const [statusCode] = await router.request(["ideas", "bad_uri.bin"], ownerParams());
       expect(statusCode).to.equal(500);
@@ -810,7 +859,7 @@ describe("EFSRouter Web3 Capabilities", function () {
       await addProperty(dataUID, "contentType", "text/plain");
       await addMirror(dataUID, onchainTransportUID, `web3://${targetAddress}`);
       await addMirror(dataUID, httpsTransportUID, "https://evil.example/hijack", signer1); // third-party mirror
-      await tagAtPath(dataUID, fileAnchorUID, true);
+      await pinAtPath(dataUID, fileAnchorUID);
 
       const [statusCode, body, headers] = await router.request(["ideas", "spam_test.txt"], ownerParams());
       expect(statusCode).to.equal(200);
@@ -828,7 +877,7 @@ describe("EFSRouter Web3 Capabilities", function () {
       await addProperty(dataUID, "contentType", "text/plain");
       await addMirror(dataUID, onchainTransportUID, "web3://short"); // invalid
       await addMirror(dataUID, ipfsTransportUID, "ipfs://QmFallback");
-      await tagAtPath(dataUID, fileAnchorUID, true);
+      await pinAtPath(dataUID, fileAnchorUID);
 
       const [statusCode, , headers] = await router.request(["ideas", "fallback.txt"], ownerParams());
       expect(statusCode).to.equal(200);
@@ -844,7 +893,7 @@ describe("EFSRouter Web3 Capabilities", function () {
       const dataUID = await createData("no-ct-content");
       // No contentType PROPERTY
       await addMirror(dataUID, onchainTransportUID, `web3://${targetAddress}`);
-      await tagAtPath(dataUID, fileAnchorUID, true);
+      await pinAtPath(dataUID, fileAnchorUID);
 
       const [statusCode, , headers] = await router.request(["ideas", "no_ct.bin"], ownerParams());
       expect(statusCode).to.equal(200);
@@ -862,7 +911,7 @@ describe("EFSRouter Web3 Capabilities", function () {
       const dataUID = await createData("bare web3 content");
       await addProperty(dataUID, "contentType", "text/plain");
       await addMirror(dataUID, onchainTransportUID, `web3://${targetAddress}`);
-      await tagAtPath(dataUID, fileAnchorUID, true);
+      await pinAtPath(dataUID, fileAnchorUID);
 
       // Request with NO editions param — empty array
       const [statusCode, body] = await router.request(["ideas", "bare_web3.txt"], []);
@@ -879,7 +928,7 @@ describe("EFSRouter Web3 Capabilities", function () {
       const dataUID = await createData("caller content", user1);
       await addProperty(dataUID, "contentType", "text/plain", user1);
       await addMirror(dataUID, ipfsTransportUID, "ipfs://QmCallerTest", user1);
-      await tagAtPath(dataUID, fileAnchorUID, true, user1);
+      await pinAtPath(dataUID, fileAnchorUID, user1);
 
       // With ?caller=user1 and no editions — should find user1's file
       const [statusCode, , headers] = await router.request(
@@ -898,7 +947,7 @@ describe("EFSRouter Web3 Capabilities", function () {
       await addProperty(dataUID, "contentType", "text/plain");
       await addMirror(dataUID, ipfsTransportUID, "ipfs://QmPriorityTest");
       await addMirror(dataUID, arweaveTransportUID, "ar://ArweavePriorityTest");
-      await tagAtPath(dataUID, fileAnchorUID, true);
+      await pinAtPath(dataUID, fileAnchorUID);
 
       const [statusCode, , headers] = await router.request(["ideas", "priority_test.txt"], ownerParams());
       expect(statusCode).to.equal(200);
@@ -913,7 +962,7 @@ describe("EFSRouter Web3 Capabilities", function () {
       const dataUID = await createData("revoked-mirror-content");
       await addProperty(dataUID, "contentType", "text/plain");
       const mirrorUID = await addMirror(dataUID, ipfsTransportUID, "ipfs://QmRevoked");
-      await tagAtPath(dataUID, fileAnchorUID, true);
+      await pinAtPath(dataUID, fileAnchorUID);
 
       // Verify it serves before revocation
       const [statusBefore] = await router.request(["ideas", "revoked_mirror.txt"], ownerParams());
@@ -939,7 +988,7 @@ describe("EFSRouter Web3 Capabilities", function () {
       // Add ar:// first so it appears earlier in the attestation array
       await addMirror(dataUID, arweaveTransportUID, "ar://ShouldNotWin");
       await addMirror(dataUID, onchainTransportUID, `web3://${targetAddress}`);
-      await tagAtPath(dataUID, fileAnchorUID, true);
+      await pinAtPath(dataUID, fileAnchorUID);
 
       const [statusCode, body] = await router.request(["ideas", "web3_vs_ar.txt"], ownerParams());
       expect(statusCode).to.equal(200);
@@ -957,7 +1006,7 @@ describe("EFSRouter Web3 Capabilities", function () {
       await addProperty(dataUID, "contentType", "text/plain");
       const web3MirrorUID = await addMirror(dataUID, onchainTransportUID, `web3://${targetAddress}`);
       await addMirror(dataUID, ipfsTransportUID, "ipfs://QmFallbackHash");
-      await tagAtPath(dataUID, fileAnchorUID, true);
+      await pinAtPath(dataUID, fileAnchorUID);
 
       // Before revocation: web3:// serves content directly
       const [statusBefore, bodyBefore] = await router.request(["ideas", "fallback_mirror.txt"], ownerParams());
@@ -989,7 +1038,7 @@ describe("EFSRouter Web3 Capabilities", function () {
       const dataUID = await createData("user2 file content", user2);
       await addProperty(dataUID, "contentType", "text/plain", user2);
       await addMirror(dataUID, onchainTransportUID, `web3://${targetAddress}`, user2);
-      await tagAtPath(dataUID, fileAnchorUID, true, user2);
+      await pinAtPath(dataUID, fileAnchorUID, user2);
 
       // Pass owner first (has no DATA here), then user2 (has DATA) — should fall through to user2
       const noDataAddr = ownerAddr;
@@ -1002,9 +1051,11 @@ describe("EFSRouter Web3 Capabilities", function () {
     });
 
     it("Should return application/octet-stream when the contentType PROPERTY binding is removed", async function () {
-      // Under the unified free-floating model (ADR-0035), PROPERTY values are
-      // non-revocable; removing a contentType binding means revoking the TAG
-      // that places the PROPERTY under the key anchor.
+      // Under ADR-0041, PROPERTY values are bound to the key anchor via PIN
+      // (cardinality 1 — one current value per attester per key). The PROPERTY
+      // attestation itself is non-revocable; removing a contentType binding
+      // means revoking the PIN edge that places the PROPERTY under the key
+      // anchor.
       const targetAddress = ethers.getAddress("0x00000000000000000000000000000000000000E0");
       await setCode(targetAddress, "0x00" + Buffer.from("no content type").toString("hex"));
 
@@ -1012,26 +1063,27 @@ describe("EFSRouter Web3 Capabilities", function () {
       const dataUID = await createData("no content type");
       const propUID = await addProperty(dataUID, "contentType", "text/plain");
       await addMirror(dataUID, onchainTransportUID, `web3://${targetAddress}`);
-      await tagAtPath(dataUID, fileAnchorUID, true);
+      await pinAtPath(dataUID, fileAnchorUID);
 
       // Sanity: text/plain before binding removal
       const [statusBefore, , headersBefore] = await router.request(["ideas", "revoked_ct.txt"], ownerParams());
       expect(statusBefore).to.equal(200);
       expect(headersBefore.find((h: any) => h.key === "Content-Type")?.value).to.equal("text/plain");
 
-      // Look up the TAG binding and revoke it — the PROPERTY itself stays immutable.
+      // Look up the PIN binding and revoke it — the PROPERTY itself stays immutable.
       const ctKeyAnchor = await indexer.resolveAnchor(dataUID, "contentType", propertySchemaUID);
-      const ctTagUID = await tagResolver.getActiveTagUID(ownerAddr, propUID, ctKeyAnchor);
-      await eas.revoke({ schema: tagSchemaUID, data: { uid: ctTagUID, value: 0n } });
+      const ctPinUID = activePinIndex.get(`${propUID}|${ctKeyAnchor}|${ownerAddr}`);
+      if (!ctPinUID) throw new Error("contentType PIN not tracked in activePinIndex");
+      await eas.revoke({ schema: pinSchemaUID, data: { uid: ctPinUID, value: 0n } });
 
-      // After TAG revocation: no active PROPERTY, falls back to default.
+      // After PIN revocation: no active PROPERTY value, falls back to default.
       const [statusAfter, , headersAfter] = await router.request(["ideas", "revoked_ct.txt"], ownerParams());
       expect(statusAfter).to.equal(200);
       expect(headersAfter.find((h: any) => h.key === "Content-Type")?.value).to.equal("application/octet-stream");
     });
 
-    it("Should return 404 when the placement TAG is revoked", async function () {
-      // Revoking a TAG(applies=true) removes the DATA from _activeByAAS.
+    it("Should return 404 when the placement PIN is revoked", async function () {
+      // Revoking the placement PIN clears the slot in EdgeResolver._activeBySlot.
       // The router can no longer find a DATA at the anchor → 404.
       const targetAddress = ethers.getAddress("0x00000000000000000000000000000000000000E1");
       await setCode(targetAddress, "0x00" + Buffer.from("tag revoked content").toString("hex"));
@@ -1040,13 +1092,13 @@ describe("EFSRouter Web3 Capabilities", function () {
       const dataUID = await createData("tag revoked content");
       await addProperty(dataUID, "contentType", "text/plain");
       await addMirror(dataUID, onchainTransportUID, `web3://${targetAddress}`);
-      const tagUID = await tagAtPath(dataUID, fileAnchorUID, true);
+      const placementPinUID = await pinAtPath(dataUID, fileAnchorUID);
 
       const [statusBefore] = await router.request(["ideas", "tag_revoked.txt"], ownerParams());
       expect(statusBefore).to.equal(200);
 
-      // Revoke the TAG — removes DATA from the active compact index in TagResolver
-      await eas.revoke({ schema: tagSchemaUID, data: { uid: tagUID, value: 0n } });
+      // Revoke the PIN — clears the (def, attester, schema) slot in EdgeResolver
+      await eas.revoke({ schema: pinSchemaUID, data: { uid: placementPinUID, value: 0n } });
 
       const [statusAfter] = await router.request(["ideas", "tag_revoked.txt"], ownerParams());
       expect(statusAfter).to.equal(404);
@@ -1063,7 +1115,7 @@ describe("EFSRouter Web3 Capabilities", function () {
       await addProperty(dataUID, "contentType", "text/plain");
       // URI with :1 chain ID suffix appended
       await addMirror(dataUID, onchainTransportUID, `web3://${targetAddress}:1`);
-      await tagAtPath(dataUID, fileAnchorUID, true);
+      await pinAtPath(dataUID, fileAnchorUID);
 
       const [statusCode, body] = await router.request(["ideas", "chainid_suffix.txt"], ownerParams());
       expect(statusCode).to.equal(200);
@@ -1083,12 +1135,12 @@ describe("EFSRouter Web3 Capabilities", function () {
       const dataUID1 = await createData("version 1");
       await addProperty(dataUID1, "contentType", "text/plain");
       await addMirror(dataUID1, onchainTransportUID, `web3://${addr1}`);
-      await tagAtPath(dataUID1, fileAnchorUID, true);
+      await pinAtPath(dataUID1, fileAnchorUID);
 
       const dataUID2 = await createData("version 2");
       await addProperty(dataUID2, "contentType", "text/plain");
       await addMirror(dataUID2, onchainTransportUID, `web3://${addr2}`);
-      await tagAtPath(dataUID2, fileAnchorUID, true);
+      await pinAtPath(dataUID2, fileAnchorUID);
 
       // dataUID2 was attested after dataUID1 → higher timestamp → should be served
       const [statusCode, body] = await router.request(["ideas", "versioned.txt"], ownerParams());
@@ -1096,34 +1148,34 @@ describe("EFSRouter Web3 Capabilities", function () {
       expect(Buffer.from(ethers.getBytes(body)).toString()).to.equal("version 2");
     });
 
-    it("Should serve the most recently attested contentType when an attester binds multiple PROPERTYs under the same key anchor", async function () {
-      // TAG singleton is per (attester, targetID, definition). Two TAGs from the same
-      // attester with different PROPERTY refUIDs under the same contentType key anchor
-      // are both active until one is explicitly revoked. _activeByAAS stores targetIDs
-      // in first-attestation order, so a naive reader at [0] would serve the stale
-      // value. _getContentType must scan all active targets and pick the newest by
-      // attestation timestamp. (Mirrors the DATA recency rule above.)
+    it("Should serve the latest contentType when an attester re-binds the PROPERTY value under the same key anchor", async function () {
+      // ADR-0041: PROPERTY values are bound via PIN (cardinality 1) under a key
+      // anchor. Re-binding the same key with a new PROPERTY UID supersedes the
+      // prior PIN in O(1) at the EdgeResolver level — _activeBySlot[def][attester][schema]
+      // holds exactly the latest binding. No newest-by-time scan required; no stale
+      // entry left behind to leak.
       const targetAddress = ethers.getAddress("0x00000000000000000000000000000000000000E3");
       await setCode(targetAddress, "0x00" + Buffer.from("content with updated mime").toString("hex"));
 
       const fileAnchorUID = await createFileAnchor(ideasUID, "updated_ct.bin");
       const dataUID = await createData("content with updated mime");
 
-      // First binding: application/octet-stream (the "stale" value).
+      // First binding: application/octet-stream.
       await addProperty(dataUID, "contentType", "application/octet-stream");
       await addMirror(dataUID, onchainTransportUID, `web3://${targetAddress}`);
-      await tagAtPath(dataUID, fileAnchorUID, true);
+      await pinAtPath(dataUID, fileAnchorUID);
 
       // Sanity: the first binding is what the router sees.
       const [status1, , headers1] = await router.request(["ideas", "updated_ct.bin"], ownerParams());
       expect(status1).to.equal(200);
       expect(headers1.find((h: any) => h.key === "Content-Type")?.value).to.equal("application/octet-stream");
 
-      // Second binding from the SAME attester — newer PROPERTY + newer TAG, prior TAG
-      // left active (simulates a client that updated contentType without revoking).
+      // Re-bind from the SAME attester to a new PROPERTY UID. addProperty issues a
+      // new PIN at (def=keyAnchor, attester, schema=PROPERTY) — the prior PIN is
+      // superseded in EdgeResolver._activeBySlot. No revoke needed.
       await addProperty(dataUID, "contentType", "image/png");
 
-      // Router must now return the newer value, not position [0] in _activeByAAS.
+      // Router reads the now-active PIN target via getActivePinTarget — returns image/png.
       const [status2, , headers2] = await router.request(["ideas", "updated_ct.bin"], ownerParams());
       expect(status2).to.equal(200);
       expect(headers2.find((h: any) => h.key === "Content-Type")?.value).to.equal("image/png");
@@ -1205,7 +1257,7 @@ describe("EFSRouter Web3 Capabilities", function () {
       const dataUID = await createData("hi from user1", _user1);
       await addProperty(dataUID, "contentType", "text/plain", _user1);
       await addMirror(dataUID, onchainTransportUID, `web3://${codeAddr}`, _user1);
-      await tagAtPath(dataUID, fileAnchor, true, _user1);
+      await pinAtPath(dataUID, fileAnchor, _user1);
 
       // No ?editions= passed — router should auto-default to [caller, segAddr].
       // caller comes from msg.sender (owner calling via ethers), but eth_call from owner sets msg.sender=owner.
@@ -1224,7 +1276,7 @@ describe("EFSRouter Web3 Capabilities", function () {
       const dataUID = await createData("from user1", _user1);
       await addProperty(dataUID, "contentType", "text/plain", _user1);
       await addMirror(dataUID, onchainTransportUID, `web3://${codeAddr}`, _user1);
-      await tagAtPath(dataUID, fileAnchor, true, _user1);
+      await pinAtPath(dataUID, fileAnchor, _user1);
 
       // Explicit editions=owner (no match) should 404 — the default-[caller, segAddr] doesn't apply.
       const [statusCode] = await router.request([segAddr, "onlyuser1.txt"], [{ key: "editions", value: ownerAddr }]);
@@ -1258,7 +1310,7 @@ describe("EFSRouter Web3 Capabilities", function () {
     it("Should serve a DATA tagged directly at a schema UID (no anchor in path)", async function () {
       // Schema sub-anchors can't exist (EAS rejects refUID=schemaUID since it's not an attestation),
       // but a TAG can place a DATA directly at a schema UID via definition=schemaUID. The router's
-      // _findDataAtPath calls tagResolver.getActiveTargetsByAttesterAndSchema(targetAnchor=schemaUID)
+      // _findDataAtPath calls edgeResolver.getActivePinTarget(targetAnchor=schemaUID, …)
       // which resolves the TAG and returns the DATA. This is how files "live at" a schema container.
       const codeAddr = ethers.getAddress("0x00000000000000000000000000000000000000F0");
       await setCode(codeAddr, "0x00" + Buffer.from("tagged at schema").toString("hex"));
@@ -1266,8 +1318,8 @@ describe("EFSRouter Web3 Capabilities", function () {
       const dataUID = await createData("tagged at schema");
       await addProperty(dataUID, "contentType", "text/plain");
       await addMirror(dataUID, onchainTransportUID, `web3://${codeAddr}`);
-      // Place DATA directly at the schema UID via TAG (definition = schemaUID).
-      await tagAtPath(dataUID, dataSchemaUID, true);
+      // Place DATA directly at the schema UID via PIN (definition = schemaUID, cardinality 1).
+      await pinAtPath(dataUID, dataSchemaUID);
 
       const [statusCode, body] = await router.request([dataSchemaUID], ownerParams());
       expect(statusCode).to.equal(200);

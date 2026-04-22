@@ -7,7 +7,7 @@ import { GenericContractsDeclaration } from "~~/utils/scaffold-eth/contract";
 const deployedContracts = {
   31337: {
     EFSFileView: {
-      address: "0x29e8a042ea34B7EE720C12b52720027b5E9049C6",
+      address: "0x04fD5Ee60B015B6EfD21a54D1E662D68868683c5",
       abi: [
         {
           inputs: [
@@ -17,8 +17,8 @@ const deployedContracts = {
               type: "address",
             },
             {
-              internalType: "contract ITagResolverForFileView",
-              name: "_tagResolver",
+              internalType: "contract IEdgeResolverForFileView",
+              name: "_edgeResolver",
               type: "address",
             },
           ],
@@ -50,6 +50,19 @@ const deployedContracts = {
           outputs: [
             {
               internalType: "contract IEAS",
+              name: "",
+              type: "address",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "edgeResolver",
+          outputs: [
+            {
+              internalType: "contract IEdgeResolverForFileView",
               name: "",
               type: "address",
             },
@@ -553,24 +566,11 @@ const deployedContracts = {
           stateMutability: "view",
           type: "function",
         },
-        {
-          inputs: [],
-          name: "tagResolver",
-          outputs: [
-            {
-              internalType: "contract ITagResolverForFileView",
-              name: "",
-              type: "address",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
       ],
       inheritedFunctions: {},
     },
     EFSRouter: {
-      address: "0xa498a50aADa7790F5d3EFD594365E797c947eece",
+      address: "0x19C7dAeb1828942DeBf60FB78FF70292300E7800",
       abi: [
         {
           inputs: [
@@ -586,7 +586,7 @@ const deployedContracts = {
             },
             {
               internalType: "address",
-              name: "_tagResolver",
+              name: "_edgeResolver",
               type: "address",
             },
             {
@@ -646,6 +646,19 @@ const deployedContracts = {
           outputs: [
             {
               internalType: "contract IEAS",
+              name: "",
+              type: "address",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "edgeResolver",
+          outputs: [
+            {
+              internalType: "contract IEdgeResolverForRouter",
               name: "",
               type: "address",
             },
@@ -750,24 +763,11 @@ const deployedContracts = {
           stateMutability: "view",
           type: "function",
         },
-        {
-          inputs: [],
-          name: "tagResolver",
-          outputs: [
-            {
-              internalType: "contract ITagResolverForRouter",
-              name: "",
-              type: "address",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
       ],
       inheritedFunctions: {},
     },
     EFSSortOverlay: {
-      address: "0x04fD5Ee60B015B6EfD21a54D1E662D68868683c5",
+      address: "0x806c44f027a6f6ee75aDe3F6DBf1c6DB496FfC67",
       abi: [
         {
           inputs: [
@@ -1745,8 +1745,1069 @@ const deployedContracts = {
           "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
       },
     },
+    EdgeResolver: {
+      address: "0xC64700624b2129C81288e7Bd4d5Ec9DD006eb2D0",
+      abi: [
+        {
+          inputs: [
+            {
+              internalType: "contract IEAS",
+              name: "eas",
+              type: "address",
+            },
+            {
+              internalType: "bytes32",
+              name: "pinSchemaUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "tagSchemaUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "contract IEFSIndexerForEdges",
+              name: "_indexer",
+              type: "address",
+            },
+            {
+              internalType: "contract ISchemaRegistry",
+              name: "_schemaRegistry",
+              type: "address",
+            },
+          ],
+          stateMutability: "nonpayable",
+          type: "constructor",
+        },
+        {
+          inputs: [],
+          name: "AccessDenied",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "InsufficientValue",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "InvalidDefinition",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "InvalidEAS",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "InvalidLength",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "InvalidTarget",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "MustTargetSomething",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "NotPayable",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "UnknownEdgeSchema",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "PIN_SCHEMA_UID",
+          outputs: [
+            {
+              internalType: "bytes32",
+              name: "",
+              type: "bytes32",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "TAG_SCHEMA_UID",
+          outputs: [
+            {
+              internalType: "bytes32",
+              name: "",
+              type: "bytes32",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              components: [
+                {
+                  internalType: "bytes32",
+                  name: "uid",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "bytes32",
+                  name: "schema",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "uint64",
+                  name: "time",
+                  type: "uint64",
+                },
+                {
+                  internalType: "uint64",
+                  name: "expirationTime",
+                  type: "uint64",
+                },
+                {
+                  internalType: "uint64",
+                  name: "revocationTime",
+                  type: "uint64",
+                },
+                {
+                  internalType: "bytes32",
+                  name: "refUID",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "address",
+                  name: "recipient",
+                  type: "address",
+                },
+                {
+                  internalType: "address",
+                  name: "attester",
+                  type: "address",
+                },
+                {
+                  internalType: "bool",
+                  name: "revocable",
+                  type: "bool",
+                },
+                {
+                  internalType: "bytes",
+                  name: "data",
+                  type: "bytes",
+                },
+              ],
+              internalType: "struct Attestation",
+              name: "attestation",
+              type: "tuple",
+            },
+          ],
+          name: "attest",
+          outputs: [
+            {
+              internalType: "bool",
+              name: "",
+              type: "bool",
+            },
+          ],
+          stateMutability: "payable",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+            {
+              internalType: "bytes32",
+              name: "targetID",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "definition",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "schema",
+              type: "bytes32",
+            },
+          ],
+          name: "getActiveEdgeUID",
+          outputs: [
+            {
+              internalType: "bytes32",
+              name: "",
+              type: "bytes32",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "definition",
+              type: "bytes32",
+            },
+            {
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+            {
+              internalType: "bytes32",
+              name: "targetSchema",
+              type: "bytes32",
+            },
+          ],
+          name: "getActivePin",
+          outputs: [
+            {
+              internalType: "bytes32",
+              name: "",
+              type: "bytes32",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "definition",
+              type: "bytes32",
+            },
+            {
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+            {
+              internalType: "bytes32",
+              name: "targetSchema",
+              type: "bytes32",
+            },
+          ],
+          name: "getActivePinSlot",
+          outputs: [
+            {
+              components: [
+                {
+                  internalType: "bytes32",
+                  name: "pinUID",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "bytes32",
+                  name: "targetID",
+                  type: "bytes32",
+                },
+              ],
+              internalType: "struct EdgeResolver.SlotEntry",
+              name: "",
+              type: "tuple",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "definition",
+              type: "bytes32",
+            },
+            {
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+            {
+              internalType: "bytes32",
+              name: "targetSchema",
+              type: "bytes32",
+            },
+          ],
+          name: "getActivePinTarget",
+          outputs: [
+            {
+              internalType: "bytes32",
+              name: "",
+              type: "bytes32",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "definition",
+              type: "bytes32",
+            },
+            {
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+            {
+              internalType: "bytes32",
+              name: "schema",
+              type: "bytes32",
+            },
+            {
+              internalType: "uint256",
+              name: "start",
+              type: "uint256",
+            },
+            {
+              internalType: "uint256",
+              name: "length",
+              type: "uint256",
+            },
+          ],
+          name: "getActiveTagEntries",
+          outputs: [
+            {
+              components: [
+                {
+                  internalType: "bytes32",
+                  name: "tagUID",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "int256",
+                  name: "weight",
+                  type: "int256",
+                },
+              ],
+              internalType: "struct EdgeResolver.TagEntry[]",
+              name: "",
+              type: "tuple[]",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "definition",
+              type: "bytes32",
+            },
+            {
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+            {
+              internalType: "bytes32",
+              name: "schema",
+              type: "bytes32",
+            },
+            {
+              internalType: "uint256",
+              name: "start",
+              type: "uint256",
+            },
+            {
+              internalType: "uint256",
+              name: "length",
+              type: "uint256",
+            },
+          ],
+          name: "getActiveTags",
+          outputs: [
+            {
+              internalType: "bytes32[]",
+              name: "",
+              type: "bytes32[]",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "definition",
+              type: "bytes32",
+            },
+            {
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+            {
+              internalType: "bytes32",
+              name: "schema",
+              type: "bytes32",
+            },
+          ],
+          name: "getActiveTagsCount",
+          outputs: [
+            {
+              internalType: "uint256",
+              name: "",
+              type: "uint256",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "definition",
+              type: "bytes32",
+            },
+            {
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+            {
+              internalType: "bytes32",
+              name: "schema",
+              type: "bytes32",
+            },
+            {
+              internalType: "uint256",
+              name: "start",
+              type: "uint256",
+            },
+            {
+              internalType: "uint256",
+              name: "length",
+              type: "uint256",
+            },
+          ],
+          name: "getActiveTargetsByAttesterAndSchema",
+          outputs: [
+            {
+              internalType: "bytes32[]",
+              name: "",
+              type: "bytes32[]",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "definition",
+              type: "bytes32",
+            },
+            {
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+            {
+              internalType: "bytes32",
+              name: "schema",
+              type: "bytes32",
+            },
+          ],
+          name: "getActiveTargetsByAttesterAndSchemaCount",
+          outputs: [
+            {
+              internalType: "uint256",
+              name: "",
+              type: "uint256",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "parentUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "definition",
+              type: "bytes32",
+            },
+            {
+              internalType: "uint256",
+              name: "start",
+              type: "uint256",
+            },
+            {
+              internalType: "uint256",
+              name: "length",
+              type: "uint256",
+            },
+          ],
+          name: "getChildrenWithEdge",
+          outputs: [
+            {
+              internalType: "bytes32[]",
+              name: "",
+              type: "bytes32[]",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "parentUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "definition",
+              type: "bytes32",
+            },
+          ],
+          name: "getChildrenWithEdgeCount",
+          outputs: [
+            {
+              internalType: "uint256",
+              name: "",
+              type: "uint256",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "targetID",
+              type: "bytes32",
+            },
+          ],
+          name: "getEdgeDefinitionCount",
+          outputs: [
+            {
+              internalType: "uint256",
+              name: "",
+              type: "uint256",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "targetID",
+              type: "bytes32",
+            },
+            {
+              internalType: "uint256",
+              name: "start",
+              type: "uint256",
+            },
+            {
+              internalType: "uint256",
+              name: "length",
+              type: "uint256",
+            },
+          ],
+          name: "getEdgeDefinitions",
+          outputs: [
+            {
+              internalType: "bytes32[]",
+              name: "",
+              type: "bytes32[]",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "definition",
+              type: "bytes32",
+            },
+            {
+              internalType: "uint256",
+              name: "start",
+              type: "uint256",
+            },
+            {
+              internalType: "uint256",
+              name: "length",
+              type: "uint256",
+            },
+          ],
+          name: "getTargetsByDefinition",
+          outputs: [
+            {
+              internalType: "bytes32[]",
+              name: "",
+              type: "bytes32[]",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "definition",
+              type: "bytes32",
+            },
+          ],
+          name: "getTargetsByDefinitionCount",
+          outputs: [
+            {
+              internalType: "uint256",
+              name: "",
+              type: "uint256",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "targetID",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "definition",
+              type: "bytes32",
+            },
+          ],
+          name: "hasActiveEdge",
+          outputs: [
+            {
+              internalType: "bool",
+              name: "",
+              type: "bool",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "targetID",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "definition",
+              type: "bytes32",
+            },
+            {
+              internalType: "address[]",
+              name: "attesters",
+              type: "address[]",
+            },
+          ],
+          name: "hasActiveEdgeFromAny",
+          outputs: [
+            {
+              internalType: "bool",
+              name: "",
+              type: "bool",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "indexer",
+          outputs: [
+            {
+              internalType: "contract IEFSIndexerForEdges",
+              name: "",
+              type: "address",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+            {
+              internalType: "bytes32",
+              name: "targetID",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "definition",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "schema",
+              type: "bytes32",
+            },
+          ],
+          name: "isActiveEdge",
+          outputs: [
+            {
+              internalType: "bool",
+              name: "",
+              type: "bool",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+            {
+              internalType: "bytes32",
+              name: "targetID",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "definition",
+              type: "bytes32",
+            },
+          ],
+          name: "isActiveEdgeAnySchema",
+          outputs: [
+            {
+              internalType: "bool",
+              name: "",
+              type: "bool",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "isPayable",
+          outputs: [
+            {
+              internalType: "bool",
+              name: "",
+              type: "bool",
+            },
+          ],
+          stateMutability: "pure",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              components: [
+                {
+                  internalType: "bytes32",
+                  name: "uid",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "bytes32",
+                  name: "schema",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "uint64",
+                  name: "time",
+                  type: "uint64",
+                },
+                {
+                  internalType: "uint64",
+                  name: "expirationTime",
+                  type: "uint64",
+                },
+                {
+                  internalType: "uint64",
+                  name: "revocationTime",
+                  type: "uint64",
+                },
+                {
+                  internalType: "bytes32",
+                  name: "refUID",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "address",
+                  name: "recipient",
+                  type: "address",
+                },
+                {
+                  internalType: "address",
+                  name: "attester",
+                  type: "address",
+                },
+                {
+                  internalType: "bool",
+                  name: "revocable",
+                  type: "bool",
+                },
+                {
+                  internalType: "bytes",
+                  name: "data",
+                  type: "bytes",
+                },
+              ],
+              internalType: "struct Attestation[]",
+              name: "attestations",
+              type: "tuple[]",
+            },
+            {
+              internalType: "uint256[]",
+              name: "values",
+              type: "uint256[]",
+            },
+          ],
+          name: "multiAttest",
+          outputs: [
+            {
+              internalType: "bool",
+              name: "",
+              type: "bool",
+            },
+          ],
+          stateMutability: "payable",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              components: [
+                {
+                  internalType: "bytes32",
+                  name: "uid",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "bytes32",
+                  name: "schema",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "uint64",
+                  name: "time",
+                  type: "uint64",
+                },
+                {
+                  internalType: "uint64",
+                  name: "expirationTime",
+                  type: "uint64",
+                },
+                {
+                  internalType: "uint64",
+                  name: "revocationTime",
+                  type: "uint64",
+                },
+                {
+                  internalType: "bytes32",
+                  name: "refUID",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "address",
+                  name: "recipient",
+                  type: "address",
+                },
+                {
+                  internalType: "address",
+                  name: "attester",
+                  type: "address",
+                },
+                {
+                  internalType: "bool",
+                  name: "revocable",
+                  type: "bool",
+                },
+                {
+                  internalType: "bytes",
+                  name: "data",
+                  type: "bytes",
+                },
+              ],
+              internalType: "struct Attestation[]",
+              name: "attestations",
+              type: "tuple[]",
+            },
+            {
+              internalType: "uint256[]",
+              name: "values",
+              type: "uint256[]",
+            },
+          ],
+          name: "multiRevoke",
+          outputs: [
+            {
+              internalType: "bool",
+              name: "",
+              type: "bool",
+            },
+          ],
+          stateMutability: "payable",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              components: [
+                {
+                  internalType: "bytes32",
+                  name: "uid",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "bytes32",
+                  name: "schema",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "uint64",
+                  name: "time",
+                  type: "uint64",
+                },
+                {
+                  internalType: "uint64",
+                  name: "expirationTime",
+                  type: "uint64",
+                },
+                {
+                  internalType: "uint64",
+                  name: "revocationTime",
+                  type: "uint64",
+                },
+                {
+                  internalType: "bytes32",
+                  name: "refUID",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "address",
+                  name: "recipient",
+                  type: "address",
+                },
+                {
+                  internalType: "address",
+                  name: "attester",
+                  type: "address",
+                },
+                {
+                  internalType: "bool",
+                  name: "revocable",
+                  type: "bool",
+                },
+                {
+                  internalType: "bytes",
+                  name: "data",
+                  type: "bytes",
+                },
+              ],
+              internalType: "struct Attestation",
+              name: "attestation",
+              type: "tuple",
+            },
+          ],
+          name: "revoke",
+          outputs: [
+            {
+              internalType: "bool",
+              name: "",
+              type: "bool",
+            },
+          ],
+          stateMutability: "payable",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "schemaRegistry",
+          outputs: [
+            {
+              internalType: "contract ISchemaRegistry",
+              name: "",
+              type: "address",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "version",
+          outputs: [
+            {
+              internalType: "string",
+              name: "",
+              type: "string",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          stateMutability: "payable",
+          type: "receive",
+        },
+      ],
+      inheritedFunctions: {
+        attest:
+          "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
+        isPayable:
+          "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
+        multiAttest:
+          "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
+        multiRevoke:
+          "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
+        revoke:
+          "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
+        version:
+          "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
+      },
+    },
     Indexer: {
-      address: "0x85554083b691219C1F2556bA52D4fDEe5d76a01f",
+      address: "0x2a88C3373cD7D7CAc90420515614d5C43777A00c",
       abi: [
         {
           inputs: [
@@ -2081,6 +3142,19 @@ const deployedContracts = {
         },
         {
           inputs: [],
+          name: "PIN_SCHEMA_UID",
+          outputs: [
+            {
+              internalType: "bytes32",
+              name: "",
+              type: "bytes32",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [],
           name: "PROPERTY_SCHEMA_UID",
           outputs: [
             {
@@ -2274,6 +3348,19 @@ const deployedContracts = {
               internalType: "bytes32",
               name: "",
               type: "bytes32",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "edgeResolver",
+          outputs: [
+            {
+              internalType: "address",
+              name: "",
+              type: "address",
             },
           ],
           stateMutability: "view",
@@ -3796,19 +4883,6 @@ const deployedContracts = {
         },
         {
           inputs: [],
-          name: "tagResolver",
-          outputs: [
-            {
-              internalType: "address",
-              name: "",
-              type: "address",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [],
           name: "version",
           outputs: [
             {
@@ -3824,8 +4898,13 @@ const deployedContracts = {
           inputs: [
             {
               internalType: "address",
-              name: "_tagResolver",
+              name: "_edgeResolver",
               type: "address",
+            },
+            {
+              internalType: "bytes32",
+              name: "_pinSchemaUID",
+              type: "bytes32",
             },
             {
               internalType: "bytes32",
@@ -3871,7 +4950,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     MirrorResolver: {
-      address: "0x19C7dAeb1828942DeBf60FB78FF70292300E7800",
+      address: "0x9CfBEaB5419279528B3e9A68B7522dFDED882137",
       abi: [
         {
           inputs: [
@@ -4327,7 +5406,7 @@ const deployedContracts = {
       },
     },
     NameSort: {
-      address: "0x6e2D4b9fABb3A1Cbec42bb38c51Ff421D4dD4b5A",
+      address: "0xe9e0e645C145E9d99246aB522AFF724F31F95E00",
       abi: [
         {
           inputs: [
@@ -4413,7 +5492,7 @@ const deployedContracts = {
       },
     },
     SchemaNameIndex: {
-      address: "0x2a88C3373cD7D7CAc90420515614d5C43777A00c",
+      address: "0x9B0F3b52Eaa4625459dA9d4f3fd1d35194652c60",
       abi: [
         {
           inputs: [
@@ -4517,789 +5596,8 @@ const deployedContracts = {
       ],
       inheritedFunctions: {},
     },
-    TagResolver: {
-      address: "0xC64700624b2129C81288e7Bd4d5Ec9DD006eb2D0",
-      abi: [
-        {
-          inputs: [
-            {
-              internalType: "contract IEAS",
-              name: "eas",
-              type: "address",
-            },
-            {
-              internalType: "bytes32",
-              name: "tagSchemaUID",
-              type: "bytes32",
-            },
-            {
-              internalType: "contract IEFSIndexerForTag",
-              name: "_indexer",
-              type: "address",
-            },
-            {
-              internalType: "contract ISchemaRegistry",
-              name: "_schemaRegistry",
-              type: "address",
-            },
-          ],
-          stateMutability: "nonpayable",
-          type: "constructor",
-        },
-        {
-          inputs: [],
-          name: "AccessDenied",
-          type: "error",
-        },
-        {
-          inputs: [],
-          name: "InsufficientValue",
-          type: "error",
-        },
-        {
-          inputs: [],
-          name: "InvalidDefinition",
-          type: "error",
-        },
-        {
-          inputs: [],
-          name: "InvalidEAS",
-          type: "error",
-        },
-        {
-          inputs: [],
-          name: "InvalidLength",
-          type: "error",
-        },
-        {
-          inputs: [],
-          name: "InvalidTarget",
-          type: "error",
-        },
-        {
-          inputs: [],
-          name: "MustTargetSomething",
-          type: "error",
-        },
-        {
-          inputs: [],
-          name: "NotPayable",
-          type: "error",
-        },
-        {
-          inputs: [],
-          name: "TAG_SCHEMA_UID",
-          outputs: [
-            {
-              internalType: "bytes32",
-              name: "",
-              type: "bytes32",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              components: [
-                {
-                  internalType: "bytes32",
-                  name: "uid",
-                  type: "bytes32",
-                },
-                {
-                  internalType: "bytes32",
-                  name: "schema",
-                  type: "bytes32",
-                },
-                {
-                  internalType: "uint64",
-                  name: "time",
-                  type: "uint64",
-                },
-                {
-                  internalType: "uint64",
-                  name: "expirationTime",
-                  type: "uint64",
-                },
-                {
-                  internalType: "uint64",
-                  name: "revocationTime",
-                  type: "uint64",
-                },
-                {
-                  internalType: "bytes32",
-                  name: "refUID",
-                  type: "bytes32",
-                },
-                {
-                  internalType: "address",
-                  name: "recipient",
-                  type: "address",
-                },
-                {
-                  internalType: "address",
-                  name: "attester",
-                  type: "address",
-                },
-                {
-                  internalType: "bool",
-                  name: "revocable",
-                  type: "bool",
-                },
-                {
-                  internalType: "bytes",
-                  name: "data",
-                  type: "bytes",
-                },
-              ],
-              internalType: "struct Attestation",
-              name: "attestation",
-              type: "tuple",
-            },
-          ],
-          name: "attest",
-          outputs: [
-            {
-              internalType: "bool",
-              name: "",
-              type: "bool",
-            },
-          ],
-          stateMutability: "payable",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              internalType: "address",
-              name: "attester",
-              type: "address",
-            },
-            {
-              internalType: "bytes32",
-              name: "targetID",
-              type: "bytes32",
-            },
-            {
-              internalType: "bytes32",
-              name: "definition",
-              type: "bytes32",
-            },
-          ],
-          name: "getActiveTagUID",
-          outputs: [
-            {
-              internalType: "bytes32",
-              name: "",
-              type: "bytes32",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              internalType: "bytes32",
-              name: "definition",
-              type: "bytes32",
-            },
-            {
-              internalType: "address",
-              name: "attester",
-              type: "address",
-            },
-            {
-              internalType: "bytes32",
-              name: "schema",
-              type: "bytes32",
-            },
-            {
-              internalType: "uint256",
-              name: "start",
-              type: "uint256",
-            },
-            {
-              internalType: "uint256",
-              name: "length",
-              type: "uint256",
-            },
-          ],
-          name: "getActiveTargetsByAttesterAndSchema",
-          outputs: [
-            {
-              internalType: "bytes32[]",
-              name: "",
-              type: "bytes32[]",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              internalType: "bytes32",
-              name: "definition",
-              type: "bytes32",
-            },
-            {
-              internalType: "address",
-              name: "attester",
-              type: "address",
-            },
-            {
-              internalType: "bytes32",
-              name: "schema",
-              type: "bytes32",
-            },
-          ],
-          name: "getActiveTargetsByAttesterAndSchemaCount",
-          outputs: [
-            {
-              internalType: "uint256",
-              name: "",
-              type: "uint256",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              internalType: "bytes32",
-              name: "parentUID",
-              type: "bytes32",
-            },
-            {
-              internalType: "bytes32",
-              name: "definition",
-              type: "bytes32",
-            },
-            {
-              internalType: "uint256",
-              name: "start",
-              type: "uint256",
-            },
-            {
-              internalType: "uint256",
-              name: "length",
-              type: "uint256",
-            },
-          ],
-          name: "getChildrenTaggedWith",
-          outputs: [
-            {
-              internalType: "bytes32[]",
-              name: "",
-              type: "bytes32[]",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              internalType: "bytes32",
-              name: "parentUID",
-              type: "bytes32",
-            },
-            {
-              internalType: "bytes32",
-              name: "definition",
-              type: "bytes32",
-            },
-          ],
-          name: "getChildrenTaggedWithCount",
-          outputs: [
-            {
-              internalType: "uint256",
-              name: "",
-              type: "uint256",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              internalType: "bytes32",
-              name: "targetID",
-              type: "bytes32",
-            },
-          ],
-          name: "getTagDefinitionCount",
-          outputs: [
-            {
-              internalType: "uint256",
-              name: "",
-              type: "uint256",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              internalType: "bytes32",
-              name: "targetID",
-              type: "bytes32",
-            },
-            {
-              internalType: "uint256",
-              name: "start",
-              type: "uint256",
-            },
-            {
-              internalType: "uint256",
-              name: "length",
-              type: "uint256",
-            },
-          ],
-          name: "getTagDefinitions",
-          outputs: [
-            {
-              internalType: "bytes32[]",
-              name: "",
-              type: "bytes32[]",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              internalType: "bytes32",
-              name: "definition",
-              type: "bytes32",
-            },
-          ],
-          name: "getTaggedTargetCount",
-          outputs: [
-            {
-              internalType: "uint256",
-              name: "",
-              type: "uint256",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              internalType: "bytes32",
-              name: "definition",
-              type: "bytes32",
-            },
-            {
-              internalType: "uint256",
-              name: "start",
-              type: "uint256",
-            },
-            {
-              internalType: "uint256",
-              name: "length",
-              type: "uint256",
-            },
-          ],
-          name: "getTaggedTargets",
-          outputs: [
-            {
-              internalType: "bytes32[]",
-              name: "",
-              type: "bytes32[]",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [],
-          name: "indexer",
-          outputs: [
-            {
-              internalType: "contract IEFSIndexerForTag",
-              name: "",
-              type: "address",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              internalType: "address",
-              name: "attester",
-              type: "address",
-            },
-            {
-              internalType: "bytes32",
-              name: "targetID",
-              type: "bytes32",
-            },
-            {
-              internalType: "bytes32",
-              name: "definition",
-              type: "bytes32",
-            },
-          ],
-          name: "isActivelyApplied",
-          outputs: [
-            {
-              internalType: "bool",
-              name: "",
-              type: "bool",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              internalType: "bytes32",
-              name: "targetID",
-              type: "bytes32",
-            },
-            {
-              internalType: "bytes32",
-              name: "definition",
-              type: "bytes32",
-            },
-          ],
-          name: "isActivelyTagged",
-          outputs: [
-            {
-              internalType: "bool",
-              name: "",
-              type: "bool",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              internalType: "bytes32",
-              name: "targetID",
-              type: "bytes32",
-            },
-            {
-              internalType: "bytes32",
-              name: "definition",
-              type: "bytes32",
-            },
-            {
-              internalType: "address[]",
-              name: "attesters",
-              type: "address[]",
-            },
-          ],
-          name: "isActivelyTaggedByAny",
-          outputs: [
-            {
-              internalType: "bool",
-              name: "",
-              type: "bool",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [],
-          name: "isPayable",
-          outputs: [
-            {
-              internalType: "bool",
-              name: "",
-              type: "bool",
-            },
-          ],
-          stateMutability: "pure",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              components: [
-                {
-                  internalType: "bytes32",
-                  name: "uid",
-                  type: "bytes32",
-                },
-                {
-                  internalType: "bytes32",
-                  name: "schema",
-                  type: "bytes32",
-                },
-                {
-                  internalType: "uint64",
-                  name: "time",
-                  type: "uint64",
-                },
-                {
-                  internalType: "uint64",
-                  name: "expirationTime",
-                  type: "uint64",
-                },
-                {
-                  internalType: "uint64",
-                  name: "revocationTime",
-                  type: "uint64",
-                },
-                {
-                  internalType: "bytes32",
-                  name: "refUID",
-                  type: "bytes32",
-                },
-                {
-                  internalType: "address",
-                  name: "recipient",
-                  type: "address",
-                },
-                {
-                  internalType: "address",
-                  name: "attester",
-                  type: "address",
-                },
-                {
-                  internalType: "bool",
-                  name: "revocable",
-                  type: "bool",
-                },
-                {
-                  internalType: "bytes",
-                  name: "data",
-                  type: "bytes",
-                },
-              ],
-              internalType: "struct Attestation[]",
-              name: "attestations",
-              type: "tuple[]",
-            },
-            {
-              internalType: "uint256[]",
-              name: "values",
-              type: "uint256[]",
-            },
-          ],
-          name: "multiAttest",
-          outputs: [
-            {
-              internalType: "bool",
-              name: "",
-              type: "bool",
-            },
-          ],
-          stateMutability: "payable",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              components: [
-                {
-                  internalType: "bytes32",
-                  name: "uid",
-                  type: "bytes32",
-                },
-                {
-                  internalType: "bytes32",
-                  name: "schema",
-                  type: "bytes32",
-                },
-                {
-                  internalType: "uint64",
-                  name: "time",
-                  type: "uint64",
-                },
-                {
-                  internalType: "uint64",
-                  name: "expirationTime",
-                  type: "uint64",
-                },
-                {
-                  internalType: "uint64",
-                  name: "revocationTime",
-                  type: "uint64",
-                },
-                {
-                  internalType: "bytes32",
-                  name: "refUID",
-                  type: "bytes32",
-                },
-                {
-                  internalType: "address",
-                  name: "recipient",
-                  type: "address",
-                },
-                {
-                  internalType: "address",
-                  name: "attester",
-                  type: "address",
-                },
-                {
-                  internalType: "bool",
-                  name: "revocable",
-                  type: "bool",
-                },
-                {
-                  internalType: "bytes",
-                  name: "data",
-                  type: "bytes",
-                },
-              ],
-              internalType: "struct Attestation[]",
-              name: "attestations",
-              type: "tuple[]",
-            },
-            {
-              internalType: "uint256[]",
-              name: "values",
-              type: "uint256[]",
-            },
-          ],
-          name: "multiRevoke",
-          outputs: [
-            {
-              internalType: "bool",
-              name: "",
-              type: "bool",
-            },
-          ],
-          stateMutability: "payable",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              components: [
-                {
-                  internalType: "bytes32",
-                  name: "uid",
-                  type: "bytes32",
-                },
-                {
-                  internalType: "bytes32",
-                  name: "schema",
-                  type: "bytes32",
-                },
-                {
-                  internalType: "uint64",
-                  name: "time",
-                  type: "uint64",
-                },
-                {
-                  internalType: "uint64",
-                  name: "expirationTime",
-                  type: "uint64",
-                },
-                {
-                  internalType: "uint64",
-                  name: "revocationTime",
-                  type: "uint64",
-                },
-                {
-                  internalType: "bytes32",
-                  name: "refUID",
-                  type: "bytes32",
-                },
-                {
-                  internalType: "address",
-                  name: "recipient",
-                  type: "address",
-                },
-                {
-                  internalType: "address",
-                  name: "attester",
-                  type: "address",
-                },
-                {
-                  internalType: "bool",
-                  name: "revocable",
-                  type: "bool",
-                },
-                {
-                  internalType: "bytes",
-                  name: "data",
-                  type: "bytes",
-                },
-              ],
-              internalType: "struct Attestation",
-              name: "attestation",
-              type: "tuple",
-            },
-          ],
-          name: "revoke",
-          outputs: [
-            {
-              internalType: "bool",
-              name: "",
-              type: "bool",
-            },
-          ],
-          stateMutability: "payable",
-          type: "function",
-        },
-        {
-          inputs: [],
-          name: "schemaRegistry",
-          outputs: [
-            {
-              internalType: "contract ISchemaRegistry",
-              name: "",
-              type: "address",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [],
-          name: "version",
-          outputs: [
-            {
-              internalType: "string",
-              name: "",
-              type: "string",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          stateMutability: "payable",
-          type: "receive",
-        },
-      ],
-      inheritedFunctions: {
-        attest:
-          "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
-        isPayable:
-          "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
-        multiAttest:
-          "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
-        multiRevoke:
-          "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
-        revoke:
-          "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
-        version:
-          "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
-      },
-    },
     TimestampSort: {
-      address: "0x9B12dD81a01DCA303722286DE8DC659C38B95486",
+      address: "0xdAC7424d00eA6Fc56069f548049884E0b31316FD",
       abi: [
         {
           inputs: [

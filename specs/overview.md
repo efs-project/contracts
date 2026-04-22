@@ -18,9 +18,14 @@ The point is **permanent, credibly neutral archival**. Anyone can publish. Anyon
 - **DATA** is standalone file identity: `contentHash` + `size`. It does NOT belong to any specific path; it's pure content identity. Multiple paths can reference the same DATA.
 - **MIRRORs** are retrieval URIs. Each MIRROR references a DATA via `refUID` and carries one URI. Multiple MIRRORs per DATA (ipfs://, ar://, web3://, https://, magnet:) let the router pick the best available transport.
 
-**TAG** attestations are the glue: `TAG(definition=anchorUID, refUID=dataUID, attester=alice)` means "Alice says this DATA lives at this path." TAGs enable three things at once: cross-referencing (same DATA at many paths), removal without revocation (`applies=false` supersedes an earlier `applies=true`), and per-attester **editions** (next section).
+**Edge attestations** (PIN, TAG) are the glue: `PIN(definition=anchorUID, refUID=dataUID, attester=alice)` means "Alice says this DATA lives at this path." Edges enable cross-referencing (same DATA at many paths) and per-attester **editions** (next section). The two edge schemas differ only in cardinality (ADR-0041):
 
-Content-addressed dedup: the first DATA attestation for a given `contentHash` is canonical. Subsequent uploads of identical bytes reuse the existing DATA — only a new TAG is needed to place it at a new path.
+- **PIN** — cardinality 1. Used for file placement, PROPERTY value binding, and any predicate where one slot holds one thing. Re-attesting at the same `(attester, definition, targetSchema)` slot supersedes the prior PIN in O(1).
+- **TAG** — cardinality N. Used for folder visibility, descriptive labels, and any predicate where one slot accumulates many entries. Each entry carries an `int256 weight` for sort/score/ranking metadata.
+
+Removal is always via `eas.revoke()` — there is no `applies=false` mechanism (removed in ADR-0041). PIN supersession is automatic when re-attesting at the same slot with a different target.
+
+Content-addressed dedup: the first DATA attestation for a given `contentHash` is canonical. Subsequent uploads of identical bytes reuse the existing DATA — only a new PIN is needed to place it at a new path.
 
 ## Editions (whose content are you looking at?)
 
@@ -36,18 +41,21 @@ Without `?editions=`, the router falls back to `?caller=` (the requesting addres
 
 Reads are edition-scoped beyond just TAG resolution: mirrors and PROPERTYs on a DATA are also filtered to the winning attester. This prevents third parties from injecting a malicious mirror or a bogus `contentType` onto someone else's DATA.
 
-## Six EAS schemas
+## Seven EAS schemas
 
 | Schema | Revocable | Purpose |
 |---|---|---|
 | ANCHOR | no | Paths. Hierarchical via `refUID = parentAnchor`. |
 | DATA | no | Content identity (`contentHash`, `size`). Standalone (`refUID = 0x0`). |
 | MIRROR | yes | Retrieval URI for a DATA. Multiple allowed per DATA. |
-| TAG | yes | Places a DATA at a path. Singleton per `(attester, target, definition)` — a new TAG on the same triple supersedes the old. |
-| PROPERTY | no | Free-floating string value, placed on a container via TAG under a PROPERTY-typed "key" anchor (ADR-0035). Symmetric with DATA. Reserved key anchor names: `contentType` (ADR-0005/ADR-0035), `name` (ADR-0034). |
+| **PIN** | yes | Cardinality-1 edge. Places one thing per `(attester, definition, targetSchema)` slot. File placement, PROPERTY value binding (`contentType`, `name`, …). Re-attesting supersedes in O(1). ADR-0041. |
+| **TAG** | yes | Cardinality-N edge. Accumulates entries per slot. Folder visibility (ADR-0038), descriptive labels (`#nsfw`, …), schema-alias discovery. Each entry carries an `int256 weight` for sort/score metadata. ADR-0041. |
+| PROPERTY | no | Free-floating string value, placed on a container via PIN under a PROPERTY-typed "key" anchor (ADR-0035 → ADR-0041). Symmetric with DATA. Reserved key anchor names: `contentType` (ADR-0005), `name` (ADR-0034). |
 | SORT_INFO | yes | Declares a sort scheme for a folder (sort function + target schema). |
 
 Full field definitions and resolver wiring: `02-Data-Models-and-Schemas.md`.
+
+**Cardinality lives in the schema UID** (ADR-0041). PIN and TAG share one resolver contract but distinct schema UIDs. Smart-contract readers and subgraph indexers see the schema UID and know whether to call a singular or list-shaped reader — zero EFS-specific decoding.
 
 ## Core contracts
 
@@ -55,8 +63,8 @@ Full field definitions and resolver wiring: `02-Data-Models-and-Schemas.md`.
 |---|---|---|---|
 | EFSIndexer | Append-only kernel. All indices, path resolution, revocation tracking. | Yes (heavy) | No — schema UIDs encode its address |
 | EFSRouter | `web3://` URI resolution (ERC-5219). Edition-scoped content serving. | No | Yes — but URIs change |
-| EFSFileView | Directory listing views over EFSIndexer. | No | Yes — fully stateless |
-| TagResolver | TAG schema hook. Singleton placement via `_activeByAAS` swap-and-pop index. | Yes | No — wired into EFSIndexer |
+| EFSFileView | Directory listing views over EFSIndexer + EdgeResolver. | No | Yes — fully stateless |
+| EdgeResolver | PIN + TAG schema hooks (ADR-0041). `_activeBySlot` for PIN (O(1) singleton); `_activeByAAS` (struct-of-tuple) for TAG. | Yes | No — wired into EFSIndexer |
 | MirrorResolver | MIRROR schema hook. URI scheme allowlist + transport ancestry check. | Minimal | No — wired into EFSIndexer |
 | EFSSortOverlay | Per-parent sorted linked lists. Lazy overlay on EFSIndexer. | Yes | No — wired into EFSIndexer |
 

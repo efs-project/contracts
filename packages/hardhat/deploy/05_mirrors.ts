@@ -71,9 +71,10 @@ const deployMirrors: DeployFunction = async function (hre: HardhatRuntimeEnviron
   // 6. Wire ALL partner contracts into EFSIndexer
   //    (moved here from 04_sortoverlay.ts so mirrorResolver is available)
   const indexer = await hre.ethers.getContract<Contract>("Indexer", deployer);
-  const tagResolverDeployment = await hre.deployments.get("TagResolver");
-  const tagResolver = await hre.ethers.getContractAt("TagResolver", tagResolverDeployment.address);
-  const tagSchemaUID = await tagResolver.TAG_SCHEMA_UID();
+  const edgeResolverDeployment = await hre.deployments.get("EdgeResolver");
+  const edgeResolver = await hre.ethers.getContractAt("EdgeResolver", edgeResolverDeployment.address);
+  const pinSchemaUID = await edgeResolver.PIN_SCHEMA_UID();
+  const tagSchemaUID = await edgeResolver.TAG_SCHEMA_UID();
 
   const sortOverlayDeployment = await hre.deployments.get("EFSSortOverlay");
   const sortOverlay = await hre.ethers.getContractAt("EFSSortOverlay", sortOverlayDeployment.address);
@@ -82,7 +83,8 @@ const deployMirrors: DeployFunction = async function (hre: HardhatRuntimeEnviron
   try {
     await (
       await indexer.wireContracts(
-        tagResolverDeployment.address,
+        edgeResolverDeployment.address,
+        pinSchemaUID,
         tagSchemaUID,
         sortOverlay.target,
         sortInfoSchemaUID,
@@ -92,7 +94,8 @@ const deployMirrors: DeployFunction = async function (hre: HardhatRuntimeEnviron
       )
     ).wait();
     console.log("EFSIndexer wired:");
-    console.log("  tagResolver:         ", tagResolverDeployment.address);
+    console.log("  edgeResolver:        ", edgeResolverDeployment.address);
+    console.log("  PIN_SCHEMA_UID:      ", pinSchemaUID);
     console.log("  TAG_SCHEMA_UID:      ", tagSchemaUID);
     console.log("  sortOverlay:         ", sortOverlay.target);
     console.log("  SORT_INFO_SCHEMA_UID:", sortInfoSchemaUID);

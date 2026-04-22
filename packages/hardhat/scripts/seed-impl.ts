@@ -19,26 +19,29 @@
  * Two callers can coexist without double-running; only whoever explicitly
  * invokes `seedDemoTree()` triggers execution.
  *
- * Each file uses the current three-layer model (ADR-0001/0002/0005/0035):
+ * Each file uses the current model (ADR-0001/0002/0005/0035/0040):
  *   - Anchor (filename with schema=DATA_SCHEMA_UID → "file slot")
  *   - DATA (standalone, refUID=0x0, encodes contentHash + size)
- *   - PROPERTY contentType via ADR-0035 three-attestation dance
- *     (key-anchor under DATA + free-floating PROPERTY(value) + TAG binding)
+ *   - PROPERTY contentType via the unified bind dance — PIN binds the value:
+ *     key-anchor under DATA + free-floating PROPERTY(value) + PIN binding
+ *     (cardinality 1 — contentType is exclusive per attester).
  *   - MIRROR (refUID=DATA, refs a /transports/* anchor, carries URI)
- *   - TAG (refUID=DATA, definition=fileAnchorUID, applies=true → placement)
+ *   - PIN (refUID=DATA, definition=fileAnchorUID → placement)
+ *     Per ADR-0041 file placement is Shape A (one DATA per attester per slot),
+ *     so it uses PIN; rebinding to a new DATA supersedes the old in O(1). PIN
+ *     carries no per-entry metadata (cardinality 1 has no order to encode).
  *
  * Idempotency: guards are per-file, not per-subtree. Folders are created via
  * `getOrCreateFolder` (ADR-0008 append-only anchors — never rewritten), and
  * each file goes through `makeFileIfMissing`, which checks both that the
- * file-slot anchor exists AND that the attester has an active TAG placement on
- * it (via `TagResolver.getActiveTargetsByAttesterAndSchemaCount`). Re-running
- * after a successful seed is a no-op (one read per anchor, one read per file
- * for the placement check). Re-running after a **partial** failure — say
- * `/docs/` got created but `readme.txt`'s TAG never landed — fills in only
- * the missing files; the fully-seeded ones are skipped. For the editions
- * demo, the owner and user1 placements on `shared/photo.png` are guarded
- * independently, so either edition can be backfilled without touching the
- * other.
+ * file-slot anchor exists AND that the attester has an active PIN placement on
+ * it (via `EdgeResolver.getActivePinTarget`). Re-running after a successful
+ * seed is a no-op (one read per anchor, one read per file for the placement
+ * check). Re-running after a **partial** failure — say `/docs/` got created
+ * but `readme.txt`'s PIN never landed — fills in only the missing files; the
+ * fully-seeded ones are skipped. For the editions demo, the owner and user1
+ * placements on `shared/photo.png` are guarded independently, so either
+ * edition can be backfilled without touching the other.
  *
  * Fail-soft at the top: if the Indexer contract isn't registered (e.g. CI
  * against vanilla hardhat without EAS), log a skip and return cleanly — don't
@@ -81,16 +84,17 @@ export async function seedDemoTree() {
     "@ethereum-attestation-service/eas-contracts/contracts/IEAS.sol:IEAS",
     easAddr,
   )) as any;
-  // TagResolver drives per-file idempotency: we look up whether the current
-  // attester has an active TAG placement at a file-slot anchor before redoing
-  // the DATA/PROPERTY/MIRROR/TAG work.
-  const tagResolverAddr = await indexer.tagResolver();
+  // EdgeResolver drives per-file idempotency: we look up whether the current
+  // attester has an active PIN placement at a file-slot anchor before redoing
+  // the DATA/PROPERTY/MIRROR/PIN work.
+  const edgeResolverAddr = await indexer.edgeResolver();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const tagResolver = (await ethers.getContractAt("TagResolver", tagResolverAddr)) as any;
+  const edgeResolver = (await ethers.getContractAt("EdgeResolver", edgeResolverAddr)) as any;
 
   const anchorSchemaUID = await indexer.ANCHOR_SCHEMA_UID();
   const dataSchemaUID = await indexer.DATA_SCHEMA_UID();
   const mirrorSchemaUID = await indexer.MIRROR_SCHEMA_UID();
+  const pinSchemaUID = await indexer.PIN_SCHEMA_UID();
   const tagSchemaUID = await indexer.TAG_SCHEMA_UID();
   const propertySchemaUID = await indexer.PROPERTY_SCHEMA_UID();
   const rootUID = await indexer.rootAnchorUID();
@@ -201,13 +205,44 @@ export async function seedDemoTree() {
     return uid;
   };
 
-  /** Create a TAG attestation (ADR-0003: TAG-based placement; applies=true activates). */
+  /**
+   * Create a PIN attestation (ADR-0041: cardinality-1 edge; Shape A — file
+   * placement, PROPERTY value bind). Re-attesting at the same (attester,
+   * definition, targetSchema) slot supersedes the prior PIN in O(1); revoke
+   * clears. PIN carries no per-entry metadata.
+   */
+  const makePin = async (
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    signer: any,
+    targetUID: string,
+    definition: string,
+  ): Promise<string> => {
+    const tx = await eas.connect(signer).attest({
+      schema: pinSchemaUID,
+      data: {
+        recipient: ethers.ZeroAddress,
+        expirationTime: 0n,
+        revocable: true,
+        refUID: targetUID,
+        data: encode.encode(["bytes32"], [definition]),
+        value: 0n,
+      },
+    });
+    return getUID(tx);
+  };
+
+  /**
+   * Create a TAG attestation (ADR-0041: cardinality-N edge; Shape B — list
+   * semantics). Per-entry `weight` is generic metadata; folder-visibility TAGs
+   * pass weight=1 (any value > 0 simply marks the edge as present — the kernel
+   * does not maintain a sorted index by weight).
+   */
   const makeTag = async (
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     signer: any,
     targetUID: string,
     definition: string,
-    applies: boolean = true,
+    weight: bigint = 1n,
   ): Promise<string> => {
     const tx = await eas.connect(signer).attest({
       schema: tagSchemaUID,
@@ -216,7 +251,7 @@ export async function seedDemoTree() {
         expirationTime: 0n,
         revocable: true,
         refUID: targetUID,
-        data: encode.encode(["bytes32", "bool"], [definition, applies]),
+        data: encode.encode(["bytes32", "int256"], [definition, weight]),
         value: 0n,
       },
     });
@@ -224,9 +259,11 @@ export async function seedDemoTree() {
   };
 
   /**
-   * Attach a PROPERTY(key=value) to a container using the ADR-0035 free-floating model.
-   * Three attestations: key anchor under container (if not present) + standalone PROPERTY
-   * (value) + TAG binding key-anchor↔property. Reserved keys include `contentType`.
+   * Attach a PROPERTY(key=value) to a container using the ADR-0035 free-floating
+   * model with the ADR-0041 PIN bind. Three attestations: key anchor under
+   * container (if not present) + standalone PROPERTY (value) + PIN binding
+   * key-anchor↔property. Reserved keys include `contentType` (exclusive per
+   * attester — must be PIN, not TAG).
    */
   const makeProperty = async (
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -264,7 +301,7 @@ export async function seedDemoTree() {
     });
     const propertyUID = await getUID(propTx);
 
-    await makeTag(signer, propertyUID, keyAnchorUID, true);
+    await makePin(signer, propertyUID, keyAnchorUID);
     return propertyUID;
   };
 
@@ -297,28 +334,27 @@ export async function seedDemoTree() {
 
   /**
    * "Has this attester placed any DATA at this file-slot?" — the idempotency
-   * primitive. Uses `TagResolver.getActiveTargetsByAttesterAndSchemaCount`:
-   * > 0 iff the attester currently has an active applies=true TAG where
-   * `definition == fileSlotAnchorUID` and the target is a DATA attestation.
-   * Read-only; no writes.
+   * primitive. Uses `EdgeResolver.getActivePinTarget`: returns non-zero iff the
+   * attester currently has an active PIN where `definition == fileSlotAnchorUID`
+   * and the target is a DATA attestation. O(1), single SLOAD.
    */
   const hasActivePlacement = async (fileSlotUID: string, attester: string): Promise<boolean> => {
-    const count: bigint = await tagResolver.getActiveTargetsByAttesterAndSchemaCount(
-      fileSlotUID,
-      attester,
-      dataSchemaUID,
-    );
-    return count > 0n;
+    const target: string = await edgeResolver.getActivePinTarget(fileSlotUID, attester, dataSchemaUID);
+    return target !== ethers.ZeroHash;
   };
 
   /**
-   * Ancestor-walk visibility TAGs (ADR-0038).
+   * Ancestor-walk visibility TAGs (ADR-0038, ADR-0041).
    *
    * After placing a file at a file-slot anchor, every generic folder from the
-   * file-slot's parent up to root (exclusive) must have an active applies=true
-   * TAG(definition=dataSchemaUID, refUID=folder) so EFSFileView phase-0 includes
+   * file-slot's parent up to root (exclusive) must have an active TAG
+   * (definition=dataSchemaUID, refUID=folder) so EFSFileView phase-0 includes
    * it in edition-scoped directory listings. Walk stops early when an already-
    * tagged ancestor is found — steady-state cost is zero extra writes.
+   *
+   * Folder visibility is Shape B (list semantics: multiple attesters can tag
+   * the same folder under the same definition) so the edge is a TAG, not a
+   * PIN. Weight is 1 (arbitrary positive — this is a presence marker).
    */
   const walkAncestorVisibility = async (
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -330,10 +366,13 @@ export async function seedDemoTree() {
     for (let depth = 0; depth < 32; depth++) {
       const parent: string = await indexer.getParent(current);
       if (!parent || parent === ethers.ZeroHash || parent === rootUID) break;
-      const alreadyTagged = await tagResolver.isActivelyTaggedByAny(parent, dataSchemaUID, [attester]);
+      // Schema-blind — either PIN or TAG from any prior attester would satisfy folder
+      // visibility for this edition. In practice folder visibility always lands as TAG,
+      // but the kernel treats both schemas uniformly for Shape-B-style reads.
+      const alreadyTagged = await edgeResolver.hasActiveEdgeFromAny(parent, dataSchemaUID, [attester]);
       if (alreadyTagged) break;
       console.log(`  Visibility ${parent.slice(0, 10)}… (${attester.slice(0, 10)}…)`);
-      await makeTag(signer, parent, dataSchemaUID, true);
+      await makeTag(signer, parent, dataSchemaUID, 1n);
       current = parent;
     }
   };
@@ -342,7 +381,7 @@ export async function seedDemoTree() {
    * Per-file idempotent version of `makeFile`. Skips re-attesting when the
    * file-slot anchor exists AND this attester already has a live placement
    * on it; otherwise fills in whatever is missing (file-slot anchor first,
-   * then DATA+PROPERTY+MIRROR+TAG). Safe to re-run after any partial failure.
+   * then DATA+PROPERTY+MIRROR+PIN). Safe to re-run after any partial failure.
    */
   const makeFileIfMissing = async (
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -367,7 +406,9 @@ export async function seedDemoTree() {
     const dataUID = await makeData(signer, content);
     await makeProperty(signer, dataUID, "contentType", contentType);
     await makeMirror(signer, dataUID, transportUID, uri);
-    await makeTag(signer, dataUID, fileUID, true);
+    // File placement is Shape A (one DATA per attester per file-slot): PIN.
+    await makePin(signer, dataUID, fileUID);
+    // Ancestor-walk visibility TAGs are Shape B (list): makeTag, not makePin.
     await walkAncestorVisibility(signer, fileUID);
     return { fileUID, created: true };
   };
@@ -376,7 +417,7 @@ export async function seedDemoTree() {
   //
   // Idempotency is per-file, not per-subtree (see module docstring): each
   // `getOrCreateFolder` / `makeFileIfMissing` call independently decides whether
-  // to write, so a partial seed (folder created, file's TAG never landed) is
+  // to write, so a partial seed (folder created, file's PIN never landed) is
   // fully backfilled on retry.
 
   console.log("── /docs/ ──");
@@ -442,7 +483,7 @@ export async function seedDemoTree() {
     const ownerPhotoData = await makeData(deployerSigner, "owner-photo-png-bytes");
     await makeProperty(deployerSigner, ownerPhotoData, "contentType", "image/png");
     await makeMirror(deployerSigner, ownerPhotoData, ipfsTransportUID, "ipfs://owner-version-of-photo");
-    await makeTag(deployerSigner, ownerPhotoData, photoUID, true);
+    await makePin(deployerSigner, ownerPhotoData, photoUID);
   }
   await walkAncestorVisibility(deployerSigner, photoUID);
 
@@ -453,7 +494,7 @@ export async function seedDemoTree() {
     const user1PhotoData = await makeData(user1, "user1-photo-png-bytes");
     await makeProperty(user1, user1PhotoData, "contentType", "image/png");
     await makeMirror(user1, user1PhotoData, ipfsTransportUID, "ipfs://user1-version-of-photo");
-    await makeTag(user1, user1PhotoData, photoUID, true);
+    await makePin(user1, user1PhotoData, photoUID);
   }
   await walkAncestorVisibility(user1, photoUID);
 

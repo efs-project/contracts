@@ -34,14 +34,18 @@ const PERSONAS: { name: string; address: string }[] = [
 
 /**
  * Seeds `name` PROPERTY bindings on each Hardhat persona address per the
- * unified model (ADR-0034, ADR-0035):
+ * unified model (ADR-0034, ADR-0035, ADR-0041):
  *
- *   Anchor<PROPERTY>(recipient=addr, name="name")  ← TAG  ← PROPERTY(value=personaName)
+ *   Anchor<PROPERTY>(recipient=addr, name="name")  ← PIN  ← PROPERTY(value=personaName)
  *
  * The name anchor uses `recipient=addr` rather than `refUID` because address
  * containers don't have an anchor attestation UID to hang off; the Anchor
  * schema's recipient-fallback rule (specs/02 §Anchor; ADR-0033) makes the
  * anchor's parent `bytes32(uint160(addr))` automatically.
+ *
+ * The bind step is **PIN** (cardinality 1) per ADR-0041: a name is exclusive,
+ * so rebinds must supersede rather than accumulate. Read-side becomes a single
+ * O(1) `getActivePinTarget` call.
  *
  * Localhost/devnet only — skipped on live networks. The deployer attests;
  * unconfigured viewers fall through to the deployer's edition per ADR-0016,
@@ -63,11 +67,11 @@ const deployPersonaNames: DeployFunction = async function (hre: HardhatRuntimeEn
     EAS_ADDRESS,
   );
   const indexer = await ethers.getContract<Contract>("Indexer", deployer);
-  const tagResolver = await ethers.getContract<Contract>("TagResolver", deployer);
+  const edgeResolver = await ethers.getContract<Contract>("EdgeResolver", deployer);
 
   const anchorSchemaUID: string = await indexer.ANCHOR_SCHEMA_UID();
   const propertySchemaUID: string = await indexer.PROPERTY_SCHEMA_UID();
-  const tagSchemaUID: string = await tagResolver.TAG_SCHEMA_UID();
+  const pinSchemaUID: string = await indexer.PIN_SCHEMA_UID();
 
   const addrToBytes32 = (addr: string): string => ethers.zeroPadValue(ethers.getAddress(addr), 32);
 
@@ -109,40 +113,24 @@ const deployPersonaNames: DeployFunction = async function (hre: HardhatRuntimeEn
       }
     }
 
-    // 2. Skip if the deployer's *newest* active PROPERTY under this key anchor
-    //    already matches. `_activeByAAS` is append-only per rebind (compositeHash
-    //    is keyed on targetID, not schema), so asking for index 0 returns the
-    //    *oldest* push — which would make this step re-attest on every deploy
-    //    after a value change, breaking idempotency. Fetch up to 50 active
-    //    targets, walk them, and pick the newest by EAS `time`. ADR-0035 §3
-    //    assumed _activeByAAS provided singleton semantics; see docs/QUESTIONS.md
-    //    for the Tier 2 follow-up on making the write path genuinely singleton.
-    const existing: string[] = await tagResolver.getActiveTargetsByAttesterAndSchema(
+    // 2. Skip if the deployer's active PIN under this key anchor already binds
+    //    to a PROPERTY whose value matches. PIN is genuinely singleton
+    //    (ADR-0041) — single O(1) read, no defensive newest-by-time walk.
+    const existingPropertyUID: string = await edgeResolver.getActivePinTarget(
       keyAnchorUID,
       deployer,
       propertySchemaUID,
-      0,
-      50,
     );
-    if (existing.length > 0) {
-      let newestTime: bigint = -1n;
-      let newestValue: string | undefined;
-      for (const uid of existing) {
-        try {
-          const att = await eas.getAttestation(uid);
-          const t = att.time as bigint;
-          if (t > newestTime) {
-            newestTime = t;
-            const [decoded] = ethers.AbiCoder.defaultAbiCoder().decode(["string"], att.data);
-            newestValue = decoded as string;
-          }
-        } catch {
-          // Unresolvable entry — skip; another loop iter may still find the winner.
+    if (existingPropertyUID && existingPropertyUID !== ethers.ZeroHash) {
+      try {
+        const att = await eas.getAttestation(existingPropertyUID);
+        const [decoded] = ethers.AbiCoder.defaultAbiCoder().decode(["string"], att.data);
+        if ((decoded as string) === persona.name) {
+          console.log(`  ${persona.name} — already seeded`);
+          continue;
         }
-      }
-      if (newestValue === persona.name) {
-        console.log(`  ${persona.name} — already seeded`);
-        continue;
+      } catch {
+        // Unresolvable — fall through and re-attest.
       }
     }
 
@@ -165,16 +153,17 @@ const deployPersonaNames: DeployFunction = async function (hre: HardhatRuntimeEn
       continue;
     }
 
-    // 4. TAG(definition=keyAnchor, refUID=property, applies=true).
+    // 4. PIN(definition=keyAnchor, refUID=property) — singleton bind.
+    //    PIN carries no per-entry metadata; supersede via re-attest, clear via revoke.
     await (
       await eas.attest({
-        schema: tagSchemaUID,
+        schema: pinSchemaUID,
         data: {
           recipient: ethers.ZeroAddress,
           expirationTime: 0,
           revocable: true,
           refUID: propertyUID,
-          data: ethers.AbiCoder.defaultAbiCoder().encode(["bytes32", "bool"], [keyAnchorUID, true]),
+          data: ethers.AbiCoder.defaultAbiCoder().encode(["bytes32"], [keyAnchorUID]),
           value: 0,
         },
       })
@@ -187,5 +176,5 @@ const deployPersonaNames: DeployFunction = async function (hre: HardhatRuntimeEn
 
 export default deployPersonaNames;
 deployPersonaNames.tags = ["PersonaNames"];
-// PROPERTY + TAG schemas are set in 01_indexer.ts / wireContracts().
+// PROPERTY + PIN schemas are set in 01_indexer.ts / wireContracts().
 deployPersonaNames.dependencies = ["Indexer", "Mirrors"];
