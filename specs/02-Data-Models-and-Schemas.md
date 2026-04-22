@@ -85,7 +85,7 @@ Revoke the PIN with `eas.revoke(pinUID)`. The PROPERTY value itself is non-revoc
 
 **Revocable**: `false` — DATA is permanent. Once a file identity exists, it cannot be removed.
 
-**Details**: DATA attestations are standalone (refUID = 0x0). They represent file identity, not file location. A DATA is placed at a path via a TAG attestation (see Tag Schema below). The same DATA can be tagged into multiple paths without duplication.
+**Details**: DATA attestations are standalone (refUID = 0x0). They represent file identity, not file location. A DATA is placed at a path via a PIN attestation (see Pin Schema below). The same DATA can be pinned into multiple paths by different attesters without duplication.
 
 Content-addressed deduplication: `EFSIndexer.dataByContentKey[contentHash]` stores the first DATA UID per content hash as the canonical entry. Subsequent DATAs with the same hash still get created (different UIDs) but the canonical lookup returns the first.
 

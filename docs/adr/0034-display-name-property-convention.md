@@ -96,9 +96,11 @@ Arbitrary DATAs, attestations, and user addresses are NOT pre-seeded — they'd 
 A container's info panel gets an editable "Name" field. Submitting:
 1. If the name anchor doesn't exist under the container, attest `Anchor<PROPERTY>(parent=C, name="name")`.
 2. Attest a free-standing `PROPERTY(value=<input>)`.
-3. Attest a `TAG(definition=nameAnchor, refUID=propertyUID, applies=true)`.
+3. Attest a `PIN(definition=nameAnchor, refUID=propertyUID)`.
 
-Can be batched into a single `multiAttest`. The new TAG supersedes the caller's previous name binding per `_activeByAAS` singleton semantics (ADR-0003).
+Can be batched into a single `multiAttest`. The new PIN supersedes the caller's previous name binding at the same `(attester, definition, targetSchema)` slot in O(1) (ADR-0041).
+
+*Prose-accuracy correction 2026-04-22 (within 30-day grace window): step 3 updated from TAG to PIN per ADR-0041, which introduced the PIN schema (cardinality-1 edge) to replace the singleton-TAG pattern for PROPERTY value binding. The core decision — `name` PROPERTY as display-name fallback — is unchanged.*
 
 ## Consequences
 
