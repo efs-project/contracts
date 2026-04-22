@@ -4,10 +4,12 @@ pragma solidity 0.8.26;
 import { IEAS, Attestation } from "@ethereum-attestation-service/eas-contracts/contracts/IEAS.sol";
 
 interface IEdgeResolverForFileView {
-    /// @notice True iff any of `attesters` currently has an active edge (PIN or TAG) on
-    ///         (targetID, definition). Schema-blind by design — folder visibility (ADR-0038)
-    ///         is satisfied by either schema.
-    function hasActiveEdgeFromAny(
+    /// @notice TAG-specific edition-aware check: true iff any of `attesters` has an active
+    ///         TAG on (targetID, definition). Used for phase-0 folder visibility (ADR-0038):
+    ///         folder visibility is TAG-only; a PIN with `definition=DATA_SCHEMA_UID` targeting
+    ///         a folder must NOT make that folder appear in edition-scoped directory listings.
+    ///         One SLOAD per attester.
+    function hasActiveTagFromAny(
         bytes32 targetID,
         bytes32 definition,
         address[] calldata attesters
@@ -272,7 +274,7 @@ contract EFSFileView {
                     scanned++;
                     bytes32 uid = batch[k];
                     if (indexer.isRevoked(uid)) continue;
-                    if (!edgeResolver.hasActiveEdgeFromAny(uid, anchorSchema, attesters)) continue;
+                    if (!edgeResolver.hasActiveTagFromAny(uid, anchorSchema, attesters)) continue;
                     buf[count++] = uid;
                     if (count == maxItems) break;
                 }

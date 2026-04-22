@@ -284,6 +284,46 @@ describe("EFSFileView", function () {
     expect(items.length).to.equal(0);
   });
 
+  it("PIN(definition=dataSchemaUID, refUID=folder) does NOT make the folder visible (TAG-only, ADR-0038 regression)", async function () {
+    // ADR-0038: folder visibility is TAG-only — a PIN at the same (attester, definition, schema)
+    // slot must NOT substitute for a TAG. Pre-fix, `hasActiveEdgeFromAny` was schema-blind and
+    // would accept a PIN, making the folder appear spuriously. This test confirms the fix:
+    // `hasActiveTagFromAny` is used instead, so the PIN has zero effect on folder visibility.
+    const ownerAddr = await owner.getAddress();
+
+    const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32);
+    const folderUID = await createAnchor("pin-visible-folder", rootUID, ZERO_BYTES32);
+
+    // Attest a PIN with definition=dataSchemaUID targeting the folder.
+    // This is not how file placement is done in practice (placement PINs use a file-slot UID
+    // as definition), but an attacker or a misusing client could emit this. Pre-fix it would
+    // have been enough to surface the folder; post-fix it must not.
+    await createPin(folderUID, dataSchemaUID);
+
+    const { items } = await fileView.getDirectoryPageBySchemaAndAddressList(
+      rootUID,
+      dataSchemaUID,
+      [ownerAddr],
+      "0x",
+      10,
+    );
+
+    // The folder must NOT appear — only a TAG makes a folder visible.
+    expect(items.length).to.equal(0);
+
+    // Confirm that adding a TAG DOES make it appear (proves the check works, not that it's broken).
+    await createTag(folderUID, dataSchemaUID);
+    const { items: after } = await fileView.getDirectoryPageBySchemaAndAddressList(
+      rootUID,
+      dataSchemaUID,
+      [ownerAddr],
+      "0x",
+      10,
+    );
+    expect(after.length).to.equal(1);
+    expect(after[0].name).to.equal("pin-visible-folder");
+  });
+
   it("Empty folders appear when explicitly tagged with the schema UID", async function () {
     // A folder is visible in an edition iff it has an active TAG with definition=dataSchemaUID
     // and weight>0 by someone in the edition list.
