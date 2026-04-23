@@ -189,7 +189,8 @@ describe("EFSFileView", function () {
 
   /**
    * Create a TAG attestation (cardinality N — folder visibility, descriptive labels).
-   * Default weight is 1 (active, no sort key in use).
+   * Default weight is 1. Activity is existence/revoke only — weight does NOT determine
+   * whether a TAG is active (ADR-0041 §4).
    */
   const createTag = async (
     targetUID: string,

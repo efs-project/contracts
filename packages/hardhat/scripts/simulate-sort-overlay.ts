@@ -614,8 +614,7 @@ async function main() {
   // ════════════════════════════════════════════════════════════════════════════════
   console.log("\n── Phase 8: Edition removal + fallback ──\n");
 
-  // Alice removes her zebra placement (eas.revoke on the active PIN — ADR-0041
-  // replaces the old applies=false supersede signal with a clean revoke).
+  // Alice removes her zebra placement (eas.revoke on the active PIN — ADR-0041).
   await unplaceData(alice, aliceZebraData.uid, aliceZebra);
 
   // Bob's edition should now win

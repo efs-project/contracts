@@ -77,7 +77,7 @@ For `getFilesAtPath`:
 ```solidity
 abi.encode(uint256 attesterIdx, uint256 targetIdx)
 // attesterIdx: next attester in the caller-supplied list
-// targetIdx:   next position in _activeByAAS[anchorUID][attesters[attesterIdx]][schema]
+// targetIdx:   next position in _activeBySlot[anchorUID][attesters[attesterIdx]][schema] (PIN; cardinality 1 per ADR-0041)
 ```
 
 Both schemes are deploy-mutable: since `EFSFileView` is stateless (and marked redeployable in `specs/overview.md`), a new cursor format can ship with a new `EFSFileView` address. Clients round-trip tokens within a deploy; they don't persist them across deploys. Documented as part of the API contract.
@@ -88,7 +88,7 @@ Multi-attester views (the "editions" model, ADR-0031) must return each target at
 
 ### No result cap
 
-Neither function retains a `MAX_TAGGED_FOLDERS`, `length × attesters` allocation, or any implicit ceiling on total source size. The walker processes whatever `_childrenTaggedWith` / `_childrenBySchema` / `_activeByAAS` contain; growth is bounded only by the underlying indices, which are themselves bounded by actual on-chain attestations.
+Neither function retains a `MAX_TAGGED_FOLDERS`, `length × attesters` allocation, or any implicit ceiling on total source size. The walker processes whatever `_childrenTaggedWith` / `_childrenBySchema` / `_activeBySlot` (PIN placement storage) contain; growth is bounded only by the underlying indices, which are themselves bounded by actual on-chain attestations.
 
 ## Consequences
 
@@ -111,4 +111,4 @@ Neither function retains a `MAX_TAGGED_FOLDERS`, `length × attesters` allocatio
 
 ---
 
-*Prose-accuracy corrections 2026-04-22 (within 30-day grace window): (1) Context updated from `TagResolver._childrenTaggedWith` / `_activeByAAS` to `EdgeResolver._childrenWithEdge` / per-attester PIN targets — contract renamed and schema split per ADR-0041. (2) Dedup semantics section rewritten: dedup is now `isActivePinEdge` (PIN-specific, O(1)) not `TagResolver.getActiveTagUID` — file placement is PIN (Shape A); TAG is irrelevant to the dedup check. (3) Concurrent-mutation consequences bullet updated to `_activeBySlot` (PIN storage). The core decision — opaque cursor over multi-source views — is unchanged.*
+*Prose-accuracy corrections 2026-04-22 (within 30-day grace window): (1) Context updated from `TagResolver._childrenTaggedWith` / `_activeByAAS` to `EdgeResolver._childrenWithEdge` / per-attester PIN targets — contract renamed and schema split per ADR-0041. (2) Dedup semantics section rewritten: dedup is now `isActivePinEdge` (PIN-specific, O(1)) not `TagResolver.getActiveTagUID` — file placement is PIN (Shape A); TAG is irrelevant to the dedup check. (3) Concurrent-mutation consequences bullet updated to `_activeBySlot` (PIN storage). (4) `getFilesAtPath` cursor pseudocode comment: `_activeByAAS` → `_activeBySlot` (PIN is cardinality 1 per ADR-0041). (5) "No result cap" section: `_activeByAAS` → `_activeBySlot` (PIN placement storage). The core decision — opaque cursor over multi-source views — is unchanged.*

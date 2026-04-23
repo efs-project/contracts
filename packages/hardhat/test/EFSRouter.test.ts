@@ -440,7 +440,7 @@ describe("EFSRouter Web3 Capabilities", function () {
   // The reference inside tagAtPath's body counts as usage and keeps the compiler happy.
   void tagAtPath;
 
-  /** Full upload: DATA + PROPERTY(contentType) + MIRROR + TAG placement */
+  /** Full upload: DATA + PROPERTY(contentType) + MIRROR + PIN placement */
   async function uploadOnchain(
     content: string,
     contentType: string,
@@ -459,7 +459,7 @@ describe("EFSRouter Web3 Capabilities", function () {
     return dataUID;
   }
 
-  /** Builds params array with owner's address as editions (required for TAG-based lookup) */
+  /** Builds params array with owner's address as editions (required for PIN-based lookup) */
   function ownerParams(...extra: { key: string; value: string }[]): { key: string; value: string }[] {
     return [{ key: "editions", value: ownerAddr }, ...extra];
   }
@@ -903,7 +903,7 @@ describe("EFSRouter Web3 Capabilities", function () {
     it("Should serve content with no ?editions= param (falls back to EFS deployer)", async function () {
       // When no editions param is supplied, _findDataAtPath falls back to
       // indexer.DEPLOYER(). In tests owner IS the deployer, so owner's DATA
-      // (placed via TAG) should be found.
+      // (placed via PIN) should be found.
       const targetAddress = ethers.getAddress("0x00000000000000000000000000000000000000A0");
       await setCode(targetAddress, "0x00" + Buffer.from("bare web3 content").toString("hex"));
 

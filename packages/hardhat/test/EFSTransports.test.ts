@@ -332,7 +332,7 @@ describe("EFS Transports & Data Model", function () {
     return uid;
   }
 
-  /** Revoke the live PIN for (target, def, attester). Equivalent to the old `applies=false` supersede. */
+  /** Revoke the live PIN for (target, def, attester). */
   async function unpinAt(targetUID: string, definitionUID: string, signer: Signer = owner): Promise<void> {
     const key = `${targetUID}|${definitionUID}|${await signer.getAddress()}`;
     const uid = activePinIndex.get(key);

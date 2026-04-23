@@ -198,8 +198,7 @@ describe("EFS Data Model — E2E Integration", function () {
 
   /**
    * Revoke the live PIN for (target, def, attester). Idempotent — does nothing
-   * if there is no active PIN. Mirrors the old `tagTarget(..., applies=false)`
-   * call site semantics under the new ADR-0041 model.
+   * if there is no active PIN.
    */
   async function unpinTarget(targetUID: string, definitionUID: string, signer: Signer = owner): Promise<void> {
     const key = `${targetUID}|${definitionUID}|${await signer.getAddress()}`;

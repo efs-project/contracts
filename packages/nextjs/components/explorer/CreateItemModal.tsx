@@ -789,9 +789,9 @@ export const CreateItemModal = ({
 
       // contentType PROPERTY (ADR-0035 / ADR-0005-superseded) uses the unified
       // free-floating model: key anchor under the DATA, free-floating PROPERTY
-      // with value, then a TAG binding them. Three transactions; only the TAG
-      // is revocable, so flipping a MIME type is a TAG re-attest, not a
-      // PROPERTY revoke.
+      // with value, then a PIN binding them. Three transactions; only the PIN
+      // is revocable, so flipping a MIME type is a PIN re-attest (which supersedes
+      // the prior PIN in O(1)), not a PROPERTY revoke.
       ops.log(opId, "Creating contentType key anchor...");
       let contentTypeKeyAnchorUID: `0x${string}` | undefined;
       if (indexer && publicClient) {
