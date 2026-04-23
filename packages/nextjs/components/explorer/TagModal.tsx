@@ -124,6 +124,7 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
           if (target && target !== zeroHash) {
             if (!cancelled) {
               setEffectiveUID(target);
+              setDataUIDMissing(false); // clear any stale missing flag from a previous resolution
               setIsResolvingDataUID(false);
             }
             return;
@@ -312,9 +313,20 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
     return () => {
       cancelled = true;
     };
-  }, [publicClient, edgeResolverAddress, effectiveUID, connectedAddress, easInfo, refreshKey, tagsRoot, tagSchemaUID, dataUIDMissing]);
+  }, [
+    publicClient,
+    edgeResolverAddress,
+    effectiveUID,
+    connectedAddress,
+    easInfo,
+    refreshKey,
+    tagsRoot,
+    tagSchemaUID,
+    dataUIDMissing,
+  ]);
 
   const handleAddTag = async () => {
+    if (dataUIDMissing) return; // handler-level guard: belt-and-suspenders alongside the disabled prop
     if (!anchorSchemaUID || !connectedAddress || !publicClient || !tagsRoot || !tagSchemaUID) return;
     setIsSubmitting(true);
 

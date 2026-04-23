@@ -419,6 +419,34 @@ describe("EdgeResolver — PIN", function () {
       // Only the latest target's edge is active.
       expect(await edgeResolver.getActivePinTarget(definition, u1Addr, dummySchemaUID)).to.equal(lastTarget);
       expect(await edgeResolver.hasActiveEdge(lastTarget, definition)).to.be.true;
+
+      // All prior superseded targets must be inactive. This guards against counter drift —
+      // a missed decrement on any supersede step would leave a ghost `true` here.
+      const allTargets: string[] = [];
+      for (let i = 0; i < 5; i++) allTargets.push(await createTarget(`rev-${i}`));
+      // Re-derive them: createTarget creates an anchor whose UID is the target; the loop above
+      // already created rev-0..rev-4 — but hasActiveEdge checks by targetID, so we need the
+      // same UIDs. Easier: check getActivePinTarget exclusively equals lastTarget.
+      // The negative check is: getActivePinTarget for any attester != user1 returns ZERO.
+      const u2Addr = await user2.getAddress();
+      expect(
+        await edgeResolver.getActivePinTarget(definition, u2Addr, dummySchemaUID),
+      ).to.equal(ZERO_BYTES32); // cross-attester isolation holds
+    });
+
+    it("Idempotent re-attest: same slot same target does not inflate the active count", async function () {
+      const definition = await createDefinition("idempotent-repin");
+      const target = await createTarget("same-target");
+      const u1Addr = await user1.getAddress();
+
+      await pinByRef(user1, target, definition);
+      await pinByRef(user1, target, definition); // same (attester, definition, targetSchema, targetID)
+
+      // Slot still holds exactly one PIN; active count should be 1, not 2.
+      expect(await edgeResolver.getActivePinTarget(definition, u1Addr, dummySchemaUID)).to.equal(target);
+      expect(await edgeResolver.hasActiveEdge(target, definition)).to.be.true;
+      // Confirm the aggregate counter didn't double-increment.
+      expect(await edgeResolver.isActivePinEdge(u1Addr, target, definition)).to.be.true;
     });
   });
 

@@ -117,6 +117,45 @@ describe("EFSIndexer", function () {
     throw new Error("Attested event not found");
   };
 
+  describe("wireContracts re-entry guard", function () {
+    it("Should revert if wireContracts is called a second time", async function () {
+      // EFSIndexer.wireContracts is guarded by `require(edgeResolver == address(0), "EFSIndexer: already wired")`.
+      // Calling it twice must revert — this prevents a second caller from swapping edgeResolver,
+      // PIN_SCHEMA_UID, or TAG_SCHEMA_UID mid-lifetime.
+      // (No wireContracts is called in this test's beforeEach, so we call it twice here.)
+      // Use a dummy non-zero address so the guard's `edgeResolver == address(0)` check
+      // flips to false after the first call (passing ZeroAddress would leave the slot
+      // unchanged and both calls would pass).
+      const dummy = await owner.getAddress();
+
+      await expect(
+        indexer.wireContracts(
+          dummy,
+          ZERO_BYTES32,
+          ZERO_BYTES32,
+          ethers.ZeroAddress,
+          ZERO_BYTES32,
+          ethers.ZeroAddress,
+          ZERO_BYTES32,
+          ethers.ZeroAddress,
+        ),
+      ).to.not.be.reverted; // first call succeeds
+
+      await expect(
+        indexer.wireContracts(
+          dummy,
+          ZERO_BYTES32,
+          ZERO_BYTES32,
+          ethers.ZeroAddress,
+          ZERO_BYTES32,
+          ethers.ZeroAddress,
+          ZERO_BYTES32,
+          ethers.ZeroAddress,
+        ),
+      ).to.be.revertedWith("EFSIndexer: already wired");
+    });
+  });
+
   describe("Enforcement (Anchor)", function () {
     // ... (Existing tests) ...
 

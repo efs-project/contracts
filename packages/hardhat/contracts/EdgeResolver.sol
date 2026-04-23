@@ -482,6 +482,10 @@ contract EdgeResolver is SchemaResolver {
             // Only TAG attestations live in _activeByAAS, so the schema is always
             // TAG_SCHEMA_UID and the decode shape is always TAG's (bytes32, int256).
             Attestation memory moved = _eas.getAttestation(lastEntry.tagUID);
+            // Every UID stored in _activeByAAS was placed via onAttest, so it must always
+            // resolve. A zero uid here means index corruption — revert rather than silently
+            // writing a bad hash into the index map.
+            if (moved.uid == bytes32(0)) revert InvalidTarget();
             (bytes32 movedDef, ) = abi.decode(moved.data, (bytes32, int256));
             bytes32 movedTargetID = _resolveTargetID(moved.refUID, moved.recipient);
             bytes32 movedHash = _edgeHash(moved.attester, movedTargetID, movedDef, TAG_SCHEMA_UID);
