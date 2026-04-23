@@ -218,6 +218,8 @@ cd packages/hardhat && npx hardhat test test/EFSIndexer.test.ts --network hardha
 **Hardened (load-bearing — don't violate without writing a superseding ADR):**
 
 - **Cardinality is declared at the schema level (PIN vs TAG), not per-attestation.** The schema UID is the only permanent, globally-coordinated, machine-readable slot in EFS. PIN = cardinality 1 (file placement, PROPERTY value binding); TAG = cardinality N with an `int256 weight` (folder visibility, descriptive labels, schema-alias discovery). See ADR-0041.
+  - **Active TAG** (kernel) = unrevoked edge exists. Weight does not affect kernel activity. Use this definition in contracts, resolver helpers, and any non-filter code path.
+  - **Effective TAG** (client convention, ADR-0042) = active TAG with `weight >= 0`. Only applied in `FileBrowser.resolveTagSet` for the explorer's descriptive-label include/exclude filter. `weight < 0` = suppressed for that filter but still active on-chain. Do not call suppressed/negative-weight TAGs "inactive" in shared code.
 - **Removal is via `eas.revoke()`, not `applies=false`.** PIN replacement is automatic when re-attesting at the same `(attester, definition, targetSchema)` slot; the prior PIN is superseded in O(1).
 
 **Soft (working draft — flag any reshaping as Tier 1):**

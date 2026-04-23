@@ -310,9 +310,14 @@ export const FileBrowser = ({
     let cancelled = false;
     setIsTagFilterLoading(true);
 
-    // AGENT-NOTE (ADR-0041): descriptive labels under /tags/ are TAG-only (cardinality N).
-    // The discovery enumerator returns targets across PIN+TAG; we filter down to active
-    // TAG edges from the viewed attesters via getActiveEdgeUID(... TAG_SCHEMA_UID).
+    // AGENT-NOTE (ADR-0041 + ADR-0042): descriptive labels under /tags/ are TAG-only (cardinality N).
+    // Two distinct concepts:
+    //   active TAG   = unrevoked edge exists (kernel semantic, ADR-0041 §4).
+    //   effective TAG = active TAG with weight >= 0 (client-layer convention, ADR-0042).
+    // Negative-weight TAGs remain active on-chain (kernel does not interpret sign) but are
+    // suppressed for the include/exclude filter sets built here.  weight = 0 is effective.
+    // hasActiveTagFromAny and other raw resolver helpers use the kernel (active-only) check
+    // and are NOT changed by this convention.
     const resolveTagSet = async (tagName: string): Promise<Set<string>> => {
       const definitionUID = (await publicClient.readContract({
         address: indexerInfo.address as `0x${string}`,
@@ -322,27 +327,6 @@ export const FileBrowser = ({
       })) as `0x${string}`;
 
       if (!definitionUID || definitionUID === zeroHash) return new Set();
-
-      const count = (await publicClient.readContract({
-        address: edgeResolverAddress,
-        abi: EDGE_RESOLVER_ABI,
-        functionName: "getTargetsByDefinitionCount",
-        args: [definitionUID],
-      })) as bigint;
-
-      if (count === 0n) return new Set();
-
-      const PAGE_SIZE = 500n;
-      const allTargets: `0x${string}`[] = [];
-      for (let cursor = 0n; cursor < count; cursor += PAGE_SIZE) {
-        const page = (await publicClient.readContract({
-          address: edgeResolverAddress,
-          abi: EDGE_RESOLVER_ABI,
-          functionName: "getTargetsByDefinition",
-          args: [definitionUID, cursor, PAGE_SIZE],
-        })) as `0x${string}`[];
-        allTargets.push(...page);
-      }
 
       // Only consider tags applied by the currently viewed attesters (editions list).
       // Do NOT widen with connectedAddress — explicit ?editions= must not be overridden
@@ -357,22 +341,50 @@ export const FileBrowser = ({
 
       if (tagAttesters.length === 0) return new Set();
 
-      const activeChecks = await Promise.all(
-        allTargets.map(async target => {
-          // Schema-aware active check across all viewed attesters: any active TAG wins.
-          for (const attester of tagAttesters) {
-            const uid = (await publicClient.readContract({
+      // Per-attester bulk fetch: getActiveTagEntries (weight-aware) + getActiveTargetsByAttesterAndSchema
+      // (resolves tagUID → targetID) fetched in parallel at the same pagination window.
+      // The two arrays share the same underlying _activeByAAS[def][attester][schema] index, so
+      // entries[i] and targets[i] always correspond to the same edge. Filter to weight >= 0.
+      const PAGE_SIZE = 500n;
+      const effectiveTargets = new Set<string>();
+
+      for (const attester of tagAttesters) {
+        const count = (await publicClient.readContract({
+          address: edgeResolverAddress,
+          abi: EDGE_RESOLVER_ABI,
+          functionName: "getActiveTagsCount",
+          args: [definitionUID, attester, tagSchemaUID as `0x${string}`],
+        })) as bigint;
+
+        if (count === 0n) continue;
+
+        for (let cursor = 0n; cursor < count; cursor += PAGE_SIZE) {
+          const [entries, targets] = (await Promise.all([
+            publicClient.readContract({
               address: edgeResolverAddress,
               abi: EDGE_RESOLVER_ABI,
-              functionName: "getActiveEdgeUID",
-              args: [attester, target, definitionUID, tagSchemaUID as `0x${string}`],
-            })) as `0x${string}`;
-            if (uid && uid !== zeroHash) return target.toLowerCase();
+              functionName: "getActiveTagEntries",
+              args: [definitionUID, attester, tagSchemaUID as `0x${string}`, cursor, PAGE_SIZE],
+            }),
+            publicClient.readContract({
+              address: edgeResolverAddress,
+              abi: EDGE_RESOLVER_ABI,
+              functionName: "getActiveTargetsByAttesterAndSchema",
+              args: [definitionUID, attester, tagSchemaUID as `0x${string}`, cursor, PAGE_SIZE],
+            }),
+          ])) as [ReadonlyArray<{ tagUID: `0x${string}`; weight: bigint }>, readonly `0x${string}`[]];
+
+          for (let i = 0; i < entries.length; i++) {
+            // Effective TAG: weight >= 0. weight < 0 is active on-chain but suppressed for
+            // this filter (ADR-0042). weight = 0 is included.
+            if (entries[i].weight >= 0n) {
+              effectiveTargets.add(targets[i].toLowerCase());
+            }
           }
-          return null;
-        }),
-      );
-      return new Set(activeChecks.filter((t): t is string => t !== null));
+        }
+      }
+
+      return effectiveTargets;
     };
 
     const resolve = async () => {

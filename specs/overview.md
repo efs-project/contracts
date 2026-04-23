@@ -49,7 +49,7 @@ Reads are edition-scoped beyond just TAG resolution: mirrors and PROPERTYs on a 
 | DATA | no | Content identity (`contentHash`, `size`). Standalone (`refUID = 0x0`). |
 | MIRROR | yes | Retrieval URI for a DATA. Multiple allowed per DATA. |
 | **PIN** | yes | Cardinality-1 edge. Places one thing per `(attester, definition, targetSchema)` slot. File placement, PROPERTY value binding (`contentType`, `name`, …). Re-attesting supersedes in O(1). ADR-0041. |
-| **TAG** | yes | Cardinality-N edge. Accumulates entries per slot. Folder visibility (ADR-0038), descriptive labels (`#nsfw`, …), schema-alias discovery. Each entry carries an `int256 weight` for sort/score metadata. ADR-0041. |
+| **TAG** | yes | Cardinality-N edge. Accumulates entries per slot. Folder visibility (ADR-0038), descriptive labels (`#nsfw`, …), schema-alias discovery. Each entry carries an `int256 weight` for sort/score metadata. ADR-0041. Active = unrevoked (kernel). For the explorer label-filter only, *effective* = active with `weight >= 0` (ADR-0042). |
 | PROPERTY | no | Free-floating string value, placed on a container via PIN under a PROPERTY-typed "key" anchor (ADR-0035 → ADR-0041). Symmetric with DATA. Reserved key anchor names: `contentType` (ADR-0005), `name` (ADR-0034). |
 | SORT_INFO | yes | Declares a sort scheme for a folder (sort function + target schema). |
 

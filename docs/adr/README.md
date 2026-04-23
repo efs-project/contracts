@@ -115,4 +115,5 @@ What else we looked at and why it lost.
 
 ### Frontend / Static Export
 - [ADR-0040 — Read dynamic route params from `usePathname`, not `useParams`, in static-exported dynamic routes](./0040-static-export-usepathname-over-useparams.md)
+- [ADR-0042 — Effective TAG as a client-layer weight filter for descriptive labels](./0042-effective-tag-weight-filter.md)
 

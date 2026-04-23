@@ -231,6 +231,41 @@ describe("EdgeResolver — TAG", function () {
       expect(await edgeResolver.hasActiveEdge(target, definition)).to.be.true;
     });
 
+    // ── ADR-0042: active vs effective ───────────────────────────────────────────
+    // "active TAG"   = unrevoked edge (kernel semantic — contracts, ADR-0041 §4).
+    // "effective TAG" = active TAG with weight >= 0 (client-layer convention for
+    //                  the explorer descriptive-label filter — ADR-0042).
+    // These tests verify the contract side: negative-weight and zero-weight TAGs
+    // are still active (kernel). The client-side filter (weight >= 0) is layered
+    // on top in FileBrowser.resolveTagSet.
+    it("ADR-0042: negative-weight TAG is still contract-active (not suppressed at kernel)", async function () {
+      const definition = await createDefinition("active-vs-effective");
+      const tNeg = await createTarget("eff-neg");
+      const tZero = await createTarget("eff-zero");
+      const tPos = await createTarget("eff-pos");
+      const u1Addr = await user1.getAddress();
+
+      await tagByRef(user1, tNeg, definition, -5n);
+      await tagByRef(user1, tZero, definition, 0n);
+      await tagByRef(user1, tPos, definition, 3n);
+
+      // All three are active at the kernel level.
+      expect(await edgeResolver.hasActiveEdge(tNeg, definition)).to.be.true;
+      expect(await edgeResolver.hasActiveEdge(tZero, definition)).to.be.true;
+      expect(await edgeResolver.hasActiveEdge(tPos, definition)).to.be.true;
+
+      const entries = await edgeResolver.getActiveTagEntries(definition, u1Addr, dummySchemaUID, 0n, 10n);
+      expect(entries.length).to.equal(3);
+
+      // Client-layer effective filter simulation (ADR-0042): weight >= 0n only.
+      // tZero and tPos pass; tNeg is suppressed.
+      const effectiveWeights = entries.filter(e => e.weight >= 0n).map(e => e.weight);
+      expect(effectiveWeights.length).to.equal(2);
+      const negWeights = entries.filter(e => e.weight < 0n);
+      expect(negWeights.length).to.equal(1);
+      expect(negWeights[0].weight).to.equal(-5n);
+    });
+
     it("Should revert InvalidDefinition when definition is bytes32(0)", async function () {
       const target = await createTarget("zero-def-target");
       await expect(
