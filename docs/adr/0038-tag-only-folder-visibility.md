@@ -18,20 +18,20 @@ EFS is pre-ship; no deployed data relies on the older dual-source semantics.
 
 ## Decision
 
-Folder visibility in an edition-scoped directory listing is **single-source**: a folder appears iff at least one edition attester has an active (weight > 0) `TAG(definition=dataSchemaUID, refUID=folder)`.
+Folder visibility in an edition-scoped directory listing is **single-source**: a folder appears iff at least one edition attester has an active (existing and not revoked) `TAG(definition=dataSchemaUID, refUID=folder)`.
 
 ### What this means concretely
 
 - **Folder creation** is unchanged: it's an ANCHOR attestation whose `refUID` points at the parent folder. That ANCHOR is the structural membership record, consumed by non-edition-filtered views (anchor walk, `getDirectoryPage`) and by the `web3://` router's path walk.
 - **Edition visibility** is a separate, per-attester claim, expressed through a TAG. The kernel does not emit this TAG implicitly — clients do.
-- **Upload flow** (client-side): after placing a file at `/a/b/file.txt`, the client walks the ancestor chain `/a/b → /a` (stopping at root exclusive). For each ancestor that the uploader has not already actively tagged with `(definition=dataSchemaUID, weight=1)`, the client emits a visibility TAG. Steady-state cost: zero (walk exits on the first hit). First upload into a new subtree: one extra TAG per generic ancestor.
+- **Upload flow** (client-side): after placing a file at `/a/b/file.txt`, the client walks the ancestor chain `/a/b → /a` (stopping at root exclusive). For each ancestor that the uploader has not already actively tagged with `(definition=dataSchemaUID)`, the client emits a visibility TAG. Weight defaults to 1 by convention; the kernel does not interpret weight. Steady-state cost: zero (walk exits on the first hit). First upload into a new subtree: one extra TAG per generic ancestor.
 - **Empty-folder visibility** (the `CreateItemModal` "make an empty folder that's visible immediately" case): the creator emits the same visibility TAG as the upload flow. Same mechanism, no special case.
 - **Folder deletion**: revoke the attester's visibility TAG on the target folder, then cascade-revoke the attester's file-placement PINs in the subtree. No orphan placements.
 - **Cross-edition**: Alice's visibility TAG on `/a` does not make `/a` visible to Bob's edition. Bob must tag it himself. Matches ADR-0031 first-attester-wins.
 
 ### View wiring
 
-`EFSFileView` schema-filtered directory reads consume `EdgeResolver._childrenWithEdge[parent][dataSchemaUID]` and filter on active (weight > 0) TAGs by any edition attester via `hasActiveTagFromAny`. The old `_getQualifyingTaggedFolders` helper, the `MAX_TAGGED_FOLDERS = 10000` cap, and the dual-source `_qualifyingFolders` fallback are all removed. The schema-filtered walker is now the opaque-cursor paginator from ADR-0036, so there is no silent truncation at any fan-out size.
+`EFSFileView` schema-filtered directory reads consume `EdgeResolver._childrenWithEdge[parent][dataSchemaUID]` and filter on active (existing and not revoked) TAGs by any edition attester via `hasActiveTagFromAny`. The old `_getQualifyingTaggedFolders` helper, the `MAX_TAGGED_FOLDERS = 10000` cap, and the dual-source `_qualifyingFolders` fallback are all removed. The schema-filtered walker is now the opaque-cursor paginator from ADR-0036, so there is no silent truncation at any fan-out size.
 
 ### Kernel storage
 
@@ -64,4 +64,4 @@ Folder visibility in an edition-scoped directory listing is **single-source**: a
 
 ---
 
-*Prose-accuracy corrections 2026-04-22 (within 30-day grace window): (1) `applies=true` language replaced with `weight > 0` / `weight=1` throughout — ADR-0041 superseded the `applies: bool` field with `int256 weight`; the core decision (TAG-only visibility) is unchanged. (2) `TagResolver._childrenTaggedWith` updated to `EdgeResolver._childrenWithEdge` — contract was renamed per ADR-0041's implementation. (3) "file-placement TAGs" updated to "file-placement PINs" in the Folder deletion bullet — file placement is now PIN (cardinality 1) per ADR-0041.*
+*Prose-accuracy corrections 2026-04-22 (within 30-day grace window): (1) `TagResolver._childrenTaggedWith` updated to `EdgeResolver._childrenWithEdge` — contract was renamed per ADR-0041's implementation. (2) "file-placement TAGs" updated to "file-placement PINs" in the Folder deletion bullet — file placement is now PIN (cardinality 1) per ADR-0041. (3) An earlier version of this note replaced `applies=true` language with `weight > 0` / `weight=1`; this was itself incorrect — ADR-0041 §4 explicitly rejected the "negative weight = supersede" coupling. Activity is existence/revoke only: a TAG is active iff it exists and has not been EAS-revoked; weight is opaque metadata the kernel does not interpret. All `"weight > 0"` and `"weight > 0 = active"` phrases updated to `"existing and not revoked"` accordingly. The core decision (TAG-only folder visibility via explicit TAG per attester) is unchanged.*

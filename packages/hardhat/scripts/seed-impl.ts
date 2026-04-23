@@ -231,9 +231,10 @@ export async function seedDemoTree() {
 
   /**
    * Create a TAG attestation (ADR-0041: cardinality-N edge; Shape B — list
-   * semantics). Per-entry `weight` is generic metadata; folder-visibility TAGs
-   * pass weight=1 (any value > 0 simply marks the edge as present — the kernel
-   * does not maintain a sorted index by weight).
+   * semantics). Per-entry `weight` is generic, opaque metadata — the kernel
+   * stores it but does not interpret it. A TAG is active iff it exists and
+   * is not EAS-revoked; weight does NOT determine activity (ADR-0041 §4).
+   * Folder-visibility TAGs pass weight=1 by convention.
    */
   const makeTag = async (
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

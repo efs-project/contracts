@@ -77,15 +77,15 @@ Step 2 is the load-bearing step. Steps 1, 3, 4 are narrow-purpose.
 
 ### 4. Edition scoping
 
-The default viewer is the connected wallet; the default fallback is the deployer (ADR-0016). Unconfigured viewers see the deployer's naming — which is what the pre-seeded aliases produce. A viewer who TAGs their own `name` PROPERTY under any container's name anchor overrides the deployer's label *for themselves* — matching ADR-0014's "your view, your names" property.
+The default viewer is the connected wallet; the default fallback is the deployer (ADR-0016). Unconfigured viewers see the deployer's naming — which is what the pre-seeded aliases produce. A viewer who PINs their own `name` PROPERTY under any container's name anchor overrides the deployer's label *for themselves* — matching ADR-0014's "your view, your names" property.
 
-Cross-attester injection is blocked by the `_activeByAAS[nameAnchor][attester][…]` split: a malicious attester cannot force their naming of Vitalik into my view. I'd have to add them to `?editions=` first.
+Cross-attester injection is blocked by the `_activeBySlot[nameAnchor][attester][…]` split: a malicious attester cannot force their naming of Vitalik into my view. I'd have to add them to `?editions=` first.
 
 ### 5. Deploy-time seeding
 
 The user's guidance: "lazy unless it's an important one." We pre-seed only the containers users are likely to see raw:
 
-1. **System schemas** (6) — each alias anchor per ADR-0033 gets an `Anchor<PROPERTY>(name="name")` child, a free PROPERTY with `value="ANCHOR"` / `"DATA"` / etc., and a TAG binding them. Handled by `06_schema_aliases.ts`.
+1. **System schemas** (6) — each alias anchor per ADR-0033 gets an `Anchor<PROPERTY>(name="name")` child, a free PROPERTY with `value="ANCHOR"` / `"DATA"` / etc., and a PIN binding them. Handled by `06_schema_aliases.ts`.
 2. **Dev personas** (20, localhost/devnet only) — each Hardhat deterministic address gets the same treatment, with `value="Satoshi Nakamoto"` / etc. Handled by `07_persona_names.ts`. Skipped on live networks.
 3. **EFS contracts** — Indexer / Router / etc. are deferred (FUTURE_WORK) unless the production UI actually renders them as bare addresses.
 
@@ -100,7 +100,7 @@ A container's info panel gets an editable "Name" field. Submitting:
 
 Can be batched into a single `multiAttest`. The new PIN supersedes the caller's previous name binding at the same `(attester, definition, targetSchema)` slot in O(1) (ADR-0041).
 
-*Prose-accuracy corrections 2026-04-22 (within 30-day grace window): Throughout the Context and Decision sections, all references to "placed via TAG", "TAG binds them", "TagResolver._activeByAAS", and "read the TAG" have been updated to "PIN", "PIN binds them", "EdgeResolver._activeBySlot", and "read the PIN" respectively — per ADR-0041, which introduced the PIN schema (cardinality-1 edge) to replace the singleton-TAG pattern for PROPERTY value binding. Step 3 of §6 was updated in the same pass. The core decision — `name` PROPERTY as display-name fallback, resolved in edition order via a key anchor — is unchanged.*
+*Prose-accuracy corrections 2026-04-22 (within 30-day grace window): (1) Throughout Context, Decision, §4, §5, §6, and Consequences, all references to "placed via TAG", "TAG binds them", "TagResolver._activeByAAS", "tag binding", "anchor + property + tag", and "read the TAG" have been updated to the PIN equivalents — per ADR-0041, which introduced the PIN schema (cardinality-1 edge) to replace the singleton-TAG pattern for PROPERTY value binding. (2) In §4, "a viewer who TAGs their own name PROPERTY" → "PINs"; "`_activeByAAS[nameAnchor][attester]`" → "`_activeBySlot[nameAnchor][attester]`". (3) In Consequences, "TAG singleton machinery" → "PIN singleton machinery"; "anchor + property + tag" → "anchor + property + pin"; "`TagResolver._activeByAAS` is the security boundary" → "`EdgeResolver._activeBySlot` is the security boundary". The core decision — `name` PROPERTY as display-name fallback, resolved in edition order via a cardinality-1 key anchor — is unchanged.*
 
 ## Consequences
 
@@ -108,19 +108,19 @@ Can be batched into a single `multiAttest`. The new PIN supersedes the caller's 
 
 - Comments, notifications, mentions, feeds, timelines — anywhere an address/schema/attestation/DATA UID appears, we render a name.
 - Per-viewer naming. My address book is mine; another viewer sees theirs (or the deployer's).
-- No new schema kinds, no new resolver, no new index — reuses the existing TAG singleton machinery and the `_nameToAnchor` directory for key-anchor lookup.
+- No new schema kinds, no new resolver, no new index — reuses the existing PIN singleton machinery and the `_nameToAnchor` directory for key-anchor lookup.
 - Schemas and attestations get EFS-native human labels without touching EAS (ADR-0032 intact).
-- Symmetric with DATA — one mental model (free-floating value + TAG placement under a key anchor) covers both.
+- Symmetric with DATA — one mental model (free-floating value + PIN placement under a key anchor) covers both.
 
 **Costs**
 
-- Three attestations per name seed instead of one (anchor + property + tag). Worth it for the uniformity; batch via `multiAttest`. Pre-launch acceptable; mainnet deploy only runs the small schema-alias set.
+- Three attestations per name seed instead of one (anchor + property + pin). Worth it for the uniformity; batch via `multiAttest`. Pre-launch acceptable; mainnet deploy only runs the small schema-alias set.
 - Reserved anchor name `"name"` at each container — follows the `"contentType"` reservation precedent (ADR-0005).
 - ENS dependency in step 1 requires a mainnet RPC round-trip in the client. Clients cache; non-mainnet viewers skip step 1.
 
 **Load-bearing**
 
-- `TagResolver._activeByAAS` singleton is the security boundary. Without it, any attester could inject display names onto anyone else's view — a phishing vector ("0xdeadbeef" displayed as "Vitalik Buterin").
+- `EdgeResolver._activeBySlot` singleton is the security boundary. Without it, any attester could inject display names onto anyone else's view — a phishing vector ("0xdeadbeef" displayed as "Vitalik Buterin").
 - Schemas and attestations have no ENS analog; step 2 is the only meaningful label source. This is why the deploy-seeded aliases matter — unconfigured viewers would otherwise see raw schema UIDs.
 
 ## Alternatives considered

@@ -470,8 +470,9 @@ export const CreateItemModal = ({
 
           // Visibility TAG — folder visibility is tag-only (ADR-0038 / ADR-0041).
           // A folder appears in an edition-scoped listing iff at least one edition attester
-          // has an active TAG(definition=dataSchemaUID, refUID=folder, weight>0).
-          // AGENT-NOTE: weight=1n is the default; consumers may store sort/score metadata here.
+          // has an active TAG(definition=dataSchemaUID, refUID=folder). A TAG is active iff
+          // it exists and is not EAS-revoked — weight is opaque metadata (ADR-0041 §4).
+          // weight=1n is the conventional default; the kernel does not interpret it.
           const encodedTag = ethers.AbiCoder.defaultAbiCoder().encode(["bytes32", "int256"], [dataSchemaUID, 1n]);
           try {
             const tagTx = await attest(
@@ -950,10 +951,10 @@ export const CreateItemModal = ({
 
       // Ancestor-walk visibility TAGs (tag-only folder-visibility model, ADR-0038 / ADR-0041).
       // A folder appears in an edition listing iff at least one edition attester has an
-      // active TAG(definition=dataSchemaUID, refUID=folder, weight>0). On upload, the
-      // uploader must emit that TAG at every generic-folder ancestor from the immediate
-      // parent up to (but excluding) root, or those folders stay hidden in the uploader's
-      // edition. Skip ancestors already tagged by this attester.
+      // active TAG(definition=dataSchemaUID, refUID=folder). Active = exists and not revoked;
+      // weight is opaque metadata (ADR-0041 §4). On upload, the uploader must emit that TAG
+      // at every generic-folder ancestor from the immediate parent up to (but excluding) root,
+      // or those folders stay hidden in the uploader's edition. Skip already-tagged ancestors.
       if (indexer) {
         const edgeResolverAddress = await getEdgeResolverAddress(targetNetwork.id);
         if (edgeResolverAddress) {

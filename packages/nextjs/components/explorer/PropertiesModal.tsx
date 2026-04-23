@@ -317,7 +317,7 @@ export const PropertiesModal = ({ uid, onClose }: PropertiesModalProps) => {
             {isSubmitting ? "Processing..." : "Add Property"}
           </button>
           <p className="text-xs text-opacity-50 text-base-content mt-1">
-            New keys take three transactions (key anchor + property + tag); existing keys take two.
+            New keys take three transactions (key anchor + property + pin binding); existing keys take two.
           </p>
         </div>
       </div>
