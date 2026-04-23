@@ -364,10 +364,10 @@ export async function seedDemoTree() {
     for (let depth = 0; depth < 32; depth++) {
       const parent: string = await indexer.getParent(current);
       if (!parent || parent === ethers.ZeroHash || parent === rootUID) break;
-      // Schema-blind — either PIN or TAG from any prior attester would satisfy folder
-      // visibility for this edition. In practice folder visibility always lands as TAG,
-      // but the kernel treats both schemas uniformly for Shape-B-style reads.
-      const alreadyTagged = await edgeResolver.hasActiveEdgeFromAny(parent, dataSchemaUID, [attester]);
+      // Folder visibility is TAG-only (ADR-0038, ADR-0041): check whether this attester
+      // already has an active TAG on (parent, dataSchemaUID). A PIN would never satisfy
+      // folder visibility — use hasActiveTagFromAny, not hasActiveEdgeFromAny.
+      const alreadyTagged = await edgeResolver.hasActiveTagFromAny(parent, dataSchemaUID, [attester]);
       if (alreadyTagged) break;
       console.log(`  Visibility ${parent.slice(0, 10)}… (${attester.slice(0, 10)}…)`);
       await makeTag(signer, parent, dataSchemaUID, 1n);

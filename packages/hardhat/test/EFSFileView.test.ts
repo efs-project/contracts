@@ -653,6 +653,59 @@ describe("EFSFileView", function () {
     expect(page.items[0].uid).to.equal(bobData);
   });
 
+  it("getFilesAtPath: earlier attester's TAG does NOT suppress a later attester's PIN (PIN-only dedup, ADR-0041 regression)", async function () {
+    // Adversarial case for the `isActivePinEdge` dedup fix (ADR-0041).
+    //
+    // Pre-fix: `getFilesAtPath` used `isActiveEdgeAnySchema` (schema-blind) for the
+    // cross-attester dedup check. An earlier attester who happens to have a TAG on the
+    // same (target, definition) would suppress a later attester's legitimate PIN placement
+    // — hiding valid file content in a multi-edition view.
+    //
+    // Post-fix: the dedup uses `isActivePinEdge` (PIN-specific). Only a prior PIN from an
+    // earlier attester can suppress a later attester's PIN. A TAG from the earlier attester
+    // is irrelevant and must not suppress anything.
+    const aliceAddr = await alice.getAddress();
+    const bobAddr = await bob.getAddress();
+
+    const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32);
+    const folderUID = await createAnchor("folder", rootUID, ZERO_BYTES32);
+    const slotUID = await createAnchor("doc.txt", folderUID, dataSchemaUID, bob);
+
+    // Bob's DATA payload.
+    const bobDataTx = await eas.connect(bob).attest({
+      schema: dataSchemaUID,
+      data: {
+        recipient: ZeroAddress,
+        expirationTime: NO_EXPIRATION,
+        revocable: false,
+        refUID: ZERO_BYTES32,
+        data: enc.encode(["bytes32", "uint64"], [ethers.keccak256(ethers.toUtf8Bytes("bob adversarial")), 42n]),
+        value: 0n,
+      },
+    });
+    const bobData = getUIDFromReceipt(await bobDataTx.wait());
+
+    // Alice has a TAG (not a PIN) targeting bobData with definition=slotUID.
+    // This emulates a client bug or adversarial action: alice has a TAG edge
+    // on the same (target=bobData, definition=slotUID) that bob uses for his PIN.
+    await createTag(bobData, slotUID, alice);
+
+    // Alice has NO active PIN: her getActivePinTarget returns 0x0.
+    expect(await edgeResolver.getActivePinTarget(slotUID, aliceAddr, dataSchemaUID)).to.equal(ZERO_BYTES32);
+
+    // Bob has a valid PIN placing his DATA at the slot.
+    await createPin(bobData, slotUID, bob);
+    expect(await edgeResolver.getActivePinTarget(slotUID, bobAddr, dataSchemaUID)).to.equal(bobData);
+
+    // getFilesAtPath([alice, bob]): alice contributes nothing (no PIN), bob's PIN yields bobData.
+    // The dedup check must NOT fire for bob — alice has a TAG on bobData, but NOT a PIN.
+    // Pre-fix: `isActiveEdgeAnySchema(alice, bobData, slotUID)` → true → bob's file hidden ❌
+    // Post-fix: `isActivePinEdge(alice, bobData, slotUID)` → false → bob's file shown ✓
+    const page = await fileView.getFilesAtPath(slotUID, [aliceAddr, bobAddr], dataSchemaUID, "0x", 10);
+    expect(page.items.length).to.equal(1, "bob's file must appear despite alice's TAG on the same target");
+    expect(page.items[0].uid).to.equal(bobData);
+  });
+
   it("Surfaces >10k tagged folders without silent truncation (ADR-0036)", async function () {
     // Regression for the old MAX_TAGGED_FOLDERS=10000 silent-cap landmine. The cursor-based
     // walker must continue past any arbitrary cap. We do NOT create 10k folders here (too

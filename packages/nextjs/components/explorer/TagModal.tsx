@@ -41,6 +41,9 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
   // True while the async DATA UID lookup is in flight for file items.
   // Submission is blocked until this resolves so we never accidentally tag the anchor UID.
   const [isResolvingDataUID, setIsResolvingDataUID] = useState(!!isFile);
+  // True when isFile=true but no active PIN was found for any edition attester.
+  // Submission is blocked — tagging the anchor UID for a file is incorrect (specs/02 §Tag).
+  const [dataUIDMissing, setDataUIDMissing] = useState(false);
 
   const { address: connectedAddress } = useAccount();
   const publicClient = usePublicClient();
@@ -127,14 +130,16 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
           }
         }
 
-        // No DATA found — fall back to anchor UID
+        // No DATA found — refuse to tag rather than falling back to the anchor UID.
+        // File tags must target DATA UIDs (specs/02 §Tag). Setting dataUIDMissing
+        // disables submission so the user can't accidentally tag the wrong target.
         if (!cancelled) {
-          setEffectiveUID(uid);
+          setDataUIDMissing(true);
           setIsResolvingDataUID(false);
         }
       } catch {
         if (!cancelled) {
-          setEffectiveUID(uid);
+          setDataUIDMissing(true);
           setIsResolvingDataUID(false);
         }
       }
@@ -448,8 +453,6 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
     }
   };
 
-  const usingDataUID = isFile && effectiveUID !== uid;
-
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
       <div className="bg-base-100 rounded-xl p-6 w-96 max-h-[80vh] flex flex-col shadow-2xl">
@@ -464,9 +467,9 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
           <p className="text-xs text-base-content/50 mb-3">
             {isResolvingDataUID
               ? "Resolving edition..."
-              : usingDataUID
-                ? "Tagging the viewed edition of this file."
-                : "No data found — tagging the file anchor."}
+              : dataUIDMissing
+                ? "No edition data found — tagging unavailable for this file."
+                : "Tagging the viewed edition of this file."}
           </p>
         )}
 
@@ -509,14 +512,14 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
             value={tagName}
             onChange={e => setTagName(e.target.value)}
             onKeyDown={e => {
-              if (e.key === "Enter" && tagName.trim() && !isResolvingDataUID) handleAddTag();
+              if (e.key === "Enter" && tagName.trim() && !isResolvingDataUID && !dataUIDMissing) handleAddTag();
             }}
           />
           <div className="flex gap-2">
             <button
               className="btn btn-primary btn-sm flex-1"
               onClick={() => handleAddTag()}
-              disabled={!tagName.trim() || isSubmitting || isResolvingDataUID}
+              disabled={!tagName.trim() || isSubmitting || isResolvingDataUID || dataUIDMissing}
             >
               <PlusIcon className="w-4 h-4 mr-1" />
               {isSubmitting ? "..." : "Apply"}

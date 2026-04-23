@@ -344,14 +344,16 @@ export const FileBrowser = ({
         allTargets.push(...page);
       }
 
-      // Only consider tags applied by the currently viewed attesters (connected user + editions).
-      // This prevents strangers from affecting your view by tagging your files.
-      const tagAttesters: `0x${string}`[] = [
-        ...(connectedAddress ? [connectedAddress as `0x${string}`] : []),
-        ...editionAddresses
-          .filter(a => a.toLowerCase() !== connectedAddress?.toLowerCase())
-          .map(a => a as `0x${string}`),
-      ];
+      // Only consider tags applied by the currently viewed attesters (editions list).
+      // Do NOT widen with connectedAddress — explicit ?editions= must not be overridden
+      // (ADR-0031/0039: same URL must render identically for all viewers).
+      // Fall back to connectedAddress only when no editions are configured.
+      const tagAttesters: `0x${string}`[] =
+        editionAddresses.length > 0
+          ? editionAddresses.map(a => a as `0x${string}`)
+          : connectedAddress
+            ? [connectedAddress as `0x${string}`]
+            : [];
 
       if (tagAttesters.length === 0) return new Set();
 
@@ -992,14 +994,13 @@ export const FileBrowser = ({
   const matchesUID = (item: any, uidSet: Set<string>): boolean => {
     const anchorUID = item.uid.toLowerCase();
     if (isFile(item, dataSchemaUID)) {
-      // Tags target DATA UIDs (standalone, placed at anchors via TAGs).
-      // Check if any DATA placed at this anchor matches the filter set.
+      // Tags on files target DATA UIDs — never anchor UIDs (specs/02 §Tag:
+      // "tags should target the DATA attestation UID rather than the Anchor UID").
+      // If no DATA is loaded for this anchor, treat as no-match; do NOT fall back
+      // to the anchor UID (that would silently accept tags meant for different semantics).
       const dataUIDs = dataUIDMap.get(anchorUID);
-      if (dataUIDs && dataUIDs.size > 0) {
-        return [...dataUIDs].some(uid => uidSet.has(uid));
-      }
-      // Fallback: check anchor UID directly (covers tags applied to anchor itself)
-      return uidSet.has(anchorUID);
+      if (!dataUIDs || dataUIDs.size === 0) return false;
+      return [...dataUIDs].some(uid => uidSet.has(uid));
     }
     return uidSet.has(anchorUID);
   };
