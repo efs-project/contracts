@@ -49,3 +49,5 @@ Created `dev-process` branch from main with: lean `AGENTS.md` as canonical entry
 ### 2026-04-16 — [claude] Production EFS Client repo URL recorded
 
 The production EFS Client (Vite/Lit) lives at https://github.com/efs-project/client. Recorded inline in `AGENTS.md`. Resolves the Tier 2 question on production client discoverability. Actual review of the client's code is still deferred to a dedicated session per `docs/LAUNCH_CHECKLIST.md`.
+
+2026-04-22: Pin invariant requires fresh fork + cleared `deployments/localhost/` cache. The hardhat deployer account (`0xf39Fd6e51...`) has 47,236 prior Sepolia transactions at the pinned block — deterministic, but only when the fork truly starts fresh. `pkill -f "hardhat node"` does NOT kill the running node (wrong pattern); use `kill <pid>` or `lsof -i :8545` to find the PID. Running `yarn deploy` on an already-used node advances nonces → different addresses → pin breaks. CI/devnet should always use a fresh node per deploy run. [claude-sonnet-4.6]
