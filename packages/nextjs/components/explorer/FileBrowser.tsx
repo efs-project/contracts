@@ -388,7 +388,11 @@ export const FileBrowser = ({
               }),
             ])) as [ReadonlyArray<{ tagUID: `0x${string}`; weight: bigint }>, readonly `0x${string}`[]];
 
-            for (let i = 0; i < entries.length; i++) {
+            // Use min length: getActiveTagEntries and getActiveTargetsByAttesterAndSchema are
+            // two independent RPC calls. A revocation between them can produce arrays of
+            // different lengths; iterating past the shorter array would throw on targets[i].
+            const bound = Math.min(entries.length, targets.length);
+            for (let i = 0; i < bound; i++) {
               // Effective TAG: weight >= 0. weight < 0 is active on-chain but suppressed for
               // this filter (ADR-0042). weight = 0 is included.
               if (entries[i].weight >= 0n) {
