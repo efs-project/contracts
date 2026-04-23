@@ -39,6 +39,21 @@ clean resolvable review threads.
 
 ## Default selection
 
+### If unsure
+
+Default to:
+
+- `principal-merge-blocker`
+- `perf-quick-pass`
+
+Escalate to:
+
+- `defcon1-nuclear`
+- `perf-quick-pass`
+
+when the branch touches schemas, resolvers, indexers, router behavior,
+append-only storage assumptions, or ADR-sensitive architecture.
+
 ### Small or local changes
 
 Run:
@@ -114,6 +129,21 @@ The full performance audit is optional for most branches, but strongly recommend
 - `perf-quick-pass`
 - `performance-scalability-auditor`
 
+## Conflict triage
+
+Use this review posture when docs and code are not perfectly aligned:
+
+- runtime bug or invariant break: real finding, regardless of documentation
+- spec mismatch: real finding, because specs are the current intended behavior
+- ADR-only contradiction on a clearly pre-launch, deliberate improvement:
+  usually a documentation / governance finding, not an automatic blocker
+- unclear whether the drift is deliberate: escalate instead of guessing
+- launch-bound or Etched surface: treat contradictions much more strictly
+
+This repo is deliberately pre-launch and change-friendly, but silent drift is
+still a bug. The question is usually "is this change documented honestly and at
+the right permanence tier?", not "does the oldest text automatically win?"
+
 ## Output preference
 
 Prefer one merged dev-facing comment after all reviewers finish. Keep raw specialist comments when:
@@ -146,6 +176,56 @@ If it cannot create native review threads, it should stop and return one
 paste-ready structured review instead of posting ad hoc comments to the PR
 timeline.
 
+## Verification context
+
+`<verification_context>` should be short and concrete. Prefer:
+
+- the exact commands run
+- whether they passed or failed
+- the most important output summary
+- any known environment caveat that affects confidence
+
+Example:
+
+- `yarn hardhat:test` — passed (`308 passing`)
+- `yarn lint` — passed
+- `yarn next:check-types` — failed in this environment with `TS7016` at `packages/nextjs/components/explorer/FileBrowser.tsx:9`
+
+Do not hand reviewers vague text like "tests are good" or "typecheck mostly
+clean."
+
+## Fallback review format
+
+When native review threads are unavailable, return one paste-ready review using
+this structure:
+
+```text
+[model-name · role]
+
+Review mode: <reviewer or squad name>
+Base/head: <base_ref>.. <head_sha>
+
+Findings
+1. [P1] <short title>
+- Why it is wrong
+- Exact file and line references
+- Concrete regression or risk
+- Minimally correct fix direction
+
+2. [P2] <short title>
+...
+
+Open questions / assumptions
+- <only if needed>
+
+Verification
+- <command> — <result>
+- <command> — <result>
+```
+
+If there are no findings, say so explicitly and list only residual risks or
+coverage gaps.
+
 ## Recommended PR prompts
 
 ### Review prompt
@@ -156,6 +236,7 @@ Use this when you want a clean PR review pass:
 Run review-squad on PR #<N>.
 Read the PR description first, including Agents involved.
 Read the governing specs / ADRs for the changed area before commenting.
+If unsure which reviewers to run, default to principal-merge-blocker + perf-quick-pass.
 Post findings using GitHub's native Review feature, not plain comments.
 Use resolvable inline review threads whenever the finding maps to a diff hunk.
 Put non-inline findings in the top-level review body.

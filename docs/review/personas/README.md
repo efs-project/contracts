@@ -54,6 +54,7 @@ Suggested usage:
 - Small or local changes: `default-deep-review`
 - Cross-file behavior or risky logic: `principal-merge-blocker`
 - Schema/indexing/router/ADR-sensitive work: `defcon1-nuclear`
+- If unsure: default to `principal-merge-blocker` plus `perf-quick-pass`
 - PR hardening pass: run the three specialists in parallel
 - Day-to-day hot-path check: add `perf-quick-pass`
 - Scale-sensitive work (indexers, resolvers, pagination, explorer reads, write batching): add `performance-scalability-auditor`

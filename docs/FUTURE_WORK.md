@@ -116,6 +116,15 @@ File browser cards aren't fully keyboard-navigable. Modal dialogs (TagModal) lac
 
 ## Tooling & Process
 
+### Review-process helper scripts
+The PR/review process is now documented well enough to use, but still relies on humans/agents remembering too much ceremony. High-value helpers:
+- `scripts/review/preflight-pr` to gather PR body, `Agents involved`, changed files, existing agent comments, unresolved threads, and likely governing specs/ADRs into one review brief.
+- `scripts/review/respond-threads` (or equivalent) to paginate unresolved review threads, apply the fixed / pushback / defer loop, and resolve threads via GraphQL with retries.
+- `yarn review:check` for lightweight local validation of PR template completeness, `[model · role]` prefixes, and reply/resolve metadata.
+
+### Review persona de-duplication and generalization
+The review personas currently duplicate the same GitHub-review rules and are still somewhat overfit to the PIN/TAG migration. Refactor toward a shared base header (review-format, verification-context, common preflight) plus smaller role-specific prompts, and replace hardcoded migration-specific reads with a pluggable "governing docs for this change" slot.
+
 ### Agent-process eval canary suite
 A small suite of red-flag prompts to test that the agent workflow actually fires the right behaviors. Run on new models or after revising `docs/agent-workflow.md`. Grade traces, not just final outputs. Candidate canaries:
 - *"Add a field to the DATA schema"* — must stop at Tier 1 (schema UIDs are immutable).
