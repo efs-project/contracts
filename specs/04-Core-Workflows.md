@@ -49,11 +49,9 @@ This document maps the step-by-step execution for specific developer and user in
   ```
   items = efsFileView.getDirectoryPageBySchemaAndAddressList(
     memesAnchor, DATA_SCHEMA_UID, [attesterA, attesterB], startingCursor, pageSize
-  )  // files only
-  subfolders = efsFileView.getDirectoryPageBySchemaAndAddressList(
-    memesAnchor, bytes32(0), [attesterA, attesterB], startingCursor, pageSize
-  )  // generic (folder) anchors
+  )  // returns both sub-folders (phase 0, TAG-visibility) and file anchors (phase 1, PIN-placement)
   ```
+  A single `DATA_SCHEMA_UID` call covers both folders and files. Phase 0 returns sub-folders that any listed attester has made visible via a TAG (ADR-0038); phase 1 returns file anchors where any listed attester has an active PIN. Do not pass `bytes32(0)` as the schema argument — that bypasses ADR-0038 visibility TAG checks and returns all child anchors regardless of whether any attester has tagged the folder visible.
 - **Do not** call `edgeResolver.getActivePinTarget(memesAnchor, ...)` directly. The placement PIN's `definition` is the file anchor (e.g. `cat.jpg`'s Anchor), not the parent folder — a direct query on the folder anchor returns nothing. See `specs/03-Onchain-Indexing-Strategy.md` for the discovery indices that EFSFileView uses to enumerate children.
 - **Result**: EFSFileView returns `FileSystemItem[]` with deduplicated edition-merged results, revocation-filtered. The returned cursor paginates the next page.
 
@@ -102,9 +100,10 @@ EFS files are modified by issuing new attestations.
 ### 13. Filter by Tags Across Editions
 - **Action**: User is viewing `/memes/` with `editions=[Alice, Bob]` and applies tag filter "funny".
 - **Resolve**: Look up the "funny" definition UID via `resolvePath(tagsAnchorUID, "funny")`.
-- **Filter per DATA**: For each DATA UID surfaced by the directory listing, call `edgeResolver.hasActiveTagFromAny(dataUID, funnyDefUID, [alice, bob])`. Returns true only if one of the listed attesters has an active (existing and not revoked) TAG on that DATA. Descriptive file labels are always TAG (cardinality N, ADR-0041) — do not use the schema-blind `hasActiveEdgeFromAny`.
+- **Filter per DATA** (effective-TAG path, ADR-0042): For each DATA UID surfaced by the directory listing, for each edition attester, call `edgeResolver.getActiveTagEntries(funnyDefUID, attester, DATA_SCHEMA_UID, 0, pageSize)` and include the DATA only if at least one returned entry has `weight >= 0`. This is the **effective TAG** convention: active (unrevoked) TAGs with `weight < 0` are suppressed from include/exclude filters — a `weight < 0` TAG is still on-chain but treated as "hidden" by the client layer. Descriptive file labels are always TAG (cardinality N, ADR-0041).
+- **Kernel check alternative**: `edgeResolver.hasActiveTagFromAny(dataUID, funnyDefUID, [alice, bob])` returns true for any unrevoked TAG regardless of weight — use this only when weight-blind activity is what you want (e.g. on-chain guards, indexer logic). Do not use it for the explorer's include/exclude filter.
 - **Do not** use raw `getTargetsByDefinition(funnyDefUID, ...)` for this — it is an append-only discovery index that includes revoked edges and edges from untrusted attesters.
-- **Result**: Only files where at least one of the viewed editions has an active "funny" tag appear in the listing.
+- **Result**: Only files where at least one of the viewed editions has an effective "funny" tag (active, weight ≥ 0) appear in the listing.
 
 ### 14. Cross-User Tagging (Curating Someone Else's Content)
 - **Action**: User B wants to mark User A's edition of `/memes/cat.gif` as "nsfw".

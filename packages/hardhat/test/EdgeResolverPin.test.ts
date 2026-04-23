@@ -429,9 +429,8 @@ describe("EdgeResolver — PIN", function () {
       // same UIDs. Easier: check getActivePinTarget exclusively equals lastTarget.
       // The negative check is: getActivePinTarget for any attester != user1 returns ZERO.
       const u2Addr = await user2.getAddress();
-      expect(
-        await edgeResolver.getActivePinTarget(definition, u2Addr, dummySchemaUID),
-      ).to.equal(ZERO_BYTES32); // cross-attester isolation holds
+      // cross-attester isolation holds after all rebinds
+      expect(await edgeResolver.getActivePinTarget(definition, u2Addr, dummySchemaUID)).to.equal(ZERO_BYTES32);
     });
 
     it("Idempotent re-attest: same slot same target does not inflate the active count", async function () {

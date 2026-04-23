@@ -93,6 +93,9 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
     }
 
     let cancelled = false;
+    // Reset both flags at the start of each resolution cycle so a prior failure doesn't
+    // block the UI if a dependency change (new editions, reconnected wallet) leads to success.
+    setDataUIDMissing(false);
     setIsResolvingDataUID(true);
 
     const resolve = async () => {

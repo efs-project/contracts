@@ -293,14 +293,14 @@ export default function DebugSchemas() {
             </div>
             <div className="form-control">
               <label className="label">
-                <span className="label-text">Definition (String/Hex)</span>
+                <span className="label-text">Definition (Anchor or Schema UID)</span>
               </label>
               <input
                 type="text"
                 value={pinDef}
                 onChange={e => setPinDef(e.target.value)}
                 className="input input-bordered"
-                placeholder="e.g. anchor UID, or 'contentType'"
+                placeholder="0x... (anchor UID or schema UID — ADR-0041)"
               />
             </div>
             <div className="card-actions justify-end mt-4">
