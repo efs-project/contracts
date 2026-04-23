@@ -35,6 +35,15 @@ EFSIndexer emits events for off-chain indexing. Adding a field to an event later
 ### Audit and deprecate `getActiveTargetsByAttesterAndSchema`
 `EdgeResolver.getActiveTargetsByAttesterAndSchema` does an N+1 EAS read pattern — one `eas.getAttestation` per TAG entry to resolve `tagUID → targetID`. For large lists this hits gas limits. The preferred path is `getActiveTagEntries` (returns `(tagUID, weight)` in one bulk read) followed by targeted per-UID lookups only as needed. Audit all callers of `getActiveTargetsByAttesterAndSchema` in contracts and the TS client; migrate or deprecate once nothing load-bearing relies on it.
 
+### Dev-UI: batch / cache PIN resolution in FileBrowser page load
+`getDirectoryPage` resolves `getActivePinTarget` per `(file, attester)` pair on every page load — an `items × attesters` RPC fanout. Compounds when effective-tag filtering is active (tag resolution iterates `targetSchemaBuckets × attesters × pages`). Collapse into a page-level batch helper or cache data-target results across tag names so cost scales with page size, not `tags × attesters × items`. Dev UI / Ephemeral tier; not a correctness issue.
+
+### Dev-UI: TagModal edge-definition scan scales with lifetime churn
+`TagModal` paginates the full append-only `getEdgeDefinitions` set for a target, then does an active-edge lookup and ancestor walk per definition to classify it under `/tags/`. On a heavily-reused DATA UID this scales with all-time edge history, not active tags. Fix: expose a TAG-schema-specific reverse index or `/tags/` classification cache so modal-open cost is O(active tag count). Dev UI / Ephemeral tier.
+
+### EFSFileView phase-0 folder pagination scales with append-only history
+`getDirectoryPageBySchemaAndAddressList` (phase 0) walks `getChildrenWithEdge` history under a fixed scan budget; a hot folder with many revoked or out-of-edition edges can exhaust the budget before returning a full page. Latency scales with historical churn, not live child count. Long-term: add a direct active-visibility index in EFSIndexer or EdgeResolver so phase-0 pagination is O(page) on active children. Tracked alongside ADR-0009 append-only implications.
+
 ### Sort overlay at >10K items
 `computeHints` punts to client-side for lists >1K. `getSortedChunk` is O(N) traversal capped by `maxTraversal`. For lists of 100K+ items, pagination is sequential — no random access. Consider: time-bucketed secondary indices, hashed offset support, or accepting that very large lists need off-chain sort hints.
 
