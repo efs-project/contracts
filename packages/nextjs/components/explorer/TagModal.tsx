@@ -177,6 +177,13 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
   // Load tag definitions on this target and check the connected user's active tags.
   // Only shows tags where the connected user has an active TAG.
   useEffect(() => {
+    // When no DATA was found for a file, refuse to load tags from the stale anchor UID —
+    // displaying anchor-level tags in a file context is misleading and the Remove buttons
+    // would revoke the wrong target. dataUIDMissing already disables submission (line 522).
+    if (dataUIDMissing) {
+      setUserTags([]);
+      return;
+    }
     if (!publicClient || !edgeResolverAddress || !effectiveUID || !connectedAddress || !easInfo || !tagSchemaUID) {
       setUserTags([]);
       return;
@@ -305,7 +312,7 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
     return () => {
       cancelled = true;
     };
-  }, [publicClient, edgeResolverAddress, effectiveUID, connectedAddress, easInfo, refreshKey, tagsRoot, tagSchemaUID]);
+  }, [publicClient, edgeResolverAddress, effectiveUID, connectedAddress, easInfo, refreshKey, tagsRoot, tagSchemaUID, dataUIDMissing]);
 
   const handleAddTag = async () => {
     if (!anchorSchemaUID || !connectedAddress || !publicClient || !tagsRoot || !tagSchemaUID) return;
@@ -490,7 +497,7 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
                     <button
                       className="btn btn-error btn-xs"
                       onClick={() => handleRemoveTag(tag.activeTagUID!)}
-                      disabled={isSubmitting}
+                      disabled={isSubmitting || dataUIDMissing}
                     >
                       <XMarkIcon className="w-3 h-3" />
                       Remove
