@@ -8,6 +8,14 @@ Informal dated log of small decisions agents made while working. Lighter than AD
 
 ---
 
+### 2026-04-23 — [claude-sonnet-4.6 · dev] Pre-mainnet architectural conversations recorded in LAUNCH_CHECKLIST
+
+PR #10 (PIN/TAG schema split) deferred three Tier-1 architectural conversations as out-of-scope: (1) DATA schema deprecation, (2) kernel layer-2/layer-3 split, (3) layer-3 audit of `_containsAttestations` and similar storage maps for file-system bleed. Originally only recorded in the local plan file (`~/.claude/plans/`), which is ephemeral. Promoted to a new "Pre-Mainnet Architectural Conversations" section in `docs/LAUNCH_CHECKLIST.md` so they survive session boundaries and are visible to any agent doing pre-mainnet work. Each item carries a "default if not addressed" disposition so the checklist isn't blocking — but each genuinely deserves its own session before ADR-0030 freezes EFSIndexer's interface.
+
+### 2026-04-23 — [claude-sonnet-4.6 · dev] Review-squad pattern shipped alongside ADR-0041
+
+PR #10 bundled the multi-agent review-squad pattern (10 reviewer personas in `docs/review/personas/`, the orchestrator at `docs/review/review-squad.md`, the review-thread response loop in `docs/agent-workflow.md`, kernel-style commit trailers including `Reviewed-by:` / `Suggested-by:` / `Tested-by:` / `Permanence-tier:`, and the per-comment `[model · role]` speaker prefix convention) with the schema-split work that motivated it. The bundling was intentional — the process was being designed in real time by being used on the PR — but it under-sold what landed. Discoverability is handled by the existing `## PR review quick start` section in `AGENTS.md` pointing at `docs/review/review-squad.md`; this entry exists so future agents grepping for "where did the review squad come from?" find a pointer. A formal ADR for the review squad is Tier 3 backlog — nice-to-have, not required.
+
 ### 2026-04-22 — [claude-sonnet-4.6 · dev] PIN/TAG schema split resolves ADR-0035 PROPERTY-singleton flaw
 
 Closed `docs/QUESTIONS.md` Tier-2 entry "ADR-0035 PROPERTY singleton claim does not hold." Resolution: ADR-0041 (Etched) supersedes ADR-0035 with two sibling schemas — PIN (cardinality 1) and TAG (cardinality N with `int256 weight`). PROPERTY value binding becomes a PIN under the key anchor; the new schema-aware `_edgeHash(attester, targetID, definition, schema)` and per-slot `_activeBySlot` storage give PROPERTY rebinds genuine O(1) supersede semantics on-chain — no more newest-by-time read-side workaround. Removal is `eas.revoke()` only (no `applies=false`). Cardinality lives in the schema UID, the only permanent globally-coordinated coordination point in EFS. Touches all six existing data-model ADRs by reframing TAG-the-singleton as PIN; out-of-scope items (DATA deprecation, kernel layer-2/layer-3 split, layer-3 audit of `containsAttestations`) recorded in the plan and `specs/01-System-Architecture.md` working sketch.
