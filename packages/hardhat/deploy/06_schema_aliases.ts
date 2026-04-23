@@ -26,8 +26,8 @@ const EAS_ADDRESS = "0xC2679fBD37d54388Ce493F1DB75320D236e1815e";
  *     Each alias gets:
  *       - `Anchor<PROPERTY>(refUID=aliasUID, name="name")` key anchor.
  *       - Free-floating `PROPERTY(value=<label>)`.
- *       - `PIN(definition=keyAnchor, refUID=property, weight=1)` from the
- *         deployer (Shape A — singleton per attester).
+ *       - `PIN(definition=keyAnchor, refUID=property)` from the
+ *         deployer (Shape A — singleton per attester; no weight field).
  *     …and a `/tags/schema` TAG from the deployer so sidebars find it (Shape B
  *     — list).
  *

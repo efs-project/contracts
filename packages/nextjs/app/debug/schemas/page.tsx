@@ -417,37 +417,40 @@ export default function DebugSchemas() {
           </div>
         </div>
 
-        {/* PROPERTY FORM (Smart) */}
+        {/* PROPERTY FORM — 3-step: key anchor + free-floating PROPERTY + PIN binding (ADR-0041) */}
         <div className="card w-96 bg-base-100 shadow-xl border border-base-200">
           <div className="card-body">
             <h2 className="card-title">Property Schema</h2>
-            <div className="text-xs opacity-50 mb-2">Creates Anchor(Name) -&gt; Property(Value)</div>
+            <div className="text-xs opacity-50 mb-2">
+              3 txns: Anchor(key) → PROPERTY(value, standalone) → PIN(binding). Per ADR-0041.
+            </div>
             <div className="form-control">
               <label className="label">
-                <span className="label-text">Ref UID (Target)</span>
+                <span className="label-text">Container UID (refUID of key anchor)</span>
               </label>
               <input
                 type="text"
                 value={propRef}
                 onChange={e => setPropRef(e.target.value)}
-                className="input input-bordered"
+                className="input input-bordered font-mono text-xs"
+                placeholder="0x… (DATA / anchor / address-as-bytes32)"
               />
             </div>
             <div className="form-control">
               <label className="label">
-                <span className="label-text">Name (New Anchor)</span>
+                <span className="label-text">Key (anchor name, e.g. &ldquo;contentType&rdquo;)</span>
               </label>
               <input
                 type="text"
                 value={propName}
                 onChange={e => setPropName(e.target.value)}
                 className="input input-bordered"
-                placeholder="e.g. 'age' or 'title'"
+                placeholder="e.g. contentType, name, description"
               />
             </div>
             <div className="form-control">
               <label className="label">
-                <span className="label-text">Value (String)</span>
+                <span className="label-text">Value (string)</span>
               </label>
               <input
                 type="text"
@@ -462,12 +465,18 @@ export default function DebugSchemas() {
                 disabled={isPending}
                 onClick={async () => {
                   if (!propName) {
-                    notification.error("Name required");
+                    notification.error("Key name required");
+                    return;
+                  }
+                  const pinSchemaUID = (schemas as any).PIN as string | undefined;
+                  if (!pinSchemaUID) {
+                    notification.error("PIN schema not available.");
                     return;
                   }
 
-                  // Step 1: Create Anchor
-                  notification.info("Step 1/2: Creating Anchor...");
+                  // Step 1: Create key anchor (Anchor<PROPERTY> under container).
+                  // schemaUID field = PROPERTY_SCHEMA_UID to mark it as a PROPERTY key anchor.
+                  notification.info("Step 1/3: Creating key anchor...");
                   const anchorArgs = {
                     schema: schemas.ANCHOR as `0x${string}`,
                     data: {
@@ -482,27 +491,45 @@ export default function DebugSchemas() {
                       value: 0n,
                     },
                   };
+                  const keyAnchorUID = await attestWithArgs(anchorArgs);
+                  if (!keyAnchorUID) return;
 
-                  const anchorUID = await attestWithArgs(anchorArgs);
-                  if (!anchorUID) return;
-
-                  // Step 2: Create Property
-                  notification.info("Step 2/2: Creating Property...");
+                  // Step 2: Create free-floating PROPERTY (refUID=0x0, standalone).
+                  notification.info("Step 2/3: Creating PROPERTY value...");
                   const propArgs = {
                     schema: (schemas.PROPERTY || zeroHash) as `0x${string}`,
                     data: {
                       recipient: zeroAddress,
                       expirationTime: 0n,
-                      revocable: true,
-                      refUID: anchorUID as `0x${string}`,
+                      revocable: false,
+                      refUID: zeroHash as `0x${string}`,
                       data: encodeAbiParameters(parseAbiParameters("string"), [propVal]),
                       value: 0n,
                     },
                   };
-                  await attestWithArgs(propArgs);
+                  const propertyUID = await attestWithArgs(propArgs);
+                  if (!propertyUID) return;
+
+                  // Step 3: Create PIN binding (definition=keyAnchorUID, refUID=propertyUID).
+                  // Cardinality-1 per ADR-0041: re-PINning the same (attester, keyAnchor, schema)
+                  // slot supersedes the prior binding in O(1).
+                  notification.info("Step 3/3: Creating PIN binding...");
+                  const pinArgs = {
+                    schema: pinSchemaUID as `0x${string}`,
+                    data: {
+                      recipient: zeroAddress,
+                      expirationTime: 0n,
+                      revocable: true,
+                      refUID: propertyUID as `0x${string}`,
+                      data: encodeAbiParameters(parseAbiParameters("bytes32"), [keyAnchorUID as `0x${string}`]),
+                      value: 0n,
+                    },
+                  };
+                  await attestWithArgs(pinArgs);
+                  notification.success("PROPERTY bound. Key anchor → PROPERTY → PIN all created.");
                 }}
               >
-                Attest Property
+                Attest Property (3 steps)
               </button>
             </div>
           </div>

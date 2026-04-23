@@ -60,7 +60,7 @@ This document maps the step-by-step execution for specific developer and user in
 ### 6. Show items tagged 'Funny', hide items tagged 'NSFW'
 - **Action**: When rendering the children of an Anchor, resolve tag definitions and cross-reference against the edition-specific DATA UIDs.
 - **Resolve definitions**: Look up `resolvePath(tagsAnchorUID, "funny")` and `resolvePath(tagsAnchorUID, "nsfw")` to get the definition Anchor UIDs.
-- **Per-item check** (scoped to trusted editions): Call `edgeResolver.hasActiveEdgeFromAny(dataUID, defUID, [editionAttesters])` for each DATA UID against each definition. This scopes the check to **active edges by trusted attesters only** — no revoked edges, no untrusted attesters. Checks both PIN and TAG schemas. Include if any edition tagged "Funny"; exclude if any edition tagged "NSFW".
+- **Per-item check** (scoped to trusted editions): Call `edgeResolver.hasActiveTagFromAny(dataUID, defUID, [editionAttesters])` for each DATA UID against each definition. This scopes the check to **active TAGs by trusted attesters only** — no revoked edges, no untrusted attesters. Descriptive file labels are always TAG (cardinality N, ADR-0041). Include if any edition tagged "Funny"; exclude if any edition tagged "NSFW".
 - **Key invariant**: Tags are on DATA UIDs, not Anchor UIDs. If User A tagged their edition as NSFW, User B's edition of the same filename is unaffected.
 
 ### 7. Get property 'icon' in `/memes/` made by `0x123...`
