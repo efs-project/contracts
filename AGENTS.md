@@ -22,15 +22,34 @@ EFS — Ethereum File System. On-chain file system built on EAS attestations. Pr
 - **[docs/LAUNCH_CHECKLIST.md](./docs/LAUNCH_CHECKLIST.md)** — pre-launch blockers
 - **[reference/README.md](./reference/README.md)** — EAS, EIP, Scaffold-ETH docs (indexed by task)
 
+## PR review quick start
+
+When reviewing a PR, do not prompt agents with only `review PR #<N>`. That is
+too weak and reliably produces messy shared-account output.
+
+Use the canonical prompt shape from `docs/review/review-squad.md`, or an
+equivalent prompt that explicitly requires all of the following:
+
+- read the PR description first, including `Agents involved`
+- read the governing specs / ADRs before commenting
+- use GitHub's native Review feature, not loose PR comments
+- open resolvable inline review threads whenever the finding maps to a diff hunk
+- prefix every review body, inline comment, and thread reply with
+  `[<model-name> · <role>]`
+- avoid placeholder / probe / "testing anchor" comments
+- if native review threads are unavailable, return one paste-ready structured
+  review comment instead of spraying ad hoc comments into the PR timeline
+
 ## Change-type → required reads
 
 If your task fits one of these categories, load the listed ADRs *before* writing code. Most Tier 1 mistakes come from missing the right governing decision.
 
 | Change type | Required reads |
 |---|---|
-| Schema field change (ANCHOR, DATA, MIRROR, TAG, PROPERTY, SORT_INFO) | ADR-0005, ADR-0030, ADR-0032, `specs/02-Data-Models-and-Schemas.md` |
+| Schema field change (ANCHOR, DATA, MIRROR, PIN, TAG, PROPERTY, SORT_INFO) | ADR-0005, ADR-0030, ADR-0032, ADR-0041, `specs/02-Data-Models-and-Schemas.md` |
 | New transport type or priority change | ADR-0011, ADR-0012, ADR-0023, `specs/02` §Mirror |
-| Kernel index / indexing logic (EFSIndexer) | ADR-0007, ADR-0008, ADR-0009, ADR-0010, ADR-0021, `specs/03-Onchain-Indexing-Strategy.md` |
+| Kernel index / indexing logic (EFSIndexer / EdgeResolver) | ADR-0007, ADR-0008, ADR-0009, ADR-0010, ADR-0021, ADR-0041, `specs/03-Onchain-Indexing-Strategy.md` |
+| Edge writes (PIN vs TAG choice; cardinality) | ADR-0041, `specs/02-Data-Models-and-Schemas.md` §Pin/Tag |
 | Editions / router resolution | ADR-0013, ADR-0014, ADR-0016, ADR-0017, ADR-0020, ADR-0031, ADR-0033, `specs/04-Core-Workflows.md` |
 | Root URL classification / schema alias anchors | ADR-0033, ADR-0019, ADR-0025 |
 | Display-name / address-label rendering | ADR-0014, ADR-0034, `specs/02` §Property |
@@ -211,6 +230,19 @@ cd packages/hardhat && npx hardhat test test/EFSIndexer.test.ts --network hardha
 - **Specs are authoritative.** If specs and code disagree, surface it (likely Tier 2). Don't guess which is right.
 - **ADRs are immutable once Accepted.** Don't edit historical ones. Supersede instead.
 - **Permanence-tier awareness.** Before any non-trivial work, identify whether you're on an Etched, Durable, or Ephemeral surface (see `docs/agent-workflow.md` → Permanence tiers). On Etched surfaces (mainnet contracts, schema UIDs, append-only index shapes, ADR-codified invariants), the frame is "minimum irreversible assumptions" and the 50-year test applies. Simplicity heuristics that bias toward "minimum code" are subordinate to future-proofing on these surfaces.
+
+## Invariants
+
+**Hardened (load-bearing — don't violate without writing a superseding ADR):**
+
+- **Cardinality is declared at the schema level (PIN vs TAG), not per-attestation.** The schema UID is the only permanent, globally-coordinated, machine-readable slot in EFS. PIN = cardinality 1 (file placement, PROPERTY value binding); TAG = cardinality N with an `int256 weight` (folder visibility, descriptive labels, schema-alias discovery). See ADR-0041.
+  - **Active TAG** (kernel) = unrevoked edge exists. Weight does not affect kernel activity. Use this definition in contracts, resolver helpers, and any non-filter code path.
+  - **Effective TAG** (client convention, ADR-0042) = active TAG with `weight >= 0`. Only applied in `FileBrowser.resolveTagSet` for the explorer's descriptive-label include/exclude filter. `weight < 0` = suppressed for that filter but still active on-chain. Do not call suppressed/negative-weight TAGs "inactive" in shared code.
+- **Removal is via `eas.revoke()`, not `applies=false`.** PIN replacement is automatic when re-attesting at the same `(attester, definition, targetSchema)` slot; the prior PIN is superseded in O(1).
+
+**Soft (working draft — flag any reshaping as Tier 1):**
+
+- **Database (kernel) and File System (overlay) are separate concerns.** Don't put file-system-specific primitives in the kernel. The layer-2 vs layer-3 boundary inside `EFSIndexer.sol` and what counts as "layer-4 file-system overlay" vs "layer-3 graph primitive" (e.g. `_containsAttestations`, qualifying-folder index) are still being shaped — see `specs/01-System-Architecture.md` for the working sketch. Reshaping the layers is a Tier 1 design conversation.
 
 ---
 

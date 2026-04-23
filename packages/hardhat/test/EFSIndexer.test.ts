@@ -85,9 +85,10 @@ describe("EFSIndexer", function () {
     // commentSchemaUID = rc7!.logs[0].topics[1];
 
     // 3. Deploy Indexer
-    // Note: TAG schema is now handled by the separate TagResolver contract, not EFSIndexer.
-    // tagSchemaUID is still registered (with futureIndexerAddr as resolver) in tests so that
-    // generic referencing tests still exercise the indexer's _allReferencing / _referencingBySchema maps.
+    // Note: PIN and TAG schemas are now handled by the separate EdgeResolver contract (ADR-0041),
+    // not EFSIndexer. tagSchemaUID is still registered (with futureIndexerAddr as resolver) in tests
+    // so that generic referencing tests still exercise the indexer's _allReferencing /
+    // _referencingBySchema maps.
     const IndexerFactory = await ethers.getContractFactory("EFSIndexer");
     indexer = await IndexerFactory.deploy(
       await eas.getAddress(),
@@ -115,6 +116,45 @@ describe("EFSIndexer", function () {
     }
     throw new Error("Attested event not found");
   };
+
+  describe("wireContracts re-entry guard", function () {
+    it("Should revert if wireContracts is called a second time", async function () {
+      // EFSIndexer.wireContracts is guarded by `require(edgeResolver == address(0), "EFSIndexer: already wired")`.
+      // Calling it twice must revert — this prevents a second caller from swapping edgeResolver,
+      // PIN_SCHEMA_UID, or TAG_SCHEMA_UID mid-lifetime.
+      // (No wireContracts is called in this test's beforeEach, so we call it twice here.)
+      // Use a dummy non-zero address so the guard's `edgeResolver == address(0)` check
+      // flips to false after the first call (passing ZeroAddress would leave the slot
+      // unchanged and both calls would pass).
+      const dummy = await owner.getAddress();
+
+      await expect(
+        indexer.wireContracts(
+          dummy,
+          ZERO_BYTES32,
+          ZERO_BYTES32,
+          ethers.ZeroAddress,
+          ZERO_BYTES32,
+          ethers.ZeroAddress,
+          ZERO_BYTES32,
+          ethers.ZeroAddress,
+        ),
+      ).to.not.be.reverted; // first call succeeds
+
+      await expect(
+        indexer.wireContracts(
+          dummy,
+          ZERO_BYTES32,
+          ZERO_BYTES32,
+          ethers.ZeroAddress,
+          ZERO_BYTES32,
+          ethers.ZeroAddress,
+          ZERO_BYTES32,
+          ethers.ZeroAddress,
+        ),
+      ).to.be.revertedWith("EFSIndexer: already wired");
+    });
+  });
 
   describe("Enforcement (Anchor)", function () {
     // ... (Existing tests) ...
@@ -827,7 +867,8 @@ describe("EFSIndexer", function () {
   });
 
   describe("Tags (Generic Referencing via tagSchemaUID)", function () {
-    // Note: TAG attestations are now managed by the TagResolver contract (singleton pattern).
+    // Note: PIN and TAG attestations are now managed by the EdgeResolver contract (ADR-0041:
+    // PIN = cardinality 1, TAG = cardinality N — sibling schemas, one shared resolver).
     // The Indexer still generically indexes any schema with refUID, so these tests verify
     // that generic referencing (getAllReferencing, getReferencingAttestations) still works
     // for the tagSchemaUID registered with the Indexer as resolver.
@@ -848,7 +889,7 @@ describe("EFSIndexer", function () {
       const receipt = await tx.wait();
       const anchorUID = getUIDFromReceipt(receipt);
 
-      // Tag 1 (using new "bytes32 definition, bool applies" schema format)
+      // Tag 1 — "bytes32 definition, int256 weight" per ADR-0041 (weight > 0 = active)
       await eas.attest({
         schema: tagSchemaUID,
         data: {
@@ -856,12 +897,12 @@ describe("EFSIndexer", function () {
           expirationTime: NO_EXPIRATION,
           revocable: true,
           refUID: anchorUID,
-          data: schemaEncoder.encode(["bytes32", "bool"], [ethers.ZeroHash, true]),
+          data: schemaEncoder.encode(["bytes32", "int256"], [ethers.ZeroHash, 1n]),
           value: 0n,
         },
       });
 
-      // Tag 2 (second definition)
+      // Tag 2 (different weight; both generically indexed by refUID regardless of weight)
       await eas.attest({
         schema: tagSchemaUID,
         data: {
@@ -869,7 +910,7 @@ describe("EFSIndexer", function () {
           expirationTime: NO_EXPIRATION,
           revocable: true,
           refUID: anchorUID,
-          data: schemaEncoder.encode(["bytes32", "bool"], [ethers.ZeroHash, false]),
+          data: schemaEncoder.encode(["bytes32", "int256"], [ethers.ZeroHash, 2n]),
           value: 0n,
         },
       });
@@ -1099,8 +1140,9 @@ describe("EFSIndexer", function () {
       const valueUID = getUIDFromReceipt(receiptValue);
       expect(valueUID).to.not.equal(ZERO_BYTES32);
 
-      // 3. Resolve key anchor (the placement binding happens via TAG in the full model,
-      //    which lives in TagResolver — this kernel-only test verifies attestation shape).
+      // 3. Resolve key anchor (the placement binding happens via PIN in the full model
+      //    under ADR-0041, which lives in EdgeResolver — this kernel-only test verifies
+      //    attestation shape).
       const resolvedAnchor = await indexer.resolveAnchor(parentUID, "theme", propertySchemaUID);
       expect(resolvedAnchor).to.equal(anchorUID);
     });

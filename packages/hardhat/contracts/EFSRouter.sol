@@ -62,20 +62,15 @@ interface IEFSIndexer {
     function DEPLOYER() external view returns (address);
 }
 
-interface ITagResolverForRouter {
-    function getActiveTargetsByAttesterAndSchema(
+interface IEdgeResolverForRouter {
+    /// @notice O(1) read of the active PIN's target UID for a (definition, attester, schema) slot.
+    ///         Used for Shape A reads — file placement (DATA at anchor) and PROPERTY value
+    ///         binding (contentType, name, etc.). Returns bytes32(0) when the slot is empty.
+    function getActivePinTarget(
         bytes32 definition,
         address attester,
-        bytes32 schema,
-        uint256 start,
-        uint256 length
-    ) external view returns (bytes32[] memory);
-
-    function getActiveTargetsByAttesterAndSchemaCount(
-        bytes32 definition,
-        address attester,
-        bytes32 schema
-    ) external view returns (uint256);
+        bytes32 targetSchema
+    ) external view returns (bytes32);
 }
 
 interface IEAS {
@@ -98,7 +93,7 @@ interface IEAS {
 contract EFSRouter is IDecentralizedApp {
     IEFSIndexer public indexer;
     IEAS public eas;
-    ITagResolverForRouter public tagResolver;
+    IEdgeResolverForRouter public edgeResolver;
     ISchemaRegistry public schemaRegistry;
     bytes32 public dataSchemaUID;
 
@@ -114,10 +109,16 @@ contract EFSRouter is IDecentralizedApp {
         Attestation
     }
 
-    constructor(address _indexer, address _eas, address _tagResolver, address _schemaRegistry, bytes32 _dataSchemaUID) {
+    constructor(
+        address _indexer,
+        address _eas,
+        address _edgeResolver,
+        address _schemaRegistry,
+        bytes32 _dataSchemaUID
+    ) {
         indexer = IEFSIndexer(_indexer);
         eas = IEAS(_eas);
-        tagResolver = ITagResolverForRouter(_tagResolver);
+        edgeResolver = IEdgeResolverForRouter(_edgeResolver);
         schemaRegistry = ISchemaRegistry(_schemaRegistry);
         dataSchemaUID = _dataSchemaUID;
     }
@@ -813,10 +814,9 @@ contract EFSRouter is IDecentralizedApp {
         return (200, bytes(json), h);
     }
 
-    // Find DATA at a path anchor via TAG query — returns the most recent DATA by timestamp
-    // and the attester whose TAG resolved it (used to scope mirror selection).
-    // The _activeByAttesterAndSchema array uses swap-and-pop, so element order is not
-    // chronological. We scan all active targets and pick the one with the highest `time`.
+    // Find DATA at a path anchor via PIN read — file placement is Shape A (cardinality 1).
+    // O(1) read per attester: `EdgeResolver.getActivePinTarget(anchor, attester, dataSchema)`.
+    // Returns the DATA UID and the winning attester (used to scope mirror + PROPERTY selection).
     //
     // Fallback priority when no ?editions= is specified:
     //   1. caller (from ?caller= param or msg.sender if non-zero) — user sees their own files
@@ -841,33 +841,13 @@ contract EFSRouter is IDecentralizedApp {
             attesters[0] = indexer.DEPLOYER();
         }
 
+        // File placement is Shape A — a file Anchor holds at most one DATA per attester.
+        // Read the active PIN's target in O(1); skip attesters with an empty slot.
+        // (Per ADR-0041 the cardinality lives in the schema UID itself.)
         for (uint256 i = 0; i < attesters.length; i++) {
-            uint256 count = tagResolver.getActiveTargetsByAttesterAndSchemaCount(
-                targetAnchor,
-                attesters[i],
-                dataSchema
-            );
-            if (count == 0) continue;
-
-            bytes32[] memory targets = tagResolver.getActiveTargetsByAttesterAndSchema(
-                targetAnchor,
-                attesters[i],
-                dataSchema,
-                0,
-                count
-            );
-
-            // Pick the most recent target by attestation timestamp
-            bytes32 best = targets[0];
-            uint64 bestTime = eas.getAttestation(targets[0]).time;
-            for (uint256 j = 1; j < targets.length; j++) {
-                uint64 t = eas.getAttestation(targets[j]).time;
-                if (t > bestTime) {
-                    bestTime = t;
-                    best = targets[j];
-                }
-            }
-            return (best, attesters[i]);
+            bytes32 target = edgeResolver.getActivePinTarget(targetAnchor, attesters[i], dataSchema);
+            if (target == bytes32(0)) continue;
+            return (target, attesters[i]);
         }
 
         return (bytes32(0), address(0));
@@ -944,21 +924,12 @@ contract EFSRouter is IDecentralizedApp {
         return (best, hadMirrors);
     }
 
-    // Get contentType from PROPERTY on DATA, scoped to the edition attester (ADR-0035).
-    //
-    // Unified PROPERTY model: the value lives on a free-floating PROPERTY attestation,
-    // bound to the DATA via TAG under `Anchor<PROPERTY>(parent=DATA, name="contentType")`.
-    // Cross-attester protection comes from TagResolver._activeByAAS — only the target
-    // attester's active bindings are considered, so third parties cannot displace the
-    // MIME type.
-    //
-    // Recency disambiguation: TAG singleton is per (attester, targetID, definition), so
-    // two TAGs from the same attester with different PROPERTY refUIDs under the same
-    // key anchor can both be active when a caller updates contentType without first
-    // revoking the prior TAG. `_activeByAAS` stores targetIDs in first-attestation
-    // order, which is oldest-first — returning position [0] would serve a stale value.
-    // We fetch all active targets and pick the most recent by `attestation.time`,
-    // mirroring `_findDataAtPath`'s pattern for the analogous DATA case above.
+    // Get contentType from PROPERTY on DATA, scoped to the edition attester (ADR-0041,
+    // superseding ADR-0035's append-only TAG-based singleton). PROPERTY value bindings
+    // are Shape A (cardinality 1) and live on a PIN under `Anchor<PROPERTY>(parent=DATA,
+    // name="contentType")`. Cross-attester protection comes from EdgeResolver._activeBySlot
+    // being attester-scoped — only the target attester's PIN is considered, so third
+    // parties cannot displace the MIME type.
     function _getContentType(bytes32 dataUID, address attester) private view returns (string memory) {
         bytes32 propertySchema = indexer.PROPERTY_SCHEMA_UID();
 
@@ -967,31 +938,12 @@ contract EFSRouter is IDecentralizedApp {
         bytes32 keyAnchor = indexer.resolveAnchor(dataUID, "contentType", propertySchema);
         if (keyAnchor == bytes32(0)) return "application/octet-stream";
 
-        // 2. Fetch all of the attester's active PROPERTY targets under that key anchor.
-        uint256 count = tagResolver.getActiveTargetsByAttesterAndSchemaCount(keyAnchor, attester, propertySchema);
-        if (count == 0) return "application/octet-stream";
+        // 2. O(1) read of the attester's active PROPERTY PIN under that key anchor.
+        bytes32 propertyUID = edgeResolver.getActivePinTarget(keyAnchor, attester, propertySchema);
+        if (propertyUID == bytes32(0)) return "application/octet-stream";
 
-        bytes32[] memory targets = tagResolver.getActiveTargetsByAttesterAndSchema(
-            keyAnchor,
-            attester,
-            propertySchema,
-            0,
-            count
-        );
-
-        // 3. Pick the most recent target by attestation timestamp.
-        bytes32 bestPropertyUID = targets[0];
-        uint64 bestTime = eas.getAttestation(targets[0]).time;
-        for (uint256 i = 1; i < targets.length; i++) {
-            uint64 t = eas.getAttestation(targets[i]).time;
-            if (t > bestTime) {
-                bestTime = t;
-                bestPropertyUID = targets[i];
-            }
-        }
-
-        // 4. Decode the value.
-        IEAS.Attestation memory propAtt = eas.getAttestation(bestPropertyUID);
+        // 3. Decode the value.
+        IEAS.Attestation memory propAtt = eas.getAttestation(propertyUID);
         string memory value = abi.decode(propAtt.data, (string));
         if (bytes(value).length == 0) return "application/octet-stream";
         return value;

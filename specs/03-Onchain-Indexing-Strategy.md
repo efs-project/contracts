@@ -5,17 +5,17 @@ EFS is designed to work fully onchain without offchain centralized dependencies,
 For practical queries utilizing this index, see [Core Workflows](./04-Core-Workflows.md).
 
 ## The Multi-Level Attestation Challenge
-In EFS, file identity is decoupled from file location. A DATA attestation is standalone (`refUID = 0x0`) and placed at paths via TAG attestations. The logical flow is:
+In EFS, file identity is decoupled from file location. A DATA attestation is standalone (`refUID = 0x0`) and placed at paths via **edge attestations** (PIN for cardinality 1, TAG for cardinality N — ADR-0041). The logical flow:
 
 ```
-Folder (Anchor) → File Name (child Anchor) ←── TAG(definition=Anchor, refUID=DATA) ←── DATA (standalone)
-                                                                                        ├── PROPERTY (contentType)
+Folder (Anchor) → File Name (child Anchor) ←── PIN(definition=Anchor, refUID=DATA) ←── DATA (standalone)
+                                                                                        ├── PROPERTY (contentType)  ← bound via PIN
                                                                                         └── MIRROR (retrieval URI)
 ```
 
-Because Ethereum cannot natively query "all DATAs placed at this Anchor by this attester" without an index, EFS uses two coordinated contracts:
-- **EFSIndexer** — indexes Anchors (directory tree), PROPERTYs, and MIRRORs via resolver hooks
-- **TagResolver** — indexes TAG-based file placement via its `_activeByAAS` compact index
+Because Ethereum cannot natively query "the active DATA placed at this Anchor by this attester" without an index, EFS uses two coordinated resolver contracts:
+- **EFSIndexer** — indexes Anchors (directory tree), DATAs, PROPERTYs, and MIRRORs via resolver hooks
+- **EdgeResolver** — indexes both PIN and TAG schemas (one shared contract per ADR-0041); maintains the per-slot active sets and the shared edge-discovery indices
 
 ## Contract Indexing Approach
 To make fast directory browsing possible, two resolver contracts maintain complementary indices:
@@ -25,12 +25,18 @@ To make fast directory browsing possible, two resolver contracts maintain comple
 2. When a standalone DATA is created (`refUID = 0x0`), the indexer records content-addressed deduplication via `dataByContentKey[contentHash]`.
 3. When a PROPERTY or MIRROR references a DATA, the indexer records it in referencing indices.
 
-**TagResolver** (resolver for TAG schema):
-1. When a TAG with `applies=true` places a DATA at an Anchor, the TagResolver adds the DATA UID to `_activeByAAS[definition][attester][schema]` — a compact, swap-and-pop array enabling efficient folder listing.
-2. When a TAG with `applies=false` removes a placement, the TagResolver swap-and-pops the DATA UID out of the array.
-3. The TagResolver also calls `indexer.propagateContains(definition, attester)` to flag the Anchor's ancestors in the tree, enabling "has content" checks for tree rendering.
+**EdgeResolver** (resolver for PIN and TAG schemas — ADR-0041):
+1. When a **PIN** is attested, EdgeResolver writes the active entry into `_activeBySlot[definition][attester][targetSchema]` (`SlotEntry { pinUID, targetID }`). A new PIN at the same slot but a different target supersedes the prior one in O(1) — the prior entry's `_activeEdge` row is cleared and counters are decremented.
+2. When a **TAG** is attested, EdgeResolver appends the entry to `_activeByAAS[definition][attester][targetSchema]` as a `TagEntry { tagUID, weight }` and records its position in `_activeByAASIndex` for O(1) swap-and-pop. Re-attesting the same `(attester, target, definition)` edge updates the existing entry's UID and weight in place.
+3. Both PIN and TAG calls into `indexer.propagateContains(definition, attester)` when the definition is a structural Anchor — this flags ancestors in the tree, enabling "has content" checks for tree rendering.
+4. EdgeResolver maintains schema-blind discovery indices shared across PIN and TAG: `_edgeDefinitions[targetID]`, `_targetsByDef[definition]`, `_childrenWithEdge[parentUID][definition]`. Aggregate counters (`_activeCount[targetDefHash]`, `_activeTotalByDefAndAttester[def][attester]`) sum across both schemas naturally.
 
-This allows a client to query `getActiveTargetsByAttesterAndSchema(anchorUID, attester, DATA_SCHEMA_UID, start, length)` to get a compact, active-only list of DATAs at any path.
+The bookkeeping is **schema-aware**: `_edgeHash(attester, targetID, definition, schema)` includes the schema UID, so a PIN and a TAG at the same `(attester, target, definition)` triple occupy independent slots in `_activeEdge` and cannot corrupt each other's state. Aggregate counts use a schema-blind `_targetDefHash(targetID, definition)` and compose correctly because each schema's `wasActive` check is isolated.
+
+Smart-contract readers split by cardinality:
+
+- **PIN** (Shape A — singular): `getActivePin(definition, attester, targetSchema) → bytes32 pinUID` and `getActivePinTarget(...) → bytes32 targetID`. O(1).
+- **TAG** (Shape B — list): `getActiveTagEntries(definition, attester, schema, start, length) → TagEntry[]` for full `(uid, weight)` tuples in one bulk SLOAD; `getActiveTags(...)` drops weights when not needed.
 
 ### Gas Limits, Spam, and Append-Only Storage
 Because EAS is permissionless, anyone can attest files to a folder. To prevent Out-Of-Gas (OOG) errors:
@@ -68,15 +74,21 @@ To support subjective file resolution natively onchain, two coordinated index sy
 - **Schema + Attester Filtered Listings**: `getAnchorsBySchemaAndAddressList(parentUID, anchorSchema, attesters, startCursor, pageSize, reverseOrder, showRevoked)` intersects `_childrenBySchema[anchorSchema]` with `_containsAttestations` per attester. Use this when the caller wants a specific anchor type (e.g. `DATA_SCHEMA_UID` for file anchors, `SORT_INFO_SCHEMA_UID` for sort anchors) from a multi-attester directory without interleaving unrelated anchor types.
 - **Content-Addressed Dedup**: `dataByContentKey[contentHash]` maps content hashes to the first (canonical) DATA UID.
 
-### TagResolver: File Placement (Compact Index)
-- **`_activeByAAS[definition][attester][schema]`**: Compact swap-and-pop array of active targets per `(definition, attester, schema)`. **The `definition` is the Anchor where content is placed — for a file like `/memes/cat.jpg`, the definition is `cat.jpg`'s Anchor, NOT the `/memes/` Anchor.** When `applies=true`, the target is pushed; when `applies=false`, it's swap-and-popped out. This gives O(1) add/remove and contiguous reads — no revoked-item scanning needed.
-- **`_activeByAASIndex[definition][attester][schema][target]`**: Position+1 index for O(1) swap-and-pop removal (0 = absent).
-- **Queried via**: `getActiveTargetsByAttesterAndSchema(definition, attester, schema, start, length)` and `getActiveTargetsByAttesterAndSchemaCount(definition, attester, schema)`.
+### EdgeResolver: PIN and TAG storage (per-cardinality indices)
+
+**PIN — `_activeBySlot[definition][attester][targetSchema]` (`SlotEntry { pinUID, targetID }`)**: Single-slot storage. **The `definition` is the Anchor where content is placed — for a file like `/memes/cat.jpg`, the definition is `cat.jpg`'s Anchor, NOT the `/memes/` Anchor.** A new PIN at the same slot supersedes the prior one in O(1). Revoke clears the slot iff the held `pinUID` matches.
+
+- **Queried via**: `getActivePin(definition, attester, targetSchema)`, `getActivePinTarget(definition, attester, targetSchema)`, `getActivePinSlot(definition, attester, targetSchema)`.
+
+**TAG — `_activeByAAS[definition][attester][schema]` (`TagEntry[] { tagUID, weight }`)**: Compact append-and-swap-and-pop list of active edges per slot. Each entry is a struct of `(tagUID, weight)` so on-chain consumers can read the full list with weights in one bulk SLOAD per slot — avoiding the N+1 SLOAD pattern that would arise if weight lived in a side mapping. Re-attesting the same `(attester, target, definition)` edge updates the existing entry's UID and weight in place. Revoke swap-and-pops the entry.
+
+- **`_activeByAASIndex[definition][attester][schema][edgeHash]`**: Position+1 index for O(1) swap-and-pop removal (0 = absent). `edgeHash` is the schema-aware `keccak256(attester, targetID, definition, TAG_SCHEMA_UID)` so PIN re-attestations cannot collide with TAG entries.
+- **Queried via**: `getActiveTagEntries(definition, attester, schema, start, length)` for `(uid, weight)` tuples; `getActiveTags(...)` for UID-only convenience; `getActiveTagsCount(...)` for length.
 
 **Do not use raw `_activeByAAS` queries for folder listing.** The index is keyed per file anchor, not per folder. Listing the files inside `/memes/` requires iterating the folder's child anchors. Use `EFSFileView` (next section) — it handles the iteration, pagination, edition merge, and revocation filtering for you.
 
 ### EFSFileView: High-level directory views
-EFSFileView is the read-side wrapper most client code should call rather than composing EFSIndexer + TagResolver queries by hand. Three variants:
+EFSFileView is the read-side wrapper most client code should call rather than composing EFSIndexer + EdgeResolver queries by hand. Three variants:
 
 - `getDirectoryPage(parent, start, length, dataSchemaUID, propertySchemaUID)` — all children, insertion order.
 - `getDirectoryPageByAddressList(parent, attesters, startingCursor, pageSize)` — attester-filtered directory listing.
@@ -84,25 +96,25 @@ EFSFileView is the read-side wrapper most client code should call rather than co
 
 Use `getDirectoryPageBySchemaAndAddressList(folderUID, DATA_SCHEMA_UID, [alice, bob], 0, 50)` to list files in `/memes/` from Alice and Bob's editions. EFSFileView also exposes `getFilesAtPath(fileAnchorUID, attesters, schema, start, length)` for the narrower case of "what DATA attestations are on this specific anchor" — callers pass a file anchor, not a folder.
 
-**Subfolder visibility in edition listings is tag-only** (ADR-0006 revised 2026-04-18). `getDirectoryPageBySchemaAndAddressList` returns generic subfolders iff at least one edition attester has an active applies=true `TAG(definition=anchorSchema, refUID=folder)`. There is no write-time folder-qualifying index. The upload flow (client side) walks the ancestor chain from the immediate parent up to root exclusive and emits a visibility TAG at every generic ancestor the attester hasn't already claimed; this keeps every folder on the path to an uploaded file visible in the uploader's edition. `_containsAttestations` is still populated (used below for file-anchor child filtering), but is no longer consulted for folder visibility.
+**Subfolder visibility in edition listings is tag-only** (ADR-0038, revised by ADR-0041). `getDirectoryPageBySchemaAndAddressList` returns generic subfolders iff at least one edition attester has an active `TAG(definition=anchorSchema, refUID=folder)`. There is no write-time folder-qualifying index. The upload flow (client side) walks the ancestor chain from the immediate parent up to root exclusive and emits a visibility TAG at every generic ancestor the attester hasn't already claimed; this keeps every folder on the path to an uploaded file visible in the uploader's edition. `_containsAttestations` is still populated (used below for file-anchor child filtering), but is no longer consulted for folder visibility.
 
 ### `propagateContains` (Tree Visibility)
-When a TAG with `applies=true` places a DATA at a structural Anchor, the TagResolver calls `indexer.propagateContains(definition, attester)`. This walks up the `_parents` chain from the definition Anchor, setting `_containsAttestations[ancestor][attester] = true` at each level. Early-exit on already-flagged ancestors makes repeated contributions amortized O(1). This enables the sidebar tree to show which folders contain content from a given attester without scanning their children.
+When a PIN or TAG places content at a structural Anchor, EdgeResolver calls `indexer.propagateContains(definition, attester)`. This walks up the `_parents` chain from the definition Anchor, setting `_containsAttestations[ancestor][attester] = true` at each level. Early-exit on already-flagged ancestors makes repeated contributions amortized O(1). This enables the sidebar tree to show which folders contain content from a given attester without scanning their children.
 
 `MAX_ANCHOR_DEPTH = 32` caps the upward walk to prevent gas griefing via deeply nested Anchor chains.
 
 ### `clearContains` (partial de-propagation)
-When the last active item placed at a definition Anchor by an attester is removed (TAG with `applies=false`, or revocation), TagResolver calls `indexer.clearContains(definition, attester)`. This clears the **immediate folder's** `_containsAttestations` flag only — ancestor flags remain sticky (see ADR-0010). The immediate-folder clear is sufficient because `getDirectoryPageByAddressList` checks the direct child's flag; leaving ancestors flagged is conservative (a folder might stop appearing empty) and avoids the gas cost of reference-counted de-propagation.
+When the last active edge placed at a definition Anchor by an attester is removed (revocation, or PIN supersede that empties the slot), EdgeResolver calls `indexer.clearContains(definition, attester)`. This clears the **immediate folder's** `_containsAttestations` flag only — ancestor flags remain sticky (see ADR-0010). The immediate-folder clear is sufficient because `getDirectoryPageByAddressList` checks the direct child's flag; leaving ancestors flagged is conservative (a folder might stop appearing empty) and avoids the gas cost of reference-counted de-propagation.
 
 ### `_childrenByAttester` and `_containsAttestations` Propagation Behaviour
 `_containsAttestations[anchorUID][attester]` is flagged when an attester contributes content under that anchor. Two paths trigger propagation:
 
 1. **Anchor creation**: When an attester creates an Anchor under a parent, the indexer walks up `_parents` flagging `_containsAttestations` and pushing to `_childrenByAttester` at each ancestor.
-2. **TAG-based file placement**: When the TagResolver processes a TAG with `applies=true` where the definition is a structural Anchor, it calls `indexer.propagateContains(definition, attester)` which performs the same upward walk.
+2. **Edge-based placement (PIN or TAG)**: When EdgeResolver processes an edge whose definition is a structural Anchor, it calls `indexer.propagateContains(definition, attester)` which performs the same upward walk.
 
 In practice this means:
 - Alice creates `apple.mp3` (Anchor) under `/music/`. `_childrenByAttester[musicUID][alice]` gets `apple.mp3`. Direct anchor creation.
-- Bob tags a DATA into Alice’s `apple.mp3` Anchor. TagResolver calls `propagateContains(apple.mp3, bob)` → `_containsAttestations[musicUID][bob]` is set and `apple.mp3` is pushed to `_childrenByAttester[musicUID][bob]`.
+- Bob PINs a DATA into Alice's `apple.mp3` Anchor. EdgeResolver calls `propagateContains(apple.mp3, bob)` → `_containsAttestations[musicUID][bob]` is set and `apple.mp3` is pushed to `_childrenByAttester[musicUID][bob]`.
 
 **UI implication**: `getChildrenByAddressList(musicUID, [alice, bob])` walks the global `_children` array and O(1)-checks `_containsAttestations`. Both alice’s and bob’s contributions appear without duplicates.
 
@@ -112,72 +124,109 @@ When a web client needs to load a directory:
 2. For each name returned, the client receives the associated resolved state (the newest/most valid Data or Property attestation).
 3. Under the hood, this requires indexing based on the *schema type* and the *attester's address*, as the active state of a directory is a subjective compilation based on a specific user's web of trust or explicit edition request.
 
-## Tag Indexing via EFSTagResolver
-Tag attestations are handled by a dedicated `EFSTagResolver` contract (separate from the `EFSIndexer`). The Tag schema is registered in EAS with the `EFSTagResolver` as its resolver.
+## Edge Indexing via EdgeResolver
 
-### Singleton Tagging Pattern
-The `EFSTagResolver` enforces that only one active tag exists per `(attester, target, definition)` triple. It maintains an internal mapping:
+Edge attestations (PIN and TAG) are handled by a single `EdgeResolver` contract — distinct from `EFSIndexer`. Both schemas register `EdgeResolver` as their resolver. ADR-0041 explains why one shared resolver implements two cardinality regimes rather than two separate contracts.
+
+### Schema-Aware Active-Edge Map
+EdgeResolver maintains a single active-edge map keyed by a **schema-aware** hash:
+
 ```
-mapping(bytes32 compositeHash => bytes32 activeUID) _activeTag
+mapping(bytes32 edgeHash => bytes32 activeUID) _activeEdge
+edgeHash = keccak256(abi.encodePacked(attester, targetID, definition, schema))
 ```
-where `compositeHash = keccak256(abi.encodePacked(attester, targetID, definition))`.
 
-When a user applies a tag that matches an existing combination, the resolver overwrites the mapping pointer to the new attestation UID. The old attestation remains on-chain but is logically superseded. This "logical superseding" approach avoids reentrancy issues that would arise from calling `eas.revoke()` inside a resolver hook (EAS requires `msg.sender == attester` for revocation, which the resolver cannot satisfy).
+The `schema` term keeps PIN and TAG entries at the same `(attester, target, definition)` triple in independent slots — they cannot corrupt each other. Aggregate counters that intentionally sum across schemas (`_activeCount`, `_activeTotalByDefAndAttester`) use a schema-blind `_targetDefHash(targetID, definition)` and compose correctly because each schema's `wasActive` check is isolated.
 
-### Tag Definition Storage
-Tag definitions are stored as normal Anchors under a reserved `/tags/` folder in the filesystem tree. This folder is created at deploy time as a child of the root Anchor. The UI hides `/tags/` from directory listings and the sidebar tree, but the definitions are discoverable via `resolvePath(tagsAnchorUID, "tagName")`. This approach keeps all anchors uniform (no special schema markers) while giving tags a dedicated namespace.
+### PIN: Per-Slot Singleton
+For PIN attestations, EdgeResolver writes `_activeBySlot[definition][attester][targetSchema]` as a `SlotEntry { pinUID, targetID }`. A new PIN at the same slot but a different target supersedes the prior PIN in O(1): the prior `edgeHash` row is cleared from `_activeEdge`, counters are decremented, and the slot updates atomically. There is no "logical supersede" delay or special revoke handling — re-attestation *is* the supersede.
 
-### Discovery Indices
-The resolver maintains append-only discovery indices:
-- **Definitions by Target**: Which tag definitions have ever been applied to a given target (`_tagDefinitions[targetID]`).
-- **Targets by Definition**: Which targets have ever been tagged with a given definition (`_taggedTargets[definition]`).
+EAS revoke of a PIN clears the slot iff the held `pinUID` matches; revoking a stale (already-superseded) PIN is a no-op.
 
-These indices only grow; revoked or negated tags are **not** removed from them. Consumers must cross-reference `getActiveTagUID` to determine whether a discovered entry is still active.
+### TAG: Per-Slot List with Inline Weights
+For TAG attestations, EdgeResolver appends to `_activeByAAS[definition][attester][targetSchema]` a `TagEntry { tagUID, weight }`. The struct-of-tuple shape is load-bearing per ADR-0041: it lets on-chain consumers read `(uid, weight)` tuples in one bulk SLOAD per slot, avoiding the N+1 SLOAD pattern that would arise if weight lived in a side mapping. Re-attesting the same `edgeHash` (same `(attester, target, definition)`) updates the entry's UID and weight in place. EAS revoke swap-and-pops the entry.
+
+`_activeByAASIndex[definition][attester][schema][edgeHash] → uint256 (index+1, 0 = absent)` enables O(1) swap-and-pop. The schema-aware `edgeHash` ensures TAG removals never touch PIN bookkeeping.
+
+### Shared Discovery Indices
+EdgeResolver maintains append-only discovery indices that are **schema-blind** — both PIN and TAG contribute:
+- **Definitions by Target**: which definitions have ever been attested against a target (`_edgeDefinitions[targetID]`).
+- **Targets by Definition**: which targets have ever been attested under a definition (`_targetsByDef[definition]`).
+- **Children with Edge by Parent**: child anchors with an active edge under a definition, scoped by parent (`_childrenWithEdge[parentUID][definition]`).
+
+These indices only grow; revoked entries are **not** removed. Consumers cross-reference active-state queries (e.g. `isActiveEdgeAnySchema`) to filter out stale entries.
+
+### Definition Storage for Descriptive TAG Labels
+Descriptive label definitions (e.g. `#nsfw`) are stored as normal Anchors under a reserved `/tags/` folder, created at deploy time. The UI hides `/tags/` from standard browsing while keeping definitions discoverable via `resolvePath(tagsAnchorUID, "tagName")`. Folder-visibility TAGs use a schema UID (e.g. `DATA_SCHEMA_UID`) directly as the definition — no `/tags/` anchor required.
 
 ### EFSIndexer Integration
-`TagResolver` is wired to EFSIndexer: `onAttest` calls `indexer.index(uid)` and `onRevoke` calls `indexer.indexRevocation(uid)`. This means TAG attestations are fully registered in EFSIndexer's generic discovery indices alongside all other schemas:
+EdgeResolver is wired to EFSIndexer: `onAttest` calls `indexer.index(uid)` and `onRevoke` calls `indexer.indexRevocation(uid)`. PIN and TAG attestations are fully registered in EFSIndexer's generic discovery indices alongside other schemas:
 
 ```
+indexer.getReferencingAttestations(targetUID, PIN_SCHEMA_UID, 0, 100, false)
+  → all PIN attestations targeting a given anchor or address
 indexer.getReferencingAttestations(targetUID, TAG_SCHEMA_UID, 0, 100, false)
   → all TAG attestations targeting a given anchor or address
-
-indexer.getOutgoingAttestations(attester, TAG_SCHEMA_UID, 0, 100, false)
-  → all TAG attestations made by a specific user
+indexer.getOutgoingAttestations(attester, PIN_SCHEMA_UID, 0, 100, false)
+  → all PINs made by a specific user
 ```
 
-**Schema-aware queries are the correct pattern**: Because tags now share the EFSIndexer discovery layer with other schemas, callers must specify `schemaUID` when they want schema-specific results. A call for file Anchors in a directory should pass `DATA_SCHEMA_UID`; a call for tags on a target should pass `TAG_SCHEMA_UID`. Mixing schemas in a single query is intentional only when building a generic history view.
+**Schema-aware queries are the correct pattern**: callers must specify the schema UID for schema-specific results. Mixing PIN and TAG in a generic query is intentional only when building a unified history view.
 
 ### On-Chain Query Functions
-- `getActiveTagUID(attester, targetID, definition)` — Returns the active tag attestation UID for a specific triple. Returns zero if no active tag exists (never set, revoked, or the active attestation was for a different triple).
-- `isActivelyTagged(targetID, definition)` — Returns true if any attester has an active `applies=true` tag for this (target, definition) pair.
-- `isActivelyTaggedByAny(targetID, definition, attesters[])` — Returns true if any of the given attesters has an active `applies=true` tag.
-- `getTagDefinitionCount(targetID)` — Number of distinct definitions ever applied to a target.
-- `getTagDefinitions(targetID, start, length)` — Paginated list of definitions applied to a target.
-- `getTaggedTargetCount(definition)` — Number of distinct targets ever tagged with a definition.
-- `getTaggedTargets(definition, start, length)` — Paginated list of targets tagged with a definition.
-- **`getActiveTargetsByAttesterAndSchema(definition, attester, schema, start, length)`** — Paginated list of active target UIDs from the compact `_activeByAAS` index. **This is the primary folder listing query** — returns only currently-placed items, no revoked-item scanning needed.
-- **`getActiveTargetsByAttesterAndSchemaCount(definition, attester, schema)`** — Count of active targets in the compact index.
+**Schema-blind aggregate (PIN ∪ TAG):**
+- `hasActiveEdge(targetID, definition)` — Returns true if any attester has any active edge (PIN or TAG) on the pair. O(1) via `_activeCount`.
+- `hasActiveEdgeFromAny(targetID, definition, attesters[])` — Edition-scoped: true iff any of `attesters` has an active edge (PIN or TAG). Two SLOADs per attester.
+- `isActiveEdgeAnySchema(attester, targetID, definition)` — True iff a specific attester has an active edge of either kind. Two SLOADs.
+- `getEdgeDefinitions(targetID, start, length)` and `getEdgeDefinitionCount(targetID)` — Paginated discovery: which definitions have been attested against the target.
+- `getTargetsByDefinition(definition, start, length)` and `getTargetsByDefinitionCount(definition)` — Paginated discovery: which targets have been attested under the definition.
+- `getChildrenWithEdge(parentUID, definition, start, length)` and `getChildrenWithEdgeCount(parentUID, definition)` — Paginated discovery: child anchors with an active edge under a definition, scoped by parent.
 
-### Edition-Aware Tag Filtering
-When filtering a directory listing by tags, the client must account for editions. Tags target specific DATA UIDs, not the shared Anchor UID. The filtering algorithm is:
+**Schema-specific (caller picks the cardinality they want):**
+- `isActiveEdge(attester, targetID, definition, schema)` — Boolean for one specific schema.
+- `getActiveEdgeUID(attester, targetID, definition, schema)` — Active UID for one specific schema (zero if none).
 
-1. **Resolve the tag definition**: `resolvePath(tagsAnchorUID, tagName)` returns the definition Anchor UID. Tag definitions can be nested (e.g., `/tags/nsfw/orgy/`); the UI walks `refUID` up from a definition to check if it's a descendant of `/tags/`.
-2. **Fetch tagged targets**: `getTaggedTargets(definitionUID, 0, count)` returns all DATA UIDs ever tagged with this definition.
-3. **Build a DATA UID map for the directory**: For each file item, resolve its DATA UIDs via `getActiveTargetsByAttesterAndSchema(anchorUID, attester, DATA_SCHEMA_UID, 0, count)` for each attester in the editions list.
-4. **Match**: If **any** of the file's DATA UIDs appears in the tagged targets set, the item matches the filter.
+**PIN readers (Shape A — singular):**
+- `getActivePin(definition, attester, targetSchema) → bytes32 pinUID` — O(1) read of the active PIN UID.
+- `getActivePinTarget(definition, attester, targetSchema) → bytes32 targetID` — O(1) read of the active PIN's target. **Primary read for Shape A consumers** (file placement, PROPERTY value binding, contentType).
+- `getActivePinSlot(definition, attester, targetSchema) → SlotEntry` — both fields in one return.
 
-This ensures that tagging User A's edition of `test.txt` as "nsfw" does not cause User B's edition to appear when filtering by "nsfw".
+**TAG readers (Shape B — list):**
+- `getActiveTagEntries(definition, attester, schema, start, length) → TagEntry[]` — Primary list reader. Returns `(tagUID, weight)` tuples in one bulk SLOAD per slot — sortable by weight without an N+1 SLOAD pattern.
+- `getActiveTags(definition, attester, schema, start, length) → bytes32[]` — Convenience: drops weights, returns UIDs only.
+- `getActiveTargetsByAttesterAndSchema(definition, attester, schema, start, length) → bytes32[]` — Resolves entries back to their target IDs (one EAS read per entry; prefer `getActiveTagEntries` when you also need the weight).
+- `getActiveTagsCount(definition, attester, schema)` — Count of active TAG entries in the slot.
+
+### Edition-Aware Label Filtering
+When filtering a directory listing by descriptive TAG labels, the client uses direct per-attester reads — not a global definition scan. Labels target specific DATA UIDs (for file items) or Anchor UIDs (for folder items), not the shared Anchor UID of the file slot.
+
+**Terminology (ADR-0041 + ADR-0042):**
+- **Active TAG** (kernel): an unrevoked TAG edge. Weight is opaque kernel metadata — does not affect activity.
+- **Effective TAG** (client convention, ADR-0042): an active TAG with `weight >= 0`. Applied only in the explorer's include/exclude filter (`FileBrowser.resolveTagSet`). Tags with `weight < 0` remain kernel-active but are excluded from the filter set. Do not call `weight < 0` tags "inactive" in shared code.
+
+**Algorithm (`resolveTagSet(tagName)` in `FileBrowser`):**
+
+1. **Resolve the tag definition**: `resolvePath(tagsAnchorUID, tagName)` → `definitionUID`. Definitions can be nested (e.g. `/tags/nsfw/language/`).
+2. **Iterate per attester, per target schema**: For each `targetSchema` in `[DATA_SCHEMA_UID, ANCHOR_SCHEMA_UID]` and each attester in the editions list:
+   a. `getActiveTagsCount(definitionUID, attester, targetSchema)` — skip bucket if count is 0.
+   b. Paginate (500-entry pages) with two parallel reads: `getActiveTagEntries(...)` → `(tagUID, weight)` tuples; `getActiveTargetsByAttesterAndSchema(...)` → resolved target IDs.
+   c. Iterate to `min(entries.length, targets.length)` (guards against a revocation landing between the two RPC calls). For each pair: if `weight >= 0`, add `targetID` to the effective-targets set.
+3. **Match against directory items**: a directory item matches the filter if its DATA UID (file items) or Anchor UID (folder items) is in the effective-targets set returned by step 2.
+
+This approach reads directly from the per-attester active-TAG buckets (`_activeByAAS[definition][attester][schema]`). It does **not** use `getTargetsByDefinition` for filtering — that function returns an append-only list of ever-attested targets including revoked ones and is only appropriate for discovery/history views.
+
+**Edition isolation**: tagging User A's edition of `test.txt` as "nsfw" (stores the tag under User A's attester key) does not cause User B's DATA UID for the same file to match the filter — each attester's active-TAG bucket is independent.
 
 ### Edge Cases and Caveats
-- **Append-only discovery**: `getTaggedTargets` returns UIDs that were ever tagged, including revoked ones. A strict filter should additionally verify each candidate via `getActiveTagUID` or by checking the `applies` field of the active attestation.
-- **Updated DATA (new uploads)**: When a user uploads a new version, they TAG the new DATA at the path (`applies=true`) and TAG the old DATA (`applies=false`). Tags (labels like "nsfw") on the old DATA UID do not carry over to the new version. Users must re-tag after uploading a new version.
-- **Cross-user tagging**: User B can tag User A's DATA UID. The tag is stored under `(userB, dataA_UID, definition)` and `dataA_UID` appears in `getTaggedTargets`. When viewing User A's edition, the filter matches regardless of who applied the tag.
-- **Folder-level tags**: Tags on Anchor UIDs (folders) are checked directly against the anchor UID without DATA indirection.
+- **Updated DATA (new uploads)**: When a user uploads a new version, they PIN the new DATA at the file Anchor — the prior PIN supersedes automatically. Descriptive labels (TAGs) on the old DATA UID do not carry over to the new DATA UID; users must re-tag after a new upload.
+- **Cross-user tagging**: User B can TAG User A's DATA UID directly. The tag lives in User B's bucket under `_activeByAAS[definition][userB][DATA_SCHEMA_UID]`. When the filter iterates User B's editions, User A's DATA UID will appear in the effective-target set. This is intentional: cross-user curation is supported by design.
+- **Folder-level tags**: TAGs on Anchor UIDs use `ANCHOR_SCHEMA_UID` as the target schema bucket, checked in the same loop alongside `DATA_SCHEMA_UID`. No DATA indirection.
+- **Non-atomic RPC reads**: `getActiveTagEntries` and `getActiveTargetsByAttesterAndSchema` are two independent RPC calls. A revocation between them can return arrays of different lengths. The `min(entries.length, targets.length)` bound guards against an out-of-bounds read; the mismatched entry would have been stale anyway.
 
 ### Off-Chain Indexer API Patterns
 For a responsive web UI, off-chain indexers should expose these additional query patterns:
-1. **Attestations by Tag and Schema**: `getAttestationsByTag(definitionUID, targetSchemaUID, applies, cursor)` — Paginated list of items with a specific tag, filtered by the target's schema type.
-2. **Addresses by Tag**: `getAddressesByTag(definitionUID, applies, cursor)` — Paginated list of user addresses (from the `recipient` field) possessing a specific tag.
+1. **Attestations by Tag and Schema**: `getAttestationsByTag(definitionUID, targetSchemaUID, cursor)` — Paginated list of items with a specific tag, filtered by the target's schema type.
+2. **Addresses by Tag**: `getAddressesByTag(definitionUID, cursor)` — Paginated list of user addresses (from the `recipient` field) possessing a specific tag.
 3. **Tags for Target**: `getTagsForTarget(targetID)` — All active tags applied to a specific file, folder, or address.
 4. **Boolean State Check**: `checkIfTargetHasTag(targetID, definitionUID)` — Optimized boolean check for tag membership.
 
@@ -241,8 +290,8 @@ EFSIndexer exposes a permissionless indexing API for any EAS attestation whose s
 onAttest → indexer.index(attestation.uid)           // makes SORT_INFO discoverable
 onRevoke → indexer.indexRevocation(attestation.uid) // syncs revocation state
 
-// TagResolver
-onAttest → indexer.index(attestation.uid)           // makes TAG attestations discoverable
+// EdgeResolver (handles both PIN and TAG schemas — ADR-0041)
+onAttest → indexer.index(attestation.uid)           // makes PIN/TAG attestations discoverable
 onRevoke → indexer.indexRevocation(attestation.uid) // syncs revocation state
 
 // MirrorResolver

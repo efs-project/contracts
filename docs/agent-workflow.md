@@ -93,6 +93,15 @@ Vendor emails: `noreply@anthropic.com`, `noreply@openai.com`, `noreply@google.co
 
 For review passes, use `gh pr review` (creates a real Review object, participates in the request-changes flow), not `gh pr comment` (inline discussion only).
 
+Before posting review feedback, read:
+1. The PR description, including the `Agents involved` field.
+2. The governing specs / ADRs for the area being reviewed.
+3. Existing agent-authored review comments, so you don't duplicate or contradict them blindly.
+
+Do **not** leave placeholder comments, probe comments, "testing inline anchor"
+comments, or praise-only shared-account reviews. If you're checking whether an
+anchor works, do it locally and post only the final finding.
+
 - General review: `gh pr review <N> --comment --body "..."`
 - Approve: `gh pr review <N> --approve --body "..."`
 - Request changes: `gh pr review <N> --request-changes --body "..."`
@@ -104,6 +113,23 @@ gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: "THREA
 ```
 
 Find thread IDs: `gh api graphql -f query='query { repository(owner:"OWNER",name:"REPO") { pullRequest(number:N) { reviewThreads(first:50) { nodes { id isResolved comments(first:1) { nodes { body } } } } } } }'`. If the mutation fails, reply inline with `fixed in <sha>` and move on — don't block on tooling friction.
+
+If your tooling cannot create native review threads cleanly, do **not** fall
+back to spraying top-level PR comments. Instead, return one paste-ready review
+comment with file/line findings to the human or coordinating agent and let them
+post it through the proper path.
+
+### Review-thread response loop
+
+When the dev agent is addressing review comments, every unresolved thread must be classified into one of three buckets:
+
+- **Fixed now** — implement the change, reply inline with `[<model-name> · dev]` and `fixed in <sha>` plus a one-paragraph summary, then resolve the thread.
+- **Pushback / needs decision** — reply inline with `[<model-name> · dev]`, explain the technical disagreement or tradeoff, and **leave the thread unresolved** until the reviewer or human agrees.
+- **Future work / accepted defer** — reply inline with `[<model-name> · dev]`, link the durable follow-up (`docs/FUTURE_WORK.md`, `docs/QUESTIONS.md`, issue, ADR, or decision record), and resolve the thread **only if** the finding is explicitly non-blocking / Tier-3 / future work. If the status is ambiguous, leave it unresolved for the human.
+
+Do not silently ignore comments that are out of diff scope, inconvenient, or not worth fixing. Every unresolved thread gets either a fix, a pushback reply, or a defer reply.
+
+When posting agent-authored follow-up replies, prefer the native GitHub review thread. On Codex/GitHub-connector flows, `_list_pull_request_review_threads` + `_reply_to_review_comment` + `_resolve_review_thread` is the cleanest path; on CLI-only flows, use `gh api graphql` as above.
 
 **Agent reviews are advisory, not governance.** When an agent posts `gh pr review --approve` from the human's GitHub account, that's discussion structure, not real sign-off — the human literally holds the only account that can approve, so self-approval isn't separation of duties. Merge decisions require an explicit acknowledgement from the human (in chat, or as a direct PR comment without a `[model · role]` prefix). Treat an agent's `--approve` as *"I'm satisfied; waiting on human to land."*
 

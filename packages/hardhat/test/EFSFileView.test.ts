@@ -1,15 +1,29 @@
 import { expect } from "chai";
 import { ethers } from "hardhat";
-import { EFSIndexer, EFSFileView, EAS, SchemaRegistry, TagResolver } from "../typechain-types";
+import { EFSIndexer, EFSFileView, EdgeResolver, EAS, SchemaRegistry } from "../typechain-types";
 import { Signer, ZeroAddress } from "ethers";
 
 const ZERO_BYTES32 = "0x0000000000000000000000000000000000000000000000000000000000000000";
 const NO_EXPIRATION = 0n;
+const DEFAULT_TAG_WEIGHT = 1n;
 
+/**
+ * EFSFileView — directory-listing tests under the ADR-0041 PIN/TAG model.
+ *
+ * Folder visibility is TAG-based (cardinality N): each attester emits
+ * `TAG(definition=dataSchemaUID, refUID=folder)` to claim a folder in their
+ * edition. A TAG is active iff it exists and is not EAS-revoked; weight is
+ * opaque metadata the kernel does not interpret (ADR-0041 §4).
+ *
+ * File placement is PIN-based (cardinality 1) — each filename-anchor slot
+ * holds one PIN per attester, but the file-listing tests below mostly
+ * exercise the *folder* listing path (Phase 0) and the cross-attester dedup
+ * inside `getFilesAtPath`.
+ */
 describe("EFSFileView", function () {
   let indexer: EFSIndexer;
   let fileView: EFSFileView;
-  let tagResolver: TagResolver;
+  let edgeResolver: EdgeResolver;
   let eas: EAS;
   let registry: SchemaRegistry;
   let owner: Signer;
@@ -19,10 +33,20 @@ describe("EFSFileView", function () {
   let anchorSchemaUID: string;
   let dataSchemaUID: string;
   let propertySchemaUID: string;
+  let pinSchemaUID: string;
   let tagSchemaUID: string;
+
+  // Per-test active-edge index: `${target}|${definition}|${attester}` → live attestation UID
+  // (used by `untag` / `unpin` helpers to revoke the live edge without bookkeeping
+  // sprinkled across each test).
+  let activePinIndex: Map<string, string>;
+  let activeTagIndex: Map<string, string>;
 
   beforeEach(async function () {
     [owner, alice, bob] = await ethers.getSigners();
+
+    activePinIndex = new Map();
+    activeTagIndex = new Map();
 
     const RegistryFactory = await ethers.getContractFactory("SchemaRegistry");
     registry = await RegistryFactory.deploy();
@@ -36,29 +60,33 @@ describe("EFSFileView", function () {
     const nonce = await ethers.provider.getTransactionCount(ownerAddr);
 
     // Deploy order:
-    //   nonce+0: TagResolver
-    //   nonce+1..4: Anchor, Property, Data, Blob schema registrations
-    //   nonce+5: TAG schema registration
-    //   nonce+6: Indexer
-    const futureTagResolverAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: nonce });
-    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: nonce + 6 });
+    //   nonce+0: EdgeResolver
+    //   nonce+1..5: Anchor, Property, Data, Blob, PIN, TAG schema registrations (5 total)
+    //   nonce+7: Indexer
+    const futureEdgeResolverAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: nonce });
+    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: nonce + 7 });
+    const precomputedPinSchemaUID = ethers.solidityPackedKeccak256(
+      ["string", "address", "bool"],
+      ["bytes32 definition", futureEdgeResolverAddr, true],
+    );
     const precomputedTagSchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
-      ["bytes32 definition, bool applies", futureTagResolverAddr, true],
+      ["bytes32 definition, int256 weight", futureEdgeResolverAddr, true],
     );
 
-    // Deploy TagResolver first
-    const TagResolverFactory = await ethers.getContractFactory("TagResolver");
-    tagResolver = await TagResolverFactory.deploy(
+    // Deploy EdgeResolver first
+    const EdgeResolverFactory = await ethers.getContractFactory("EdgeResolver");
+    edgeResolver = await EdgeResolverFactory.deploy(
       await eas.getAddress(),
+      precomputedPinSchemaUID,
       precomputedTagSchemaUID,
       futureIndexerAddr,
       await registry.getAddress(),
     );
-    await tagResolver.waitForDeployment();
+    await edgeResolver.waitForDeployment();
 
     // Register Schemas (aligned with canonical EFSIndexer and EFSRouter schemas)
-    const tx1 = await registry.register("string name, bytes32 schemaUID", futureIndexerAddr, true);
+    const tx1 = await registry.register("string name, bytes32 schemaUID", futureIndexerAddr, false);
     const rc1 = await tx1.wait();
     anchorSchemaUID = rc1!.logs[0].topics[1];
 
@@ -77,10 +105,15 @@ describe("EFSFileView", function () {
     const rc4 = await tx4.wait();
     const blobSchemaUID = rc4!.logs[0].topics[1];
 
-    // TAG schema
-    const tx5 = await registry.register("bytes32 definition, bool applies", futureTagResolverAddr, true);
+    // PIN schema
+    const tx5 = await registry.register("bytes32 definition", futureEdgeResolverAddr, true);
     const rc5 = await tx5.wait();
-    tagSchemaUID = rc5!.logs[0].topics[1];
+    pinSchemaUID = rc5!.logs[0].topics[1];
+
+    // TAG schema
+    const tx6 = await registry.register("bytes32 definition, int256 weight", futureEdgeResolverAddr, true);
+    const rc6 = await tx6.wait();
+    tagSchemaUID = rc6!.logs[0].topics[1];
 
     // Deploy Indexer
     const IndexerFactory = await ethers.getContractFactory("EFSIndexer");
@@ -95,18 +128,17 @@ describe("EFSFileView", function () {
 
     expect(await indexer.getAddress()).to.equal(futureIndexerAddr);
 
-    // Deploy FileView (with TagResolver)
+    // Deploy FileView (with EdgeResolver)
     const FileViewFactory = await ethers.getContractFactory("EFSFileView");
-    fileView = await FileViewFactory.deploy(await indexer.getAddress(), await tagResolver.getAddress());
+    fileView = await FileViewFactory.deploy(await indexer.getAddress(), await edgeResolver.getAddress());
     await fileView.waitForDeployment();
 
-    // Wire the indexer -> tagResolver link so TagResolver.onAttest can call
+    // Wire the indexer -> edgeResolver link so EdgeResolver.onAttest can call
     // indexer.propagateContains without reverting Unauthorized. The sort/mirror
-    // slots aren't exercised here, so passing zero addresses for them is fine
-    // (only the tagResolver + TAG_SCHEMA_UID + schemaRegistry fields are read
-    // on the file-view paths these tests cover).
+    // slots aren't exercised here, so passing zero addresses for them is fine.
     await indexer.wireContracts(
-      await tagResolver.getAddress(),
+      await edgeResolver.getAddress(),
+      pinSchemaUID,
       tagSchemaUID,
       ZeroAddress,
       ZERO_BYTES32,
@@ -114,6 +146,8 @@ describe("EFSFileView", function () {
       ZERO_BYTES32,
       await registry.getAddress(),
     );
+
+    void propertySchemaUID; // keep declared (used by callers in future expansions)
   });
 
   const getUIDFromReceipt = (receipt: any) => {
@@ -133,8 +167,13 @@ describe("EFSFileView", function () {
   const enc = new ethers.AbiCoder();
 
   /** Create an anchor under parentUID with the given name and schema type. */
-  const createAnchor = async (name: string, parentUID: string, schema: string): Promise<string> => {
-    const tx = await eas.attest({
+  const createAnchor = async (
+    name: string,
+    parentUID: string,
+    schema: string,
+    signer: Signer = owner,
+  ): Promise<string> => {
+    const tx = await eas.connect(signer).attest({
       schema: anchorSchemaUID,
       data: {
         recipient: ZeroAddress,
@@ -148,12 +187,16 @@ describe("EFSFileView", function () {
     return getUIDFromReceipt(await tx.wait());
   };
 
-  /** Create a TAG attestation (goes through TagResolver). */
+  /**
+   * Create a TAG attestation (cardinality N — folder visibility, descriptive labels).
+   * Default weight is 1. Activity is existence/revoke only — weight does NOT determine
+   * whether a TAG is active (ADR-0041 §4).
+   */
   const createTag = async (
     targetUID: string,
     definition: string,
-    applies: boolean,
     attester: Signer = owner,
+    weight: bigint = DEFAULT_TAG_WEIGHT,
   ): Promise<string> => {
     const tx = await eas.connect(attester).attest({
       schema: tagSchemaUID,
@@ -162,19 +205,66 @@ describe("EFSFileView", function () {
         expirationTime: NO_EXPIRATION,
         revocable: true,
         refUID: targetUID,
-        data: enc.encode(["bytes32", "bool"], [definition, applies]),
+        data: enc.encode(["bytes32", "int256"], [definition, weight]),
         value: 0n,
       },
     });
-    return getUIDFromReceipt(await tx.wait());
+    const uid = getUIDFromReceipt(await tx.wait());
+    activeTagIndex.set(`${targetUID}|${definition}|${await attester.getAddress()}`, uid);
+    return uid;
+  };
+
+  /** Revoke the live TAG for (target, def, attester). No-op if no active TAG. */
+  const untag = async (targetUID: string, definition: string, attester: Signer = owner): Promise<void> => {
+    const key = `${targetUID}|${definition}|${await attester.getAddress()}`;
+    const uid = activeTagIndex.get(key);
+    if (uid === undefined) return;
+    await eas.connect(attester).revoke({
+      schema: tagSchemaUID,
+      data: { uid, value: 0n },
+    });
+    activeTagIndex.delete(key);
+  };
+
+  /**
+   * Create a PIN attestation (cardinality 1 — file placement, PROPERTY value binding).
+   * Re-attesting at the same (def, attester, schema) slot supersedes prior PIN in O(1).
+   */
+  const createPin = async (targetUID: string, definition: string, attester: Signer = owner): Promise<string> => {
+    const tx = await eas.connect(attester).attest({
+      schema: pinSchemaUID,
+      data: {
+        recipient: ZeroAddress,
+        expirationTime: NO_EXPIRATION,
+        revocable: true,
+        refUID: targetUID,
+        data: enc.encode(["bytes32"], [definition]),
+        value: 0n,
+      },
+    });
+    const uid = getUIDFromReceipt(await tx.wait());
+    activePinIndex.set(`${targetUID}|${definition}|${await attester.getAddress()}`, uid);
+    return uid;
+  };
+
+  /** Revoke the live PIN for (target, def, attester). No-op if no active PIN. */
+  const unpin = async (targetUID: string, definition: string, attester: Signer = owner): Promise<void> => {
+    const key = `${targetUID}|${definition}|${await attester.getAddress()}`;
+    const uid = activePinIndex.get(key);
+    if (uid === undefined) return;
+    await eas.connect(attester).revoke({
+      schema: pinSchemaUID,
+      data: { uid, value: 0n },
+    });
+    activePinIndex.delete(key);
   };
 
   it("Folder visibility requires an explicit TAG — untagged folders with file-anchor children do NOT appear", async function () {
-    // Post-refactor (ADR-0006 revised 2026-04-18): folder visibility is tag-only. A folder
-    // does NOT appear in a schema-filtered listing just because it contains file-anchor
-    // children; the attester must emit a TAG(definition=dataSchemaUID, refUID=folder)
-    // to claim that folder in their edition. The client upload flow walks the ancestor
-    // chain and emits any missing visibility TAGs.
+    // Folder visibility is tag-only (ADR-0038, carried over to ADR-0041): a folder does NOT
+    // appear in a schema-filtered listing just because it contains file-anchor children;
+    // the attester must emit a TAG(definition=dataSchemaUID, refUID=folder) to claim that
+    // folder in their edition (weight is opaque; any existing non-revoked TAG counts). The client upload flow walks the ancestor chain
+    // and emits any missing visibility TAGs.
     const ownerAddr = await owner.getAddress();
 
     const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32);
@@ -195,15 +285,55 @@ describe("EFSFileView", function () {
     expect(items.length).to.equal(0);
   });
 
+  it("PIN(definition=dataSchemaUID, refUID=folder) does NOT make the folder visible (TAG-only, ADR-0038 regression)", async function () {
+    // ADR-0038: folder visibility is TAG-only — a PIN at the same (attester, definition, schema)
+    // slot must NOT substitute for a TAG. Pre-fix, `hasActiveEdgeFromAny` was schema-blind and
+    // would accept a PIN, making the folder appear spuriously. This test confirms the fix:
+    // `hasActiveTagFromAny` is used instead, so the PIN has zero effect on folder visibility.
+    const ownerAddr = await owner.getAddress();
+
+    const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32);
+    const folderUID = await createAnchor("pin-visible-folder", rootUID, ZERO_BYTES32);
+
+    // Attest a PIN with definition=dataSchemaUID targeting the folder.
+    // This is not how file placement is done in practice (placement PINs use a file-slot UID
+    // as definition), but an attacker or a misusing client could emit this. Pre-fix it would
+    // have been enough to surface the folder; post-fix it must not.
+    await createPin(folderUID, dataSchemaUID);
+
+    const { items } = await fileView.getDirectoryPageBySchemaAndAddressList(
+      rootUID,
+      dataSchemaUID,
+      [ownerAddr],
+      "0x",
+      10,
+    );
+
+    // The folder must NOT appear — only a TAG makes a folder visible.
+    expect(items.length).to.equal(0);
+
+    // Confirm that adding a TAG DOES make it appear (proves the check works, not that it's broken).
+    await createTag(folderUID, dataSchemaUID);
+    const { items: after } = await fileView.getDirectoryPageBySchemaAndAddressList(
+      rootUID,
+      dataSchemaUID,
+      [ownerAddr],
+      "0x",
+      10,
+    );
+    expect(after.length).to.equal(1);
+    expect(after[0].name).to.equal("pin-visible-folder");
+  });
+
   it("Empty folders appear when explicitly tagged with the schema UID", async function () {
-    // A folder is visible in an edition iff it has an active applies=true TAG with
-    // definition=dataSchemaUID by someone in the edition list.
+    // A folder is visible in an edition iff it has an active (existing, not revoked) TAG with
+    // definition=dataSchemaUID by someone in the edition list. Weight is not checked.
     const ownerAddr = await owner.getAddress();
 
     const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32);
 
     const emptyTaggedUID = await createAnchor("empty-tagged", rootUID, ZERO_BYTES32);
-    await createTag(emptyTaggedUID, dataSchemaUID, true);
+    await createTag(emptyTaggedUID, dataSchemaUID);
 
     await createAnchor("empty-untagged", rootUID, ZERO_BYTES32);
 
@@ -219,6 +349,41 @@ describe("EFSFileView", function () {
     expect(items[0].name).to.equal("empty-tagged");
   });
 
+  it("TAG activity is existence/revoke only — weight=0 and weight=-1 TAGs are still active (ADR-0041 §4 regression)", async function () {
+    // ADR-0041 §4 explicitly rejected the "negative weight = supersede" design.
+    // A TAG is active iff it exists and is not EAS-revoked. Weight is opaque metadata
+    // that the kernel stores but does not interpret. This test confirms that TAGs with
+    // zero and negative weights make folders visible, matching the implementation in
+    // EdgeResolver.hasActiveTagFromAny (checks _activeEdge != bytes32(0), not weight).
+    const ownerAddr = await owner.getAddress();
+
+    const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32);
+    const zeroWeightFolder = await createAnchor("zero-weight", rootUID, ZERO_BYTES32);
+    const negWeightFolder = await createAnchor("neg-weight", rootUID, ZERO_BYTES32);
+    const revokedFolder = await createAnchor("revoked", rootUID, ZERO_BYTES32);
+
+    // TAG with weight=0: still active under ADR-0041 §4.
+    await createTag(zeroWeightFolder, dataSchemaUID, owner, 0n);
+    // TAG with weight=-999: still active.
+    await createTag(negWeightFolder, dataSchemaUID, owner, -999n);
+    // TAG with weight=1 that gets revoked: must NOT appear.
+    await createTag(revokedFolder, dataSchemaUID, owner, 1n);
+    await untag(revokedFolder, dataSchemaUID, owner);
+
+    const { items } = await fileView.getDirectoryPageBySchemaAndAddressList(
+      rootUID,
+      dataSchemaUID,
+      [ownerAddr],
+      "0x",
+      10,
+    );
+
+    const names = items.map(i => i.name).sort();
+    expect(names).to.deep.equal(["neg-weight", "zero-weight"]);
+    // The revoked TAG must not appear.
+    expect(names).to.not.include("revoked");
+  });
+
   it("Ancestor-chain visibility: only folders explicitly tagged appear, regardless of nested contents", async function () {
     // root → /photos/ → /cats/ → cat.jpg (file anchor, with /photos/ and /cats/ explicitly tagged)
     // In the tag-only model the client walks the ancestor chain on upload and emits a
@@ -232,8 +397,8 @@ describe("EFSFileView", function () {
     await createAnchor("cat.jpg", catsUID, dataSchemaUID);
 
     // Simulate client ancestor-walk: tag every ancestor folder up to (but excluding) root.
-    await createTag(catsUID, dataSchemaUID, true);
-    await createTag(photosUID, dataSchemaUID, true);
+    await createTag(catsUID, dataSchemaUID);
+    await createTag(photosUID, dataSchemaUID);
 
     const { items: rootItems } = await fileView.getDirectoryPageBySchemaAndAddressList(
       rootUID,
@@ -265,7 +430,7 @@ describe("EFSFileView", function () {
     const photosUID = await createAnchor("photos", rootUID, ZERO_BYTES32); // NOT tagged
     const catsUID = await createAnchor("cats", photosUID, ZERO_BYTES32);
     await createAnchor("cat.jpg", catsUID, dataSchemaUID);
-    await createTag(catsUID, dataSchemaUID, true);
+    await createTag(catsUID, dataSchemaUID);
 
     const { items: rootItems } = await fileView.getDirectoryPageBySchemaAndAddressList(
       rootUID,
@@ -277,13 +442,15 @@ describe("EFSFileView", function () {
     expect(rootItems.length).to.equal(0);
   });
 
-  it("Should not return a tagged folder after its tag is set to applies=false", async function () {
+  it("Should not return a tagged folder after its visibility TAG is revoked", async function () {
+    // Under ADR-0041 there is no `applies=false` — removal is `eas.revoke()` on the active
+    // TAG attestation. The folder must disappear from the listing immediately.
     const ownerAddr = await owner.getAddress();
 
     const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32);
     const folderUID = await createAnchor("my-folder", rootUID, ZERO_BYTES32);
 
-    await createTag(folderUID, dataSchemaUID, true);
+    await createTag(folderUID, dataSchemaUID);
 
     const { items: before } = await fileView.getDirectoryPageBySchemaAndAddressList(
       rootUID,
@@ -295,7 +462,7 @@ describe("EFSFileView", function () {
     expect(before.length).to.equal(1);
     expect(before[0].name).to.equal("my-folder");
 
-    await createTag(folderUID, dataSchemaUID, false);
+    await untag(folderUID, dataSchemaUID);
 
     const { items: after } = await fileView.getDirectoryPageBySchemaAndAddressList(
       rootUID,
@@ -309,14 +476,14 @@ describe("EFSFileView", function () {
 
   it("Should not return a tagged folder after its tag is revoked via EAS multiRevoke", async function () {
     // Regression: the client-driven folder delete flow issues EAS multiRevoke on the
-    // visibility TAG rather than attesting applies=false. This must produce the same
-    // outcome — folder disappears from the edition listing.
+    // visibility TAG. This must produce the same outcome as a single-revoke — folder
+    // disappears from the edition listing.
     const ownerAddr = await owner.getAddress();
 
     const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32);
     const folderUID = await createAnchor("my-folder", rootUID, ZERO_BYTES32);
 
-    const visTagUID = await createTag(folderUID, dataSchemaUID, true);
+    const visTagUID = await createTag(folderUID, dataSchemaUID);
 
     const { items: before } = await fileView.getDirectoryPageBySchemaAndAddressList(
       rootUID,
@@ -340,9 +507,9 @@ describe("EFSFileView", function () {
   });
 
   it("Should return a folder once in a multi-attester listing even when both attesters tagged it", async function () {
-    // `_childrenTaggedWith` is keyed by (parent, definition) not (parent, definition, attester),
+    // `_childrenWithEdge` is keyed by (parent, definition) not (parent, definition, attester),
     // so a folder appears in the discovery list once regardless of how many attesters tagged it.
-    // `isActivelyTaggedByAny` short-circuits on the first match. Verify the folder is not double-counted.
+    // `hasActiveEdgeFromAny` short-circuits on the first match. Verify the folder is not double-counted.
     const aliceAddr = await alice.getAddress();
     const bobAddr = await bob.getAddress();
 
@@ -350,9 +517,9 @@ describe("EFSFileView", function () {
     const sharedFolder = await createAnchor("shared", rootUID, ZERO_BYTES32);
     const aliceOnlyFolder = await createAnchor("alice-only", rootUID, ZERO_BYTES32);
 
-    await createTag(sharedFolder, dataSchemaUID, true, alice);
-    await createTag(sharedFolder, dataSchemaUID, true, bob);
-    await createTag(aliceOnlyFolder, dataSchemaUID, true, alice);
+    await createTag(sharedFolder, dataSchemaUID, alice);
+    await createTag(sharedFolder, dataSchemaUID, bob);
+    await createTag(aliceOnlyFolder, dataSchemaUID, alice);
 
     const { items } = await fileView.getDirectoryPageBySchemaAndAddressList(
       rootUID,
@@ -378,9 +545,9 @@ describe("EFSFileView", function () {
     const folderA = await createAnchor("folder-a", rootUID, ZERO_BYTES32);
     const folderB = await createAnchor("folder-b", rootUID, ZERO_BYTES32);
     const folderC = await createAnchor("folder-c", rootUID, ZERO_BYTES32);
-    await createTag(folderA, dataSchemaUID, true);
-    await createTag(folderB, dataSchemaUID, true);
-    await createTag(folderC, dataSchemaUID, true);
+    await createTag(folderA, dataSchemaUID);
+    await createTag(folderB, dataSchemaUID);
+    await createTag(folderC, dataSchemaUID);
 
     // 4 content items
     await createAnchor("file-1.txt", rootUID, dataSchemaUID);
@@ -427,7 +594,7 @@ describe("EFSFileView", function () {
     const ownerAddr = await owner.getAddress();
     const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32);
     const folderUID = await createAnchor("folder", rootUID, ZERO_BYTES32);
-    await createTag(folderUID, dataSchemaUID, true);
+    await createTag(folderUID, dataSchemaUID);
 
     // 1. Completely garbage bytes (not a multiple of 32). Must NOT revert with a Panic;
     //    must start the walk fresh and return the one real folder.
@@ -451,66 +618,128 @@ describe("EFSFileView", function () {
     expect(p2.items.length).to.equal(1);
     expect(p2.items[0].name).to.equal("folder");
 
-    // 3. getFilesAtPath cursor is `(uint256, uint256)` — 64 bytes. Feeding wrong-length
-    //    garbage must not revert. We don't care what it returns (the view walks active
-    //    TAGs targeting `anchorUID`, and this test hasn't placed any). The point is that
-    //    the defensive decode fresh-starts instead of panicking on abi.decode.
+    // 3. getFilesAtPath cursor is `(uint256)` — 32 bytes. Feeding wrong-length
+    //    garbage must not revert. We don't care what it returns (the view walks PINs at
+    //    `anchorUID`, and this test hasn't placed any). The point is that the defensive
+    //    decode fresh-starts instead of panicking on abi.decode.
     const garbageForFiles = "0xdeadbeef";
     const p3 = await fileView.getFilesAtPath(folderUID, [ownerAddr], dataSchemaUID, garbageForFiles, 10);
     // Empty page or full page, either is fine — the guarantee is no-revert.
     expect(p3.nextCursor.length).to.be.greaterThanOrEqual(2); // at minimum "0x"
   });
 
-  it("getFilesAtPath dedup must filter earlier attester's applies=false tag (ADR-0031 fallback)", async function () {
-    // Regression: the cross-attester dedup in `getFilesAtPath` previously relied on
-    // `getActiveTagUID != 0`. But `TagResolver._activeTag` retains the latest TAG UID
-    // even when that TAG is applies=false (a "negation" that supersedes a prior
-    // applies=true). So if Alice first tags then negates a target, her active-tag
-    // UID stays nonzero — the dedup would incorrectly treat Bob's still-active tag
-    // as "claimed by Alice" and suppress it. ADR-0031's first-attester-wins fallback
-    // must only fall through on an applies=true claim; a negation should yield to
-    // later attesters.
+  it("getFilesAtPath: revoking an earlier attester's PIN clears their slot, falls through to next attester", async function () {
+    // Regression: under ADR-0041 the `_activeBySlot` storage carries a true singleton —
+    // when the active PIN is revoked the slot is cleared (targetID returns 0x0), so the
+    // multi-attester walk in `getFilesAtPath` correctly falls through to the next attester.
+    // This is the PIN equivalent of the old "applies=false fallback" regression for TAG.
     const aliceAddr = await alice.getAddress();
     const bobAddr = await bob.getAddress();
 
     const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32);
     const folderUID = await createAnchor("folder", rootUID, ZERO_BYTES32);
 
-    // Create a DATA attestation (its UID is what Alice/Bob will TAG against `folderUID`).
-    const dataTx = await eas.attest({
+    // File slot — created by alice. Both editions PIN their own DATA into this slot.
+    const slotUID = await createAnchor("doc.txt", folderUID, dataSchemaUID, alice);
+
+    // Alice's DATA payload.
+    const aliceDataTx = await eas.connect(alice).attest({
       schema: dataSchemaUID,
       data: {
         recipient: ZeroAddress,
         expirationTime: NO_EXPIRATION,
         revocable: false,
         refUID: ZERO_BYTES32,
-        data: enc.encode(["bytes32", "uint64"], [ethers.keccak256(ethers.toUtf8Bytes("payload")), 7n]),
+        data: enc.encode(["bytes32", "uint64"], [ethers.keccak256(ethers.toUtf8Bytes("alice payload")), 7n]),
         value: 0n,
       },
     });
-    const dataUID = getUIDFromReceipt(await dataTx.wait());
+    const aliceData = getUIDFromReceipt(await aliceDataTx.wait());
 
-    // Alice places it, then negates.
-    await createTag(dataUID, folderUID, true, alice);
-    await createTag(dataUID, folderUID, false, alice);
+    // Bob's DATA payload.
+    const bobDataTx = await eas.connect(bob).attest({
+      schema: dataSchemaUID,
+      data: {
+        recipient: ZeroAddress,
+        expirationTime: NO_EXPIRATION,
+        revocable: false,
+        refUID: ZERO_BYTES32,
+        data: enc.encode(["bytes32", "uint64"], [ethers.keccak256(ethers.toUtf8Bytes("bob payload")), 11n]),
+        value: 0n,
+      },
+    });
+    const bobData = getUIDFromReceipt(await bobDataTx.wait());
 
-    // Bob still has it applied.
-    await createTag(dataUID, folderUID, true, bob);
+    // Alice PINs first, then revokes — slot must clear.
+    await createPin(aliceData, slotUID, alice);
+    await unpin(aliceData, slotUID, alice);
 
-    // Sanity: after negation, Alice's _activeTag UID is NONZERO (points at the
-    // applies=false tag) but her applies-state is false. Bob's is true. This is
-    // the exact configuration that broke the old dedup.
-    expect(await tagResolver.getActiveTagUID(aliceAddr, dataUID, folderUID)).to.not.equal(ZERO_BYTES32);
-    expect(await tagResolver.isActivelyApplied(aliceAddr, dataUID, folderUID)).to.equal(false);
-    expect(await tagResolver.isActivelyApplied(bobAddr, dataUID, folderUID)).to.equal(true);
+    // Bob PINs.
+    await createPin(bobData, slotUID, bob);
 
-    // Multi-attester fallback: Alice first, Bob second. With the bug, Alice's
-    // nonzero active-UID suppresses Bob's entry → 0 items. With the fix, Bob's
-    // DATA is returned.
-    const page = await fileView.getFilesAtPath(folderUID, [aliceAddr, bobAddr], dataSchemaUID, "0x", 10);
+    // Sanity: alice's slot is empty after revoke; bob's slot points at his DATA.
+    expect(await edgeResolver.getActivePinTarget(slotUID, aliceAddr, dataSchemaUID)).to.equal(ZERO_BYTES32);
+    expect(await edgeResolver.getActivePinTarget(slotUID, bobAddr, dataSchemaUID)).to.equal(bobData);
+
+    // Multi-attester walk: alice first, bob second. Alice's empty slot is skipped,
+    // bob's DATA is returned. (Under ADR-0041 there's no stale "active=false" UID
+    // that could be misread as still-claimed — revocation cleared the slot.)
+    const page = await fileView.getFilesAtPath(slotUID, [aliceAddr, bobAddr], dataSchemaUID, "0x", 10);
     expect(page.items.length).to.equal(1);
-    // getFilesAtPath returns the DATA UID inside `items[].uid`.
-    expect(page.items[0].uid).to.equal(dataUID);
+    expect(page.items[0].uid).to.equal(bobData);
+  });
+
+  it("getFilesAtPath: earlier attester's TAG does NOT suppress a later attester's PIN (PIN-only dedup, ADR-0041 regression)", async function () {
+    // Adversarial case for the `isActivePinEdge` dedup fix (ADR-0041).
+    //
+    // Pre-fix: `getFilesAtPath` used `isActiveEdgeAnySchema` (schema-blind) for the
+    // cross-attester dedup check. An earlier attester who happens to have a TAG on the
+    // same (target, definition) would suppress a later attester's legitimate PIN placement
+    // — hiding valid file content in a multi-edition view.
+    //
+    // Post-fix: the dedup uses `isActivePinEdge` (PIN-specific). Only a prior PIN from an
+    // earlier attester can suppress a later attester's PIN. A TAG from the earlier attester
+    // is irrelevant and must not suppress anything.
+    const aliceAddr = await alice.getAddress();
+    const bobAddr = await bob.getAddress();
+
+    const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32);
+    const folderUID = await createAnchor("folder", rootUID, ZERO_BYTES32);
+    const slotUID = await createAnchor("doc.txt", folderUID, dataSchemaUID, bob);
+
+    // Bob's DATA payload.
+    const bobDataTx = await eas.connect(bob).attest({
+      schema: dataSchemaUID,
+      data: {
+        recipient: ZeroAddress,
+        expirationTime: NO_EXPIRATION,
+        revocable: false,
+        refUID: ZERO_BYTES32,
+        data: enc.encode(["bytes32", "uint64"], [ethers.keccak256(ethers.toUtf8Bytes("bob adversarial")), 42n]),
+        value: 0n,
+      },
+    });
+    const bobData = getUIDFromReceipt(await bobDataTx.wait());
+
+    // Alice has a TAG (not a PIN) targeting bobData with definition=slotUID.
+    // This emulates a client bug or adversarial action: alice has a TAG edge
+    // on the same (target=bobData, definition=slotUID) that bob uses for his PIN.
+    await createTag(bobData, slotUID, alice);
+
+    // Alice has NO active PIN: her getActivePinTarget returns 0x0.
+    expect(await edgeResolver.getActivePinTarget(slotUID, aliceAddr, dataSchemaUID)).to.equal(ZERO_BYTES32);
+
+    // Bob has a valid PIN placing his DATA at the slot.
+    await createPin(bobData, slotUID, bob);
+    expect(await edgeResolver.getActivePinTarget(slotUID, bobAddr, dataSchemaUID)).to.equal(bobData);
+
+    // getFilesAtPath([alice, bob]): alice contributes nothing (no PIN), bob's PIN yields bobData.
+    // The dedup check must NOT fire for bob — alice has a TAG on bobData, but NOT a PIN.
+    // Pre-fix: `isActiveEdgeAnySchema(alice, bobData, slotUID)` → true → bob's file hidden ❌
+    // Post-fix: `isActivePinEdge(alice, bobData, slotUID)` → false → bob's file shown ✓
+    const page = await fileView.getFilesAtPath(slotUID, [aliceAddr, bobAddr], dataSchemaUID, "0x", 10);
+    expect(page.items.length).to.equal(1, "bob's file must appear despite alice's TAG on the same target");
+    expect(page.items[0].uid).to.equal(bobData);
   });
 
   it("Surfaces >10k tagged folders without silent truncation (ADR-0036)", async function () {
@@ -526,7 +755,7 @@ describe("EFSFileView", function () {
     for (let i = 0; i < 50; i++) {
       const name = `folder-${String(i).padStart(3, "0")}`;
       const uid = await createAnchor(name, rootUID, ZERO_BYTES32);
-      await createTag(uid, dataSchemaUID, true);
+      await createTag(uid, dataSchemaUID);
       names.push(name);
     }
 

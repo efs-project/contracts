@@ -21,8 +21,8 @@ const deployEFSRouter: DeployFunction = async function (hre: HardhatRuntimeEnvir
 
   const dataSchemaUID = await indexer.DATA_SCHEMA_UID();
 
-  // Get TagResolver (deployed in 01_indexer.ts)
-  const tagResolverDeployment = await hre.deployments.get("TagResolver");
+  // Get EdgeResolver (deployed in 01_indexer.ts)
+  const edgeResolverDeployment = await hre.deployments.get("EdgeResolver");
 
   // Resolve SchemaRegistry via EAS (matches 01_indexer.ts fallback pattern)
   const eas = await ethers.getContractAt(
@@ -37,7 +37,13 @@ const deployEFSRouter: DeployFunction = async function (hre: HardhatRuntimeEnvir
     schemaRegistryAddress = SCHEMA_REGISTRY_ADDRESS;
   }
 
-  const routerArgs = [indexer.target, EAS_ADDRESS, tagResolverDeployment.address, schemaRegistryAddress, dataSchemaUID];
+  const routerArgs = [
+    indexer.target,
+    EAS_ADDRESS,
+    edgeResolverDeployment.address,
+    schemaRegistryAddress,
+    dataSchemaUID,
+  ];
   await redeployIfArgsChanged(hre, "EFSRouter", routerArgs);
 
   await deploy("EFSRouter", {

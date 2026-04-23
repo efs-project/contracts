@@ -2,33 +2,31 @@
  * EFS Data Model — End-to-End Integration Tests
  *
  * Exercises the full three-layer data model (Paths → Data → Mirrors) through
- * realistic user workflows. Tests cover:
+ * realistic user workflows under the ADR-0041 PIN/TAG split.
  *
- *   1. Full upload flows (on-chain, IPFS, Arweave, multi-transport)
- *   2. PROPERTY metadata (contentType, previousVersion)
- *   3. TAG-based file placement and removal
- *   4. Folder/sub-folder listing via EFSFileView.getFilesAtPath
- *   5. Cross-referencing (same DATA in multiple folders)
- *   6. File versioning (untag old, tag new, previousVersion chain)
- *   7. Dedup (dataByContentKey canonical lookup)
- *   8. Editions (multi-attester scenarios)
- *   9. NSFW-style label tagging and filtering
- *  10. Tree visibility propagation (containsAttestations)
- *  11. Mirror queries (getDataMirrors)
- *  12. Swap-and-pop ordering correctness
- *  13. Edge cases: re-tag, tag non-existent, deep nesting
+ * Predicate-cardinality routing:
+ *   - File placement (DATA at folder anchor)            → PIN  (singleton)
+ *   - PROPERTY value binding (contentType, name, etc.)  → PIN  (singleton)
+ *   - Sub-folder visibility under dataSchemaUID         → TAG  (cardinality N)
+ *   - Descriptive labels (#nsfw, #spoiler)              → TAG  (cardinality N)
+ *
+ * Removal semantics: there is no `applies=false` — placements/labels are removed
+ * via `eas.revoke()` on the active edge UID. PIN replacement is in-place
+ * supersession by attesting at the same (def, attester, schema) slot with a
+ * different target.
  */
 import { expect } from "chai";
 import { ethers } from "hardhat";
-import { EFSIndexer, TagResolver, MirrorResolver, EFSFileView, EAS, SchemaRegistry } from "../typechain-types";
+import { EFSIndexer, EdgeResolver, MirrorResolver, EFSFileView, EAS, SchemaRegistry } from "../typechain-types";
 import { Signer, ZeroAddress, ZeroHash } from "ethers";
 
 const ZERO_BYTES32 = ZeroHash;
 const NO_EXPIRATION = 0n;
+const DEFAULT_TAG_WEIGHT = 1n;
 
 describe("EFS Data Model — E2E Integration", function () {
   let indexer: EFSIndexer;
-  let tagResolver: TagResolver;
+  let edgeResolver: EdgeResolver;
   let mirrorResolver: MirrorResolver;
   let fileView: EFSFileView;
   let eas: EAS;
@@ -41,6 +39,7 @@ describe("EFS Data Model — E2E Integration", function () {
   let anchorSchemaUID: string;
   let dataSchemaUID: string;
   let propertySchemaUID: string;
+  let pinSchemaUID: string;
   let tagSchemaUID: string;
   let mirrorSchemaUID: string;
   let blobSchemaUID: string;
@@ -57,6 +56,11 @@ describe("EFS Data Model — E2E Integration", function () {
 
   const enc = new ethers.AbiCoder();
 
+  // Active-edge index used by the helpers to look up the live UID for revocation.
+  // Keys: `${target}|${definition}|${attester}` → live attestation UID.
+  let activePinIndex: Map<string, string>;
+  let activeTagIndex: Map<string, string>;
+
   // ─── Encoding Helpers ─────────────────────────────────────────────────────
 
   const encodeAnchor = (name: string, schema: string = ZERO_BYTES32) =>
@@ -66,7 +70,9 @@ describe("EFS Data Model — E2E Integration", function () {
 
   const encodePropertyValue = (value: string) => enc.encode(["string"], [value]);
 
-  const encodeTag = (definition: string, applies: boolean) => enc.encode(["bytes32", "bool"], [definition, applies]);
+  const encodePin = (definition: string) => enc.encode(["bytes32"], [definition]);
+
+  const encodeTag = (definition: string, weight: bigint) => enc.encode(["bytes32", "int256"], [definition, weight]);
 
   const encodeMirror = (transportDef: string, uri: string) => enc.encode(["bytes32", "string"], [transportDef, uri]);
 
@@ -122,9 +128,11 @@ describe("EFS Data Model — E2E Integration", function () {
   }
 
   /**
-   * Attach a PROPERTY to a container using the unified free-floating model
-   * (ADR-0035): key anchor under the container, free-floating PROPERTY(value),
-   * and a TAG binding them. Returns the PROPERTY UID.
+   * Attach a PROPERTY value to a container using the unified free-floating model
+   * (ADR-0035 / ADR-0041): key anchor under the container, free-floating
+   * PROPERTY(value), and a PIN binding them. Returns the PROPERTY UID.
+   *
+   * Binding cardinality is 1 (a key has one current value) — therefore PIN, not TAG.
    */
   async function createProperty(
     containerUID: string,
@@ -161,25 +169,58 @@ describe("EFS Data Model — E2E Integration", function () {
     });
     const propertyUID = getUID(await propTx.wait());
 
-    await eas.connect(signer).attest({
-      schema: tagSchemaUID,
+    // PIN binds the value to the key anchor. Re-binding under the same key auto-supersedes.
+    await pinTarget(propertyUID, keyAnchorUID, signer);
+    return propertyUID;
+  }
+
+  /**
+   * PIN a target to a definition (file placement, PROPERTY value binding).
+   * Cardinality 1: re-attesting on the same (def, attester, schema) slot
+   * supersedes the prior PIN automatically.
+   */
+  async function pinTarget(targetUID: string, definitionUID: string, signer: Signer = owner): Promise<string> {
+    const tx = await eas.connect(signer).attest({
+      schema: pinSchemaUID,
       data: {
         recipient: ZeroAddress,
         expirationTime: NO_EXPIRATION,
         revocable: true,
-        refUID: propertyUID,
-        data: encodeTag(keyAnchorUID, true),
+        refUID: targetUID,
+        data: encodePin(definitionUID),
         value: 0n,
       },
     });
-    return propertyUID;
+    const uid = getUID(await tx.wait());
+    activePinIndex.set(`${targetUID}|${definitionUID}|${await signer.getAddress()}`, uid);
+    return uid;
   }
 
+  /**
+   * Revoke the live PIN for (target, def, attester). Idempotent — does nothing
+   * if there is no active PIN.
+   */
+  async function unpinTarget(targetUID: string, definitionUID: string, signer: Signer = owner): Promise<void> {
+    const key = `${targetUID}|${definitionUID}|${await signer.getAddress()}`;
+    const uid = activePinIndex.get(key);
+    if (uid === undefined) return;
+    await eas.connect(signer).revoke({
+      schema: pinSchemaUID,
+      data: { uid, value: 0n },
+    });
+    activePinIndex.delete(key);
+  }
+
+  /**
+   * TAG a target with a definition (sub-folder visibility, descriptive labels).
+   * Cardinality N: each new attestation accumulates in the active set.
+   * Default weight is 1 (active, no sort key in use).
+   */
   async function tagTarget(
     targetUID: string,
     definitionUID: string,
-    applies: boolean,
     signer: Signer = owner,
+    weight: bigint = DEFAULT_TAG_WEIGHT,
   ): Promise<string> {
     const tx = await eas.connect(signer).attest({
       schema: tagSchemaUID,
@@ -188,11 +229,25 @@ describe("EFS Data Model — E2E Integration", function () {
         expirationTime: NO_EXPIRATION,
         revocable: true,
         refUID: targetUID,
-        data: encodeTag(definitionUID, applies),
+        data: encodeTag(definitionUID, weight),
         value: 0n,
       },
     });
-    return getUID(await tx.wait());
+    const uid = getUID(await tx.wait());
+    activeTagIndex.set(`${targetUID}|${definitionUID}|${await signer.getAddress()}`, uid);
+    return uid;
+  }
+
+  /** Revoke the live TAG for (target, def, attester). */
+  async function untagTarget(targetUID: string, definitionUID: string, signer: Signer = owner): Promise<void> {
+    const key = `${targetUID}|${definitionUID}|${await signer.getAddress()}`;
+    const uid = activeTagIndex.get(key);
+    if (uid === undefined) return;
+    await eas.connect(signer).revoke({
+      schema: tagSchemaUID,
+      data: { uid, value: 0n },
+    });
+    activeTagIndex.delete(key);
   }
 
   async function createMirror(
@@ -216,9 +271,21 @@ describe("EFS Data Model — E2E Integration", function () {
   }
 
   /**
-   * Full file upload: DATA + PROPERTY(contentType) + MIRROR + TAG
-   * Returns { dataUID, propertyUID, mirrorUID, tagUID }
+   * Full file upload mirroring the production seed pattern (`scripts/seed-impl.ts`):
+   *   1. Filename anchor under `folderUID` with `schema=DATA_SCHEMA_UID` ("file slot").
+   *   2. Standalone DATA (refUID=0x0) carrying contentHash + size.
+   *   3. PROPERTY(contentType) bound to DATA via PIN under the contentType key anchor.
+   *   4. MIRROR(refUID=DATA) for retrieval.
+   *   5. PIN(target=DATA, definition=fileSlot) — Shape A placement (cardinality 1
+   *      per attester per file slot, so PIN, not TAG).
+   *
+   * The optional `name` param lets tests place files predictably; otherwise an
+   * auto-incremented unique name is used so multiple uploads don't collide on
+   * `(parent, name, schema)`.
+   *
+   * Returns { fileSlotUID, dataUID, propertyUID, mirrorUID, pinUID, contentHash }.
    */
+  let _uploadCounter = 0;
   async function uploadFile(
     content: string,
     contentType: string,
@@ -226,16 +293,26 @@ describe("EFS Data Model — E2E Integration", function () {
     mirrorUri: string,
     folderUID: string,
     signer: Signer = owner,
+    name?: string,
   ) {
     const contentHash = hash(content);
     const size = BigInt(Buffer.from(content).length);
+    const fileName = name ?? `file-${_uploadCounter++}.bin`;
+
+    // Reuse an existing file slot if one already exists at (folder, name, DATA_SCHEMA);
+    // otherwise create one. Mirrors the `findAnchor` / `makeAnchor` idempotency in
+    // the production seed.
+    let fileSlotUID = await indexer.resolveAnchor(folderUID, fileName, dataSchemaUID);
+    if (fileSlotUID === ZERO_BYTES32) {
+      fileSlotUID = await createAnchor(folderUID, fileName, dataSchemaUID, signer);
+    }
 
     const dataUID = await createData(contentHash, size, signer);
     const propertyUID = await createProperty(dataUID, "contentType", contentType, signer);
     const mirrorUID = await createMirror(dataUID, transportUID, mirrorUri, signer);
-    const tagUID = await tagTarget(dataUID, folderUID, true, signer);
+    const pinUID = await pinTarget(dataUID, fileSlotUID, signer);
 
-    return { dataUID, propertyUID, mirrorUID, tagUID, contentHash };
+    return { fileSlotUID, dataUID, propertyUID, mirrorUID, pinUID, contentHash };
   }
 
   // ─── Setup ────────────────────────────────────────────────────────────────
@@ -243,6 +320,9 @@ describe("EFS Data Model — E2E Integration", function () {
   beforeEach(async function () {
     [owner, alice, bob, charlie] = await ethers.getSigners();
     const ownerAddr = await owner.getAddress();
+
+    activePinIndex = new Map();
+    activeTagIndex = new Map();
 
     // Deploy EAS
     const RegistryFactory = await ethers.getContractFactory("SchemaRegistry");
@@ -253,11 +333,15 @@ describe("EFS Data Model — E2E Integration", function () {
     eas = await EASFactory.deploy(await registry.getAddress());
     await eas.waitForDeployment();
 
-    // Nonce prediction (same layout as EFSTransports.test.ts)
+    // Nonce prediction. Deployment order:
+    //   nonce+0: EdgeResolver deploy
+    //   nonce+1: MirrorResolver deploy
+    //   nonce+2..8: 7 schema registrations (anchor, property, data, PIN, TAG, mirror, blob)
+    //   nonce+9: EFSIndexer deploy
     const currentNonce = await ethers.provider.getTransactionCount(ownerAddr);
-    const futureTagResolverAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce });
+    const futureEdgeResolverAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce });
     const futureMirrorResolverAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce + 1 });
-    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce + 8 });
+    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce + 9 });
 
     // Pre-compute schema UIDs
     anchorSchemaUID = ethers.solidityPackedKeccak256(
@@ -272,9 +356,13 @@ describe("EFS Data Model — E2E Integration", function () {
       ["string", "address", "bool"],
       ["bytes32 contentHash, uint64 size", futureIndexerAddr, false],
     );
+    pinSchemaUID = ethers.solidityPackedKeccak256(
+      ["string", "address", "bool"],
+      ["bytes32 definition", futureEdgeResolverAddr, true],
+    );
     tagSchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
-      ["bytes32 definition, bool applies", futureTagResolverAddr, true],
+      ["bytes32 definition, int256 weight", futureEdgeResolverAddr, true],
     );
     mirrorSchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
@@ -286,9 +374,10 @@ describe("EFS Data Model — E2E Integration", function () {
     );
 
     // Deploy resolvers
-    const TagResolverFactory = await ethers.getContractFactory("TagResolver");
-    tagResolver = await TagResolverFactory.deploy(
+    const EdgeResolverFactory = await ethers.getContractFactory("EdgeResolver");
+    edgeResolver = await EdgeResolverFactory.deploy(
       await eas.getAddress(),
+      pinSchemaUID,
       tagSchemaUID,
       futureIndexerAddr,
       await registry.getAddress(),
@@ -301,7 +390,8 @@ describe("EFS Data Model — E2E Integration", function () {
     await (await registry.register("string name, bytes32 schemaUID", futureIndexerAddr, false)).wait();
     await (await registry.register("string value", futureIndexerAddr, false)).wait();
     await (await registry.register("bytes32 contentHash, uint64 size", futureIndexerAddr, false)).wait();
-    await (await registry.register("bytes32 definition, bool applies", await tagResolver.getAddress(), true)).wait();
+    await (await registry.register("bytes32 definition", await edgeResolver.getAddress(), true)).wait();
+    await (await registry.register("bytes32 definition, int256 weight", await edgeResolver.getAddress(), true)).wait();
     await (
       await registry.register("bytes32 transportDefinition, string uri", await mirrorResolver.getAddress(), true)
     ).wait();
@@ -320,11 +410,12 @@ describe("EFS Data Model — E2E Integration", function () {
 
     // Deploy FileView
     const FileViewFactory = await ethers.getContractFactory("EFSFileView");
-    fileView = await FileViewFactory.deploy(await indexer.getAddress(), await tagResolver.getAddress());
+    fileView = await FileViewFactory.deploy(await indexer.getAddress(), await edgeResolver.getAddress());
 
     // Wire contracts
     await indexer.wireContracts(
-      await tagResolver.getAddress(),
+      await edgeResolver.getAddress(),
+      pinSchemaUID,
       tagSchemaUID,
       ZeroAddress, // no sort overlay
       ZERO_BYTES32,
@@ -370,13 +461,15 @@ describe("EFS Data Model — E2E Integration", function () {
       docsUID = await createAnchor(rootUID, "docs");
     });
 
-    it("on-chain upload: DATA + contentType PROPERTY + onchain MIRROR + TAG placement", async function () {
-      const { dataUID, contentHash } = await uploadFile(
+    it("on-chain upload: DATA + contentType PROPERTY + onchain MIRROR + PIN placement", async function () {
+      const { dataUID, fileSlotUID, contentHash } = await uploadFile(
         "# Hello World\nSome markdown content.",
         "text/markdown",
         onchainTransportUID,
         "web3://0x1234567890AbCdEf1234567890AbCdEf12345678",
         docsUID,
+        owner,
+        "hello.md",
       );
 
       // Verify DATA is standalone
@@ -387,19 +480,13 @@ describe("EFS Data Model — E2E Integration", function () {
       // Verify dedup key
       expect(await indexer.dataByContentKey(contentHash)).to.equal(dataUID);
 
-      // Verify contentType PROPERTY exists (unified free-floating model)
+      // Verify contentType PROPERTY exists (PIN-bound under key anchor — ADR-0041)
       const ctKeyAnchor = await indexer.resolveAnchor(dataUID, "contentType", propertySchemaUID);
       expect(ctKeyAnchor).to.not.equal(ZERO_BYTES32);
       const ownerAddrForCT = await owner.getAddress();
-      const ctProps = await tagResolver.getActiveTargetsByAttesterAndSchema(
-        ctKeyAnchor,
-        ownerAddrForCT,
-        propertySchemaUID,
-        0,
-        10,
-      );
-      expect(ctProps.length).to.equal(1);
-      const propAtt = await eas.getAttestation(ctProps[0]);
+      const ctPropertyUID = await edgeResolver.getActivePinTarget(ctKeyAnchor, ownerAddrForCT, propertySchemaUID);
+      expect(ctPropertyUID).to.not.equal(ZERO_BYTES32);
+      const propAtt = await eas.getAttestation(ctPropertyUID);
       const [decodedValue] = enc.decode(["string"], propAtt.data);
       expect(decodedValue).to.equal("text/markdown");
 
@@ -409,16 +496,28 @@ describe("EFS Data Model — E2E Integration", function () {
       expect(mirrors[0].transportDefinition).to.equal(onchainTransportUID);
       expect(mirrors[0].uri).to.equal("web3://0x1234567890AbCdEf1234567890AbCdEf12345678");
 
-      // Verify TAG placement — DATA appears in /docs/ listing
+      // Verify PIN placement: file slot anchor under /docs/, DATA pinned at the slot.
       const ownerAddr = await owner.getAddress();
-      const items = (await fileView.getFilesAtPath(docsUID, [ownerAddr], dataSchemaUID, "0x", 50)).items;
-      expect(items.length).to.equal(1);
-      expect(items[0].uid).to.equal(dataUID);
-      expect(items[0].hasData).to.equal(true);
-      expect(items[0].contentHash).to.equal(contentHash);
+      const dirItems = (
+        await fileView.getDirectoryPageBySchemaAndAddressList(docsUID, dataSchemaUID, [ownerAddr], "0x", 50)
+      ).items;
+      expect(dirItems.length).to.equal(1);
+      expect(dirItems[0].uid).to.equal(fileSlotUID);
+      expect(dirItems[0].name).to.equal("hello.md");
+      expect(dirItems[0].schema).to.equal(dataSchemaUID);
+
+      // O(1) PIN read at the slot returns the active DATA — primary Shape A read.
+      expect(await edgeResolver.getActivePinTarget(fileSlotUID, ownerAddr, dataSchemaUID)).to.equal(dataUID);
+
+      // `getFilesAtPath(slot, …)` then resolves to the underlying DATA itself.
+      const slotItems = (await fileView.getFilesAtPath(fileSlotUID, [ownerAddr], dataSchemaUID, "0x", 50)).items;
+      expect(slotItems.length).to.equal(1);
+      expect(slotItems[0].uid).to.equal(dataUID);
+      expect(slotItems[0].hasData).to.equal(true);
+      expect(slotItems[0].contentHash).to.equal(contentHash);
     });
 
-    it("IPFS paste: DATA + contentType + ipfs MIRROR + TAG placement", async function () {
+    it("IPFS paste: DATA + contentType + ipfs MIRROR + PIN placement", async function () {
       const content = '{"name":"Cool NFT","image":"ipfs://QmImage"}';
       const { dataUID } = await uploadFile(
         content,
@@ -434,7 +533,7 @@ describe("EFS Data Model — E2E Integration", function () {
       expect(mirrors[0].uri).to.equal("ipfs://QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG");
     });
 
-    it("Arweave paste: DATA + contentType + arweave MIRROR + TAG placement", async function () {
+    it("Arweave paste: DATA + contentType + arweave MIRROR + PIN placement", async function () {
       const { dataUID } = await uploadFile(
         "<html><body>Permaweb page</body></html>",
         "text/html",
@@ -448,7 +547,7 @@ describe("EFS Data Model — E2E Integration", function () {
       expect(mirrors[0].uri).to.equal("ar://bNbA3TEQVL60xlgCcqdz4ZPHFZ711cZ3hmkpGttDt_U");
     });
 
-    it("Magnet link paste: DATA + magnet MIRROR + TAG", async function () {
+    it("Magnet link paste: DATA + magnet MIRROR + PIN", async function () {
       const magnetUri = "magnet:?xt=urn:btih:c12fe1c06bba254a9dc9f519b335aa7c1367a88a&dn=test.iso";
       const { dataUID } = await uploadFile(
         "large file content placeholder",
@@ -463,7 +562,7 @@ describe("EFS Data Model — E2E Integration", function () {
       expect(mirrors[0].uri).to.equal(magnetUri);
     });
 
-    it("HTTPS link paste: DATA + https MIRROR + TAG", async function () {
+    it("HTTPS link paste: DATA + https MIRROR + PIN", async function () {
       const { dataUID } = await uploadFile(
         "remote hosted content",
         "image/png",
@@ -539,23 +638,17 @@ describe("EFS Data Model — E2E Integration", function () {
   // =========================================================================
 
   describe("PROPERTY Metadata on DATA", function () {
-    it("should store contentType as PROPERTY", async function () {
+    it("should store contentType as PROPERTY (PIN-bound)", async function () {
       const ownerAddr = await owner.getAddress();
       const dataUID = await createData(hash("typed file"), 10n);
       await createProperty(dataUID, "contentType", "image/jpeg");
 
       const keyAnchor = await indexer.resolveAnchor(dataUID, "contentType", propertySchemaUID);
       expect(keyAnchor).to.not.equal(ZERO_BYTES32);
-      const props = await tagResolver.getActiveTargetsByAttesterAndSchema(
-        keyAnchor,
-        ownerAddr,
-        propertySchemaUID,
-        0,
-        10,
-      );
-      expect(props.length).to.equal(1);
+      const propUID = await edgeResolver.getActivePinTarget(keyAnchor, ownerAddr, propertySchemaUID);
+      expect(propUID).to.not.equal(ZERO_BYTES32);
 
-      const propAtt = await eas.getAttestation(props[0]);
+      const propAtt = await eas.getAttestation(propUID);
       const [val] = enc.decode(["string"], propAtt.data);
       expect(val).to.equal("image/jpeg");
     });
@@ -573,15 +666,9 @@ describe("EFS Data Model — E2E Integration", function () {
 
       const keyAnchor = await indexer.resolveAnchor(v2, "previousVersion", propertySchemaUID);
       expect(keyAnchor).to.not.equal(ZERO_BYTES32);
-      const props = await tagResolver.getActiveTargetsByAttesterAndSchema(
-        keyAnchor,
-        ownerAddr,
-        propertySchemaUID,
-        0,
-        10,
-      );
-      expect(props.length).to.equal(1);
-      const propAtt = await eas.getAttestation(props[0]);
+      const propUID = await edgeResolver.getActivePinTarget(keyAnchor, ownerAddr, propertySchemaUID);
+      expect(propUID).to.not.equal(ZERO_BYTES32);
+      const propAtt = await eas.getAttestation(propUID);
       const [prevVersion] = enc.decode(["string"], propAtt.data);
       expect(prevVersion).to.equal(v1);
     });
@@ -597,125 +684,192 @@ describe("EFS Data Model — E2E Integration", function () {
       expect(ctAnchor).to.not.equal(ZERO_BYTES32);
       expect(descAnchor).to.not.equal(ZERO_BYTES32);
 
-      const ctProps = await tagResolver.getActiveTargetsByAttesterAndSchema(
-        ctAnchor,
-        ownerAddr,
-        propertySchemaUID,
-        0,
-        10,
+      expect(await edgeResolver.getActivePinTarget(ctAnchor, ownerAddr, propertySchemaUID)).to.not.equal(ZERO_BYTES32);
+      expect(await edgeResolver.getActivePinTarget(descAnchor, ownerAddr, propertySchemaUID)).to.not.equal(
+        ZERO_BYTES32,
       );
-      const descProps = await tagResolver.getActiveTargetsByAttesterAndSchema(
-        descAnchor,
-        ownerAddr,
-        propertySchemaUID,
-        0,
-        10,
-      );
-      expect(ctProps.length).to.equal(1);
-      expect(descProps.length).to.equal(1);
+    });
+
+    it("PROPERTY rebind supersedes the prior value (PIN cardinality 1)", async function () {
+      // Resolves the historical ADR-0035 "PROPERTY singleton" flaw: with PIN, the new
+      // value replaces the old in O(1) and no read-side newest-by-time scan is needed.
+      const ownerAddr = await owner.getAddress();
+      const dataUID = await createData(hash("rebind test"), 10n);
+
+      await createProperty(dataUID, "contentType", "text/plain");
+      await createProperty(dataUID, "contentType", "text/markdown");
+      await createProperty(dataUID, "contentType", "text/html");
+
+      const keyAnchor = await indexer.resolveAnchor(dataUID, "contentType", propertySchemaUID);
+      const liveProp = await edgeResolver.getActivePinTarget(keyAnchor, ownerAddr, propertySchemaUID);
+      const att = await eas.getAttestation(liveProp);
+      const [val] = enc.decode(["string"], att.data);
+      expect(val).to.equal("text/html");
     });
   });
 
   // =========================================================================
-  // 4. TAG-BASED FILE PLACEMENT & FOLDER LISTING
+  // 4. PIN-BASED FILE PLACEMENT & FOLDER LISTING
   // =========================================================================
 
-  describe("TAG-based Folder Listing", function () {
+  describe("PIN-based Folder Listing", function () {
     let memesUID: string;
 
     beforeEach(async function () {
       memesUID = await createAnchor(rootUID, "memes");
     });
 
-    it("should list DATAs at a path via getFilesAtPath", async function () {
+    it("should list file slots at a path via getDirectoryPageBySchemaAndAddressList", async function () {
       const ownerAddr = await owner.getAddress();
 
-      // Upload 3 files to /memes/
-      const f1 = await uploadFile("cat.jpg bytes", "image/jpeg", onchainTransportUID, "web3://0xCat", memesUID);
-      const f2 = await uploadFile("dog.png bytes", "image/png", onchainTransportUID, "web3://0xDog", memesUID);
-      const f3 = await uploadFile("meme.gif bytes", "image/gif", onchainTransportUID, "web3://0xMeme", memesUID);
+      // Upload 3 files to /memes/ — each gets its own filename anchor (file slot).
+      const f1 = await uploadFile(
+        "cat.jpg bytes",
+        "image/jpeg",
+        onchainTransportUID,
+        "web3://0xCat",
+        memesUID,
+        owner,
+        "cat.jpg",
+      );
+      const f2 = await uploadFile(
+        "dog.png bytes",
+        "image/png",
+        onchainTransportUID,
+        "web3://0xDog",
+        memesUID,
+        owner,
+        "dog.png",
+      );
+      const f3 = await uploadFile(
+        "meme.gif bytes",
+        "image/gif",
+        onchainTransportUID,
+        "web3://0xMeme",
+        memesUID,
+        owner,
+        "meme.gif",
+      );
 
-      const items = (await fileView.getFilesAtPath(memesUID, [ownerAddr], dataSchemaUID, "0x", 50)).items;
+      // Listing /memes/ via the schema-scoped, attester-scoped page reader returns
+      // all three filename anchors (Phase 1 — direct child anchors of schema=DATA
+      // attested by `owner`).
+      const items = (
+        await fileView.getDirectoryPageBySchemaAndAddressList(memesUID, dataSchemaUID, [ownerAddr], "0x", 50)
+      ).items;
       expect(items.length).to.equal(3);
 
-      const uids = items.map((i: any) => i.uid);
-      expect(uids).to.include(f1.dataUID);
-      expect(uids).to.include(f2.dataUID);
-      expect(uids).to.include(f3.dataUID);
+      const slotUIDs = items.map((i: any) => i.uid);
+      expect(slotUIDs).to.include(f1.fileSlotUID);
+      expect(slotUIDs).to.include(f2.fileSlotUID);
+      expect(slotUIDs).to.include(f3.fileSlotUID);
 
-      // All should be DATA (hasData=true, isFolder=false)
+      // Each slot is a "file" (anchor with schema=DATA → not a folder per the
+      // FileSystemItem semantics: isFolder = anchorType==bytes32(0)).
       for (const item of items) {
-        expect(item.hasData).to.equal(true);
         expect(item.isFolder).to.equal(false);
+        expect(item.schema).to.equal(dataSchemaUID);
       }
+
+      // The actual DATA pinned at each slot is reachable in O(1) via getActivePinTarget.
+      expect(await edgeResolver.getActivePinTarget(f1.fileSlotUID, ownerAddr, dataSchemaUID)).to.equal(f1.dataUID);
+      expect(await edgeResolver.getActivePinTarget(f2.fileSlotUID, ownerAddr, dataSchemaUID)).to.equal(f2.dataUID);
+      expect(await edgeResolver.getActivePinTarget(f3.fileSlotUID, ownerAddr, dataSchemaUID)).to.equal(f3.dataUID);
     });
 
-    it("should list sub-folders via getFilesAtPath with ANCHOR_SCHEMA", async function () {
+    it("should list TAG-visible sub-folders via Phase 0", async function () {
       const ownerAddr = await owner.getAddress();
 
-      // Create sub-folders under /memes/
+      // Create sub-folders under /memes/. Generic anchors (schema=0) — these are
+      // the folder shape that visibility TAGs target.
       const funnyUID = await createAnchor(memesUID, "funny");
       const catsUID = await createAnchor(memesUID, "cats");
 
-      // Tag sub-folders at the parent (sub-folder placement)
-      await tagTarget(funnyUID, memesUID, true);
-      await tagTarget(catsUID, memesUID, true);
+      // Folder visibility (per seed-impl.ts `walkAncestorVisibility`): the attester
+      // TAGs each subfolder with `definition=dataSchemaUID` to declare "this folder
+      // is part of my edition and contains data." Cardinality N — many subfolders
+      // can carry the same definition under the same attester, so TAG (not PIN).
+      await tagTarget(funnyUID, dataSchemaUID);
+      await tagTarget(catsUID, dataSchemaUID);
 
-      const items = (await fileView.getFilesAtPath(memesUID, [ownerAddr], anchorSchemaUID, "0x", 50)).items;
+      // Phase 0 of the schema-scoped page reader gathers child anchors carrying an
+      // active edge under `anchorSchema=dataSchemaUID`. Phase 1 fires too but
+      // returns nothing here (no DATA-schema'd file slots under /memes/).
+      const items = (
+        await fileView.getDirectoryPageBySchemaAndAddressList(memesUID, dataSchemaUID, [ownerAddr], "0x", 50)
+      ).items;
       expect(items.length).to.equal(2);
 
-      const names = items.map((i: any) => i.name);
-      expect(names).to.include("funny");
-      expect(names).to.include("cats");
+      const names = items.map((i: any) => i.name).sort();
+      expect(names).to.deep.equal(["cats", "funny"]);
 
       for (const item of items) {
         expect(item.isFolder).to.equal(true);
-        expect(item.hasData).to.equal(false);
       }
     });
 
-    it("should show mixed content: DATAs and sub-folders in same parent", async function () {
+    it("should show mixed content: file slots and sub-folders surface in one call", async function () {
       const ownerAddr = await owner.getAddress();
 
-      // Files
-      await uploadFile("file1", "text/plain", onchainTransportUID, "web3://0x1", memesUID);
-      await uploadFile("file2", "text/plain", onchainTransportUID, "web3://0x2", memesUID);
+      // Files: each gets its own filename anchor (file slot) with schema=DATA_SCHEMA.
+      await uploadFile("file1", "text/plain", onchainTransportUID, "web3://0x1", memesUID, owner, "f1.txt");
+      await uploadFile("file2", "text/plain", onchainTransportUID, "web3://0x2", memesUID, owner, "f2.txt");
 
-      // Sub-folders tagged at parent
+      // Sub-folder is a generic anchor (schema=0) the attester TAGs as visible.
       const subUID = await createAnchor(memesUID, "subfolder");
-      await tagTarget(subUID, memesUID, true);
+      await tagTarget(subUID, dataSchemaUID);
 
-      // Query DATAs
-      const dataItems = (await fileView.getFilesAtPath(memesUID, [ownerAddr], dataSchemaUID, "0x", 50)).items;
-      expect(dataItems.length).to.equal(2);
+      // Single call surfaces both: Phase 0 returns the TAG-visible subfolder
+      // (`subfolder`), Phase 1 returns the two file-slot anchors (`f1.txt`, `f2.txt`).
+      // Production directory listings rely on this combined output.
+      const items = (
+        await fileView.getDirectoryPageBySchemaAndAddressList(memesUID, dataSchemaUID, [ownerAddr], "0x", 50)
+      ).items;
+      expect(items.length).to.equal(3);
 
-      // Query sub-folders
-      const folderItems = (await fileView.getFilesAtPath(memesUID, [ownerAddr], anchorSchemaUID, "0x", 50)).items;
-      expect(folderItems.length).to.equal(1);
-      expect(folderItems[0].name).to.equal("subfolder");
+      const names = items.map((i: any) => i.name).sort();
+      expect(names).to.deep.equal(["f1.txt", "f2.txt", "subfolder"]);
+
+      const fileSlots = items.filter((i: any) => i.schema === dataSchemaUID);
+      const folders = items.filter((i: any) => i.isFolder);
+      expect(fileSlots.length).to.equal(2);
+      expect(folders.length).to.equal(1);
+      expect(folders[0].name).to.equal("subfolder");
     });
 
-    it("should remove a file from listing when TAG applies=false", async function () {
+    it("should remove a file from listing when its PIN is revoked", async function () {
       const ownerAddr = await owner.getAddress();
-      const { dataUID } = await uploadFile("removeme", "text/plain", onchainTransportUID, "web3://0x1", memesUID);
+      const { dataUID, fileSlotUID } = await uploadFile(
+        "removeme",
+        "text/plain",
+        onchainTransportUID,
+        "web3://0x1",
+        memesUID,
+      );
 
-      // Verify it's listed
-      let items = (await fileView.getFilesAtPath(memesUID, [ownerAddr], dataSchemaUID, "0x", 50)).items;
+      // Slot is listed and the active DATA is reachable in O(1) via PIN.
+      const items = (
+        await fileView.getDirectoryPageBySchemaAndAddressList(memesUID, dataSchemaUID, [ownerAddr], "0x", 50)
+      ).items;
       expect(items.length).to.equal(1);
+      expect(await edgeResolver.getActivePinTarget(fileSlotUID, ownerAddr, dataSchemaUID)).to.equal(dataUID);
 
-      // Untag
-      await tagTarget(dataUID, memesUID, false);
+      // Revoke the PIN. The file slot anchor itself remains (anchors are non-revocable
+      // and append-only), but its active PIN target is now zero.
+      await unpinTarget(dataUID, fileSlotUID);
+      expect(await edgeResolver.getActivePinTarget(fileSlotUID, ownerAddr, dataSchemaUID)).to.equal(ZERO_BYTES32);
 
-      // Verify it's gone
-      items = (await fileView.getFilesAtPath(memesUID, [ownerAddr], dataSchemaUID, "0x", 50)).items;
-      expect(items.length).to.equal(0);
+      // The slot anchor is still listed (it's a non-revocable child of `memesUID`),
+      // but `getFilesAtPath(slot, …)` resolves to nothing.
+      const slotItems = (await fileView.getFilesAtPath(fileSlotUID, [ownerAddr], dataSchemaUID, "0x", 50)).items;
+      expect(slotItems.length).to.equal(0);
 
-      // DATA itself still exists
+      // DATA itself still exists.
       const att = await eas.getAttestation(dataUID);
       expect(att.uid).to.equal(dataUID);
     });
 
-    it("should show empty folder (no items tagged)", async function () {
+    it("should show empty folder (no items pinned)", async function () {
       const ownerAddr = await owner.getAddress();
       const emptyUID = await createAnchor(rootUID, "empty-folder");
 
@@ -729,7 +883,7 @@ describe("EFS Data Model — E2E Integration", function () {
   // =========================================================================
 
   describe("Cross-Referencing", function () {
-    it("same DATA tagged at two different paths shares metadata and mirrors", async function () {
+    it("same DATA pinned at two different paths shares metadata and mirrors", async function () {
       const ownerAddr = await owner.getAddress();
       const memesUID = await createAnchor(rootUID, "memes");
       const animalsUID = await createAnchor(rootUID, "animals");
@@ -740,9 +894,9 @@ describe("EFS Data Model — E2E Integration", function () {
       await createProperty(dataUID, "contentType", "image/jpeg");
       await createMirror(dataUID, ipfsTransportUID, "ipfs://QmSharedCat");
 
-      // Tag at both /memes/ and /animals/
-      await tagTarget(dataUID, memesUID, true);
-      await tagTarget(dataUID, animalsUID, true);
+      // PIN at both /memes/ and /animals/ — different definitions, both cardinality 1 per slot
+      await pinTarget(dataUID, memesUID);
+      await pinTarget(dataUID, animalsUID);
 
       // Both paths list the DATA
       const memesItems = (await fileView.getFilesAtPath(memesUID, [ownerAddr], dataSchemaUID, "0x", 50)).items;
@@ -764,11 +918,11 @@ describe("EFS Data Model — E2E Integration", function () {
       const path2 = await createAnchor(rootUID, "path2");
 
       const dataUID = await createData(hash("shared file"), 11n);
-      await tagTarget(dataUID, path1, true);
-      await tagTarget(dataUID, path2, true);
+      await pinTarget(dataUID, path1);
+      await pinTarget(dataUID, path2);
 
       // Remove from path1
-      await tagTarget(dataUID, path1, false);
+      await unpinTarget(dataUID, path1);
 
       const items1 = (await fileView.getFilesAtPath(path1, [ownerAddr], dataSchemaUID, "0x", 50)).items;
       const items2 = (await fileView.getFilesAtPath(path2, [ownerAddr], dataSchemaUID, "0x", 50)).items;
@@ -782,7 +936,7 @@ describe("EFS Data Model — E2E Integration", function () {
   // =========================================================================
 
   describe("File Versioning", function () {
-    it("should replace file: untag old DATA, tag new DATA, link via previousVersion", async function () {
+    it("should replace file: revoke old PIN, attest new PIN, link via previousVersion", async function () {
       const ownerAddr = await owner.getAddress();
       const docsUID = await createAnchor(rootUID, "docs");
 
@@ -798,9 +952,9 @@ describe("EFS Data Model — E2E Integration", function () {
       // Link v2 → v1 via previousVersion PROPERTY
       await createProperty(v2DataUID, "previousVersion", v1.dataUID);
 
-      // Untag v1, tag v2
-      await tagTarget(v1.dataUID, docsUID, false);
-      await tagTarget(v2DataUID, docsUID, true);
+      // Revoke v1's PIN, place v2's PIN
+      await unpinTarget(v1.dataUID, docsUID);
+      await pinTarget(v2DataUID, docsUID);
 
       // Only v2 should appear
       const items = (await fileView.getFilesAtPath(docsUID, [ownerAddr], dataSchemaUID, "0x", 50)).items;
@@ -822,17 +976,17 @@ describe("EFS Data Model — E2E Integration", function () {
       const docsUID = await createAnchor(rootUID, "docs");
 
       const v1 = await createData(hash("v1"), 2n);
-      await tagTarget(v1, docsUID, true);
+      await pinTarget(v1, docsUID);
 
       const v2 = await createData(hash("v2"), 2n);
       await createProperty(v2, "previousVersion", v1); // previousVersion
-      await tagTarget(v1, docsUID, false);
-      await tagTarget(v2, docsUID, true);
+      await unpinTarget(v1, docsUID);
+      await pinTarget(v2, docsUID);
 
       const v3 = await createData(hash("v3"), 2n);
       await createProperty(v3, "previousVersion", v2); // previousVersion
-      await tagTarget(v2, docsUID, false);
-      await tagTarget(v3, docsUID, true);
+      await unpinTarget(v2, docsUID);
+      await pinTarget(v3, docsUID);
 
       // Only v3 should be in the folder
       const ownerAddr = await owner.getAddress();
@@ -889,105 +1043,131 @@ describe("EFS Data Model — E2E Integration", function () {
       memesUID = await createAnchor(rootUID, "memes");
     });
 
-    it("each attester has independent file listing at same path", async function () {
+    it("each attester has independent edition at the same file slot", async function () {
       const aliceAddr = await alice.getAddress();
       const bobAddr = await bob.getAddress();
 
-      // Alice uploads her version
-      const aliceData = await createData(hash("alice cat"), 9n);
-      await tagTarget(aliceData, memesUID, true, alice);
+      // Shared file slot (filename anchor created by alice — could be anyone).
+      const slotUID = await createAnchor(memesUID, "cat.jpg", dataSchemaUID, alice);
 
-      // Bob uploads his version
-      const bobData = await createData(hash("bob cat"), 7n);
-      await tagTarget(bobData, memesUID, true, bob);
+      // Alice's edition.
+      const aliceData = await createData(hash("alice cat"), 9n, alice);
+      await pinTarget(aliceData, slotUID, alice);
 
-      // Query Alice's edition
-      const aliceItems = (await fileView.getFilesAtPath(memesUID, [aliceAddr], dataSchemaUID, "0x", 50)).items;
-      expect(aliceItems.length).to.equal(1);
-      expect(aliceItems[0].uid).to.equal(aliceData);
+      // Bob's edition — same slot, different DATA.
+      const bobData = await createData(hash("bob cat"), 7n, bob);
+      await pinTarget(bobData, slotUID, bob);
 
-      // Query Bob's edition
-      const bobItems = (await fileView.getFilesAtPath(memesUID, [bobAddr], dataSchemaUID, "0x", 50)).items;
-      expect(bobItems.length).to.equal(1);
-      expect(bobItems[0].uid).to.equal(bobData);
+      // Per-attester O(1) PIN read at the slot — exactly the production pattern
+      // for "render this file slot under <attester>'s edition." First-attester-wins
+      // resolution (ADR-0031) is done by trying each attester in order and taking
+      // the first non-zero target.
+      expect(await edgeResolver.getActivePinTarget(slotUID, aliceAddr, dataSchemaUID)).to.equal(aliceData);
+      expect(await edgeResolver.getActivePinTarget(slotUID, bobAddr, dataSchemaUID)).to.equal(bobData);
+
+      // `getFilesAtPath(slot, …)` returns ALL editions of a slot — one DirectoryItem
+      // per attester whose PIN target hasn't already been claimed by an earlier
+      // attester (cross-attester dedup is by target UID, not by slot). When alice
+      // and bob PIN *different* DATAs to the same slot, both surface. Higher-level
+      // first-attester-wins rendering uses `getActivePinTarget` directly.
+      const bothEditions = (await fileView.getFilesAtPath(slotUID, [aliceAddr, bobAddr], dataSchemaUID, "0x", 50))
+        .items;
+      expect(bothEditions.length).to.equal(2);
+      const editionTargets = bothEditions.map((i: any) => i.uid).sort();
+      expect(editionTargets).to.deep.equal([aliceData, bobData].sort());
     });
 
-    it("query with multiple attesters merges and deduplicates", async function () {
+    it("multiple attesters, multiple file slots: directory listing surfaces all slots", async function () {
       const aliceAddr = await alice.getAddress();
       const bobAddr = await bob.getAddress();
 
-      // Both tag the same DATA
-      const sharedData = await createData(hash("shared meme"), 11n);
-      await tagTarget(sharedData, memesUID, true, alice);
-      await tagTarget(sharedData, memesUID, true, bob);
+      // Two slots, each PINned to its own DATA by different attesters.
+      const slotShared = await createAnchor(memesUID, "shared.png", dataSchemaUID, alice);
+      const slotAliceOnly = await createAnchor(memesUID, "alice-only.png", dataSchemaUID, alice);
 
-      // Alice-only also has a unique file
-      const aliceOnly = await createData(hash("alice only"), 10n);
-      await tagTarget(aliceOnly, memesUID, true, alice);
+      // Both attesters PIN distinct DATAs to the shared slot (different editions of the same file).
+      const aliceShared = await createData(hash("alice's shared"), 11n, alice);
+      const bobShared = await createData(hash("bob's shared"), 11n, bob);
+      await pinTarget(aliceShared, slotShared, alice);
+      await pinTarget(bobShared, slotShared, bob);
 
-      // Query both → should show 2 unique items (deduped shared + aliceOnly)
-      const items = (await fileView.getFilesAtPath(memesUID, [aliceAddr, bobAddr], dataSchemaUID, "0x", 50)).items;
+      // Alice has an additional file slot only she uses.
+      const aliceUnique = await createData(hash("alice unique"), 10n, alice);
+      await pinTarget(aliceUnique, slotAliceOnly, alice);
+
+      // Directory listing: both file slots appear (both created by alice, attester
+      // filter accepts alice). Bob isn't in the attester list for the directory
+      // call but the slots themselves are alice-attested anchors — which is what
+      // the listing filters on.
+      const items = (
+        await fileView.getDirectoryPageBySchemaAndAddressList(memesUID, dataSchemaUID, [aliceAddr, bobAddr], "0x", 50)
+      ).items;
       expect(items.length).to.equal(2);
-
-      const uids = items.map((i: any) => i.uid);
-      expect(uids).to.include(sharedData);
-      expect(uids).to.include(aliceOnly);
+      const names = items.map((i: any) => i.name).sort();
+      expect(names).to.deep.equal(["alice-only.png", "shared.png"]);
     });
 
-    it("one attester removing file doesn't affect other attester's listing", async function () {
+    it("one attester removing PIN doesn't affect another attester at the same slot", async function () {
       const aliceAddr = await alice.getAddress();
       const bobAddr = await bob.getAddress();
 
-      const data = await createData(hash("contested"), 9n);
-      await tagTarget(data, memesUID, true, alice);
-      await tagTarget(data, memesUID, true, bob);
+      // Shared slot, both editions PIN their own DATA.
+      const slotUID = await createAnchor(memesUID, "contested.png", dataSchemaUID, alice);
+      const aliceData = await createData(hash("alice contested"), 9n, alice);
+      const bobData = await createData(hash("bob contested"), 9n, bob);
+      await pinTarget(aliceData, slotUID, alice);
+      await pinTarget(bobData, slotUID, bob);
 
-      // Alice untags
-      await tagTarget(data, memesUID, false, alice);
+      // Alice revokes her PIN.
+      await unpinTarget(aliceData, slotUID, alice);
 
-      // Bob still sees it
-      const bobItems = (await fileView.getFilesAtPath(memesUID, [bobAddr], dataSchemaUID, "0x", 50)).items;
-      expect(bobItems.length).to.equal(1);
-
-      // Alice doesn't
-      const aliceItems = (await fileView.getFilesAtPath(memesUID, [aliceAddr], dataSchemaUID, "0x", 50)).items;
-      expect(aliceItems.length).to.equal(0);
+      // Bob still sees his DATA at the slot; alice's slot is empty.
+      expect(await edgeResolver.getActivePinTarget(slotUID, aliceAddr, dataSchemaUID)).to.equal(ZERO_BYTES32);
+      expect(await edgeResolver.getActivePinTarget(slotUID, bobAddr, dataSchemaUID)).to.equal(bobData);
     });
 
-    it("three attesters with overlapping files: correct counts per edition", async function () {
+    it("three attesters with overlapping files: correct unique count via directory listing", async function () {
       const aliceAddr = await alice.getAddress();
       const bobAddr = await bob.getAddress();
       const charlieAddr = await charlie.getAddress();
+
+      // Three distinct file slots in the folder (one per file in the test scenario).
+      // The slots are alice-attested for predictable listing membership.
+      const slot1 = await createAnchor(memesUID, "f1.bin", dataSchemaUID, alice);
+      const slot2 = await createAnchor(memesUID, "f2.bin", dataSchemaUID, alice);
+      const slot3 = await createAnchor(memesUID, "f3.bin", dataSchemaUID, alice);
 
       const d1 = await createData(hash("d1"), 2n);
       const d2 = await createData(hash("d2"), 2n);
       const d3 = await createData(hash("d3"), 2n);
 
-      // Alice: d1, d2
-      await tagTarget(d1, memesUID, true, alice);
-      await tagTarget(d2, memesUID, true, alice);
+      // Editions overlap on different slots.
+      await pinTarget(d1, slot1, alice);
+      await pinTarget(d2, slot2, alice);
+      await pinTarget(d2, slot2, bob);
+      await pinTarget(d3, slot3, bob);
+      await pinTarget(d1, slot1, charlie);
+      await pinTarget(d3, slot3, charlie);
 
-      // Bob: d2, d3
-      await tagTarget(d2, memesUID, true, bob);
-      await tagTarget(d3, memesUID, true, bob);
-
-      // Charlie: d1, d3
-      await tagTarget(d1, memesUID, true, charlie);
-      await tagTarget(d3, memesUID, true, charlie);
-
-      // Each should have 2
-      expect(await tagResolver.getActiveTargetsByAttesterAndSchemaCount(memesUID, aliceAddr, dataSchemaUID)).to.equal(
-        2n,
-      );
-      expect(await tagResolver.getActiveTargetsByAttesterAndSchemaCount(memesUID, bobAddr, dataSchemaUID)).to.equal(2n);
-      expect(await tagResolver.getActiveTargetsByAttesterAndSchemaCount(memesUID, charlieAddr, dataSchemaUID)).to.equal(
-        2n,
-      );
-
-      // Query all three → 3 unique items
-      const all = (await fileView.getFilesAtPath(memesUID, [aliceAddr, bobAddr, charlieAddr], dataSchemaUID, "0x", 50))
-        .items;
+      // Directory listing returns the 3 unique slots.
+      const all = (
+        await fileView.getDirectoryPageBySchemaAndAddressList(
+          memesUID,
+          dataSchemaUID,
+          [aliceAddr, bobAddr, charlieAddr],
+          "0x",
+          50,
+        )
+      ).items;
       expect(all.length).to.equal(3);
+      const names = all.map((i: any) => i.name).sort();
+      expect(names).to.deep.equal(["f1.bin", "f2.bin", "f3.bin"]);
+
+      // Spot-check: per-attester PIN resolution at each slot returns the right edition.
+      expect(await edgeResolver.getActivePinTarget(slot2, aliceAddr, dataSchemaUID)).to.equal(d2);
+      expect(await edgeResolver.getActivePinTarget(slot2, bobAddr, dataSchemaUID)).to.equal(d2);
+      expect(await edgeResolver.getActivePinTarget(slot1, charlieAddr, dataSchemaUID)).to.equal(d1);
+      expect(await edgeResolver.getActivePinTarget(slot3, charlieAddr, dataSchemaUID)).to.equal(d3);
     });
   });
 
@@ -1006,92 +1186,124 @@ describe("EFS Data Model — E2E Integration", function () {
       spoilerUID = await createAnchor(tagsUID, "spoiler");
     });
 
-    it("should tag a DATA as NSFW and check via point lookup", async function () {
+    it("should TAG a DATA as NSFW and check via point lookup", async function () {
       const dataUID = await createData(hash("spicy content"), 14n);
       const ownerAddr = await owner.getAddress();
 
-      await tagTarget(dataUID, nsfwUID, true);
+      await tagTarget(dataUID, nsfwUID);
 
-      // Point lookup
-      const tagUID = await tagResolver.getActiveTagUID(ownerAddr, dataUID, nsfwUID);
+      // Schema-aware point lookup: get the active TAG UID for (owner, data, nsfw, TAG)
+      const tagUID = await edgeResolver.getActiveEdgeUID(ownerAddr, dataUID, nsfwUID, tagSchemaUID);
       expect(tagUID).to.not.equal(ZERO_BYTES32);
 
-      // isActivelyTagged (any attester)
-      expect(await tagResolver.isActivelyTagged(dataUID, nsfwUID)).to.equal(true);
+      // hasActiveEdge: true iff anyone (any schema, any attester) is asserting (target, def)
+      expect(await edgeResolver.hasActiveEdge(dataUID, nsfwUID)).to.equal(true);
     });
 
-    it("should track active state across attesters via isActivelyTagged", async function () {
+    it("should track active state across attesters via hasActiveEdgeFromAny", async function () {
       const dataUID = await createData(hash("maybe nsfw"), 10n);
       const aliceAddr = await alice.getAddress();
       const bobAddr = await bob.getAddress();
+      const charlieAddr = await charlie.getAddress();
 
       // Initially not tagged
-      expect(await tagResolver.isActivelyTagged(dataUID, nsfwUID)).to.equal(false);
+      expect(await edgeResolver.hasActiveEdge(dataUID, nsfwUID)).to.equal(false);
 
-      // Alice says NSFW
-      await tagTarget(dataUID, nsfwUID, true, alice);
-      expect(await tagResolver.isActivelyTagged(dataUID, nsfwUID)).to.equal(true);
-      expect(await tagResolver.getActiveTagUID(aliceAddr, dataUID, nsfwUID)).to.not.equal(ZERO_BYTES32);
+      // Alice TAGs NSFW
+      await tagTarget(dataUID, nsfwUID, alice);
+      expect(await edgeResolver.hasActiveEdge(dataUID, nsfwUID)).to.equal(true);
+      expect(await edgeResolver.getActiveEdgeUID(aliceAddr, dataUID, nsfwUID, tagSchemaUID)).to.not.equal(ZERO_BYTES32);
 
-      // Bob also says NSFW
-      await tagTarget(dataUID, nsfwUID, true, bob);
-      expect(await tagResolver.getActiveTagUID(bobAddr, dataUID, nsfwUID)).to.not.equal(ZERO_BYTES32);
+      // Bob also TAGs NSFW
+      await tagTarget(dataUID, nsfwUID, bob);
+      expect(await edgeResolver.getActiveEdgeUID(bobAddr, dataUID, nsfwUID, tagSchemaUID)).to.not.equal(ZERO_BYTES32);
 
-      // Charlie says NOT NSFW (applies=false — they never said true, so no effect on others)
-      await tagTarget(dataUID, nsfwUID, false, charlie);
-      // Still actively tagged (alice + bob have applies=true)
-      expect(await tagResolver.isActivelyTagged(dataUID, nsfwUID)).to.equal(true);
+      // Charlie has never asserted NSFW. There is no "applies=false" anymore — we just
+      // assert nothing on Charlie's behalf and the aggregate stays driven by Alice + Bob.
+      expect(await edgeResolver.hasActiveEdgeFromAny(dataUID, nsfwUID, [charlieAddr])).to.equal(false);
+      expect(await edgeResolver.hasActiveEdge(dataUID, nsfwUID)).to.equal(true);
 
-      // Alice changes mind
-      await tagTarget(dataUID, nsfwUID, false, alice);
-      // Still actively tagged (bob still has applies=true)
-      expect(await tagResolver.isActivelyTagged(dataUID, nsfwUID)).to.equal(true);
+      // Alice changes mind → revoke
+      await untagTarget(dataUID, nsfwUID, alice);
+      expect(await edgeResolver.hasActiveEdge(dataUID, nsfwUID)).to.equal(true);
 
-      // Bob also changes mind → no more active tags
-      await tagTarget(dataUID, nsfwUID, false, bob);
-      expect(await tagResolver.isActivelyTagged(dataUID, nsfwUID)).to.equal(false);
+      // Bob also changes mind → revoke. No more active TAGs.
+      await untagTarget(dataUID, nsfwUID, bob);
+      expect(await edgeResolver.hasActiveEdge(dataUID, nsfwUID)).to.equal(false);
     });
 
     it("should filter NSFW items from a folder listing (client-side pattern)", async function () {
       const memesUID = await createAnchor(rootUID, "memes");
       const ownerAddr = await owner.getAddress();
 
-      const safeData = await createData(hash("safe meme"), 9n);
-      const nsfwData = await createData(hash("nsfw meme"), 9n);
-      const alsoSafe = await createData(hash("another safe"), 12n);
+      // Three file slots, each PINned to its own DATA. Production model: every file
+      // has its own filename anchor under the folder (cardinality 1 PIN per slot).
+      const safeFile = await uploadFile(
+        "safe meme",
+        "image/png",
+        onchainTransportUID,
+        "web3://0xSafe",
+        memesUID,
+        owner,
+        "safe.png",
+      );
+      const nsfwFile = await uploadFile(
+        "nsfw meme",
+        "image/png",
+        onchainTransportUID,
+        "web3://0xNsfw",
+        memesUID,
+        owner,
+        "nsfw.png",
+      );
+      const alsoSafeFile = await uploadFile(
+        "another safe",
+        "image/png",
+        onchainTransportUID,
+        "web3://0xSafe2",
+        memesUID,
+        owner,
+        "safe2.png",
+      );
 
-      await tagTarget(safeData, memesUID, true);
-      await tagTarget(nsfwData, memesUID, true);
-      await tagTarget(alsoSafe, memesUID, true);
+      // Mark the NSFW DATA as NSFW (TAG, not PIN — labels are cardinality N).
+      await tagTarget(nsfwFile.dataUID, nsfwUID);
 
-      // Mark one as NSFW
-      await tagTarget(nsfwData, nsfwUID, true);
-
-      // Get all items in folder
-      const allItems = (await fileView.getFilesAtPath(memesUID, [ownerAddr], dataSchemaUID, "0x", 50)).items;
+      // Directory listing returns the 3 file-slot anchors.
+      const allItems = (
+        await fileView.getDirectoryPageBySchemaAndAddressList(memesUID, dataSchemaUID, [ownerAddr], "0x", 50)
+      ).items;
       expect(allItems.length).to.equal(3);
 
-      // Client-side filter: for each item, check NSFW tag
+      // Client-side filter: for each slot, resolve the active DATA and check whether
+      // it carries the NSFW label. Resolves via the same O(1) PIN read the production
+      // FileBrowser uses.
       const filtered = [];
       for (const item of allItems) {
-        const isNsfw = await tagResolver.isActivelyTagged(item.uid, nsfwUID);
+        const dataUID = await edgeResolver.getActivePinTarget(item.uid, ownerAddr, dataSchemaUID);
+        const isNsfw = await edgeResolver.hasActiveEdge(dataUID, nsfwUID);
         if (!isNsfw) filtered.push(item);
       }
       expect(filtered.length).to.equal(2);
-      expect(filtered.map((i: any) => i.uid)).to.not.include(nsfwData);
+      const filteredNames = filtered.map((i: any) => i.name).sort();
+      expect(filteredNames).to.deep.equal(["safe.png", "safe2.png"]);
+
+      // Reference vars reachable so they're not stripped by tooling.
+      expect(safeFile.dataUID).to.not.equal(ZERO_BYTES32);
+      expect(alsoSafeFile.dataUID).to.not.equal(ZERO_BYTES32);
     });
 
     it("should support multiple labels on same DATA", async function () {
       const dataUID = await createData(hash("tagged content"), 14n);
 
-      await tagTarget(dataUID, nsfwUID, true);
-      await tagTarget(dataUID, spoilerUID, true);
+      await tagTarget(dataUID, nsfwUID);
+      await tagTarget(dataUID, spoilerUID);
 
-      expect(await tagResolver.isActivelyTagged(dataUID, nsfwUID)).to.equal(true);
-      expect(await tagResolver.isActivelyTagged(dataUID, spoilerUID)).to.equal(true);
+      expect(await edgeResolver.hasActiveEdge(dataUID, nsfwUID)).to.equal(true);
+      expect(await edgeResolver.hasActiveEdge(dataUID, spoilerUID)).to.equal(true);
 
-      // Tag definitions for this DATA
-      const defCount = await tagResolver.getTagDefinitionCount(dataUID);
+      // Edge definitions for this DATA (PIN + TAG, schema-blind)
+      const defCount = await edgeResolver.getEdgeDefinitionCount(dataUID);
       expect(defCount).to.be.gte(2n);
     });
   });
@@ -1101,7 +1313,7 @@ describe("EFS Data Model — E2E Integration", function () {
   // =========================================================================
 
   describe("Tree Visibility Propagation", function () {
-    it("tagging DATA at deep path propagates to all ancestors", async function () {
+    it("PIN-placing DATA at deep path propagates to all ancestors", async function () {
       const aliceAddr = await alice.getAddress();
 
       // /media/images/cats/funny/
@@ -1111,7 +1323,7 @@ describe("EFS Data Model — E2E Integration", function () {
       const funnyUID = await createAnchor(catsUID, "funny");
 
       const dataUID = await createData(hash("deep cat"), 8n);
-      await tagTarget(dataUID, funnyUID, true, alice);
+      await pinTarget(dataUID, funnyUID, alice);
 
       // All ancestors should show containsAttestations for alice
       expect(await indexer.containsAttestations(funnyUID, aliceAddr)).to.equal(true);
@@ -1121,60 +1333,69 @@ describe("EFS Data Model — E2E Integration", function () {
       expect(await indexer.containsAttestations(rootUID, aliceAddr)).to.equal(true);
     });
 
-    it("propagation is per-attester (alice visible, bob not until bob tags)", async function () {
+    it("propagation is per-attester (alice visible, bob not until bob places)", async function () {
       const aliceAddr = await alice.getAddress();
       const bobAddr = await bob.getAddress();
 
       const folderUID = await createAnchor(rootUID, "perm-test");
       const dataUID = await createData(hash("alice only data"), 15n);
-      await tagTarget(dataUID, folderUID, true, alice);
+      await pinTarget(dataUID, folderUID, alice);
 
       expect(await indexer.containsAttestations(folderUID, aliceAddr)).to.equal(true);
       expect(await indexer.containsAttestations(folderUID, bobAddr)).to.equal(false);
 
-      // Now bob tags something there too
+      // Now bob places something there too
       const bobData = await createData(hash("bob data"), 8n);
-      await tagTarget(bobData, folderUID, true, bob);
+      await pinTarget(bobData, folderUID, bob);
 
       expect(await indexer.containsAttestations(folderUID, bobAddr)).to.equal(true);
     });
 
-    it("early-exit optimization: second tag at same path doesn't re-walk tree", async function () {
+    it("early-exit optimization: second placement under same parent doesn't re-walk tree", async function () {
       const aliceAddr = await alice.getAddress();
       const folderUID = await createAnchor(rootUID, "opt-test");
 
-      const d1 = await createData(hash("d1"), 2n);
-      const d2 = await createData(hash("d2"), 2n);
+      // Each file has its own filename slot under `folderUID` (production pattern —
+      // PIN cardinality 1 per slot means two files cannot share one slot).
+      const slot1 = await createAnchor(folderUID, "f1.bin", dataSchemaUID, alice);
+      const slot2 = await createAnchor(folderUID, "f2.bin", dataSchemaUID, alice);
 
-      // First tag propagates up the tree
-      await tagTarget(d1, folderUID, true, alice);
+      const d1 = await createData(hash("d1"), 2n, alice);
+      const d2 = await createData(hash("d2"), 2n, alice);
+
+      // First PIN propagates `containsAttestations` up the ancestor chain.
+      await pinTarget(d1, slot1, alice);
       expect(await indexer.containsAttestations(folderUID, aliceAddr)).to.equal(true);
 
-      // Second tag — should succeed without issue (early exit in propagateContains)
-      await tagTarget(d2, folderUID, true, alice);
+      // Second PIN at the *same parent folder* should early-exit in `propagateContains`
+      // — the per-attester flag is already set on `folderUID`, so no further ancestor
+      // walk is needed.
+      await pinTarget(d2, slot2, alice);
 
-      // Both files visible
-      const items = await tagResolver.getActiveTargetsByAttesterAndSchema(folderUID, aliceAddr, dataSchemaUID, 0, 10);
-      expect(items.length).to.equal(2);
+      // Both PINs are live in their respective slots (PIN cardinality 1 per slot).
+      const d1Live = await edgeResolver.getActiveEdgeUID(aliceAddr, d1, slot1, pinSchemaUID);
+      const d2Live = await edgeResolver.getActiveEdgeUID(aliceAddr, d2, slot2, pinSchemaUID);
+      expect(d1Live).to.not.equal(ZERO_BYTES32);
+      expect(d2Live).to.not.equal(ZERO_BYTES32);
     });
 
     it("remove-then-readd does not duplicate entries in _childrenByAttester", async function () {
-      // Regression: TagResolver.onAttest for applies=false calls indexer.clearContains(folder, attester),
-      // which flips _containsAttestations[folder][attester] to false. If _propagateContains subsequently
-      // ran on an applies=true re-add and used _containsAttestations as its dedup guard, it would push
+      // Regression: EdgeResolver.onRevoke clears _containsAttestations[folder][attester] when
+      // the folder's per-attester edge count hits zero. If _propagateContains used
+      // _containsAttestations as its dedup guard on a subsequent re-add, it would push
       // `folder` into _childrenByAttester[parent][attester] a second time — inflating
-      // getChildrenByAttesterCount and producing duplicate entries in
-      // getChildrenByAttester/getChildrenByAddressList.
+      // getChildrenByAttesterCount and producing duplicate entries in the children-by-attester
+      // listing.
       //
-      // The fix is a dedicated append-only dedup flag (_childInChildrenByAttester) that is set on push
-      // and never cleared by clearContains.
+      // The fix is a dedicated append-only dedup flag (_childInChildrenByAttester) that is
+      // set on push and never cleared by clearContains.
       const aliceAddr = await alice.getAddress();
       const folderUID = await createAnchor(rootUID, "readd-dup-test");
 
       const d1 = await createData(hash("readd-d1"), 2n);
-      await tagTarget(d1, folderUID, true, alice);
+      await pinTarget(d1, folderUID, alice);
 
-      // After first tag, folder is in alice's root children-by-attester exactly once.
+      // After first placement, folder is in alice's root children-by-attester exactly once.
       expect(await indexer.getChildrenByAttesterCount(rootUID, aliceAddr)).to.equal(1n);
       let children = await indexer["getChildrenByAttester(bytes32,address,uint256,uint256,bool,bool)"](
         rootUID,
@@ -1186,17 +1407,17 @@ describe("EFS Data Model — E2E Integration", function () {
       );
       expect(children).to.deep.equal([folderUID]);
 
-      // Supersede with applies=false. This triggers clearContains(folder, alice), flipping
+      // Revoke the only PIN. EdgeResolver will fire clearContains(folder, alice), flipping
       // _containsAttestations[folder][alice] to false while leaving _containsAttestations[root][alice]
       // intact (sticky at higher levels).
-      await tagTarget(d1, folderUID, false, alice);
+      await unpinTarget(d1, folderUID, alice);
       expect(await indexer.containsAttestations(folderUID, aliceAddr)).to.equal(false);
       expect(await indexer.containsAttestations(rootUID, aliceAddr)).to.equal(true);
 
       // Re-add under the same folder. _propagateContains walks: folder (flag cleared, re-enters loop;
       // BEFORE fix, pushes folder into root's children array AGAIN) → root (flag still true, break).
       const d2 = await createData(hash("readd-d2"), 2n);
-      await tagTarget(d2, folderUID, true, alice);
+      await pinTarget(d2, folderUID, alice);
 
       // Count and contents must remain 1/[folder] — the fix's guard prevents the second push.
       expect(await indexer.getChildrenByAttesterCount(rootUID, aliceAddr)).to.equal(1n);
@@ -1216,123 +1437,128 @@ describe("EFS Data Model — E2E Integration", function () {
   });
 
   // =========================================================================
-  // 11. SWAP-AND-POP ORDERING
+  // 11. SWAP-AND-POP ORDERING (TAG accumulation; PIN slot replacement)
   // =========================================================================
 
-  describe("Swap-and-Pop Compact Index", function () {
-    it("removing middle item preserves other items", async function () {
+  describe("Swap-and-Pop Compact Index (TAG)", function () {
+    // PIN is cardinality 1 — the swap-and-pop pattern only matters for TAG (cardinality N).
+    // We exercise it via folder-visibility TAGs where the active set genuinely grows/shrinks.
+
+    it("removing middle TAG preserves other TAGs", async function () {
       const ownerAddr = await owner.getAddress();
       const folderUID = await createAnchor(rootUID, "swap-test");
 
-      const d1 = await createData(hash("item1"), 5n);
-      const d2 = await createData(hash("item2"), 5n);
-      const d3 = await createData(hash("item3"), 5n);
+      const sub1 = await createAnchor(folderUID, "sub1");
+      const sub2 = await createAnchor(folderUID, "sub2");
+      const sub3 = await createAnchor(folderUID, "sub3");
 
-      await tagTarget(d1, folderUID, true);
-      await tagTarget(d2, folderUID, true);
-      await tagTarget(d3, folderUID, true);
+      await tagTarget(sub1, folderUID);
+      await tagTarget(sub2, folderUID);
+      await tagTarget(sub3, folderUID);
 
-      expect(await tagResolver.getActiveTargetsByAttesterAndSchemaCount(folderUID, ownerAddr, dataSchemaUID)).to.equal(
-        3n,
-      );
+      expect(await edgeResolver.getActiveTagsCount(folderUID, ownerAddr, anchorSchemaUID)).to.equal(3n);
 
-      // Remove middle item
-      await tagTarget(d2, folderUID, false);
+      // Remove middle TAG via revoke
+      await untagTarget(sub2, folderUID);
 
-      const remaining = await tagResolver.getActiveTargetsByAttesterAndSchema(
+      const remaining = await edgeResolver.getActiveTargetsByAttesterAndSchema(
         folderUID,
         ownerAddr,
-        dataSchemaUID,
+        anchorSchemaUID,
         0,
         10,
       );
       expect(remaining.length).to.equal(2);
-      expect(remaining).to.include(d1);
-      expect(remaining).to.include(d3);
-      expect(remaining).to.not.include(d2);
+      expect(remaining).to.include(sub1);
+      expect(remaining).to.include(sub3);
+      expect(remaining).to.not.include(sub2);
     });
 
-    it("removing first item works correctly", async function () {
+    it("removing first TAG works correctly", async function () {
       const ownerAddr = await owner.getAddress();
       const folderUID = await createAnchor(rootUID, "swap-first");
 
-      const d1 = await createData(hash("first"), 5n);
-      const d2 = await createData(hash("second"), 6n);
+      const sub1 = await createAnchor(folderUID, "first");
+      const sub2 = await createAnchor(folderUID, "second");
 
-      await tagTarget(d1, folderUID, true);
-      await tagTarget(d2, folderUID, true);
+      await tagTarget(sub1, folderUID);
+      await tagTarget(sub2, folderUID);
 
       // Remove first
-      await tagTarget(d1, folderUID, false);
+      await untagTarget(sub1, folderUID);
 
-      const remaining = await tagResolver.getActiveTargetsByAttesterAndSchema(
+      const remaining = await edgeResolver.getActiveTargetsByAttesterAndSchema(
         folderUID,
         ownerAddr,
-        dataSchemaUID,
+        anchorSchemaUID,
         0,
         10,
       );
       expect(remaining.length).to.equal(1);
-      expect(remaining[0]).to.equal(d2);
+      expect(remaining[0]).to.equal(sub2);
     });
 
-    it("removing last item works correctly", async function () {
+    it("removing last TAG works correctly", async function () {
       const ownerAddr = await owner.getAddress();
       const folderUID = await createAnchor(rootUID, "swap-last");
 
-      const d1 = await createData(hash("first-l"), 7n);
-      const d2 = await createData(hash("last-l"), 6n);
+      const sub1 = await createAnchor(folderUID, "first-l");
+      const sub2 = await createAnchor(folderUID, "last-l");
 
-      await tagTarget(d1, folderUID, true);
-      await tagTarget(d2, folderUID, true);
+      await tagTarget(sub1, folderUID);
+      await tagTarget(sub2, folderUID);
 
       // Remove last
-      await tagTarget(d2, folderUID, false);
+      await untagTarget(sub2, folderUID);
 
-      const remaining = await tagResolver.getActiveTargetsByAttesterAndSchema(
+      const remaining = await edgeResolver.getActiveTargetsByAttesterAndSchema(
         folderUID,
         ownerAddr,
-        dataSchemaUID,
+        anchorSchemaUID,
         0,
         10,
       );
       expect(remaining.length).to.equal(1);
-      expect(remaining[0]).to.equal(d1);
+      expect(remaining[0]).to.equal(sub1);
     });
 
-    it("removing only item results in empty list", async function () {
+    it("removing only TAG results in empty list", async function () {
       const ownerAddr = await owner.getAddress();
       const folderUID = await createAnchor(rootUID, "swap-only");
 
-      const d1 = await createData(hash("lonely"), 6n);
-      await tagTarget(d1, folderUID, true);
-      await tagTarget(d1, folderUID, false);
+      const sub1 = await createAnchor(folderUID, "lonely");
+      await tagTarget(sub1, folderUID);
+      await untagTarget(sub1, folderUID);
 
-      expect(await tagResolver.getActiveTargetsByAttesterAndSchemaCount(folderUID, ownerAddr, dataSchemaUID)).to.equal(
-        0n,
-      );
+      expect(await edgeResolver.getActiveTagsCount(folderUID, ownerAddr, anchorSchemaUID)).to.equal(0n);
     });
 
     it("re-add after remove: item appears at end", async function () {
       const ownerAddr = await owner.getAddress();
       const folderUID = await createAnchor(rootUID, "swap-readd");
 
-      const d1 = await createData(hash("readd1"), 6n);
-      const d2 = await createData(hash("readd2"), 6n);
-      const d3 = await createData(hash("readd3"), 6n);
+      const sub1 = await createAnchor(folderUID, "readd1");
+      const sub2 = await createAnchor(folderUID, "readd2");
+      const sub3 = await createAnchor(folderUID, "readd3");
 
-      await tagTarget(d1, folderUID, true);
-      await tagTarget(d2, folderUID, true);
-      await tagTarget(d3, folderUID, true);
+      await tagTarget(sub1, folderUID);
+      await tagTarget(sub2, folderUID);
+      await tagTarget(sub3, folderUID);
 
-      // Remove d1, re-add d1
-      await tagTarget(d1, folderUID, false);
-      await tagTarget(d1, folderUID, true);
+      // Remove sub1, re-add sub1
+      await untagTarget(sub1, folderUID);
+      await tagTarget(sub1, folderUID);
 
-      const items = await tagResolver.getActiveTargetsByAttesterAndSchema(folderUID, ownerAddr, dataSchemaUID, 0, 10);
+      const items = await edgeResolver.getActiveTargetsByAttesterAndSchema(
+        folderUID,
+        ownerAddr,
+        anchorSchemaUID,
+        0,
+        10,
+      );
       expect(items.length).to.equal(3);
-      // d1 should be at the end now (after swap-and-pop removed it, re-push puts it at end)
-      expect(items[2]).to.equal(d1);
+      // sub1 should be at the end now (after swap-and-pop removed it, re-push puts it at end)
+      expect(items[2]).to.equal(sub1);
     });
   });
 
@@ -1341,57 +1567,57 @@ describe("EFS Data Model — E2E Integration", function () {
   // =========================================================================
 
   describe("Discovery Indices", function () {
-    it("getTagDefinitions returns all definitions ever applied to a target", async function () {
+    it("getEdgeDefinitions returns all definitions ever attested against a target (PIN + TAG)", async function () {
       const memesUID = await createAnchor(rootUID, "memes-disc");
       const animalsUID = await createAnchor(rootUID, "animals-disc");
       const tagsUID = await createAnchor(rootUID, "tags-disc");
       const nsfwUID = await createAnchor(tagsUID, "nsfw");
 
-      const dataUID = await createData(hash("multi-tagged"), 12n);
+      const dataUID = await createData(hash("multi-edged"), 12n);
 
-      // Tag at two paths + one label
-      await tagTarget(dataUID, memesUID, true);
-      await tagTarget(dataUID, animalsUID, true);
-      await tagTarget(dataUID, nsfwUID, true);
+      // PIN at two folder paths, TAG with one label
+      await pinTarget(dataUID, memesUID);
+      await pinTarget(dataUID, animalsUID);
+      await tagTarget(dataUID, nsfwUID);
 
-      const defCount = await tagResolver.getTagDefinitionCount(dataUID);
+      const defCount = await edgeResolver.getEdgeDefinitionCount(dataUID);
       expect(defCount).to.equal(3n);
 
-      const defs = await tagResolver.getTagDefinitions(dataUID, 0, 10);
+      const defs = await edgeResolver.getEdgeDefinitions(dataUID, 0, 10);
       expect(defs).to.include(memesUID);
       expect(defs).to.include(animalsUID);
       expect(defs).to.include(nsfwUID);
     });
 
-    it("getTaggedTargets returns all targets ever tagged with a definition", async function () {
+    it("getTargetsByDefinition returns all targets ever attested under a definition", async function () {
       const folderUID = await createAnchor(rootUID, "browse-test");
 
       const d1 = await createData(hash("browse1"), 7n);
       const d2 = await createData(hash("browse2"), 7n);
       const d3 = await createData(hash("browse3"), 7n);
 
-      await tagTarget(d1, folderUID, true);
-      await tagTarget(d2, folderUID, true);
-      await tagTarget(d3, folderUID, true);
+      await pinTarget(d1, folderUID);
+      await pinTarget(d2, folderUID);
+      await pinTarget(d3, folderUID);
 
-      const targetCount = await tagResolver.getTaggedTargetCount(folderUID);
+      const targetCount = await edgeResolver.getTargetsByDefinitionCount(folderUID);
       expect(targetCount).to.equal(3n);
 
-      const targets = await tagResolver.getTaggedTargets(folderUID, 0, 10);
+      const targets = await edgeResolver.getTargetsByDefinition(folderUID, 0, 10);
       expect(targets).to.include(d1);
       expect(targets).to.include(d2);
       expect(targets).to.include(d3);
     });
 
-    it("getTaggedTargets is append-only (untagged items still appear)", async function () {
+    it("getTargetsByDefinition is append-only (revoked items still appear)", async function () {
       const folderUID = await createAnchor(rootUID, "append-test");
 
       const d1 = await createData(hash("append1"), 7n);
-      await tagTarget(d1, folderUID, true);
-      await tagTarget(d1, folderUID, false); // untag
+      await pinTarget(d1, folderUID);
+      await unpinTarget(d1, folderUID); // revoke
 
       // Still in append-only list
-      const targets = await tagResolver.getTaggedTargets(folderUID, 0, 10);
+      const targets = await edgeResolver.getTargetsByDefinition(folderUID, 0, 10);
       expect(targets).to.include(d1);
     });
   });
@@ -1401,37 +1627,43 @@ describe("EFS Data Model — E2E Integration", function () {
   // =========================================================================
 
   describe("Edge Cases", function () {
-    it("duplicate TAG (applies=true twice) is idempotent in compact index", async function () {
+    it("PIN re-attestation at same slot supersedes the prior PIN (cardinality 1)", async function () {
       const ownerAddr = await owner.getAddress();
-      const folderUID = await createAnchor(rootUID, "idempotent");
+      const folderUID = await createAnchor(rootUID, "supersede");
 
-      const dataUID = await createData(hash("idem"), 4n);
-      await tagTarget(dataUID, folderUID, true);
-      await tagTarget(dataUID, folderUID, true); // second applies=true
+      const d1 = await createData(hash("supersede-d1"), 4n);
+      const d2 = await createData(hash("supersede-d2"), 4n);
 
-      // Should still be count 1, not 2
-      expect(await tagResolver.getActiveTargetsByAttesterAndSchemaCount(folderUID, ownerAddr, dataSchemaUID)).to.equal(
-        1n,
-      );
+      await pinTarget(d1, folderUID);
+      // Re-attest at the same (def=folder, attester, schema=PIN) slot with a different
+      // target → supersedes d1 in O(1).
+      await pinTarget(d2, folderUID);
+
+      const live = await edgeResolver.getActivePinTarget(folderUID, ownerAddr, dataSchemaUID);
+      expect(live).to.equal(d2);
+
+      // d1's PIN is no longer the active edge for the slot.
+      // Folder listing should show only d2.
+      const items = (await fileView.getFilesAtPath(folderUID, [ownerAddr], dataSchemaUID, "0x", 50)).items;
+      expect(items.length).to.equal(1);
+      expect(items[0].uid).to.equal(d2);
     });
 
-    it("TAG applies=false on never-tagged item is safe (no underflow)", async function () {
+    it("revoking a never-attested PIN is a no-op (no underflow)", async function () {
       const folderUID = await createAnchor(rootUID, "no-underflow");
-      const dataUID = await createData(hash("never-tagged"), 12n);
+      const dataUID = await createData(hash("never-pinned"), 12n);
 
-      // This should not revert
-      await tagTarget(dataUID, folderUID, false);
+      // unpinTarget is a no-op when there's no live PIN — we never attested one.
+      await unpinTarget(dataUID, folderUID);
 
       const ownerAddr = await owner.getAddress();
-      expect(await tagResolver.getActiveTargetsByAttesterAndSchemaCount(folderUID, ownerAddr, dataSchemaUID)).to.equal(
-        0n,
-      );
+      expect(await edgeResolver.getActivePinTarget(folderUID, ownerAddr, dataSchemaUID)).to.equal(ZERO_BYTES32);
     });
 
     it("DATA with no mirrors is valid", async function () {
       const docsUID = await createAnchor(rootUID, "no-mirrors");
       const dataUID = await createData(hash("mirrorless"), 10n);
-      await tagTarget(dataUID, docsUID, true);
+      await pinTarget(dataUID, docsUID);
 
       const mirrors = await fileView.getDataMirrors(dataUID, 0, 10);
       expect(mirrors.length).to.equal(0);
@@ -1462,31 +1694,46 @@ describe("EFS Data Model — E2E Integration", function () {
       expect(mirrors[0].attester).to.equal(await bob.getAddress());
     });
 
-    it("pagination: getFilesAtPath via opaque cursor (ADR-0036)", async function () {
+    it("pagination: getDirectoryPageBySchemaAndAddressList via opaque cursor (ADR-0036)", async function () {
       const ownerAddr = await owner.getAddress();
       const folderUID = await createAnchor(rootUID, "paginate");
 
-      const datas: string[] = [];
+      // Five file slots (one per file) — production pattern under PIN cardinality 1.
+      const slots: string[] = [];
       for (let i = 0; i < 5; i++) {
         const d = await createData(hash(`page-item-${i}`), BigInt(i + 1));
-        await tagTarget(d, folderUID, true);
-        datas.push(d);
+        const slot = await createAnchor(folderUID, `f${i}.bin`, dataSchemaUID);
+        await pinTarget(d, slot);
+        slots.push(slot);
       }
 
-      // First page: maxItems=3
-      const page1 = await fileView.getFilesAtPath(folderUID, [ownerAddr], dataSchemaUID, "0x", 3);
+      // First page: maxItems=3 — slots come back in newest-first order.
+      const page1 = await fileView.getDirectoryPageBySchemaAndAddressList(
+        folderUID,
+        dataSchemaUID,
+        [ownerAddr],
+        "0x",
+        3,
+      );
       expect(page1.items.length).to.equal(3);
       expect(page1.nextCursor).to.not.equal("0x");
 
       // Second page: resume with cursor
-      const page2 = await fileView.getFilesAtPath(folderUID, [ownerAddr], dataSchemaUID, page1.nextCursor, 3);
+      const page2 = await fileView.getDirectoryPageBySchemaAndAddressList(
+        folderUID,
+        dataSchemaUID,
+        [ownerAddr],
+        page1.nextCursor,
+        3,
+      );
       expect(page2.items.length).to.equal(2);
       expect(page2.nextCursor).to.equal("0x");
 
-      // All 5 unique UIDs across both pages
+      // All 5 unique slots across both pages.
       const allUIDs = [...page1.items.map((i: any) => i.uid), ...page2.items.map((i: any) => i.uid)];
       const uniqueUIDs = new Set(allUIDs);
       expect(uniqueUIDs.size).to.equal(5);
+      for (const slot of slots) expect(uniqueUIDs.has(slot)).to.equal(true);
     });
 
     it("MAX_ANCHOR_DEPTH is enforced (prevents gas griefing)", async function () {
@@ -1508,15 +1755,17 @@ describe("EFS Data Model — E2E Integration", function () {
       const bobAddr = await bob.getAddress();
 
       // ── Setup folder structure ──
-      const photosUID = await createAnchor(rootUID, "photos");
-      const vacationUID = await createAnchor(photosUID, "vacation");
-      const favoritesUID = await createAnchor(photosUID, "favorites");
+      const photosUID = await createAnchor(rootUID, "photos", ZERO_BYTES32, alice);
+      const vacationUID = await createAnchor(photosUID, "vacation", ZERO_BYTES32, alice);
+      const favoritesUID = await createAnchor(photosUID, "favorites", ZERO_BYTES32, alice);
 
       // Label anchors
       const tagsUID = await createAnchor(rootUID, "tags");
       const nsfwUID = await createAnchor(tagsUID, "nsfw");
 
       // ── Alice uploads 3 photos to /photos/vacation/ ──
+      // Each photo gets its own filename anchor (production pattern: PIN cardinality 1
+      // per file slot, so multiple files require multiple slots).
       const photo1 = await uploadFile(
         "beach sunrise pixels",
         "image/jpeg",
@@ -1524,6 +1773,7 @@ describe("EFS Data Model — E2E Integration", function () {
         "web3://0xBeach",
         vacationUID,
         alice,
+        "beach.jpg",
       );
       const photo2 = await uploadFile(
         "mountain view pixels",
@@ -1532,6 +1782,7 @@ describe("EFS Data Model — E2E Integration", function () {
         "ipfs://QmMountain",
         vacationUID,
         alice,
+        "mountain.jpg",
       );
       const photo3 = await uploadFile(
         "sunset over water",
@@ -1540,18 +1791,30 @@ describe("EFS Data Model — E2E Integration", function () {
         "ar://SunsetHash",
         vacationUID,
         alice,
+        "sunset.png",
       );
 
-      // ── Verify /photos/vacation/ shows 3 photos for Alice ──
-      let vacationItems = (await fileView.getFilesAtPath(vacationUID, [aliceAddr], dataSchemaUID, "0x", 50)).items;
+      // ── Verify /photos/vacation/ lists all 3 file slots for Alice ──
+      let vacationItems = (
+        await fileView.getDirectoryPageBySchemaAndAddressList(vacationUID, dataSchemaUID, [aliceAddr], "0x", 50)
+      ).items;
       expect(vacationItems.length).to.equal(3);
+      const initialNames = vacationItems.map((i: any) => i.name).sort();
+      expect(initialNames).to.deep.equal(["beach.jpg", "mountain.jpg", "sunset.png"]);
 
       // ── Alice cross-references photo1 into /photos/favorites/ ──
-      await tagTarget(photo1.dataUID, favoritesUID, true, alice);
+      // Cross-reference = a separate filename slot under /favorites/ that PINs the
+      // same DATA. Same DATA, two slots — content dedup at the DATA layer, distinct
+      // slots at the placement layer.
+      const favBeachSlot = await createAnchor(favoritesUID, "beach.jpg", dataSchemaUID, alice);
+      await pinTarget(photo1.dataUID, favBeachSlot, alice);
 
-      const favItems = (await fileView.getFilesAtPath(favoritesUID, [aliceAddr], dataSchemaUID, "0x", 50)).items;
+      const favItems = (
+        await fileView.getDirectoryPageBySchemaAndAddressList(favoritesUID, dataSchemaUID, [aliceAddr], "0x", 50)
+      ).items;
       expect(favItems.length).to.equal(1);
-      expect(favItems[0].uid).to.equal(photo1.dataUID);
+      expect(favItems[0].name).to.equal("beach.jpg");
+      expect(await edgeResolver.getActivePinTarget(favItems[0].uid, aliceAddr, dataSchemaUID)).to.equal(photo1.dataUID);
 
       // ── Bob adds an IPFS mirror to Alice's beach photo ──
       await createMirror(photo1.dataUID, ipfsTransportUID, "ipfs://QmBeachBackup", bob);
@@ -1559,42 +1822,46 @@ describe("EFS Data Model — E2E Integration", function () {
       expect(beachMirrors.length).to.equal(2); // onchain + IPFS
 
       // ── Alice edits photo2 (new version) ──
+      // PIN replacement at the same slot supersedes the prior DATA in O(1) — no
+      // explicit revoke needed for the supersede semantic.
       const photo2v2Hash = hash("mountain view pixels ENHANCED");
       const photo2v2 = await createData(photo2v2Hash, 30n, alice);
       await createProperty(photo2v2, "contentType", "image/jpeg", alice);
       await createMirror(photo2v2, ipfsTransportUID, "ipfs://QmMountainV2", alice);
-      await createProperty(photo2v2, "previousVersion", photo2.dataUID, alice); // previousVersion
+      await createProperty(photo2v2, "previousVersion", photo2.dataUID, alice);
+      await pinTarget(photo2v2, photo2.fileSlotUID, alice); // supersedes photo2.dataUID at the slot
 
-      // Untag old, tag new
-      await tagTarget(photo2.dataUID, vacationUID, false, alice);
-      await tagTarget(photo2v2, vacationUID, true, alice);
-
-      // Still 3 items (photo1, photo2v2, photo3)
-      vacationItems = (await fileView.getFilesAtPath(vacationUID, [aliceAddr], dataSchemaUID, "0x", 50)).items;
+      // Still 3 file slots; the mountain slot now resolves to v2.
+      vacationItems = (
+        await fileView.getDirectoryPageBySchemaAndAddressList(vacationUID, dataSchemaUID, [aliceAddr], "0x", 50)
+      ).items;
       expect(vacationItems.length).to.equal(3);
-      const vacUIDs = vacationItems.map((i: any) => i.uid);
-      expect(vacUIDs).to.include(photo2v2);
-      expect(vacUIDs).to.not.include(photo2.dataUID);
+      expect(await edgeResolver.getActivePinTarget(photo2.fileSlotUID, aliceAddr, dataSchemaUID)).to.equal(photo2v2);
 
-      // ── Bob marks photo3 as NSFW ──
-      await tagTarget(photo3.dataUID, nsfwUID, true, bob);
+      // ── Bob marks photo3's DATA as NSFW (TAG, not PIN — labels are cardinality N) ──
+      await tagTarget(photo3.dataUID, nsfwUID, bob);
 
-      // ── Client-side NSFW filter: only show non-NSFW items ──
-      const allVacation = (await fileView.getFilesAtPath(vacationUID, [aliceAddr], dataSchemaUID, "0x", 50)).items;
+      // ── Client-side NSFW filter: resolve each slot's active DATA, drop labelled ones ──
+      const allVacation = (
+        await fileView.getDirectoryPageBySchemaAndAddressList(vacationUID, dataSchemaUID, [aliceAddr], "0x", 50)
+      ).items;
       const safeVacation = [];
       for (const item of allVacation) {
-        const isNsfw = await tagResolver.isActivelyTagged(item.uid, nsfwUID);
+        const dataUID = await edgeResolver.getActivePinTarget(item.uid, aliceAddr, dataSchemaUID);
+        const isNsfw = await edgeResolver.hasActiveEdge(dataUID, nsfwUID);
         if (!isNsfw) safeVacation.push(item);
       }
-      expect(safeVacation.length).to.equal(2); // photo1 and photo2v2
+      expect(safeVacation.length).to.equal(2); // beach.jpg (photo1) and mountain.jpg (photo2v2)
+      const safeNames = safeVacation.map((i: any) => i.name).sort();
+      expect(safeNames).to.deep.equal(["beach.jpg", "mountain.jpg"]);
 
       // ── Tree visibility: alice visible up to root ──
       expect(await indexer.containsAttestations(vacationUID, aliceAddr)).to.equal(true);
       expect(await indexer.containsAttestations(photosUID, aliceAddr)).to.equal(true);
       expect(await indexer.containsAttestations(rootUID, aliceAddr)).to.equal(true);
 
-      // Bob hasn't tagged anything at these paths, so no containsAttestations
-      // (Bob's NSFW tag definition is /tags/nsfw, not /photos/vacation/)
+      // Bob hasn't placed anything at these paths, so no containsAttestations
+      // (Bob's NSFW TAG is at /tags/nsfw, not /photos/vacation/)
       expect(await indexer.containsAttestations(vacationUID, bobAddr)).to.equal(false);
 
       // ── Dedup: re-uploading same beach photo returns same canonical ──

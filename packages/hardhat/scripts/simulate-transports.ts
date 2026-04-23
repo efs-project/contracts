@@ -1,27 +1,32 @@
 import { ethers } from "hardhat";
-import { EFSIndexer, TagResolver, EFSFileView, EFSRouter } from "../typechain-types";
+import { EFSIndexer, EdgeResolver, EFSFileView, EFSRouter } from "../typechain-types";
 
 /**
  * EFS Transports & Mirrors Simulation
  *
- * Exercises the full multi-transport retrieval layer:
+ * Exercises the full multi-transport retrieval layer under the ADR-0041
+ * PIN/TAG model:
  *   DATA (standalone) → MIRROR(s) (per transport) → gateway resolution
+ *
+ * File placement is PIN (cardinality 1) — `PIN(definition=fileAnchor, refUID=DATA)`
+ * with one active PIN per (attester, definition, targetSchema) slot. Removal is
+ * always `eas.revoke()` — there is no `applies=false` supersede.
  *
  * Tests:
  *   1.  Transport definition anchor discovery (/transports/*)
- *   2.  Single-transport file upload (DATA + MIRROR + TAG)
+ *   2.  Single-transport file upload (DATA + MIRROR + PIN)
  *   3.  Multi-transport mirrors on one DATA (IPFS + Arweave + HTTPS)
  *   4.  EFSFileView.getDataMirrors pagination + revocation filtering
  *   5.  Best-mirror selection via EFSRouter._getBestMirrorURI (web3:// preferred)
  *   6.  Content-addressed dedup — same content, shared mirrors
  *   7.  Adding a mirror to someone else's DATA (permissionless)
  *   8.  Mirror revocation — revoke one transport, others survive
- *   9.  EFSRouter full resolution: path → TAG → DATA → MIRROR → response
- *  10.  EFSFileView.getFilesAtPath for tag-based folder listing
- *  11.  Cross-path mirror sharing (same DATA at two paths)
+ *   9.  EFSRouter full resolution: path → PIN → DATA → MIRROR → response
+ *  10.  EFSFileView.getFilesAtPath for PIN-based folder listing
+ *  11.  Cross-path mirror sharing (same DATA at two paths via two PINs)
  *  12.  Transport preference ordering (onchain > ipfs > arweave > https > magnet)
  *  13.  Magnet link transport
- *  14.  contentType PROPERTY resolution via EFSRouter._getContentType
+ *  14.  contentType PROPERTY resolution via EFSRouter._getContentType (PIN-based binding)
  *
  * Run: npx hardhat run scripts/simulate-transports.ts --network localhost
  */
@@ -72,16 +77,19 @@ async function main() {
   const dataSchemaUID = await indexer.DATA_SCHEMA_UID();
   const propertySchemaUID = await indexer.PROPERTY_SCHEMA_UID();
   const mirrorSchemaUID = await indexer.MIRROR_SCHEMA_UID();
+  const pinSchemaUID = await indexer.PIN_SCHEMA_UID();
   const tagSchemaUID = await indexer.TAG_SCHEMA_UID();
-  const tagResolverAddr = await indexer.tagResolver();
-  const tagResolver = (await ethers.getContractAt("TagResolver", tagResolverAddr)) as unknown as TagResolver;
+  const edgeResolverAddr = await indexer.edgeResolver();
+  const edgeResolver = (await ethers.getContractAt("EdgeResolver", edgeResolverAddr)) as unknown as EdgeResolver;
+  void tagSchemaUID; // file placement uses PIN here; TAG schema unused in these tests
   const rootUID = await indexer.rootAnchorUID();
 
-  console.log(`Indexer:   ${indexer.target}`);
-  console.log(`FileView:  ${fileView.target}`);
-  console.log(`Router:    ${router.target}`);
-  console.log(`EAS:       ${eas.target}`);
-  console.log(`Root:      ${rootUID}\n`);
+  console.log(`Indexer:       ${indexer.target}`);
+  console.log(`FileView:      ${fileView.target}`);
+  console.log(`Router:        ${router.target}`);
+  console.log(`EdgeResolver:  ${edgeResolver.target}`);
+  console.log(`EAS:           ${eas.target}`);
+  console.log(`Root:          ${rootUID}\n`);
 
   // Session ID for unique names
   const S = Date.now().toString(36);
@@ -138,9 +146,10 @@ async function main() {
   };
 
   /**
-   * Attach a PROPERTY to a container using the unified free-floating model
-   * (ADR-0035): key anchor under the container, free-floating PROPERTY(value),
-   * and a TAG binding them. Returns the PROPERTY UID.
+   * Attach a PROPERTY to a container under the ADR-0041 model: key anchor under
+   * the container, free-floating PROPERTY(value), and a PIN (cardinality 1)
+   * binding them. Returns the PROPERTY UID. Re-binding the same key with a new
+   * PROPERTY UID supersedes the prior PIN in O(1).
    */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const property = async (signer: any, containerUID: string, key: string, value: string) => {
@@ -173,17 +182,7 @@ async function main() {
     });
     const propertyUID: string = await getUID(propTx);
 
-    await eas.connect(signer).attest({
-      schema: tagSchemaUID,
-      data: {
-        recipient: ethers.ZeroAddress,
-        expirationTime: 0n,
-        revocable: true,
-        refUID: propertyUID,
-        data: encode.encode(["bytes32", "bool"], [keyAnchorUID, true]),
-        value: 0n,
-      },
-    });
+    await pin(signer, propertyUID, keyAnchorUID);
     return propertyUID;
   };
 
@@ -203,16 +202,20 @@ async function main() {
     return getUID(tx);
   };
 
+  /**
+   * PIN a target under a definition (ADR-0041, cardinality 1). Re-pinning the
+   * same (definition, attester, targetSchema) slot supersedes prior PIN in O(1).
+   */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const tag = async (signer: any, targetUID: string, definition: string, applies: boolean) => {
+  const pin = async (signer: any, targetUID: string, definition: string) => {
     const tx = await eas.connect(signer).attest({
-      schema: tagSchemaUID,
+      schema: pinSchemaUID,
       data: {
         recipient: ethers.ZeroAddress,
         expirationTime: 0n,
         revocable: true,
         refUID: targetUID,
-        data: encode.encode(["bytes32", "bool"], [definition, applies]),
+        data: encode.encode(["bytes32"], [definition]),
         value: 0n,
       },
     });
@@ -235,6 +238,7 @@ async function main() {
   const arweaveTransportUID = await indexer.resolvePath(transportsUID, "arweave");
   const magnetTransportUID = await indexer.resolvePath(transportsUID, "magnet");
   const httpsTransportUID = await indexer.resolvePath(transportsUID, "https");
+  void onchainTransportUID; // /transports/onchain exists but isn't exercised in this script
 
   // ======================================================================
   // TEST 1: Transport Definition Anchor Discovery
@@ -263,7 +267,7 @@ async function main() {
   const photo1Data = await createData(owner, "sunset-jpeg-bytes-content");
   await property(owner, photo1Data.uid, "contentType", "image/jpeg");
   const photo1Mirror = await createMirror(owner, photo1Data.uid, ipfsTransportUID, "ipfs://QmSunset123");
-  await tag(owner, photo1Data.uid, photo1UID, true);
+  await pin(owner, photo1Data.uid, photo1UID);
 
   // Verify mirror is discoverable via getReferencingAttestations
   const photo1Mirrors = await indexer.getReferencingAttestations(photo1Data.uid, mirrorSchemaUID, 0, 10, false);
@@ -291,7 +295,7 @@ async function main() {
   const _docMirrorIPFS = await createMirror(owner, docData.uid, ipfsTransportUID, "ipfs://QmPaper456");
   const _docMirrorArweave = await createMirror(owner, docData.uid, arweaveTransportUID, "ar://paper789");
   const docMirrorHTTPS = await createMirror(owner, docData.uid, httpsTransportUID, "https://example.com/paper.pdf");
-  await tag(owner, docData.uid, docUID, true);
+  await pin(owner, docData.uid, docUID);
 
   const docMirrors = await indexer.getReferencingAttestations(docData.uid, mirrorSchemaUID, 0, 10, false);
   assert("3 mirrors on paper.pdf DATA", docMirrors.length === 3, `got ${docMirrors.length}`);
@@ -391,43 +395,31 @@ async function main() {
   assert("original DATA mirrors unchanged", origMirrors.length === 2);
 
   // ======================================================================
-  // TEST 8: Cross-Path Mirror Sharing (same DATA at two paths)
+  // TEST 8: Cross-Path Sharing (same DATA at two paths via two PINs)
   // ======================================================================
   console.log("\n[8] Cross-Path Sharing\n");
 
   const favesUID = await anchor(owner, `faves_${S}`, rootUID);
   const faveSunsetUID = await anchor(owner, "sunset.jpg", favesUID, dataSchemaUID);
 
-  // Place the SAME original DATA at a second path — no new mirrors needed
-  await tag(owner, photo1Data.uid, faveSunsetUID, true);
+  // Place the SAME original DATA at a second path — independent PIN slot, no
+  // new mirrors needed. The PIN at /faves/sunset.jpg is cardinality 1 just
+  // like the one at /gallery/sunset.jpg.
+  await pin(owner, photo1Data.uid, faveSunsetUID);
 
-  // Verify the DATA is now in both paths
-  const galleryTargets = await tagResolver.getActiveTargetsByAttesterAndSchema(
-    photo1UID,
-    ownerAddr,
-    dataSchemaUID,
-    0,
-    10,
-  );
-  assert("sunset.jpg in /gallery/ via TAG", galleryTargets.length === 1);
-  assert("gallery points to original DATA", galleryTargets[0] === photo1Data.uid);
+  // Verify the DATA is now in both paths via PIN reads
+  const galleryTarget = await edgeResolver.getActivePinTarget(photo1UID, ownerAddr, dataSchemaUID);
+  assert("sunset.jpg in /gallery/ via PIN", galleryTarget === photo1Data.uid);
 
-  const faveTargets = await tagResolver.getActiveTargetsByAttesterAndSchema(
-    faveSunsetUID,
-    ownerAddr,
-    dataSchemaUID,
-    0,
-    10,
-  );
-  assert("sunset.jpg in /faves/ via TAG", faveTargets.length === 1);
-  assert("faves points to same DATA", faveTargets[0] === photo1Data.uid);
+  const faveTarget = await edgeResolver.getActivePinTarget(faveSunsetUID, ownerAddr, dataSchemaUID);
+  assert("sunset.jpg in /faves/ via PIN", faveTarget === photo1Data.uid);
 
   // Both paths share the same mirrors
-  const favesMirrors = await fileView.getDataMirrors(faveTargets[0], 0, 10);
+  const favesMirrors = await fileView.getDataMirrors(faveTarget, 0, 10);
   assert("shared DATA, shared mirrors (2)", favesMirrors.length === 2, `got ${favesMirrors.length}`);
 
   // ======================================================================
-  // TEST 9: EFSFileView.getFilesAtPath (tag-based folder listing)
+  // TEST 9: EFSFileView.getFilesAtPath (PIN-based folder listing)
   // ======================================================================
   console.log("\n[9] EFSFileView.getFilesAtPath\n");
 
@@ -438,7 +430,7 @@ async function main() {
   assert("returned item has correct contentHash", galleryFiles[0].contentHash === photo1Data.contentHash);
   assert("returned item hasData=true", galleryFiles[0].hasData);
 
-  // Multi-attester query: owner + user2 at sunset anchor (owner tagged, user2 didn't)
+  // Multi-attester query: owner + user2 at sunset anchor (owner pinned, user2 didn't)
   const multiAttesterPage = await fileView.getFilesAtPath(photo1UID, [ownerAddr, u2Addr], dataSchemaUID, "0x", 10);
   assert("multi-attester: only owner's DATA", multiAttesterPage.items.length === 1);
 
@@ -452,7 +444,7 @@ async function main() {
   await property(owner, torrentData.uid, "contentType", "application/x-iso9660-image");
   const magnetURI = "magnet:?xt=urn:btih:abc123&dn=linux.iso";
   await createMirror(owner, torrentData.uid, magnetTransportUID, magnetURI);
-  await tag(owner, torrentData.uid, torrentUID, true);
+  await pin(owner, torrentData.uid, torrentUID);
 
   const torrentMirrors = await fileView.getDataMirrors(torrentData.uid, 0, 10);
   assert("magnet mirror created", torrentMirrors.length === 1);
@@ -472,7 +464,7 @@ async function main() {
   // Add mirrors in non-preferred order: https first, then ipfs
   await createMirror(owner, prefData.uid, httpsTransportUID, "https://cdn.example.com/pref.txt");
   await createMirror(owner, prefData.uid, ipfsTransportUID, "ipfs://QmPref");
-  await tag(owner, prefData.uid, prefUID, true);
+  await pin(owner, prefData.uid, prefUID);
 
   // Router request — should pick ipfs or https (no web3:// mirror, so first non-web3 wins)
   // Since _getBestMirrorURI prefers web3://, and there's none, it picks the first available
@@ -496,19 +488,13 @@ async function main() {
   // ======================================================================
   console.log("\n[12] contentType PROPERTY Resolution\n");
 
-  // Verify the _getContentType fix: it should return the PROPERTY value via
-  // the unified free-floating model — key anchor + attester-scoped TAG.
+  // ADR-0041: PROPERTY values are bound to the key anchor via PIN (cardinality 1).
+  // _getContentType reads the active PIN's target via getActivePinTarget — O(1).
   const ctKeyAnchor = await indexer.resolveAnchor(prefData.uid, "contentType", propertySchemaUID);
   assert("contentType key anchor indexed under DATA", ctKeyAnchor !== ethers.ZeroHash, `got ${ctKeyAnchor}`);
-  const ctProps = await tagResolver.getActiveTargetsByAttesterAndSchema(
-    ctKeyAnchor,
-    ownerAddr,
-    propertySchemaUID,
-    0,
-    10,
-  );
-  assert("Owner has 1 active contentType PROPERTY", ctProps.length === 1, `got ${ctProps.length}`);
-  const ctPropAtt = await eas.getAttestation(ctProps[0]);
+  const ctPropertyUID = await edgeResolver.getActivePinTarget(ctKeyAnchor, ownerAddr, propertySchemaUID);
+  assert("Owner has an active contentType PROPERTY PIN", ctPropertyUID !== ethers.ZeroHash, `got ${ctPropertyUID}`);
+  const ctPropAtt = await eas.getAttestation(ctPropertyUID);
   const [ctValue] = encode.decode(["string"], ctPropAtt.data);
   assert("PROPERTY value is 'text/plain'", ctValue === "text/plain", `got ${ctValue}`);
 
@@ -530,13 +516,12 @@ async function main() {
 
   // No editions → should still find data via referencing fallback or return 404
   const noEditionsRes = await router.request([`gallery_${S}`, "sunset.jpg"], []);
-  // Without editions, Router falls back to getReferencingAttestations
-  // sunset.jpg anchor has no direct DATA refUID, but photo1Data.uid doesn't ref the anchor either
-  // In new model without editions, the router's no-editions fallback checks getReferencingAttestations
-  // on the anchor for DATA_SCHEMA — which returns empty (DATA is standalone). So this should 404.
+  // Without editions, Router falls back to default-editions chain (caller → segment owner → deployer).
+  // sunset.jpg under /gallery/ is a normal anchor (not an address-container), so the fallback walks
+  // [caller, EFS_DEPLOYER]. caller=owner=deployer here, so the active PIN is found and 200 is returned.
   assert(
-    "Router with no editions returns 404 (DATA is tag-placed, not direct ref)",
-    noEditionsRes[0] === 404n,
+    "Router with no editions returns 200 (default-editions resolves to deployer)",
+    noEditionsRes[0] === 200n,
     `got ${noEditionsRes[0]}`,
   );
 
@@ -547,7 +532,7 @@ async function main() {
 
   const orphanUID = await anchor(owner, `orphan_${S}.txt`, galleryUID, dataSchemaUID);
   const orphanData = await createData(owner, "orphan-no-mirrors");
-  await tag(owner, orphanData.uid, orphanUID, true);
+  await pin(owner, orphanData.uid, orphanUID);
 
   const orphanMirrors = await fileView.getDataMirrors(orphanData.uid, 0, 10);
   assert("DATA with no mirrors returns empty", orphanMirrors.length === 0);

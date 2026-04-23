@@ -6,7 +6,7 @@
 
 ## Context
 
-Several `EFSFileView` read functions combine **more than one underlying source** into a single result page — notably, schema-filtered directory listings merge "qualifying tagged folders" (from `TagResolver._childrenTaggedWith`) with "content children" (from `EFSIndexer._childrenBySchema`), and multi-attester file listings merge per-attester active-target lists (`_activeByAAS`) with cross-attester dedup. Today these functions expose a single `(uint256 startingCursor, uint256 pageSize)` input and return at most one `nextCursor`:
+Several `EFSFileView` read functions combine **more than one underlying source** into a single result page — notably, schema-filtered directory listings merge "qualifying tagged folders" (from `EdgeResolver._childrenWithEdge`) with "content children" (from `EFSIndexer._childrenBySchema`), and multi-attester file listings merge per-attester active-PIN targets with cross-attester dedup. Today these functions expose a single `(uint256 startingCursor, uint256 pageSize)` input and return at most one `nextCursor`:
 
 - `getDirectoryPageBySchemaAndAddressList(parent, schema, attesters, startingCursor, pageSize) → (items, nextCursor)`
   - Materializes the entire qualifying-folder set up-front via `_getQualifyingTaggedFolders`, capped at `MAX_TAGGED_FOLDERS = 10000`. Folders past the cap are silently dropped. Folders appear only on page 1 (hard-coded `startingCursor == 0` branch); if a page-1 response is larger than the UI's render budget, the caller cannot resume from the middle of the folder set.
@@ -77,27 +77,27 @@ For `getFilesAtPath`:
 ```solidity
 abi.encode(uint256 attesterIdx, uint256 targetIdx)
 // attesterIdx: next attester in the caller-supplied list
-// targetIdx:   next position in _activeByAAS[anchorUID][attesters[attesterIdx]][schema]
+// targetIdx:   next position in _activeBySlot[anchorUID][attesters[attesterIdx]][schema] (PIN; cardinality 1 per ADR-0041)
 ```
 
 Both schemes are deploy-mutable: since `EFSFileView` is stateless (and marked redeployable in `specs/overview.md`), a new cursor format can ship with a new `EFSFileView` address. Clients round-trip tokens within a deploy; they don't persist them across deploys. Documented as part of the API contract.
 
 ### Dedup semantics
 
-Multi-attester views (the "editions" model, ADR-0031) must return each target at most once. With an opaque cursor, dedup is expressed as: when processing attester `a`'s active target `t`, skip `t` if any earlier attester `b` (where `b` appears before `a` in the caller's attester list) has an active tag on `t`. Checked via `TagResolver.getActiveTagUID(b, t, definition) != 0`, which is O(1) per check. Total dedup cost is O(attesters × page_size), replacing the prior O(n²) scratch-buffer scan.
+Multi-attester views (the "editions" model, ADR-0031) must return each target at most once. File placement is Shape A (PIN only — cardinality 1 per `(attester, definition, targetSchema)` slot, ADR-0041). Dedup is expressed as: when processing attester `a`'s active PIN target `t`, skip `t` if any earlier attester `b` already has an active PIN on `(t, definition)`. Checked via `EdgeResolver.isActivePinEdge(b, t, definition)`, which is O(1) per check. Total dedup cost is O(attesters × page_size), replacing the prior O(n²) scratch-buffer scan.
 
 ### No result cap
 
-Neither function retains a `MAX_TAGGED_FOLDERS`, `length × attesters` allocation, or any implicit ceiling on total source size. The walker processes whatever `_childrenTaggedWith` / `_childrenBySchema` / `_activeByAAS` contain; growth is bounded only by the underlying indices, which are themselves bounded by actual on-chain attestations.
+Neither function retains a `MAX_TAGGED_FOLDERS`, `length × attesters` allocation, or any implicit ceiling on total source size. The walker processes whatever `_childrenTaggedWith` / `_childrenBySchema` / `_activeBySlot` (PIN placement storage) contain; growth is bounded only by the underlying indices, which are themselves bounded by actual on-chain attestations.
 
 ## Consequences
 
 - **Silent truncation is structurally eliminated.** There is no cap past which entries vanish; the only way to "miss" an entry is if the caller stops paging early, which is explicit.
 - **API remains stable as internals evolve.** New sources can be added to a merged page (e.g. a future "pinned folders" phase) by bumping the encoded phase tag. Existing clients continue to send the old cursor shape until the next deploy; no caller-facing breaking change.
 - **ADR-0030 compatibility.** Because the caller never inspects the cursor, there is no mainnet-permanent encoding commitment. The `DirectoryPage` struct and the opaque-bytes contract are the frozen surface.
-- **Concurrent-mutation semantics are "best-effort."** For phase 0 and the `getFilesAtPath` walker, the underlying indices are stable append-only structures — indices don't shift. For the `_activeByAAS` swap-and-pop index used in `getFilesAtPath`, a revocation between calls can shift later entries up by one slot; the next resumed page may skip one item or show one item twice. Documented as a best-effort pagination guarantee under concurrent mutation, in line with every non-snapshotting paginator in the industry. Not fixable without a snapshot index.
+- **Concurrent-mutation semantics are "best-effort."** For phase 0 and the `getFilesAtPath` walker, the underlying indices are stable append-only structures — indices don't shift. For the `_activeBySlot` PIN storage used in `getFilesAtPath`, a revocation between calls clears that slot; the next resumed page safely skips to the next attester's slot. Documented as a best-effort pagination guarantee under concurrent mutation, in line with every non-snapshotting paginator in the industry. Not fixable without a snapshot index.
 - **Work-per-call is bounded by `maxItems` + filter skip.** Callers pick `maxItems`; internal walkers advance indices even for filtered-out entries, so heavily-filtered pages cost proportionally more per item returned. Mitigated by picking `maxItems` conservatively (e.g. 20–50 for UI use); unbounded walks are the caller's choice.
-- **Dedup cost drops from O(n²) to O(n · attesters).** Via `getActiveTagUID` O(1) lookups.
+- **Dedup cost drops from O(n²) to O(n · attesters).** Via `isActivePinEdge` O(1) lookups (ADR-0041).
 - **Client complexity is unchanged or lower.** Clients that previously tracked `(start, pageSize)` manually now round-trip an opaque `bytes` value. No phase reasoning; no "folders only on page 1" special case.
 - **`MAX_ATTESTERS_PER_QUERY = 20` is retained** as a hard bound on per-call gas. This is a bound on the caller's attester list length, not on returned items, so it does not cause silent truncation of results — it's a precondition the caller asserts.
 - **Tests and simulation scripts must update signatures.** Internal — no mainnet impact.
@@ -108,3 +108,7 @@ Neither function retains a `MAX_TAGGED_FOLDERS`, `length × attesters` allocatio
 - **Return `(items, uint256 nextStart, bool truncated)`.** Rejected — `truncated` is a lossy signal (it tells you there's more, but not where). Callers still can't resume from mid-folder on page 1. The opaque-cursor approach subsumes this.
 - **Split into separate single-source functions and have clients merge.** Rejected — pushes dedup and ordering responsibility to clients (including the `web3://` router), and makes the sidebar/browser UI fetch 2–3× the calls. The merged view is the natural unit; the bug was how pagination was expressed, not that merging exists.
 - **Numeric compound cursor (`uint256 packed`).** Rejected — commits to a fixed bit layout on mainnet. Bytes are strictly more flexible at negligible cost (abi encoding overhead is dwarfed by the rest of the call).
+
+---
+
+*Prose-accuracy corrections 2026-04-22 (within 30-day grace window): (1) Context updated from `TagResolver._childrenTaggedWith` / `_activeByAAS` to `EdgeResolver._childrenWithEdge` / per-attester PIN targets — contract renamed and schema split per ADR-0041. (2) Dedup semantics section rewritten: dedup is now `isActivePinEdge` (PIN-specific, O(1)) not `TagResolver.getActiveTagUID` — file placement is PIN (Shape A); TAG is irrelevant to the dedup check. (3) Concurrent-mutation consequences bullet updated to `_activeBySlot` (PIN storage). (4) `getFilesAtPath` cursor pseudocode comment: `_activeByAAS` → `_activeBySlot` (PIN is cardinality 1 per ADR-0041). (5) "No result cap" section: `_activeByAAS` → `_activeBySlot` (PIN placement storage). The core decision — opaque cursor over multi-source views — is unchanged.*

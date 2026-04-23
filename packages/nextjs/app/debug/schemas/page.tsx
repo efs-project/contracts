@@ -92,6 +92,9 @@ export default function DebugSchemas() {
   const registry = useSchemaRegistry();
 
   // State for forms
+  const [pinRef, setPinRef] = useState("");
+  const [pinDef, setPinDef] = useState("");
+
   const [tagRef, setTagRef] = useState("");
   const [tagDef, setTagDef] = useState("");
   const [tagWeight, setTagWeight] = useState("1");
@@ -100,11 +103,8 @@ export default function DebugSchemas() {
   const [propName, setPropName] = useState("");
   const [propVal, setPropVal] = useState("");
 
-  const [dataRef, setDataRef] = useState("");
-  const [dataName, setDataName] = useState("");
-  const [dataBlobUID, setDataBlobUID] = useState("");
-
-  const [dataFileMode, setDataFileMode] = useState("100644"); // Default file mode
+  const [dataContentHash, setDataContentHash] = useState("");
+  const [dataSize, setDataSize] = useState("0");
 
   const [anchorRef, setAnchorRef] = useState("");
   const [anchorName, setAnchorName] = useState("");
@@ -118,9 +118,9 @@ export default function DebugSchemas() {
   // Initialize/Update form refs when rootTopicUid loads
   useEffect(() => {
     if (registry.rootTopicUid && registry.rootTopicUid !== zeroHash) {
+      if (!pinRef || pinRef === zeroHash) setPinRef(registry.rootTopicUid);
       if (!tagRef || tagRef === zeroHash) setTagRef(registry.rootTopicUid);
       if (!propRef || propRef === zeroHash) setPropRef(registry.rootTopicUid);
-      if (!dataRef || dataRef === zeroHash) setDataRef(registry.rootTopicUid);
       if (!blobRef || blobRef === zeroHash) setBlobRef(registry.rootTopicUid);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -272,10 +272,78 @@ export default function DebugSchemas() {
           </div>
         </div>
 
-        {/* TAG FORM */}
+        {/* PIN FORM (cardinality 1, ADR-0041) */}
+        <div className="card w-96 bg-base-100 shadow-xl border border-base-200">
+          <div className="card-body">
+            <h2 className="card-title">Pin Schema</h2>
+            <div className="text-xs opacity-50 mb-2">
+              Cardinality 1 — re-attesting at the same (attester, definition, targetSchema) supersedes the prior PIN in
+              O(1). Removal is via eas.revoke().
+            </div>
+            <div className="form-control">
+              <label className="label">
+                <span className="label-text">Ref UID (Target)</span>
+              </label>
+              <input
+                type="text"
+                value={pinRef}
+                onChange={e => setPinRef(e.target.value)}
+                className="input input-bordered"
+              />
+            </div>
+            <div className="form-control">
+              <label className="label">
+                <span className="label-text">Definition (Anchor or Schema UID)</span>
+              </label>
+              <input
+                type="text"
+                value={pinDef}
+                onChange={e => setPinDef(e.target.value)}
+                className="input input-bordered"
+                placeholder="0x... (anchor UID or schema UID — ADR-0041)"
+              />
+            </div>
+            <div className="card-actions justify-end mt-4">
+              <button
+                className="btn btn-primary"
+                disabled={isPending}
+                onClick={() => {
+                  try {
+                    let defBytes;
+                    if (pinDef.startsWith("0x")) {
+                      defBytes = pinDef as `0x${string}`;
+                    } else {
+                      defBytes = stringToHex(pinDef, { size: 32 });
+                    }
+                    // Schema: bytes32 definition (via EdgeResolver, ADR-0041)
+                    const pinSchema = (schemas as any).PIN as string | undefined;
+                    if (!pinSchema) {
+                      notification.error("PIN schema not available.");
+                      return;
+                    }
+                    const encoded = encodeAbiParameters(parseAbiParameters("bytes32"), [defBytes]);
+                    attest(pinSchema, pinRef, encoded);
+                  } catch (e) {
+                    console.error(e);
+                    notification.error("Encoding failed");
+                  }
+                }}
+              >
+                Attest Pin
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* TAG FORM (cardinality N, ADR-0041) */}
         <div className="card w-96 bg-base-100 shadow-xl border border-base-200">
           <div className="card-body">
             <h2 className="card-title">Tag Schema</h2>
+            <div className="text-xs opacity-50 mb-2">
+              Cardinality N — entries accumulate at the same (attester, definition, targetSchema) slot. Each carries an
+              int256 weight as opaque sort/score/ranking metadata for consumers (overlays, subgraphs). The weight has no
+              kernel-level meaning — it does not assert/supersede. Removal is via eas.revoke().
+            </div>
             <div className="form-control">
               <label className="label">
                 <span className="label-text">Ref UID (Target)</span>
@@ -289,7 +357,7 @@ export default function DebugSchemas() {
             </div>
             <div className="form-control">
               <label className="label">
-                <span className="label-text">Label (String/Hex)</span>
+                <span className="label-text">Definition (String/Hex)</span>
               </label>
               <input
                 type="text"
@@ -316,24 +384,26 @@ export default function DebugSchemas() {
                 disabled={isPending}
                 onClick={() => {
                   try {
-                    let labelBytes;
+                    let defBytes;
                     if (tagDef.startsWith("0x")) {
-                      labelBytes = tagDef as `0x${string}`;
+                      defBytes = tagDef as `0x${string}`;
                     } else {
-                      labelBytes = stringToHex(tagDef, { size: 32 });
+                      defBytes = stringToHex(tagDef, { size: 32 });
                     }
-                    // Schema: bytes32 definition, bool applies (via TagResolver)
-                    // NOTE: TAG attestations now go through the TagResolver contract.
-                    // Use the TagModal in the File Explorer for proper tag management.
-                    const tagSchema = (schemas as any).TAG as string | undefined;
-                    if (!tagSchema) {
-                      notification.error("TAG schema not available. Use TagModal in File Explorer.");
+                    let weight: bigint;
+                    try {
+                      weight = BigInt(tagWeight);
+                    } catch {
+                      notification.error("Weight must be a valid integer");
                       return;
                     }
-                    const encoded = encodeAbiParameters(parseAbiParameters("bytes32, bool"), [
-                      labelBytes,
-                      true, // applies
-                    ]);
+                    // Schema: bytes32 definition, int256 weight (via EdgeResolver, ADR-0041)
+                    const tagSchema = (schemas as any).TAG as string | undefined;
+                    if (!tagSchema) {
+                      notification.error("TAG schema not available.");
+                      return;
+                    }
+                    const encoded = encodeAbiParameters(parseAbiParameters("bytes32, int256"), [defBytes, weight]);
                     attest(tagSchema, tagRef, encoded);
                   } catch (e) {
                     console.error(e);
@@ -347,37 +417,40 @@ export default function DebugSchemas() {
           </div>
         </div>
 
-        {/* PROPERTY FORM (Smart) */}
+        {/* PROPERTY FORM — 3-step: key anchor + free-floating PROPERTY + PIN binding (ADR-0041) */}
         <div className="card w-96 bg-base-100 shadow-xl border border-base-200">
           <div className="card-body">
             <h2 className="card-title">Property Schema</h2>
-            <div className="text-xs opacity-50 mb-2">Creates Anchor(Name) -&gt; Property(Value)</div>
+            <div className="text-xs opacity-50 mb-2">
+              3 txns: Anchor(key) → PROPERTY(value, standalone) → PIN(binding). Per ADR-0041.
+            </div>
             <div className="form-control">
               <label className="label">
-                <span className="label-text">Ref UID (Target)</span>
+                <span className="label-text">Container UID (refUID of key anchor)</span>
               </label>
               <input
                 type="text"
                 value={propRef}
                 onChange={e => setPropRef(e.target.value)}
-                className="input input-bordered"
+                className="input input-bordered font-mono text-xs"
+                placeholder="0x… (DATA / anchor / address-as-bytes32)"
               />
             </div>
             <div className="form-control">
               <label className="label">
-                <span className="label-text">Name (New Anchor)</span>
+                <span className="label-text">Key (anchor name, e.g. &ldquo;contentType&rdquo;)</span>
               </label>
               <input
                 type="text"
                 value={propName}
                 onChange={e => setPropName(e.target.value)}
                 className="input input-bordered"
-                placeholder="e.g. 'age' or 'title'"
+                placeholder="e.g. contentType, name, description"
               />
             </div>
             <div className="form-control">
               <label className="label">
-                <span className="label-text">Value (String)</span>
+                <span className="label-text">Value (string)</span>
               </label>
               <input
                 type="text"
@@ -392,12 +465,18 @@ export default function DebugSchemas() {
                 disabled={isPending}
                 onClick={async () => {
                   if (!propName) {
-                    notification.error("Name required");
+                    notification.error("Key name required");
+                    return;
+                  }
+                  const pinSchemaUID = (schemas as any).PIN as string | undefined;
+                  if (!pinSchemaUID) {
+                    notification.error("PIN schema not available.");
                     return;
                   }
 
-                  // Step 1: Create Anchor
-                  notification.info("Step 1/2: Creating Anchor...");
+                  // Step 1: Create key anchor (Anchor<PROPERTY> under container).
+                  // schemaUID field = PROPERTY_SCHEMA_UID to mark it as a PROPERTY key anchor.
+                  notification.info("Step 1/3: Creating key anchor...");
                   const anchorArgs = {
                     schema: schemas.ANCHOR as `0x${string}`,
                     data: {
@@ -412,135 +491,107 @@ export default function DebugSchemas() {
                       value: 0n,
                     },
                   };
+                  const keyAnchorUID = await attestWithArgs(anchorArgs);
+                  if (!keyAnchorUID) return;
 
-                  const anchorUID = await attestWithArgs(anchorArgs);
-                  if (!anchorUID) return;
-
-                  // Step 2: Create Property
-                  notification.info("Step 2/2: Creating Property...");
+                  // Step 2: Create free-floating PROPERTY (refUID=0x0, standalone).
+                  notification.info("Step 2/3: Creating PROPERTY value...");
                   const propArgs = {
                     schema: (schemas.PROPERTY || zeroHash) as `0x${string}`,
                     data: {
                       recipient: zeroAddress,
                       expirationTime: 0n,
-                      revocable: true,
-                      refUID: anchorUID as `0x${string}`,
+                      revocable: false,
+                      refUID: zeroHash as `0x${string}`,
                       data: encodeAbiParameters(parseAbiParameters("string"), [propVal]),
                       value: 0n,
                     },
                   };
-                  await attestWithArgs(propArgs);
+                  const propertyUID = await attestWithArgs(propArgs);
+                  if (!propertyUID) return;
+
+                  // Step 3: Create PIN binding (definition=keyAnchorUID, refUID=propertyUID).
+                  // Cardinality-1 per ADR-0041: re-PINning the same (attester, keyAnchor, schema)
+                  // slot supersedes the prior binding in O(1).
+                  notification.info("Step 3/3: Creating PIN binding...");
+                  const pinArgs = {
+                    schema: pinSchemaUID as `0x${string}`,
+                    data: {
+                      recipient: zeroAddress,
+                      expirationTime: 0n,
+                      revocable: true,
+                      refUID: propertyUID as `0x${string}`,
+                      data: encodeAbiParameters(parseAbiParameters("bytes32"), [keyAnchorUID as `0x${string}`]),
+                      value: 0n,
+                    },
+                  };
+                  await attestWithArgs(pinArgs);
+                  notification.success("PROPERTY bound. Key anchor → PROPERTY → PIN all created.");
                 }}
               >
-                Attest Property
+                Attest Property (3 steps)
               </button>
             </div>
           </div>
         </div>
 
-        {/* DATA FORM (Smart) */}
+        {/* DATA FORM — standalone non-revocable content identity (ADR-0002) */}
         <div className="card w-96 bg-base-100 shadow-xl border border-base-200">
           <div className="card-body">
             <h2 className="card-title">Data Schema</h2>
-            <div className="text-xs opacity-50 mb-2">Creates Anchor(Name) -&gt; Data(Blob)</div>
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text">Ref UID (Target)</span>
-              </label>
-              <input
-                type="text"
-                value={dataRef}
-                onChange={e => setDataRef(e.target.value)}
-                className="input input-bordered"
-              />
+            <div className="text-xs opacity-50 mb-2">
+              Standalone, non-revocable content identity. refUID=0x0. Schema: bytes32 contentHash, uint64 size.
             </div>
             <div className="form-control">
               <label className="label">
-                <span className="label-text">Name (New Anchor)</span>
+                <span className="label-text">Content Hash (bytes32)</span>
               </label>
               <input
                 type="text"
-                value={dataName}
-                onChange={e => setDataName(e.target.value)}
-                className="input input-bordered"
-                placeholder="e.g. 'avatar' or 'document'"
-              />
-            </div>
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text">Blob UID (bytes32)</span>
-              </label>
-              <input
-                type="text"
-                value={dataBlobUID}
-                onChange={e => setDataBlobUID(e.target.value)}
+                value={dataContentHash}
+                onChange={e => setDataContentHash(e.target.value)}
                 className="input input-bordered font-mono text-xs"
                 placeholder="0x..."
               />
             </div>
             <div className="form-control">
               <label className="label">
-                <span className="label-text">File Mode (string)</span>
+                <span className="label-text">Size (uint64, bytes)</span>
               </label>
               <input
-                type="text"
-                value={dataFileMode}
-                onChange={e => setDataFileMode(e.target.value)}
+                type="number"
+                value={dataSize}
+                onChange={e => setDataSize(e.target.value)}
                 className="input input-bordered"
-                placeholder="100644"
+                placeholder="0"
               />
             </div>
             <div className="card-actions justify-end mt-4">
               <button
                 className="btn btn-primary"
                 disabled={isPending}
-                onClick={async () => {
-                  if (!dataName) {
-                    notification.error("Name required");
+                onClick={() => {
+                  if (!dataContentHash.startsWith("0x")) {
+                    notification.error("Content hash must be 0x hex");
                     return;
                   }
-                  if (!dataBlobUID.startsWith("0x")) {
-                    notification.error("Blob UID must be 0x hex");
+                  let size: bigint;
+                  try {
+                    size = BigInt(dataSize);
+                  } catch {
+                    notification.error("Size must be a valid integer");
                     return;
                   }
-
-                  // Step 1: Create Anchor
-                  notification.info("Step 1/2: Creating Anchor...");
-                  const anchorArgs = {
-                    schema: schemas.ANCHOR as `0x${string}`,
-                    data: {
-                      recipient: zeroAddress,
-                      expirationTime: 0n,
-                      revocable: false,
-                      refUID: (dataRef || zeroHash) as `0x${string}`,
-                      data: encodeAbiParameters(parseAbiParameters("string, bytes32"), [
-                        dataName,
-                        (schemas.DATA || zeroHash) as `0x${string}`,
-                      ]),
-                      value: 0n,
-                    },
-                  };
-
-                  const anchorUID = await attestWithArgs(anchorArgs);
-                  if (!anchorUID) return;
-
-                  // Step 2: Create Data
-                  notification.info("Step 2/2: Attaching Data...");
-                  const dataArgs = {
-                    schema: schemas.DATA as `0x${string}`,
-                    data: {
-                      recipient: zeroAddress,
-                      expirationTime: 0n,
-                      revocable: true,
-                      refUID: anchorUID as `0x${string}`,
-                      data: encodeAbiParameters(parseAbiParameters("bytes32, string"), [
-                        dataBlobUID as `0x${string}`,
-                        dataFileMode,
-                      ]),
-                      value: 0n,
-                    },
-                  };
-                  await attestWithArgs(dataArgs);
+                  if (!schemas.DATA) {
+                    notification.error("DATA schema not available.");
+                    return;
+                  }
+                  // Schema: bytes32 contentHash, uint64 size — standalone, non-revocable (ADR-0002)
+                  const encoded = encodeAbiParameters(parseAbiParameters("bytes32, uint64"), [
+                    dataContentHash as `0x${string}`,
+                    size,
+                  ]);
+                  attest(schemas.DATA, zeroHash, encoded, false);
                 }}
               >
                 Attest Data
@@ -591,11 +642,12 @@ export default function DebugSchemas() {
                 disabled={isPending}
                 onClick={() => {
                   const bytes = toHex(blobData);
-                  // Schema: bytes data, string contentType
+                  // Schema: string mimeType, uint8 storageType, bytes location (ADR-0041)
+                  // storageType 0 = inline; location = raw bytes of the content
                   attest(
                     schemas.BLOB as string,
                     blobRef,
-                    encodeAbiParameters(parseAbiParameters("bytes, string"), [bytes, blobType]),
+                    encodeAbiParameters(parseAbiParameters("string, uint8, bytes"), [blobType, 0, bytes]),
                   );
                 }}
               >
@@ -641,11 +693,18 @@ function AttestationViewer({ rootUid, schemas, easAddress }: { rootUid: string; 
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
         {/* Added Anchors Column */}
         <SchemaList
           title="Anchors"
           schemaUID={schemas.ANCHOR}
+          targetRef={targetUID}
+          easAddress={easAddress}
+          onFocus={setTargetUID}
+        />
+        <SchemaList
+          title="Pins"
+          schemaUID={(schemas as any).PIN}
           targetRef={targetUID}
           easAddress={easAddress}
           onFocus={setTargetUID}
@@ -766,23 +825,42 @@ function AttestationItem({
       const [val] = decodeAbiParameters(parseAbiParameters("string"), attestation.data);
       decodedValue = <span>{val}</span>;
     } else if (title === "Data") {
-      // bytes32 blobUID, string fileMode
-      const [blobId, mode] = decodeAbiParameters(parseAbiParameters("bytes32, string"), attestation.data);
+      // bytes32 contentHash, uint64 size (standalone non-revocable, ADR-0002)
+      const [contentHash, size] = decodeAbiParameters(parseAbiParameters("bytes32, uint64"), attestation.data);
       decodedValue = (
         <div className="flex flex-col gap-1">
-          <div className="badge badge-sm badge-neutral">Mode: {mode}</div>
-          <div className="text-xs break-all font-mono bg-base-300 p-1 rounded">Blob: {blobId.slice(0, 10)}...</div>
+          <div className="badge badge-sm badge-neutral">Size: {size.toString()} bytes</div>
+          <div className="text-xs break-all font-mono bg-base-300 p-1 rounded">Hash: {contentHash.slice(0, 14)}…</div>
         </div>
       );
+    } else if (title === "Pins") {
+      // bytes32 definition (cardinality-1 edge, ADR-0041)
+      const [definition] = decodeAbiParameters(parseAbiParameters("bytes32"), attestation.data);
+      try {
+        const asString = hexToString(definition, { size: 32 }).replace(/\0/g, "");
+        decodedValue = (
+          <div className="flex flex-col gap-1">
+            <span className="font-bold">{asString || definition.slice(0, 14) + "…"}</span>
+            <span className="text-xs opacity-50 font-mono">{definition.slice(0, 14)}…</span>
+          </div>
+        );
+      } catch {
+        decodedValue = <span className="font-mono text-xs">{definition.slice(0, 14)}…</span>;
+      }
     } else if (title === "Blobs") {
-      // bytes data, string contentType
-      const [data, contentType] = decodeAbiParameters(parseAbiParameters("bytes, string"), attestation.data);
+      // string mimeType, uint8 storageType, bytes location (ADR-0041)
+      const [mimeType, storageType, location] = decodeAbiParameters(
+        parseAbiParameters("string, uint8, bytes"),
+        attestation.data,
+      );
       decodedValue = (
         <div className="flex flex-col gap-1">
-          <div className="badge badge-sm badge-info">{contentType}</div>
-          <div className="text-xs opacity-50">{(data.length - 2) / 2} bytes</div>
+          <div className="badge badge-sm badge-info">{mimeType}</div>
+          <div className="text-xs opacity-50">
+            storageType: {storageType}, {(location.length - 2) / 2} bytes
+          </div>
           <div className="text-xs break-all font-mono bg-base-300 p-1 rounded max-h-20 overflow-auto">
-            {contentType.includes("text") ? hexToString(data) : data.slice(0, 50) + "..."}
+            {mimeType.includes("text") ? hexToString(location) : location.slice(0, 50) + "…"}
           </div>
         </div>
       );

@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { decodeEventLog, encodeAbiParameters, parseAbiItem, parseAbiParameters, zeroAddress, zeroHash } from "viem";
-import { useAccount, usePublicClient, useReadContracts } from "wagmi";
+import { useAccount, usePublicClient } from "wagmi";
 import { PlusIcon, XMarkIcon } from "@heroicons/react/24/outline";
 import { useDeployedContractInfo, useScaffoldReadContract, useScaffoldWriteContract } from "~~/hooks/scaffold-eth";
 import { useBackgroundOps } from "~~/services/store/backgroundOps";
@@ -14,19 +14,20 @@ interface PropertiesModalProps {
 }
 
 /**
- * PROPERTY CRUD modal. Per ADR-0035 PROPERTY is free-floating
- * (refUID=0x0, non-revocable) and placed on a container via the unified
- * hierarchy:
+ * PROPERTY CRUD modal. Per ADR-0035 (refined by ADR-0041) PROPERTY is free-floating
+ * (refUID=0x0, non-revocable) and placed on a container via the unified hierarchy:
  *
- *   Container → Anchor<PROPERTY>(name=key) → TAG(applies=true) → PROPERTY(value)
+ *   Container → Anchor<PROPERTY>(name=key) → PIN → PROPERTY(value)
  *
  * Writes take three attestations: (1) key anchor, if missing, (2) the new
- * PROPERTY value, (3) a TAG binding the PROPERTY to the key anchor. The TAG is
- * the singleton — re-attesting supersedes; revoking it removes the binding
- * without touching the immutable PROPERTY.
+ * PROPERTY value, (3) a PIN binding the PROPERTY to the key anchor. The PIN is
+ * cardinality 1 (ADR-0041) — re-attesting at the same (attester, keyAnchor,
+ * PROPERTY_SCHEMA_UID) slot supersedes the prior PIN in O(1). Removal is
+ * `eas.revoke()` on the active PIN UID looked up via `getActivePin`.
  *
- * Reads use TagResolver._activeByAAS as the per-attester singleton index:
- * getActiveTargetsByAttesterAndSchema(keyAnchor, attester, PROPERTY_SCHEMA_UID).
+ * Reads use EdgeResolver._activeBySlot as the per-attester singleton index:
+ * getActivePinTarget(keyAnchor, attester, PROPERTY_SCHEMA_UID) — O(1), no
+ * enumeration / newest-by-time fallback needed under cardinality 1.
  */
 export const PropertiesModal = ({ uid, onClose }: PropertiesModalProps) => {
   const [propName, setPropName] = useState("");
@@ -53,8 +54,15 @@ export const PropertiesModal = ({ uid, onClose }: PropertiesModalProps) => {
     functionName: "PROPERTY_SCHEMA_UID",
   });
 
-  const { data: tagResolverInfo } = useDeployedContractInfo({ contractName: "TagResolver" });
-  const tagResolverAddress = tagResolverInfo?.address as `0x${string}` | undefined;
+  const { data: edgeResolverInfo } = useDeployedContractInfo({ contractName: "EdgeResolver" });
+  const edgeResolverAddress = edgeResolverInfo?.address as `0x${string}` | undefined;
+
+  // PIN_SCHEMA_UID lives on EdgeResolver (ADR-0041). PROPERTY value bindings use the PIN
+  // schema, not TAG, because each (attester, keyAnchor) holds exactly one value at a time.
+  const { data: pinSchemaUID } = useScaffoldReadContract({
+    contractName: "EdgeResolver",
+    functionName: "PIN_SCHEMA_UID",
+  });
 
   // Fetch Children (Anchors) via EFSFileView
   const { data: fileSystemItems, refetch } = useScaffoldReadContract({
@@ -69,7 +77,7 @@ export const PropertiesModal = ({ uid, onClose }: PropertiesModalProps) => {
   const { writeContractAsync: attest } = useScaffoldWriteContract("EAS");
 
   const handleAddProperty = async () => {
-    if (!anchorSchemaUID || !propertySchemaUID || !tagResolverAddress || !publicClient) return;
+    if (!anchorSchemaUID || !propertySchemaUID || !edgeResolverAddress || !pinSchemaUID || !publicClient) return;
     setIsSubmitting(true);
 
     const ops = useBackgroundOps.getState();
@@ -206,32 +214,27 @@ export const PropertiesModal = ({ uid, onClose }: PropertiesModalProps) => {
         return;
       }
 
-      // 3. Attest TAG(definition=keyAnchor, refUID=property, applies=true).
-      //    TAG_SCHEMA_UID is derived from the resolver address per EAS.
-      const { ethers } = await import("ethers");
-      const tagSchemaUID = ethers.solidityPackedKeccak256(
-        ["string", "address", "bool"],
-        ["bytes32 definition, bool applies", tagResolverAddress, true],
-      ) as `0x${string}`;
+      // 3. Attest PIN(definition=keyAnchor, refUID=property) — cardinality 1 (ADR-0041).
+      //    Re-binding the same key to a different value just re-attests at the same slot;
+      //    the prior PIN is superseded in O(1). No revoke needed in the rebind path.
+      // AGENT-NOTE: Previous behavior accumulated stale TAGs in _activeByAAS that the
+      //             read side worked around with newest-by-time. PIN's cardinality removes
+      //             the accumulation entirely.
+      const encodedPinData = encodeAbiParameters(parseAbiParameters("bytes32 definition"), [keyAnchorUID]);
 
-      const encodedTagData = encodeAbiParameters(parseAbiParameters("bytes32 definition, bool applies"), [
-        keyAnchorUID,
-        true,
-      ]);
-
-      ops.log(opId, "Binding TAG...");
-      const tagTxHash = await attest(
+      ops.log(opId, "Binding PROPERTY via PIN...");
+      const pinTxHash = await attest(
         {
           functionName: "attest",
           args: [
             {
-              schema: tagSchemaUID,
+              schema: pinSchemaUID as `0x${string}`,
               data: {
                 recipient: zeroAddress,
                 expirationTime: 0n,
                 revocable: true,
                 refUID: propertyUID,
-                data: encodedTagData,
+                data: encodedPinData,
                 value: 0n,
               },
             },
@@ -239,7 +242,7 @@ export const PropertiesModal = ({ uid, onClose }: PropertiesModalProps) => {
         },
         { silent: true },
       );
-      if (tagTxHash) await publicClient.waitForTransactionReceipt({ hash: tagTxHash });
+      if (pinTxHash) await publicClient.waitForTransactionReceipt({ hash: pinTxHash });
 
       notification.success("Property added.");
       ops.complete(opId, "Property added.");
@@ -280,7 +283,7 @@ export const PropertiesModal = ({ uid, onClose }: PropertiesModalProps) => {
                   key={`${item.uid}-${refreshKey}`}
                   item={item}
                   propertySchemaUID={propertySchemaUID}
-                  tagResolverAddress={tagResolverAddress}
+                  edgeResolverAddress={edgeResolverAddress}
                   viewer={connectedAddress}
                 />
               ))}
@@ -314,7 +317,7 @@ export const PropertiesModal = ({ uid, onClose }: PropertiesModalProps) => {
             {isSubmitting ? "Processing..." : "Add Property"}
           </button>
           <p className="text-xs text-opacity-50 text-base-content mt-1">
-            New keys take three transactions (key anchor + property + tag); existing keys take two.
+            New keys take three transactions (key anchor + property + pin binding); existing keys take two.
           </p>
         </div>
       </div>
@@ -322,103 +325,39 @@ export const PropertiesModal = ({ uid, onClose }: PropertiesModalProps) => {
   );
 };
 
-// Cap on active PROPERTY entries scanned per key anchor when picking the
-// "current" value. Practical values are 1-3 (one per rebind without revoke);
-// 50 is a guardrail against a pathological accumulation. Reads are batched
-// through a single multicall so the cost is linear in active targets, not in
-// the cap.
-const MAX_ACTIVE_PROPERTY_TARGETS = 50n;
-
 // Item Component: renders "Key: ConnectedUserValue" on a single line.
-// Walks TagResolver._activeByAAS[keyAnchor][viewer][PROPERTY_SCHEMA] to get the
-// viewer's current PROPERTY under this key. Edition-scoped lookups (non-viewer
+// Reads EdgeResolver._activeBySlot[keyAnchor][viewer][PROPERTY_SCHEMA].pinUID's target
+// to get the viewer's current PROPERTY under this key. Edition-scoped lookups (non-viewer
 // attesters) belong on the read-side viewing UIs, not this write-side modal.
 //
-// Multi-active-target handling: `_activeByAAS[def][attester][schema]` is an
-// array, not a singleton. ADR-0035 §3 claims re-TAGging replaces the previous
-// value via `_activeByAAS` "singleton semantics", but that's only true when the
-// new TAG references the SAME propertyUID — and a value change necessarily
-// uses a new PROPERTY attestation (new UID). The contract treats each
-// (attester, targetID, definition) triple as a separate compositeHash, so
-// rebinds with different values accumulate in the array until the stale TAGs
-// are explicitly revoked. Until the write path is hardened to revoke prior
-// TAGs (tracked as a Tier 2 question referencing ADR-0035), we defend on read:
-// fetch every active target and surface the newest by EAS `time`.
+// Under ADR-0041 PROPERTY value bindings are PIN (cardinality 1), so the read is O(1)
+// and there is no array-accumulation defense to apply. The PIN slot returns either zero
+// (unbound) or a single PROPERTY UID directly.
 const PropertyAnchorItem = ({
   item,
   propertySchemaUID,
-  tagResolverAddress,
+  edgeResolverAddress,
   viewer,
 }: {
   item: any;
   propertySchemaUID: string | undefined;
-  tagResolverAddress: `0x${string}` | undefined;
+  edgeResolverAddress: `0x${string}` | undefined;
   viewer: `0x${string}` | undefined;
 }) => {
-  const { data: easInfo } = useDeployedContractInfo({ contractName: "EAS" });
-  const easAddress = easInfo?.address as `0x${string}` | undefined;
-  const easAbi = easInfo?.abi;
-
-  const { data: activeTargets, isLoading: isTargetsLoading } = useScaffoldReadContract({
-    contractName: "TagResolver",
-    functionName: "getActiveTargetsByAttesterAndSchema",
+  const { data: activePropertyUID, isLoading } = useScaffoldReadContract({
+    contractName: "EdgeResolver",
+    functionName: "getActivePinTarget",
     args: [
       item.uid as `0x${string}`,
       (viewer ?? zeroAddress) as `0x${string}`,
       (propertySchemaUID || zeroHash) as `0x${string}`,
-      0n,
-      MAX_ACTIVE_PROPERTY_TARGETS,
     ],
     query: {
-      enabled: !!item.uid && !!propertySchemaUID && !!tagResolverAddress && !!viewer,
+      enabled: !!item.uid && !!propertySchemaUID && !!edgeResolverAddress && !!viewer,
     },
   });
 
-  // Stable array reference — wagmi's `useReadContracts` re-runs whenever the
-  // `contracts` identity changes, and the raw `activeTargets` from wagmi is
-  // recreated each render even when values are unchanged. Memoizing on the
-  // joined hex string keeps the batched fetch from thrashing.
-  const targetUIDs = useMemo(() => {
-    if (!activeTargets || activeTargets.length === 0) return [] as `0x${string}`[];
-    return [...activeTargets] as `0x${string}`[];
-  }, [activeTargets?.join(",")]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Batched attestation fetch (single multicall). Only engages when there are
-  // 2+ active targets — the single-target case is the overwhelming common
-  // case and skips the extra RPC entirely.
-  const { data: attestations, isLoading: isAttestationsLoading } = useReadContracts({
-    contracts: targetUIDs.map(uid => ({
-      address: easAddress,
-      abi: easAbi as any,
-      functionName: "getAttestation",
-      args: [uid],
-    })),
-    query: {
-      enabled: targetUIDs.length > 1 && !!easAddress && !!easAbi,
-    },
-  });
-
-  const activeUID = useMemo<`0x${string}` | null>(() => {
-    if (targetUIDs.length === 0) return null;
-    if (targetUIDs.length === 1) return targetUIDs[0];
-    // Newest-by-time wins. Falls back to last-pushed (array tail) when the
-    // batched fetch hasn't landed yet — still strictly better than picking
-    // the head, because in push-only steady state the tail IS the newest.
-    if (!attestations) return targetUIDs[targetUIDs.length - 1];
-    let bestIdx = 0;
-    let bestTime: bigint = -1n;
-    attestations.forEach((res, idx) => {
-      if (res.status !== "success" || !res.result) return;
-      const t = (res.result as any).time as bigint;
-      if (t > bestTime) {
-        bestTime = t;
-        bestIdx = idx;
-      }
-    });
-    return targetUIDs[bestIdx];
-  }, [targetUIDs, attestations]);
-
-  const isLoading = isTargetsLoading || (targetUIDs.length > 1 && isAttestationsLoading);
+  const activeUID = activePropertyUID && activePropertyUID !== zeroHash ? (activePropertyUID as `0x${string}`) : null;
 
   return (
     <li className="bg-base-200 p-2 rounded text-sm mb-1 flex items-center justify-between">

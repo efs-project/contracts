@@ -31,6 +31,18 @@ const deployEFSIndexer: DeployFunction = async function (hre: HardhatRuntimeEnvi
   );
 
   // 2. Define Schemas
+  //    PIN and TAG are sibling edge schemas served by a single EdgeResolver. Cardinality
+  //    lives in the schema UID itself (PIN = singleton, TAG = list). The two schemas have
+  //    DIFFERENT on-wire shapes — PIN carries just the predicate, TAG carries predicate +
+  //    per-entry weight (generic metadata: sort key, score, ranking). The differing field
+  //    counts make the EAS UIDs naturally distinct (EAS UID = keccak256(definition_string,
+  //    resolver, revocable)); the resolver branches on attestation.schema before decoding.
+  //
+  //      - PIN  (cardinality 1) — `bytes32 definition`. Re-attest at the same slot
+  //                                supersedes; revoke clears. No per-entry metadata.
+  //      - TAG  (cardinality N) — `bytes32 definition, int256 weight`. Re-attest updates
+  //                                weight in place; revoke removes. No supersede-via-weight.
+  //    See ADR-0041.
   const schemas = [
     { name: "ANCHOR", definition: "string name, bytes32 schemaUID", revocable: false },
     { name: "PROPERTY", definition: "string value", revocable: false },
@@ -41,50 +53,56 @@ const deployEFSIndexer: DeployFunction = async function (hre: HardhatRuntimeEnvi
       revocable: true,
       noResolver: true,
     },
-    { name: "TAG", definition: "bytes32 definition, bool applies", revocable: true, useTagResolver: true },
+    { name: "PIN", definition: "bytes32 definition", revocable: true, useEdgeResolver: true },
+    { name: "TAG", definition: "bytes32 definition, int256 weight", revocable: true, useEdgeResolver: true },
     { name: "NAMING", definition: "bytes32 schemaId, string name", revocable: true, noResolver: true },
   ];
 
   // 3. Calculate Future Addresses
   // Deployment order:
-  //   nonce+0: Deploy TagResolver
-  //   nonce+1 through nonce+6: Register 6 schemas
-  //   nonce+7: Deploy EFSIndexer
+  //   nonce+0: Deploy EdgeResolver
+  //   nonce+1 through nonce+7: Register 7 schemas (ANCHOR, PROPERTY, DATA, BLOB, PIN, TAG, NAMING)
+  //   nonce+8: Deploy EFSIndexer
 
   const currentNonce = await ethers.provider.getTransactionCount(deployer);
   console.log("Current Nonce:", currentNonce);
 
-  const futureTagResolverAddress = ethers.getCreateAddress({ from: deployer, nonce: currentNonce });
-  const futureIndexerAddress = ethers.getCreateAddress({ from: deployer, nonce: currentNonce + 7 });
-  console.log("Predicted TagResolver Address:", futureTagResolverAddress);
+  const futureEdgeResolverAddress = ethers.getCreateAddress({ from: deployer, nonce: currentNonce });
+  const futureIndexerAddress = ethers.getCreateAddress({ from: deployer, nonce: currentNonce + 8 });
+  console.log("Predicted EdgeResolver Address:", futureEdgeResolverAddress);
   console.log("Predicted EFSIndexer Address:", futureIndexerAddress);
 
-  // Pre-compute the TAG schema UID (deterministic: keccak256(definition, resolver, revocable))
+  // Pre-compute PIN and TAG schema UIDs (deterministic: keccak256(definition, resolver, revocable))
+  const pinSchema = schemas.find(s => s.name === "PIN")!;
   const tagSchema = schemas.find(s => s.name === "TAG")!;
+  const pinSchemaUID = ethers.solidityPackedKeccak256(
+    ["string", "address", "bool"],
+    [pinSchema.definition, futureEdgeResolverAddress, pinSchema.revocable],
+  );
   const tagSchemaUID = ethers.solidityPackedKeccak256(
     ["string", "address", "bool"],
-    [tagSchema.definition, futureTagResolverAddress, tagSchema.revocable],
+    [tagSchema.definition, futureEdgeResolverAddress, tagSchema.revocable],
   );
+  console.log("Pre-computed PIN_SCHEMA_UID:", pinSchemaUID);
   console.log("Pre-computed TAG_SCHEMA_UID:", tagSchemaUID);
 
-  // 4. Deploy TagResolver first (needs to exist before schema registration)
-  //    tagsRoot is not set yet — it requires the Indexer to exist first (EAS calls
-  //    the Indexer resolver's onAttest when creating the anchor). setTagsRoot() is
-  //    called after the Indexer is deployed and the tagsRoot anchor is created.
-  await deploy("TagResolver", {
-    contract: "TagResolver",
+  // 4. Deploy EdgeResolver first (needs to exist before schema registration)
+  //    EdgeResolver serves both PIN and TAG schemas. Both UIDs are immutable on the resolver
+  //    so it can dispatch storage by attestation.schema in one branch.
+  await deploy("EdgeResolver", {
+    contract: "EdgeResolver",
     from: deployer,
-    args: [EAS_ADDRESS, tagSchemaUID, futureIndexerAddress, schemaRegistryAddress],
+    args: [EAS_ADDRESS, pinSchemaUID, tagSchemaUID, futureIndexerAddress, schemaRegistryAddress],
     log: true,
     autoMine: true,
   });
 
-  const tagResolver = await hre.ethers.getContract<Contract>("TagResolver", deployer);
-  console.log("TagResolver deployed at:", tagResolver.target);
+  const edgeResolver = await hre.ethers.getContract<Contract>("EdgeResolver", deployer);
+  console.log("EdgeResolver deployed at:", edgeResolver.target);
 
-  if (tagResolver.target !== futureTagResolverAddress) {
-    console.warn("WARNING: TagResolver address different from predicted!");
-    console.warn(`Expected: ${futureTagResolverAddress}, Got: ${tagResolver.target}`);
+  if (edgeResolver.target !== futureEdgeResolverAddress) {
+    console.warn("WARNING: EdgeResolver address different from predicted!");
+    console.warn(`Expected: ${futureEdgeResolverAddress}, Got: ${edgeResolver.target}`);
   }
 
   // 5. Register Schemas with appropriate Resolvers
@@ -94,8 +112,8 @@ const deployEFSIndexer: DeployFunction = async function (hre: HardhatRuntimeEnvi
     let resolver: string;
     if (schema.noResolver) {
       resolver = ethers.ZeroAddress;
-    } else if (schema.useTagResolver) {
-      resolver = futureTagResolverAddress;
+    } else if (schema.useEdgeResolver) {
+      resolver = futureEdgeResolverAddress;
     } else {
       resolver = futureIndexerAddress;
     }
@@ -118,7 +136,7 @@ const deployEFSIndexer: DeployFunction = async function (hre: HardhatRuntimeEnvi
     }
   }
 
-  // 6. Deploy EFSIndexer (no longer takes TAG_SCHEMA_UID)
+  // 6. Deploy EFSIndexer
   await deploy("Indexer", {
     contract: "EFSIndexer",
     from: deployer,

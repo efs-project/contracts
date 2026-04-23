@@ -3,41 +3,44 @@ pragma solidity 0.8.26;
 
 import { IEAS, Attestation } from "@ethereum-attestation-service/eas-contracts/contracts/IEAS.sol";
 
-interface ITagResolverForFileView {
-    function isActivelyTagged(bytes32 targetID, bytes32 definition) external view returns (bool);
-    function isActivelyTaggedByAny(
+interface IEdgeResolverForFileView {
+    /// @notice TAG-specific edition-aware check: true iff any of `attesters` has an active
+    ///         TAG on (targetID, definition). Used for phase-0 folder visibility (ADR-0038):
+    ///         folder visibility is TAG-only; a PIN with `definition=DATA_SCHEMA_UID` targeting
+    ///         a folder must NOT make that folder appear in edition-scoped directory listings.
+    ///         One SLOAD per attester.
+    function hasActiveTagFromAny(
         bytes32 targetID,
         bytes32 definition,
         address[] calldata attesters
     ) external view returns (bool);
-    function getChildrenTaggedWith(
+
+    /// @notice Append-only discovery: child anchors with an active edge (PIN or TAG) under
+    ///         `definition`, scoped by `parentUID`. Used by Shape B folder-visibility reads
+    ///         (ADR-0038, ADR-0041).
+    function getChildrenWithEdge(
         bytes32 parentUID,
         bytes32 definition,
         uint256 start,
         uint256 length
     ) external view returns (bytes32[] memory);
-    function getChildrenTaggedWithCount(bytes32 parentUID, bytes32 definition) external view returns (uint256);
-    function getActiveTargetsByAttesterAndSchema(
+    function getChildrenWithEdgeCount(bytes32 parentUID, bytes32 definition) external view returns (uint256);
+
+    /// @notice O(1) read of the active PIN's target UID for a (definition, attester, schema) slot.
+    ///         Primary read for Shape A consumers (file placement, PROPERTY value binding).
+    function getActivePinTarget(
         bytes32 definition,
         address attester,
-        bytes32 schema,
-        uint256 start,
-        uint256 length
-    ) external view returns (bytes32[] memory);
-    function getActiveTargetsByAttesterAndSchemaCount(
-        bytes32 definition,
-        address attester,
-        bytes32 schema
-    ) external view returns (uint256);
-    /// @notice O(1) per-attester latest-tag lookup. Returns the latest TAG UID for the
-    ///         (attester, targetID, definition) singleton — may be applies=false. Callers that
-    ///         need "is this placement currently applied?" must use `isActivelyApplied`.
-    function getActiveTagUID(address attester, bytes32 targetID, bytes32 definition) external view returns (bytes32);
-    /// @notice O(1) per-attester applied-state lookup. Returns true iff `attester`'s latest
-    ///         TAG on (targetID, definition) is applies=true. Used for cross-attester dedup in
-    ///         multi-edition views to avoid suppressing a later attester's still-active tag
-    ///         behind an earlier attester's superseding applies=false tag.
-    function isActivelyApplied(address attester, bytes32 targetID, bytes32 definition) external view returns (bool);
+        bytes32 targetSchema
+    ) external view returns (bytes32);
+
+    /// @notice PIN-specific single-attester check: true iff `attester` has an active PIN on
+    ///         (targetID, definition). One SLOAD.
+    ///
+    ///         Use this — not `isActiveEdgeAnySchema` — for cross-attester file-placement dedup
+    ///         in `getFilesAtPath` (ADR-0041): file placement is PIN-only (Shape A); a TAG from
+    ///         an earlier attester must NOT suppress a later attester's valid PIN placement.
+    function isActivePinEdge(address attester, bytes32 targetID, bytes32 definition) external view returns (bool);
 }
 
 interface IEFSIndexer {
@@ -122,12 +125,12 @@ contract EFSFileView {
 
     IEFSIndexer public immutable indexer;
     IEAS public immutable eas;
-    ITagResolverForFileView public immutable tagResolver;
+    IEdgeResolverForFileView public immutable edgeResolver;
 
-    constructor(IEFSIndexer _indexer, ITagResolverForFileView _tagResolver) {
+    constructor(IEFSIndexer _indexer, IEdgeResolverForFileView _edgeResolver) {
         indexer = _indexer;
         eas = _indexer.getEAS();
-        tagResolver = _tagResolver;
+        edgeResolver = _edgeResolver;
     }
 
     function getDirectoryPage(
@@ -171,15 +174,15 @@ contract EFSFileView {
     ///      Callers wanting more than this many editions need a different aggregation model.
     uint256 private constant MAX_ATTESTERS_PER_QUERY = 20;
 
-    /// @dev Internal batch size for `_childrenTaggedWith` chunk fetches during the folder
+    /// @dev Internal batch size for `_childrenWithEdge` chunk fetches during the folder
     ///      phase of `getDirectoryPageBySchemaAndAddressList`. Chosen to keep memory use
     ///      bounded while still amortizing external-call overhead.
     uint256 private constant _FOLDER_SCAN_CHUNK = 64;
 
     /// @dev Hard cap on entries inspected in phase 0 per call. The append-only
-    ///      `_childrenTaggedWith[parent][schema]` list can grow unboundedly for a hot
+    ///      `_childrenWithEdge[parent][schema]` list can grow unboundedly for a hot
     ///      directory, and a page where most entries get filtered out (wrong attester,
-    ///      revoked) would otherwise loop `_childrenTaggedWith.length` times in a
+    ///      revoked) would otherwise loop `_childrenWithEdge.length` times in a
     ///      single eth_call — causing RPC timeouts or provider out-of-gas. The budget
     ///      bounds per-call work; the opaque cursor continues progress across calls
     ///      (same pattern as ADR-0020's `MAX_PAGES = 10` mirror-scan cap in
@@ -192,9 +195,10 @@ contract EFSFileView {
      *         sources are disjoint (tagged folders vs. direct children of `anchorSchema`):
      *
      *           Phase 0: qualifying generic folders — subfolders under `parentAnchor` that
-     *                    at least one `attesters[]` entry has an active applies=true TAG on
-     *                    with `definition = anchorSchema` (ADR-0006 revised, single-source
-     *                    tag-only folder visibility).
+     *                    at least one `attesters[]` entry has an active TAG on with
+     *                    `definition = anchorSchema` (ADR-0006 revised, ADR-0038, ADR-0041:
+     *                    single-source tag-only folder visibility under the cardinality-N
+     *                    TAG schema).
      *           Phase 1: direct child anchors of `anchorSchema` under `parentAnchor`, scoped
      *                    to `attesters[]` via `_childrenBySchema` + `containsAttestations`.
      *
@@ -260,25 +264,20 @@ contract EFSFileView {
 
         // ───── Phase 0: qualifying tagged folders ─────
         if (phase == 0) {
-            uint256 taggedTotal = tagResolver.getChildrenTaggedWithCount(parentAnchor, anchorSchema);
+            uint256 taggedTotal = edgeResolver.getChildrenWithEdgeCount(parentAnchor, anchorSchema);
             uint256 scanned = 0; // entries inspected this call — bounded by budget
             while (count < maxItems && folderIdx < taggedTotal && scanned < _FOLDER_SCAN_BUDGET_PER_CALL) {
                 uint256 remainingSource = taggedTotal - folderIdx;
                 uint256 remainingBudget = _FOLDER_SCAN_BUDGET_PER_CALL - scanned;
                 uint256 chunk = remainingSource < _FOLDER_SCAN_CHUNK ? remainingSource : _FOLDER_SCAN_CHUNK;
                 if (chunk > remainingBudget) chunk = remainingBudget;
-                bytes32[] memory batch = tagResolver.getChildrenTaggedWith(
-                    parentAnchor,
-                    anchorSchema,
-                    folderIdx,
-                    chunk
-                );
+                bytes32[] memory batch = edgeResolver.getChildrenWithEdge(parentAnchor, anchorSchema, folderIdx, chunk);
                 for (uint256 k = 0; k < batch.length; k++) {
                     folderIdx++; // advance walker for every inspected entry
                     scanned++;
                     bytes32 uid = batch[k];
                     if (indexer.isRevoked(uid)) continue;
-                    if (!tagResolver.isActivelyTaggedByAny(uid, anchorSchema, attesters)) continue;
+                    if (!edgeResolver.hasActiveTagFromAny(uid, anchorSchema, attesters)) continue;
                     buf[count++] = uid;
                     if (count == maxItems) break;
                 }
@@ -376,33 +375,32 @@ contract EFSFileView {
         return result;
     }
 
-    /// @dev Internal batch size for per-attester `_activeByAAS` chunk fetches during
-    ///      `getFilesAtPath`. Bounds memory per external call; walker advances through all
-    ///      attesters regardless.
-    uint256 private constant _TARGETS_SCAN_CHUNK = 64;
-
     /**
-     * @notice Tag-based file listing with cross-attester dedup. Opaque-cursor paginated
-     *         (ADR-0036). Walks each attester's `_activeByAAS[anchorUID][attester][schema]`
-     *         slice in order; earlier attesters win on duplicate targets (ADR-0031
-     *         first-attester-wins).
+     * @notice PIN-based file listing with cross-attester dedup. Opaque-cursor paginated
+     *         (ADR-0036, ADR-0041). For each attester, reads the active PIN target
+     *         (cardinality 1) at `_activeBySlot[anchorUID][attester][schema]` — Shape A
+     *         file-placement reads.
      *
+     *         Earlier attesters win on duplicate targets (ADR-0031 first-attester-wins).
      *         Filtered-out entries (targets claimed by an earlier attester) still advance
      *         the walker; `maxItems` bounds result size, not work.
      *
      * @param anchorUID  The path anchor (e.g. /memes/).
      * @param attesters  Edition addresses to query, in precedence order.
-     * @param schema     Target schema to filter (DATA_SCHEMA_UID for files,
-     *                   ANCHOR_SCHEMA_UID for sub-folders).
+     * @param schema     Target schema to filter. **Must be DATA_SCHEMA_UID or
+     *                   ANCHOR_SCHEMA_UID** — those are the only two payload shapes
+     *                   the per-item decode below understands. Calling with any other
+     *                   schema (e.g. PROPERTY_SCHEMA_UID) will produce decode reverts
+     *                   or garbage `name`/`contentHash` fields. A separate, schema-aware
+     *                   listing view is the right home for non-file PIN-shaped reads.
      * @param cursor     Opaque token from a prior call. Empty = start from the beginning.
      * @param maxItems   Target result size. Must be > 0.
-     * @return page      `items` + `nextCursor`. `nextCursor.length == 0` iff every
-     *                   attester's slice has been walked to completion.
+     * @return page      `items` + `nextCursor`. `nextCursor.length == 0` iff every attester
+     *                   has been walked.
      *
-     * @dev Concurrent-mutation caveat: `_activeByAAS` is a swap-and-pop compact index. A
-     *      revocation between calls can shift later entries up by one slot, causing the
-     *      resumed page to skip or repeat an item. This is a best-effort pagination
-     *      guarantee typical of non-snapshotting paginators.
+     * @dev Note: with PIN cardinality 1 per attester, the per-attester result is at most
+     *      one item, so concurrent-mutation caveats from the prior TAG-list pagination no
+     *      longer apply.
      */
     function getFilesAtPath(
         bytes32 anchorUID,
@@ -415,15 +413,12 @@ contract EFSFileView {
         require(attesters.length <= MAX_ATTESTERS_PER_QUERY, "Too many attesters");
         require(maxItems > 0, "maxItems must be > 0");
 
-        // Decode cursor — empty OR malformed = fresh start at (attesterIdx=0,
-        // targetIdx=0). Same defensive pattern as `getDirectoryPageBySchemaAndAddressList`
-        // above: length-check protects against `abi.decode` Panics on arbitrary
-        // caller-supplied bytes. If `attesterIdx` ends up >= `attesters.length` the
-        // outer while-loop simply exits with an empty page (no infinite loop).
+        // Decode cursor — empty OR malformed = fresh start at attesterIdx=0.
+        // Same defensive pattern as `getDirectoryPageBySchemaAndAddressList`: length-check
+        // protects against `abi.decode` Panics on arbitrary caller-supplied bytes.
         uint256 attesterIdx = 0;
-        uint256 targetIdx = 0;
-        if (cursor.length == 64) {
-            (attesterIdx, targetIdx) = abi.decode(cursor, (uint256, uint256));
+        if (cursor.length == 32) {
+            attesterIdx = abi.decode(cursor, (uint256));
         }
 
         bytes32[] memory buf = new bytes32[](maxItems);
@@ -431,49 +426,26 @@ contract EFSFileView {
 
         while (attesterIdx < attesters.length && count < maxItems) {
             address currentAttester = attesters[attesterIdx];
-            uint256 totalForAttester = tagResolver.getActiveTargetsByAttesterAndSchemaCount(
-                anchorUID,
-                currentAttester,
-                schema
-            );
+            attesterIdx++;
 
-            while (targetIdx < totalForAttester && count < maxItems) {
-                uint256 remainingSource = totalForAttester - targetIdx;
-                uint256 chunk = remainingSource < _TARGETS_SCAN_CHUNK ? remainingSource : _TARGETS_SCAN_CHUNK;
-                bytes32[] memory batch = tagResolver.getActiveTargetsByAttesterAndSchema(
-                    anchorUID,
-                    currentAttester,
-                    schema,
-                    targetIdx,
-                    chunk
-                );
-                for (uint256 k = 0; k < batch.length; k++) {
-                    targetIdx++; // advance for every inspected entry
-                    bytes32 target = batch[k];
-                    // Cross-attester dedup: earlier attester already has an active applies=true
-                    // tag on this target? Must use `isActivelyApplied` (not `getActiveTagUID !=0`)
-                    // because `_activeTag` retains the latest TAG UID even when that TAG is
-                    // applies=false — an earlier attester's negation would otherwise suppress a
-                    // later attester's still-active placement and break ADR-0031 fallback.
-                    bool taken = false;
-                    for (uint256 prior = 0; prior < attesterIdx; prior++) {
-                        if (tagResolver.isActivelyApplied(attesters[prior], target, anchorUID)) {
-                            taken = true;
-                            break;
-                        }
-                    }
-                    if (taken) continue;
-                    buf[count++] = target;
-                    if (count == maxItems) break;
+            // O(1) PIN read — per-attester slot holds 0 or 1 target.
+            bytes32 target = edgeResolver.getActivePinTarget(anchorUID, currentAttester, schema);
+            if (target == bytes32(0)) continue;
+
+            // Cross-attester dedup (ADR-0031 first-attester-wins): if an earlier attester
+            // already has an active PIN placing this DATA at this anchor, skip — this edition
+            // is already represented. PIN-specific check: file placement is Shape A (PIN only).
+            // A TAG from an earlier attester must NOT suppress a later attester's valid PIN.
+            bool taken = false;
+            for (uint256 prior = 0; prior + 1 < attesterIdx; prior++) {
+                if (edgeResolver.isActivePinEdge(attesters[prior], target, anchorUID)) {
+                    taken = true;
+                    break;
                 }
-                if (batch.length < chunk) break; // defensive: resolver returned short batch
             }
+            if (taken) continue;
 
-            if (targetIdx >= totalForAttester) {
-                // Attester exhausted; advance to next attester's slice.
-                attesterIdx++;
-                targetIdx = 0;
-            }
+            buf[count++] = target;
         }
 
         // Trim buffer, build items.
@@ -514,11 +486,11 @@ contract EFSFileView {
         }
         page.items = items;
 
-        // Cursor: empty iff every attester's slice has been walked to completion.
+        // Cursor: empty iff every attester walked.
         if (attesterIdx >= attesters.length) {
             page.nextCursor = "";
         } else {
-            page.nextCursor = abi.encode(attesterIdx, targetIdx);
+            page.nextCursor = abi.encode(attesterIdx);
         }
     }
 

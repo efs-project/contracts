@@ -26,9 +26,9 @@ import { useEditionDirectoryPage } from "~~/hooks/efs/useEditionDirectoryPage";
 import { useSortedData } from "~~/hooks/efs/useSortedData";
 import { useDeployedContractInfo, useScaffoldReadContract, useScaffoldWriteContract } from "~~/hooks/scaffold-eth";
 import { useBackgroundOps } from "~~/services/store/backgroundOps";
+import { EDGE_RESOLVER_ABI, getEdgeResolverAddress } from "~~/utils/efs/edgeResolver";
 import { isFile, isTopic } from "~~/utils/efs/efsTypes";
 import { SORT_OVERLAY_ABI } from "~~/utils/efs/sortOverlay";
-import { TAG_RESOLVER_ABI, getTagResolverAddress } from "~~/utils/efs/tagResolver";
 import { TRANSPORT_LABELS, detectTransport, resolveGatewayUrl } from "~~/utils/efs/transports";
 import { notification } from "~~/utils/scaffold-eth";
 
@@ -125,6 +125,7 @@ function isTextViewable(contentType: string | null): boolean {
 export const FileBrowser = ({
   currentAnchorUID,
   dataSchemaUID,
+  anchorSchemaUID,
   currentPathNames,
   editionAddresses,
   explicitEditions = false,
@@ -139,6 +140,8 @@ export const FileBrowser = ({
 }: {
   currentAnchorUID: string | null;
   dataSchemaUID: string;
+  /** ANCHOR_SCHEMA_UID from EFSIndexer — needed to query folder-level descriptive-label TAG buckets. */
+  anchorSchemaUID?: string;
   currentPathNames: string[];
   editionAddresses: string[];
   /**
@@ -198,12 +201,16 @@ export const FileBrowser = ({
   const [isDataUIDMapLoading, setIsDataUIDMapLoading] = useState(false);
   // Incremented whenever the user adds or removes a tag so the filter effect re-runs immediately.
   const [tagFilterVersion, setTagFilterVersion] = useState(0);
-  const [tagResolverAddress, setTagResolverAddress] = useState<`0x${string}` | null>(null);
+  const [edgeResolverAddress, setEdgeResolverAddress] = useState<`0x${string}` | null>(null);
   const [tagsRoot, setTagsRoot] = useState<`0x${string}` | null>(null);
-  // Folder-delete confirmation. `tagUIDs` is populated by scanSubtree.
+  // Folder-delete confirmation. `pinUIDs` (file placements, cardinality 1) and
+  // `tagUIDs` (folder visibility, cardinality N) are populated by scanSubtree.
+  // Tracked separately because they live under different EAS schemas (PIN vs TAG)
+  // and revoke() requires the matching schema (ADR-0041).
   const [deleteConfirm, setDeleteConfirm] = useState<{
     item: any;
     status: "scanning" | "ready" | "revoking";
+    pinUIDs: `0x${string}`[];
     tagUIDs: `0x${string}`[];
     folderCount: number;
     fileCount: number;
@@ -221,6 +228,19 @@ export const FileBrowser = ({
   const { address: connectedAddress } = useAccount();
   const { writeContractAsync: easWrite } = useScaffoldWriteContract("EAS");
 
+  // PIN and TAG schema UIDs from EdgeResolver (ADR-0041 — distinct schemas
+  // for cardinality 1 vs N). Declared early because the tag-filter useEffect
+  // below depends on tagSchemaUID for schema-aware active-edge queries; the
+  // revoke flow further down also uses both UIDs as the schema arg.
+  const { data: pinSchemaUID } = useScaffoldReadContract({
+    contractName: "EdgeResolver",
+    functionName: "PIN_SCHEMA_UID",
+  });
+  const { data: tagSchemaUID } = useScaffoldReadContract({
+    contractName: "EdgeResolver",
+    functionName: "TAG_SCHEMA_UID",
+  });
+
   // Revoke blob URLs when fileContent changes to prevent memory leaks
   useEffect(() => {
     return () => {
@@ -234,14 +254,14 @@ export const FileBrowser = ({
     setPageSize(50n);
   }, [currentAnchorUID]);
 
-  // Load TagResolver address and "tags" anchor UID once.
+  // Load EdgeResolver address and "tags" anchor UID once.
   // "tags" is a normal anchor under the file system root — discovered the same way
   // any folder is, via resolvePath. Tag definitions (e.g. "favorites") are its children.
   useEffect(() => {
     if (!publicClient || !indexerInfo) return;
-    getTagResolverAddress(publicClient.chain.id).then(async addr => {
+    getEdgeResolverAddress(publicClient.chain.id).then(async addr => {
       if (!addr) return;
-      setTagResolverAddress(addr);
+      setEdgeResolverAddress(addr);
       try {
         const fsRoot = (await publicClient.readContract({
           address: indexerInfo.address as `0x${string}`,
@@ -285,7 +305,7 @@ export const FileBrowser = ({
       return;
     }
 
-    if (!publicClient || !indexerInfo || !tagResolverAddress || !tagsRoot) {
+    if (!publicClient || !indexerInfo || !edgeResolverAddress || !tagsRoot || !tagSchemaUID) {
       setIsTagFilterLoading(false);
       return;
     }
@@ -293,6 +313,14 @@ export const FileBrowser = ({
     let cancelled = false;
     setIsTagFilterLoading(true);
 
+    // AGENT-NOTE (ADR-0041 + ADR-0042): descriptive labels under /tags/ are TAG-only (cardinality N).
+    // Two distinct concepts:
+    //   active TAG   = unrevoked edge exists (kernel semantic, ADR-0041 §4).
+    //   effective TAG = active TAG with weight >= 0 (client-layer convention, ADR-0042).
+    // Negative-weight TAGs remain active on-chain (kernel does not interpret sign) but are
+    // suppressed for the include/exclude filter sets built here.  weight = 0 is effective.
+    // hasActiveTagFromAny and other raw resolver helpers use the kernel (active-only) check
+    // and are NOT changed by this convention.
     const resolveTagSet = async (tagName: string): Promise<Set<string>> => {
       const definitionUID = (await publicClient.readContract({
         address: indexerInfo.address as `0x${string}`,
@@ -303,51 +331,79 @@ export const FileBrowser = ({
 
       if (!definitionUID || definitionUID === zeroHash) return new Set();
 
-      const count = (await publicClient.readContract({
-        address: tagResolverAddress,
-        abi: TAG_RESOLVER_ABI,
-        functionName: "getTaggedTargetCount",
-        args: [definitionUID],
-      })) as bigint;
+      // Only consider tags applied by the currently viewed attesters (editions list).
+      // Do NOT widen with connectedAddress — explicit ?editions= must not be overridden
+      // (ADR-0031/0039: same URL must render identically for all viewers).
+      // Fall back to connectedAddress only when no editions are configured.
+      const tagAttesters: `0x${string}`[] =
+        editionAddresses.length > 0
+          ? editionAddresses.map(a => a as `0x${string}`)
+          : connectedAddress
+            ? [connectedAddress as `0x${string}`]
+            : [];
 
-      if (count === 0n) return new Set();
+      if (tagAttesters.length === 0) return new Set();
 
+      // Per-attester bulk fetch: getActiveTagEntries (weight-aware) + getActiveTargetsByAttesterAndSchema
+      // (resolves tagUID → targetID) fetched in parallel at the same pagination window.
+      // The two arrays share the same underlying _activeByAAS[def][attester][targetSchema] index, so
+      // entries[i] and targets[i] always correspond to the same edge. Filter to weight >= 0.
+      //
+      // _activeByAAS is keyed by TARGET schema (the schema of the tagged thing), NOT TAG_SCHEMA_UID.
+      // Descriptive labels can target DATA attestations (file-level) or ANCHOR attestations
+      // (folder-level), so we union both buckets. tagSchemaUID is deliberately NOT used here.
       const PAGE_SIZE = 500n;
-      const allTargets: `0x${string}`[] = [];
-      for (let cursor = 0n; cursor < count; cursor += PAGE_SIZE) {
-        const page = (await publicClient.readContract({
-          address: tagResolverAddress,
-          abi: TAG_RESOLVER_ABI,
-          functionName: "getTaggedTargets",
-          args: [definitionUID, cursor, PAGE_SIZE],
-        })) as `0x${string}`[];
-        allTargets.push(...page);
+      const effectiveTargets = new Set<string>();
+
+      // The buckets we care about for the explorer's descriptive-label filter:
+      //   dataSchemaUID  — DATA-target file labels (the primary use case)
+      //   anchorSchemaUID — ANCHOR-target folder labels (optional — skipped if not provided)
+      const targetSchemaBuckets: `0x${string}`[] = [dataSchemaUID as `0x${string}`];
+      if (anchorSchemaUID) targetSchemaBuckets.push(anchorSchemaUID as `0x${string}`);
+
+      for (const targetSchema of targetSchemaBuckets) {
+        for (const attester of tagAttesters) {
+          const count = (await publicClient.readContract({
+            address: edgeResolverAddress,
+            abi: EDGE_RESOLVER_ABI,
+            functionName: "getActiveTagsCount",
+            args: [definitionUID, attester, targetSchema],
+          })) as bigint;
+
+          if (count === 0n) continue;
+
+          for (let cursor = 0n; cursor < count; cursor += PAGE_SIZE) {
+            const [entries, targets] = (await Promise.all([
+              publicClient.readContract({
+                address: edgeResolverAddress,
+                abi: EDGE_RESOLVER_ABI,
+                functionName: "getActiveTagEntries",
+                args: [definitionUID, attester, targetSchema, cursor, PAGE_SIZE],
+              }),
+              publicClient.readContract({
+                address: edgeResolverAddress,
+                abi: EDGE_RESOLVER_ABI,
+                functionName: "getActiveTargetsByAttesterAndSchema",
+                args: [definitionUID, attester, targetSchema, cursor, PAGE_SIZE],
+              }),
+            ])) as [ReadonlyArray<{ tagUID: `0x${string}`; weight: bigint }>, readonly `0x${string}`[]];
+
+            // Use min length: getActiveTagEntries and getActiveTargetsByAttesterAndSchema are
+            // two independent RPC calls. A revocation between them can produce arrays of
+            // different lengths; iterating past the shorter array would throw on targets[i].
+            const bound = Math.min(entries.length, targets.length);
+            for (let i = 0; i < bound; i++) {
+              // Effective TAG: weight >= 0. weight < 0 is active on-chain but suppressed for
+              // this filter (ADR-0042). weight = 0 is included.
+              if (entries[i].weight >= 0n) {
+                effectiveTargets.add(targets[i].toLowerCase());
+              }
+            }
+          }
+        }
       }
 
-      // Only consider tags applied by the currently viewed attesters (connected user + editions).
-      // This prevents strangers from affecting your view by tagging your files.
-      const tagAttesters: `0x${string}`[] = [
-        ...(connectedAddress ? [connectedAddress as `0x${string}`] : []),
-        ...editionAddresses
-          .filter(a => a.toLowerCase() !== connectedAddress?.toLowerCase())
-          .map(a => a as `0x${string}`),
-      ];
-
-      const activeChecks = await Promise.all(
-        allTargets.map(async target => {
-          const isActive =
-            tagAttesters.length > 0
-              ? ((await publicClient.readContract({
-                  address: tagResolverAddress,
-                  abi: TAG_RESOLVER_ABI,
-                  functionName: "isActivelyTaggedByAny",
-                  args: [target, definitionUID, tagAttesters],
-                })) as boolean)
-              : false;
-          return isActive ? target.toLowerCase() : null;
-        }),
-      );
-      return new Set(activeChecks.filter((t): t is string => t !== null));
+      return effectiveTargets;
     };
 
     const resolve = async () => {
@@ -397,10 +453,13 @@ export const FileBrowser = ({
     tagFilterVersion,
     publicClient,
     indexerInfo,
-    tagResolverAddress,
+    edgeResolverAddress,
     tagsRoot,
     connectedAddress,
     editionAddresses,
+    tagSchemaUID,
+    dataSchemaUID,
+    anchorSchemaUID,
   ]);
 
   const fetchFileContent = async (item: any) => {
@@ -577,6 +636,8 @@ export const FileBrowser = ({
     contractName: "Indexer",
     functionName: "PROPERTY_SCHEMA_UID",
   });
+  // pinSchemaUID and tagSchemaUID are declared earlier (top of component) so
+  // they're in scope for the tag-filter useEffect.
 
   const { data: sortsAnchorUID } = useScaffoldReadContract({
     contractName: "Indexer",
@@ -887,11 +948,12 @@ export const FileBrowser = ({
   }, [useEditionsQuery, editionAddresses.length, editionItems, standardItems]);
 
   // When a tag filter is active, resolve DATA UIDs for each file item.
-  // DATA is standalone (refUID=0x0) and placed at anchors via TAGs, so we query
-  // TagResolver's _activeByAAS index to find which DATAs are at each anchor.
-  // Multiple attesters can have data for the same anchor, so we store a Set per anchor.
+  // AGENT-NOTE (ADR-0041): file placement is now PIN (cardinality 1) — there's at
+  // most one active DATA per (attester, anchor), so we use the O(1) `getActivePinTarget`
+  // reader instead of the old TAG count → enumerate scan. We still build a Set per
+  // anchor because multiple attesters can each have their own DATA at the same anchor.
   useEffect(() => {
-    if ((!tagFilteredUIDs && tagExcludedUIDs.size === 0) || !rawItems || !publicClient || !tagResolverAddress) {
+    if ((!tagFilteredUIDs && tagExcludedUIDs.size === 0) || !rawItems || !publicClient || !edgeResolverAddress) {
       setDataUIDMap(new Map());
       setIsDataUIDMapLoading(false);
       return;
@@ -920,28 +982,14 @@ export const FileBrowser = ({
             await Promise.all(
               attesters.map(async attester => {
                 try {
-                  const count = (await publicClient.readContract({
-                    address: tagResolverAddress,
-                    abi: TAG_RESOLVER_ABI,
-                    functionName: "getActiveTargetsByAttesterAndSchemaCount",
+                  const target = (await publicClient.readContract({
+                    address: edgeResolverAddress,
+                    abi: EDGE_RESOLVER_ABI,
+                    functionName: "getActivePinTarget",
                     args: [item.uid as `0x${string}`, attester as `0x${string}`, dataSchemaUID as `0x${string}`],
-                  })) as bigint;
-                  if (count > 0n) {
-                    const targets = (await publicClient.readContract({
-                      address: tagResolverAddress,
-                      abi: TAG_RESOLVER_ABI,
-                      functionName: "getActiveTargetsByAttesterAndSchema",
-                      args: [
-                        item.uid as `0x${string}`,
-                        attester as `0x${string}`,
-                        dataSchemaUID as `0x${string}`,
-                        0n,
-                        count,
-                      ],
-                    })) as `0x${string}`[];
-                    for (const t of targets) {
-                      if (t !== zeroHash) dataUIDs.add(t.toLowerCase());
-                    }
+                  })) as `0x${string}`;
+                  if (target && target !== zeroHash) {
+                    dataUIDs.add(target.toLowerCase());
                   }
                 } catch {
                   // ignore
@@ -968,7 +1016,7 @@ export const FileBrowser = ({
     tagExcludedUIDs,
     rawItems,
     publicClient,
-    tagResolverAddress,
+    edgeResolverAddress,
     dataSchemaUID,
     connectedAddress,
     editionAddresses,
@@ -979,14 +1027,13 @@ export const FileBrowser = ({
   const matchesUID = (item: any, uidSet: Set<string>): boolean => {
     const anchorUID = item.uid.toLowerCase();
     if (isFile(item, dataSchemaUID)) {
-      // Tags target DATA UIDs (standalone, placed at anchors via TAGs).
-      // Check if any DATA placed at this anchor matches the filter set.
+      // Tags on files target DATA UIDs — never anchor UIDs (specs/02 §Tag:
+      // "tags should target the DATA attestation UID rather than the Anchor UID").
+      // If no DATA is loaded for this anchor, treat as no-match; do NOT fall back
+      // to the anchor UID (that would silently accept tags meant for different semantics).
       const dataUIDs = dataUIDMap.get(anchorUID);
-      if (dataUIDs && dataUIDs.size > 0) {
-        return [...dataUIDs].some(uid => uidSet.has(uid));
-      }
-      // Fallback: check anchor UID directly (covers tags applied to anchor itself)
-      return uidSet.has(anchorUID);
+      if (!dataUIDs || dataUIDs.size === 0) return false;
+      return [...dataUIDs].some(uid => uidSet.has(uid));
     }
     return uidSet.has(anchorUID);
   };
@@ -1092,65 +1139,53 @@ export const FileBrowser = ({
     fetchFileContent(nextItem);
   };
 
-  // Delete a file/folder by revoking the connected user's TAGs (ADR-0006 revised 2026-04-18,
-  // tag-only folder visibility).
-  // File: revoke TAG(target=DATA_UID, definition=fileAnchorUID) for every DATA the
-  //   user placed at this anchor. Removes the file from this edition's view; other
-  //   editions with their own placement TAGs are unaffected. DATA is permanent (ADR-0002).
+  // Delete a file/folder by revoking the connected user's edges (ADR-0041 — PIN+TAG split).
+  // File: revoke the user's PIN(definition=fileAnchorUID, target=DATA_UID, schema=DATA_SCHEMA).
+  //   File placement is now PIN cardinality 1, so there's at most one PIN per file per user.
+  //   Removes the file from this edition's view; other editions with their own PIN are unaffected.
+  //   DATA is permanent (ADR-0002).
   // Folder: full subtree cascade. Walks the folder and every subfolder, revoking
-  //   (a) the user's visibility TAG on each folder (definition=dataSchemaUID, refUID=folder)
-  //   and (b) the user's file placement TAGs on every file child at any depth. Cascading
+  //   (a) the user's visibility TAG on each folder (definition=dataSchemaUID, target=folder)
+  //   and (b) the user's file placement PINs on every file child at any depth. Cascading
   //   prevents orphaned file placements (files invisible in the folder listing but still
   //   discoverable via "what files has this user placed?" queries).
-  const collectUserFilePlacementTags = async (fileAnchorUID: `0x${string}`): Promise<`0x${string}`[]> => {
-    if (!publicClient || !tagResolverAddress || !connectedAddress || !dataSchemaUID) return [];
-    const count = (await publicClient.readContract({
-      address: tagResolverAddress,
-      abi: TAG_RESOLVER_ABI,
-      functionName: "getActiveTargetsByAttesterAndSchemaCount",
+  // AGENT-NOTE: PINs and TAGs live under different EAS schemas, so revoke() must be issued
+  // per-schema. Returned arrays are kept separate; executeRevokesBySchema groups them.
+  const collectUserFilePlacementPins = async (fileAnchorUID: `0x${string}`): Promise<`0x${string}`[]> => {
+    if (!publicClient || !edgeResolverAddress || !connectedAddress || !dataSchemaUID) return [];
+    // PIN cardinality 1: at most one active PIN per (attester, fileAnchorUID, DATA_SCHEMA).
+    const slot = (await publicClient.readContract({
+      address: edgeResolverAddress,
+      abi: EDGE_RESOLVER_ABI,
+      functionName: "getActivePinSlot",
       args: [fileAnchorUID, connectedAddress as `0x${string}`, dataSchemaUID as `0x${string}`],
-    })) as bigint;
-    if (count === 0n) return [];
-    const dataUIDs = (await publicClient.readContract({
-      address: tagResolverAddress,
-      abi: TAG_RESOLVER_ABI,
-      functionName: "getActiveTargetsByAttesterAndSchema",
-      args: [fileAnchorUID, connectedAddress as `0x${string}`, dataSchemaUID as `0x${string}`, 0n, count],
-    })) as `0x${string}`[];
-    const tagUIDs: `0x${string}`[] = [];
-    for (const dataUID of dataUIDs) {
-      if (dataUID === zeroHash) continue;
-      const tagUID = (await publicClient.readContract({
-        address: tagResolverAddress,
-        abi: TAG_RESOLVER_ABI,
-        functionName: "getActiveTagUID",
-        args: [connectedAddress as `0x${string}`, dataUID, fileAnchorUID],
-      })) as `0x${string}`;
-      if (tagUID && tagUID !== zeroHash) tagUIDs.push(tagUID);
-    }
-    return tagUIDs;
+    })) as { pinUID: `0x${string}`; targetID: `0x${string}` };
+    if (slot.pinUID && slot.pinUID !== zeroHash) return [slot.pinUID];
+    return [];
   };
 
-  const getTagSchemaUID = (): `0x${string}` =>
-    ethers.solidityPackedKeccak256(
-      ["string", "address", "bool"],
-      ["bytes32 definition, bool applies", tagResolverAddress, true],
-    ) as `0x${string}`;
-
   // Recursively walks the subtree rooted at `rootFolderUID`, paginating getDirectoryPage (500/page).
-  // Returns every TAG UID the connected user would need to revoke to remove their visibility of the folder:
-  //   - file placements the user authored at any depth
-  //   - the visibility TAG the user authored on the root folder and every subfolder (if any)
+  // Returns every PIN/TAG UID the connected user would need to revoke to remove their visibility:
+  //   - PINs: file placements the user authored at any depth (cardinality 1, schema=PIN)
+  //   - TAGs: the visibility tag the user authored on the root folder and every subfolder (cardinality N, schema=TAG)
   // Skips `tagsRoot` and `sortsAnchorUID` (system anchors — never touch).
   const scanSubtree = async (
     rootFolderUID: `0x${string}`,
-  ): Promise<{ tagUIDs: `0x${string}`[]; folderCount: number; fileCount: number }> => {
-    if (!publicClient || !tagResolverAddress || !connectedAddress || !dataSchemaUID || !efsFileViewInfo) {
+  ): Promise<{ pinUIDs: `0x${string}`[]; tagUIDs: `0x${string}`[]; folderCount: number; fileCount: number }> => {
+    if (
+      !publicClient ||
+      !edgeResolverAddress ||
+      !connectedAddress ||
+      !dataSchemaUID ||
+      !efsFileViewInfo ||
+      !tagSchemaUID
+    ) {
       throw new Error("Not ready — reconnect wallet and try again.");
     }
     const me = connectedAddress as `0x${string}`;
     const dataSchema = dataSchemaUID as `0x${string}`;
     const propertySchema = (propertySchemaUID as `0x${string}` | undefined) ?? zeroHash;
+    const pinUIDs: `0x${string}`[] = [];
     const tagUIDs: `0x${string}`[] = [];
     const visited = new Set<string>();
     const queue: `0x${string}`[] = [rootFolderUID];
@@ -1164,11 +1199,12 @@ export const FileBrowser = ({
       folderCount += 1;
 
       // Folder's own visibility TAG (if the user authored one).
+      // AGENT-NOTE (ADR-0041): visibility is TAG-only — getActiveEdgeUID with TAG_SCHEMA_UID.
       const visibilityTagUID = (await publicClient.readContract({
-        address: tagResolverAddress,
-        abi: TAG_RESOLVER_ABI,
-        functionName: "getActiveTagUID",
-        args: [me, folder, dataSchema],
+        address: edgeResolverAddress,
+        abi: EDGE_RESOLVER_ABI,
+        functionName: "getActiveEdgeUID",
+        args: [me, folder, dataSchema, tagSchemaUID as `0x${string}`],
       })) as `0x${string}`;
       if (visibilityTagUID && visibilityTagUID !== zeroHash) tagUIDs.push(visibilityTagUID);
 
@@ -1198,10 +1234,10 @@ export const FileBrowser = ({
           if (childUID === tagsRoot || childUID === sortsAnchorUID) continue;
           const schema = (child.schema as string | undefined)?.toLowerCase();
           if (schema === (dataSchema as string).toLowerCase()) {
-            // File anchor — collect placement TAGs under this file.
+            // File anchor — collect placement PINs under this file.
             fileCount += 1;
-            const childTags = await collectUserFilePlacementTags(childUID);
-            tagUIDs.push(...childTags);
+            const childPins = await collectUserFilePlacementPins(childUID);
+            pinUIDs.push(...childPins);
           } else {
             // Subfolder — queue for recursion.
             queue.push(childUID);
@@ -1213,42 +1249,46 @@ export const FileBrowser = ({
       }
     }
 
-    return { tagUIDs, folderCount, fileCount };
+    return { pinUIDs, tagUIDs, folderCount, fileCount };
   };
 
-  const executeRevokes = async (
-    tagUIDs: `0x${string}`[],
+  // Revoke a batch of edge UIDs grouped by schema. Each multiRevoke call carries one schema's
+  // chunk (max CHUNK_SIZE entries) — EAS requires the schema to match the attestation.
+  const executeRevokesBySchema = async (
+    edgesBySchema: { schema: `0x${string}`; uids: `0x${string}`[]; label: string }[],
     ops: ReturnType<typeof useBackgroundOps.getState>,
     opId: string,
   ) => {
-    if (tagUIDs.length === 0 || !publicClient) return;
-    const tagSchemaUID = getTagSchemaUID();
+    if (!publicClient) return;
     const CHUNK_SIZE = 50;
-    const total = tagUIDs.length;
+    const total = edgesBySchema.reduce((acc, g) => acc + g.uids.length, 0);
+    if (total === 0) return;
     let done = 0;
-    for (let i = 0; i < total; i += CHUNK_SIZE) {
-      const chunk = tagUIDs.slice(i, i + CHUNK_SIZE);
-      ops.log(opId, `Revoking TAGs ${done + 1}–${done + chunk.length} of ${total}...`);
-      const txHash = await easWrite(
-        {
-          functionName: "multiRevoke",
-          args: [[{ schema: tagSchemaUID, data: chunk.map(uid => ({ uid, value: 0n })) }]],
-        },
-        { silent: true },
-      );
-      if (txHash) await publicClient.waitForTransactionReceipt({ hash: txHash });
-      done += chunk.length;
+    for (const group of edgesBySchema) {
+      for (let i = 0; i < group.uids.length; i += CHUNK_SIZE) {
+        const chunk = group.uids.slice(i, i + CHUNK_SIZE);
+        ops.log(opId, `Revoking ${group.label}s ${done + 1}–${done + chunk.length} of ${total}...`);
+        const txHash = await easWrite(
+          {
+            functionName: "multiRevoke",
+            args: [[{ schema: group.schema, data: chunk.map(uid => ({ uid, value: 0n })) }]],
+          },
+          { silent: true },
+        );
+        if (txHash) await publicClient.waitForTransactionReceipt({ hash: txHash });
+        done += chunk.length;
+      }
     }
   };
 
   const handleDelete = async (item: any, isItemFile: boolean) => {
-    if (!publicClient || !tagResolverAddress || !connectedAddress || !dataSchemaUID) {
+    if (!publicClient || !edgeResolverAddress || !connectedAddress || !dataSchemaUID || !pinSchemaUID) {
       notification.error("Not ready — reconnect wallet and try again.");
       return;
     }
     if (!isItemFile) {
       // Folder → open confirm dialog and scan.
-      setDeleteConfirm({ item, status: "scanning", tagUIDs: [], folderCount: 0, fileCount: 0 });
+      setDeleteConfirm({ item, status: "scanning", pinUIDs: [], tagUIDs: [], folderCount: 0, fileCount: 0 });
       try {
         const scan = await scanSubtree(item.uid as `0x${string}`);
         setDeleteConfirm(prev =>
@@ -1256,6 +1296,7 @@ export const FileBrowser = ({
             ? {
                 ...prev,
                 status: "ready",
+                pinUIDs: scan.pinUIDs,
                 tagUIDs: scan.tagUIDs,
                 folderCount: scan.folderCount,
                 fileCount: scan.fileCount,
@@ -1278,12 +1319,16 @@ export const FileBrowser = ({
     const label = item.name || "item";
     const opId = ops.start(`Delete: ${label}`);
     try {
-      ops.log(opId, "Locating placement TAG...");
-      const placementTags = await collectUserFilePlacementTags(item.uid as `0x${string}`);
-      if (placementTags.length === 0) {
+      ops.log(opId, "Locating placement PIN...");
+      const placementPins = await collectUserFilePlacementPins(item.uid as `0x${string}`);
+      if (placementPins.length === 0) {
         throw new Error("You have no active placement on this file — nothing to delete.");
       }
-      await executeRevokes(placementTags, ops, opId);
+      await executeRevokesBySchema(
+        [{ schema: pinSchemaUID as `0x${string}`, uids: placementPins, label: "PIN" }],
+        ops,
+        opId,
+      );
       ops.complete(opId, `Deleted ${label}.`);
       if (selectedFile?.uid === item.uid) closePreview();
       if (useEditionsQuery) {
@@ -1301,9 +1346,14 @@ export const FileBrowser = ({
 
   const confirmFolderDelete = async () => {
     if (!deleteConfirm || deleteConfirm.status !== "ready") return;
-    const { item, tagUIDs } = deleteConfirm;
+    if (!pinSchemaUID || !tagSchemaUID) {
+      notification.error("Schema UIDs not loaded yet — try again in a moment.");
+      return;
+    }
+    const { item, pinUIDs, tagUIDs } = deleteConfirm;
     const label = item.name || "folder";
-    if (tagUIDs.length === 0) {
+    const total = pinUIDs.length + tagUIDs.length;
+    if (total === 0) {
       notification.info(`Nothing of yours to delete in "${label}". Anchors are permanent.`);
       setDeleteConfirm(null);
       return;
@@ -1312,8 +1362,18 @@ export const FileBrowser = ({
     const ops = useBackgroundOps.getState();
     const opId = ops.start(`Delete folder: ${label}`);
     try {
-      await executeRevokes(tagUIDs, ops, opId);
-      ops.complete(opId, `Deleted ${label} — revoked ${tagUIDs.length} TAG${tagUIDs.length === 1 ? "" : "s"}.`);
+      await executeRevokesBySchema(
+        [
+          { schema: pinSchemaUID as `0x${string}`, uids: pinUIDs, label: "PIN" },
+          { schema: tagSchemaUID as `0x${string}`, uids: tagUIDs, label: "TAG" },
+        ],
+        ops,
+        opId,
+      );
+      ops.complete(
+        opId,
+        `Deleted ${label} — revoked ${pinUIDs.length} PIN${pinUIDs.length === 1 ? "" : "s"} and ${tagUIDs.length} TAG${tagUIDs.length === 1 ? "" : "s"}.`,
+      );
       if (selectedFile?.uid === item.uid) closePreview();
       if (useEditionsQuery) {
         await refetchEditionItems();
@@ -1798,41 +1858,46 @@ export const FileBrowser = ({
               </div>
             )}
 
-            {deleteConfirm.status !== "scanning" && (
-              <div className="mt-4 space-y-2 text-sm">
-                {deleteConfirm.error && <div className="text-error">{deleteConfirm.error}</div>}
-                {deleteConfirm.tagUIDs.length === 0 ? (
-                  <div className="text-base-content/70">
-                    Nothing of yours to delete here. Anchors are permanent, and this folder contains no files or
-                    visibility TAGs you authored.
+            {deleteConfirm.status !== "scanning" &&
+              (() => {
+                const totalEdges = deleteConfirm.pinUIDs.length + deleteConfirm.tagUIDs.length;
+                const txCount =
+                  Math.ceil(deleteConfirm.pinUIDs.length / 50) + Math.ceil(deleteConfirm.tagUIDs.length / 50);
+                return (
+                  <div className="mt-4 space-y-2 text-sm">
+                    {deleteConfirm.error && <div className="text-error">{deleteConfirm.error}</div>}
+                    {totalEdges === 0 ? (
+                      <div className="text-base-content/70">
+                        Nothing of yours to delete here. Anchors are permanent, and this folder contains no file
+                        placements or visibility tags you authored.
+                      </div>
+                    ) : (
+                      <>
+                        <div>
+                          This will revoke{" "}
+                          <span className="font-semibold text-error">
+                            {deleteConfirm.pinUIDs.length} PIN{deleteConfirm.pinUIDs.length === 1 ? "" : "s"} and{" "}
+                            {deleteConfirm.tagUIDs.length} TAG{deleteConfirm.tagUIDs.length === 1 ? "" : "s"}
+                          </span>{" "}
+                          you authored across{" "}
+                          <span className="font-semibold">
+                            {deleteConfirm.folderCount} folder{deleteConfirm.folderCount === 1 ? "" : "s"}
+                          </span>{" "}
+                          and{" "}
+                          <span className="font-semibold">
+                            {deleteConfirm.fileCount} file{deleteConfirm.fileCount === 1 ? "" : "s"}
+                          </span>
+                          .
+                        </div>
+                        <div className="text-xs text-base-content/60">
+                          Batched in chunks of 50 per transaction (one batch per schema) — expect {txCount} wallet
+                          prompt{txCount === 1 ? "" : "s"}. Anchors themselves are permanent and cannot be deleted.
+                        </div>
+                      </>
+                    )}
                   </div>
-                ) : (
-                  <>
-                    <div>
-                      This will revoke{" "}
-                      <span className="font-semibold text-error">
-                        {deleteConfirm.tagUIDs.length} TAG{deleteConfirm.tagUIDs.length === 1 ? "" : "s"}
-                      </span>{" "}
-                      you authored across{" "}
-                      <span className="font-semibold">
-                        {deleteConfirm.folderCount} folder{deleteConfirm.folderCount === 1 ? "" : "s"}
-                      </span>{" "}
-                      and{" "}
-                      <span className="font-semibold">
-                        {deleteConfirm.fileCount} file{deleteConfirm.fileCount === 1 ? "" : "s"}
-                      </span>
-                      .
-                    </div>
-                    <div className="text-xs text-base-content/60">
-                      Batched in chunks of 50 per transaction — expect {Math.ceil(deleteConfirm.tagUIDs.length / 50)}{" "}
-                      wallet prompt
-                      {Math.ceil(deleteConfirm.tagUIDs.length / 50) === 1 ? "" : "s"}. Anchors themselves are permanent
-                      and cannot be deleted.
-                    </div>
-                  </>
-                )}
-              </div>
-            )}
+                );
+              })()}
 
             <div className="mt-6 flex justify-end gap-2">
               <button
@@ -1845,7 +1910,9 @@ export const FileBrowser = ({
               <button
                 className="btn btn-error btn-sm"
                 onClick={confirmFolderDelete}
-                disabled={deleteConfirm.status !== "ready" || deleteConfirm.tagUIDs.length === 0}
+                disabled={
+                  deleteConfirm.status !== "ready" || deleteConfirm.pinUIDs.length + deleteConfirm.tagUIDs.length === 0
+                }
               >
                 {deleteConfirm.status === "revoking" ? (
                   <>

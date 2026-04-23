@@ -12,9 +12,12 @@ const EAS_ADDRESS = "0xC2679fBD37d54388Ce493F1DB75320D236e1815e";
  * any user PROPERTYs / sub-anchors / TAGs). Client sidebars enumerate schemas
  * by iterating TAGs whose `definition` is the `/tags/schema` anchor.
  *
- * Display-name values use the unified model (ADR-0034 / ADR-0035):
- *   Container → Anchor<PROPERTY>(name="name") → TAG → PROPERTY(value="ANCHOR")
- * so we attest three records per name rather than one key/value PROPERTY.
+ * Display-name values use the unified model (ADR-0034 / ADR-0035 / ADR-0041):
+ *   Container → Anchor<PROPERTY>(name="name") → PIN → PROPERTY(value="ANCHOR")
+ * The bind step uses **PIN** (cardinality 1) rather than TAG because a name
+ * is an exclusive value: rebinding must supersede, never accumulate. Schema
+ * discovery (`/tags/schema`) stays on TAG because it's a list of N alias
+ * anchors per attester.
  *
  * At deploy we seed:
  *   - `/tags/schema/` — a regular tag definition under the existing `/tags/`
@@ -23,8 +26,10 @@ const EAS_ADDRESS = "0xC2679fBD37d54388Ce493F1DB75320D236e1815e";
  *     Each alias gets:
  *       - `Anchor<PROPERTY>(refUID=aliasUID, name="name")` key anchor.
  *       - Free-floating `PROPERTY(value=<label>)`.
- *       - `TAG(definition=keyAnchor, refUID=property, applies=true)` from the deployer.
- *     …and a `/tags/schema` TAG from the deployer so sidebars find it.
+ *       - `PIN(definition=keyAnchor, refUID=property)` from the
+ *         deployer (Shape A — singleton per attester; no weight field).
+ *     …and a `/tags/schema` TAG from the deployer so sidebars find it (Shape B
+ *     — list).
  *
  * Kernel auto-tagging of user-created aliases is deferred (see FUTURE_WORK) —
  * for now, user-created aliases need a follow-up tx to attach the `/tags/schema`
@@ -42,14 +47,15 @@ const deploySchemaAliases: DeployFunction = async function (hre: HardhatRuntimeE
   );
 
   const indexer = await ethers.getContract<Contract>("Indexer", deployer);
-  const tagResolver = await ethers.getContract<Contract>("TagResolver", deployer);
+  const edgeResolver = await ethers.getContract<Contract>("EdgeResolver", deployer);
 
   const anchorSchemaUID: string = await indexer.ANCHOR_SCHEMA_UID();
   const propertySchemaUID: string = await indexer.PROPERTY_SCHEMA_UID();
   const dataSchemaUID: string = await indexer.DATA_SCHEMA_UID();
   const mirrorSchemaUID: string = await indexer.MIRROR_SCHEMA_UID();
   const sortInfoSchemaUID: string = await indexer.SORT_INFO_SCHEMA_UID();
-  const tagSchemaUID: string = await tagResolver.TAG_SCHEMA_UID();
+  const pinSchemaUID: string = await indexer.PIN_SCHEMA_UID();
+  const tagSchemaUID: string = await indexer.TAG_SCHEMA_UID();
 
   // ADR-0028 graceful degradation: if earlier steps couldn't create anchors
   // (e.g. CI deploying against vanilla hardhat with no EAS registered, where
@@ -82,7 +88,8 @@ const deploySchemaAliases: DeployFunction = async function (hre: HardhatRuntimeE
   };
 
   // Helper: attest the three-record `name` binding under a container (refUID = containerUID).
-  // Idempotent — skips when the deployer's active TAG already resolves to `label`.
+  // ADR-0041: bind step uses PIN. Idempotent — skips when the deployer's active
+  // PIN already resolves to a PROPERTY whose value is `label`.
   const upsertNameOnAnchor = async (containerUID: string, label: string) => {
     // 1. Resolve (or create) the "name" key anchor under the container.
     let keyAnchorUID: string = await indexer.resolveAnchor(containerUID, "name", propertySchemaUID);
@@ -103,42 +110,24 @@ const deploySchemaAliases: DeployFunction = async function (hre: HardhatRuntimeE
       if (keyAnchorUID === ethers.ZeroHash) throw new Error("Failed to create 'name' key anchor");
     }
 
-    // 2. If the deployer's *newest* active PROPERTY under this key anchor has
-    //    the target label, skip. `_activeByAAS` is append-only per rebind
-    //    (compositeHash is keyed on targetID, not schema), so asking for index
-    //    0 returns the *oldest* push — which would make this upsert re-attest
-    //    on every deploy after any label change, breaking the stated
-    //    idempotency. Fetch up to 50 active targets, walk them, pick newest by
-    //    EAS `time`. Matches the defensive read in `PropertiesModal` and the
-    //    companion fix in `07_persona_names.ts`. See docs/QUESTIONS.md for the
-    //    Tier 2 on making the write path genuinely singleton per ADR-0035.
-    const existing: string[] = await tagResolver.getActiveTargetsByAttesterAndSchema(
+    // 2. Skip if the deployer's active PIN under this key anchor already binds
+    //    to a PROPERTY whose value matches `label`. PIN is genuinely singleton
+    //    (ADR-0041) so this is a single O(1) read — no defensive newest-by-time
+    //    walk needed (compare with the pre-PIN history in git blame).
+    const existingPropertyUID: string = await edgeResolver.getActivePinTarget(
       keyAnchorUID,
       deployer,
       propertySchemaUID,
-      0,
-      50,
     );
-    if (existing.length > 0) {
-      let newestTime: bigint = -1n;
-      let newestUID: string | undefined;
-      let newestValue: string | undefined;
-      for (const uid of existing) {
-        try {
-          const att = await eas.getAttestation(uid);
-          const t = att.time as bigint;
-          if (t > newestTime) {
-            newestTime = t;
-            newestUID = uid;
-            const [decoded] = ethers.AbiCoder.defaultAbiCoder().decode(["string"], att.data);
-            newestValue = decoded as string;
-          }
-        } catch {
-          // Unresolvable entry — skip; another loop iter may still find the winner.
+    if (existingPropertyUID && existingPropertyUID !== ethers.ZeroHash) {
+      try {
+        const att = await eas.getAttestation(existingPropertyUID);
+        const [decoded] = ethers.AbiCoder.defaultAbiCoder().decode(["string"], att.data);
+        if ((decoded as string) === label) {
+          return { keyAnchorUID, propertyUID: existingPropertyUID, skipped: true };
         }
-      }
-      if (newestUID && newestValue === label) {
-        return { keyAnchorUID, propertyUID: newestUID, skipped: true };
+      } catch {
+        // Unresolvable — fall through and re-attest.
       }
     }
 
@@ -158,16 +147,18 @@ const deploySchemaAliases: DeployFunction = async function (hre: HardhatRuntimeE
     const propertyUID = extractUID(propReceipt);
     if (!propertyUID) throw new Error("Failed to create PROPERTY");
 
-    // 4. TAG(definition=keyAnchor, refUID=property, applies=true).
+    // 4. PIN(definition=keyAnchor, refUID=property) — singleton bind.
+    //    Re-attest at the same slot supersedes; revoke clears. PIN carries no
+    //    per-entry metadata (cardinality 1 has no sort order to encode).
     await (
       await eas.attest({
-        schema: tagSchemaUID,
+        schema: pinSchemaUID,
         data: {
           recipient: ethers.ZeroAddress,
           expirationTime: 0,
           revocable: true,
           refUID: propertyUID,
-          data: ethers.AbiCoder.defaultAbiCoder().encode(["bytes32", "bool"], [keyAnchorUID, true]),
+          data: ethers.AbiCoder.defaultAbiCoder().encode(["bytes32"], [keyAnchorUID]),
           value: 0,
         },
       })
@@ -206,6 +197,7 @@ const deploySchemaAliases: DeployFunction = async function (hre: HardhatRuntimeE
     { label: "ANCHOR", uid: anchorSchemaUID },
     { label: "DATA", uid: dataSchemaUID },
     { label: "PROPERTY", uid: propertySchemaUID },
+    { label: "PIN", uid: pinSchemaUID },
     { label: "TAG", uid: tagSchemaUID },
     { label: "MIRROR", uid: mirrorSchemaUID },
     { label: "SORT_INFO", uid: sortInfoSchemaUID },
@@ -240,17 +232,18 @@ const deploySchemaAliases: DeployFunction = async function (hre: HardhatRuntimeE
     }
     if (aliasUID === ethers.ZeroHash) continue;
 
-    // 2a. Attach the unified-model `name` binding (ADR-0035).
+    // 2a. Attach the unified-model `name` binding (ADR-0035 + ADR-0041).
     const res = await upsertNameOnAnchor(aliasUID, schema.label);
     console.log(`  name binding for ${schema.label}: ${res.skipped ? "unchanged" : "attested"}`);
 
     // 2b. Attest `/tags/schema` TAG from the deployer so the sidebar enumerator
-    //     finds it. Kernel-side auto-tagging (onAttest) will replace this for
-    //     user-created aliases in a follow-up PR.
+    //     finds it. Shape B (list of schema aliases per attester) — stays on TAG.
+    //     Kernel-side auto-tagging (onAttest) will replace this for user-created
+    //     aliases in a follow-up PR.
     if (tagsSchemaUID !== ethers.ZeroHash) {
       // _activeByAAS for (tagDef=/tags/schema, attester=deployer, ANCHOR_SCHEMA) stores the
       // anchor UIDs deployer has actively tagged as a schema alias.
-      const existingTags: string[] = await tagResolver.getActiveTargetsByAttesterAndSchema(
+      const existingTags: string[] = await edgeResolver.getActiveTargetsByAttesterAndSchema(
         tagsSchemaUID,
         deployer,
         anchorSchemaUID,
@@ -273,7 +266,7 @@ const deploySchemaAliases: DeployFunction = async function (hre: HardhatRuntimeE
               expirationTime: 0,
               revocable: true,
               refUID: aliasUID,
-              data: ethers.AbiCoder.defaultAbiCoder().encode(["bytes32", "bool"], [tagsSchemaUID, true]),
+              data: ethers.AbiCoder.defaultAbiCoder().encode(["bytes32", "int256"], [tagsSchemaUID, 1n]),
               value: 0,
             },
           })
@@ -288,6 +281,6 @@ const deploySchemaAliases: DeployFunction = async function (hre: HardhatRuntimeE
 
 export default deploySchemaAliases;
 deploySchemaAliases.tags = ["SchemaAliases"];
-// Depends on Mirrors because TAG / MIRROR / SORT_INFO schema UIDs are wired in
+// Depends on Mirrors because PIN / TAG / MIRROR / SORT_INFO schema UIDs are wired in
 // EFSIndexer only after 05_mirrors.ts runs wireContracts().
 deploySchemaAliases.dependencies = ["Mirrors"];

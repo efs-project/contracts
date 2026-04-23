@@ -8,6 +8,22 @@ This repo is the contracts monorepo. The user-facing production web client is a 
 
 **Architecture at a glance** → [`specs/overview.md`](./specs/overview.md)
 **Contributor / agent workflow** → [AGENTS.md](./AGENTS.md)
+**Human PR review workflow** → [docs/HUMAN_PR_WORKFLOW.md](./docs/HUMAN_PR_WORKFLOW.md)
+
+## PR Reviews With Agents
+
+If you want agents to review a PR or clean up PR comments, start here:
+
+- Human-friendly guide: [docs/HUMAN_PR_WORKFLOW.md](./docs/HUMAN_PR_WORKFLOW.md)
+- Deeper routing / persona details: [docs/review/review-squad.md](./docs/review/review-squad.md)
+
+Short version:
+
+1. Keep the PR description current, especially `Agents involved`.
+2. Before asking for review, scan existing agent comments and unresolved threads.
+3. Do not just say `review PR #<N>`.
+4. Use the copy/paste review prompt from the human workflow doc.
+5. After fixes land, use the copy/paste response prompt so threads get replied to and resolved cleanly.
 
 ## Getting Started
 
@@ -31,7 +47,7 @@ yarn deploy
 >
 > Running a single contract test file is the one documented exception — see AGENTS.md for the pattern.
 
-### 4. Optional: Start Scaffold UI (Terminal 3)
+### 4. Optional: Start Internal Debug UI (Terminal 3)
 For debugging and easily using the contracts:
 ```bash
 yarn start
@@ -45,4 +61,3 @@ yarn start
 This project uses [Scaffold-ETH 2](https://scaffoldeth.io) as a base.
 - [Documentation](https://docs.scaffoldeth.io)
 - [Website](https://scaffoldeth.io)
-

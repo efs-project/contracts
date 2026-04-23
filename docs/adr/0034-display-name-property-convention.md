@@ -23,9 +23,9 @@ A first draft of this ADR placed a PROPERTY *directly* on the container via `ref
 PROPERTY(refUID = <containerUID>, key = "name", value = "…")
 ```
 
-That collided with the existing design for DATA (ADR-0002 / ADR-0003): DATAs are free-floating content identity that gets *placed* at anchors via TAG, not attached via `refUID`. The user pointed out the inconsistency — "no real reason for PROPERTY and DATA to be different" — so this ADR now establishes the symmetric model: PROPERTY is a free-floating value, placed via TAG under an `Anchor<PROPERTY>` that holds the key.
+That collided with the existing design for DATA (ADR-0002 / ADR-0003): DATAs are free-floating content identity that gets *placed* at anchors via PIN, not attached via `refUID`. The user pointed out the inconsistency — "no real reason for PROPERTY and DATA to be different" — so this ADR now establishes the symmetric model: PROPERTY is a free-floating value, placed via PIN under an `Anchor<PROPERTY>` that holds the key.
 
-Anchors are the static tree the user navigates. Free-floating content (DATA, PROPERTY) attaches to anchors via TAG. The per-attester singleton semantics of `TagResolver._activeByAAS` then give us "Alice's current name for Vitalik" as a natural consequence, not a bespoke lookup.
+Anchors are the static tree the user navigates. Free-floating content (DATA, PROPERTY) attaches to anchors via PIN. The per-attester singleton semantics of `EdgeResolver._activeBySlot` then give us "Alice's current name for Vitalik" as a natural consequence, not a bespoke lookup.
 
 ## Decision
 
@@ -38,11 +38,11 @@ PROPERTY schema:  string value             (non-revocable)
 DATA schema:      bytes32 contentHash, uint64 size    (non-revocable)
 ```
 
-A PROPERTY attestation is a standalone value (`refUID = 0x0`, `recipient = 0x0`). Placement is via TAG under an `Anchor<PROPERTY>(name="<key>")` — the name anchor holds the key; the free-floating PROPERTY holds the value; the TAG binds them under one attester.
+A PROPERTY attestation is a standalone value (`refUID = 0x0`, `recipient = 0x0`). Placement is via PIN under an `Anchor<PROPERTY>(name="<key>")` — the name anchor holds the key; the free-floating PROPERTY holds the value; the PIN binds them under one attester.
 
-Per-attester singleton comes for free from `TagResolver._activeByAAS[definition][attester][PROPERTY_SCHEMA_UID]`. Alice's current "name" value for Vitalik is whichever PROPERTY she last TAG'd under `Vitalik / name` — a new TAG from Alice supersedes her previous one automatically (ADR-0003). Revocation of the TAG (not the PROPERTY) removes the binding.
+Per-attester singleton comes for free from `EdgeResolver._activeBySlot[definition][attester][PROPERTY_SCHEMA_UID]`. Alice's current "name" value for Vitalik is whichever PROPERTY she last PIN'd under `Vitalik / name` — a new PIN from Alice supersedes her previous one automatically (ADR-0041). Revocation of the PIN (not the PROPERTY) removes the binding.
 
-PROPERTY itself is non-revocable — values are permanent, the *binding* is what gets moved. This mirrors DATA's non-revocability: the bytes of a file don't get "unpublished"; only the TAG that places them at a path can be revoked.
+PROPERTY itself is non-revocable — values are permanent, the *binding* is what gets moved. This mirrors DATA's non-revocability: the bytes of a file don't get "unpublished"; only the PIN that places them at a path can be revoked.
 
 ### 2. The `name` convention
 
@@ -51,7 +51,7 @@ A human-readable display name for any container `C` is:
 ```
 C                                             // any bytes32: anchor / DATA / address-as-bytes32 / schema UID / attestation UID
 └── Anchor<PROPERTY>(parent=C, name="name")   // the key anchor — `schemaUID = PROPERTY_SCHEMA_UID`
-    └── TAG(definition=nameAnchor, refUID=property, attester=alice)
+    └── PIN(definition=nameAnchor, refUID=property, attester=alice)
         → PROPERTY(value="Vitalik Buterin")
 ```
 
@@ -66,10 +66,10 @@ Length: names SHOULD be ≤ 64 characters; clients SHOULD truncate with ellipsis
 When a client needs a display name for a container UID `C`, it resolves in order and stops at the first hit:
 
 1. **If `C` is an address:** ENS reverse-lookup (off-chain, `publicClient.getEnsName`). Mainnet only; skipped otherwise. Clients cache aggressively.
-2. **`name` via TAG + PROPERTY, edition-scoped:**
+2. **`name` via PIN + PROPERTY, edition-scoped:**
    - Look up `nameAnchor = Indexer.resolveAnchor(C, "name", PROPERTY_SCHEMA_UID)`. If missing, go to step 3.
-   - For each attester in the active editions list (ADR-0031 order: explicit `?editions=` → `[caller]` → `[DEPLOYER]`), fetch `_activeByAAS[nameAnchor][attester][PROPERTY_SCHEMA_UID]`.
-   - First attester with an active entry wins. Read the TAG, follow `refUID` to the PROPERTY, decode `value`.
+   - For each attester in the active editions list (ADR-0031 order: explicit `?editions=` → `[caller]` → `[DEPLOYER]`), call `EdgeResolver.getActivePinTarget(nameAnchor, attester, PROPERTY_SCHEMA_UID)`.
+   - First attester with a non-zero result wins. Read the PIN's target UID, fetch the PROPERTY attestation, decode `value`.
 3. **Schema fallback:** if `C` is a schema UID and `SchemaRegistry.getSchema(C).uid != 0`, show the field-list string (deployer-seeded alias anchors handled transparently by step 2).
 4. **Short-hex fallback:** `0x8626…1199` for addresses, `0x3f4a…12ab` for other 32-byte UIDs.
 
@@ -77,15 +77,15 @@ Step 2 is the load-bearing step. Steps 1, 3, 4 are narrow-purpose.
 
 ### 4. Edition scoping
 
-The default viewer is the connected wallet; the default fallback is the deployer (ADR-0016). Unconfigured viewers see the deployer's naming — which is what the pre-seeded aliases produce. A viewer who TAGs their own `name` PROPERTY under any container's name anchor overrides the deployer's label *for themselves* — matching ADR-0014's "your view, your names" property.
+The default viewer is the connected wallet; the default fallback is the deployer (ADR-0016). Unconfigured viewers see the deployer's naming — which is what the pre-seeded aliases produce. A viewer who PINs their own `name` PROPERTY under any container's name anchor overrides the deployer's label *for themselves* — matching ADR-0014's "your view, your names" property.
 
-Cross-attester injection is blocked by the `_activeByAAS[nameAnchor][attester][…]` split: a malicious attester cannot force their naming of Vitalik into my view. I'd have to add them to `?editions=` first.
+Cross-attester injection is blocked by the `_activeBySlot[nameAnchor][attester][…]` split: a malicious attester cannot force their naming of Vitalik into my view. I'd have to add them to `?editions=` first.
 
 ### 5. Deploy-time seeding
 
 The user's guidance: "lazy unless it's an important one." We pre-seed only the containers users are likely to see raw:
 
-1. **System schemas** (6) — each alias anchor per ADR-0033 gets an `Anchor<PROPERTY>(name="name")` child, a free PROPERTY with `value="ANCHOR"` / `"DATA"` / etc., and a TAG binding them. Handled by `06_schema_aliases.ts`.
+1. **System schemas** (6) — each alias anchor per ADR-0033 gets an `Anchor<PROPERTY>(name="name")` child, a free PROPERTY with `value="ANCHOR"` / `"DATA"` / etc., and a PIN binding them. Handled by `06_schema_aliases.ts`.
 2. **Dev personas** (20, localhost/devnet only) — each Hardhat deterministic address gets the same treatment, with `value="Satoshi Nakamoto"` / etc. Handled by `07_persona_names.ts`. Skipped on live networks.
 3. **EFS contracts** — Indexer / Router / etc. are deferred (FUTURE_WORK) unless the production UI actually renders them as bare addresses.
 
@@ -96,9 +96,11 @@ Arbitrary DATAs, attestations, and user addresses are NOT pre-seeded — they'd 
 A container's info panel gets an editable "Name" field. Submitting:
 1. If the name anchor doesn't exist under the container, attest `Anchor<PROPERTY>(parent=C, name="name")`.
 2. Attest a free-standing `PROPERTY(value=<input>)`.
-3. Attest a `TAG(definition=nameAnchor, refUID=propertyUID, applies=true)`.
+3. Attest a `PIN(definition=nameAnchor, refUID=propertyUID)`.
 
-Can be batched into a single `multiAttest`. The new TAG supersedes the caller's previous name binding per `_activeByAAS` singleton semantics (ADR-0003).
+Can be batched into a single `multiAttest`. The new PIN supersedes the caller's previous name binding at the same `(attester, definition, targetSchema)` slot in O(1) (ADR-0041).
+
+*Prose-accuracy corrections 2026-04-22 (within 30-day grace window): (1) Throughout Context, Decision, §4, §5, §6, and Consequences, all references to "placed via TAG", "TAG binds them", "TagResolver._activeByAAS", "tag binding", "anchor + property + tag", and "read the TAG" have been updated to the PIN equivalents — per ADR-0041, which introduced the PIN schema (cardinality-1 edge) to replace the singleton-TAG pattern for PROPERTY value binding. (2) In §4, "a viewer who TAGs their own name PROPERTY" → "PINs"; "`_activeByAAS[nameAnchor][attester]`" → "`_activeBySlot[nameAnchor][attester]`". (3) In Consequences, "TAG singleton machinery" → "PIN singleton machinery"; "anchor + property + tag" → "anchor + property + pin"; "`TagResolver._activeByAAS` is the security boundary" → "`EdgeResolver._activeBySlot` is the security boundary". The core decision — `name` PROPERTY as display-name fallback, resolved in edition order via a cardinality-1 key anchor — is unchanged.*
 
 ## Consequences
 
@@ -106,19 +108,19 @@ Can be batched into a single `multiAttest`. The new TAG supersedes the caller's 
 
 - Comments, notifications, mentions, feeds, timelines — anywhere an address/schema/attestation/DATA UID appears, we render a name.
 - Per-viewer naming. My address book is mine; another viewer sees theirs (or the deployer's).
-- No new schema kinds, no new resolver, no new index — reuses the existing TAG singleton machinery and the `_nameToAnchor` directory for key-anchor lookup.
+- No new schema kinds, no new resolver, no new index — reuses the existing PIN singleton machinery and the `_nameToAnchor` directory for key-anchor lookup.
 - Schemas and attestations get EFS-native human labels without touching EAS (ADR-0032 intact).
-- Symmetric with DATA — one mental model (free-floating value + TAG placement under a key anchor) covers both.
+- Symmetric with DATA — one mental model (free-floating value + PIN placement under a key anchor) covers both.
 
 **Costs**
 
-- Three attestations per name seed instead of one (anchor + property + tag). Worth it for the uniformity; batch via `multiAttest`. Pre-launch acceptable; mainnet deploy only runs the small schema-alias set.
+- Three attestations per name seed instead of one (anchor + property + pin). Worth it for the uniformity; batch via `multiAttest`. Pre-launch acceptable; mainnet deploy only runs the small schema-alias set.
 - Reserved anchor name `"name"` at each container — follows the `"contentType"` reservation precedent (ADR-0005).
 - ENS dependency in step 1 requires a mainnet RPC round-trip in the client. Clients cache; non-mainnet viewers skip step 1.
 
 **Load-bearing**
 
-- `TagResolver._activeByAAS` singleton is the security boundary. Without it, any attester could inject display names onto anyone else's view — a phishing vector ("0xdeadbeef" displayed as "Vitalik Buterin").
+- `EdgeResolver._activeBySlot` singleton is the security boundary. Without it, any attester could inject display names onto anyone else's view — a phishing vector ("0xdeadbeef" displayed as "Vitalik Buterin").
 - Schemas and attestations have no ENS analog; step 2 is the only meaningful label source. This is why the deploy-seeded aliases matter — unconfigured viewers would otherwise see raw schema UIDs.
 
 ## Alternatives considered

@@ -5,18 +5,19 @@ import { decodeAbiParameters, getAddress, isAddress, zeroAddress, zeroHash } fro
 import { mainnet } from "viem/chains";
 import { useEnsName, usePublicClient } from "wagmi";
 import { useDeployedContractInfo, useTargetNetwork } from "~~/hooks/scaffold-eth";
+import { EDGE_RESOLVER_ABI } from "~~/utils/efs/edgeResolver";
 
 /**
  * Resolve a human-readable display name for any EFS container (address, anchor,
- * DATA, schema, attestation) per ADR-0034 and ADR-0035.
+ * DATA, schema, attestation) per ADR-0034 and ADR-0041.
  *
  * Resolution walks the unified PROPERTY model:
  *
- *   container → Anchor<PROPERTY>(name="name") → TAG (per-attester singleton) → PROPERTY(value)
+ *   container → Anchor<PROPERTY>(name="name") → PIN (cardinality 1) → PROPERTY(value)
  *
  * Hierarchy:
  *   1. ENS reverse-lookup (addresses only, mainnet).
- *   2. `name` PROPERTY bound via TAG, scoped to the `editions` list in order. First hit wins.
+ *   2. `name` PROPERTY bound via PIN, scoped to the `editions` list in order. First hit wins.
  *   3. Short-hex fallback (`0xabcd…ef01`).
  *
  * `target` may be an EVM address or a raw 32-byte hex UID. Addresses are
@@ -25,11 +26,8 @@ import { useDeployedContractInfo, useTargetNetwork } from "~~/hooks/scaffold-eth
 
 // NOTE: Tuple order MUST match EAS's on-chain `Attestation` struct in
 // `Common.sol` exactly: uid, schema, time, expirationTime, revocationTime,
-// refUID, recipient, attester, revocable, data. An earlier revision had
-// `refUID` before `time`, which caused `att.time` to decode from refUID's
-// bytes — so the recency comparison below silently picked whichever target
-// the resolver returned first, exactly the stale-name bug this hook is
-// supposed to avoid. Keep field order locked to the Solidity struct.
+// refUID, recipient, attester, revocable, data. Keep field order locked to
+// the Solidity struct.
 const EAS_GET_ATTESTATION_ABI = [
   {
     inputs: [{ name: "uid", type: "bytes32" }],
@@ -52,33 +50,6 @@ const EAS_GET_ATTESTATION_ABI = [
         type: "tuple",
       },
     ],
-    stateMutability: "view",
-    type: "function",
-  },
-] as const;
-
-const TAG_RESOLVER_ABI = [
-  {
-    inputs: [
-      { name: "definition", type: "bytes32" },
-      { name: "attester", type: "address" },
-      { name: "schema", type: "bytes32" },
-      { name: "start", type: "uint256" },
-      { name: "length", type: "uint256" },
-    ],
-    name: "getActiveTargetsByAttesterAndSchema",
-    outputs: [{ name: "", type: "bytes32[]" }],
-    stateMutability: "view",
-    type: "function",
-  },
-  {
-    inputs: [
-      { name: "definition", type: "bytes32" },
-      { name: "attester", type: "address" },
-      { name: "schema", type: "bytes32" },
-    ],
-    name: "getActiveTargetsByAttesterAndSchemaCount",
-    outputs: [{ name: "", type: "uint256" }],
     stateMutability: "view",
     type: "function",
   },
@@ -151,10 +122,10 @@ export const useDisplayName = ({
   const publicClient = usePublicClient({ chainId: targetNetwork.id });
 
   const { data: indexerInfo } = useDeployedContractInfo({ contractName: "Indexer" });
-  const { data: tagResolverInfo } = useDeployedContractInfo({ contractName: "TagResolver" });
+  const { data: edgeResolverInfo } = useDeployedContractInfo({ contractName: "EdgeResolver" });
   const indexerAddress = indexerInfo?.address as `0x${string}` | undefined;
   const indexerAbi = indexerInfo?.abi;
-  const tagResolverAddress = tagResolverInfo?.address as `0x${string}` | undefined;
+  const edgeResolverAddress = edgeResolverInfo?.address as `0x${string}` | undefined;
 
   const { data: ensName, isLoading: ensLoading } = useEnsName({
     address: classified?.kind === "address" ? classified.address : undefined,
@@ -183,7 +154,7 @@ export const useDisplayName = ({
     let cancelled = false;
 
     async function run() {
-      if (!classified || !indexerAddress || !indexerAbi || !tagResolverAddress || !publicClient) {
+      if (!classified || !indexerAddress || !indexerAbi || !edgeResolverAddress || !publicClient) {
         if (!cancelled) setPropertyLookup({ name: null, attester: null, loading: false });
         return;
       }
@@ -228,64 +199,43 @@ export const useDisplayName = ({
           args: [],
         })) as `0x${string}`;
 
-        // 2. For each attester in edition order, fetch the active PROPERTY under the key anchor.
-        //    Recency disambiguation (mirrors EFSRouter._getContentType): the TAG singleton is
-        //    per (attester, targetID, definition), so a single attester can have multiple active
-        //    PROPERTY bindings on the same key anchor when they `name`-rebind without revoking
-        //    the prior TAG. `_activeByAAS` stores entries in first-attestation (oldest-first)
-        //    order, so `targets[0]` can be stale. Fetch all active targets and pick the one with
-        //    the newest `att.time`.
+        // 2. For each attester in edition order, fetch the active PROPERTY bound to the
+        //    key anchor via PIN. AGENT-NOTE (ADR-0041): PROPERTY value binding is now PIN
+        //    (cardinality 1), so each attester has at most one active PROPERTY per key
+        //    anchor — `getActivePinTarget` returns it in O(1), eliminating the old
+        //    enumerate-and-pick-newest pattern that existed because TAG could accumulate.
         for (const edition of editionsList) {
-          const count = (await publicClient.readContract({
-            address: tagResolverAddress,
-            abi: TAG_RESOLVER_ABI,
-            functionName: "getActiveTargetsByAttesterAndSchemaCount",
+          const propertyUID = (await publicClient.readContract({
+            address: edgeResolverAddress,
+            abi: EDGE_RESOLVER_ABI,
+            functionName: "getActivePinTarget",
             args: [keyAnchorUID, getAddress(edition), propertySchemaUID],
-          })) as bigint;
-          if (count === 0n) continue;
+          })) as `0x${string}`;
+          if (!propertyUID || propertyUID === zeroHash) continue;
 
-          const targets = (await publicClient.readContract({
-            address: tagResolverAddress,
-            abi: TAG_RESOLVER_ABI,
-            functionName: "getActiveTargetsByAttesterAndSchema",
-            args: [keyAnchorUID, getAddress(edition), propertySchemaUID, 0n, count],
-          })) as `0x${string}`[];
-          if (targets.length === 0) continue;
-
-          // Fetch attestations and pick the newest non-revoked PROPERTY.
-          let bestValue: string | null = null;
-          let bestTime = -1n;
-          for (const propertyUID of targets) {
-            try {
-              const att = (await publicClient.readContract({
-                address: easAddress,
-                abi: EAS_GET_ATTESTATION_ABI,
-                functionName: "getAttestation",
-                args: [propertyUID],
-              })) as {
-                uid: `0x${string}`;
-                time: bigint;
-                revocationTime: bigint;
-                data: `0x${string}`;
-              };
-              if (!att || att.uid === zeroHash) continue;
-              if (att.revocationTime !== 0n) continue;
-              const value = decodeValue(att.data);
-              if (!value || value.length === 0) continue;
-              if (att.time > bestTime) {
-                bestTime = att.time;
-                bestValue = value;
-              }
-            } catch {
-              // malformed PROPERTY — skip this target, try the next
-            }
-          }
-
-          if (bestValue) {
+          try {
+            const att = (await publicClient.readContract({
+              address: easAddress,
+              abi: EAS_GET_ATTESTATION_ABI,
+              functionName: "getAttestation",
+              args: [propertyUID],
+            })) as {
+              uid: `0x${string}`;
+              revocationTime: bigint;
+              data: `0x${string}`;
+            };
+            if (!att || att.uid === zeroHash) continue;
+            // PIN cardinality 1 means a revoked PIN wouldn't be returned by
+            // getActivePinTarget; this is a defense-in-depth check.
+            if (att.revocationTime !== 0n) continue;
+            const value = decodeValue(att.data);
+            if (!value || value.length === 0) continue;
             if (!cancelled) {
-              setPropertyLookup({ name: bestValue, attester: getAddress(edition), loading: false });
+              setPropertyLookup({ name: value, attester: getAddress(edition), loading: false });
             }
             return;
+          } catch {
+            // malformed PROPERTY — try the next edition
           }
         }
 
@@ -300,7 +250,7 @@ export const useDisplayName = ({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [classified?.uid, editionsKey, indexerAddress, tagResolverAddress, publicClient]);
+  }, [classified?.uid, editionsKey, indexerAddress, edgeResolverAddress, publicClient]);
 
   if (!classified) {
     return { displayName: target ?? "", source: "short-hex", isLoading: false };

@@ -10,7 +10,7 @@
 > source of folder visibility** in edition-scoped directory listings. It is used
 > only to filter file-anchor children in `getChildrenByAddressList` /
 > `getAnchorsBySchemaAndAddressList` / `containsSchemaAttestations`. Folder
-> visibility in edition listings comes exclusively from an active applies=true
+> visibility in edition listings comes exclusively from an active (existing, not revoked)
 > `TAG(definition=dataSchemaUID, refUID=folder)` by an edition attester.
 >
 > The sticky-on-revoke property described below still holds — it's just no

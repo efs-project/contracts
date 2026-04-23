@@ -1,14 +1,26 @@
 import { expect } from "chai";
 import { ethers } from "hardhat";
-import { EFSIndexer, TagResolver, MirrorResolver, EFSFileView, EAS, SchemaRegistry } from "../typechain-types";
+import { EFSIndexer, EdgeResolver, MirrorResolver, EFSFileView, EAS, SchemaRegistry } from "../typechain-types";
 import { Signer, ZeroAddress, ZeroHash } from "ethers";
 
 const ZERO_BYTES32 = ZeroHash;
 const NO_EXPIRATION = 0n;
 
+/**
+ * EFS Transports & Data Model — exercises the standalone DATA, MIRROR, and
+ * placement primitives under the ADR-0041 PIN/TAG model.
+ *
+ * - File placement (DATA at a folder/anchor slot) is PIN (cardinality 1):
+ *     PIN(definition=anchorUID, refUID=DATA) — one active PIN per
+ *     (attester, definition, targetSchema) slot. Removal is `eas.revoke()`,
+ *     never `applies=false`.
+ * - PROPERTY value binding (contentType, etc.) is also PIN under a key anchor.
+ * - Folder visibility / sub-folder enumeration would be TAG (cardinality N) but
+ *   isn't exercised here — those cases live in EFSFileView.test.ts.
+ */
 describe("EFS Transports & Data Model", function () {
   let indexer: EFSIndexer;
-  let tagResolver: TagResolver;
+  let edgeResolver: EdgeResolver;
   let mirrorResolver: MirrorResolver;
   let fileView: EFSFileView;
   let eas: EAS;
@@ -20,6 +32,7 @@ describe("EFS Transports & Data Model", function () {
   let anchorSchemaUID: string;
   let dataSchemaUID: string;
   let propertySchemaUID: string;
+  let pinSchemaUID: string;
   let tagSchemaUID: string;
   let mirrorSchemaUID: string;
   let blobSchemaUID: string;
@@ -32,6 +45,10 @@ describe("EFS Transports & Data Model", function () {
   let _httpsTransportUID: string;
   let _magnetTransportUID: string;
 
+  // Per-test active-edge index: `${target}|${definition}|${attester}` → live attestation UID.
+  // Lets `unpin()` revoke the live PIN without per-test bookkeeping.
+  let activePinIndex: Map<string, string>;
+
   const enc = new ethers.AbiCoder();
 
   const encodeAnchor = (name: string, schema: string = ZERO_BYTES32) =>
@@ -41,7 +58,7 @@ describe("EFS Transports & Data Model", function () {
 
   const encodePropertyValue = (value: string) => enc.encode(["string"], [value]);
 
-  const encodeTag = (definition: string, applies: boolean) => enc.encode(["bytes32", "bool"], [definition, applies]);
+  const encodePin = (definition: string) => enc.encode(["bytes32"], [definition]);
 
   const encodeMirror = (transportDef: string, uri: string) => enc.encode(["bytes32", "string"], [transportDef, uri]);
 
@@ -58,6 +75,7 @@ describe("EFS Transports & Data Model", function () {
   beforeEach(async function () {
     [owner, alice, bob] = await ethers.getSigners();
     const ownerAddr = await owner.getAddress();
+    activePinIndex = new Map();
 
     // Deploy EAS infrastructure
     const RegistryFactory = await ethers.getContractFactory("SchemaRegistry");
@@ -69,21 +87,22 @@ describe("EFS Transports & Data Model", function () {
     await eas.waitForDeployment();
 
     // Nonce prediction:
-    //   nonce+0: TagResolver
+    //   nonce+0: EdgeResolver
     //   nonce+1: MirrorResolver
     //   nonce+2: ANCHOR schema
     //   nonce+3: PROPERTY schema
     //   nonce+4: DATA schema
-    //   nonce+5: TAG schema
-    //   nonce+6: MIRROR schema
-    //   nonce+7: BLOB schema
-    //   nonce+8: EFSIndexer
-    //   nonce+9: EFSFileView
+    //   nonce+5: PIN schema
+    //   nonce+6: TAG schema
+    //   nonce+7: MIRROR schema
+    //   nonce+8: BLOB schema
+    //   nonce+9: EFSIndexer
+    //   nonce+10: EFSFileView
     const currentNonce = await ethers.provider.getTransactionCount(ownerAddr);
 
-    const futureTagResolverAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce });
+    const futureEdgeResolverAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce });
     const futureMirrorResolverAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce + 1 });
-    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce + 8 });
+    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce + 9 });
 
     // Pre-compute schema UIDs
     anchorSchemaUID = ethers.solidityPackedKeccak256(
@@ -98,9 +117,13 @@ describe("EFS Transports & Data Model", function () {
       ["string", "address", "bool"],
       ["bytes32 contentHash, uint64 size", futureIndexerAddr, false],
     );
+    pinSchemaUID = ethers.solidityPackedKeccak256(
+      ["string", "address", "bool"],
+      ["bytes32 definition", futureEdgeResolverAddr, true],
+    );
     tagSchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
-      ["bytes32 definition, bool applies", futureTagResolverAddr, true],
+      ["bytes32 definition, int256 weight", futureEdgeResolverAddr, true],
     );
     mirrorSchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
@@ -111,10 +134,11 @@ describe("EFS Transports & Data Model", function () {
       ["string mimeType, uint8 storageType, bytes location", ZeroAddress, true],
     );
 
-    // Deploy TagResolver
-    const TagResolverFactory = await ethers.getContractFactory("TagResolver");
-    tagResolver = await TagResolverFactory.deploy(
+    // Deploy EdgeResolver (PIN + TAG combined under one resolver)
+    const EdgeResolverFactory = await ethers.getContractFactory("EdgeResolver");
+    edgeResolver = await EdgeResolverFactory.deploy(
       await eas.getAddress(),
+      pinSchemaUID,
       tagSchemaUID,
       futureIndexerAddr,
       await registry.getAddress(),
@@ -128,7 +152,8 @@ describe("EFS Transports & Data Model", function () {
     await (await registry.register("string name, bytes32 schemaUID", futureIndexerAddr, false)).wait();
     await (await registry.register("string value", futureIndexerAddr, false)).wait();
     await (await registry.register("bytes32 contentHash, uint64 size", futureIndexerAddr, false)).wait();
-    await (await registry.register("bytes32 definition, bool applies", await tagResolver.getAddress(), true)).wait();
+    await (await registry.register("bytes32 definition", await edgeResolver.getAddress(), true)).wait();
+    await (await registry.register("bytes32 definition, int256 weight", await edgeResolver.getAddress(), true)).wait();
     await (
       await registry.register("bytes32 transportDefinition, string uri", await mirrorResolver.getAddress(), true)
     ).wait();
@@ -147,11 +172,12 @@ describe("EFS Transports & Data Model", function () {
 
     // Deploy EFSFileView
     const FileViewFactory = await ethers.getContractFactory("EFSFileView");
-    fileView = await FileViewFactory.deploy(await indexer.getAddress(), await tagResolver.getAddress());
+    fileView = await FileViewFactory.deploy(await indexer.getAddress(), await edgeResolver.getAddress());
 
     // Wire contracts
     await indexer.wireContracts(
-      await tagResolver.getAddress(),
+      await edgeResolver.getAddress(),
+      pinSchemaUID,
       tagSchemaUID,
       ZeroAddress, // no sort overlay in this test
       ZERO_BYTES32,
@@ -239,9 +265,11 @@ describe("EFS Transports & Data Model", function () {
   }
 
   /**
-   * Attach a PROPERTY to a container using the unified free-floating model
-   * (ADR-0035): key anchor under the container, free-floating PROPERTY(value),
-   * and a TAG binding them. Returns the PROPERTY UID.
+   * Attach a PROPERTY to a container under the unified free-floating model
+   * (ADR-0035) but with PIN-based binding (ADR-0041): key anchor under the
+   * container, free-floating PROPERTY(value), and a PIN (cardinality 1) that
+   * binds them. Returns the PROPERTY UID. Re-binding the same key with a new
+   * PROPERTY UID supersedes the prior PIN in O(1).
    */
   async function createProperty(
     containerUID: string,
@@ -278,38 +306,42 @@ describe("EFS Transports & Data Model", function () {
     });
     const propertyUID = getUID(await propTx.wait());
 
-    await eas.connect(signer).attest({
-      schema: tagSchemaUID,
-      data: {
-        recipient: ZeroAddress,
-        expirationTime: NO_EXPIRATION,
-        revocable: true,
-        refUID: propertyUID,
-        data: encodeTag(keyAnchorUID, true),
-        value: 0n,
-      },
-    });
+    await pinAt(propertyUID, keyAnchorUID, signer);
     return propertyUID;
   }
 
-  async function tagTarget(
-    targetUID: string,
-    definitionUID: string,
-    applies: boolean,
-    signer: Signer = owner,
-  ): Promise<string> {
+  /**
+   * PIN a target under a definition (cardinality 1: each attester has one
+   * active PIN per (definition, targetSchema) slot). Re-pinning at the same
+   * slot supersedes prior PIN in O(1). Returns the PIN attestation UID.
+   */
+  async function pinAt(targetUID: string, definitionUID: string, signer: Signer = owner): Promise<string> {
     const tx = await eas.connect(signer).attest({
-      schema: tagSchemaUID,
+      schema: pinSchemaUID,
       data: {
         recipient: ZeroAddress,
         expirationTime: NO_EXPIRATION,
         revocable: true,
         refUID: targetUID,
-        data: encodeTag(definitionUID, applies),
+        data: encodePin(definitionUID),
         value: 0n,
       },
     });
-    return getUID(await tx.wait());
+    const uid = getUID(await tx.wait());
+    activePinIndex.set(`${targetUID}|${definitionUID}|${await signer.getAddress()}`, uid);
+    return uid;
+  }
+
+  /** Revoke the live PIN for (target, def, attester). */
+  async function unpinAt(targetUID: string, definitionUID: string, signer: Signer = owner): Promise<void> {
+    const key = `${targetUID}|${definitionUID}|${await signer.getAddress()}`;
+    const uid = activePinIndex.get(key);
+    if (uid === undefined) throw new Error(`no active PIN tracked for ${key}`);
+    await eas.connect(signer).revoke({
+      schema: pinSchemaUID,
+      data: { uid, value: 0n },
+    });
+    activePinIndex.delete(key);
   }
 
   async function createMirror(
@@ -477,9 +509,9 @@ describe("EFS Transports & Data Model", function () {
     });
   });
 
-  // ─── TAG-based placement Tests ────────────────────────────────────────────
+  // ─── PIN-based file placement ─────────────────────────────────────────────
 
-  describe("TAG-based file placement", function () {
+  describe("PIN-based file placement", function () {
     let memesUID: string;
     let catDataUID: string;
 
@@ -490,100 +522,78 @@ describe("EFS Transports & Data Model", function () {
       catDataUID = await createData(contentHash, 5000n);
     });
 
-    it("should place DATA at path via TAG", async function () {
-      await tagTarget(catDataUID, memesUID, true);
+    it("should place DATA at path via PIN", async function () {
+      // ADR-0041: file placement is cardinality 1 — the active PIN at the
+      // (definition=anchor, attester, schema=DATA) slot identifies the file.
+      await pinAt(catDataUID, memesUID);
 
       const ownerAddr = await owner.getAddress();
-      const count = await tagResolver.getActiveTargetsByAttesterAndSchemaCount(memesUID, ownerAddr, dataSchemaUID);
-      expect(count).to.equal(1n);
-
-      const targets = await tagResolver.getActiveTargetsByAttesterAndSchema(memesUID, ownerAddr, dataSchemaUID, 0, 10);
-      expect(targets[0]).to.equal(catDataUID);
+      expect(await edgeResolver.getActivePinTarget(memesUID, ownerAddr, dataSchemaUID)).to.equal(catDataUID);
+      expect(await edgeResolver.isActiveEdge(ownerAddr, catDataUID, memesUID, pinSchemaUID)).to.equal(true);
     });
 
-    it("should remove DATA from path via TAG applies=false", async function () {
+    it("should remove DATA from path via PIN revocation", async function () {
       const ownerAddr = await owner.getAddress();
-      await tagTarget(catDataUID, memesUID, true);
+      await pinAt(catDataUID, memesUID);
+      expect(await edgeResolver.getActivePinTarget(memesUID, ownerAddr, dataSchemaUID)).to.equal(catDataUID);
 
-      expect(await tagResolver.getActiveTargetsByAttesterAndSchemaCount(memesUID, ownerAddr, dataSchemaUID)).to.equal(
-        1n,
-      );
+      // Removal under ADR-0041 is always EAS revoke — there is no `applies=false`
+      await unpinAt(catDataUID, memesUID);
 
-      // Remove
-      await tagTarget(catDataUID, memesUID, false);
-
-      expect(await tagResolver.getActiveTargetsByAttesterAndSchemaCount(memesUID, ownerAddr, dataSchemaUID)).to.equal(
-        0n,
-      );
+      expect(await edgeResolver.getActivePinTarget(memesUID, ownerAddr, dataSchemaUID)).to.equal(ZERO_BYTES32);
+      expect(await edgeResolver.isActiveEdge(ownerAddr, catDataUID, memesUID, pinSchemaUID)).to.equal(false);
     });
 
-    it("should handle re-tag after untag: count, list contents, and isActivelyTagged are correct", async function () {
+    it("should handle re-pin after revoke: slot reads correctly through pin → revoke → pin", async function () {
       const ownerAddr = await owner.getAddress();
 
-      // Initial state: not tagged
-      expect(await tagResolver.getActiveTargetsByAttesterAndSchemaCount(memesUID, ownerAddr, dataSchemaUID)).to.equal(
-        0n,
-      );
-      expect(await tagResolver.isActivelyTagged(catDataUID, memesUID)).to.equal(false);
+      // Initial: empty slot
+      expect(await edgeResolver.getActivePinTarget(memesUID, ownerAddr, dataSchemaUID)).to.equal(ZERO_BYTES32);
+      expect(await edgeResolver.hasActiveEdge(catDataUID, memesUID)).to.equal(false);
 
-      // Tag
-      await tagTarget(catDataUID, memesUID, true);
-      expect(await tagResolver.getActiveTargetsByAttesterAndSchemaCount(memesUID, ownerAddr, dataSchemaUID)).to.equal(
-        1n,
-      );
-      expect(await tagResolver.isActivelyTagged(catDataUID, memesUID)).to.equal(true);
+      // Pin
+      await pinAt(catDataUID, memesUID);
+      expect(await edgeResolver.getActivePinTarget(memesUID, ownerAddr, dataSchemaUID)).to.equal(catDataUID);
+      expect(await edgeResolver.hasActiveEdge(catDataUID, memesUID)).to.equal(true);
 
-      // Untag
-      await tagTarget(catDataUID, memesUID, false);
-      expect(await tagResolver.getActiveTargetsByAttesterAndSchemaCount(memesUID, ownerAddr, dataSchemaUID)).to.equal(
-        0n,
-      );
-      expect(await tagResolver.isActivelyTagged(catDataUID, memesUID)).to.equal(false);
+      // Revoke
+      await unpinAt(catDataUID, memesUID);
+      expect(await edgeResolver.getActivePinTarget(memesUID, ownerAddr, dataSchemaUID)).to.equal(ZERO_BYTES32);
+      expect(await edgeResolver.hasActiveEdge(catDataUID, memesUID)).to.equal(false);
 
-      // Re-tag: DATA must reappear in the list
-      await tagTarget(catDataUID, memesUID, true);
-      expect(await tagResolver.getActiveTargetsByAttesterAndSchemaCount(memesUID, ownerAddr, dataSchemaUID)).to.equal(
-        1n,
-      );
-      expect(await tagResolver.isActivelyTagged(catDataUID, memesUID)).to.equal(true);
-
-      const listed = await tagResolver.getActiveTargetsByAttesterAndSchema(memesUID, ownerAddr, dataSchemaUID, 0, 10);
-      expect(listed.length).to.equal(1);
-      expect(listed[0]).to.equal(catDataUID);
+      // Re-pin: DATA must reappear in the slot
+      await pinAt(catDataUID, memesUID);
+      expect(await edgeResolver.getActivePinTarget(memesUID, ownerAddr, dataSchemaUID)).to.equal(catDataUID);
+      expect(await edgeResolver.hasActiveEdge(catDataUID, memesUID)).to.equal(true);
     });
 
-    it("should support same DATA at multiple paths", async function () {
+    it("should support same DATA at multiple paths (one PIN per slot)", async function () {
       const animalsUID = await createAnchor(rootUID, "animals");
       const ownerAddr = await owner.getAddress();
 
-      await tagTarget(catDataUID, memesUID, true);
-      await tagTarget(catDataUID, animalsUID, true);
+      await pinAt(catDataUID, memesUID);
+      await pinAt(catDataUID, animalsUID);
 
-      expect(await tagResolver.getActiveTargetsByAttesterAndSchemaCount(memesUID, ownerAddr, dataSchemaUID)).to.equal(
-        1n,
-      );
-      expect(await tagResolver.getActiveTargetsByAttesterAndSchemaCount(animalsUID, ownerAddr, dataSchemaUID)).to.equal(
-        1n,
-      );
+      expect(await edgeResolver.getActivePinTarget(memesUID, ownerAddr, dataSchemaUID)).to.equal(catDataUID);
+      expect(await edgeResolver.getActivePinTarget(animalsUID, ownerAddr, dataSchemaUID)).to.equal(catDataUID);
     });
 
     it("should support multiple DATAs at same path by different attesters", async function () {
       const aliceAddr = await alice.getAddress();
       const bobAddr = await bob.getAddress();
 
-      // Alice and Bob each create their own DATA and tag it at /memes/
+      // Alice and Bob each create their own DATA and pin it at /memes/.
+      // PIN cardinality 1 is per-attester — each gets their own slot.
       const aliceHash = ethers.keccak256(ethers.toUtf8Bytes("alice cat"));
-      const aliceData = await createData(aliceHash, 100n);
-      await tagTarget(aliceData, memesUID, true, alice);
+      const aliceData = await createData(aliceHash, 100n, alice);
+      await pinAt(aliceData, memesUID, alice);
 
       const bobHash = ethers.keccak256(ethers.toUtf8Bytes("bob cat"));
-      const bobData = await createData(bobHash, 200n);
-      await tagTarget(bobData, memesUID, true, bob);
+      const bobData = await createData(bobHash, 200n, bob);
+      await pinAt(bobData, memesUID, bob);
 
-      expect(await tagResolver.getActiveTargetsByAttesterAndSchemaCount(memesUID, aliceAddr, dataSchemaUID)).to.equal(
-        1n,
-      );
-      expect(await tagResolver.getActiveTargetsByAttesterAndSchemaCount(memesUID, bobAddr, dataSchemaUID)).to.equal(1n);
+      expect(await edgeResolver.getActivePinTarget(memesUID, aliceAddr, dataSchemaUID)).to.equal(aliceData);
+      expect(await edgeResolver.getActivePinTarget(memesUID, bobAddr, dataSchemaUID)).to.equal(bobData);
     });
 
     it("should propagate containsAttestations up the tree", async function () {
@@ -592,10 +602,10 @@ describe("EFS Transports & Data Model", function () {
       // Create /memes/funny/
       const funnyUID = await createAnchor(memesUID, "funny");
 
-      // Alice tags DATA at /memes/funny/
+      // Alice pins DATA at /memes/funny/
       const hash = ethers.keccak256(ethers.toUtf8Bytes("funny cat"));
-      const dataUID = await createData(hash, 100n);
-      await tagTarget(dataUID, funnyUID, true, alice);
+      const dataUID = await createData(hash, 100n, alice);
+      await pinAt(dataUID, funnyUID, alice);
 
       // containsAttestations should propagate to /memes/funny/, /memes/, and root
       expect(await indexer.containsAttestations(funnyUID, aliceAddr)).to.equal(true);
@@ -622,11 +632,11 @@ describe("EFS Transports & Data Model", function () {
   // ─── EFSFileView Integration Tests ────────────────────────────────────────
 
   describe("EFSFileView.getFilesAtPath", function () {
-    it("should return DATAs tagged at a path", async function () {
+    it("should return DATAs pinned at a path", async function () {
       const memesUID = await createAnchor(rootUID, "memes-view");
       const contentHash = ethers.keccak256(ethers.toUtf8Bytes("view test"));
       const dataUID = await createData(contentHash, 42n);
-      await tagTarget(dataUID, memesUID, true);
+      await pinAt(dataUID, memesUID);
 
       const ownerAddr = await owner.getAddress();
       const { items } = await fileView.getFilesAtPath(memesUID, [ownerAddr], dataSchemaUID, "0x", 10);
@@ -663,7 +673,7 @@ describe("EFS Transports & Data Model", function () {
   // ─── Full Upload Flow (atomic) ────────────────────────────────────────────
 
   describe("Full upload flow", function () {
-    it("should create DATA + PROPERTY + MIRROR + TAG in sequence", async function () {
+    it("should create DATA + PROPERTY + MIRROR + PIN in sequence", async function () {
       // Create file anchor path
       const docsUID = await createAnchor(rootUID, "docs");
 
@@ -671,20 +681,18 @@ describe("EFS Transports & Data Model", function () {
       const contentHash = ethers.keccak256(ethers.toUtf8Bytes("# Hello World\n"));
       const dataUID = await createData(contentHash, 15n);
 
-      // 2. Attach PROPERTY (contentType)
+      // 2. Attach PROPERTY (contentType) — bound via PIN under the key anchor
       await createProperty(dataUID, "contentType", "text/markdown");
 
       // 3. Create MIRROR (onchain retrieval)
       await createMirror(dataUID, onchainTransportUID, "web3://0x1234567890123456789012345678901234567890");
 
-      // 4. TAG to place at /docs/
-      await tagTarget(dataUID, docsUID, true);
+      // 4. PIN to place at /docs/ (file placement is cardinality 1)
+      await pinAt(dataUID, docsUID);
 
-      // Verify: DATA at /docs/ via tag query
+      // Verify: DATA at /docs/ via PIN read
       const ownerAddr = await owner.getAddress();
-      const targets = await tagResolver.getActiveTargetsByAttesterAndSchema(docsUID, ownerAddr, dataSchemaUID, 0, 10);
-      expect(targets.length).to.equal(1);
-      expect(targets[0]).to.equal(dataUID);
+      expect(await edgeResolver.getActivePinTarget(docsUID, ownerAddr, dataSchemaUID)).to.equal(dataUID);
 
       // Verify: mirrors on DATA
       const mirrors = await indexer.getReferencingAttestations(dataUID, mirrorSchemaUID, 0, 10, false);

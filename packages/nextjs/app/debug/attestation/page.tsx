@@ -222,19 +222,31 @@ function DecodedData({ schemaUID, data, schemas }: { schemaUID: string; data: st
     if (!schemas) return <div className="text-sm italic opacity-60">Schemas loading...</div>;
 
     if ((schemas as any).TAG && schemaUID === (schemas as any).TAG) {
-      // TAG schema: "bytes32 definition, bool applies"
-      const [definition, applies] = decodeAbiParameters(
-        parseAbiParameters("bytes32 definition, bool applies"),
+      // TAG schema (ADR-0041): "bytes32 definition, int256 weight".
+      // Removal is via eas.revoke() — the weight value carries no
+      // assert/supersede semantics; it's metadata for sort/score consumers.
+      const [definition, weight] = decodeAbiParameters(
+        parseAbiParameters("bytes32 definition, int256 weight"),
         data as `0x${string}`,
       );
       return (
         <div className="p-4 bg-primary/10 rounded-lg border border-primary/20">
           <div className="text-xs font-bold uppercase mb-1">Tag</div>
           <div className="flex items-center gap-2">
-            <span className={`badge ${applies ? "badge-primary" : "badge-ghost"}`}>
-              {applies ? "applied" : "removed"}
-            </span>
+            <span className="badge badge-primary">weight: {weight.toString()}</span>
           </div>
+          <div className="text-xs font-mono opacity-50 mt-1">definition: {definition}</div>
+        </div>
+      );
+    }
+    if ((schemas as any).PIN && schemaUID === (schemas as any).PIN) {
+      // PIN schema (ADR-0041): "bytes32 definition". Cardinality-1 edge —
+      // re-attesting at the same (attester, definition, targetSchema) slot
+      // supersedes the prior PIN in O(1). Removal is via eas.revoke().
+      const [definition] = decodeAbiParameters(parseAbiParameters("bytes32 definition"), data as `0x${string}`);
+      return (
+        <div className="p-4 bg-primary/10 rounded-lg border border-primary/20">
+          <div className="text-xs font-bold uppercase mb-1">Pin</div>
           <div className="text-xs font-mono opacity-50 mt-1">definition: {definition}</div>
         </div>
       );
@@ -258,33 +270,51 @@ function DecodedData({ schemaUID, data, schemas }: { schemaUID: string; data: st
       );
     }
     if (schemaUID === schemas.DATA) {
-      const [blobUID, fileMode] = decodeAbiParameters(parseAbiParameters("bytes32, string"), data as `0x${string}`);
+      // DATA schema (registered in deploy/01_indexer.ts): "bytes32 contentHash, uint64 size".
+      // It is pure content identity — the actual bytes live in MIRRORs. The retrievable
+      // payload is keyed by `contentHash` via `dataByContentKey` for cross-uploader dedup.
+      const [contentHash, size] = decodeAbiParameters(
+        parseAbiParameters("bytes32 contentHash, uint64 size"),
+        data as `0x${string}`,
+      );
       return (
         <div className="p-4 bg-accent/10 rounded-lg border border-accent/20">
           <div className="text-xs font-bold uppercase mb-1">Data</div>
           <div className="flex flex-col gap-2">
-            <div className="badge badge-neutral">Mode: {fileMode}</div>
-            <div className="text-xs font-mono break-all bg-base-100 p-1 rounded">Blob: {blobUID}</div>
+            <div className="badge badge-neutral">Size: {size.toString()} bytes</div>
+            <div className="text-xs font-mono break-all bg-base-100 p-1 rounded">contentHash: {contentHash}</div>
           </div>
         </div>
       );
     }
     if (schemaUID === schemas.BLOB) {
-      const [content, contentType] = decodeAbiParameters(parseAbiParameters("bytes, string"), data as `0x${string}`);
-      const isText = contentType.includes("text") || contentType.includes("json") || contentType.includes("javascript");
-      let displayText = content;
+      // BLOB schema (registered in deploy/01_indexer.ts):
+      //   "string mimeType, uint8 storageType, bytes location"
+      // BLOB attestations carry the storage-pointer envelope; `location` is mimeType-typed
+      // bytes whose interpretation depends on `storageType` (e.g. URL for off-chain,
+      // raw bytes for tiny inline payloads).
+      const [mimeType, storageType, location] = decodeAbiParameters(
+        parseAbiParameters("string mimeType, uint8 storageType, bytes location"),
+        data as `0x${string}`,
+      );
+      const isText = mimeType.includes("text") || mimeType.includes("json") || mimeType.includes("javascript");
+      let displayText: string = location;
       if (isText) {
         try {
-          displayText = hexToString(content) as any;
+          displayText = hexToString(location);
         } catch {}
       }
       return (
         <div className="p-4 bg-info/10 rounded-lg border border-info/20">
-          <div className="text-xs font-bold uppercase mb-1">Blob ({contentType})</div>
+          <div className="text-xs font-bold uppercase mb-1">
+            Blob ({mimeType}) — storageType {storageType.toString()}
+          </div>
           {isText ? (
             <pre className="text-xs overflow-auto max-h-[300px] p-2 bg-base-100 rounded">{displayText}</pre>
           ) : (
-            <div className="text-xs italic opacity-70">{Number(content.length) / 2 - 1} bytes of binary data</div>
+            <div className="text-xs italic opacity-70">
+              {Number(location.length) / 2 - 1} bytes of binary location data
+            </div>
           )}
         </div>
       );
@@ -311,6 +341,9 @@ function ReferencingAttestations({
     <div className="flex flex-col gap-4">
       <h3 className="text-xl font-bold px-1">Referencing Attestations</h3>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        {(registry.schemas as any)?.PIN && (
+          <ReferencingList title="Pins" schema={(registry.schemas as any).PIN} target={uid} onNavigate={onNavigate} />
+        )}
         {(registry.schemas as any)?.TAG && (
           <ReferencingList title="Tags" schema={(registry.schemas as any).TAG} target={uid} onNavigate={onNavigate} />
         )}
