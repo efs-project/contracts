@@ -11,9 +11,9 @@ const DEFAULT_TAG_WEIGHT = 1n;
  * EFSFileView — directory-listing tests under the ADR-0041 PIN/TAG model.
  *
  * Folder visibility is TAG-based (cardinality N): each attester emits
- * `TAG(definition=dataSchemaUID, refUID=folder, weight>0)` to claim a folder
- * in their edition. Removal is `eas.revoke()` on the active TAG — there is
- * no `applies=false` supersede.
+ * `TAG(definition=dataSchemaUID, refUID=folder)` to claim a folder in their
+ * edition. A TAG is active iff it exists and is not EAS-revoked; weight is
+ * opaque metadata the kernel does not interpret (ADR-0041 §4).
  *
  * File placement is PIN-based (cardinality 1) — each filename-anchor slot
  * holds one PIN per attester, but the file-listing tests below mostly
@@ -261,8 +261,8 @@ describe("EFSFileView", function () {
   it("Folder visibility requires an explicit TAG — untagged folders with file-anchor children do NOT appear", async function () {
     // Folder visibility is tag-only (ADR-0038, carried over to ADR-0041): a folder does NOT
     // appear in a schema-filtered listing just because it contains file-anchor children;
-    // the attester must emit a TAG(definition=dataSchemaUID, refUID=folder, weight>0) to
-    // claim that folder in their edition. The client upload flow walks the ancestor chain
+    // the attester must emit a TAG(definition=dataSchemaUID, refUID=folder) to claim that
+    // folder in their edition (weight is opaque; any existing non-revoked TAG counts). The client upload flow walks the ancestor chain
     // and emits any missing visibility TAGs.
     const ownerAddr = await owner.getAddress();
 
@@ -325,8 +325,8 @@ describe("EFSFileView", function () {
   });
 
   it("Empty folders appear when explicitly tagged with the schema UID", async function () {
-    // A folder is visible in an edition iff it has an active TAG with definition=dataSchemaUID
-    // and weight>0 by someone in the edition list.
+    // A folder is visible in an edition iff it has an active (existing, not revoked) TAG with
+    // definition=dataSchemaUID by someone in the edition list. Weight is not checked.
     const ownerAddr = await owner.getAddress();
 
     const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32);
@@ -346,6 +346,41 @@ describe("EFSFileView", function () {
 
     expect(items.length).to.equal(1);
     expect(items[0].name).to.equal("empty-tagged");
+  });
+
+  it("TAG activity is existence/revoke only — weight=0 and weight=-1 TAGs are still active (ADR-0041 §4 regression)", async function () {
+    // ADR-0041 §4 explicitly rejected the "negative weight = supersede" design.
+    // A TAG is active iff it exists and is not EAS-revoked. Weight is opaque metadata
+    // that the kernel stores but does not interpret. This test confirms that TAGs with
+    // zero and negative weights make folders visible, matching the implementation in
+    // EdgeResolver.hasActiveTagFromAny (checks _activeEdge != bytes32(0), not weight).
+    const ownerAddr = await owner.getAddress();
+
+    const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32);
+    const zeroWeightFolder = await createAnchor("zero-weight", rootUID, ZERO_BYTES32);
+    const negWeightFolder = await createAnchor("neg-weight", rootUID, ZERO_BYTES32);
+    const revokedFolder = await createAnchor("revoked", rootUID, ZERO_BYTES32);
+
+    // TAG with weight=0: still active under ADR-0041 §4.
+    await createTag(zeroWeightFolder, dataSchemaUID, owner, 0n);
+    // TAG with weight=-999: still active.
+    await createTag(negWeightFolder, dataSchemaUID, owner, -999n);
+    // TAG with weight=1 that gets revoked: must NOT appear.
+    await createTag(revokedFolder, dataSchemaUID, owner, 1n);
+    await untag(revokedFolder, dataSchemaUID, owner);
+
+    const { items } = await fileView.getDirectoryPageBySchemaAndAddressList(
+      rootUID,
+      dataSchemaUID,
+      [ownerAddr],
+      "0x",
+      10,
+    );
+
+    const names = items.map(i => i.name).sort();
+    expect(names).to.deep.equal(["neg-weight", "zero-weight"]);
+    // The revoked TAG must not appear.
+    expect(names).to.not.include("revoked");
   });
 
   it("Ancestor-chain visibility: only folders explicitly tagged appear, regardless of nested contents", async function () {
