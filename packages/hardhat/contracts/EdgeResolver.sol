@@ -151,6 +151,9 @@ contract EdgeResolver is SchemaResolver {
         IEFSIndexerForEdges _indexer,
         ISchemaRegistry _schemaRegistry
     ) SchemaResolver(eas) {
+        require(pinSchemaUID != bytes32(0), "EdgeResolver: pinSchemaUID is zero");
+        require(tagSchemaUID != bytes32(0), "EdgeResolver: tagSchemaUID is zero");
+        require(pinSchemaUID != tagSchemaUID, "EdgeResolver: PIN and TAG schemas must differ");
         PIN_SCHEMA_UID = pinSchemaUID;
         TAG_SCHEMA_UID = tagSchemaUID;
         indexer = _indexer;
@@ -419,6 +422,15 @@ contract EdgeResolver is SchemaResolver {
             // `propagateContains` (gated on `refUID != EMPTY_UID` in onAttest), so
             // address-target TAGs (targetSchema == 0) must not contribute or revoke
             // would over-clear the contains flag (see onRevoke comment).
+            //
+            // Note: when `definition` is a schema UID (e.g. DATA_SCHEMA_UID for
+            // folder-visibility TAGs per ADR-0038), the counter still increments/
+            // decrements correctly.  When it reaches zero, `clearContains(definition,
+            // attester)` is called in EFSIndexer, but EFSIndexer guards on
+            // `eas.getAttestation(anchorUID).schema == ANCHOR_SCHEMA_UID` — schema
+            // UIDs are not EAS attestations, so that guard fails and clearContains
+            // is effectively a no-op for those definitions.  This is intentional:
+            // schema-UID definitions don't carry an EFS `_containsAttestations` flag.
             if (!wasActive && targetSchema != bytes32(0)) {
                 _activeTotalByDefAndAttester[definition][attester]++;
             }

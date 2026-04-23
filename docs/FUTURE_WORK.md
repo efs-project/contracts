@@ -32,6 +32,9 @@ EFSIndexer emits events for off-chain indexing. Adding a field to an event later
 
 ## Performance & Scale
 
+### Audit and deprecate `getActiveTargetsByAttesterAndSchema`
+`EdgeResolver.getActiveTargetsByAttesterAndSchema` does an N+1 EAS read pattern — one `eas.getAttestation` per TAG entry to resolve `tagUID → targetID`. For large lists this hits gas limits. The preferred path is `getActiveTagEntries` (returns `(tagUID, weight)` in one bulk read) followed by targeted per-UID lookups only as needed. Audit all callers of `getActiveTargetsByAttesterAndSchema` in contracts and the TS client; migrate or deprecate once nothing load-bearing relies on it.
+
 ### Sort overlay at >10K items
 `computeHints` punts to client-side for lists >1K. `getSortedChunk` is O(N) traversal capped by `maxTraversal`. For lists of 100K+ items, pagination is sequential — no random access. Consider: time-bucketed secondary indices, hashed offset support, or accepting that very large lists need off-chain sort hints.
 
