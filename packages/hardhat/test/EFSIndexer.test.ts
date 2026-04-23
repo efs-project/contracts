@@ -850,7 +850,7 @@ describe("EFSIndexer", function () {
       const receipt = await tx.wait();
       const anchorUID = getUIDFromReceipt(receipt);
 
-      // Tag 1 (using new "bytes32 definition, bool applies" schema format)
+      // Tag 1 — "bytes32 definition, int256 weight" per ADR-0041 (weight > 0 = active)
       await eas.attest({
         schema: tagSchemaUID,
         data: {
@@ -858,12 +858,12 @@ describe("EFSIndexer", function () {
           expirationTime: NO_EXPIRATION,
           revocable: true,
           refUID: anchorUID,
-          data: schemaEncoder.encode(["bytes32", "bool"], [ethers.ZeroHash, true]),
+          data: schemaEncoder.encode(["bytes32", "int256"], [ethers.ZeroHash, 1n]),
           value: 0n,
         },
       });
 
-      // Tag 2 (second definition)
+      // Tag 2 (different weight; both generically indexed by refUID regardless of weight)
       await eas.attest({
         schema: tagSchemaUID,
         data: {
@@ -871,7 +871,7 @@ describe("EFSIndexer", function () {
           expirationTime: NO_EXPIRATION,
           revocable: true,
           refUID: anchorUID,
-          data: schemaEncoder.encode(["bytes32", "bool"], [ethers.ZeroHash, false]),
+          data: schemaEncoder.encode(["bytes32", "int256"], [ethers.ZeroHash, 2n]),
           value: 0n,
         },
       });
