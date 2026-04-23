@@ -23,6 +23,12 @@ PR review format is mandatory:
 - Start every review body, inline comment, and issue reply with `[<model-name> · <role>]` on its own line.
 - Use the persona's stable role name in that prefix rather than a random worker nickname.
 - Mention the reviewing model + version explicitly in PR descriptions and review summaries when relevant.
+- Do not accept a bare prompt like `review PR #<N>` as sufficient instructions.
+  Reviewers should first read the PR description, `Agents involved`, and the
+  governing docs for the touched area.
+- Never leave placeholder / probe / test comments in the PR timeline. If review
+  threads are unavailable, return one paste-ready structured review instead of
+  posting loose top-level comments.
 
 Shared placeholders:
 - `<repo_path>`: absolute repo path

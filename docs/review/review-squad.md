@@ -18,6 +18,10 @@ PR review output must follow the repo's GitHub conventions:
 - use the stable persona role name, not a generated worker nickname
 - include model + version in the PR's `Agents involved` field and in agent-authored review summaries when relevant
 
+Do not invoke reviewers with only `review PR #<N>`. That shorthand is too weak
+for this repo and tends to produce low-signal shared-account chatter instead of
+clean resolvable review threads.
+
 ## Core reviewers
 
 - [default-deep-review.md](./personas/default-deep-review.md)
@@ -129,6 +133,19 @@ Thread policy:
 
 Do not leave review threads hanging without a reply just because the answer is "not in this PR."
 
+## Review preflight
+
+Before an agent posts review feedback, it should first:
+
+- read the PR description and the `Agents involved` field
+- read the governing specs / ADRs for the area it is reviewing
+- scan existing agent comments so it doesn't duplicate findings or miss active pushback
+- decide whether it can create native GitHub review threads cleanly
+
+If it cannot create native review threads, it should stop and return one
+paste-ready structured review instead of posting ad hoc comments to the PR
+timeline.
+
 ## Recommended PR prompts
 
 ### Review prompt
@@ -137,11 +154,14 @@ Use this when you want a clean PR review pass:
 
 ```text
 Run review-squad on PR #<N>.
+Read the PR description first, including Agents involved.
+Read the governing specs / ADRs for the changed area before commenting.
 Post findings using GitHub's native Review feature, not plain comments.
 Use resolvable inline review threads whenever the finding maps to a diff hunk.
 Put non-inline findings in the top-level review body.
 Prefix every review body, inline comment, and issue reply with [model · role].
 Follow docs/agent-workflow.md and the repo PR template conventions.
+Do not leave placeholder, probe, or praise-only comments.
 ```
 
 ### Response prompt

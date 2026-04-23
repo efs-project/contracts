@@ -22,6 +22,24 @@ EFS — Ethereum File System. On-chain file system built on EAS attestations. Pr
 - **[docs/LAUNCH_CHECKLIST.md](./docs/LAUNCH_CHECKLIST.md)** — pre-launch blockers
 - **[reference/README.md](./reference/README.md)** — EAS, EIP, Scaffold-ETH docs (indexed by task)
 
+## PR review quick start
+
+When reviewing a PR, do not prompt agents with only `review PR #<N>`. That is
+too weak and reliably produces messy shared-account output.
+
+Use the canonical prompt shape from `docs/review/review-squad.md`, or an
+equivalent prompt that explicitly requires all of the following:
+
+- read the PR description first, including `Agents involved`
+- read the governing specs / ADRs before commenting
+- use GitHub's native Review feature, not loose PR comments
+- open resolvable inline review threads whenever the finding maps to a diff hunk
+- prefix every review body, inline comment, and thread reply with
+  `[<model-name> · <role>]`
+- avoid placeholder / probe / "testing anchor" comments
+- if native review threads are unavailable, return one paste-ready structured
+  review comment instead of spraying ad hoc comments into the PR timeline
+
 ## Change-type → required reads
 
 If your task fits one of these categories, load the listed ADRs *before* writing code. Most Tier 1 mistakes come from missing the right governing decision.

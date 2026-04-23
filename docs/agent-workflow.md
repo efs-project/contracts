@@ -93,6 +93,15 @@ Vendor emails: `noreply@anthropic.com`, `noreply@openai.com`, `noreply@google.co
 
 For review passes, use `gh pr review` (creates a real Review object, participates in the request-changes flow), not `gh pr comment` (inline discussion only).
 
+Before posting review feedback, read:
+1. The PR description, including the `Agents involved` field.
+2. The governing specs / ADRs for the area being reviewed.
+3. Existing agent-authored review comments, so you don't duplicate or contradict them blindly.
+
+Do **not** leave placeholder comments, probe comments, "testing inline anchor"
+comments, or praise-only shared-account reviews. If you're checking whether an
+anchor works, do it locally and post only the final finding.
+
 - General review: `gh pr review <N> --comment --body "..."`
 - Approve: `gh pr review <N> --approve --body "..."`
 - Request changes: `gh pr review <N> --request-changes --body "..."`
@@ -104,6 +113,11 @@ gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: "THREA
 ```
 
 Find thread IDs: `gh api graphql -f query='query { repository(owner:"OWNER",name:"REPO") { pullRequest(number:N) { reviewThreads(first:50) { nodes { id isResolved comments(first:1) { nodes { body } } } } } } }'`. If the mutation fails, reply inline with `fixed in <sha>` and move on — don't block on tooling friction.
+
+If your tooling cannot create native review threads cleanly, do **not** fall
+back to spraying top-level PR comments. Instead, return one paste-ready review
+comment with file/line findings to the human or coordinating agent and let them
+post it through the proper path.
 
 ### Review-thread response loop
 
