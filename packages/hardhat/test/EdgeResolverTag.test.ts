@@ -266,6 +266,73 @@ describe("EdgeResolver — TAG", function () {
       expect(negWeights[0].weight).to.equal(-5n);
     });
 
+    // ── ADR-0042 bucket-key regression ──────────────────────────────────────────
+    // This test guards the FileBrowser.resolveTagSet fix: _activeByAAS is keyed by
+    // TARGET schema (the schema of the tagged thing), not by TAG_SCHEMA_UID.
+    // Querying the wrong bucket (tagSchemaUID) returns empty; the correct bucket
+    // (dummySchemaUID here, corresponding to DATA_SCHEMA_UID or ANCHOR_SCHEMA_UID
+    // in production) returns the entries.
+    it("ADR-0042 bucket fix: getActiveTagEntries uses TARGET schema, not TAG_SCHEMA_UID", async function () {
+      const def = await createDefinition("bucket-fix");
+      const fileTarget = await createTarget("file-1"); // simulates a DATA attestation
+      const folderTarget = await createTarget("folder-1"); // simulates an ANCHOR attestation
+      const u1Addr = await user1.getAddress();
+
+      // Tag both targets (both live under dummySchemaUID = simulated DATA/ANCHOR schema).
+      await tagByRef(user1, fileTarget, def, 1n); // effective (weight >= 0)
+      await tagByRef(user1, folderTarget, def, 1n); // effective (weight >= 0)
+
+      // Correct bucket: dummySchemaUID (target's schema) → returns both entries.
+      const correctEntries = await edgeResolver.getActiveTagEntries(def, u1Addr, dummySchemaUID, 0n, 10n);
+      expect(correctEntries.length).to.equal(2);
+
+      // Wrong bucket: tagSchemaUID → always empty (tags are never stored there).
+      const wrongEntries = await edgeResolver.getActiveTagEntries(def, u1Addr, tagSchemaUID, 0n, 10n);
+      expect(wrongEntries.length).to.equal(0);
+
+      // Correct target resolution.
+      const resolvedTargets = await edgeResolver.getActiveTargetsByAttesterAndSchema(
+        def,
+        u1Addr,
+        dummySchemaUID,
+        0n,
+        10n,
+      );
+      expect(resolvedTargets.length).to.equal(2);
+      expect(resolvedTargets.map((t: string) => t.toLowerCase())).to.include(fileTarget.toLowerCase());
+      expect(resolvedTargets.map((t: string) => t.toLowerCase())).to.include(folderTarget.toLowerCase());
+    });
+
+    it("ADR-0042 effective filter: negative-weight DATA-target TAG excluded; zero/positive included", async function () {
+      const def = await createDefinition("eff-filter-data");
+      const fileIncluded = await createTarget("file-included");
+      const fileZeroW = await createTarget("file-zero-weight");
+      const fileExcluded = await createTarget("file-excluded");
+      const u1Addr = await user1.getAddress();
+
+      await tagByRef(user1, fileIncluded, def, 3n); // effective (weight = 3 >= 0)
+      await tagByRef(user1, fileZeroW, def, 0n); // effective (weight = 0 >= 0)
+      await tagByRef(user1, fileExcluded, def, -1n); // suppressed (weight < 0) — still active!
+
+      // All three active at kernel level.
+      expect(await edgeResolver.hasActiveEdge(fileIncluded, def)).to.be.true;
+      expect(await edgeResolver.hasActiveEdge(fileZeroW, def)).to.be.true;
+      expect(await edgeResolver.hasActiveEdge(fileExcluded, def)).to.be.true;
+
+      // Client-side effective filter simulation (query correct bucket, filter weight >= 0n).
+      const entries = await edgeResolver.getActiveTagEntries(def, u1Addr, dummySchemaUID, 0n, 10n);
+      const targets = await edgeResolver.getActiveTargetsByAttesterAndSchema(def, u1Addr, dummySchemaUID, 0n, 10n);
+      expect(entries.length).to.equal(3);
+
+      const effectiveTargets: string[] = [];
+      for (let i = 0; i < entries.length; i++) {
+        if (entries[i].weight >= 0n) effectiveTargets.push(targets[i].toLowerCase());
+      }
+      expect(effectiveTargets).to.include(fileIncluded.toLowerCase());
+      expect(effectiveTargets).to.include(fileZeroW.toLowerCase());
+      expect(effectiveTargets).to.not.include(fileExcluded.toLowerCase());
+    });
+
     it("Should revert InvalidDefinition when definition is bytes32(0)", async function () {
       const target = await createTarget("zero-def-target");
       await expect(

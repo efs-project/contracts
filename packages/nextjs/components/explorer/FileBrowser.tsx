@@ -125,6 +125,7 @@ function isTextViewable(contentType: string | null): boolean {
 export const FileBrowser = ({
   currentAnchorUID,
   dataSchemaUID,
+  anchorSchemaUID,
   currentPathNames,
   editionAddresses,
   explicitEditions = false,
@@ -139,6 +140,8 @@ export const FileBrowser = ({
 }: {
   currentAnchorUID: string | null;
   dataSchemaUID: string;
+  /** ANCHOR_SCHEMA_UID from EFSIndexer — needed to query folder-level descriptive-label TAG buckets. */
+  anchorSchemaUID?: string;
   currentPathNames: string[];
   editionAddresses: string[];
   /**
@@ -343,42 +346,54 @@ export const FileBrowser = ({
 
       // Per-attester bulk fetch: getActiveTagEntries (weight-aware) + getActiveTargetsByAttesterAndSchema
       // (resolves tagUID → targetID) fetched in parallel at the same pagination window.
-      // The two arrays share the same underlying _activeByAAS[def][attester][schema] index, so
+      // The two arrays share the same underlying _activeByAAS[def][attester][targetSchema] index, so
       // entries[i] and targets[i] always correspond to the same edge. Filter to weight >= 0.
+      //
+      // _activeByAAS is keyed by TARGET schema (the schema of the tagged thing), NOT TAG_SCHEMA_UID.
+      // Descriptive labels can target DATA attestations (file-level) or ANCHOR attestations
+      // (folder-level), so we union both buckets. tagSchemaUID is deliberately NOT used here.
       const PAGE_SIZE = 500n;
       const effectiveTargets = new Set<string>();
 
-      for (const attester of tagAttesters) {
-        const count = (await publicClient.readContract({
-          address: edgeResolverAddress,
-          abi: EDGE_RESOLVER_ABI,
-          functionName: "getActiveTagsCount",
-          args: [definitionUID, attester, tagSchemaUID as `0x${string}`],
-        })) as bigint;
+      // The buckets we care about for the explorer's descriptive-label filter:
+      //   dataSchemaUID  — DATA-target file labels (the primary use case)
+      //   anchorSchemaUID — ANCHOR-target folder labels (optional — skipped if not provided)
+      const targetSchemaBuckets: `0x${string}`[] = [dataSchemaUID as `0x${string}`];
+      if (anchorSchemaUID) targetSchemaBuckets.push(anchorSchemaUID as `0x${string}`);
 
-        if (count === 0n) continue;
+      for (const targetSchema of targetSchemaBuckets) {
+        for (const attester of tagAttesters) {
+          const count = (await publicClient.readContract({
+            address: edgeResolverAddress,
+            abi: EDGE_RESOLVER_ABI,
+            functionName: "getActiveTagsCount",
+            args: [definitionUID, attester, targetSchema],
+          })) as bigint;
 
-        for (let cursor = 0n; cursor < count; cursor += PAGE_SIZE) {
-          const [entries, targets] = (await Promise.all([
-            publicClient.readContract({
-              address: edgeResolverAddress,
-              abi: EDGE_RESOLVER_ABI,
-              functionName: "getActiveTagEntries",
-              args: [definitionUID, attester, tagSchemaUID as `0x${string}`, cursor, PAGE_SIZE],
-            }),
-            publicClient.readContract({
-              address: edgeResolverAddress,
-              abi: EDGE_RESOLVER_ABI,
-              functionName: "getActiveTargetsByAttesterAndSchema",
-              args: [definitionUID, attester, tagSchemaUID as `0x${string}`, cursor, PAGE_SIZE],
-            }),
-          ])) as [ReadonlyArray<{ tagUID: `0x${string}`; weight: bigint }>, readonly `0x${string}`[]];
+          if (count === 0n) continue;
 
-          for (let i = 0; i < entries.length; i++) {
-            // Effective TAG: weight >= 0. weight < 0 is active on-chain but suppressed for
-            // this filter (ADR-0042). weight = 0 is included.
-            if (entries[i].weight >= 0n) {
-              effectiveTargets.add(targets[i].toLowerCase());
+          for (let cursor = 0n; cursor < count; cursor += PAGE_SIZE) {
+            const [entries, targets] = (await Promise.all([
+              publicClient.readContract({
+                address: edgeResolverAddress,
+                abi: EDGE_RESOLVER_ABI,
+                functionName: "getActiveTagEntries",
+                args: [definitionUID, attester, targetSchema, cursor, PAGE_SIZE],
+              }),
+              publicClient.readContract({
+                address: edgeResolverAddress,
+                abi: EDGE_RESOLVER_ABI,
+                functionName: "getActiveTargetsByAttesterAndSchema",
+                args: [definitionUID, attester, targetSchema, cursor, PAGE_SIZE],
+              }),
+            ])) as [ReadonlyArray<{ tagUID: `0x${string}`; weight: bigint }>, readonly `0x${string}`[]];
+
+            for (let i = 0; i < entries.length; i++) {
+              // Effective TAG: weight >= 0. weight < 0 is active on-chain but suppressed for
+              // this filter (ADR-0042). weight = 0 is included.
+              if (entries[i].weight >= 0n) {
+                effectiveTargets.add(targets[i].toLowerCase());
+              }
             }
           }
         }
@@ -439,6 +454,8 @@ export const FileBrowser = ({
     connectedAddress,
     editionAddresses,
     tagSchemaUID,
+    dataSchemaUID,
+    anchorSchemaUID,
   ]);
 
   const fetchFileContent = async (item: any) => {

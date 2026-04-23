@@ -698,6 +698,7 @@ export default function ExplorerClient() {
                   <FileBrowser
                     currentAnchorUID={currentAnchorUID}
                     dataSchemaUID={dataSchemaUID}
+                    anchorSchemaUID={anchorSchemaUID}
                     editionAddresses={editionAddresses}
                     // True whenever the URL carries `?editions=…`, INCLUDING
                     // `?editions=` with an empty value (explicit "scope to
