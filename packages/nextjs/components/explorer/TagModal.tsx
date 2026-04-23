@@ -184,12 +184,16 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
     // When no DATA was found for a file, refuse to load tags from the stale anchor UID —
     // displaying anchor-level tags in a file context is misleading and the Remove buttons
     // would revoke the wrong target. dataUIDMissing already disables submission (line 522).
+    // Reset isLoadingTags here: a prior invocation may have set it to true and been cancelled
+    // mid-flight; without this reset the modal would stay stuck on "Loading...".
     if (dataUIDMissing) {
       setUserTags([]);
+      setIsLoadingTags(false);
       return;
     }
     if (!publicClient || !edgeResolverAddress || !effectiveUID || !connectedAddress || !easInfo || !tagSchemaUID) {
       setUserTags([]);
+      setIsLoadingTags(false);
       return;
     }
 

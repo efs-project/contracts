@@ -198,20 +198,30 @@ indexer.getOutgoingAttestations(attester, PIN_SCHEMA_UID, 0, 100, false)
 - `getActiveTagsCount(definition, attester, schema)` — Count of active TAG entries in the slot.
 
 ### Edition-Aware Label Filtering
-When filtering a directory listing by descriptive TAG labels, the client accounts for editions. Labels target specific DATA UIDs, not the shared Anchor UID. The filtering algorithm:
+When filtering a directory listing by descriptive TAG labels, the client uses direct per-attester reads — not a global definition scan. Labels target specific DATA UIDs (for file items) or Anchor UIDs (for folder items), not the shared Anchor UID of the file slot.
 
-1. **Resolve the tag definition**: `resolvePath(tagsAnchorUID, tagName)` returns the definition Anchor UID. Definitions can be nested (e.g. `/tags/nsfw/orgy/`).
-2. **Fetch tagged targets**: `getTargetsByDefinition(definitionUID, 0, count)` returns all targets ever attested under this definition.
-3. **Build a DATA UID map for the directory**: For each file item, resolve its DATA UIDs via `getActivePinTarget(anchorUID, attester, DATA_SCHEMA_UID)` for each attester in the editions list.
-4. **Match**: If any of the file's DATA UIDs appears in the tagged targets set, the item matches the filter.
+**Terminology (ADR-0041 + ADR-0042):**
+- **Active TAG** (kernel): an unrevoked TAG edge. Weight is opaque kernel metadata — does not affect activity.
+- **Effective TAG** (client convention, ADR-0042): an active TAG with `weight >= 0`. Applied only in the explorer's include/exclude filter (`FileBrowser.resolveTagSet`). Tags with `weight < 0` remain kernel-active but are excluded from the filter set. Do not call `weight < 0` tags "inactive" in shared code.
 
-This ensures that tagging User A's edition of `test.txt` as "nsfw" does not cause User B's edition to appear when filtering by "nsfw".
+**Algorithm (`resolveTagSet(tagName)` in `FileBrowser`):**
+
+1. **Resolve the tag definition**: `resolvePath(tagsAnchorUID, tagName)` → `definitionUID`. Definitions can be nested (e.g. `/tags/nsfw/language/`).
+2. **Iterate per attester, per target schema**: For each `targetSchema` in `[DATA_SCHEMA_UID, ANCHOR_SCHEMA_UID]` and each attester in the editions list:
+   a. `getActiveTagsCount(definitionUID, attester, targetSchema)` — skip bucket if count is 0.
+   b. Paginate (500-entry pages) with two parallel reads: `getActiveTagEntries(...)` → `(tagUID, weight)` tuples; `getActiveTargetsByAttesterAndSchema(...)` → resolved target IDs.
+   c. Iterate to `min(entries.length, targets.length)` (guards against a revocation landing between the two RPC calls). For each pair: if `weight >= 0`, add `targetID` to the effective-targets set.
+3. **Match against directory items**: a directory item matches the filter if its DATA UID (file items) or Anchor UID (folder items) is in the effective-targets set returned by step 2.
+
+This approach reads directly from the per-attester active-TAG buckets (`_activeByAAS[definition][attester][schema]`). It does **not** use `getTargetsByDefinition` for filtering — that function returns an append-only list of ever-attested targets including revoked ones and is only appropriate for discovery/history views.
+
+**Edition isolation**: tagging User A's edition of `test.txt` as "nsfw" (stores the tag under User A's attester key) does not cause User B's DATA UID for the same file to match the filter — each attester's active-TAG bucket is independent.
 
 ### Edge Cases and Caveats
-- **Append-only discovery**: `getTargetsByDefinition` returns UIDs that were ever attested under the definition, including revoked ones. A strict filter should additionally verify each candidate via `isActiveEdgeAnySchema` (or schema-specific `isActiveEdge`).
-- **Updated DATA (new uploads)**: When a user uploads a new version, they PIN the new DATA at the file Anchor — the prior PIN supersedes automatically. Descriptive labels (TAGs) on the old DATA UID do not carry over to the new version; users must re-tag after a new upload.
-- **Cross-user tagging**: User B can TAG User A's DATA UID. The tag is stored under `(userB, dataA_UID, definition)` and `dataA_UID` appears in `getTargetsByDefinition`. When viewing User A's edition, the filter matches regardless of who applied the tag.
-- **Folder-level tags**: TAGs on Anchor UIDs (folders) are checked directly against the anchor UID without DATA indirection.
+- **Updated DATA (new uploads)**: When a user uploads a new version, they PIN the new DATA at the file Anchor — the prior PIN supersedes automatically. Descriptive labels (TAGs) on the old DATA UID do not carry over to the new DATA UID; users must re-tag after a new upload.
+- **Cross-user tagging**: User B can TAG User A's DATA UID directly. The tag lives in User B's bucket under `_activeByAAS[definition][userB][DATA_SCHEMA_UID]`. When the filter iterates User B's editions, User A's DATA UID will appear in the effective-target set. This is intentional: cross-user curation is supported by design.
+- **Folder-level tags**: TAGs on Anchor UIDs use `ANCHOR_SCHEMA_UID` as the target schema bucket, checked in the same loop alongside `DATA_SCHEMA_UID`. No DATA indirection.
+- **Non-atomic RPC reads**: `getActiveTagEntries` and `getActiveTargetsByAttesterAndSchema` are two independent RPC calls. A revocation between them can return arrays of different lengths. The `min(entries.length, targets.length)` bound guards against an out-of-bounds read; the mismatched entry would have been stale anyway.
 
 ### Off-Chain Indexer API Patterns
 For a responsive web UI, off-chain indexers should expose these additional query patterns:

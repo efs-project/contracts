@@ -17,7 +17,7 @@ Removal options:
 
 Kernel indices are append-only. Revocation only sets `_isRevoked[uid] = true`. Readers must check `isRevoked()` if they want active-only results, or pass `showRevoked = false` to indexer functions that filter for them.
 
-The exception is `_activeByAAS` in TagResolver (ADR-0007), which uses swap-and-pop because TAG singleton semantics make it tractable.
+The exception is `_activeByAAS` in EdgeResolver (ADR-0007, ADR-0041), which uses swap-and-pop because its bounded active-set semantics (one entry per `(attester, target, definition)` triple) make O(1) removal tractable.
 
 ## Consequences
 
