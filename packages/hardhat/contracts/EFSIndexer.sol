@@ -215,8 +215,8 @@ contract EFSIndexer is SchemaResolver {
 
     /**
      * @notice Propagate "contains attestations by attester" flags from an anchor up the tree.
-     *         Called by EdgeResolver when a PIN or TAG with weight > 0 places content at an
-     *         anchor, and by SortOverlay for sort-related propagation.
+     *         Called by EdgeResolver when a PIN or TAG with a non-zero refUID places content
+     *         at an anchor, and by SortOverlay for sort-related propagation.
      *
      *         Walks _parents from anchorUID to root, flagging _containsAttestations and
      *         building _childrenByAttester. Early-exits if already flagged (amortized O(1)).
@@ -233,8 +233,8 @@ contract EFSIndexer is SchemaResolver {
 
     /**
      * @notice Clear the "contains attestations by attester" flag at a single anchor.
-     *         Called by EdgeResolver when the last active item placed at an anchor by an
-     *         attester is removed (PIN or TAG with weight <= 0). Only clears the immediate
+     *         Called by EdgeResolver when the last active edge placed at an anchor by an
+     *         attester is removed (revoked PIN or revoked TAG). Only clears the immediate
      *         anchor — ancestor flags remain set (optimistic / sticky).
      *
      *         Clearing the immediate folder flag is O(1) and sufficient for accurate

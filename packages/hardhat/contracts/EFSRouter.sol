@@ -814,10 +814,9 @@ contract EFSRouter is IDecentralizedApp {
         return (200, bytes(json), h);
     }
 
-    // Find DATA at a path anchor via TAG query — returns the most recent DATA by timestamp
-    // and the attester whose TAG resolved it (used to scope mirror selection).
-    // The _activeByAttesterAndSchema array uses swap-and-pop, so element order is not
-    // chronological. We scan all active targets and pick the one with the highest `time`.
+    // Find DATA at a path anchor via PIN read — file placement is Shape A (cardinality 1).
+    // O(1) read per attester: `EdgeResolver.getActivePinTarget(anchor, attester, dataSchema)`.
+    // Returns the DATA UID and the winning attester (used to scope mirror + PROPERTY selection).
     //
     // Fallback priority when no ?editions= is specified:
     //   1. caller (from ?caller= param or msg.sender if non-zero) — user sees their own files

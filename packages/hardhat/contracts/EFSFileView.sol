@@ -34,10 +34,13 @@ interface IEdgeResolverForFileView {
         bytes32 targetSchema
     ) external view returns (bytes32);
 
-    /// @notice True iff `attester` has any active edge (PIN or TAG) on (targetID, definition).
-    ///         Schema-blind: used for cross-attester dedup in multi-edition views, where the
-    ///         dedup should fire whether the prior attester used PIN or TAG to assert the edge.
-    function isActiveEdgeAnySchema(address attester, bytes32 targetID, bytes32 definition) external view returns (bool);
+    /// @notice PIN-specific single-attester check: true iff `attester` has an active PIN on
+    ///         (targetID, definition). One SLOAD.
+    ///
+    ///         Use this — not `isActiveEdgeAnySchema` — for cross-attester file-placement dedup
+    ///         in `getFilesAtPath` (ADR-0041): file placement is PIN-only (Shape A); a TAG from
+    ///         an earlier attester must NOT suppress a later attester's valid PIN placement.
+    function isActivePinEdge(address attester, bytes32 targetID, bytes32 definition) external view returns (bool);
 }
 
 interface IEFSIndexer {
@@ -429,13 +432,13 @@ contract EFSFileView {
             bytes32 target = edgeResolver.getActivePinTarget(anchorUID, currentAttester, schema);
             if (target == bytes32(0)) continue;
 
-            // Cross-attester dedup (ADR-0031 first-attester-wins): earlier attester already
-            // has an active edge on this (target, definition)? Schema-blind by design — the
-            // dedup must fire whether the prior attester used PIN or TAG, since both express
-            // "this attester is asserting this edge."
+            // Cross-attester dedup (ADR-0031 first-attester-wins): if an earlier attester
+            // already has an active PIN placing this DATA at this anchor, skip — this edition
+            // is already represented. PIN-specific check: file placement is Shape A (PIN only).
+            // A TAG from an earlier attester must NOT suppress a later attester's valid PIN.
             bool taken = false;
             for (uint256 prior = 0; prior + 1 < attesterIdx; prior++) {
-                if (edgeResolver.isActiveEdgeAnySchema(attesters[prior], target, anchorUID)) {
+                if (edgeResolver.isActivePinEdge(attesters[prior], target, anchorUID)) {
                     taken = true;
                     break;
                 }
