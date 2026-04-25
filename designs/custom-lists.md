@@ -5,6 +5,7 @@
 **Permanence-tier:** Durable (sets stable conventions over Etched primitives; introduces no new schemas)
 **Authors:** Claude Sonnet 4.7 + Codex GPT-5 (cross-agent brainstorming)
 **Related:** ADR-0030, ADR-0031, ADR-0034, ADR-0038, ADR-0039, ADR-0041, ADR-0042; specs/02, specs/06, specs/07, specs/08
+**Notes / scratchpad:** [`custom-lists_notes.md`](./custom-lists_notes.md) — exploratory thoughts, design history, parked ideas
 
 ---
 
@@ -36,26 +37,30 @@ If you're the project owner reviewing this doc — this section is your shortlis
 When you visit `alice.eth/fav_friends?editions=alice,bob`, what should the page show?
 
 - **A. Just Alice's view.** Bob's claims are hidden. Default-safe; matches existing router behavior.
-- **B. Side-by-side.** Show items both have ranked, with each attester's weight displayed separately. Opt-in via `?merge=union`.
+- **B. Side-by-side.** Show items both have ranked, with each attester's weight displayed separately. Opt-in via a list-view mode flag.
 - **C. One merged ranking.** Math combines weights into a single list. Powerful, but Sybil-attackable.
 
-**Recommendation:** ship A as default and B as an opt-in URL flag; defer C to its own future proposal with explicit Sybil-resistance scope.
+**Recommendation:** ship A as default and B as an opt-in flag; defer C to its own future proposal with explicit Sybil-resistance scope. Final URL/parameter syntax is deferred until ADR-0031's broader merge resolution lands.
 
 This interacts with the open question already in [docs/QUESTIONS.md](../docs/QUESTIONS.md) — resolving it here would also unblock that one.
 
 📎 [Full detail: Q1 — Multi-edition merge semantics](#q1--multi-edition-merge-semantics-for-ranked-sets-blocking)
 
-### 2. What ships in `/lists/` at deploy?
+### 2. Who curates `/lists/`, and what ships at deploy?
 
-`/lists/` is the global registry of well-known shared predicates (e.g., `/lists/fav_friends`). Right now the design proposes it ships **empty**.
+`/lists/` is the namespace for shared predicate anchors. Authority is layered:
 
-- **Empty.** Users invent predicates; community-canonical ones get lifted later without contract change.
-- **One demo seed.** Add `/lists/fav_friends` only, marked "demo, not canonical."
-- **Several seeds.** Pre-populate `fav_friends`, `bookmarks`, `blocklist`, etc. Risk: locking in opinions about what matters.
+- **Protocol identity** (`efs.eth` / deployer): creates `/lists/` as a root namespace. **No predicates** seeded — protocol identity is reserved for system facts (schemas, deployment metadata), not curatorial recommendations.
+- **EFS Team** (a separate, identified account): may curate recommended ecosystem predicates (`fav_friends`, `bookmarks`, etc.). Authority is reputational, not protocol.
+- **Community**: any community can create competing predicate anchors anywhere; clients pick which curator to trust via editions priority and explicit address selection.
 
-**Recommendation:** Empty `/lists/`. Seed one demo predicate inside the demo tree (`08_seed_demo_tree.ts`) for illustration without making it canonical.
+**Decisions needed:**
+- **A.** Confirm protocol ships `/lists/` empty at deploy.
+- **B.** Does an EFS Team account exist at v1 launch, and if so, which predicates does it seed (separate from the protocol)?
 
-📎 [Full detail: Q3 — Seeded predicates](#q3--should-lists-ship-with-any-seeded-predicates)
+**Recommendation:** Protocol ships `/lists/` empty. Whether/which EFS Team predicate seeding happens is a separate non-protocol decision. Demo seed (`08_seed_demo_tree.ts`) may include one demo predicate inside the demo tree, flagged demo-only.
+
+📎 [Full detail: Discovery](#discovery) and [Q3 — Seeded predicates](#q3--who-curates-lists-and-what-ships-at-deploy)
 
 ### 3. Confirm: P2 (playlists with duplicates) is deferred from v1?
 
@@ -127,9 +132,9 @@ Two cross-agent research surveys converged on the same finding: **single-typed l
 **Decision:** Picker rule:
 
 ```
-Need duplicates of the same target?      → P2 (Slot Sequence)
-Need stable per-entry metadata?          → P1.5 (Entry-Anchor Set)
-Else                                     → P1 (Ranked Set)
+Need duplicate occurrences or stable slot identity? → P2 (Slot Sequence)
+Need per-entry metadata on unique targets?          → P1.5 (Entry-Anchor Set)
+Else                                                → P1 (Ranked Set)
 ```
 
 P3 (Sorted Folder) is not a curated list; it's an ordinary folder with a render order applied. Mentioned for completeness; nothing new needed.
@@ -193,12 +198,13 @@ This nudges users toward typed lists by making them genuinely cheaper to read on
 
 ### D7 — Stateless `EFSListView` is the read primitive
 
-**Decision:** Add a stateless `EFSListView` contract (analogous to `EFSFileView`) returning `(targetID, tagUID, weight)[]` in one call by internally batching `eas.getAttestation(tagUID)` reads.
+**Decision:** Add a stateless `EFSListView` contract (analogous to `EFSFileView`) with a paginated, **single-attester, single-schema** signature: `getRankedSetPage(listAnchor, attester, targetSchema, start, length) → (RankedEntry[], nextStart)`. Returns `(targetID, tagUID, weight, attester)` tuples by internally batching `eas.getAttestation(tagUID)` reads. Multi-attester merge semantics, allowlist composition, and generic-schema enumeration are explicit client concerns layered on top.
 
 **Why:**
 - ADR-0041's `TagEntry` is `(tagUID, weight)` — does not include `targetID`. Resolving target identity is N+1 EAS reads if done naively.
 - A view contract solves this without storage changes or kernel commitments.
 - Storage widening (`TagEntry → {tagUID, targetID, weight}`) is a Tier-1 supersession of ADR-0041 §7 and not justified by current demand.
+- **Single-attester paginated** (not multi-attester opaque-cursor) keeps merge semantics out of the helper. Multi-attester pagination would force per-attester offsets in the cursor, and an opaque cursor risks accidentally baking in a merge default before Q1 is resolved. Active TAG buckets are compact arrays — numeric `(start, length)` is the natural shape; multi-attester views are composed by clients.
 
 ### D8 — Top-N is presentation metadata, not data-model
 
@@ -241,30 +247,31 @@ TAG(definition=listUID, refUID=dogDataUID,     weight=80,  alice)
 
 **Attestation graph for "Alice's annotated top 3 books":**
 ```
-ANCHOR(name="favorite-books", refUID=alice_home)                     → listUID
+ANCHOR(name="favorite-books", refUID=alice_home)                  → listUID
 
-ANCHOR(name="<bookA-uid-hex>", refUID=listUID)                       → entryA
+# Per entry: entry anchor + target binding + weighted membership + metadata
+ANCHOR(name="<bookA-uid-hex>", refUID=listUID)                    → entryA
 PIN(definition=entryA, refUID=bookA_DATA, attester=alice)
-PROPERTY(value="Changed how I think about systems") → noteA_prop
-Anchor<PROPERTY>(name="note", refUID=entryA)        → noteA_key
+TAG(definition=listUID, refUID=entryA, weight=100, attester=alice)
+PROPERTY(value="Changed how I think about systems")               → noteA_prop
+Anchor<PROPERTY>(name="note", refUID=entryA)                      → noteA_key
 PIN(definition=noteA_key, refUID=noteA_prop, attester=alice)
-PROPERTY(value="100") → weightA_prop
-Anchor<PROPERTY>(name="weight", refUID=entryA)      → weightA_key
-PIN(definition=weightA_key, refUID=weightA_prop, attester=alice)
 ... (entryB, entryC similarly)
 ```
 
-**Read shape:** enumerate `getChildren(listUID)` to find entry anchors; for each, resolve target via `getActivePin(entry, attester, ...)` and read PROPERTYs for metadata.
+P1.5 is structurally **"P1 over entry anchors"**: the TAG against `listUID` provides membership and weight (same machinery as P1, with `targetSchema = ANCHOR_SCHEMA_UID`); the entry anchor wraps the actual target with stable identity for metadata.
 
-**Reorder cost:** re-PIN the weight PROPERTY at the same `(attester, weightKey, PROPERTY_SCHEMA)` slot. O(1) supersede per ADR-0041 §4.
+**Read shape:** call `EFSListView.getRankedSetPage(listUID, alice, ANCHOR_SCHEMA_UID, 0, 100)` to get entry anchor UIDs ranked by weight; for each, resolve target via `getActivePin(entry, alice, ...)`; read note PROPERTYs as needed.
 
-**Multi-attester:** entry anchor is a shared schelling point; per-attester PINs handle multiple attesters' views naturally. Bob attests his own PIN on `entryA` to record his target-binding without disturbing Alice's.
+**Reorder cost:** re-attest the TAG at the same `edgeHash` with new weight — O(1) supersede per ADR-0041 §4. Same mechanism as P1.
 
-**Cost:** ~1 list anchor + per entry: 1 entry anchor + 1 target PIN + (1 PROPERTY + 1 key anchor + 1 PIN) per metadata field. ~5–8 attestations per entry depending on how many fields.
+**Multi-attester:** entry anchor is a shared schelling point; per-attester PINs handle multiple attesters' target bindings; per-attester TAGs (via the standard editions filter) handle multiple attesters' rankings of the same entry without disturbing each other.
+
+**Cost:** ~1 list anchor + per entry: 1 entry anchor + 1 target PIN + 1 weight TAG + (1 PROPERTY + 1 key anchor + 1 PIN) per metadata field. ~4 attestations per entry without notes; ~7 with one note field.
 
 **Naming convention:** entry anchor name SHOULD be the lowercase 0x-hex of the target UID (or address), so two attesters writing to the "same entry" land on the same anchor. This mirrors ADR-0033's schema-alias-anchor convention.
 
-**Limitations:** higher attestation count than P1; no duplicates.
+**Limitations:** higher attestation count than P1; no duplicates of the same target.
 
 ### P2 — Slot Sequence (deferred to future proposal)
 
@@ -310,9 +317,15 @@ PROPERTYs on the list anchor (per ADR-0034 reserved-key idiom; bound via PIN per
 
 **A user's lists.** Clients enumerate Alice's named anchors via `getAnchorsBySchema(home, ANCHOR_SCHEMA)`, then filter by presence of `listKind` PROPERTY. One extra read per candidate; cheap for typical user namespaces.
 
-**Shared predicate lists.** Well-known anchors under `/lists/` (e.g., `/lists/fav_friends`, `/lists/bookmarks`). Anyone can attest TAGs against them; editions filter at read time.
+**Shared predicate anchors.** Anchors under `/lists/` (e.g., `/lists/fav_friends`, `/lists/bookmarks`) act as shared predicates: anyone can attest TAGs against them; editions filter at read time.
 
-**v1 deploy seed:** **`/lists/` ships empty.** Predicates emerge organically from user practice; community-canonical predicates can be lifted to "well-known" status without contract change. Compare with `/sorts/`, which ships populated because the sort funcs themselves require contract code — predicates have no such requirement.
+**Authority for `/lists/` is layered:**
+
+- **Protocol identity** (deployer / `efs.eth`) creates the `/lists/` root namespace itself at deploy. The protocol does **not** seed predicates — predicate selection is a curatorial act, not a protocol fact. Protocol identity is reserved for system facts: schemas, deployment metadata, and similar.
+- **EFS Team** (a separate, identified account distinct from `efs.eth` / deployer) may curate recommended ecosystem predicates. Anchors created under the EFS Team identity carry weight as "recommended convention" but are not protocol requirements. Clients can recognize EFS Team-curated predicates via a known-address registry.
+- **Community curation** is unrestricted: any community can create competing predicate anchors under any path. Clients pick which curator to trust through editions priority and explicit address selection. The protocol does not adjudicate curatorial competition.
+
+**v1 deploy seed:** protocol creates `/lists/` empty. Compare with `/sorts/`, which the protocol seeds because sort funcs require contract code — predicates have no such requirement, and predicate selection is curatorial. Demo predicates may appear in the demo seed (`08_seed_demo_tree.ts`) flagged demo-only, but that lives in the demo tree, not under the protocol identity.
 
 ---
 
@@ -320,22 +333,39 @@ PROPERTYs on the list anchor (per ADR-0034 reserved-key idiom; bound via PIN per
 
 Stateless helper contract. No state, no kernel changes. Deployed once, callable by any client or contract.
 
+The v1 helper is **single-attester, single-schema, paginated** by numeric `(start, length)`. Multi-attester merge, allowlist composition, and generic-schema enumeration are explicit client concerns — `EFSListView` does not bake those decisions in.
+
 ```solidity
-// Returns (targetID, tagUID, weight) tuples for a P1 ranked set,
-// merging the inputs from all listed attesters in one pass.
-function getRankedSet(
+struct RankedEntry {
+    bytes32 targetID;
+    bytes32 tagUID;
+    int256  weight;
+    address attester;
+}
+
+function getRankedSetPage(
     bytes32 listAnchor,
-    address[] calldata attesters,        // editions list
-    bytes32 targetSchema,                // single-schema or one entry of an allowlist
-    uint256 limit,
-    bytes32 cursor                        // opaque pagination token
+    address attester,
+    bytes32 targetSchema,
+    uint256 start,
+    uint256 length
 ) external view returns (
-    Entry[] memory entries,              // {targetID, tagUID, weight, attester}
-    bytes32 nextCursor
+    RankedEntry[] memory entries,
+    uint256 nextStart
 );
 ```
 
-For allowlists (multi-schema), the client calls once per schema and merges. For generic lists, off-chain indexer is required.
+**Composition patterns clients build on top:**
+- **Allowlist:** client calls once per `targetSchema` in `allowedTargetSchemas`, merges results.
+- **Multi-attester views:** client calls once per attester, merges per the chosen merge semantic (priority chain, side-by-side, etc. — see Q1).
+- **Generic schema lists:** off-chain indexer enumerates target schemas; client then calls per-schema.
+
+**Reading P1.5 with the same helper:** P1.5 entries are TAGs whose `targetSchema = ANCHOR_SCHEMA_UID` (the entry anchors). `getRankedSetPage` returns the entry anchor UIDs as `targetID`; the client then resolves each entry anchor's active PIN to find the actual underlying target, and reads PROPERTYs for metadata.
+
+**Why single-attester, paginated, simple:**
+- Active TAG buckets are compact arrays, not linked lists. Numeric `(start, length)` is the natural pagination shape.
+- Multi-attester pagination requires per-attester offsets; an opaque cursor would either re-fragment per attester or bake merge semantics. Better to expose the per-attester primitive and let clients compose.
+- Keeps Q1 (multi-edition merge) **out of the low-level helper** — prevents the helper from accidentally locking in merge defaults before the policy decision lands.
 
 **Why stateless view, not kernel widening:** ADR-0041 §7 was load-bearing about `_activeByAAS` being `TagEntry[] {tagUID, weight}` for sort feasibility. Widening to `{tagUID, targetID, weight}` is a Tier-1 supersession; the view contract gives the same client API without that commitment.
 
@@ -401,11 +431,11 @@ Entry anchors named by target UID hex (e.g., `0xabc...123`) MUST satisfy the exi
 When viewing `/alice.eth/fav_friends` with `?editions=alice,bob`, how are Alice's and Bob's claims combined?
 
 **Options:**
-- **A. Priority chain (default per ADR-0039):** Alice's view wins; Bob's claims ignored. Boring but consistent with router semantics elsewhere.
+- **A. Priority chain (default per ADR-0039):** Alice's view wins; Bob's claims ignored. Default-safe; consistent with router semantics elsewhere.
 - **B. Union with parallel weights:** show items from both attesters, displaying each attester's weight side-by-side ("Alice ranks Bob #1, Carol ranks Bob #3").
 - **C. Aggregate (sum/mean/median):** one merged ranking. Strongest Sybil concerns.
 
-**Proposal:** v1 ships A as default; B as opt-in via `?merge=union`; C deferred to its own proposal with Sybil-resistance scope.
+**Proposal:** v1 ships A as default; B as opt-in via a list-view mode flag (concrete URL/parameter syntax — `listMerge=union`, `?merge=union`, or similar — deferred until ADR-0031's broader merge question lands so the syntax is decided once); C deferred to its own proposal with Sybil-resistance scope.
 
 This question interacts with the pre-existing tier-2 question in [docs/QUESTIONS.md](../docs/QUESTIONS.md) ("Multi-edition merge semantics") — resolution should be coordinated. **Needs human decision before this design lands as ADR.**
 
@@ -417,9 +447,21 @@ Spec needs concrete language for `visibilityWarning = "social"` UX. Suggested fl
 
 Refinement deferred until a UI surface implements it.
 
-### Q3 — Should `/lists/` ship with any seeded predicates?
+### Q3 — Who curates `/lists/`, and what ships at deploy?
 
-**Proposal:** No. Empty `/lists/` registry at v1 deploy. Predicates emerge from user practice. Demo seed (`08_seed_demo_tree.ts`) MAY add one demonstrative `/lists/fav_friends` predicate flagged as "demo, not canonical."
+The protocol creates `/lists/` as a root namespace but does **not** seed predicates — predicate selection is a curatorial act, and the protocol identity (`efs.eth` / deployer) is reserved for system facts only.
+
+Curatorial authority is layered:
+- Protocol: namespace only.
+- EFS Team account (if it exists at launch): may seed recommended predicates as reputational, not authoritative, conventions.
+- Communities: may seed competing predicates under any path; trust via editions priority.
+
+**Proposal for v1:** protocol ships `/lists/` empty. Whether EFS Team seeds any predicates is a separate non-protocol decision. Demo seed (`08_seed_demo_tree.ts`) MAY include one demo predicate inside the demo tree, flagged demo-only.
+
+Open sub-questions:
+- Does an EFS Team account exist at v1 launch?
+- If yes, which predicates does it seed (`fav_friends`, `bookmarks`, `blocklist`, etc.)?
+- How does a client recognize "official EFS Team curation" vs random community predicates? (Likely via known-address registry, similar to how trusted-attester sets work elsewhere.)
 
 ### Q4 — `EFSListView` deployment and addressing
 
