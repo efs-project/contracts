@@ -159,6 +159,69 @@ Adversarial review's loud warnings:
 
 The subagent reports themselves are not preserved in this notes file (they ran in cross-agent dialogue context); the conclusions above are the load-bearing summary.
 
+---
+
+## Round 5 — radical simplification
+
+After the round-4 doc landed (~648 lines, 4 patterns including P3, full merge convention section, `EFSListView` shipping in v1, multi-PROPERTY metadata), James asked the meta-question: "is this too complex?" Three more subagents (clean-slate radical, one-list-with-options, two-list strict-split) plus a parallel pass from Codex converged on simplification.
+
+### Two modes, not four (or three, or one)
+
+The structural alphabet collapses to two modes:
+
+- **Item List** — TAG targets the item directly. P1 unchanged.
+- **Entry List** — TAG targets an entry anchor that PINs to the item. P1.5 + P2 unified; the previous P1.5-vs-P2 distinction (target-keyed vs occurrence-keyed naming) becomes a writer convention inside Entry List, not a separate `listKind`.
+
+P3 (sorted folder) drops out of the list taxonomy entirely — folders are folders, not lists. `listKind` collapses from 4 values to 2 (`item` / `entry`).
+
+The "one mode only" alternative (always-wrapped, every list is an Entry List) was considered seriously and rejected: it taxes the dominant case 3× and creates EAS state per address listed (asymmetry between "things in EFS" and "people on the network"). The simplicity gain doesn't earn its weight.
+
+### Aggressive cuts to v1 scope
+
+Codex's parallel synthesis pushed simplification further than my agent passes did, and James adopted most of it:
+
+- **Drop `EFSListView` from v1.** Use `EdgeResolver.getActiveTagEntries` + SDK multicall directly. Add the helper later only if implementation pain demonstrates need. Pre-launch, the burden of proof is on adding contracts, not omitting them.
+- **Drop merge semantics from the canonical design.** Multi-attester rendering is client UX, not list architecture. The previous "Recommended URL conventions for clients" subsection — even though it was small — is removed. Future merge conventions can land as separate docs without changing the list design.
+- **Singular `itemSchema`, not `allowedTargetSchemas`.** Drop the multi-schema allowlist case from v1. Mixed-schema lists are an Entry List with diverse inner PINs; a future plural variant can be added without breaking the design.
+- **Drop `displayLimit`, `weightMeaning`, `weightDirection`, `tieBreak`, etc.** These are presentation conventions; apps use generic PROPERTYs. Spec stays minimal until cross-app interop demands a convention.
+
+### Edition flexibility preserved deliberately
+
+James flagged: "We should try our hardest not to design in a way that makes editions very hard." The two-mode design preserves edition independence at every layer:
+
+- Per-attester storage (`_activeByAAS`) is independent — both modes read per-attester.
+- Item List editions: trivial (parallel reads per attester).
+- Entry List editions, target-derived naming: entry anchors are shared schelling points across attesters; per-attester PINs and TAGs filter naturally.
+- Entry List editions, occurrence-derived naming: per-curator entry anchors; intentional patching possible by reusing existing occurrence anchors.
+
+No mode forces merge to happen on-chain; all merging is client-side composition. Future merge conventions can ship without contract changes. **This was explicitly considered and validated as part of the round-5 simplification, not added as a constraint after the fact.**
+
+### `listKind` clarification
+
+James asked: "is `listKind` a proxy for two different schemas?" No. Both modes use the same TAG schema. `listKind` is a client-side reader hint that tells clients which read recipe to apply (TAG-targets-item vs traverse-entry-anchor). Without it, readers would have to infer mode from the TAG's `refUID` schema — fragile when storage shapes mix. Smart contracts could validate consistency, but the kernel doesn't enforce it.
+
+### Doc length impact
+
+Pre-round-5: ~648 lines of design + ~284 of notes.
+Post-round-5: ~250 lines of design + ~340 of notes.
+
+Notes file accumulates design history; design doc is the canonical pre-ADR artifact. The simplified design eliminates entire sections: Q1 multi-edition merge, recommended URL conventions, `EFSListView` signature + composition patterns, split P1/P1.5 schema-semantics discussion, multi-schema sort-before-truncate pitfall, large rejected-alternatives matrix.
+
+What stays load-bearing: the two modes, the picker question, list metadata convention (just `listKind` + `itemSchema`), reading conventions via existing kernel reader, editions composition, the entry-anchor squatting pitfall (now Entry List specific), the `listKind` advisory rule.
+
+The round-5 simplification was tested against the 100-year-design lens explicitly: a future agent inheriting this in 2076 reads "lists are ordered tagging; two modes by what TAG targets" and is done. Compare with the round-4 model where they'd need to learn 4 patterns + merge conventions + helper contract semantics + multi-schema rules.
+
+### What was preserved as parked / future work
+
+- `EFSListView` helper (deferred, not rejected)
+- Allowlist `allowedTargetSchemas` (deferred as `itemSchemas` plural)
+- Multi-attester merge URL conventions (future shared-conventions doc)
+- TAG-source extension to `EFSSortOverlay` (deferred until contract-consumer demand)
+- ADR-0039 alignment ADR (rightmost-priority chain ordering, if/when client merge conventions formally adopt that direction)
+- FractionalSort (deprecated as list requirement; parked as possible future huge-list optimization)
+
+These all live in the doc's "Out of scope for v1 / future work" section so future agents know they were considered, not forgotten.
+
 ### Round 5 Codex cleanup: stale prose after P2/rightmost-wins reframing
 
 Codex's final pass after Claude's round-4 commit found no conceptual blocker, but a few stale lines still reflected older frames:
