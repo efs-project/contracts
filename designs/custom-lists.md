@@ -58,7 +58,7 @@ TAG(definition=listUID, recipient=0xCarol, weight=90,  alice)
 TAG(definition=listUID, recipient=0xDave,  weight=80,  alice)
 ```
 
-Address-target TAGs use `recipient` (no `refUID`). The kernel routes target via ADR-0041 §2 and stores under the `bytes32(0)` (`ADDRESS_TARGET`) schema slot — **no EAS attestation is created on or for the address itself.**
+Address-target TAGs use `recipient` (no `refUID`). The kernel routes target via ADR-0041 §2 and stores under the `bytes32(0)` (`ADDRESS_TARGET`) schema slot — **no separate ANCHOR/DATA attestation is created to represent the address.**
 
 **Reorder cost:** O(1) — re-attest at same edgeHash with new weight (ADR-0041 §4 supersedes in place).
 
@@ -70,7 +70,7 @@ Address-target TAGs use `recipient` (no `refUID`). The kernel routes target via 
 
 ### Entry List
 
-The TAG's target is an entry anchor that PINs to the item. The entry has its own identity, can carry per-entry metadata via PROPERTYs, and can be re-PINned to a different target without disturbing weight or notes.
+The TAG's target is an entry anchor that PINs to the item. The entry has its own identity and can carry per-entry metadata via PROPERTYs. Occurrence-derived entries can be re-PINned to a different target without disturbing weight or notes; target-derived entries are expected to keep their name and PIN target aligned.
 
 **Attestation graph (Alice's annotated top 3 books):**
 ```
@@ -90,7 +90,7 @@ The entry anchor sets `schemaUID = innerTargetSchema` (e.g., `DATA_SCHEMA_UID` f
 
 **Entry anchor naming is a writer convention, not a protocol type.** Two patterns:
 
-- **Target-derived** (set semantics): `name = canonical lowercase hex of targetID`. UID targets render as `0x` + 64 hex (66 chars); address targets render as `0x` + 40 hex (42 chars; canonical Ethereum address form, low 160 bits of `targetID`). Two attestations on the same target land at the same anchor — multi-attester editions converge on shared entries. Use for unique annotated favorites.
+- **Target-derived** (set semantics): `name = canonical lowercase hex of targetID`. UID targets render as `0x` + 64 hex (66 chars); address targets render as `0x` + 40 hex (42 chars; canonical Ethereum address form, low 160 bits of `targetID`). The first curator creates the entry anchor; later curators for the same target reuse that resolved anchor — multi-attester editions converge on shared entries. Use for unique annotated favorites.
 - **Occurrence-derived** (sequence semantics): `name = lowercase 0x + 64 hex of keccak256("efs:list-occurrence:v1", listAnchor, creatorAddress, clientNonce)`. Curator-generated nonce; the same target can appear at multiple distinct entries. Use for playlists, syllabi, ranked ballots.
 
 The naming convention is per-list, not per-entry; clients pick by intent at list creation. There is no protocol-level enforcement that all entries in one list use the same convention — but mixing is confusing and clients SHOULD avoid it.
@@ -133,7 +133,7 @@ No new view contract in v1. Clients use `EdgeResolver.getActiveTagEntries(listAn
 
 **For Entry List:**
 - `targetSchema` is always `ANCHOR_SCHEMA_UID` (the TAG's target is an entry anchor)
-- `getActiveTagEntries` returns the entries' tag UIDs paired with weights
+- `getActiveTagEntries` returns `(tagUID, weight)[]`; read each TAG attestation's `refUID` to get the entry anchor UID
 - For each entry: read the entry anchor's `schemaUID`, then call `getActivePinTarget(entry, attester, entry.schemaUID)` for the actual underlying target; read PROPERTYs for metadata
 
 **Pages are NOT sorted by weight.** `getActiveTagEntries` paginates the active TAG bucket in insertion order (with swap-and-pop on revoke per ADR-0007). Clients producing a sorted top-N MUST fetch all entries, sort locally, then truncate. For very large lists (>>1000 entries), use an off-chain indexer.
