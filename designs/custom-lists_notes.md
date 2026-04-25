@@ -99,6 +99,68 @@ Active TAG buckets are NOT snapshot-stable across multiple RPC calls. Swap-and-p
 
 ---
 
+## Round 4 — final decisions and reframings
+
+### P2 unification → "Occurrence Sequence"
+
+P2 was previously deferred behind FractionalSort. After cross-agent analysis it became clear that P2 = P1.5 with relaxed entry-anchor naming (per-occurrence rather than per-target-hash). Same TAG-weight ordering, same `EFSListView` read primitive, same metadata convention.
+
+**Codex's naming decision**: rename "Slot Sequence" → "Occurrence Sequence" because "slot" still implies the deprecated `a0/a1/a2` positional model.
+
+**Codex's entry-naming formula**: `keccak256("efs:list-occurrence:v1", listAnchor, creatorAddress, clientNonce)` rendered as 66-char `0x` + 64 hex. Doesn't include `targetID` — entry identity should survive replacing the target PIN. `target:sequence` rejected because `:` fails ADR-0025 anchor-name validation.
+
+**FractionalSort is now deprecated** as a v1 list requirement. Sparse `int256` TAG weights with periodic rebalance (Logoot/CRDT pattern) handle insertion and reorder in O(1). FractionalSort parked as a possible future read/index optimization for very long ordered lists if lazy sorted pagination demands it; not core to lists.
+
+### Merge mode reframed as client convention, not data-layer
+
+James caught the conflation. Merge modes (priority-union, last-write-wins, aggregate, intersection, side-by-side) are **client rendering choices** — the contracts/kernel know nothing about them; `EFSListView` is single-attester and clients compose. Standardizing the URL convention (`?merge=`) is for cross-client interop, not protocol enforcement.
+
+The doc previously had a heavy "Q1 BLOCKING" framing for merge mode selection. Reframed as "Recommended URL conventions for clients" — a small section recommending priority-union default + `?merge=parallel` opt-in. The full tradeoff analysis from three subagent passes (use cases, engineering, adversarial) is summarized below in this notes file rather than bloating the canonical design.
+
+### Rightmost-wins, not leftmost-wins
+
+Round-3 doc had leftmost-priority for editions. James pushed back: URLs and paths go least-to-most-specific left-to-right (`/app/section/feature/`); config inheritance treats most-specific (rightmost/leaf) as the winner. Editions should match. Adopted **rightmost = highest priority** as the v1 client convention. URL `?editions=alice,bob` reads naturally as "Alice base, Bob layered on top."
+
+This is consistent with CSS cascade (later rules override earlier) and most config-file inheritance systems.
+
+**ADR-0039 alignment concern**: ADR-0039 currently documents the default editions chain with leftmost-priority semantics (caller leftmost). Adopting rightmost-wins for lists implies the chain order should flip for consistency. Tracked as a follow-up alignment ADR; not blocking this design. Documented in the Read primitive section's "Recommended URL conventions" subsection.
+
+### UX warning softened
+
+Round-2 / round-3 had a MUST first-publish-confirmation modal for `visibilityWarning = "social"` lists. James vetoed: following / listing other users is normal social behavior; consumer products don't gate it with friction. Spec language softened to MAY-advisory. The `visibilityWarning` PROPERTY remains as advisory metadata clients MAY use; the load-bearing safety primitive is **attribution labeling** ("Alice's blocklist", not "blocked"), which stays as SHOULD.
+
+### `specs/06` rewrite deferred until design lands
+
+Round-3 plan was to fix `specs/06`'s `SORT_INFO` field-count drift in the same PR. Codex argued — and we agreed — for a more substantial rewrite of `specs/06` around the unified P1 / P1.5 / P2 / P3 alphabet, with `specs/08` superseded as design notes. James agreed but said defer the prose work until the design itself is settled, to avoid token waste on text that may shift. Tracked as follow-up; not blocking.
+
+### "First-attester-empty" UI note dropped
+
+Earlier draft suggested clients show a small note when the first attester has no items in the list ("Alice has no items in this list"). James vetoed: just build the merged view silently; debug provenance can be exposed via explicit user action (a button). Removed from the doc.
+
+### Q1 subagent research summary
+
+Three independent subagents (use cases / engineering / adversarial) converged on the same recommendation:
+
+- **Priority-union default + `?merge=parallel` opt-in for v1.**
+- **Defer math aggregate** — Sybil-vulnerable, incompatible with default chain (system tier pollutes math), incoherent for P1.5/P2 (whose target binding wins?), weight-scale normalization unsolved.
+- **Defer intersection** — incompatible with default chain (system-tier zero-TAGs → empty intersection for fresh users).
+- **Defer explicit last-write-wins** — overlaps with priority-union via reversed editions list; URL-reorder attacks make it unsafe to default-on.
+- **C-iv parallel side-by-side** is the only mode with clean revocation UX and best attribution preservation; ships as opt-in.
+
+Only C-i (priority) is paginatable in any meaningful sense — every other mode requires reading all attesters' full buckets before top-N can render. With `MAX_EDITIONS = 20` and N≤1000 per attester, worst case ~400 RPC calls; realistic ~6.
+
+The strongest cross-survey signal: **the merge rule should be part of the artifact's contract** (legible to the reader), not a hidden default. Adopted via the `?merge=` URL flag convention.
+
+Adversarial review's loud warnings:
+- C-iii (aggregate) MUST NOT ship in v1 by default — multiple unsolved problems.
+- C-ii (last-write) unsafe under shareable URL model — reordering editions list silently flips trust authority.
+- C-v (intersection) incompatible with ADR-0039 tail-fallback — almost always empty for fresh users.
+- C-i and C-iv are the only modes safe to default-on; ship in that exact configuration.
+
+The subagent reports themselves are not preserved in this notes file (they ran in cross-agent dialogue context); the conclusions above are the load-bearing summary.
+
+---
+
 ## Speculation / parked ideas
 
 ### Future `EFSListView` extensions

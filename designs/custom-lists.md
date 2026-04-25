@@ -17,91 +17,61 @@ Three list-shaped patterns plus folders:
 
 | Pattern | One-liner | Best for |
 |---|---|---|
-| **P1 — Ranked Set** | Weighted TAGs against a definition anchor | Top-N, favorites, allowlists, ratings |
-| **P1.5 — Entry-Anchor Set** | Per-entry anchors with PINs and PROPERTYs | Annotated favorites; sets needing per-entry notes |
-| **P2 — Slot Sequence** | Positional anchors + PIN + ordering | Playlists with duplicates; per-slot identity |
+| **P1 — Ranked Set** | Weighted TAGs targeting items directly | Top-N, favorites, allowlists, ratings — no per-entry notes, no duplicates |
+| **P1.5 — Entry-Anchor Set** | Entry anchors named by target hash; PIN to target, TAG-weight, PROPERTYs | Same as P1 but with per-entry metadata that survives reorders |
+| **P2 — Occurrence Sequence** | Entry anchors named per-occurrence (keccak); same shape otherwise | Sequences with duplicates — playlists, syllabi, ranked ballots |
 | **P3 — Sorted Folder** | Existing folder + optional SORT_INFO | File libraries; not a curated list |
 
-**v1 ships P1, P1.5, P3** plus a metadata convention and a stateless `EFSListView` read helper. **P2 deferred** to a follow-on proposal when concrete sequence demand (playlists, syllabi) surfaces.
+P1, P1.5, and P2 are three points on one spectrum — same TAG-weight ordering, same `EFSListView` read primitive, same metadata convention. They differ only in whether/how entries wrap targets (per-target hash for P1.5; per-occurrence for P2) and which use cases each fits best.
 
-The MySpace top-8 / top-10 use case lands cleanly on P1.
+**v1 ships P1, P1.5, P2, P3** plus a metadata convention and a stateless `EFSListView` read helper. The MySpace top-8 / top-10 use case lands cleanly on P1.
 
 ---
 
-## Decisions awaiting human sign-off
+## Decisions resolved
 
-If you're the project owner reviewing this doc — this section is your shortlist. Each item is plain-language, with a recommendation and a link to the detailed reasoning. Items 1–4 are real decisions; items 5–6 are confirmations / timing.
+These were the open decisions during cross-agent review. All resolved by the project owner; the design body below reflects them in detail.
 
-### 1. How should multi-edition list views merge? **(BLOCKS the ADR)**
+### 1. Multi-attester merge — client convention, priority-union, rightmost wins
 
-When you visit `alice.eth/fav_friends?editions=alice,bob`, what should the page show?
+When viewing `alice.eth/fav_friends?editions=alice,bob,carol`, the recommended client default is **priority-union with rightmost wins** — items are pooled across all listed attesters; for items multiple attesters disagree on, the **rightmost** attester wins (matches URL/path specificity convention: most-specific-rightmost). So `?editions=alice,bob` reads naturally as "Alice base, Bob layered on top."
 
-- **A. Just Alice's view.** Bob's claims are hidden. Default-safe; matches existing router behavior.
-- **B. Side-by-side.** Show items both have ranked, with each attester's weight displayed separately. Opt-in via a list-view mode flag.
-- **C. One merged ranking.** Math combines weights into a single list. Powerful, but Sybil-attackable.
+**This is a client rendering convention, not a data-layer commitment.** The contracts/kernel don't know about merge mode. The `EFSListView` read primitive is single-attester; clients call it once per attester and merge in their own code. Standardizing the URL convention (`?merge=`) lets multiple EFS clients agree on rendering, but no enforcement happens on-chain.
 
-**Recommendation:** ship A as default and B as an opt-in flag; defer C to its own future proposal with explicit Sybil-resistance scope. Final URL/parameter syntax is deferred until ADR-0031's broader merge resolution lands.
+v1 client convention recommendations:
+- **Default** (no `?merge=` flag): priority-union, rightmost wins
+- **Opt-in** (`?merge=parallel`): render attesters' rankings side-by-side as separate columns
+- **Other modes** (aggregate, intersection, explicit last-write): not v1-recommended; clients may implement but with use-case-specific reasoning
 
-This interacts with the open question already in [docs/QUESTIONS.md](../docs/QUESTIONS.md) — resolving it here would also unblock that one.
+📎 [Full detail: Recommended URL conventions for clients](#recommended-url-conventions-for-clients)
 
-📎 [Full detail: Q1 — Multi-edition merge semantics](#q1--multi-edition-merge-semantics-for-ranked-sets-blocking)
+### 2. `/lists/` ships empty
 
-### 2. Who curates `/lists/`, and what ships at deploy?
+Protocol identity (`efs.eth` / deployer) creates `/lists/` as an empty root namespace at v1 deploy. No predicates seeded — protocol identity is reserved for system facts (schemas, deployment metadata), not curatorial recommendations. A separate EFS Team multi-sig will populate recommended predicates later (out of scope of this design).
 
-`/lists/` is the namespace for shared predicate anchors. Authority is layered:
+📎 [Full detail: Discovery](#discovery)
 
-- **Protocol identity** (`efs.eth` / deployer): creates `/lists/` as a root namespace. **No predicates** seeded — protocol identity is reserved for system facts (schemas, deployment metadata), not curatorial recommendations.
-- **EFS Team** (a separate, identified account): may curate recommended ecosystem predicates (`fav_friends`, `bookmarks`, etc.). Authority is reputational, not protocol.
-- **Community**: any community can create competing predicate anchors anywhere; clients pick which curator to trust via editions priority and explicit address selection.
+### 3. P2 (Occurrence Sequence) folded into v1
 
-**Decisions needed:**
-- **A.** Confirm protocol ships `/lists/` empty at deploy.
-- **B.** Does an EFS Team account exist at v1 launch, and if so, which predicates does it seed (separate from the protocol)?
+P2 was previously deferred behind FractionalSort. It's now unified with P1.5 as "entry anchors named per-occurrence" (vs P1.5's "entry anchors named per-target-hash"). FractionalSort is unnecessary; sparse `int256` weights handle reorder. P2 ships in v1 alongside P1 and P1.5.
 
-**Recommendation:** Protocol ships `/lists/` empty. Whether/which EFS Team predicate seeding happens is a separate non-protocol decision. Demo seed (`08_seed_demo_tree.ts`) may include one demo predicate inside the demo tree, flagged demo-only.
+📎 [Full detail: P2 — Occurrence Sequence](#p2--occurrence-sequence)
 
-📎 [Full detail: Discovery](#discovery) and [Q3 — Seeded predicates](#q3--who-curates-lists-and-what-ships-at-deploy)
+### 4. UX warning softened from MUST to MAY
 
-### 3. Confirm: P2 (playlists with duplicates) is deferred from v1?
+The previously-proposed `visibilityWarning` first-publish-confirmation modal was over-paternalistic — following / listing other users is normal social behavior, and consumer products don't gate it with friction. Spec language softened from MUST to MAY; the `visibilityWarning` PROPERTY remains as advisory metadata clients can use if they have a concrete safety-tier reason, but no spec-floor warning text is mandated.
 
-P2 covers genuine sequences — playlists with repeated tracks, syllabi, exhibits with per-slot prose. It depends on FractionalSort, which isn't built. The design currently puts it out of scope.
+📎 [Full detail: Pitfalls — Lists of people](#lists-of-people-are-public-durable-and-irreversible) and [Q2 — UX warning](#q2--ux-warning-language-for-social-lists-advisory-only)
 
-- **Defer.** Ship MySpace-style top-N now (P1, P1.5); add P2 when a concrete sequence use case surfaces.
-- **Include in v1.** Delays launch by however long FractionalSort design + implementation takes.
+### 5. `EFSListView` shipped as stateless redeployable
 
-**Recommendation:** Defer. None of the originally-described MySpace use cases (top friends, top memes, favorite books) need P2.
-
-📎 [Full detail: P2 — Slot Sequence](#p2--slot-sequence-deferred-to-future-proposal)
-
-### 4. UX warning text for publishing a list of people
-
-When a user first publishes a list of addresses (top friends, blocklist, etc.), the UI should warn them. Proposed floor wording:
-
-> "You are about to publish a permanent on-chain list containing addresses of other people. Your name will be associated with this list forever via attestation history. Recipients may surface this association on their own profiles. This action cannot be undone, only revoked (which leaves the historical attestation in place). Are you sure?"
-
-**Recommendation:** Accept this as the spec-floor; refine wording when the production UI implements it.
-
-📎 [Full detail: Q2 — UX warning language](#q2--ux-warning-language-for-social-lists-spec-deliverable)
-
-### 5. Confirm: `EFSListView` is a stateless redeployable view contract?
-
-The doc proposes adding `EFSListView` (analogous to `EFSFileView`) as the v1 read primitive — solves the N+1 problem of resolving target identities from TAG UIDs.
-
-- Stateless: no storage, no kernel changes, redeployable. Not Etched.
-- Returns `(targetID, tagUID, weight, attester)[]` in one external call.
-
-**Recommendation:** Yes, ship it. No tradeoff against alternatives that I can see.
+A stateless `EFSListView` contract (analogous to `EFSFileView`) ships in v1. Single-attester, single-schema, paginated by `(start, length)`. Solves the N+1 target-resolve problem without storage changes. No multi-attester merge helper in v1 — client-side composition is sufficient and keeps merge semantics out of the contract layer.
 
 📎 [Full detail: Read primitive — EFSListView](#read-primitive--efslistview)
 
-### 6. Should the [specs/06](../specs/06-Lists-and-Collections.md) cleanup ship as a parallel side-PR?
+### 6. `specs/06` rewrite deferred until this design lands
 
-`specs/06` describes `SORT_INFO` with the wrong field count (drift from `specs/02` and `specs/07`). One-line fix; independent of this design but tangentially related.
-
-- **Spawn now, parallel branch.** Keeps the lists ADR clean. Won't touch this design.
-- **Roll into the lists implementation PR.** More commits in one PR.
-
-**Recommendation:** Parallel side-task. I can dispatch on a separate branch on request.
+`specs/06-Lists-and-Collections.md` will be rewritten around the unified P1/P1.5/P2/P3 alphabet, superseding `specs/08` as design notes. Deferred until this design fully settles to avoid wasted token spend on prose that may shift. Tracked as a follow-up task.
 
 ---
 
@@ -132,14 +102,14 @@ Two cross-agent research surveys converged on the same finding: **single-typed l
 **Decision:** Picker rule:
 
 ```
-Need duplicate occurrences or stable slot identity? → P2 (Slot Sequence)
-Need per-entry metadata on unique targets?          → P1.5 (Entry-Anchor Set)
-Else                                                → P1 (Ranked Set)
+Need duplicate occurrences of the same target?  → P2 (Occurrence Sequence)
+Need per-entry metadata on unique targets?      → P1.5 (Entry-Anchor Set)
+Else                                            → P1 (Ranked Set)
 ```
 
 P3 (Sorted Folder) is not a curated list; it's an ordinary folder with a render order applied. Mentioned for completeness; nothing new needed.
 
-**Why:** these are not points on a spectrum — they have structurally different attestation graphs. No config option converts one into another. Documenting them as distinct, with a clear picker rule, is honest about the design space and prevents future agents from forcing one pattern to stretch to cover all.
+**Why:** P1, P1.5, and P2 share the same machinery (TAG-weight ordering, `EFSListView` read primitive, metadata convention) and differ only in whether/how items are wrapped in entry anchors. The picker is honest about which use case each fits without forcing one pattern to cover all.
 
 ### D3 — Ranked Set (P1) is the v1 MySpace primitive
 
@@ -295,15 +265,53 @@ Both attesters writing to the "same entry" land on the same anchor. This mirrors
 
 **Limitations:** higher attestation count than P1; no duplicates of the same target.
 
-### P2 — Slot Sequence (deferred to future proposal)
+### P2 — Occurrence Sequence
 
-**When:** sequence has duplicates, slot identity matters (`alice/playlist/a3` is a permalink), or per-slot annotation must survive position changes.
+**When:** sequences with duplicates of the same target — playlists where the same track plays twice, syllabi with repeated prerequisites, ranked ballots, exhibits with re-shown items, step-by-step guides.
 
-Existing sketch in [specs/06](../specs/06-Lists-and-Collections.md) and [specs/08](../specs/08-Custom-Lists-Design-Notes.md): positional anchors `a0/a1/a2`, FractionalSort `ISortFunc` for manual ordering. **FractionalSort is not yet implemented.** This pattern is documented but not shipped in v1.
+**Structurally:** P2 is the same machinery as P1.5 (entry anchor + PIN to target + TAG-weight ordering + PROPERTYs for metadata). The only difference is **entry anchor naming**: P1.5 names by target hash (target-keyed; uniqueness enforced because two attestations naming the same anchor land at the same UID); P2 names per-occurrence (occurrence-keyed; the same target can appear at multiple distinct entry anchors).
 
-**Out-of-scope concerns to address when P2 lands:**
-- "One item per slot" enforcement (PIN cardinality is per-target-schema; a slot could hold one DATA pin and one address pin simultaneously without contractual conflict).
-- FractionalSort design (ordering keys, reorder semantics, per-attester vs shared sort overlay).
+**Naming convention (entry anchor):**
+
+```
+entry name = lowercase 0x + 64 hex of:
+  keccak256("efs:list-occurrence:v1", listAnchor, creatorAddress, clientNonce)
+```
+
+`clientNonce` is a client-generated value the curator picks (counter, random bytes, etc.). The hash is purely a uniqueness device; it does NOT include `targetID` so that an entry's identity survives a target re-PIN (curator can change which DATA the entry binds to without losing entry identity or its accumulated metadata).
+
+Free-form names are allowed as an advanced escape hatch but not the canonical convention; the standard hash form is what clients compute by default.
+
+**Attestation graph for "Alice's playlist with 'Bohemian Rhapsody' played twice":**
+```
+ANCHOR(name="alices-playlist", refUID=alice_home)                                  → listUID
+
+# First occurrence — slot ordered weight=100
+ANCHOR(name="<keccak(...nonce=0)-hex>", refUID=listUID, schemaUID=DATA_SCHEMA_UID) → entry1
+PIN(definition=entry1, refUID=bohemianRhapsody_DATA, attester=alice)
+TAG(definition=listUID, refUID=entry1, weight=100, attester=alice)
+
+# Second occurrence — slot ordered weight=90
+ANCHOR(name="<keccak(...nonce=1)-hex>", refUID=listUID, schemaUID=DATA_SCHEMA_UID) → entry2
+PIN(definition=entry2, refUID=bohemianRhapsody_DATA, attester=alice)
+TAG(definition=listUID, refUID=entry2, weight=90, attester=alice)
+```
+
+Two entry anchors with different names PIN to the same DATA. No edgeHash collision; both TAGs are active independently.
+
+**Read shape:** identical to P1.5 — call `EFSListView.getRankedSetEntriesPage(listUID, alice, ANCHOR_SCHEMA_UID, start, length)` to enumerate entries; for each, read `schemaUID` and resolve target via `EdgeResolver.getActivePinTarget(entry, alice, entry.schemaUID)`. The display "position number" (track 3, lecture 5) is computed at render time from the sorted weight order.
+
+**Reorder cost:** O(1) — re-attest the TAG at the same edgeHash with new weight (ADR-0041 §4). Sparse weight spacing (e.g., increments of 2^32) supports many insertions before requiring a rebalance pass.
+
+**Multi-attester:** entry anchors are NOT shared schelling points across attesters in P2 — each curator's `clientNonce` is independent, so Bob's "second occurrence" anchor differs from Alice's. This is the right semantic for sequences (Bob's playlist isn't the same as Alice's playlist; they're independent curations).
+
+**Cost:** identical structure to P1.5 (~4 attestations per entry without notes; ~7 with one note field).
+
+**Why FractionalSort is unnecessary:** the original specs/06 + specs/08 sketch used positional anchor names (`a0`, `a1`, `a2`) and proposed FractionalSort `ISortFunc` for O(1) reorder. With per-occurrence entry anchor names + sparse `int256` TAG weights, ordinary TAG-weight machinery handles insertion and reorder in O(1) without a custom sort func. FractionalSort is deprecated as a v1 list requirement and parked as a possible future read/index optimization for very long ordered lists if lazy sorted pagination demands it.
+
+**Stable per-occurrence permalinks:** `alice.eth/playlist/<entry-keccak-hex>` is a stable URL pointing at a specific occurrence (survives reorder; the entry anchor's UID doesn't change with weight). "Track 3" / "the third item" is presentation syntax (`?n=3`) and is inherently unstable across reorder; that's fine — Spotify and similar use track-keyed URLs, not slot-keyed.
+
+**Limitations:** higher attestation count than P1; per-curator naming (no cross-attester schelling point). Both are intentional given the use case.
 
 ### P3 — Sorted Folder
 
@@ -319,7 +327,7 @@ PROPERTYs on the list anchor (per ADR-0034 reserved-key idiom; bound via PIN per
 
 | Key | Values | Required? | Purpose |
 |---|---|---|---|
-| `listKind` | `"rankedSet"` \| `"entryAnchorSet"` \| `"slotSequence"` \| `"collection"` | **Yes** for curated lists | Selects renderer; signals "this is a list, not a folder" |
+| `listKind` | `"rankedSet"` (P1) \| `"entryAnchorSet"` (P1.5) \| `"occurrenceSequence"` (P2) \| `"collection"` (P3 — folder) | **Yes** for curated lists | Selects renderer; signals "this is a list, not a folder" |
 | `allowedTargetSchemas` | CSV of schema UIDs (or `bytes32(0)` for address targets), or `"any"` | Recommended | Enables on-chain enumeration; absent/`"any"` = off-chain indexer required. Address-target sentinel: `0x0000…0000` (32 zero bytes). |
 | `weightMeaning` | `"score"` (default) \| `"rank"` \| `"rating"` \| `"priority"` \| `"orderKey"` | No | Client UX hint for rendering ("4.5★" vs "#1") |
 | `weightDirection` | `"desc"` (default) \| `"asc"` | No | Sort direction |
@@ -327,7 +335,7 @@ PROPERTYs on the list anchor (per ADR-0034 reserved-key idiom; bound via PIN per
 | `defaultSort` | Naming anchor UID | No | Points at a `/sorts/` naming anchor; for P1 typically absent (sort by weight is implicit) |
 | `displayLimit` | Integer (e.g., `"8"`, `"10"`) | No | Render-N cap; client may truncate |
 | `title`, `description`, `icon`, `cover` | String / DATA UID | No | Display metadata |
-| `visibilityWarning` | `"social"` \| `"address-list"` \| `"none"` (default) | No | Triggers UX warning on durable publish |
+| `visibilityWarning` | `"social"` \| `"address-list"` \| `"none"` (default) | No | Advisory metadata; clients MAY surface a confirmation if they have a concrete safety reason. Following / listing other users is normal social behavior; v1 spec mandates no specific warning text. |
 
 **Encoding choice:** individual PROPERTYs (per ADR-0034 idiom), not a JSON manifest DATA. Independently rebindable; clients read targeted; one PROPERTY rebind is O(1).
 
@@ -382,13 +390,14 @@ function getRankedSetEntriesPage(
 **Composition patterns — P1 (TAGs target items directly):**
 - **Sorted top-N (single attester, single schema):** call until `nextStart == 0` or you have all entries; sort by weight per `weightDirection` + `tieBreak`; truncate to `displayLimit`.
 - **Allowlist (multi-schema):** call once per `targetSchema` in `allowedTargetSchemas`, **merge ALL schema buckets BEFORE sorting** — global top-N is not the union of per-schema top-Ns. (See Pitfalls.) Address-target entries (recipient-typed TAGs) are queried with `targetSchema = bytes32(0)` (the `ADDRESS_TARGET` sentinel; see D6).
-- **Multi-attester views:** call once per attester, merge per the chosen merge semantic (priority chain, side-by-side, etc. — see Q1). Same "merge before truncate" rule applies if combining multiple attesters into one ranking.
+- **Multi-attester views:** call once per attester, then apply the recommended URL convention for merge (see [Recommended URL conventions for clients](#recommended-url-conventions-for-clients) below). Same "merge before truncate" rule applies if combining attesters into one ranking.
 - **Generic schema lists** (`allowedTargetSchemas` absent or `"any"`): off-chain indexer enumerates target schemas; client then calls per-schema.
 
-**Composition patterns — P1.5 (TAGs target entry anchors):**
+**Composition patterns — P1.5 and P2 (TAGs target entry anchors):**
 - **Single-attester read:** call `getRankedSetEntriesPage(listAnchor, attester, ANCHOR_SCHEMA_UID, start, length)` once to enumerate entries (the outer `targetSchema` is always `ANCHOR_SCHEMA_UID` — the TAG targets are entry anchors, NOT the underlying items). Sort, truncate.
 - **Resolving inner targets:** for each returned entry anchor, read its `schemaUID` field to learn the inner target schema, then call `EdgeResolver.getActivePinTarget(entry, attester, entry.schemaUID)` to get the actual underlying target.
-- **`allowedTargetSchemas` semantics in P1.5:** describes the inner target schemas (what entry anchors are allowed to PIN to). The outer TAG bucket is always `ANCHOR_SCHEMA_UID` regardless. Validate at read time that each entry's `schemaUID` is in the list's `allowedTargetSchemas` (or that the list is generic).
+- **`allowedTargetSchemas` semantics in P1.5/P2:** describes the inner target schemas (what entry anchors are allowed to PIN to). The outer TAG bucket is always `ANCHOR_SCHEMA_UID` regardless. Validate at read time that each entry's `schemaUID` is in the list's `allowedTargetSchemas` (or that the list is generic).
+- **P1.5 vs P2 distinction is the entry anchor name only.** P1.5 entry names are target-keyed (canonical hex of target); P2 entry names are occurrence-keyed (`keccak256("efs:list-occurrence:v1", listUID, creator, nonce)`). Read shape is identical; the curator's intent is signaled via `listKind` PROPERTY.
 
 **Pagination cap:** `length` SHOULD be capped at `MAX_PAGE_LENGTH = 100` per call (matching `EFSSortOverlay.MAX_PAGE_SIZE`) to bound `eth_call` time — the helper performs N internal `eas.getAttestation` reads per page. A 1000-entry list takes ~10 calls. Larger caps risk RPC timeouts; smaller caps are fine.
 
@@ -406,6 +415,53 @@ function getRankedSetEntriesPage(
 
 ---
 
+## Recommended URL conventions for clients
+
+Multi-attester merge mode is **a client rendering choice, not a data-layer commitment**. The contracts/kernel don't know about merge modes; `EFSListView` is single-attester. Different EFS clients can implement different merge logic. The recommendations below standardize the URL surface so clients agree on what URLs mean — clients are free to ignore them, but doing so creates fragmentation.
+
+### Default: priority-union, rightmost wins
+
+When `?merge=` is absent, clients SHOULD render with **priority-union, rightmost wins**:
+
+- **Priority-union**: items pooled across all attesters in the editions list (every item any of them TAG'd is included).
+- **Rightmost wins**: for items multiple attesters disagree on (different weights), the rightmost attester in the editions list determines the rendered weight.
+
+Example: `alice.eth/fav_friends?editions=alice,bob` shows items pooled from Alice and Bob. Where they disagree on weight, **Bob wins** (he's rightmost). Reads naturally as "Alice's list, Bob's modifications layered on top."
+
+This convention matches URL/path specificity (most-specific-rightmost), CSS cascade (later rules override earlier), and config-file inheritance (most-specific config wins).
+
+**Note on ADR-0039 alignment:** ADR-0039's default editions chain is currently documented with leftmost-priority semantics. Adopting rightmost-wins for lists implies the chain order should flip to be consistent (so caller — currently leftmost — moves to rightmost). Treat this as a follow-up alignment ADR; not blocking on this design.
+
+### Opt-in: `?merge=parallel` for side-by-side
+
+Renders attesters' rankings as separate columns rather than collapsing into one ranking. Useful for comparing or diffing curators ("what does Alice rank vs what does Bob rank?"). Clients SHOULD cap the rendered columns at a small number (suggested: 5) and indicate overflow if the editions list is longer.
+
+### Not v1-recommended (clients may implement at their own discretion)
+
+- **Math aggregate** (sum / mean / median weights): Sybil-vulnerable for non-curated views, incompatible with default-chain fallback (system-tier attesters pollute the math), weight-scale normalization unsolved, and incoherent for P1.5/P2 (whose target binding wins?). Defer to a future proposal with explicit Sybil-resistance scope.
+- **Explicit last-write-wins** (separate from priority-union with reversed list): redundant — priority-union with reversed editions list achieves the same outcome more safely.
+- **Intersection-only**: incompatible with EFS's default chain (system-tier attesters typically have zero TAGs → empty intersection for fresh users).
+
+### Tie-break order for merged views
+
+When merge produces equal effective weights, clients SHOULD apply secondary tie-break in this order:
+
+1. Weight (per `weightDirection`)
+2. Editions-list position (rightmost wins — the merge primary)
+3. Configured `tieBreak` PROPERTY (`targetID` / `tagUID` / `attestationTime`)
+
+For single-attester views, position 2 is irrelevant; only weight + configured tieBreak apply.
+
+### Edge case: first attester in editions has zero items
+
+Clients SHOULD render the merged view silently — no UI note, no warning. The merged result is what the user wanted. A debug or "list provenance" view can be exposed via explicit user action (a button) for the curious.
+
+### Same default applies to all list types
+
+P1, P1.5, and P2 use the same merge default (priority-union, rightmost wins). Different defaults across list types would be confusing and serve no purpose — the underlying machinery is the same.
+
+---
+
 ## Use cases mapped
 
 | Use case | Pattern | Notes |
@@ -419,10 +475,11 @@ function getRankedSetEntriesPage(
 | Annotated curated guide ("awesome-EFS") | P1.5 | per-entry rationale |
 | Plugin/schema/resolver registry | P1 | TAGs against `/registries/<topic>` |
 | DAO delegate slate | P1 | addresses, ranked |
-| Playlist with repeated tracks | **P2 (deferred)** | duplicates are real |
-| Syllabus / step-by-step guide | **P2 (deferred)** | per-step prose, slot identity |
+| Playlist with repeated tracks | P2 | occurrence-keyed entries, same target can appear twice |
+| Syllabus / step-by-step guide | P2 | each step is its own occurrence even if it references shared material |
+| Ranked ballot / voting podium | P2 | "1st place" position is its own occurrence |
 | Photo folder sorted by date | P3 | not a curated list |
-| Archive / manifest with accession metadata | P1.5 | each entry has metadata |
+| Archive / manifest with accession metadata | P1.5 | each entry has metadata, no duplicates |
 
 ---
 
@@ -430,11 +487,12 @@ function getRankedSetEntriesPage(
 
 ### Lists of people are public, durable, and irreversible
 
-Publishing a top-friends list, blocklist, ranked talent board, or similar puts addresses on-chain attached to your address. UX MUST:
+Publishing a top-friends list, blocklist, ranked talent board, or similar puts addresses on-chain attached to your address. Clients SHOULD:
 
-- Surface a clear **first-publish confirmation** for any list with `visibilityWarning = "social"` or `"address-list"`.
-- Label issuer attribution in render: "Alice's blocklist", not "blocked".
+- Label issuer attribution in render: "Alice's blocklist", not "blocked". This is the load-bearing safety primitive — viewers must always know whose claim they're seeing.
 - Treat these lists as durable; revocation removes the active claim but not the historical attestation.
+
+Clients MAY (not MUST) surface a confirmation modal on first publish for lists where `visibilityWarning` is set; this is at client discretion. Following and listing other users is normal social behavior, and gating it with friction by default mismatches user mental models from existing platforms. The attribution-labeling requirement is doing the actual safety work.
 
 ### "Lists containing X" surface defaults — anti-feature
 
@@ -453,11 +511,15 @@ v1 does NOT ship cross-attester aggregation primitives ("global top-N across all
 
 Generic (no `allowedTargetSchemas`) lists rot at trust boundaries — readers can't enumerate without an off-chain indexer, and consumers defensively narrow per-item. Documentation should steer users toward single-typed or small allowlist lists; generic should be the explicit advanced opt-in.
 
-### Entry-anchor squatting and name-target mismatch (P1.5)
+### Entry-anchor squatting and name-target mismatch (P1.5 vs P2)
 
-Entry anchors are conventionally named by the canonical lowercase hex rendering of the underlying target (see P1.5 — Naming convention). The protocol does NOT enforce that the anchor's name actually matches the target its PIN binds to — the kernel only sees `(name, refUID=parent, schemaUID)` for the anchor and `(definition=anchor, target)` for the PIN. A malicious or buggy attester can create an entry anchor named `0xBob…` but PIN it to a totally different target, or set `schemaUID = DATA_SCHEMA_UID` but PIN to an address.
+Entry anchor names follow different rules in P1.5 vs P2, and clients must validate accordingly. Both patterns leave the door open to spoofing if validation is skipped.
 
-**Clients MUST validate name ↔ target consistency at read time, schema-aware:**
+**P1.5 (target-keyed names) — name MUST match resolved target:**
+
+The protocol does NOT enforce that an entry anchor's name actually matches the target its PIN binds to — the kernel only sees `(name, refUID=parent, schemaUID)` for the anchor and `(definition=anchor, target)` for the PIN. A malicious or buggy attester can create an entry anchor named `0xBob…` but PIN it to a totally different target, or set `schemaUID = DATA_SCHEMA_UID` but PIN to an address.
+
+Clients MUST validate name ↔ target consistency at read time, schema-aware:
 1. Read the entry anchor's `schemaUID` field.
 2. Resolve the actual target via `getActivePinTarget(entry, attester, entry.schemaUID)`.
 3. Compute the expected anchor name from `targetID` per the schema:
@@ -466,17 +528,25 @@ Entry anchors are conventionally named by the canonical lowercase hex rendering 
 4. If the entry anchor's actual name doesn't match the expected name, render a warning state OR suppress the entry from the canonical view.
 5. Additionally, if `entry.schemaUID` is not in the list's `allowedTargetSchemas` (and the list is not generic), surface as a constraint violation.
 
-Mismatches MUST NOT be silently treated as valid. **The naive rule "lowercase 0x-hex of `targetID`" is wrong for address targets** — address `targetID` is `bytes32(uint160(addr))` (zero-padded), and rendering it as a 66-char hex would not match the canonical 42-char address form. The schema-aware rule above is correct.
+**Naive rule "lowercase 0x-hex of `targetID`" is wrong for address targets** — address `targetID` is `bytes32(uint160(addr))` (zero-padded), and rendering it as a 66-char hex would not match the canonical 42-char address form. The schema-aware rule above is correct.
 
-Anchor names also MUST satisfy ADR-0025 validation (character set, length). 66-char and 42-char lowercase hex strings are ASCII-printable and within limits — no conflict expected, but worth verifying when implementing.
+**P2 (occurrence-keyed names) — name SHOULD match the keccak formula but is not strictly target-bound:**
+
+P2 entry names follow `keccak256("efs:list-occurrence:v1", listAnchor, creatorAddress, clientNonce)` rendered as 66-char `0x` + 64 hex. Two divergences from P1.5:
+
+- The name does NOT encode the target, so target-binding mismatches are NOT a spoofing vector — re-PINning the entry to a different target is the *intended* affordance (curator changing what an occurrence points at without disturbing entry identity).
+- Clients SHOULD verify the entry name is a valid 66-char hex string but cannot recompute the canonical name (the `clientNonce` is unrecoverable). Free-form P2 entry names are allowed as an advanced escape hatch.
+- The `entry.schemaUID` ∈ `allowedTargetSchemas` check (step 5 above) still applies in P2.
+
+Anchor names in both patterns MUST satisfy ADR-0025 validation (character set, length). 66-char and 42-char lowercase hex strings are ASCII-printable and within limits — no conflict expected, but worth verifying when implementing.
 
 ### `listKind` is renderer intent, not proof
 
 A list anchor's `listKind` PROPERTY signals what shape the curator INTENDS the list to be. The kernel does NOT enforce that storage matches that signal — anyone can declare `listKind="rankedSet"` and write zero TAGs, or declare `listKind="entryAnchorSet"` and write only TAGs at the list anchor with no entry anchors.
 
 **Clients MUST treat `listKind` as advisory and degrade gracefully on mismatch:**
-- Declared `rankedSet` but the active TAG bucket is empty → render an empty state. Do NOT silently fall back to enumerating children as if it were a folder.
-- Declared `entryAnchorSet` but no entry anchors exist (or no TAGs against the list with `targetSchema = ANCHOR_SCHEMA_UID`) → same empty/degraded treatment.
+- Declared `rankedSet` (P1) but the active TAG bucket is empty → render an empty state. Do NOT silently fall back to enumerating children as if it were a folder.
+- Declared `entryAnchorSet` (P1.5) or `occurrenceSequence` (P2) but no entry anchors exist (or no TAGs against the list with `targetSchema = ANCHOR_SCHEMA_UID`) → same empty/degraded treatment.
 - Declared kind and active storage shapes both present (legacy migration in progress, accidental, or adversarial mixing) → render a warning state and prefer the declared kind; do not interleave shapes silently.
 
 The client never silently reinterprets storage; mismatches surface to the user.
@@ -496,26 +566,15 @@ The same rule applies to multi-attester views: if combining multiple attesters i
 
 ## Open questions
 
-### Q1 — Multi-edition merge semantics for ranked sets [BLOCKING]
+### Q1 — Multi-edition merge semantics — RESOLVED (client convention)
 
-When viewing `/alice.eth/fav_friends` with `?editions=alice,bob`, how are Alice's and Bob's claims combined?
+**Resolution:** merge mode is a client rendering convention, not a data-layer commitment. v1 client recommendation: priority-union with rightmost-wins as default; `?merge=parallel` as the opt-in for side-by-side rendering; aggregate/intersection/explicit-last-write deferred. See [Recommended URL conventions for clients](#recommended-url-conventions-for-clients).
 
-**Options:**
-- **A. Priority chain (default per ADR-0039):** Alice's view wins; Bob's claims ignored. Default-safe; consistent with router semantics elsewhere.
-- **B. Union with parallel weights:** show items from both attesters, displaying each attester's weight side-by-side ("Alice ranks Bob #1, Carol ranks Bob #3").
-- **C. Aggregate (sum/mean/median):** one merged ranking. Strongest Sybil concerns.
+The pre-existing tier-2 question in [docs/QUESTIONS.md](../docs/QUESTIONS.md) ("Multi-edition merge semantics") is for *single-DATA path resolution* in the router and remains separately scoped — the lists convention adopts the same precedent (rightmost-wins) for cross-system consistency, which implies a follow-up alignment ADR for ADR-0039 to flip its chain ordering.
 
-**Proposal:** v1 ships A as default; B as opt-in via a list-view mode flag (concrete URL/parameter syntax — `listMerge=union`, `?merge=union`, or similar — deferred until ADR-0031's broader merge question lands so the syntax is decided once); C deferred to its own proposal with Sybil-resistance scope.
+### Q2 — UX warning language for social lists — RESOLVED (advisory only)
 
-This question interacts with the pre-existing tier-2 question in [docs/QUESTIONS.md](../docs/QUESTIONS.md) ("Multi-edition merge semantics") — resolution should be coordinated. **Needs human decision before this design lands as ADR.**
-
-### Q2 — UX warning language for social lists [SPEC DELIVERABLE]
-
-Spec needs concrete language for `visibilityWarning = "social"` UX. Suggested floor:
-
-> "You are about to publish a permanent on-chain list containing addresses of other people. Your name will be associated with this list forever via attestation history. Recipients may surface this association on their own profiles. This action cannot be undone, only revoked (which leaves the historical attestation in place). Are you sure?"
-
-Refinement deferred until a UI surface implements it.
+**Resolution:** no spec-mandated warning text. Following / listing other users is normal social behavior; consumer products don't gate it with friction. The `visibilityWarning` PROPERTY remains as advisory metadata clients MAY use if they have a concrete safety-tier reason, but no MUST language is attached. Clients shipping a confirmation modal at their discretion is fine; clients omitting it entirely is also fine.
 
 ### Q3 — Who curates `/lists/`, and what ships at deploy?
 
@@ -541,13 +600,16 @@ Open sub-questions:
 
 ## Out of scope for v1 / future work
 
-- **P2 — Slot Sequence + FractionalSort.** Separate proposal. Triggers: concrete demand for playlists/syllabi/sequences with duplicates.
-- **Cross-attester aggregation primitives** (Sybil-resistant top-N globally). Requires governance scope.
+- **Cross-attester aggregation primitives** (Sybil-resistant top-N globally; math aggregate / intersection merge modes). Requires governance scope and Sybil-resistance design.
 - **Computed lists** — predicate-and-rules generated membership (iTunes Smart Playlist analog).
 - **Reputation-weighted ranks** — depends on identity / trust graph features.
-- **TAG-source extension to `EFSSortOverlay`** — unlock when concrete contract-consumer demand surfaces; requires solving the swap-and-pop vs append-only invariant clash.
+- **TAG-source extension to `EFSSortOverlay`** — unlock when concrete contract-consumer demand surfaces; requires solving the swap-and-pop vs append-only invariant clash. Would enable lazy paginated sorted access for very long ordered lists (>>1000 entries).
 - **`TagEntry` storage widening to include `targetID`** — Tier-1 supersession of ADR-0041 §7; not justified by current demand.
 - **Reverse-lookup APIs** ("lists containing X") — anti-feature in default UX; may be added behind explicit opt-in flags.
+- **Multi-attester `EFSListMergeView` helper** — defer until profiling shows per-attester round-trip overhead matters.
+- **ADR-0039 alignment ADR** — flip default chain ordering convention from leftmost-priority to rightmost-priority for consistency with the lists URL convention. Follow-up after this design lands.
+- **`specs/06` rewrite** — describe P1 / P1.5 / P2 / P3 explicitly; mark `specs/08` as superseded design notes. Deferred until this design lands so prose reflects final decisions.
+- **FractionalSort** — kept parked as a possible future read/index optimization for huge ordered lists; not part of the v1 list model. Deprecated as a list-design requirement.
 
 ---
 
