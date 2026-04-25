@@ -388,6 +388,88 @@ ABI names on `EdgeResolver` are part of the kernel layer permanently. If we'd sh
 
 This is the "specs/01 layer model" discipline applied to ABI. Caught at round-8, before the names became immutable.
 
+---
+
+## Round 9 — three independent validation reviews
+
+After round-8 closed the API layer-leak concern, James ran the validation prompt from the previous round through three fresh agents in parallel: Gemini, Codex, and a fresh Claude instance. None had access to chat history; each read the canonical doc + notes cold.
+
+### Verdict synthesis
+
+| Reviewer | Verdict | Spirit of feedback |
+|---|---|---|
+| Gemini | GREEN | Ship; document NatSpec warnings on the readers |
+| Codex (fresh) | NO-GO until ADR + spec rewrite + ABI freeze | Architecture sound; specs/06 conflict + ABI tightening are real blockers |
+| Claude (fresh) | YELLOW-GREEN | 7 small mechanical fixes |
+
+The disagreement was less than it appeared: Codex's NO-GO was gated on `specs/06` rewrite + ADR-A (already part of the plan) plus ABI tightening shared with Claude-fresh's punchlist. Gemini's GREEN was conditional on NatSpec deliverables.
+
+### What round-9 incorporated
+
+**Picker rule expanded with flowchart + worked examples** (Claude-fresh, Codex). Replaced the philosophical question with a decision tree and three concrete examples (top friends → direct; annotated books → wrapped target-derived; playlist with duplicates → wrapped occurrence-derived).
+
+**Page-size cap promoted from SHOULD to MUST-enforce** (Codex, Claude-fresh). The new readers MUST revert with `PageSizeTooLarge()` on `length > 100`. Protects on-chain consumers from gas-griefing when they propagate caller-supplied lengths.
+
+**Indexer notes substantially expanded** (Codex). Added two critical sections:
+- TAG supersession via re-attest at same edgeHash — kernel updates active set in place WITHOUT emitting a `Revoked` event for the prior TAG. Indexers reconstructing active state MUST detect this case via edgeHash matching, not just by listening for `Attested`/`Revoked` pairs. Same applies to metadata-binding PINs.
+- Discovery indexes (`_targetsByDef`, `_edgeDefinitions`) vs active state. Discovery indexes are append-only and include historical entries; they're seeds for "what attestations have ever existed at this triple," NOT ground truth for current active state. Indexers MUST cross-reference active-set storage.
+
+**`clientNonce` trigger wording fixed** (Codex). Round-7's trigger said "if sequential nonces appear at the indexer layer" — but sequential nonces look identical to CSPRNG output in `keccak256(...)` hashes. The real signals are downstream effects: write-aborts because the expected anchor name already exists, successful squatting attacks reported, anchor-name collision rates above birthday-paradox baselines. Wording corrected.
+
+**`memberMode` mismatch upgraded from SHOULD to MUST for on-chain consumers** (Claude-fresh). Smart contracts feeding governance, allowlist gates, or any decision with security consequence MUST validate declaration against actual storage shape. Display-only consumers MAY treat as warning.
+
+**NatSpec requirements documented at implementation time** (Gemini). Three new view methods get explicit NatSpec deliverables:
+- Address-target encoding (`bytes32(uint160(recipient))`) for `getActiveTagTargetsWithWeights`.
+- `pinTargetID = bytes32(0)` semantics + `memberMode` advisory warning + occurrence trust model for `getActiveTagPinTargetsWithWeights`.
+- Validation scope (name-to-PIN consistency, NOT membership) for `validateAnchorNameMatchesPinTarget`.
+
+**Conformance test matrix promoted from spike to required pre-launch** (Codex). 19 enumerated tests covering direct mode, wrapped target, wrapped occurrence, page-size cap, mode flip, snapshot consistency, anchor-name validation, adversarial scenarios, and indexer state reconstruction. Failing any of these is non-conformant for v1.
+
+### What round-9 pushed back on
+
+**Bundling name-validation into `getActiveTagPinTargetsWithWeights`** (Claude-fresh #4). Smart contracts get atomic access within one transaction; off-chain clients pin `blockTag`. Adding name-validation to every read pays gas for everyone and doesn't solve a real TOCTOU (which only applies across separate calls without block pinning). Defer.
+
+**Day-1 custom resolver for `memberMode` mutability** (Gemini #1 should-consider). Unnecessary additional surface. Advisory metadata + on-chain consumer validation MUST + long-tail-risk-trigger framework cover v1. The custom resolver remains parked as a long-tail-risk-trigger response if mutability proves harmful.
+
+**Renaming `validateAnchorNameMatchesPinTarget` → `validateTargetIdentityEntry`** (Gemini #2 should-consider). Would re-introduce list-overlay vocabulary into the kernel resolver — exactly the layer leak Codex pushed back on in round-8. Generic name stays.
+
+### Gemini's edge-case use cases (parked for future exploration)
+
+Gemini surfaced six advanced/edge use cases that are out-of-scope for v1 but interesting to document for future design space:
+
+- **Private/metadata-obfuscated lists** — current design is inherently public; truly private lists need blinded edge schemas (incompatible with PIN/TAG transparency).
+- **Tier lists (multi-dimensional ranking)** — clients pack `(tier, rank)` into the single `int256 weight` or use auxiliary PROPERTYs; no kernel concept of tiers.
+- **Ephemeral / auto-expiring lists** — no protocol-level TTL; requires off-chain cron to issue revokes.
+- **Hierarchical / graph structures (skill trees)** — flat list model only; relational structure expressed via `parentEntry` PROPERTYs (expensive to maintain, hard to query).
+- **Multi-sig / council-curated lists** — works natively if the attester is a Smart Account, but UX friction is high for multi-sig coordination on per-entry attestations.
+- **A/B testing / draft lists** — no preview-then-publish; requires creating a new list anchor and signaling cutover (ENS, master PIN).
+
+These are documented here for future agents but explicitly out of v1 scope. Each could become its own design proposal if/when concrete demand emerges.
+
+### Claude-fresh's stale-recipe catch
+
+Claude-fresh flagged that the Direct-mode reader recipe (lines 192-203) was using low-level `getActiveTagEntries` + per-TAG `eas.getAttestation` despite round-7 committing to bundled readers. Round-8 had updated the recipe to use `getActiveTagTargetsWithWeights`; Claude-fresh either read a pre-round-8 cached version or the recipe still had subtle issues. Verified post-round-9: recipes use bundled readers, low-level fallback noted separately.
+
+### Round-9 doc length
+
+Pre-round-9: 510 lines design + ~523 notes.
+Post-round-9: ~570 lines design + ~610 notes.
+
+Net: ~+60 lines on canonical doc (page-cap MUST, indexer supersession, NatSpec section, conformance matrix). Notes grew with round-9 history.
+
+### Status after round-9
+
+The validation pass surfaced ~12 actionable items, all incorporated. No architectural changes — all operational tightening, prose improvements, and concrete commitments. The design is now in the strongest pre-implementation state it has been in across 9 rounds.
+
+**Convergence with Codex's NO-GO conditions:**
+- ABI freeze: addressed (page cap MUST, NatSpec requirements, no method renames).
+- specs/06 rewrite: still required pre-dev, on the punchlist.
+- ADR-A: still required pre-dev, on the punchlist.
+- Indexer rules: substantially expanded.
+- Conformance test matrix: now mandatory in canonical doc.
+
+After ADR-A drafting + specs/06 rewrite + the spikes, this should be GREEN unanimously.
+
 ### Round 5 Codex cleanup: stale prose after P2/rightmost-wins reframing
 
 Codex's final pass after Claude's round-4 commit found no conceptual blocker, but a few stale lines still reflected older frames:

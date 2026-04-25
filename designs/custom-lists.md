@@ -18,7 +18,31 @@
 | **direct** | The item itself (`refUID = item` or `recipient = address`) | "Item List" | Top-N favorites, ratings, allowlists, blocklists, registries |
 | **wrapped** | An entry anchor that PINs to the item | "Entry List" | Annotated favorites, sequences with duplicates, anywhere a row needs its own identity |
 
-Picker question: **"Is the item the identity, or is the entry the identity?"** A list anchor declares which pattern it uses via `memberMode = "direct" | "wrapped"`.
+Picker decision (asked at list creation; choose once, fork-as-new-list to migrate):
+
+```
+                       Need duplicates of the same target?
+                                       │
+                          ┌────────────┴────────────┐
+                         yes                        no
+                          │                          │
+                          ▼                          ▼
+                 wrapped, occurrence       Need per-entry metadata
+                                            (notes, dates, etc.)?
+                                                    │
+                                       ┌────────────┴────────────┐
+                                      yes                        no
+                                       │                          │
+                                       ▼                          ▼
+                              wrapped, target               direct
+```
+
+**Worked examples:**
+- *"Top 8 friends, just addresses, no notes"* → **direct**. Cheapest path. ~9 attestations.
+- *"Favorite books with my notes per book"* → **wrapped, target-derived**. Notes survive reorder; same book across attesters lands at shared entry anchor. ~6 attestations per entry.
+- *"Playlist where 'Bohemian Rhapsody' appears twice"* → **wrapped, occurrence-derived**. Each occurrence is its own entry; CSPRNG nonce keeps occurrences distinct. ~3 attestations per entry without notes.
+
+A list anchor declares its choice via two PROPERTYs: `memberMode = "direct" | "wrapped"` and (for wrapped) `entryIdentity = "target" | "occurrence"`. **Choose carefully: migration between modes is fork-as-new-list, not in-place.** If you might ever want notes or duplicates, choose wrapped from the start.
 
 Folders are not lists. A sorted folder is just a folder with `SORT_INFO` applied.
 
@@ -236,7 +260,7 @@ Sparse weights are NOT a universal MUST. Lists where weights have semantic meani
 
 `getActiveTagEntries` paginates the active TAG bucket in insertion order (with swap-and-pop on revoke per ADR-0007). Clients producing a sorted top-N MUST fetch all entries, sort locally, then truncate. For very large lists (>>1000 entries), use an off-chain indexer.
 
-**Recommended pagination cap:** `length ≤ 100` per call (matching `EFSSortOverlay.MAX_PAGE_SIZE`) to bound `eth_call` time on multi-read clients.
+**Pagination cap (enforced):** `length` MUST be ≤ `MAX_LIST_PAGE_SIZE = 100` per call (matching `EFSSortOverlay.MAX_PAGE_SIZE`). The new `EdgeResolver` view methods MUST revert with `PageSizeTooLarge()` if `length > 100`. This protects against gas-griefing attacks against on-chain consumers that propagate caller-supplied lengths into reads.
 
 ### Snapshot consistency
 
@@ -265,9 +289,19 @@ Subgraph and off-chain indexer implementations consuming list-related events sho
 
 **Active state vs historical state.** `_activeByAAS` reflects current active TAGs (post-revocation). Subgraphs reconstructing list state MUST track revocation events and apply swap-and-pop semantics to mirror the kernel's view (per ADR-0007). A naive "all attestations ever" view will include revoked entries. Use the `Attested`/`Revoked` event pair to maintain accurate active sets.
 
+**TAG supersession (in-place updates without revoke).** Per ADR-0041 §4, re-attesting a TAG at the same `edgeHash` updates the active entry's UID and weight in place — **without emitting a `Revoked` event for the prior TAG**. The kernel's active-set view changes, but EAS doesn't see a revocation. Indexers reconstructing active state MUST detect this case:
+- When a new `Attested` event arrives for a TAG, compute its `edgeHash = (attester, targetID, definition, schema)` (per ADR-0041 §6).
+- If a prior TAG with the same `edgeHash` exists in the indexer's active set, treat it as superseded — remove it from the active set and replace with the new one.
+- The `tagUID` returned by `_activeByAAS` is the latest TAG; the prior is no longer canonical.
+- This applies to both list TAGs and metadata-binding PINs (PIN cardinality-1 supersedes the same way).
+
+Indexers that don't handle in-place supersession will accumulate stale "active" TAGs that the kernel no longer considers active.
+
 **Metadata mutability.** A curator can re-attest the metadata-binding PIN to flip `memberMode`, `itemSchema`, or `entryIdentity` post-creation (see Pitfalls). Indexers MUST track the latest declaration per `(attester, listAnchor)` as the active metadata; expose history as a separate query if needed. Treat metadata flips as visibly disruptive events.
 
-**Reverse lookups.** Indexers MAY support "lists containing X" queries internally (different from the canonical UX anti-feature). Use `_targetsByDef` and `_edgeDefinitions` from `EdgeResolver` (per ADR-0041 §8) as ground truth. Apply per-application access policies (typically: subject opt-in only).
+**Discovery indexes vs active state.** `_targetsByDef`, `_edgeDefinitions`, and similar indices in `EdgeResolver` are append-only discovery indexes that include historical (revoked / superseded) entries. They are NOT ground truth for current active state; they are seeds for "what attestations have ever existed at this triple." Indexers MUST cross-reference active-set storage (`_activeByAAS`, `_activeBySlot`) for current truth.
+
+**Reverse lookups.** Indexers MAY support "lists containing X" queries internally (different from the canonical UX anti-feature). Use `_targetsByDef` and `_edgeDefinitions` (per ADR-0041 §8) as discovery seeds; cross-reference active-set storage for current state. Apply per-application access policies (typically: subject opt-in only).
 
 ---
 
@@ -299,7 +333,7 @@ This is an acceptable trade for v1 because the kernel surface stays minimal (no 
 
 - **Schema-fragmented `direct` lists exceed a measurable share of the corpus** at any indexed point → promote a `LIST_ITEM` schema OR move validation into a custom resolver on the `memberMode` key anchor.
 - **Target-derived entry name mismatches exceed a measurable share of wrapped-target lists** → ship an on-chain validation helper widely OR move validation into a custom resolver.
-- **Sequential `clientNonce` patterns appear at the indexer layer** → ship a kernel-side nonce-entropy resolver (rejects predictable nonce inputs at attestation time).
+- **Squatting-pattern signals appear post-launch** → ship a kernel-side nonce-entropy or anchor-name-rate-limit resolver. Sequential `clientNonce` patterns aren't observable from the resulting `keccak256` hashes (they look identical to CSPRNG output), so the trigger isn't "indexer detects sequential nonces." The real signals are: (a) curator clients reporting write-aborts because the entry anchor name they expected to create already exists; (b) successful squatting attacks reported in the wild; (c) anchor-name collision rates above expected birthday-paradox baselines for a given user's list-creation volume.
 - **Smart-contract consumers report material gas-overhead pain** despite the v1 bundled readers → extend `EdgeResolver` further or ship a stand-alone `EFSListView`.
 - **Cross-client divergence on `memberMode` mismatch handling** produces visibly inconsistent renders for the same list → ship a canonical reference SDK that becomes the de facto interpreter, OR move enforcement on-chain.
 
@@ -388,7 +422,7 @@ The list is now in an internally inconsistent state: declared `wrapped` but popu
 
 Mitigations:
 - **SDK helpers MUST refuse to flip `memberMode` post-creation.** Curators wanting to change mode revoke the old list and create a new one; their old data stays under the old declaration with history preserved.
-- **Smart contracts SHOULD validate** `memberMode` declaration against actual storage shape using the v1 readers — call `getActiveTagTargetsWithWeights` with the schema implied by `memberMode` and compare the result count to a separate query against alternative schemas.
+- **Smart contracts MUST validate** `memberMode` declaration against actual storage shape if the list feeds governance, allowlist gates, or any decision with security consequence. Call `getActiveTagTargetsWithWeights` with the schema implied by `memberMode`; if the active count doesn't match the declared mode (e.g., declared `direct` but `getActiveTagsCount(listAnchor, curator, ANCHOR_SCHEMA_UID) > 0` indicates wrapped TAGs exist), treat the list as inconsistent and refuse to act on it. Display-only consumers (frontends, indexers without on-chain consequence) MAY treat the mismatch as a warning instead.
 - **Readers MUST detect mismatches** and render warning state (per `memberMode` is renderer intent, not proof above).
 - **Future kernel mitigation** (long-tail risk trigger): constrain `memberMode` to single-write via a custom resolver on the metadata key anchor; not in v1 scope but escape-hatch documented.
 
@@ -406,7 +440,7 @@ The MUST that `clientNonce` ≥ 128 bits CSPRNG is **convention only**. Sequenti
 
 This is the residual security risk from kernel-unenforceability. The worst case is "the curator's own client used weak nonces and someone preempted them" — the attacker still needs the curator to write a TAG against the squat anchor for it to be "in" the list, and the curator's own SDK should refuse to write that TAG (because it would detect that the anchor it expected to create already exists). Compromised curator client + compromised attacker = squatting attack succeeds; honest implementations are safe.
 
-If sequential-nonce patterns appear at scale post-launch, the long-tail risk trigger fires and a kernel-side nonce-entropy resolver becomes necessary.
+If squatting-pattern signals (write-aborts, successful attacks, collision rates above birthday-paradox baseline) appear post-launch, the long-tail risk trigger fires and a kernel-side mitigation (nonce-entropy resolver, anchor-name rate-limit) becomes necessary. Note that sequential nonces themselves cannot be detected from hashes — the signals are downstream effects, not the inputs.
 
 ### ADR-0042 effective-TAG filter does NOT apply to lists by default
 
@@ -497,14 +531,43 @@ For an eventual implementation plan; not prescriptive here.
 **Likely ADR shape:**
 - ADR-A: Custom Lists — direct + wrapped member patterns, metadata convention (`memberMode`, `itemSchema`, `entryIdentity`), reading conventions, ordering rule, edition independence, public reader API extensions on `EdgeResolver`.
 
-**Spike candidates (parallel with ADR drafting):**
-- Implement and gas-measure the three new `EdgeResolver` view methods. Each is a thin wrapper over existing reads; the spike validates assumed gas profiles for typical list sizes (8 friends, 50 favorites, 100 entries).
-- End-to-end direct + wrapped contract test (validates ADR-0041 §4 in-place re-attest).
-- Multi-attester edition test (validates shared schelling-point entry anchors under `entryIdentity = "target"`).
-- Anchor-name validator dry-run on 42-char and 66-char hex.
+**NatSpec requirements for the three new view methods (mandatory at implementation time):**
+
+- `getActiveTagTargetsWithWeights` — document that the returned `tagTargetID` for address-typed targets (when `tagTargetSchema = bytes32(0)`) is `bytes32(uint160(recipient))`; consumers downcast to `address` via `address(uint160(uint256(tagTargetID)))`.
+- `getActiveTagPinTargetsWithWeights` — document that:
+  - `pinTargetID = bytes32(0)` and `pinTargetSchema = bytes32(0)` indicate either (a) the TAG target is not an anchor, or (b) the entry anchor has no active inner PIN. Consumers MUST handle both cases.
+  - `memberMode` is metadata that the kernel does NOT enforce. On-chain consumers acting on this data (governance, allowlist gates) MUST validate `memberMode` declaration against actual storage shape (see Pitfalls — `memberMode` mutability).
+  - For `entryIdentity = "occurrence"` lists, the entry anchor's name is curator-assigned and NOT a trust unit. Consumers MUST verify the TAG was attested by the expected curator address; do not infer trust from the entry anchor's name shape. Squatting on occurrence-derived entry names is undetectable from the hash, only from downstream effects.
+- `validateAnchorNameMatchesPinTarget` — document that this validates name-to-PIN-target consistency only, NOT list membership. A `true` return does not imply the anchor is part of any specific list; it only implies the anchor's name matches the canonical hex of its current PIN target.
+
+**Required pre-launch tests (conformance matrix; not optional spike — these gate the launch):**
+
+| # | Category | Test | Validates |
+|---|---|---|---|
+| 1 | Direct list | Create + 5 TAGs + read via `getActiveTagTargetsWithWeights` | Basic read path, TAG bucket population |
+| 2 | Direct list | Reorder via re-attest at same edgeHash | ADR-0041 §4 in-place update |
+| 3 | Direct list | Revoke TAG at index 2 of 5 | Swap-and-pop semantics |
+| 4 | Direct list | Address targets via `recipient` | Address sentinel routing (ADR-0041 §2) |
+| 5 | Direct list | Negative weight stays active | ADR-0042 effective-TAG filter NOT applying |
+| 6 | Wrapped list, target | Create + 3 entries + 1 with note | Full wrapped read path |
+| 7 | Wrapped list, target | `validateAnchorNameMatchesPinTarget` for valid + spoofed entry | Name validation correctness |
+| 8 | Wrapped list, target | Multi-attester at shared entry anchor | Schelling-point entry semantics |
+| 9 | Wrapped list, occurrence | Create with same target at 2 distinct entry anchors | Duplicate handling |
+| 10 | Wrapped list, occurrence | Re-PIN existing entry to different target | `entryIdentity = "occurrence"` rebinding |
+| 11 | Wrapped list | Missing PIN on entry; reader returns `pinTargetID = bytes32(0)` | Invalid-state handling |
+| 12 | Both modes | Page-size cap revert at `length = 101` | `MAX_LIST_PAGE_SIZE` enforcement |
+| 13 | Both modes | `memberMode` flip post-creation; reader behavior | Mutability pitfall surfaces |
+| 14 | Both modes | Read at finalized block tag matches active state | Snapshot consistency |
+| 15 | Anchor names | Validator passes on 42-char address hex + 66-char UID hex | ADR-0025 compliance |
+| 16 | Adversarial | Squatter creates entry anchor with mismatched name + PIN target | `validateAnchorNameMatchesPinTarget` returns false |
+| 17 | Adversarial | Direct list with mixed-schema TAGs; reader returns single bucket | Silent fragmentation behavior surfaced |
+| 18 | Indexer | Re-attest TAG at same edgeHash; subgraph detects supersession | In-place update handling |
+| 19 | Indexer | Curator flips `memberMode`; subgraph reflects latest | Metadata mutability handling |
+
+These 19 tests are required for v1 launch. Implementations failing any of these are not v1-conformant; pre-launch is the only window to catch and fix.
 
 ---
 
 ## Provenance
 
-Design produced through cross-agent brainstorming between Claude Sonnet 4.7 and Codex GPT-5, with parallel research subagents and a multi-round dialogue mediated by James Carnley. Six rounds of refinement preserved in [`custom-lists_notes.md`](./custom-lists_notes.md).
+Design produced through cross-agent brainstorming between Claude Sonnet 4.7 and Codex GPT-5, plus independent validation passes from Gemini and a fresh Claude instance. Nine rounds of refinement preserved in [`custom-lists_notes.md`](./custom-lists_notes.md).
