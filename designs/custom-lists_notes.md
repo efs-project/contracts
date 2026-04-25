@@ -595,6 +595,100 @@ Considered as a fixed URL parameter. Backed off because the broader merge questi
 
 ---
 
+## Round 11 — substantive architectural simplification
+
+After round-10 declared "convergence," James reviewed the canonical doc fresh and surfaced four concerns that triggered a real architectural revisit. He explicitly authorized ignoring ADR/Tier-1 framework concerns: "everything is up for change if it makes the system better."
+
+### The three big changes
+
+**1. Always-wrapped (one mode, not two).** Round 5 split lists into "direct" (TAGs target items) and "wrapped" (TAGs target entry anchors that PIN to items). The split was justified by ~3x cost asymmetry on simple top-N cases. James pushed back: cost is pennies on L2; the conceptual debt of two modes (picker rule, migration-as-fork, mode-mismatch pitfalls) wasn't worth the saving. Always-wrapped wins on simplicity, extensibility, and one mental model.
+
+What we gain:
+- One read recipe; one mental model
+- Migration-proof — any folder can be promoted to a list
+- Per-entry-in-list-context metadata always available (e.g., "this song should rank 5 higher in *this* playlist" without saying "this song is my favorite")
+- No picker rule; no "mode-mismatch" pitfall class
+- Per-list state on entries (status, notes, captions) trivial
+
+What we lose:
+- ~3x attestation cost on simple cases (top-N favorites). On L2 this is pennies.
+- Direct's `isActiveEdge` cheap-membership-check pattern. For pure allowlist/blocklist contracts that only need "is X in Alice's list," they now need the wrapped read path. Real cost; James judged worth it for the simpler model.
+
+**2. `LIST_DECLARATION` schema (new, non-revocable, replaces `memberMode` PROPERTY).** James caught a real fragility: round-7's `memberMode` PROPERTY (mutable via PIN supersede) is a "permanent type" implemented with mutable storage. The fix: a typed schema attestation (`revocable: false`) makes the list type immutable at attestation time. Costs one new EAS schema, but solves the entire `memberMode` mutability pitfall class.
+
+```
+LIST_DECLARATION:
+  bytes32 itemSchema       // expected schema of inner targets
+  uint8   entryIdentity    // 0 = target-derived, 1 = occurrence-derived
+revocable: false
+```
+
+This is a Tier-1 commitment per AGENTS.md, but James authorized: "we should ignore ADRs and TIER concerns for these foundational designs. I'm trying to build a good foundation."
+
+Round 5 had rejected `LIST_ITEM` (per-item schema) for proliferation reasons. `LIST_DECLARATION` is different — one schema for the primitive itself, declared once per list. Different proposal, different cost-benefit.
+
+**3. Lists ARE folders (the unification).** James pushed beyond #1 and #2 to a deeper unification: "maybe Folders and these wrapped lists could be merged too." The structural insight: a folder is an anchor with child anchors that PIN to content (this is how files are placed in folders today in EFS). A wrapped list is identical structurally, plus weight TAGs and a `LIST_DECLARATION`. They're the same primitive with optional metadata layers.
+
+The unification eliminates "list" as a separate data structure:
+- Plain folder: anchor + child anchors + PINs to content
+- List: same + LIST_DECLARATION + weight TAGs on entries
+- Sorted folder: same + SORT_INFO
+- Sorted list: any combination
+
+A folder can be promoted to a list (add LIST_DECLARATION + weight TAGs). A list can be read folder-style (ignore weights). One graph structure, two rendering conventions.
+
+### The supporting fixes
+
+**4. Shopping lists, todos, and stateful items removed from non-goals.** The earlier "non-goal" of "mutable per-item state machines" was wrongly conservative. Wrapped entries with `status` PROPERTYs (toggleable via PIN re-attest) handle shopping/todo use cases trivially. Updated non-goals to only exclude *complex* state machines with transitions/validations/history (which are app-layer concerns). Simple status PROPERTYs are core supported.
+
+This was a meaningful correction — James pointed out shopping lists and todos are basic use cases for lists, and they were wrongly excluded.
+
+**5. Exhaustive use case audit.** James asked for a thorough use-case audit. The doc now lists 28 use cases mapped to the unified primitive, demonstrating that everything from top-N favorites through annotated catalogs through playlists with duplicates through shopping lists with state through tier lists through cross-list reuse is supported by one mode.
+
+### Decisions resolved (round-11 updates)
+
+| Decision | Pre-round-11 | Post-round-11 |
+|---|---|---|
+| Modes | Two (direct + wrapped) | One (always-wrapped) |
+| `memberMode` declaration | Mutable PROPERTY (could flip in O(1)) | `LIST_DECLARATION` schema, non-revocable |
+| `entryIdentity` declaration | Mutable PROPERTY | Field in `LIST_DECLARATION`, permanent |
+| Folder vs list | Distinct concepts ("folders aren't lists") | Same primitive ("lists ARE folders") |
+| Shopping lists / todos | Non-goal (per-item state machines) | Core supported (mutable status PROPERTYs) |
+| Picker rule | "Item or Entry? Then target or occurrence?" | "Target-derived or occurrence-derived?" (one choice) |
+| New EAS schemas | Zero | One (`LIST_DECLARATION`) |
+| Etched commitments | Zero (or two-mode renamings) | One (the schema; `revocable: false`) |
+
+The tradeoff: we accept one new EAS schema (Etched commitment) in exchange for substantial architectural simplification — one mode, permanent type, unified with folders, all stateful use cases supported.
+
+### Why the round-11 revisit was right
+
+Earlier rounds optimized for "no new schemas, no new resolvers" — the minimum-Etched-surface principle. That's good discipline most of the time, but it's not infinitely reasonable. When the cost of avoiding one new schema is:
+- A "permanent type" implemented with mutable storage (memberMode PROPERTY)
+- Two modes that need a picker rule and migration-as-fork
+- A separate "lists vs folders" distinction that doesn't survive structural inspection
+- An exclusion of basic use cases (shopping lists, todos)
+
+…then the principle is overserving its purpose. One new schema (LIST_DECLARATION) for the canonical list-primitive type, used billions of times, is well-worth it. The schema is small (`bytes32 itemSchema, uint8 entryIdentity`), non-revocable, and unambiguous.
+
+The earlier rejection of `LIST_ITEM` (per-item schema) was correct — that proposal would have created proliferation. `LIST_DECLARATION` is per-list, not per-item; one schema, used as the type marker for an entire primitive.
+
+### Round-11 doc length impact
+
+Pre-round-11: 574 lines design + 606 notes.
+Post-round-11: ~470 lines design + ~720 notes.
+
+The doc actually got *shorter* despite adding the LIST_DECLARATION schema and 6 new use cases — the unification eliminated the picker rule discussion, the Item-vs-Entry duality, the `memberMode` mutability section, and the migration-as-fork detail. Single-mode design is easier to describe.
+
+### Cross-agent process notes
+
+Eleven rounds total. The first ten converged on a two-mode design that all reviewers (Claude, Codex, Gemini, fresh instances) signed off on. Round-11 was James seeing it fresh and pushing back on assumptions the agents had carried forward without questioning.
+
+Worth recording for future cross-agent work: **agents converge on a "good enough" answer and stop questioning it.** A fresh human review can re-open assumptions that all agents had treated as settled. The round-11 changes are real architectural improvements that no agent had proposed across the prior ten rounds, even though the seeds of all of them existed in earlier discussion.
+
+The lesson: the cross-agent process is great for refinement but doesn't easily detect "we accepted a constraint we shouldn't have." Periodic fresh-human review catches this.
+
+---
+
 ## How to use this file
 
 Append-friendly. When adding:
