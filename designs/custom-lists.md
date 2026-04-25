@@ -293,9 +293,10 @@ Subgraph and off-chain indexer implementations consuming list-related events sho
 - When a new `Attested` event arrives for a TAG, compute its `edgeHash = (attester, targetID, definition, schema)` (per ADR-0041 §6).
 - If a prior TAG with the same `edgeHash` exists in the indexer's active set, treat it as superseded — remove it from the active set and replace with the new one.
 - The `tagUID` returned by `_activeByAAS` is the latest TAG; the prior is no longer canonical.
-- This applies to both list TAGs and metadata-binding PINs (PIN cardinality-1 supersedes the same way).
 
-Indexers that don't handle in-place supersession will accumulate stale "active" TAGs that the kernel no longer considers active.
+**PIN supersession is slot-based, not edgeHash-based.** Metadata bindings (`memberMode`, `itemSchema`, `entryIdentity`, `note`, etc.) are PINs. Re-attesting a PIN at the same `(attester, definition, targetSchema)` slot supersedes the prior active PIN **even when the target changes**. Because the target is part of `edgeHash`, a changed-target PIN has a different edgeHash; edgeHash matching alone will miss the supersession. Indexers reconstructing active PIN state MUST key singleton slots by `(definition, attester, targetSchema)` and replace the active `(pinUID, targetID)` when a new PIN arrives for that slot.
+
+Indexers that don't handle in-place supersession will accumulate stale "active" TAGs/PINs that the kernel no longer considers active.
 
 **Metadata mutability.** A curator can re-attest the metadata-binding PIN to flip `memberMode`, `itemSchema`, or `entryIdentity` post-creation (see Pitfalls). Indexers MUST track the latest declaration per `(attester, listAnchor)` as the active metadata; expose history as a separate query if needed. Treat metadata flips as visibly disruptive events.
 
