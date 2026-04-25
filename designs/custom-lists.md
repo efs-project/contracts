@@ -187,6 +187,8 @@ The kernel only consumes `definition: bytes32` (the list anchor's UID). Path-tre
 - Multiple schema UIDs → allowlist (small N, on-chain readable with N bucket queries)
 - Absent or `"any"` → generic; **requires off-chain indexer** support for enumeration
 
+Address-target TAGs (recipient-typed, no target attestation) are represented by the **`ADDRESS_TARGET` sentinel = `bytes32(0)`** (32 zero bytes). An allowlist that permits both DATA targets and address targets would have `allowedTargetSchemas = "<DATA_SCHEMA_UID>,0x0000000000000000000000000000000000000000000000000000000000000000"`. Clients querying the address-target bucket pass `targetSchema = bytes32(0)` to `EFSListView.getRankedSetEntriesPage`.
+
 Enforcement is **client-advisory**, not contractual.
 
 **Why:**
@@ -198,13 +200,16 @@ This nudges users toward typed lists by making them genuinely cheaper to read on
 
 ### D7 — Stateless `EFSListView` is the read primitive
 
-**Decision:** Add a stateless `EFSListView` contract (analogous to `EFSFileView`) with a paginated, **single-attester, single-schema** signature: `getRankedSetPage(listAnchor, attester, targetSchema, start, length) → (RankedEntry[], nextStart)`. Returns `(targetID, tagUID, weight, attester)` tuples by internally batching `eas.getAttestation(tagUID)` reads. Multi-attester merge semantics, allowlist composition, and generic-schema enumeration are explicit client concerns layered on top.
+**Decision:** Add a stateless `EFSListView` contract (analogous to `EFSFileView`) with a paginated, **single-attester, single-schema** signature: `getRankedSetEntriesPage(listAnchor, attester, targetSchema, start, length) → (RankedEntry[], nextStart)`. Returns `(targetID, tagUID, weight, attester)` tuples by internally batching `eas.getAttestation(tagUID)` reads. Multi-attester merge semantics, allowlist composition, generic-schema enumeration, and **sorted-rank views** are explicit client concerns layered on top.
+
+**Critical caveat — pages are NOT sorted by rank.** The helper returns entries in **active TAG bucket order** (insertion order with swap-and-pop on revoke), not in weight order. `length=10` does **not** mean "top 10." Clients implementing `displayLimit` MUST fetch all relevant entries, sort client-side by weight + tie-break, then truncate. This is a deliberate v1 boundary: lazy sorted pagination over TAG buckets requires extending `EFSSortOverlay` (D5 deferred), so v1 supports list sizes where "fetch-all + sort + truncate" remains cheap (≤ ~1000 entries comfortably). Sorted pagination over very long lists belongs to off-chain indexers or a future overlay extension.
 
 **Why:**
 - ADR-0041's `TagEntry` is `(tagUID, weight)` — does not include `targetID`. Resolving target identity is N+1 EAS reads if done naively.
 - A view contract solves this without storage changes or kernel commitments.
 - Storage widening (`TagEntry → {tagUID, targetID, weight}`) is a Tier-1 supersession of ADR-0041 §7 and not justified by current demand.
 - **Single-attester paginated** (not multi-attester opaque-cursor) keeps merge semantics out of the helper. Multi-attester pagination would force per-attester offsets in the cursor, and an opaque cursor risks accidentally baking in a merge default before Q1 is resolved. Active TAG buckets are compact arrays — numeric `(start, length)` is the natural shape; multi-attester views are composed by clients.
+- The name `…EntriesPage` (not `…RankedSetPage`) avoids implying that pages are sorted by rank — a real foot-gun if the helper is mis-used.
 
 ### D8 — Top-N is presentation metadata, not data-model
 
@@ -228,7 +233,7 @@ TAG(definition=listUID, refUID=hamsterDataUID, weight=90,  alice)
 TAG(definition=listUID, refUID=dogDataUID,     weight=80,  alice)
 ```
 
-**Read shape:** `EFSListView.getRankedSet(listUID, [alice], DATA_SCHEMA, limit, cursor)` returns `(targetID, tagUID, weight)[]`. Client sorts by weight per `weightDirection` convention.
+**Read shape:** `EFSListView.getRankedSetEntriesPage(listUID, alice, DATA_SCHEMA_UID, start, length)` returns `RankedEntry[]` in active TAG bucket order (NOT sorted). Client paginates until exhausted, then sorts by weight + tie-break per the list's `weightDirection` / `tieBreak` conventions, then truncates to `displayLimit`. For multi-attester views, call per attester and compose per Q1's chosen merge mode.
 
 **Reorder cost:** one re-attestation at same `edgeHash` (alice, target, listUID). Updates weight in place per ADR-0041 §4.
 
@@ -261,7 +266,7 @@ PIN(definition=noteA_key, refUID=noteA_prop, attester=alice)
 
 P1.5 is structurally **"P1 over entry anchors"**: the TAG against `listUID` provides membership and weight (same machinery as P1, with `targetSchema = ANCHOR_SCHEMA_UID`); the entry anchor wraps the actual target with stable identity for metadata.
 
-**Read shape:** call `EFSListView.getRankedSetPage(listUID, alice, ANCHOR_SCHEMA_UID, 0, 100)` to get entry anchor UIDs ranked by weight; for each, resolve target via `getActivePin(entry, alice, ...)`; read note PROPERTYs as needed.
+**Read shape:** call `EFSListView.getRankedSetEntriesPage(listUID, alice, ANCHOR_SCHEMA_UID, start, length)` to enumerate entry anchor UIDs in active TAG bucket order. Paginate until exhausted, sort by weight + tie-break, truncate. For each entry anchor, resolve the actual target via `EdgeResolver.getActivePinTarget(entry, alice, <innerTargetSchema>)`; read note / display-metadata PROPERTYs from the entry anchor as needed. Validate that the entry anchor's name matches the resolved target (see Pitfalls — entry-name spoofing).
 
 **Reorder cost:** re-attest the TAG at the same `edgeHash` with new weight — O(1) supersede per ADR-0041 §4. Same mechanism as P1.
 
@@ -298,7 +303,7 @@ PROPERTYs on the list anchor (per ADR-0034 reserved-key idiom; bound via PIN per
 | Key | Values | Required? | Purpose |
 |---|---|---|---|
 | `listKind` | `"rankedSet"` \| `"entryAnchorSet"` \| `"slotSequence"` \| `"collection"` | **Yes** for curated lists | Selects renderer; signals "this is a list, not a folder" |
-| `allowedTargetSchemas` | CSV of schema UIDs, or `"any"` | Recommended | Enables on-chain enumeration; absent/`"any"` = off-chain indexer required |
+| `allowedTargetSchemas` | CSV of schema UIDs (or `bytes32(0)` for address targets), or `"any"` | Recommended | Enables on-chain enumeration; absent/`"any"` = off-chain indexer required. Address-target sentinel: `0x0000…0000` (32 zero bytes). |
 | `weightMeaning` | `"score"` (default) \| `"rank"` \| `"rating"` \| `"priority"` \| `"orderKey"` | No | Client UX hint for rendering ("4.5★" vs "#1") |
 | `weightDirection` | `"desc"` (default) \| `"asc"` | No | Sort direction |
 | `tieBreak` | `"targetID"` (default) \| `"tagUID"` \| `"attestationTime"` | No | Stable sort tie-break |
@@ -333,7 +338,7 @@ PROPERTYs on the list anchor (per ADR-0034 reserved-key idiom; bound via PIN per
 
 Stateless helper contract. No state, no kernel changes. Deployed once, callable by any client or contract.
 
-The v1 helper is **single-attester, single-schema, paginated** by numeric `(start, length)`. Multi-attester merge, allowlist composition, and generic-schema enumeration are explicit client concerns — `EFSListView` does not bake those decisions in.
+The v1 helper is **single-attester, single-schema, paginated** by numeric `(start, length)`. Multi-attester merge, allowlist composition, generic-schema enumeration, and **sorted-rank views** are explicit client concerns — `EFSListView` does not bake those decisions in.
 
 ```solidity
 struct RankedEntry {
@@ -343,7 +348,7 @@ struct RankedEntry {
     address attester;
 }
 
-function getRankedSetPage(
+function getRankedSetEntriesPage(
     bytes32 listAnchor,
     address attester,
     bytes32 targetSchema,
@@ -355,17 +360,23 @@ function getRankedSetPage(
 );
 ```
 
-**Composition patterns clients build on top:**
-- **Allowlist:** client calls once per `targetSchema` in `allowedTargetSchemas`, merges results.
-- **Multi-attester views:** client calls once per attester, merges per the chosen merge semantic (priority chain, side-by-side, etc. — see Q1).
-- **Generic schema lists:** off-chain indexer enumerates target schemas; client then calls per-schema.
+**Pages are in active TAG bucket order, NOT sorted by weight.** The helper paginates over `_activeByAAS[listAnchor][attester][targetSchema]` (per ADR-0041 §7), which is insertion-ordered with swap-and-pop on revoke. `length=10` does NOT mean "top 10." Clients producing a sorted top-N view MUST fetch all relevant entries, sort by weight + tie-break locally, and only then truncate to `displayLimit`. v1 sizes (≤ ~1000 entries) make fetch-all-then-sort cheap; lazy sorted pagination over very long lists requires either an off-chain indexer or a future `EFSSortOverlay` extension (deferred per D5).
 
-**Reading P1.5 with the same helper:** P1.5 entries are TAGs whose `targetSchema = ANCHOR_SCHEMA_UID` (the entry anchors). `getRankedSetPage` returns the entry anchor UIDs as `targetID`; the client then resolves each entry anchor's active PIN to find the actual underlying target, and reads PROPERTYs for metadata.
+**Composition patterns clients build on top:**
+- **Sorted top-N (single attester, single schema):** call until `nextStart == 0` or you have all entries; sort by weight per `weightDirection` + `tieBreak`; truncate to `displayLimit`.
+- **Allowlist (multi-schema):** call once per `targetSchema` in `allowedTargetSchemas`, **merge ALL schema buckets BEFORE sorting** — global top-N is not the union of per-schema top-Ns. (See Pitfalls.) Address-target entries (recipient-typed TAGs) are queried with `targetSchema = bytes32(0)` (the `ADDRESS_TARGET` sentinel; see D6).
+- **Multi-attester views:** call once per attester, merge per the chosen merge semantic (priority chain, side-by-side, etc. — see Q1). Same "merge before truncate" rule applies if combining multiple attesters into one ranking.
+- **Generic schema lists** (`allowedTargetSchemas` absent or `"any"`): off-chain indexer enumerates target schemas; client then calls per-schema.
+
+**Reading P1.5 with the same helper:** P1.5 entries are TAGs whose `targetSchema = ANCHOR_SCHEMA_UID` (the entry anchors). The helper returns the entry anchor UIDs as `targetID`; the client then calls `EdgeResolver.getActivePinTarget(entry, attester, <targetSchema>)` per entry to resolve the actual underlying target, and reads PROPERTYs for metadata. Sort-before-truncate rule still applies.
 
 **Why single-attester, paginated, simple:**
 - Active TAG buckets are compact arrays, not linked lists. Numeric `(start, length)` is the natural pagination shape.
 - Multi-attester pagination requires per-attester offsets; an opaque cursor would either re-fragment per attester or bake merge semantics. Better to expose the per-attester primitive and let clients compose.
 - Keeps Q1 (multi-edition merge) **out of the low-level helper** — prevents the helper from accidentally locking in merge defaults before the policy decision lands.
+- The `…EntriesPage` name (rather than `…RankedSetPage`) deliberately avoids implying that pages are sorted by rank.
+
+**Dependency check:** `EdgeResolver.getActiveTagEntries(definition, attester, schema, start, length)` already exists per ADR-0041 §8 reader API and supports `(start, length)` pagination — `EFSListView` calls it directly. Confirmed; no kernel-side reader addition needed.
 
 **Why stateless view, not kernel widening:** ADR-0041 §7 was load-bearing about `_activeByAAS` being `TagEntry[] {tagUID, weight}` for sort feasibility. Widening to `{tagUID, targetID, weight}` is a Tier-1 supersession; the view contract gives the same client API without that commitment.
 
@@ -418,9 +429,38 @@ v1 does NOT ship cross-attester aggregation primitives ("global top-N across all
 
 Generic (no `allowedTargetSchemas`) lists rot at trust boundaries — readers can't enumerate without an off-chain indexer, and consumers defensively narrow per-item. Documentation should steer users toward single-typed or small allowlist lists; generic should be the explicit advanced opt-in.
 
-### Anchor name validation for P1.5
+### Entry-anchor squatting and name-target mismatch (P1.5)
 
-Entry anchors named by target UID hex (e.g., `0xabc...123`) MUST satisfy the existing anchor-name validation (ADR-0025). Standard 0x-hex is ASCII-printable and within length limits — no conflict expected, but worth verifying when implementing.
+Entry anchors are conventionally named by lowercase 0x-hex of the target UID (or address). The protocol does NOT enforce that the anchor's name actually matches the target its PIN binds to — the kernel only sees `(name, refUID=parent)` for the anchor and `(definition=anchor, target)` for the PIN. A malicious or buggy attester can create an entry anchor named `0xBob…` but PIN it to a totally different target, or vice versa.
+
+**Clients MUST validate name ↔ target consistency at read time:**
+- Compute expected name from the resolved PIN target (lowercase 0x-hex of `targetID`).
+- If it doesn't match the entry anchor's actual name, render a warning state OR suppress the entry from the canonical view.
+- Mismatches MUST NOT be silently treated as valid.
+
+Anchor names also MUST satisfy ADR-0025 validation (character set, length). Standard 0x-hex (66 chars for UIDs, 42 for addresses) is ASCII-printable and within limits — no conflict expected, but worth verifying when implementing.
+
+### `listKind` is renderer intent, not proof
+
+A list anchor's `listKind` PROPERTY signals what shape the curator INTENDS the list to be. The kernel does NOT enforce that storage matches that signal — anyone can declare `listKind="rankedSet"` and write zero TAGs, or declare `listKind="entryAnchorSet"` and write only TAGs at the list anchor with no entry anchors.
+
+**Clients MUST treat `listKind` as advisory and degrade gracefully on mismatch:**
+- Declared `rankedSet` but the active TAG bucket is empty → render an empty state. Do NOT silently fall back to enumerating children as if it were a folder.
+- Declared `entryAnchorSet` but no entry anchors exist (or no TAGs against the list with `targetSchema = ANCHOR_SCHEMA_UID`) → same empty/degraded treatment.
+- Declared kind and active storage shapes both present (legacy migration in progress, accidental, or adversarial mixing) → render a warning state and prefer the declared kind; do not interleave shapes silently.
+
+The client never silently reinterprets storage; mismatches surface to the user.
+
+### Multi-schema lists: sort across all schemas BEFORE truncating
+
+For lists with `allowedTargetSchemas` containing multiple schemas (or address-target sentinel + schemas), naive client logic that fetches "top N from each schema bucket" produces wrong results — the global top-N is not the union of per-schema top-Ns.
+
+**Clients MUST:**
+1. Fetch all entries from all relevant schema buckets (subject to off-chain-indexer assistance for very large lists).
+2. Merge into a single sorted view by weight + tie-break.
+3. **Then** truncate to `displayLimit`.
+
+The same rule applies to multi-attester views: if combining multiple attesters into one ranking (Q1 option B/C), merge ALL attesters AND ALL schemas before truncating. `EFSListView.getRankedSetEntriesPage` returns insertion-ordered pages; client-side sort-merge-truncate is mandatory for correctness.
 
 ---
 

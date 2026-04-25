@@ -39,6 +39,35 @@ Initial proposal: `/lists/` ships empty at deploy; predicates emerge organically
 
 This split is now reflected in the Discovery section, Q3 detail, and human-decisions item 2.
 
+### Helper rename: `getRankedSetPage` → `getRankedSetEntriesPage` (round-2 review)
+
+The helper was originally named `getRankedSetPage`. Codex's round-2 review correctly flagged that the name implies the page is sorted by rank — but it isn't. The helper paginates the active TAG bucket (`_activeByAAS[def][attester][schema]`), which is insertion-ordered with swap-and-pop on revoke. `length=10` returns the next 10 entries in storage order, not the top 10 by weight.
+
+Renamed to `getRankedSetEntriesPage` to make the unsorted nature explicit. The unsorted-pagination caveat is now called out in:
+- D7 (Decisions section)
+- The Read primitive section
+- P1 read shape
+- P1.5 read shape
+- New Pitfall: "Multi-schema lists: sort across all schemas BEFORE truncating"
+
+Sorted top-N over very long lists (≫ 1000 entries) needs either an off-chain indexer or a future `EFSSortOverlay` extension to support TAG sources — both deferred per D5.
+
+### Address-target sentinel: `ADDRESS_TARGET = bytes32(0)`
+
+Codex's round-2 review caught that `allowedTargetSchemas` didn't define how address targets are represented. Address-target TAGs (recipient-typed) have no target attestation and therefore no schema UID. The convention adopted: `bytes32(0)` (32 zero bytes) is the `ADDRESS_TARGET` sentinel. Allowlists permitting both schemas and address targets list both, e.g. `<DATA_SCHEMA_UID>,0x0000…0000`.
+
+Reflected in D6 and the metadata-convention table.
+
+### Adversarial-review additions (round 2)
+
+Three pitfalls added based on Codex's round-2 review:
+
+1. **Entry-anchor squatting and name-target mismatch (P1.5)** — clients MUST validate that an entry anchor's name matches the lowercase 0x-hex of its resolved PIN target. The protocol doesn't enforce this; entry-anchor names are conventional, and a buggy or malicious attester can create `0xBob` named anchors that PIN to entirely different targets. Mismatches must surface as warnings, not be silently rendered.
+
+2. **`listKind` is renderer intent, not proof** — clients MUST NOT silently reinterpret storage when the declared kind doesn't match the actual data shape. Empty/degraded states surface to the user instead.
+
+3. **Multi-schema sort-before-truncate** — for `allowedTargetSchemas` lists with multiple schemas, naive "top N per schema" produces incorrect global top-N results. Clients must merge ALL relevant buckets, sort, then truncate. Same rule for multi-attester aggregation.
+
 ---
 
 ## Speculation / parked ideas
@@ -123,9 +152,9 @@ Should be fine but worth running the actual validator at implementation time.
 
 The cost lines in the design doc ("~4 attestations", "~7 with one note field") are informal estimates based on attestation counts, not measured gas. When implementing, run actual hardhat gas measurements and update the main doc if material differences emerge.
 
-### `EFSListView.getRankedSetPage` reads `_activeByAAS` indirectly via `EdgeResolver`
+### `EFSListView.getRankedSetEntriesPage` reads `_activeByAAS` indirectly via `EdgeResolver`
 
-Implementation note: the helper should call `edgeResolver.getActiveTagEntries(listAnchor, attester, targetSchema, start, length)` rather than reach into kernel storage. Per ADR-0041 §8 reader API. Confirm `getActiveTagEntries` supports `(start, length)` pagination; if not, may need a small kernel-API addition (separate from the main view contract).
+**Resolved (round-2 review):** Codex confirmed `EdgeResolver.getActiveTagEntries(definition, attester, schema, start, length)` already exists per ADR-0041 §8 reader API and supports `(start, length)` pagination. `EFSListView` calls it directly. **No kernel-side reader addition needed.** Reflected in the Read primitive section's "Dependency check" note.
 
 ### EFS Team known-address recognition
 
