@@ -182,14 +182,23 @@ The kernel only consumes `definition: bytes32` (the list anchor's UID). Path-tre
 
 ### D6 — Schema constraints via `allowedTargetSchemas` PROPERTY
 
-**Decision:** The list anchor optionally carries `allowedTargetSchemas`:
+**Decision:** The list anchor optionally carries `allowedTargetSchemas`, expressing the **logical item types** the curator intends:
 - One schema UID → single-typed list (canonical on-chain readable case)
 - Multiple schema UIDs → allowlist (small N, on-chain readable with N bucket queries)
 - Absent or `"any"` → generic; **requires off-chain indexer** support for enumeration
 
-Address-target TAGs (recipient-typed, no target attestation) are represented by the **`ADDRESS_TARGET` sentinel = `bytes32(0)`** (32 zero bytes). An allowlist that permits both DATA targets and address targets would have `allowedTargetSchemas = "<DATA_SCHEMA_UID>,0x0000000000000000000000000000000000000000000000000000000000000000"`. Clients querying the address-target bucket pass `targetSchema = bytes32(0)` to `EFSListView.getRankedSetEntriesPage`.
+Address-target TAGs (recipient-typed, no target attestation) are represented by the **`ADDRESS_TARGET` sentinel = `bytes32(0)`** (32 zero bytes). An allowlist that permits both DATA targets and address targets would have `allowedTargetSchemas = "<DATA_SCHEMA_UID>,0x0000000000000000000000000000000000000000000000000000000000000000"`.
 
 Enforcement is **client-advisory**, not contractual.
+
+**P1 vs P1.5 — what `allowedTargetSchemas` actually selects:**
+
+`allowedTargetSchemas` describes the **logical item type**, but the **TAG bucket** clients query in `EFSListView` is different across patterns:
+
+- **P1 (TAGs target items directly):** Each value in `allowedTargetSchemas` is the `targetSchema` passed to `getRankedSetEntriesPage`. To enumerate a P1 list with two allowed schemas, the client makes one helper call per schema and merges (then sorts, then truncates — see Read primitive section).
+- **P1.5 (TAGs target entry anchors):** The TAG bucket is **always** `ANCHOR_SCHEMA_UID` because the TAG's target is the entry anchor, not the underlying item. `allowedTargetSchemas` describes the **inner** target schemas — the schemas of the targets each entry anchor's PIN binds to. Clients query `targetSchema = ANCHOR_SCHEMA_UID` once to enumerate entries, then resolve each entry's inner target using the entry's declared schema (see P1.5 entry anchor `schemaUID` convention below).
+
+So `allowedTargetSchemas` is the user-meaningful constraint ("this list holds books"); the actual TAG bucket lookup is pattern-specific. Clients reading lists MUST consult `listKind` first (D2) to decide which pattern's read recipe to use.
 
 **Why:**
 - TAG buckets are keyed by `(def, attester, targetSchema)`. To enumerate a mixed list, the reader must know which target schemas to query. `allowedTargetSchemas` answers that.
@@ -201,6 +210,8 @@ This nudges users toward typed lists by making them genuinely cheaper to read on
 ### D7 — Stateless `EFSListView` is the read primitive
 
 **Decision:** Add a stateless `EFSListView` contract (analogous to `EFSFileView`) with a paginated, **single-attester, single-schema** signature: `getRankedSetEntriesPage(listAnchor, attester, targetSchema, start, length) → (RankedEntry[], nextStart)`. Returns `(targetID, tagUID, weight, attester)` tuples by internally batching `eas.getAttestation(tagUID)` reads. Multi-attester merge semantics, allowlist composition, generic-schema enumeration, and **sorted-rank views** are explicit client concerns layered on top.
+
+`length` SHOULD be capped at `MAX_PAGE_LENGTH = 100` per call to bound `eth_call` time (matching `EFSSortOverlay.MAX_PAGE_SIZE`).
 
 **Critical caveat — pages are NOT sorted by rank.** The helper returns entries in **active TAG bucket order** (insertion order with swap-and-pop on revoke), not in weight order. `length=10` does **not** mean "top 10." Clients implementing `displayLimit` MUST fetch all relevant entries, sort client-side by weight + tie-break, then truncate. This is a deliberate v1 boundary: lazy sorted pagination over TAG buckets requires extending `EFSSortOverlay` (D5 deferred), so v1 supports list sizes where "fetch-all + sort + truncate" remains cheap (≤ ~1000 entries comfortably). Sorted pagination over very long lists belongs to off-chain indexers or a future overlay extension.
 
@@ -252,21 +263,23 @@ TAG(definition=listUID, refUID=dogDataUID,     weight=80,  alice)
 
 **Attestation graph for "Alice's annotated top 3 books":**
 ```
-ANCHOR(name="favorite-books", refUID=alice_home)                  → listUID
+ANCHOR(name="favorite-books", refUID=alice_home)                              → listUID
 
-# Per entry: entry anchor + target binding + weighted membership + metadata
-ANCHOR(name="<bookA-uid-hex>", refUID=listUID)                    → entryA
+# Per entry: entry anchor (declares inner schema) + target binding + weighted membership + metadata
+ANCHOR(name="<bookA-target-hex>", refUID=listUID, schemaUID=DATA_SCHEMA_UID)  → entryA
 PIN(definition=entryA, refUID=bookA_DATA, attester=alice)
 TAG(definition=listUID, refUID=entryA, weight=100, attester=alice)
-PROPERTY(value="Changed how I think about systems")               → noteA_prop
-Anchor<PROPERTY>(name="note", refUID=entryA)                      → noteA_key
+PROPERTY(value="Changed how I think about systems")                           → noteA_prop
+Anchor<PROPERTY>(name="note", refUID=entryA)                                  → noteA_key
 PIN(definition=noteA_key, refUID=noteA_prop, attester=alice)
 ... (entryB, entryC similarly)
 ```
 
-P1.5 is structurally **"P1 over entry anchors"**: the TAG against `listUID` provides membership and weight (same machinery as P1, with `targetSchema = ANCHOR_SCHEMA_UID`); the entry anchor wraps the actual target with stable identity for metadata.
+P1.5 is structurally **"P1 over entry anchors"**: the TAG against `listUID` provides membership and weight (same machinery as P1, with the outer `targetSchema = ANCHOR_SCHEMA_UID`); the entry anchor wraps the actual target with stable identity for metadata; the entry anchor's `schemaUID` field declares the inner target schema (see "Entry anchor `schemaUID` convention" below).
 
-**Read shape:** call `EFSListView.getRankedSetEntriesPage(listUID, alice, ANCHOR_SCHEMA_UID, start, length)` to enumerate entry anchor UIDs in active TAG bucket order. Paginate until exhausted, sort by weight + tie-break, truncate. For each entry anchor, resolve the actual target via `EdgeResolver.getActivePinTarget(entry, alice, <innerTargetSchema>)`; read note / display-metadata PROPERTYs from the entry anchor as needed. Validate that the entry anchor's name matches the resolved target (see Pitfalls — entry-name spoofing).
+**Read shape:** call `EFSListView.getRankedSetEntriesPage(listUID, alice, ANCHOR_SCHEMA_UID, start, length)` to enumerate entry anchor UIDs in active TAG bucket order. Paginate until exhausted, sort by weight + tie-break, truncate. For each entry anchor, read its `schemaUID` field to learn the inner target schema, then resolve the actual target via `EdgeResolver.getActivePinTarget(entry, alice, entry.schemaUID)`; read note / display-metadata PROPERTYs from the entry anchor as needed. Validate that the entry anchor's name matches the resolved target per the schema-aware rule (see Pitfalls — entry-name spoofing).
+
+**Entry anchor `schemaUID` convention:** entry anchors SHOULD set `schemaUID` equal to the inner target schema (e.g., `DATA_SCHEMA_UID` for a books-of-DATA list). For address-target entries, `schemaUID = ADDRESS_TARGET = bytes32(0)`. This mirrors how naming anchors set `schemaUID = SORT_INFO_SCHEMA_UID` for sort discovery (specs/07) and how schema-alias anchors are declared (ADR-0033). Clients use this to know what to pass to `getActivePinTarget` without trying every schema in `allowedTargetSchemas`.
 
 **Reorder cost:** re-attest the TAG at the same `edgeHash` with new weight — O(1) supersede per ADR-0041 §4. Same mechanism as P1.
 
@@ -274,7 +287,11 @@ P1.5 is structurally **"P1 over entry anchors"**: the TAG against `listUID` prov
 
 **Cost:** ~1 list anchor + per entry: 1 entry anchor + 1 target PIN + 1 weight TAG + (1 PROPERTY + 1 key anchor + 1 PIN) per metadata field. ~4 attestations per entry without notes; ~7 with one note field.
 
-**Naming convention:** entry anchor name SHOULD be the lowercase 0x-hex of the target UID (or address), so two attesters writing to the "same entry" land on the same anchor. This mirrors ADR-0033's schema-alias-anchor convention.
+**Naming convention:** entry anchor name SHOULD be the **canonical lowercase hex rendering of the underlying target**, schema-aware:
+- **UID targets** (DATA, ANCHOR, attestation, etc.): name = `0x` + 64 lowercase hex chars (66 chars total).
+- **Address targets** (`schemaUID = ADDRESS_TARGET`): name = `0x` + 40 lowercase hex chars (42 chars total — the canonical Ethereum address form, derived from the low 160 bits of `targetID`).
+
+Both attesters writing to the "same entry" land on the same anchor. This mirrors ADR-0033's schema-alias-anchor convention. **Address `targetID` is `bytes32(uint160(addr))` (zero-padded to 32 bytes); rendering it as a 66-char hex would NOT match the canonical address form** — clients computing the expected name MUST drop the leading 24 zero bytes for address targets.
 
 **Limitations:** higher attestation count than P1; no duplicates of the same target.
 
@@ -362,13 +379,20 @@ function getRankedSetEntriesPage(
 
 **Pages are in active TAG bucket order, NOT sorted by weight.** The helper paginates over `_activeByAAS[listAnchor][attester][targetSchema]` (per ADR-0041 §7), which is insertion-ordered with swap-and-pop on revoke. `length=10` does NOT mean "top 10." Clients producing a sorted top-N view MUST fetch all relevant entries, sort by weight + tie-break locally, and only then truncate to `displayLimit`. v1 sizes (≤ ~1000 entries) make fetch-all-then-sort cheap; lazy sorted pagination over very long lists requires either an off-chain indexer or a future `EFSSortOverlay` extension (deferred per D5).
 
-**Composition patterns clients build on top:**
+**Composition patterns — P1 (TAGs target items directly):**
 - **Sorted top-N (single attester, single schema):** call until `nextStart == 0` or you have all entries; sort by weight per `weightDirection` + `tieBreak`; truncate to `displayLimit`.
 - **Allowlist (multi-schema):** call once per `targetSchema` in `allowedTargetSchemas`, **merge ALL schema buckets BEFORE sorting** — global top-N is not the union of per-schema top-Ns. (See Pitfalls.) Address-target entries (recipient-typed TAGs) are queried with `targetSchema = bytes32(0)` (the `ADDRESS_TARGET` sentinel; see D6).
 - **Multi-attester views:** call once per attester, merge per the chosen merge semantic (priority chain, side-by-side, etc. — see Q1). Same "merge before truncate" rule applies if combining multiple attesters into one ranking.
 - **Generic schema lists** (`allowedTargetSchemas` absent or `"any"`): off-chain indexer enumerates target schemas; client then calls per-schema.
 
-**Reading P1.5 with the same helper:** P1.5 entries are TAGs whose `targetSchema = ANCHOR_SCHEMA_UID` (the entry anchors). The helper returns the entry anchor UIDs as `targetID`; the client then calls `EdgeResolver.getActivePinTarget(entry, attester, <targetSchema>)` per entry to resolve the actual underlying target, and reads PROPERTYs for metadata. Sort-before-truncate rule still applies.
+**Composition patterns — P1.5 (TAGs target entry anchors):**
+- **Single-attester read:** call `getRankedSetEntriesPage(listAnchor, attester, ANCHOR_SCHEMA_UID, start, length)` once to enumerate entries (the outer `targetSchema` is always `ANCHOR_SCHEMA_UID` — the TAG targets are entry anchors, NOT the underlying items). Sort, truncate.
+- **Resolving inner targets:** for each returned entry anchor, read its `schemaUID` field to learn the inner target schema, then call `EdgeResolver.getActivePinTarget(entry, attester, entry.schemaUID)` to get the actual underlying target.
+- **`allowedTargetSchemas` semantics in P1.5:** describes the inner target schemas (what entry anchors are allowed to PIN to). The outer TAG bucket is always `ANCHOR_SCHEMA_UID` regardless. Validate at read time that each entry's `schemaUID` is in the list's `allowedTargetSchemas` (or that the list is generic).
+
+**Pagination cap:** `length` SHOULD be capped at `MAX_PAGE_LENGTH = 100` per call (matching `EFSSortOverlay.MAX_PAGE_SIZE`) to bound `eth_call` time — the helper performs N internal `eas.getAttestation` reads per page. A 1000-entry list takes ~10 calls. Larger caps risk RPC timeouts; smaller caps are fine.
+
+**Snapshot consistency caveat:** active TAG buckets are NOT snapshot-stable across multiple RPC calls. If Alice revokes a TAG mid-pagination, swap-and-pop on revoke shifts later array positions (per ADR-0007); a client paginating may double-count an entry or miss one. Clients needing strong consistency SHOULD pin all pagination calls to the same block tag (`block.number` or block hash) when their RPC supports it, or tolerate-and-refetch when bucket counts change between pages.
 
 **Why single-attester, paginated, simple:**
 - Active TAG buckets are compact arrays, not linked lists. Numeric `(start, length)` is the natural pagination shape.
@@ -431,14 +455,20 @@ Generic (no `allowedTargetSchemas`) lists rot at trust boundaries — readers ca
 
 ### Entry-anchor squatting and name-target mismatch (P1.5)
 
-Entry anchors are conventionally named by lowercase 0x-hex of the target UID (or address). The protocol does NOT enforce that the anchor's name actually matches the target its PIN binds to — the kernel only sees `(name, refUID=parent)` for the anchor and `(definition=anchor, target)` for the PIN. A malicious or buggy attester can create an entry anchor named `0xBob…` but PIN it to a totally different target, or vice versa.
+Entry anchors are conventionally named by the canonical lowercase hex rendering of the underlying target (see P1.5 — Naming convention). The protocol does NOT enforce that the anchor's name actually matches the target its PIN binds to — the kernel only sees `(name, refUID=parent, schemaUID)` for the anchor and `(definition=anchor, target)` for the PIN. A malicious or buggy attester can create an entry anchor named `0xBob…` but PIN it to a totally different target, or set `schemaUID = DATA_SCHEMA_UID` but PIN to an address.
 
-**Clients MUST validate name ↔ target consistency at read time:**
-- Compute expected name from the resolved PIN target (lowercase 0x-hex of `targetID`).
-- If it doesn't match the entry anchor's actual name, render a warning state OR suppress the entry from the canonical view.
-- Mismatches MUST NOT be silently treated as valid.
+**Clients MUST validate name ↔ target consistency at read time, schema-aware:**
+1. Read the entry anchor's `schemaUID` field.
+2. Resolve the actual target via `getActivePinTarget(entry, attester, entry.schemaUID)`.
+3. Compute the expected anchor name from `targetID` per the schema:
+   - If `schemaUID == ADDRESS_TARGET` (`bytes32(0)`): expected name = `0x` + lowercase hex of the **low 160 bits** of `targetID` (42 chars total, canonical Ethereum address form).
+   - Else: expected name = `0x` + lowercase hex of the full `targetID` (66 chars total).
+4. If the entry anchor's actual name doesn't match the expected name, render a warning state OR suppress the entry from the canonical view.
+5. Additionally, if `entry.schemaUID` is not in the list's `allowedTargetSchemas` (and the list is not generic), surface as a constraint violation.
 
-Anchor names also MUST satisfy ADR-0025 validation (character set, length). Standard 0x-hex (66 chars for UIDs, 42 for addresses) is ASCII-printable and within limits — no conflict expected, but worth verifying when implementing.
+Mismatches MUST NOT be silently treated as valid. **The naive rule "lowercase 0x-hex of `targetID`" is wrong for address targets** — address `targetID` is `bytes32(uint160(addr))` (zero-padded), and rendering it as a 66-char hex would not match the canonical 42-char address form. The schema-aware rule above is correct.
+
+Anchor names also MUST satisfy ADR-0025 validation (character set, length). 66-char and 42-char lowercase hex strings are ASCII-printable and within limits — no conflict expected, but worth verifying when implementing.
 
 ### `listKind` is renderer intent, not proof
 

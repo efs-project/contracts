@@ -68,6 +68,35 @@ Three pitfalls added based on Codex's round-2 review:
 
 3. **Multi-schema sort-before-truncate** — for `allowedTargetSchemas` lists with multiple schemas, naive "top N per schema" produces incorrect global top-N results. Clients must merge ALL relevant buckets, sort, then truncate. Same rule for multi-attester aggregation.
 
+### P1 vs P1.5 schema semantics + entry anchor `schemaUID` convention (round 3)
+
+Codex's round-3 review caught that `allowedTargetSchemas` means subtly different things in P1 vs P1.5, and the doc didn't spell it out:
+
+- **P1**: `allowedTargetSchemas` values map directly to TAG bucket schemas — the client passes them to `getRankedSetEntriesPage` as `targetSchema`.
+- **P1.5**: the outer TAG bucket is **always** `ANCHOR_SCHEMA_UID` because TAGs target entry anchors, not the underlying items. `allowedTargetSchemas` describes the **inner** target schemas (what each entry anchor's PIN binds to).
+
+Adopted convention: P1.5 entry anchors set `schemaUID = innerTargetSchema` on the ANCHOR attestation. This mirrors how naming anchors set `schemaUID = SORT_INFO_SCHEMA_UID` for sort discovery (specs/07) and how schema-alias anchors are declared (ADR-0033). Clients use this to know what to pass to `getActivePinTarget` per entry without trying every allowed schema. Address-target entries: `schemaUID = ADDRESS_TARGET = bytes32(0)`.
+
+Reflected in D6 (P1 vs P1.5 split), P1.5 attestation graph (entry anchor `schemaUID` field), P1.5 read shape, the new "Entry anchor `schemaUID` convention" subsection in P1.5, and the Read primitive section's split P1/P1.5 composition patterns.
+
+### Schema-aware entry-anchor name validation (round 3)
+
+Round-2 pitfall said "compute expected name from lowercase 0x-hex of `targetID`." Codex caught that this is wrong for address targets: address `targetID = bytes32(uint160(addr))` (zero-padded to 32 bytes), and the canonical Ethereum address form is `0x` + 40 hex chars (low 160 bits), not `0x` + 64 hex chars.
+
+Fixed rule, schema-aware:
+- UID targets: name = `0x` + 64 lowercase hex (66 chars).
+- Address targets (`schemaUID == ADDRESS_TARGET`): name = `0x` + 40 lowercase hex (42 chars; low 160 bits of `targetID`, dropping the 24 leading zero bytes).
+
+Reflected in P1.5 Naming convention and the Pitfalls "Entry-anchor squatting" section.
+
+### MAX_PAGE_LENGTH = 100 (round 3)
+
+Recommended pagination cap for `getRankedSetEntriesPage`. Matches `EFSSortOverlay.MAX_PAGE_SIZE`. Bounds `eth_call` time given the helper performs N internal `eas.getAttestation` reads per page. 1000-entry list = ~10 calls. Documented in D7 and the Read primitive section.
+
+### Snapshot consistency caveat for paginated reads (round 3)
+
+Active TAG buckets are NOT snapshot-stable across multiple RPC calls. Swap-and-pop on revoke (ADR-0007) can shift later array positions between pagination calls. Clients needing consistency should pin to a single block tag or tolerate-and-refetch. Documented in the Read primitive section.
+
 ---
 
 ## Speculation / parked ideas
