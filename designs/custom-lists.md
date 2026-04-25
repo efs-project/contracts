@@ -22,7 +22,7 @@ Picker question: **"Is the item the identity, or is the entry the identity?"** A
 
 Folders are not lists. A sorted folder is just a folder with `SORT_INFO` applied.
 
-v1 introduces no new EAS schemas, no new resolver contracts, no new view contracts. Lists are documented patterns over existing primitives (Anchors, PINs, TAGs, PROPERTYs). Smart contracts read via existing `EdgeResolver` reader API; clients compose multi-read via SDK multicall.
+v1 introduces no new EAS schemas, no new resolver contracts, no stand-alone view contracts. Lists are documented patterns over existing primitives (Anchors, PINs, TAGs, PROPERTYs). Smart contracts read via the existing `EdgeResolver` reader API plus three v1 extensions (generic graph-composition view methods that bundle the canonical multi-read patterns into single atomic calls).
 
 ---
 
@@ -168,18 +168,15 @@ These methods on `EdgeResolver` ship in v1 and are immutable post-1.0. They bund
 - `getActivePinTarget(definition, attester, targetSchema) → targetID` — resolves a PIN's current target. Returns `bytes32(0)` on missing slot (already true in code; documented).
 - `isActiveEdge(attester, targetID, definition, schema) → bool` — fast membership check (used by allowlist / blocklist consumers).
 
-**New readers shipping in v1** (committed pre-launch because data structures + public APIs are immutable post-1.0):
-- `getActiveTagTargetsWithWeights(definition, attester, targetSchema, start, length) → (targetID, tagUID, weight, attesterAddress)[]` — bundles `getActiveTagEntries` + per-TAG target extraction. For Item Lists, returns the actual targets directly (no per-entry `eas.getAttestation` round-trip). For Entry Lists with `targetSchema = ANCHOR_SCHEMA_UID`, returns entry anchor UIDs as `targetID`.
-- `getEntryListPage(listAnchor, attester, start, length) → (entryUID, innerTargetID, innerSchema, weight)[]` — for wrapped lists, bundles the full entry resolution (TAG → entry anchor → entry's `schemaUID` → `getActivePinTarget`) in one call. Entries with missing inner PINs return `innerTargetID = bytes32(0)`; consumers MUST handle the warning state.
-- `validateTargetDerivedEntry(entryAnchor, attester) → bool` — for wrapped lists with `entryIdentity = "target"`, returns true if the entry's anchor name matches the canonical lowercase hex of its resolved PIN target (per the entry-anchor squatting check below). Schema-aware (UID hex vs address hex). Returns false for missing PINs and mismatches.
+**New generic graph-composition readers shipping in v1** (committed pre-launch because data structures + public APIs are immutable post-1.0):
 
-These three additions transform the smart-contract read path from "fetch TAGs, fetch each TAG's refUID via EAS, fetch each entry anchor, fetch each entry's PIN" (3-4 separate reader calls per entry) to single calls. The pre-launch cost of adding them to `EdgeResolver` is a few hundred lines of view code; the post-launch cost of NOT having them would be every consumer reinventing the multicall and getting it slightly differently wrong.
+- `getActiveTagTargetsWithWeights(definition, attester, tagTargetSchema, start, length) → (tagTargetID, tagUID, weight, attester)[]` — bundles `getActiveTagEntries` + per-TAG target extraction. For each active TAG: returns the TAG's resolved target (`refUID` for UID-typed targets, `bytes32(uint160(recipient))` for address-typed targets when `tagTargetSchema = bytes32(0)`).
+- `getActiveTagPinTargetsWithWeights(definition, attester, tagTargetSchema, start, length) → (tagTargetID, tagUID, pinTargetID, pinTargetSchema, weight, attester)[]` — extends the previous: for each active TAG whose `tagTargetID` is itself an anchor (i.e., `tagTargetSchema = ANCHOR_SCHEMA_UID`), additionally resolves `pinTargetID` by reading the anchor's `schemaUID` field as `pinTargetSchema` and then calling `getActivePinTarget(tagTargetID, attester, pinTargetSchema)`. For non-anchor `tagTargetID`s, returns `pinTargetID = bytes32(0)` and `pinTargetSchema = bytes32(0)`. Generic over any "wrapped" pattern, not just lists.
+- `validateAnchorNameMatchesPinTarget(anchorUID, attester) → bool` — generic anchor-name consistency check. Reads the anchor's `schemaUID`, resolves its current PIN target via `getActivePinTarget(anchorUID, attester, anchor.schemaUID)`, computes the canonical hex name from that target (schema-aware: 42-char for `schemaUID = bytes32(0)` address targets, 66-char for UID-typed targets), and returns whether it matches the anchor's actual `name`. Returns false on missing PINs or mismatches. Useful for any self-naming anchor pattern (lists with target-derived `entryIdentity` use it; other patterns may also).
 
-### Single-curator scope (default)
+These three view methods are **named as generic graph operations**, not list-specific helpers, to keep `EdgeResolver` at the kernel/graph layer. Lists USE them; the methods themselves describe pure PIN/TAG composition. This avoids the layer leak of injecting list-overlay vocabulary into the generic resolver. **A future stand-alone `EFSListView` contract MAY emerge** if list-specific helpers prove desirable beyond what generic graph composition expresses, but is not in v1 scope.
 
-**Metadata authority is per-attester.** Because `memberMode`, `itemSchema`, and `entryIdentity` are PROPERTYs (and PROPERTYs are edition-scoped per ADR-0041 §4), a list read is canonically scoped to **one curator attester**. Read the curator's `memberMode`, their `itemSchema`, their `entryIdentity`, their TAGs, their entry anchors' PINs, and their entry metadata — all from the same attester.
-
-Multi-attester reads (compare/merge UI) are an explicit opt-in (see Editions section). Default reads are single-curator-scoped.
+Pre-launch cost: a few hundred lines of view code wrapping existing storage reads. Post-launch cost of NOT having them: every smart-contract consumer reinventing multicall plumbing and diverging on edge cases.
 
 ### Single-curator scope (default)
 
@@ -189,35 +186,35 @@ Multi-attester reads (compare/merge UI) are an explicit opt-in (see Editions sec
 
 ### Reader recipes
 
-**Direct mode (Item List):**
+**Direct mode (Item List) — using bundled reader:**
 ```
 1. Read listAnchor's metadata PROPERTYs (memberMode, itemSchema) PINned by curator.
    - Validate memberMode == "direct" and itemSchema present.
-2. Call EdgeResolver.getActiveTagEntries(listAnchor, curator, itemSchema, start, length).
-   - Returns (tagUID, weight)[].
-3. For each (tagUID, weight): read TAG attestation (eas.getAttestation(tagUID)).
-   - For UID targets: target = attestation.refUID.
-   - For address targets (itemSchema == bytes32(0)): target = address(uint160(uint256(attestation.recipient))).
-4. Apply default total order: sort by weight desc, tie-break by targetID asc, then tagUID asc.
-5. Truncate to client-chosen displayLimit.
+2. Call EdgeResolver.getActiveTagTargetsWithWeights(listAnchor, curator, itemSchema, start, length).
+   - Returns (tagTargetID, tagUID, weight, attester)[] in active TAG bucket order.
+   - tagTargetID is the actual item (DATA UID, attestation UID, or address-as-bytes32).
+3. Apply default total order: sort by weight desc, tie-break by tagTargetID asc, then tagUID asc.
+4. Truncate to client-chosen displayLimit.
 ```
 
-**Wrapped mode (Entry List):**
+**Wrapped mode (Entry List) — using bundled reader:**
 ```
 1. Read listAnchor's metadata PROPERTYs (memberMode, itemSchema, entryIdentity) PINned by curator.
    - Validate memberMode == "wrapped"; entryIdentity ∈ {"target","occurrence"}.
-2. Call EdgeResolver.getActiveTagEntries(listAnchor, curator, ANCHOR_SCHEMA_UID, start, length).
-   - Returns (tagUID, weight)[].
-3. For each (tagUID, weight): read TAG attestation; entry = attestation.refUID.
-4. For each entry: read entry anchor's schemaUID field; resolve target via
-     EdgeResolver.getActivePinTarget(entry, curator, entry.schemaUID).
-   - Returns bytes32(0) on missing PIN — render warning state for that entry.
-5. If entryIdentity == "target": validate name ↔ target consistency (see Pitfalls).
-6. For metadata: resolve key anchor under entry (e.g., "note"); read PROPERTY value via
+2. Call EdgeResolver.getActiveTagPinTargetsWithWeights(listAnchor, curator, ANCHOR_SCHEMA_UID, start, length).
+   - Returns (tagTargetID, tagUID, pinTargetID, pinTargetSchema, weight, attester)[] in active TAG bucket order.
+   - tagTargetID is the entry anchor UID; pinTargetID is the underlying inner target;
+     pinTargetSchema is the entry anchor's declared schemaUID field.
+3. For each entry: if pinTargetID == bytes32(0), render warning state (missing inner PIN).
+4. If entryIdentity == "target": for each entry, optionally call
+     EdgeResolver.validateAnchorNameMatchesPinTarget(tagTargetID, curator) — false → render warning.
+5. For metadata: resolve key anchor under entry (e.g., "note"); read PROPERTY value via
      getActivePinTarget(keyAnchor, curator, PROPERTY_SCHEMA_UID).
-7. Apply default total order: sort by weight desc, tie-break by entry-anchor-UID asc, then tagUID asc.
-8. Truncate to client-chosen displayLimit.
+6. Apply default total order: sort by weight desc, tie-break by tagTargetID (entry-anchor UID) asc, then tagUID asc.
+7. Truncate to client-chosen displayLimit.
 ```
+
+**Lower-level fallback (no bundled reader):** clients lacking the new view methods (or wanting to avoid them for any reason) can compose `getActiveTagEntries` + per-TAG `eas.getAttestation` + `getActivePinTarget` manually. The bundled readers are atomicity-and-convenience; the underlying graph operations remain available.
 
 ### Default total order
 
@@ -245,7 +242,7 @@ Sparse weights are NOT a universal MUST. Lists where weights have semantic meani
 
 Active TAG buckets are NOT snapshot-stable across multiple RPC calls. Swap-and-pop on revoke (per ADR-0007) can shift later array positions between pagination calls; a client paginating may double-count an entry or miss one.
 
-**Smart contracts** calling the v1 readers in a single transaction are naturally snapshot-consistent — the EVM provides atomicity per call. The new bundled helpers (`getActiveTagTargetsWithWeights`, `getEntryListPage`) preserve this property by completing all reads within one external view call, eliminating multi-call inconsistency for on-chain consumers.
+**Smart contracts** calling the v1 readers in a single transaction are naturally snapshot-consistent — the EVM provides atomicity per call. The new bundled helpers (`getActiveTagTargetsWithWeights`, `getActiveTagPinTargetsWithWeights`) preserve this property by completing all reads within one external view call, eliminating multi-call inconsistency for on-chain consumers.
 
 **Off-chain clients** (frontends, indexers) paginating across multiple RPC calls or composing PROPERTY + PIN + TAG reads MUST pin all reads in a single render to the same `blockTag`. Default `wagmi`/`viem` setups do NOT pin `blockTag` automatically across paginated queries — SDK helpers wrapping list reads MUST handle this internally.
 
@@ -353,6 +350,8 @@ The protocol does NOT enforce that an entry anchor's name matches the target its
    - else → `0x` + lowercase hex of full `targetID` (66 chars total)
 4. Mismatch → render warning state OR suppress the entry; never silently treat as valid.
 
+Smart contracts can perform this check via a single call: `EdgeResolver.validateAnchorNameMatchesPinTarget(entryAnchor, attester) → bool`. Same logic, atomic, no SDK needed.
+
 For `entryIdentity = "occurrence"`, this validation does not apply — names don't encode the target. Re-PINning an occurrence-derived entry to a different target is the *intended* affordance.
 
 ### Target universe: not everything can be a TAG target
@@ -393,7 +392,7 @@ Mitigations:
 - **Readers MUST detect mismatches** and render warning state (per `memberMode` is renderer intent, not proof above).
 - **Future kernel mitigation** (long-tail risk trigger): constrain `memberMode` to single-write via a custom resolver on the metadata key anchor; not in v1 scope but escape-hatch documented.
 
-The same logic applies to `entryIdentity` — flipping it post-creation invalidates entry name validation and breaks `validateTargetDerivedEntry` semantics.
+The same logic applies to `entryIdentity` — flipping it post-creation invalidates entry name validation and breaks `validateAnchorNameMatchesPinTarget` semantics.
 
 ### `clientNonce` entropy is unenforceable at the kernel
 
@@ -403,7 +402,7 @@ The MUST that `clientNonce` ≥ 128 bits CSPRNG is **convention only**. Sequenti
 
 - Do not assume the entry name is unguessable. An attacker who guessed the curator's `clientNonce` could pre-create an entry anchor at the predicted name with a hostile PIN. The squatting validation rule for target-derived entries does NOT apply to occurrence-derived entries because the name doesn't encode the target.
 - Validate by attestation chain: did the curator's TAG point at this entry UID? If so, the curator endorses this entry regardless of name structure. The TAG is the membership claim; the name is a label, not a credential.
-- The `validateTargetDerivedEntry` helper does NOT validate occurrence-derived entries. They have no on-chain validation primitive; the trust unit is the curator's TAG attestation itself.
+- The `validateAnchorNameMatchesPinTarget` helper does NOT validate occurrence-derived entries. They have no on-chain validation primitive; the trust unit is the curator's TAG attestation itself.
 
 This is the residual security risk from kernel-unenforceability. The worst case is "the curator's own client used weak nonces and someone preempted them" — the attacker still needs the curator to write a TAG against the squat anchor for it to be "in" the list, and the curator's own SDK should refuse to write that TAG (because it would detect that the anchor it expected to create already exists). Compromised curator client + compromised attacker = squatting attack succeeds; honest implementations are safe.
 
@@ -422,7 +421,7 @@ These were the architectural decisions made during cross-agent design review.
 1. **Two member patterns (direct, wrapped), one primitive (weighted TAG set).** Earlier drafts had P1/P1.5/P2 as distinct types; the previous P1.5 (target-keyed entry anchors) and P2 (occurrence-keyed) collapse into one wrapped pattern with `entryIdentity` distinguishing them.
 2. **Folders are not lists.** Sorted folders are folders with `SORT_INFO`; no `memberMode` PROPERTY applies.
 3. **Lists are not a new EAS primitive.** Existing PIN, TAG, ANCHOR, PROPERTY suffice. No new schemas; no Etched commitments at the schema layer.
-4. **Smart contracts read directly; v1 ships the bundled readers.** Public reader API additions to `EdgeResolver` (`getActiveTagTargetsWithWeights`, `getEntryListPage`, `validateTargetDerivedEntry`) ship in v1 because data structures + public APIs are immutable post-1.0 and SDK enforcement cannot be assumed.
+4. **Smart contracts read directly; v1 ships the bundled readers as generic graph operations.** Three view methods on `EdgeResolver` ship in v1 — `getActiveTagTargetsWithWeights`, `getActiveTagPinTargetsWithWeights`, `validateAnchorNameMatchesPinTarget`. Named as graph composition (not list-specific) to keep `EdgeResolver` at the kernel layer. Lists USE them; the methods themselves describe pure PIN/TAG composition. Data structures + public APIs are immutable post-1.0; SDK enforcement cannot be assumed because smart contracts read directly.
 5. **Multi-attester merge is informative, not normative.** Default reads are single-curator-scoped; multi-attester is opt-in for compare/merge UI; merge conventions need their own ADR (and would interact with ADR-0031/0039 alignment).
 6. **Minimal metadata: `memberMode`, `itemSchema`, `entryIdentity`.** Display PROPERTYs are app convention until cross-app interop value emerges.
 7. **`/lists/` ships empty.** Protocol identity does not seed predicates. EFS Team multi-sig may seed recommended predicates separately later.
@@ -465,7 +464,7 @@ These were the architectural decisions made during cross-agent design review.
 | **Contractual schema enforcement** (custom resolver rejecting non-allowed targets) | Federated systems can't enforce write-time type constraints meaningfully. Advisory + reader-side filtering is the durable primitive. |
 | **Multi-attester merge as normative in core design** | Couples list semantics to client UX choices and conflicts with ADR-0031/0039's existing first-wins precedent. Deferring keeps the design portable; a separate merge ADR can land later. |
 | **Allowlist `allowedTargetSchemas`** (CSV of multiple schema UIDs) | Mixed-schema lists are rare; can be expressed as wrapped lists with diverse inner PINs. Singular `itemSchema` keeps the v1 spec minimal and adds plural variant later only if needed. |
-| **Stand-alone `EFSListView` contract in v1** | The bundled reader extensions on `EdgeResolver` (`getActiveTagTargetsWithWeights`, `getEntryListPage`, `validateTargetDerivedEntry`) cover the canonical paths smart contracts and frontends need without introducing a new contract. A separate view contract may be added later if emerging demand demonstrates need. |
+| **Stand-alone `EFSListView` contract in v1** | The bundled reader extensions on `EdgeResolver` (`getActiveTagTargetsWithWeights`, `getActiveTagPinTargetsWithWeights`, `validateAnchorNameMatchesPinTarget`) — named as generic graph operations, not list-specific helpers — cover the canonical paths smart contracts and frontends need without introducing a new contract or a kernel-level layer leak. A separate view contract may be added later if list-specific helpers prove desirable beyond what generic graph composition expresses. |
 | **Deferring all bundled readers to post-launch** | Earlier rounds proposed shipping no helpers in v1 and adding them only on demand. Rejected after validation pass: data structures + public APIs are immutable post-1.0; SDK enforcement cannot be assumed because smart contracts read directly. The v1 `EdgeResolver` extensions are a small pre-launch commitment that prevents post-launch fragmentation across consumers reinventing multicall plumbing. |
 | **Positional anchors + FractionalSort for sequences** | Sparse `int256` weights with periodic rebalance handle reorder in O(1) using ordinary TAG-weight machinery. FractionalSort and `a0/a1/a2` naming buy nothing the unified design doesn't already provide. |
 | **`entryIdentity` as writer convention only** | Without machine-readable declaration, clients couldn't reliably determine when name-target validation applies. Promoting to a required PROPERTY for wrapped lists is honest about the policy. |
@@ -478,11 +477,13 @@ These were the architectural decisions made during cross-agent design review.
 For an eventual implementation plan; not prescriptive here.
 
 **v1 shipping units (committed pre-launch):**
-1. **`EdgeResolver` extensions** for the public reader API:
-   - `getActiveTagTargetsWithWeights(definition, attester, targetSchema, start, length) → (targetID, tagUID, weight, attesterAddress)[]`
-   - `getEntryListPage(listAnchor, attester, start, length) → (entryUID, innerTargetID, innerSchema, weight)[]`
-   - `validateTargetDerivedEntry(entryAnchor, attester) → bool`
-   These bundle existing reads into single calls; smart contracts use them directly without multicall.
+1. **`EdgeResolver` extensions** — three new generic graph-composition view methods:
+   - `getActiveTagTargetsWithWeights(definition, attester, tagTargetSchema, start, length) → (tagTargetID, tagUID, weight, attester)[]`
+   - `getActiveTagPinTargetsWithWeights(definition, attester, tagTargetSchema, start, length) → (tagTargetID, tagUID, pinTargetID, pinTargetSchema, weight, attester)[]`
+   - `validateAnchorNameMatchesPinTarget(anchorUID, attester) → bool`
+
+   These bundle existing reads into single atomic calls. Named as generic graph operations to avoid layer-leaking list vocabulary into the kernel resolver.
+
 2. **Reserved-key anchor names** (`memberMode`, `itemSchema`, `entryIdentity`, `note`) — added to deploy script alongside ADR-0034 reserved keys.
 3. **SDK helpers** (`efs.lists.read`, `efs.lists.write`) wrapping the reader API + write conventions:
    - `canonicalEntryAnchorName(targetID, schemaUID) → string` — single source of truth for name canonicalization
@@ -500,7 +501,6 @@ For an eventual implementation plan; not prescriptive here.
 - Implement and gas-measure the three new `EdgeResolver` view methods. Each is a thin wrapper over existing reads; the spike validates assumed gas profiles for typical list sizes (8 friends, 50 favorites, 100 entries).
 - End-to-end direct + wrapped contract test (validates ADR-0041 §4 in-place re-attest).
 - Multi-attester edition test (validates shared schelling-point entry anchors under `entryIdentity = "target"`).
-- `getActiveTagTargetsWithWeights` reader on `EdgeResolver` — measure gas; ship in v1 if tiny.
 - Anchor-name validator dry-run on 42-char and 66-char hex.
 
 ---

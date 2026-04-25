@@ -310,8 +310,8 @@ This reframed the design's relationship between conventions and on-chain APIs. R
 Added to `EdgeResolver` in v1, all view methods over existing storage:
 
 - `getActiveTagTargetsWithWeights(definition, attester, targetSchema, start, length) → (targetID, tagUID, weight, attester)[]` — bundles `getActiveTagEntries` + per-TAG `refUID`/`recipient` extraction. For Item Lists returns the actual item targets directly.
-- `getEntryListPage(listAnchor, attester, start, length) → (entryUID, innerTargetID, innerSchema, weight)[]` — bundles entry resolution: TAG → entry anchor → entry's `schemaUID` → `getActivePinTarget` in one call. Wraps the wrapped-mode read.
-- `validateTargetDerivedEntry(entryAnchor, attester) → bool` — schema-aware name-target consistency check for `entryIdentity = "target"` entries. Returns true if the entry's name matches the canonical hex of its resolved PIN target.
+- `getActiveTagPinTargetsWithWeights(definition, attester, tagTargetSchema, start, length) → (tagTargetID, tagUID, pinTargetID, pinTargetSchema, weight, attester)[]` — extends the basic reader: for each TAG whose target is itself an anchor, additionally resolves the anchor's PIN target. Generic over any "wrapped" pattern, not just lists.
+- `validateAnchorNameMatchesPinTarget(anchorUID, attester) → bool` — generic anchor-name consistency check. Useful for any self-naming anchor pattern (target-derived entry lists use it; other patterns may also).
 
 These transform the smart-contract read path from N+1 separate reader calls per entry to single calls. They're explicitly NOT a stand-alone `EFSListView` — adding to `EdgeResolver` keeps them in the kernel-extension layer rather than introducing a new contract.
 
@@ -350,6 +350,43 @@ Net: ~+120 lines on canonical doc. Still under round-4's 648 (the high-water mar
 Three reviewers (Gemini, fresh-Claude, Codex earlier) all flagged variants of "the kernel doesn't enforce; clients diverge." James's framing closed this by committing to bundled readers + accepting convention-only invariants where unenforceable. The design is honest about both: what's enforced, what's convention with named revisit triggers, what's intentionally not supported (non-goals).
 
 This round felt different from rounds 1-6 because it shifted from "what's the right design?" to "what's the right enforcement boundary?" The design didn't change architecturally — the enforcement model became explicit.
+
+---
+
+## Round 8 — API layer-leak correction
+
+After round-7 committed three new view methods to `EdgeResolver`, Codex pushed back on the names. Round-7 had:
+- `getActiveTagTargetsWithWeights` — fine, generic enough.
+- `getEntryListPage` — list-specific name in a generic kernel resolver. Layer leak.
+- `validateTargetDerivedEntry` — list-specific name in a generic kernel resolver. Layer leak.
+
+Codex's argument: `EdgeResolver` is the generic PIN/TAG resolver. Adding list-overlay vocabulary into the kernel layer pollutes the abstraction permanently (ABI names are forever post-1.0). Two options:
+1. Generic graph-operation names (e.g., `getActiveTagPinTargetsWithWeights`, `validateAnchorNameMatchesPinTarget`)
+2. Stateless `EFSListView` contract in v1 for list-specific APIs
+
+Round-8 adopted Option 1. Final method set on `EdgeResolver`:
+
+- `getActiveTagTargetsWithWeights(definition, attester, tagTargetSchema, start, length) → (tagTargetID, tagUID, weight, attester)[]` — generic TAG bucket reader with target extraction.
+- `getActiveTagPinTargetsWithWeights(definition, attester, tagTargetSchema, start, length) → (tagTargetID, tagUID, pinTargetID, pinTargetSchema, weight, attester)[]` — extension that follows PINs through TAG targets that are themselves anchors. Generic graph composition; lists USE it for wrapped-mode reads but other "wrapped" patterns could too.
+- `validateAnchorNameMatchesPinTarget(anchorUID, attester) → bool` — generic self-naming-anchor consistency check.
+
+All three names describe pure graph operations. No list, entry, or list-overlay vocabulary in the kernel ABI. Lists USE these methods; the kernel doesn't know about lists.
+
+`tagUID` in return tuples (Codex's separate point) was already in the round-7 signatures; round-8 confirms it for both readers (used for deterministic final tie-break, audit/debug, revocation UX).
+
+Round-8 also fixed several doc nits Codex caught:
+- Duplicate "Single-curator scope" subheading (round-7 paste error) — removed.
+- Reader recipes still using low-level methods despite committing to bundled ones — updated to use bundled with low-level fallback noted separately.
+- Implementation sketch had `getActiveTagTargetsWithWeights` listed as both committed shipping unit AND spike candidate — deduped.
+- TL;DR phrasing "via existing `EdgeResolver` reader API" undersold the v1 extensions — updated.
+
+This round didn't change the design semantically; it cleaned the API surface to keep the kernel/overlay layer separation honest. Adding `EFSListView` would have been the alternative if generic naming hadn't worked, but generic naming captures the operations cleanly without a new contract.
+
+### Why this matters at the 100-year horizon
+
+ABI names on `EdgeResolver` are part of the kernel layer permanently. If we'd shipped `getEntryListPage`, future agents reading the kernel resolver would learn that the kernel knows about "entry lists" — except it doesn't, because EFS lists are a file-system overlay concept built atop graph primitives. Generic-named methods preserve the architectural truth: the kernel is graph; lists are an overlay; the overlay uses kernel primitives without injecting overlay vocabulary into them.
+
+This is the "specs/01 layer model" discipline applied to ABI. Caught at round-8, before the names became immutable.
 
 ### Round 5 Codex cleanup: stale prose after P2/rightmost-wins reframing
 
