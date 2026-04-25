@@ -222,6 +222,75 @@ The round-5 simplification was tested against the 100-year-design lens explicitl
 
 These all live in the doc's "Out of scope for v1 / future work" section so future agents know they were considered, not forgotten.
 
+---
+
+## Round 6 — pre-dev validation pass
+
+After the round-5 simplified doc landed (~270 lines), James asked the validation question: "is this ready for dev? Did we miss anything?" Three subagents (expert panel from web3 / database / system design / SWE perspectives; end-to-end use case verification across 10 use cases; pre-launch readiness audit) plus a parallel Codex pass with five subagents converged on YELLOW LIGHT — architecture sound, but ~15-20 operational details that round-5 cut too aggressively or never had.
+
+### What round-5 cut too deep
+
+The round-5 simplification removed several things that turn out to be load-bearing for implementation:
+
+- **Weight-spacing convention** (sparse `int256` for manual order with periodic rebalance) was in notes only. Implementers without it pick contiguous ranks (1..N) and pay 5-30× cascade cost on every reorder. **Restored as SDK SHOULD for manual-ordering use cases**, NOT a universal MUST (Codex correction: ratings, votes, and scores use meaningful weights and shouldn't be forced into sparse spacing).
+- **Snapshot consistency caveat** for paginated reads was in notes only. ADR-0007 swap-and-pop on revoke can shift array positions between calls; multi-page readers MUST pin to a single `blockTag`. Pulled into canonical doc as MUST language.
+- **Round-4 multi-attester merge analysis** was cut entirely. **Restored as INFORMATIVE only** (Codex correction): ADR-0031/0039 currently use first-wins for path resolution; lists adopting different defaults requires its own ADR. v1 says: default reads are single-curator-scoped; multi-attester is opt-in and MUST preserve attribution.
+
+### New things neither thread had before round-6
+
+- **Reframing**: "weighted TAG set + direct/wrapped member patterns" replaces "two modes." One primitive, two recipes. Codex's framing; both threads adopted.
+- **`memberMode` rename** from `listKind`. Codex's vote: clearer, less "two protocol types" connotation. Values: `"direct"` | `"wrapped"`. Locked v1 enum.
+- **`entryIdentity` PROPERTY** for wrapped lists. Codex's catch: making the entry naming convention machine-readable (vs writer-convention-only) is required for reliable client validation. Values: `"target"` | `"occurrence"`.
+- **Single-curator metadata authority rule.** Codex's catch: `memberMode`, `itemSchema`, `entryIdentity` are PROPERTYs and therefore edition-scoped. Default reads are scoped to one curator attester for ALL metadata + TAGs + entry PINs + entry metadata. Multi-attester is explicit opt-in.
+- **`itemSchema` REQUIRED for direct mode** (vs Recommended). A direct reader can't enumerate without `itemSchema` (it picks the `_activeByAAS` bucket). For wrapped, the outer bucket is always `ANCHOR_SCHEMA_UID` so `itemSchema` is recommended-not-required (describes inner targets).
+- **`clientNonce` ≥ 128 bits CSPRNG MUST.** Sequential nonces enable squatting attacks where an attacker pre-computes the next entry-anchor name. Exact formula: `keccak256(abi.encode("efs:list-occurrence:v1", listAnchor, creatorAddress, clientNonce))`.
+- **Default total order**: `weight desc`, tie-break by target/entry UID asc, then `tagUID` asc. Apps may declare alternatives.
+- **Wire encoding rules**: lowercase enum strings, `0x` + 64 hex schema UIDs, exact-length anchor names, address sentinel as 32 zero bytes.
+- **Wrapped-list invalid-entry behavior**: missing PIN, schema mismatch, target-derived name mismatch, revoked PIN. Each surface as visible warning state; never silently render incorrect content.
+- **Direct-mode mixed-schema TAGs silently fragment** — explicit warning. Picker rule routes mixed-target curators to wrapped.
+- **Forking convention**: Bob's fork = his own list anchor + optional `originList` PROPERTY. Bob does NOT silently mutate Alice's anchor.
+- **Migration recipe Item → Entry**: explicit fork-as-new-list (revoke direct TAGs, create new list anchor, attest entry anchors). No in-place migration.
+- **Target universe warning**: raw schema UIDs are NOT valid TAG targets via `refUID`; schema registries MUST target schema-alias anchors per ADR-0033.
+- **ADR-0042 effective-TAG filter does NOT apply to lists by default**: a `weight = 0` blocklist entry is active membership; a `weight = -3` rating is meaningful. Apps MAY apply `weight ≥ 0` filter for their own UX but it's not the canonical default.
+- **`getActivePinTarget` returns `bytes32(0)` on missing slot** (already true in code; documented). Clients render warning state; never treat as the address sentinel.
+
+### Decisions the validation pass landed
+
+- `memberMode` rename (Codex's vote, both threads endorsed).
+- `entryIdentity` as required PROPERTY for wrapped (Codex's catch).
+- Single-curator scope for default reads (Codex's framing).
+- Singular `itemSchema` retained for v1; mixed-target lists routed to wrapped pattern with loud warning.
+- Default ordering rule explicit.
+- Multi-attester merge informative-only (NOT normative — would conflict with ADR-0031/0039).
+- `EFSListView` helper still deferred. `getActiveTagTargetsWithWeights` reader on `EdgeResolver` is a separate spike candidate; ship in v1 if tiny + gas reasonable.
+- specs/06 rewrite required before dev writes list data (was: deferred until design lands; tightened to required-pre-dev).
+
+### Validation pass also raised these (out of scope for now)
+
+- Naming concern (.NET overlap of "Item List" / "Entry List"). My SE agent flagged; Codex didn't echo. Resolved by keeping recipe names as user-facing aliases and using `memberMode = "direct" | "wrapped"` in the protocol layer. No rename of recipe names.
+- ERC-5219 read shape for `web3://<list-anchor>` URLs. Web3-expert flagged. Routed to "out of scope" — separate router-layer concern.
+- EFP / Snapshot interop note. Web3-expert suggested. More than v1 needs; future doc concern.
+
+### Doc length impact
+
+Pre-round-6: 270 lines design + ~340 notes.
+Post-round-6: ~430 lines design + ~430 notes.
+
+Net: ~+160 lines on canonical doc. Still well under round-4's 648. The additions are operational specs (encoding rules, validation behaviors, snapshot consistency, reader recipes) — not new architecture.
+
+### Pre-dev punchlist (status)
+
+The validation pass surfaced ~17 items; this round closed all of them in the canonical doc. Remaining pre-dev work is now:
+
+1. ADR-A drafting (canonical decision record from this design)
+2. specs/06 rewrite (REQUIRED before dev writes list data, per round-6 decisions)
+3. Spike: end-to-end direct + wrapped contract test
+4. Spike: multi-attester edition test (shared schelling-point entry anchors under `entryIdentity = "target"`)
+5. Spike: `getActiveTagTargetsWithWeights` reader gas measurement
+6. Spike: anchor-name validator dry-run
+
+Estimated 3 days total; mostly parallel.
+
 ### Round 5 Codex cleanup: stale prose after P2/rightmost-wins reframing
 
 Codex's final pass after Claude's round-4 commit found no conceptual blocker, but a few stale lines still reflected older frames:
