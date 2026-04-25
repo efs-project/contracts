@@ -159,6 +159,16 @@ Adversarial review's loud warnings:
 
 The subagent reports themselves are not preserved in this notes file (they ran in cross-agent dialogue context); the conclusions above are the load-bearing summary.
 
+### Round 5 Codex cleanup: stale prose after P2/rightmost-wins reframing
+
+Codex's final pass after Claude's round-4 commit found no conceptual blocker, but a few stale lines still reflected older frames:
+
+- P1/P1.5 multi-attester prose still said ADR-0039 "natively" selects the view. Updated to say clients compose per-attester buckets; no contract-level merge mode is baked in.
+- `allowedTargetSchemas` section said "P1 vs P1.5"; updated to "P1 vs entry-anchor lists" so P2 is included.
+- P2 multi-attester prose now distinguishes default independent occurrence IDs from intentional patching. If Bob wants to modify Alice's occurrence, he can reuse Alice's entry anchor and write his own TAG/PIN; otherwise independent P2 occurrences do not conflict.
+- Rightmost-wins note now warns implementers that current ADR-0039 default chains are documented leftmost-priority. Until ADR-0039 is aligned, clients must receive/reorder default chains in rightmost-priority order before merging.
+- Appendix / implementation sketch / likely ADR shape cleaned up so they no longer reserve positional anchors for P2 or claim a separate "ranked-set merge" ADR is needed.
+
 ---
 
 ## Speculation / parked ideas

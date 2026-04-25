@@ -124,7 +124,7 @@ TAG(definition=listAnchor, refUID|recipient=item, weight=rank, attester=alice)
 - O(1) reorder via re-attestation at same `edgeHash` (ADR-0041 §4 — "updates an existing entry's UID and weight in place").
 - Per-attester storage is naturally sortable: `_activeByAAS[def][attester][schema] → TagEntry[]`, single bulk SLOAD per ADR-0041 §7.
 - Items keep their own canonical home; the list is pure weighted membership claim from an attester.
-- Multi-attester editions handled natively via priority chain (ADR-0039).
+- Multi-attester list views are composed client-side from per-attester buckets using the recommended URL conventions below; kernel storage remains per-attester.
 - Native handling of address targets (`recipient`) and attestation targets (`refUID`) — covers "top 8 friends" (addresses) and "top 10 memes" (DATA) uniformly.
 
 ### D4 — Anchor scope (personal vs global) is convention, not kernel concern
@@ -161,12 +161,12 @@ Address-target TAGs (recipient-typed, no target attestation) are represented by 
 
 Enforcement is **client-advisory**, not contractual.
 
-**P1 vs P1.5 — what `allowedTargetSchemas` actually selects:**
+**P1 vs entry-anchor lists — what `allowedTargetSchemas` actually selects:**
 
 `allowedTargetSchemas` describes the **logical item type**, but the **TAG bucket** clients query in `EFSListView` is different across patterns:
 
 - **P1 (TAGs target items directly):** Each value in `allowedTargetSchemas` is the `targetSchema` passed to `getRankedSetEntriesPage`. To enumerate a P1 list with two allowed schemas, the client makes one helper call per schema and merges (then sorts, then truncates — see Read primitive section).
-- **P1.5 (TAGs target entry anchors):** The TAG bucket is **always** `ANCHOR_SCHEMA_UID` because the TAG's target is the entry anchor, not the underlying item. `allowedTargetSchemas` describes the **inner** target schemas — the schemas of the targets each entry anchor's PIN binds to. Clients query `targetSchema = ANCHOR_SCHEMA_UID` once to enumerate entries, then resolve each entry's inner target using the entry's declared schema (see P1.5 entry anchor `schemaUID` convention below).
+- **P1.5 / P2 (TAGs target entry anchors):** The TAG bucket is **always** `ANCHOR_SCHEMA_UID` because the TAG's target is the entry anchor, not the underlying item. `allowedTargetSchemas` describes the **inner** target schemas — the schemas of the targets each entry anchor's PIN binds to. Clients query `targetSchema = ANCHOR_SCHEMA_UID` once to enumerate entries, then resolve each entry's inner target using the entry's declared schema (see P1.5 entry anchor `schemaUID` convention below).
 
 So `allowedTargetSchemas` is the user-meaningful constraint ("this list holds books"); the actual TAG bucket lookup is pattern-specific. Clients reading lists MUST consult `listKind` first (D2) to decide which pattern's read recipe to use.
 
@@ -218,7 +218,7 @@ TAG(definition=listUID, refUID=dogDataUID,     weight=80,  alice)
 
 **Reorder cost:** one re-attestation at same `edgeHash` (alice, target, listUID). Updates weight in place per ADR-0041 §4.
 
-**Multi-attester:** Bob writes his own TAGs against the same `listUID`. Editions priority chain (ADR-0039) selects whose view to render.
+**Multi-attester:** Bob writes his own TAGs against the same `listUID`. Clients compose per-attester reads via the merge convention below; no contract-level merge semantics are baked in.
 
 **Cost:** ~1 anchor + N TAGs.
 
@@ -303,7 +303,7 @@ Two entry anchors with different names PIN to the same DATA. No edgeHash collisi
 
 **Reorder cost:** O(1) — re-attest the TAG at the same edgeHash with new weight (ADR-0041 §4). Sparse weight spacing (e.g., increments of 2^32) supports many insertions before requiring a rebalance pass.
 
-**Multi-attester:** entry anchors are NOT shared schelling points across attesters in P2 — each curator's `clientNonce` is independent, so Bob's "second occurrence" anchor differs from Alice's. This is the right semantic for sequences (Bob's playlist isn't the same as Alice's playlist; they're independent curations).
+**Multi-attester:** by default, entry anchors are per-curator occurrence IDs in P2 — each curator's `clientNonce` is independent, so Bob's "second occurrence" anchor differs from Alice's. This is the right semantic for independent sequences (Bob's playlist isn't the same as Alice's playlist; they're independent curations). A curator who intentionally wants to patch another curator's sequence can reuse an existing occurrence entry anchor and write their own TAG/PIN against it; priority-union then treats that shared entry anchor UID as the conflict key.
 
 **Cost:** identical structure to P1.5 (~4 attestations per entry without notes; ~7 with one note field).
 
@@ -430,7 +430,7 @@ Example: `alice.eth/fav_friends?editions=alice,bob` shows items pooled from Alic
 
 This convention matches URL/path specificity (most-specific-rightmost), CSS cascade (later rules override earlier), and config-file inheritance (most-specific config wins).
 
-**Note on ADR-0039 alignment:** ADR-0039's default editions chain is currently documented with leftmost-priority semantics. Adopting rightmost-wins for lists implies the chain order should flip to be consistent (so caller — currently leftmost — moves to rightmost). Treat this as a follow-up alignment ADR; not blocking on this design.
+**Note on ADR-0039 alignment:** ADR-0039's default editions chain is currently documented with leftmost-priority semantics. Adopting rightmost-wins for lists implies the chain order should flip to be consistent (so caller — currently leftmost — moves to rightmost). Treat this as a follow-up alignment ADR; not blocking on this design. Until that ADR lands, clients applying rightmost-wins to an ADR-0039-derived default chain MUST either receive that chain in rightmost-priority order or reverse the current leftmost-priority chain before merging, so connected/viewed/system precedence does not accidentally invert.
 
 ### Opt-in: `?merge=parallel` for side-by-side
 
@@ -560,7 +560,7 @@ For lists with `allowedTargetSchemas` containing multiple schemas (or address-ta
 2. Merge into a single sorted view by weight + tie-break.
 3. **Then** truncate to `displayLimit`.
 
-The same rule applies to multi-attester views: if combining multiple attesters into one ranking (Q1 option B/C), merge ALL attesters AND ALL schemas before truncating. `EFSListView.getRankedSetEntriesPage` returns insertion-ordered pages; client-side sort-merge-truncate is mandatory for correctness.
+The same rule applies to multi-attester views: if combining multiple attesters into one ranking, merge ALL attesters AND ALL schemas before truncating. `EFSListView.getRankedSetEntriesPage` returns insertion-ordered pages; client-side sort-merge-truncate is mandatory for correctness.
 
 ---
 
@@ -576,7 +576,7 @@ The pre-existing tier-2 question in [docs/QUESTIONS.md](../docs/QUESTIONS.md) ("
 
 **Resolution:** no spec-mandated warning text. Following / listing other users is normal social behavior; consumer products don't gate it with friction. The `visibilityWarning` PROPERTY remains as advisory metadata clients MAY use if they have a concrete safety-tier reason, but no MUST language is attached. Clients shipping a confirmation modal at their discretion is fine; clients omitting it entirely is also fine.
 
-### Q3 — Who curates `/lists/`, and what ships at deploy?
+### Q3 — Who curates `/lists/`, and what ships at deploy? — RESOLVED
 
 The protocol creates `/lists/` as a root namespace but does **not** seed predicates — predicate selection is a curatorial act, and the protocol identity (`efs.eth` / deployer) is reserved for system facts only.
 
@@ -585,9 +585,9 @@ Curatorial authority is layered:
 - EFS Team account (if it exists at launch): may seed recommended predicates as reputational, not authoritative, conventions.
 - Communities: may seed competing predicates under any path; trust via editions priority.
 
-**Proposal for v1:** protocol ships `/lists/` empty. Whether EFS Team seeds any predicates is a separate non-protocol decision. Demo seed (`08_seed_demo_tree.ts`) MAY include one demo predicate inside the demo tree, flagged demo-only.
+**Resolution for v1:** protocol ships `/lists/` empty. Whether EFS Team seeds any predicates is a separate non-protocol decision. Demo seed (`08_seed_demo_tree.ts`) MAY include one demo predicate inside the demo tree, flagged demo-only.
 
-Open sub-questions:
+Future EFS Team curation questions:
 - Does an EFS Team account exist at v1 launch?
 - If yes, which predicates does it seed (`fav_friends`, `bookmarks`, `blocklist`, etc.)?
 - How does a client recognize "official EFS Team curation" vs random community predicates? (Likely via known-address registry, similar to how trusted-attester sets work elsewhere.)
@@ -617,7 +617,7 @@ Open sub-questions:
 
 | Alternative | Why rejected |
 |---|---|
-| Positional anchors as the MySpace top-N primitive | Per-position metadata is the only feature P1 can't match, and MySpace top-N doesn't need it. P1 is ~3× cheaper. Positional anchors stay reserved for genuine sequences (P2). |
+| Positional anchors as the curated-list primitive | P1 handles top-N directly; P1.5/P2 handle metadata and duplicates via entry anchors. Positional `a0/a1/a2` anchors and FractionalSort are no longer required for v1 list semantics. |
 | New `LIST_ITEM` schema | Tier-1 commitment for marginal benefit. Existing primitives + advisory metadata cover the design space. |
 | JSON manifest as list metadata | One DATA per list; bulk-readable but not independently rebindable. ADR-0034 individual-PROPERTY idiom is cheaper to update and matches existing convention. |
 | Contractual schema enforcement (custom resolver rejecting non-allowed targets) | Federated systems can't enforce write-time type constraints meaningfully. Advisory + reader-side filtering is the durable primitive. |
@@ -633,13 +633,13 @@ For an eventual implementation plan; not prescriptive here.
 **Likely shipping units:**
 1. `EFSListView` contract (stateless read helper) — new file in `packages/hardhat/contracts/`.
 2. List-metadata constants and reserved key anchor names — added to deploy script alongside ADR-0034 reserved keys.
-3. Frontend list-renderer in `packages/nextjs/` debug UI — minimum demonstration of P1 and P1.5 against a seeded demo list.
+3. Frontend list-renderer in `packages/nextjs/` debug UI — minimum demonstration of P1, P1.5, and P2 against seeded demo lists.
 4. Spec additions: rewrite `specs/06-Lists-and-Collections.md` to describe P1 / P1.5 / P2 / P3 explicitly, replacing the current text that leans on positional anchors as the canonical curated-list shape.
 5. Deploy-time seed: optionally one demo `/lists/<predicate>` anchor for the demo tree, flagged demo-only.
 
-**Two ADRs likely emerge:**
-- ADR-A: Custom Lists — Ranked Set patterns (P1, P1.5) and the structural alphabet.
-- ADR-B: Multi-edition merge semantics for ranked sets (resolves Q1; may also resolve the open QUESTIONS.md tier-2 question by precedent).
+**Likely ADR shape:**
+- ADR-A: Custom Lists — P1/P1.5/P2/P3 structural alphabet, metadata convention, `EFSListView`, and recommended client merge URL conventions.
+- Follow-up ADR: ADR-0039 alignment — flip default edition-chain ordering to rightmost-priority across the client/router model.
 
 ---
 
