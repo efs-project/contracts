@@ -291,6 +291,66 @@ The validation pass surfaced ~17 items; this round closed all of them in the can
 
 Estimated 3 days total; mostly parallel.
 
+---
+
+## Round 7 — multi-source review pass + smart-contract API commitment
+
+After round-6 validation closed the operational gaps, James shared parallel review feedback from Gemini and a fresh Claude instance. Both surfaced concerns that converged on one principle James then made explicit:
+
+> "Ship whatever is needed at the data structure level pre-1.0 as it'll be immutable after that. We can't rely on an SDK to do the right thing as smart contracts can do things too. The public APIs need to work, and the data structures need to be solid."
+
+This reframed the design's relationship between conventions and on-chain APIs. Round-6 had committed to `getActiveTagTargetsWithWeights` as a "spike candidate" — round-7 promotes it (plus two siblings) to **v1 shipping units**, because:
+
+1. Smart contracts read EFS data structures directly. They don't run an SDK. Anything the design asks "the SDK to enforce" is trivially bypassable by direct contract consumers.
+2. Post-1.0 the data structures + public reader APIs are immutable. Adding bundled readers later isn't impossible (stateless helpers are redeployable) but creates fragmentation as multiple consumers reinvent the multicall.
+3. Pre-launch the cost of adding three view methods to `EdgeResolver` is small (a few hundred lines of view code wrapping existing storage reads). The post-launch cost of NOT having them is consumers diverging.
+
+### v1 reader API additions (committed)
+
+Added to `EdgeResolver` in v1, all view methods over existing storage:
+
+- `getActiveTagTargetsWithWeights(definition, attester, targetSchema, start, length) → (targetID, tagUID, weight, attester)[]` — bundles `getActiveTagEntries` + per-TAG `refUID`/`recipient` extraction. For Item Lists returns the actual item targets directly.
+- `getEntryListPage(listAnchor, attester, start, length) → (entryUID, innerTargetID, innerSchema, weight)[]` — bundles entry resolution: TAG → entry anchor → entry's `schemaUID` → `getActivePinTarget` in one call. Wraps the wrapped-mode read.
+- `validateTargetDerivedEntry(entryAnchor, attester) → bool` — schema-aware name-target consistency check for `entryIdentity = "target"` entries. Returns true if the entry's name matches the canonical hex of its resolved PIN target.
+
+These transform the smart-contract read path from N+1 separate reader calls per entry to single calls. They're explicitly NOT a stand-alone `EFSListView` — adding to `EdgeResolver` keeps them in the kernel-extension layer rather than introducing a new contract.
+
+### Other round-7 additions
+
+- **Non-goals section**: explicit list of use cases lists are NOT trying to support (mutable per-item state machines, real-time collaborative editing, computed lists, time-windowed queries, cross-attester aggregation, default-UX reverse lookups). Distinct from "Out of scope" (deferred); these are intentional shape rejections.
+- **Conventions vs enforcement section**: explicit acknowledgment that several invariants are convention-only (kernel cannot enforce). Includes named revisit triggers — if shape-invalid lists exceed measurable share, sequential nonces appear at indexer layer, etc., promote to on-chain enforcement via custom resolvers or schema additions.
+- **memberMode mutability pitfall**: re-attesting the metadata-binding PIN flips `memberMode` in O(1) without TAG storage migration. SDK MUST refuse the flip; contracts SHOULD validate; future custom resolver could constrain on-chain.
+- **clientNonce kernel-unenforceability**: explicit acknowledgment that ≥128-bit CSPRNG MUST is convention only. Smart contracts consuming wrapped-occurrence lists treat the TAG attestation chain as the trust unit, NOT the entry name pattern. Squatting risk is asymmetric between target-derived (validatable) and occurrence-derived (kernel-blind) entries.
+- **Indexer notes section**: explicit subsection for subgraph implementers covering event ordering, active-vs-historical state, metadata mutability, and reverse-lookup index access.
+- **Cost asymmetry warning louder**: "if you might ever want notes, choose wrapped from the start" — migration is fork-only, so the picker question MUST be answered honestly at list creation.
+- **Snapshot consistency clarified**: smart contracts get atomicity for free in single calls (the new bundled readers preserve this). Off-chain clients still MUST pin `blockTag` manually — `wagmi`/`viem` defaults don't.
+
+### Decisions resolved (now 14 items)
+
+Added decision 14: "Convention-violating lists are an accepted v1 risk with explicit revisit triggers." Round-7 admits the trade-off honestly; the long-tail risk section names the conditions under which to escalate.
+
+Updated decision 4: from "EFSListView helper deferred" to "smart contracts read directly; v1 ships the bundled readers." Round-7's most consequential change.
+
+### Doc length impact
+
+Pre-round-7: 391 lines design + ~430 notes.
+Post-round-7: ~510 lines design + ~510 notes.
+
+Net: ~+120 lines on canonical doc. Still under round-4's 648 (the high-water mark before round-5's simplification), but materially closer than round-6. The additions are all genuinely needed — operational specs for smart-contract consumers, honest acknowledgment of unenforceable invariants, named revisit triggers for known fragility.
+
+### What round-7 explicitly does NOT add
+
+- **Sparse-weight as universal MUST.** The fresh-Claude review pushed for this; Codex's round-6 correction (SHOULD for manual ordering only; ratings/votes use meaningful weights) is upheld. Cascade-reorder cost is a performance concern, not correctness.
+- **Migration helpers Item → Entry.** No silent migration is possible; the doc is loud about fork-as-new-list. Migration helpers would imply silent flip is possible, which it isn't.
+- **MemberMode kernel-side enforcement (custom resolver).** Reserved as a long-tail-risk trigger; not pre-emptive in v1.
+- **Nonce-entropy resolver.** Same: reserved as a long-tail-risk trigger.
+
+### Cross-thread convergence at round-7
+
+Three reviewers (Gemini, fresh-Claude, Codex earlier) all flagged variants of "the kernel doesn't enforce; clients diverge." James's framing closed this by committing to bundled readers + accepting convention-only invariants where unenforceable. The design is honest about both: what's enforced, what's convention with named revisit triggers, what's intentionally not supported (non-goals).
+
+This round felt different from rounds 1-6 because it shifted from "what's the right design?" to "what's the right enforcement boundary?" The design didn't change architecturally — the enforcement model became explicit.
+
 ### Round 5 Codex cleanup: stale prose after P2/rightmost-wins reframing
 
 Codex's final pass after Claude's round-4 commit found no conceptual blocker, but a few stale lines still reflected older frames:

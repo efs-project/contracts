@@ -32,6 +32,23 @@ Lists will accumulate use cases for the next 100 years: top friends, favorite me
 
 The core insight: **lists don't need a new primitive.** Ordered tagging already exists in EFS via `TAG(definition, refUID, weight)`. The only design question is what `refUID` points at — the item directly, or an entry anchor that wraps it. The two answers form a clean spectrum of one machinery.
 
+**Smart contracts read these data structures directly.** The data layer + public reader APIs MUST be sufficient on their own; the design cannot rely on SDK-side enforcement of invariants because contract consumers don't run the SDK. Where invariants can be enforced on-chain (or via on-chain helpers), they are. Where they can't, the design says so explicitly and adjusts the threat model accordingly.
+
+---
+
+## Non-goals
+
+These use cases are intentionally NOT what lists are trying to be — distinguished from "deferred for v1" items in [Out of scope](#out-of-scope-for-v1--future-work) below. Future agents proposing to extend lists into these spaces should expect a different primitive, not a list extension.
+
+- **Mutable per-item state machines.** Todos, shopping carts, kanban cards — items with their own lifecycle (pending → in-progress → done) tracked alongside list membership. Lists rank existing things; they don't track per-item state machines.
+- **Real-time collaborative single-list editing.** Multiple authors mutating one shared list with conflict resolution (Google Docs cursors, shared Spotify queues). That's CRDT territory; lists are per-attester claims that compose at read time.
+- **Computed lists from arbitrary queries.** "All DATA tagged `#scifi` by people I follow" is dynamic membership; lists are materialized membership claims authored by an attester.
+- **Time-windowed temporal queries.** "Top friends this week" is an indexer concern over the historical attestation stream, not a list shape.
+- **Cross-attester aggregation primitives at the kernel layer.** Sybil-resistant top-N globally requires governance scope; not a list primitive.
+- **Reverse-lookup APIs as default UX surface.** Index-level reverse lookups exist (per ADR-0041 §8) but should not surface in default profile UX (see Pitfalls).
+
+Lists are: **weighted membership claims by one attester at one anchor, ordered by `int256` weight, with optional per-entry metadata.** Fitting other shapes into this primitive degrades both the original primitive and the new use case.
+
 ---
 
 ## The two member patterns
@@ -68,7 +85,7 @@ Address-target TAGs use `recipient` (no `refUID`). The kernel routes target via 
 - **No duplicates** of the same target by the same attester (edgeHash collision).
 - **No per-entry metadata** that survives reorder (re-attesting changes the active TAG UID).
 - **Single inner schema only** — TAGs land in `_activeByAAS[def][attester][targetSchema]` keyed by target schema. A direct list with mixed-schema TAGs (some DATA, some attestation, some address) silently fragments across schema buckets and looks like missing entries to a single-schema reader. Curators wanting mixed targets MUST use the wrapped pattern.
-- **Migration to wrapped is not in-place** — converting a direct list to wrapped requires a fork (revoke direct TAGs, create new list anchor, attest entry anchors). Document the fork; there is no silent migration.
+- **Migration to wrapped is not in-place — fork required.** Converting a direct list to wrapped requires creating a new list anchor and re-authoring entries; there is no silent migration. **If you might ever want notes, duplicates, or per-entry metadata, choose `wrapped` from the start** — the cost asymmetry (direct ~1 attestation/item vs wrapped ~3-6/entry) makes "upgrade later" tempting, but every list that needs to migrate becomes a fork operation. The decision lives at list creation, and the picker question MUST be answered honestly.
 
 ### Wrapped member pattern (Entry List recipe)
 
@@ -140,7 +157,29 @@ Apps MAY attach generic display PROPERTYs (`title`, `description`, `icon`, `cove
 
 ## Reading lists
 
-No new view contract in v1. Clients use `EdgeResolver.getActiveTagEntries(listAnchor, attester, targetSchema, start, length)` (per ADR-0041 §8) and resolve targets via SDK multicall.
+Smart contracts and clients read lists via `EdgeResolver` reader APIs. Because contract consumers can't run an SDK, the public reader API surface MUST cover both modes' canonical reads in a single call wherever feasible, with snapshot consistency naturally provided by atomic transaction execution.
+
+### Public reader API (v1 commitments)
+
+These methods on `EdgeResolver` ship in v1 and are immutable post-1.0. They bundle the underlying reads (`_activeByAAS` enumeration + EAS attestation field extraction + entry anchor PIN resolution) into single calls so callers — especially smart contracts — get correct results without reinventing multicall plumbing.
+
+**Existing readers used by lists** (already in ADR-0041 §8 reader API):
+- `getActiveTagEntries(definition, attester, targetSchema, start, length) → (tagUID, weight)[]` — paginates active TAGs in a bucket.
+- `getActivePinTarget(definition, attester, targetSchema) → targetID` — resolves a PIN's current target. Returns `bytes32(0)` on missing slot (already true in code; documented).
+- `isActiveEdge(attester, targetID, definition, schema) → bool` — fast membership check (used by allowlist / blocklist consumers).
+
+**New readers shipping in v1** (committed pre-launch because data structures + public APIs are immutable post-1.0):
+- `getActiveTagTargetsWithWeights(definition, attester, targetSchema, start, length) → (targetID, tagUID, weight, attesterAddress)[]` — bundles `getActiveTagEntries` + per-TAG target extraction. For Item Lists, returns the actual targets directly (no per-entry `eas.getAttestation` round-trip). For Entry Lists with `targetSchema = ANCHOR_SCHEMA_UID`, returns entry anchor UIDs as `targetID`.
+- `getEntryListPage(listAnchor, attester, start, length) → (entryUID, innerTargetID, innerSchema, weight)[]` — for wrapped lists, bundles the full entry resolution (TAG → entry anchor → entry's `schemaUID` → `getActivePinTarget`) in one call. Entries with missing inner PINs return `innerTargetID = bytes32(0)`; consumers MUST handle the warning state.
+- `validateTargetDerivedEntry(entryAnchor, attester) → bool` — for wrapped lists with `entryIdentity = "target"`, returns true if the entry's anchor name matches the canonical lowercase hex of its resolved PIN target (per the entry-anchor squatting check below). Schema-aware (UID hex vs address hex). Returns false for missing PINs and mismatches.
+
+These three additions transform the smart-contract read path from "fetch TAGs, fetch each TAG's refUID via EAS, fetch each entry anchor, fetch each entry's PIN" (3-4 separate reader calls per entry) to single calls. The pre-launch cost of adding them to `EdgeResolver` is a few hundred lines of view code; the post-launch cost of NOT having them would be every consumer reinventing the multicall and getting it slightly differently wrong.
+
+### Single-curator scope (default)
+
+**Metadata authority is per-attester.** Because `memberMode`, `itemSchema`, and `entryIdentity` are PROPERTYs (and PROPERTYs are edition-scoped per ADR-0041 §4), a list read is canonically scoped to **one curator attester**. Read the curator's `memberMode`, their `itemSchema`, their `entryIdentity`, their TAGs, their entry anchors' PINs, and their entry metadata — all from the same attester.
+
+Multi-attester reads (compare/merge UI) are an explicit opt-in (see Editions section). Default reads are single-curator-scoped.
 
 ### Single-curator scope (default)
 
@@ -202,17 +241,36 @@ Sparse weights are NOT a universal MUST. Lists where weights have semantic meani
 
 **Recommended pagination cap:** `length ≤ 100` per call (matching `EFSSortOverlay.MAX_PAGE_SIZE`) to bound `eth_call` time on multi-read clients.
 
-### Snapshot consistency (multi-call reads)
+### Snapshot consistency
 
 Active TAG buckets are NOT snapshot-stable across multiple RPC calls. Swap-and-pop on revoke (per ADR-0007) can shift later array positions between pagination calls; a client paginating may double-count an entry or miss one.
 
-**Clients MUST pin all reads in a single render to the same `blockTag`** when paginating across pages or composing PROPERTY + PIN + TAG reads. Single-call on-chain reads (e.g., a Solidity contract calling `getActiveTagEntries` once) are naturally snapshot-consistent.
+**Smart contracts** calling the v1 readers in a single transaction are naturally snapshot-consistent — the EVM provides atomicity per call. The new bundled helpers (`getActiveTagTargetsWithWeights`, `getEntryListPage`) preserve this property by completing all reads within one external view call, eliminating multi-call inconsistency for on-chain consumers.
 
-**Governance / on-chain consumers MUST read from finalized (or sufficiently confirmed) blocks** to avoid reorg sensitivity in vote tallies, membership checks, etc.
+**Off-chain clients** (frontends, indexers) paginating across multiple RPC calls or composing PROPERTY + PIN + TAG reads MUST pin all reads in a single render to the same `blockTag`. Default `wagmi`/`viem` setups do NOT pin `blockTag` automatically across paginated queries — SDK helpers wrapping list reads MUST handle this internally.
+
+**Governance / on-chain consumers** SHOULD read from finalized (or sufficiently confirmed) blocks to avoid reorg sensitivity in vote tallies, membership checks, etc. Reading from `latest` exposes consumers to short-range reorgs that can flip membership between blocks.
 
 ### `EFSListView` future helper
 
-A future `EFSListView` helper MAY be added if implementation pain proves it necessary — to bundle target resolution internally and reduce RPC overhead. **Not in v1 scope.** Pre-launch, the burden of proof is on adding the helper, not on omitting it. A `getActiveTagTargetsWithWeights` reader on `EdgeResolver` returning `(targetID, tagUID, weight)[]` directly is a separate spike — if it's tiny and gas is reasonable, it may be worth shipping pre-launch for on-chain consumers (DAO governance, registry contracts).
+A future stand-alone `EFSListView` helper contract MAY be added later if the v1 `EdgeResolver` extensions prove insufficient for emerging use cases. Not in v1 scope; the v1 readers above cover the canonical paths.
+
+---
+
+## Indexer notes (for subgraph implementers)
+
+Subgraph and off-chain indexer implementations consuming list-related events should be aware of these state-tracking concerns:
+
+**Event ordering between TAGs and metadata.** TAG attestations and metadata PROPERTY attestations arrive as separate EAS events. A subgraph processing list-related events MAY see TAG events for `listAnchor` before its `memberMode` PROPERTY exists in indexed state. Indexers SHOULD:
+- Track unbound TAG events keyed by `(listAnchor, attester)`; resolve them when metadata appears.
+- Render `memberMode = "unknown"` for lists with TAG events but no metadata; surface this state to clients.
+- Reprocess pending TAG events when metadata arrives if typed projections matter.
+
+**Active state vs historical state.** `_activeByAAS` reflects current active TAGs (post-revocation). Subgraphs reconstructing list state MUST track revocation events and apply swap-and-pop semantics to mirror the kernel's view (per ADR-0007). A naive "all attestations ever" view will include revoked entries. Use the `Attested`/`Revoked` event pair to maintain accurate active sets.
+
+**Metadata mutability.** A curator can re-attest the metadata-binding PIN to flip `memberMode`, `itemSchema`, or `entryIdentity` post-creation (see Pitfalls). Indexers MUST track the latest declaration per `(attester, listAnchor)` as the active metadata; expose history as a separate query if needed. Treat metadata flips as visibly disruptive events.
+
+**Reverse lookups.** Indexers MAY support "lists containing X" queries internally (different from the canonical UX anti-feature). Use `_targetsByDef` and `_edgeDefinitions` from `EdgeResolver` (per ADR-0041 §8) as ground truth. Apply per-application access policies (typically: subject opt-in only).
 
 ---
 
@@ -231,6 +289,26 @@ Each attester writes their own TAGs against the same list anchor; per-attester s
 **Merge semantics are not part of this design.** Multi-attester rendering (priority chain, last-write-wins, side-by-side, aggregate, intersection) is client UX. Cross-system precedent (ADR-0031, ADR-0039) currently uses first-wins for path resolution; lists adopting different defaults requires its own ADR. **In v1, multi-attester reads are advisory and clients MUST preserve attribution** — if a merged view is rendered, every visible item carries the attester address that contributed it.
 
 **Forking convention:** Bob "forks" Alice's list by creating his own list anchor (`bob.eth/his-favorite-books`) and writing his own TAGs/PINs/entries. Optionally, Bob's list anchor carries an `originList = <alice_list_uid>` PROPERTY documenting the provenance link. This is a writer convention; the kernel does nothing special for forks. Bob does NOT silently mutate Alice's list anchor — multi-attester writes against Alice's anchor are collaboration semantics, not forking.
+
+---
+
+## Conventions vs enforcement — long-tail risk
+
+This design relies on convention enforcement for several invariants the kernel cannot validate: `memberMode` matches actual storage shape, target-derived entry names match PIN targets, `clientNonce` is CSPRNG-derived, schema buckets aren't fragmented in `direct` mode. **In a federated multi-client system over a 100-year horizon, the corpus will accumulate convention-violating lists** — clients differ in validation rigor; some will be buggy or hostile.
+
+This is an acceptable trade for v1 because the kernel surface stays minimal (no new schemas, no resolver complexity, no Etched commitments). But it has a forcing function. If convention compliance drops below tolerance in the wild, a heavier mechanism becomes necessary.
+
+**Explicit revisit triggers** — promote to a heavier mechanism if any of these become true post-launch:
+
+- **Schema-fragmented `direct` lists exceed a measurable share of the corpus** at any indexed point → promote a `LIST_ITEM` schema OR move validation into a custom resolver on the `memberMode` key anchor.
+- **Target-derived entry name mismatches exceed a measurable share of wrapped-target lists** → ship an on-chain validation helper widely OR move validation into a custom resolver.
+- **Sequential `clientNonce` patterns appear at the indexer layer** → ship a kernel-side nonce-entropy resolver (rejects predictable nonce inputs at attestation time).
+- **Smart-contract consumers report material gas-overhead pain** despite the v1 bundled readers → extend `EdgeResolver` further or ship a stand-alone `EFSListView`.
+- **Cross-client divergence on `memberMode` mismatch handling** produces visibly inconsistent renders for the same list → ship a canonical reference SDK that becomes the de facto interpreter, OR move enforcement on-chain.
+
+These triggers are not just operational concerns — they represent the conditions under which "convention only" becomes load-bearing technical debt. Operators MUST track them once lists ship; any firing should prompt an ADR. Specific quantitative thresholds (Y%, Z ms) are filled in by post-launch measurement; the principle is to have an explicit forcing function and avoid drift.
+
+This section IS the design's escape hatch. Smart contracts that consume lists today operate under the assumption that conventions hold; if they don't hold widely, the contract layer has clear paths to shift enforcement on-chain without breaking the existing data model.
 
 ---
 
@@ -303,6 +381,34 @@ Anyone can put anyone on any list. Profile pages MUST NOT default-render reverse
 
 Reverse lookups MAY be exposed only to the viewing user themselves ("lists I'm on"), opt-in only.
 
+### `memberMode` mutability creates internally-inconsistent lists
+
+`memberMode`, `itemSchema`, and `entryIdentity` are PROPERTYs bound to the list anchor via PIN (cardinality-1 per attester). Re-attesting the binding PIN with a new PROPERTY value supersedes the prior in O(1) — a curator can flip `memberMode = "direct"` to `"wrapped"` instantly without any TAG storage migration.
+
+The list is now in an internally inconsistent state: declared `wrapped` but populated with direct-mode TAGs (or vice versa). Readers honoring the declaration drop the existing data; readers inferring from storage display old data labeled as new mode. **Two clients diverge.**
+
+Mitigations:
+- **SDK helpers MUST refuse to flip `memberMode` post-creation.** Curators wanting to change mode revoke the old list and create a new one; their old data stays under the old declaration with history preserved.
+- **Smart contracts SHOULD validate** `memberMode` declaration against actual storage shape using the v1 readers — call `getActiveTagTargetsWithWeights` with the schema implied by `memberMode` and compare the result count to a separate query against alternative schemas.
+- **Readers MUST detect mismatches** and render warning state (per `memberMode` is renderer intent, not proof above).
+- **Future kernel mitigation** (long-tail risk trigger): constrain `memberMode` to single-write via a custom resolver on the metadata key anchor; not in v1 scope but escape-hatch documented.
+
+The same logic applies to `entryIdentity` — flipping it post-creation invalidates entry name validation and breaks `validateTargetDerivedEntry` semantics.
+
+### `clientNonce` entropy is unenforceable at the kernel
+
+The MUST that `clientNonce` ≥ 128 bits CSPRNG is **convention only**. Sequential nonces, monotonic counters, and CSPRNG output all look identical to the kernel — `keccak256(...)` produces a 32-byte hash regardless of input entropy. **The kernel cannot tell the difference.** SDK enforcement is the only gatekeeper, which means hostile or buggy SDKs can violate this convention freely.
+
+**Smart contracts consuming wrapped-occurrence lists SHOULD treat the entry's UID as the trust unit, NOT the entry name pattern.** Specifically:
+
+- Do not assume the entry name is unguessable. An attacker who guessed the curator's `clientNonce` could pre-create an entry anchor at the predicted name with a hostile PIN. The squatting validation rule for target-derived entries does NOT apply to occurrence-derived entries because the name doesn't encode the target.
+- Validate by attestation chain: did the curator's TAG point at this entry UID? If so, the curator endorses this entry regardless of name structure. The TAG is the membership claim; the name is a label, not a credential.
+- The `validateTargetDerivedEntry` helper does NOT validate occurrence-derived entries. They have no on-chain validation primitive; the trust unit is the curator's TAG attestation itself.
+
+This is the residual security risk from kernel-unenforceability. The worst case is "the curator's own client used weak nonces and someone preempted them" — the attacker still needs the curator to write a TAG against the squat anchor for it to be "in" the list, and the curator's own SDK should refuse to write that TAG (because it would detect that the anchor it expected to create already exists). Compromised curator client + compromised attacker = squatting attack succeeds; honest implementations are safe.
+
+If sequential-nonce patterns appear at scale post-launch, the long-tail risk trigger fires and a kernel-side nonce-entropy resolver becomes necessary.
+
 ### ADR-0042 effective-TAG filter does NOT apply to lists by default
 
 ADR-0042 establishes "effective TAG = active TAG with `weight ≥ 0`" as a client convention for the explorer's descriptive-label filter. **This convention does not apply to custom lists.** A blocklist with `weight = 0` is active membership; a rating with `weight = -3` is a meaningful low score. Apps MAY apply a `weight ≥ 0` filter for their own UX reasons, but the canonical default for list rendering is "active = unrevoked," with weight used only for ordering.
@@ -315,34 +421,36 @@ These were the architectural decisions made during cross-agent design review.
 
 1. **Two member patterns (direct, wrapped), one primitive (weighted TAG set).** Earlier drafts had P1/P1.5/P2 as distinct types; the previous P1.5 (target-keyed entry anchors) and P2 (occurrence-keyed) collapse into one wrapped pattern with `entryIdentity` distinguishing them.
 2. **Folders are not lists.** Sorted folders are folders with `SORT_INFO`; no `memberMode` PROPERTY applies.
-3. **Lists are not a new EAS primitive.** Existing PIN, TAG, ANCHOR, PROPERTY suffice. No new schemas; no Etched commitments.
-4. **`EFSListView` helper deferred.** v1 ships read paths via `EdgeResolver` + SDK multicall. Helper added later only if implementation pain demonstrates need. A `getActiveTagTargetsWithWeights` reader on `EdgeResolver` is a separate spike.
+3. **Lists are not a new EAS primitive.** Existing PIN, TAG, ANCHOR, PROPERTY suffice. No new schemas; no Etched commitments at the schema layer.
+4. **Smart contracts read directly; v1 ships the bundled readers.** Public reader API additions to `EdgeResolver` (`getActiveTagTargetsWithWeights`, `getEntryListPage`, `validateTargetDerivedEntry`) ship in v1 because data structures + public APIs are immutable post-1.0 and SDK enforcement cannot be assumed.
 5. **Multi-attester merge is informative, not normative.** Default reads are single-curator-scoped; multi-attester is opt-in for compare/merge UI; merge conventions need their own ADR (and would interact with ADR-0031/0039 alignment).
 6. **Minimal metadata: `memberMode`, `itemSchema`, `entryIdentity`.** Display PROPERTYs are app convention until cross-app interop value emerges.
 7. **`/lists/` ships empty.** Protocol identity does not seed predicates. EFS Team multi-sig may seed recommended predicates separately later.
 8. **UX warnings are advisory.** Attribution labeling is the load-bearing safety primitive; first-publish confirmation is at client discretion.
 9. **`specs/06` rewrite required before dev writes list data.** Will describe direct + wrapped patterns explicitly; supersede `specs/08`.
-10. **`clientNonce` MUST be ≥128 bits CSPRNG.** Sequential or monotonic nonces are forbidden — they enable squatting attacks on entry anchor names.
+10. **`clientNonce` ≥128 bits CSPRNG is convention, not contract-enforced.** Kernel cannot distinguish weak nonces from CSPRNG output; smart contracts treat occurrence-derived entry UIDs (not names) as trust units.
 11. **Default total order: weight desc, tie-break by target/entry UID asc, then tagUID asc.** Apps may declare alternatives via custom PROPERTYs.
 12. **Sparse `int256` weights are an SDK SHOULD for manual ordering, NOT a universal MUST.** Ratings, votes, and scores use meaningful weights.
-13. **Snapshot consistency MUST: pin paginated reads to a single `blockTag`.** Governance consumers MUST read finalized blocks.
+13. **Snapshot consistency MUST: pin paginated reads to a single `blockTag`.** On-chain single-call reads are naturally consistent; off-chain multi-call clients MUST pin. Governance consumers MUST read finalized blocks.
+14. **Convention-violating lists are an accepted v1 risk with explicit revisit triggers.** See Conventions vs enforcement section. The design includes named conditions under which to promote enforcement on-chain post-launch.
 
 ---
 
 ## Out of scope for v1 / future work
 
-- **`EFSListView` helper contract** — defer until implementation pain shows need.
-- **`getActiveTagTargetsWithWeights` reader on `EdgeResolver`** — pre-launch spike; if tiny + gas reasonable, may ship in v1; otherwise defer.
+- **Stand-alone `EFSListView` helper contract** — the v1 `EdgeResolver` extensions cover canonical read paths; a separate view contract MAY be added later if emerging use cases demonstrate need beyond what kernel-extensions provide.
 - **`displayLimit`, `weightMeaning`, `weightDirection`, `tieBreak`, etc.** — apps use generic PROPERTYs; spec stays minimal until cross-app conventions emerge.
 - **`itemSchemas` (plural) for declared multi-schema lists** — defer; mixed-schema lists are wrapped lists with diverse inner PINs.
 - **Multi-attester merge conventions** — needs its own ADR; interacts with ADR-0031/0039 alignment.
 - **Sort overlay extension for TAG sources** — `EFSSortOverlay` doesn't currently support TAG buckets; defer until concrete demand.
 - **Cross-attester aggregation primitives** — Sybil-resistance scoping required.
 - **Computed lists** — predicate-derived membership (iTunes Smart Playlist analog).
-- **Reverse-lookup APIs** — anti-feature in default UX; may be added behind explicit opt-in.
+- **Reverse-lookup APIs as default UX** — see Non-goals; index-level reverse lookups exist but should not be canonical UX.
 - **`specs/06` rewrite** — describe direct + wrapped patterns explicitly; supersede `specs/08`. **Required before dev writes list data.**
 - **FractionalSort** — kept parked as a possible future read/index optimization for huge ordered lists; not part of the v1 list model.
 - **`web3://<list-anchor>` ERC-5219 read shape** — router-layer concern; separate from list data model.
+- **Custom resolver on `memberMode` key anchor** — to constrain post-creation flips. Long-tail risk trigger; not in v1 unless mutability proves harmful.
+- **Kernel-side nonce-entropy resolver** — to reject sequential `clientNonce` at write time. Long-tail risk trigger.
 
 ---
 
@@ -357,7 +465,8 @@ These were the architectural decisions made during cross-agent design review.
 | **Contractual schema enforcement** (custom resolver rejecting non-allowed targets) | Federated systems can't enforce write-time type constraints meaningfully. Advisory + reader-side filtering is the durable primitive. |
 | **Multi-attester merge as normative in core design** | Couples list semantics to client UX choices and conflicts with ADR-0031/0039's existing first-wins precedent. Deferring keeps the design portable; a separate merge ADR can land later. |
 | **Allowlist `allowedTargetSchemas`** (CSV of multiple schema UIDs) | Mixed-schema lists are rare; can be expressed as wrapped lists with diverse inner PINs. Singular `itemSchema` keeps the v1 spec minimal and adds plural variant later only if needed. |
-| **`EFSListView` in v1** | Pre-launch, omitting it is the default; clients use `EdgeResolver` + SDK multicall. Add the helper when its absence demonstrably hurts. |
+| **Stand-alone `EFSListView` contract in v1** | The bundled reader extensions on `EdgeResolver` (`getActiveTagTargetsWithWeights`, `getEntryListPage`, `validateTargetDerivedEntry`) cover the canonical paths smart contracts and frontends need without introducing a new contract. A separate view contract may be added later if emerging demand demonstrates need. |
+| **Deferring all bundled readers to post-launch** | Earlier rounds proposed shipping no helpers in v1 and adding them only on demand. Rejected after validation pass: data structures + public APIs are immutable post-1.0; SDK enforcement cannot be assumed because smart contracts read directly. The v1 `EdgeResolver` extensions are a small pre-launch commitment that prevents post-launch fragmentation across consumers reinventing multicall plumbing. |
 | **Positional anchors + FractionalSort for sequences** | Sparse `int256` weights with periodic rebalance handle reorder in O(1) using ordinary TAG-weight machinery. FractionalSort and `a0/a1/a2` naming buy nothing the unified design doesn't already provide. |
 | **`entryIdentity` as writer convention only** | Without machine-readable declaration, clients couldn't reliably determine when name-target validation applies. Promoting to a required PROPERTY for wrapped lists is honest about the policy. |
 | **Universal sparse-weight MUST** | Ratings, votes, and scores use meaningful weights; forcing sparse spacing breaks those use cases. Sparse weights are an SDK SHOULD for manual ordering only. |
@@ -368,17 +477,27 @@ These were the architectural decisions made during cross-agent design review.
 
 For an eventual implementation plan; not prescriptive here.
 
-**Likely shipping units:**
-1. Reserved-key anchor names (`memberMode`, `itemSchema`, `entryIdentity`, `note`) — added to deploy script alongside ADR-0034 reserved keys.
-2. SDK helpers (`efs.lists.read`, `efs.lists.write`) implementing the reader recipes above; canonical name canonicalization (`canonicalEntryAnchorName(targetID, schemaUID) → string`); CSPRNG `clientNonce` generator.
-3. Frontend list-renderer in `packages/nextjs/` debug UI — minimal demonstration of direct and wrapped lists against seeded demo lists.
-4. Spec rewrite: `specs/06-Lists-and-Collections.md` describes direct + wrapped patterns explicitly; `specs/08` marked as superseded design notes.
-5. Optional demo seed: one direct list and one wrapped list under the demo tree (`08_seed_demo_tree.ts`), flagged demo-only.
+**v1 shipping units (committed pre-launch):**
+1. **`EdgeResolver` extensions** for the public reader API:
+   - `getActiveTagTargetsWithWeights(definition, attester, targetSchema, start, length) → (targetID, tagUID, weight, attesterAddress)[]`
+   - `getEntryListPage(listAnchor, attester, start, length) → (entryUID, innerTargetID, innerSchema, weight)[]`
+   - `validateTargetDerivedEntry(entryAnchor, attester) → bool`
+   These bundle existing reads into single calls; smart contracts use them directly without multicall.
+2. **Reserved-key anchor names** (`memberMode`, `itemSchema`, `entryIdentity`, `note`) — added to deploy script alongside ADR-0034 reserved keys.
+3. **SDK helpers** (`efs.lists.read`, `efs.lists.write`) wrapping the reader API + write conventions:
+   - `canonicalEntryAnchorName(targetID, schemaUID) → string` — single source of truth for name canonicalization
+   - `cryptoRandomNonce() → bytes32` — CSPRNG `clientNonce` generator
+   - `readListPagedSnapshot(listAnchor, attester, opts)` — internally pins `blockTag` across paginated reads (default `wagmi`/`viem` doesn't); enforces single-curator scope
+   - Mode-flip guard: refuses to re-attest `memberMode`, `itemSchema`, or `entryIdentity` post-creation (per Pitfalls)
+4. **Frontend list-renderer** in `packages/nextjs/` debug UI — minimal demonstration of direct and wrapped lists against seeded demo lists.
+5. **Spec rewrite:** `specs/06-Lists-and-Collections.md` describes direct + wrapped patterns explicitly; `specs/08` marked as superseded design notes.
+6. **Optional demo seed:** one direct list and one wrapped list under the demo tree (`08_seed_demo_tree.ts`), flagged demo-only.
 
 **Likely ADR shape:**
-- ADR-A: Custom Lists — direct + wrapped member patterns, metadata convention (`memberMode`, `itemSchema`, `entryIdentity`), reading conventions, ordering rule, edition independence.
+- ADR-A: Custom Lists — direct + wrapped member patterns, metadata convention (`memberMode`, `itemSchema`, `entryIdentity`), reading conventions, ordering rule, edition independence, public reader API extensions on `EdgeResolver`.
 
 **Spike candidates (parallel with ADR drafting):**
+- Implement and gas-measure the three new `EdgeResolver` view methods. Each is a thin wrapper over existing reads; the spike validates assumed gas profiles for typical list sizes (8 friends, 50 favorites, 100 entries).
 - End-to-end direct + wrapped contract test (validates ADR-0041 §4 in-place re-attest).
 - Multi-attester edition test (validates shared schelling-point entry anchors under `entryIdentity = "target"`).
 - `getActiveTagTargetsWithWeights` reader on `EdgeResolver` — measure gas; ship in v1 if tiny.
