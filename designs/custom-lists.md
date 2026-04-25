@@ -60,7 +60,7 @@ Address-target TAGs use `recipient` (no `refUID`). The kernel routes target via 
 
 **Reorder cost:** O(1) — re-attest at same edgeHash with new weight (ADR-0041 §4 supersedes in place).
 
-**Cost per item:** 1 attestation (just the TAG). 8 friends ≈ 9 attestations including the list anchor.
+**Cost per item:** 1 attestation (just the TAG). Excluding metadata, 8 friends ≈ 9 attestations including the list anchor. A canonical direct list also needs `memberMode` + `itemSchema` metadata; if both key anchors are new, add ~6 one-time attestations (key anchor + PROPERTY + PIN for each), so 8 friends ≈ 15 attestations on first creation.
 
 **Use cases:** top friends, top memes, favorites, ratings, allowlists, blocklists, plugin/schema/resolver registries.
 
@@ -101,7 +101,7 @@ The convention is per-list (declared once at creation, applies to all entries). 
 
 **Reorder cost:** O(1) — re-attest the TAG at same edgeHash with new weight. Entry anchor and metadata survive.
 
-**Cost per entry:** ~3 attestations without notes (entry anchor + PIN + TAG); ~6 with one note field. 3 books ≈ 10 attestations, ~19 with one note field each.
+**Cost per entry:** ~3 attestations without notes (entry anchor + PIN + TAG); ~6 with one note field. Excluding list metadata, 3 books ≈ 10 attestations, ~19 with one note field each. A canonical wrapped list also needs `memberMode` + `entryIdentity` metadata (~6 one-time attestations if both key anchors are new), plus ~3 more if it declares `itemSchema`.
 
 **Use cases:** annotated favorites, playlists with duplicates, syllabi, ranked ballots, exhibits, anywhere a row needs its own state independent of the target.
 
