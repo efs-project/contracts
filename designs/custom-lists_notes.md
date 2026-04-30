@@ -891,6 +891,115 @@ This is structurally consistent with EFS's primitives. Future agents proposing f
 
 ---
 
+## Round 14 — typed list anchors + revocable=false + freeform-no-PIN + placer/curator split
+
+**Date:** 2026-04-30
+**Trigger:** Three independent reviewer passes on round-13 (Gemini GREEN/+1 must-fix, Claude RED, Codex YELLOW/conditional NO-GO) plus James's frame-level reframe.
+
+**The three reviews converged on several points and disagreed on others.**
+
+Convergent points (all three reviewers):
+1. List-level metadata location was undefined after round-13 decoupled LIST from path anchor.
+2. Read API conflated placer (bookmark attester) and curator (LIST attester).
+3. Stale-PIN-to-revoked-LIST was a real concern that round-13's mitigation under-addressed.
+4. Cross-`targetSchema` PIN at one anchor was ambiguous (DATA PIN + LIST PIN at same slot).
+
+Contested points:
+- `revocable: true` (round-13) vs `revocable: false` (Claude argued strongly for false; Gemini for true; Codex either-or).
+- Mandatory curator-write-gate resolver (Claude blocking) vs no resolver (Gemini, Codex).
+- Co-contribution as feature (round-13) vs attack surface (Claude).
+
+**James's frame-level direction.** James responded with simple, decisive reframes that resolved most of the contested points cleanly:
+
+> "Lists should have name anchors like DATA do. So /memes/mylist[] is anchor<generic>=memes -> anchor<list>=mylist <- tag -> listDef attestation. Anchors have a namespace. DATA have a namespace. Properties have a namespace. Lists have a namespace."
+
+Translation: typed list anchors (`Anchor<schemaUID=LIST_SCHEMA_UID>`) — same shape as `Anchor<PROPERTY>` slots. The schemaUID on the anchor signals what kind of slot it is. This:
+- Eliminates the cross-`targetSchema` PIN ambiguity automatically (typed list anchors only hold lists)
+- Aligns with the existing PROPERTY pattern (uniformity across primitives)
+- Is mechanically the same as round-12's typed anchor insight, but with round-13's free-floating LIST attestation
+
+> "Revocable shouldn't matter and I'm not sure what a list being revoked means. So False I guess. It's not deleting the list as deletion is more like removing the tag so the list doesn't show up inside the folder anymore."
+
+Translation: `revocable: false` on the LIST schema. Match DATA. "Deletion" = revoke the placement PIN, not the LIST attestation. This:
+- Closes the curator-key-compromise concern entirely (Alice can't kill bookmarkers' references)
+- Removes one whole lifecycle pattern (no more "revoked LIST → stale PIN" warning state)
+- Bookmark PINs to a LIST UID never go stale
+
+> "Properties should totally be attached to the list definition attestation. This seems obvious."
+
+Translation: list-level metadata (title, description, etc.) attaches to the LIST attestation as PROPERTY slots, not the path anchor. Bookmarks inherit metadata automatically. (Gemini's must-fix.)
+
+> "Anchors for now use refUID as they are static and immutable. Everything else is tagged dynamic data."
+
+Translation for entries: the entry anchor IS the static identity; for freeform entries the anchor name carries the meaning, no inner PIN required. Per-entry mutable state (status, quantity) goes via PROPERTYs (which are dynamic). (Codex's targetless-entries fix.)
+
+> "Editions seem to work fine as I understood it." (on co-contribution)
+
+Translation: keep co-contribution as a feature. Editions filter spam at read time; default reads are single-curator-scoped. Mallory writing entries against Alice's LIST UID is invisible to viewers reading "Alice's L1." Subgraphs that aggregate across attesters need to scope to a curator — that's an indexer-layer responsibility, not a kernel concern.
+
+### What round-14 changed concretely
+
+- **Path anchor for list:** generic (round-13) → typed `Anchor<schemaUID=LIST_SCHEMA_UID>` (round-14).
+- **LIST schema `revocable`:** true (round-13) → false (round-14).
+- **List-level metadata location:** undefined (round-13) → PROPERTY slots on LIST attestation (round-14).
+- **Freeform entry inner PIN:** required (round-13) → optional (round-14); when absent, the entry anchor IS the entry.
+- **Reader API:** single `read(anchor, attester)` (round-13) → split `resolveListPlacement(anchor, placer)` + `readListByUID(listUID, curator)` + convenience `read(anchor, placer, curator?)` (round-14).
+- **Co-contribution:** kept as feature; documented "why this is safe at read time" with edition scoping rationale.
+- **Cross-targetSchema PIN ambiguity pitfall:** gone (typed list anchors prevent it structurally).
+- **Stale-PIN-to-revoked-LIST pitfall:** gone (`revocable: false` removes the lifecycle).
+
+### Why round-14 is better than round-13
+
+1. **Typed anchor namespace is consistent with PROPERTYs.** Each kind of attached thing has its own anchor namespace. Reader sees `Anchor<LIST>` and knows what's coming, no probing. Same as `Anchor<PROPERTY>(name="contentType")`.
+2. **`revocable: false` matches the file-parallel cleanly.** DATA is permanent at its UID; LIST is permanent at its UID. Bookmarkers are insulated from curator key-compromise.
+3. **List-level metadata travels with the LIST UID.** Bob's bookmark of Alice's list inherits Alice's title, description, cover automatically.
+4. **Freeform entries are first-class rows.** Shopping lists and todos don't carry dead-weight target PINs.
+5. **API split makes Bob-bookmarks-Alice work correctly by default.** `read(anchor, placer=bob)` defaults curator to the LIST attestation's attester (alice) — Bob's empty bucket isn't returned by mistake.
+
+### Trade-offs / things round-14 still relies on convention
+
+- Co-contribution + spam-resistance: subgraphs MUST scope active-set queries by curator. Cross-attester aggregation is an explicit opt-in. Long-tail-risk trigger: if subgraphs ship without curator scoping and spam surfaces in clients, escalate.
+- Curator-self-grief on entries: Alice can revoke her own entry TAGs to "delete" entries; can't undo bookmarks others made of her LIST UID. This is intentional and matches DATA's lifecycle.
+- Freeform entry name uniqueness: still curator's responsibility; multi-attester convergence on freeform names is opportunistic.
+
+### Pattern across rounds 11-14
+
+Four consecutive frame-level reframes:
+- Round 11: lists are folders (overshoot — unification didn't match the actual graph model)
+- Round 12: lists are NOT folders; membership is tags (correction — separates the patterns)
+- Round 13: lists are free-floating like files; placed via PIN (improvement — file-like portability)
+- Round 14: typed list anchors (parallel to PROPERTY slots) + free-floating LIST + revocable=false + freeform-no-PIN + placer/curator split
+
+Each was caught by James from outside the agent-convergence loop. The recurring pattern: **agents converge inside a frame; humans question the frame.** Round-14's typed-anchor unification has been sitting in EFS's design DNA the whole time (PROPERTYs already use typed anchors with this exact shape). No agent extended this to lists across 13 rounds; James named it directly.
+
+### Round-14 status
+
+Four architectural reframes in four consecutive rounds. Each made the design better. The model now matches EFS's existing primitives uniformly with namespace consistency:
+- DATA + Anchor<generic> + PIN = files
+- LIST + Anchor<schemaUID=LIST_SCHEMA_UID> + PIN = lists
+- PROPERTY value + Anchor<schemaUID=PROPERTY_SCHEMA_UID> + PIN = property values
+- TAGs against anchors = membership patterns
+- Multiple PINs to same content from different anchors = shared/multi-path
+- Free-floating + Anchor + PIN = portability + permanence
+
+A future agent proposing further reframes should expect a higher bar than the prior rounds. But round-11/12/13/14 says: don't be too confident.
+
+Possible-but-deferred fourth-frame question (Gemini): "Should folders be free-floating too?" — extending the file-parallel to make folder hierarchy non-`refUID`-bound. Out of scope for v1; folders stay hierarchical for now.
+
+### Doc length impact
+
+Pre-round-14: 640 lines design + 890 notes.
+Post-round-14: 750 lines design + ~1020 notes.
+
+The doc grew because:
+1. Typed list anchor + free-floating LIST needed concrete-example rewrite
+2. List-level metadata section is new
+3. Placer/curator split needs explicit treatment in the read API
+4. Co-contribution rationale is documented (instead of just asserted)
+5. New conformance tests (rows 13, 15, 17, 19, 20, 22, 30 changed or added)
+
+---
+
 ## How to use this file
 
 Append-friendly. When adding:
