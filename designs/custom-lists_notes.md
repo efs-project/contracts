@@ -797,6 +797,100 @@ The clarity gain is worth the line count.
 
 ---
 
+## Round 13 — free-floating LIST attestations (file-like model)
+
+After round-12's "lists are typed anchors with LIST attestation as config" model, James proposed another structural reframe: lists should be free-floating attestations like DATA, with anchors connecting to them via PIN. This is the third frame-level architectural change in three consecutive rounds.
+
+His framing: "Lists are a lot like files where they are sort of free floating and tags connect them to their names. So Anchor=memes, Anchor=mylist then a tag points at the list and connects it to the mylist anchor. Like files. So the same list could be in two different folders."
+
+(He used the word "tag" here, but the natural primitive for the anchor → LIST connection is PIN — cardinality-1, same as how anchors connect to DATA for files.)
+
+### The structural shift
+
+Round-12: LIST attestation has `refUID = anchor`; entries are children of the typed anchor.
+Round-13: LIST attestation is free-floating (no `refUID` anchor binding); entries are children of the LIST UID; anchors connect via PIN.
+
+```
+Round-12:                         Round-13:
+                                  
+  Anchor<LIST_SCHEMA>             generic Anchor
+       │                               │
+       ├── LIST(refUID=anchor)         └── PIN(refUID=LIST_UID,
+       │                                       targetSchema=LIST_SCHEMA_UID)
+       └── entries (refUID=anchor)              │
+                                                ▼
+                                          LIST attestation L1
+                                          (free-floating; UID=L1)
+                                                │
+                                                └── entries (refUID=L1)
+```
+
+### Why round-13 is better
+
+**1. File-like semantics.** EFS already separates content (DATA) from placement (Anchor + PIN). Round-13 brings lists into the same pattern — config and entries free-floating, placement via PIN. Consistent across primitives.
+
+**2. Same list at multiple anchors works mechanically.** Place a LIST at multiple paths via multiple PINs from different anchors. Editing the list updates all views. Like having the same DATA at multiple file paths.
+
+**3. List sharing across attesters is natural.** Bob can PIN Alice's LIST UID at Bob's anchor. Bob's namespace exposes Alice's list. Alice still owns it (entries are her attestations). Like Bob placing Alice's DATA at Bob's path.
+
+**4. Round-12's singleton-enforcement custom resolver becomes unnecessary.** The "duelling LIST attestations per (attester, anchor)" concern resolves automatically: with free-floating LISTs, multiple LIST attestations are just multiple distinct lists. The (attester, anchor) singleton is enforced by PIN cardinality-1 (kernel-level, no resolver needed).
+
+**5. Path anchor doesn't need typed `schemaUID`.** Round-12 required `Anchor<LIST_SCHEMA>` typing. Round-13 uses generic anchors with PINs. Apps detect lists by reading the anchor's PIN, same way they detect files. Eliminates round-12's "anchor schemaUID mismatch" pitfall.
+
+### Trade-offs
+
+**Cost: one extra read step in path resolution.** Round-12: anchor → done. Round-13: anchor → resolve PIN → LIST UID → read attestation. Two extra reads (`getActivePinTarget` + `eas.getAttestation`). Smart contracts: trivial gas (atomic single-tx). Off-chain: minor RPC overhead.
+
+**Reverse lookup ("which anchors hold this list?") needs `getEdgeDefinitions(listUID)`** per ADR-0041 §8. Already exists.
+
+**Orphaned LISTs possible.** A LIST with no anchor PINing to it is path-unreachable. Same as orphaned DATA. Apps don't render orphans. Curators must create at least one anchor + PIN.
+
+### What round-13 changed
+
+- LIST attestation no longer has `refUID = anchor` requirement (free-floating)
+- Entries' `refUID = LIST UID` (not the path anchor)
+- Weight TAGs use `definition = LIST UID` (not the path anchor)
+- Anchor → LIST connection is `PIN(definition=anchor, refUID=LIST UID, targetSchema=LIST_SCHEMA_UID)`
+- Anchor at the path is generic — no `schemaUID = LIST_SCHEMA_UID` requirement
+- Round-12's `ListResolver` for singleton enforcement is no longer needed (PIN cardinality handles it). Optional `ListSchemaResolver` for enum-range validation may exist as a soft check.
+- New use cases enabled: same-list-at-multiple-paths, list-bookmarking-across-attesters, moving-a-list-between-folders
+- New pitfall: stale anchor PIN to revoked LIST (curator should revoke PINs first, then LIST)
+- Reader recipe gains one step: PIN-resolve to LIST UID before reading entries
+
+### Pattern across rounds 11-13
+
+Three consecutive frame-level reframes:
+- Round 11: lists are folders (overshoot — unification didn't match the actual graph model)
+- Round 12: lists are NOT folders; membership is tags (correction — separates the patterns)
+- Round 13: lists are free-floating like files; placed via PIN (improvement — file-like portability)
+
+Each reframe is a real improvement, not preference shuffling. Each was caught by James seeing the design fresh; none was proposed by any agent across the prior rounds.
+
+The recurring pattern: **agents converge inside a frame; humans question the frame.** Round-13's free-floating model has been sitting in EFS's design DNA the whole time (DATA is free-floating; Anchors place via PIN). No agent extended this to lists across 12 rounds. Worth recording for future cross-agent design work.
+
+### Doc length impact
+
+Pre-round-13: 550 lines design + 808 notes.
+Post-round-13: ~640 lines design + ~890 notes.
+
+The doc grew because:
+1. Round-13 enables genuinely new use cases (multi-anchor placement, sharing) that need documentation
+2. Reader recipe has an extra step that needs explaining
+3. Indexer notes need to address the new anchor-PIN-to-LIST event pattern
+4. New pitfall (stale anchor PINs) needs coverage
+
+### Round-13 status
+
+Three architectural reframes in three consecutive rounds. Each made the design better. No more obvious frame-level questions remain — the model now matches EFS's existing primitives uniformly:
+- DATA + Anchor + PIN = files
+- LIST + Anchor + PIN = lists
+- TAGs against anchors = membership patterns
+- Multiple anchor PINs to same content = shared/multi-path
+
+This is structurally consistent with EFS's primitives. Future agents proposing further reframes should expect a high bar — the design space appears mostly explored at this point. But the round-11/12/13 pattern says: don't be too confident, fresh human review can still find more.
+
+---
+
 ## How to use this file
 
 Append-friendly. When adding:
