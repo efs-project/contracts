@@ -689,6 +689,114 @@ The lesson: the cross-agent process is great for refinement but doesn't easily d
 
 ---
 
+## Round 12 — structural correction
+
+After round-11's three-reviewer validation surfaced concrete fix-set, James reviewed the design once more and identified two architectural mistakes that drove round-12's substantial revision:
+
+**1. "Promotion" was a category error.** Round-11 said "promote a folder to a list by adding LIST_DECLARATION." James caught this: "I don't like the idea of 'promotion' of something to something else. An Anchor is a container of tons of things. Anchors with a schema set are for names for a specific thing like a file name. Lists are just another thing that can be added inside an Anchor. Lists can also have names with an Anchor<listSchema>. Anchors are always containers. Lists are always lists."
+
+The structural correction: lists are typed anchors (`Anchor<LIST_SCHEMA>`) that contain entries. They live INSIDE generic container anchors. They're not unifications of folders; they're separate things that can coexist with folders, files, and tags inside an anchor's namespace.
+
+This reverses round-11's "lists are folders" unification. The right framing:
+
+| Thing inside an anchor | What it is |
+|---|---|
+| Files | child Anchor + PIN to DATA |
+| Sub-folders | child Anchor (generic) |
+| Lists | typed `Anchor<LIST_SCHEMA>` + LIST attestation + entry anchors |
+| Tags | TAG attestations against the anchor |
+
+These are independent, parallel patterns. An anchor can contain any combination of them.
+
+**2. "Direct mode" was always tagging, not a list pattern.** James caught the deeper confusion: "Isn't 'direct mode' just tagged things? An allowlist or denylist is just a /tags/deny tagged on a bunch of addresses. And follow graph is too. Simple. Easy. Cheap lookup + writes. Right?"
+
+Yes — exactly right. Across rounds 5 through 11, the design was trying to make the list primitive serve membership use cases (allowlists, blocklists, follow graphs). These were never list patterns; they're tagging patterns. The "lost direct-mode cheap membership check" that reviewers worried about in round-11 was never a list concern — `isActiveEdge(...)` already exists in `EdgeResolver` per ADR-0041 §8 and serves tag-pattern membership in O(1).
+
+The correct division:
+- **Lists** = ranked/curated/metadata-bearing collections (top-N favorites, annotated catalogs, playlists, shopping lists, ranked ballots)
+- **TAGs** = membership claims (allowlists, blocklists, follow graphs, DAO membership, categorization, permissions)
+
+The picker question simplifies to: *Need ordering or per-entry metadata?* Yes → list. No → tags.
+
+### The structural design (round-12)
+
+```
+Anchor "memes"  (refUID=alice_home, schemaUID=ANCHOR_SCHEMA — generic folder)
+  └── Anchor "mylist"  (refUID=memes, schemaUID=LIST_SCHEMA — typed list anchor)
+        ├── LIST attestation  (refUID=mylist, entryIdentity=0/1/2, targetKind=0/1/2, targetSchema)
+        ├── entry "<entry-name>" anchor  (refUID=mylist)
+        │   ├── PIN(definition=entry, target)
+        │   └── weight TAG(definition=mylist, refUID=entry, weight=N)
+        ├── ... more entries
+```
+
+The anchor at `/alice.eth/memes/mylist/` is path-routable. Apps detect it as a list because its `schemaUID = LIST_SCHEMA`. The LIST attestation provides config; entries are children of the list anchor; weight TAGs use the list anchor as their definition (consistent with all other EFS TAG patterns).
+
+### Schema field set (carried from round-11 / Codex's redesign)
+
+```
+LIST schema:
+  uint8   entryIdentity   // 0=target, 1=occurrence, 2=freeform
+  uint8   targetKind      // 0=any, 1=schema-uid, 2=address
+  bytes32 targetSchema    // when targetKind == 1
+revocable: true
+resolver:  ListResolver   // singleton enforcement
+```
+
+Three values for `entryIdentity` (target-derived hex / occurrence-derived hash / freeform curator-chosen name) cover the use cases — including shopping lists with "milk", "eggs" entries (freeform).
+
+`revocable: true` per Gemini's UX argument: irrevocable type markers create permanent self-griefing footguns on long-standing namespace anchors. Custom resolver enforces singleton-per-(attester, refUID) so revocation+re-attest is a clean lifecycle event.
+
+### Use cases re-mapped
+
+The 28-use-case audit from round-11 split between LIST patterns (20 cases) and TAG patterns (8 cases). Allowlists, blocklists, follow graphs, DAO membership, categorization, permissions, verification — all moved from the list spec to "tagging patterns; use TAG + `isActiveEdge`."
+
+The list primitive's scope shrank, but its purpose became sharper. Each primitive does one thing well.
+
+### What was eliminated from the design
+
+- "Lists are folders" framing
+- "Direct mode" entirely (was always tagging)
+- `isActiveListMembership` proposal from the round-11 reviewers (unnecessary; `isActiveEdge` already covers tag membership)
+- `LIST_DECLARATION` name (renamed to just `LIST` since it IS the list, not a declaration about a list)
+- "Promotion of folders to lists" framing
+- Allowlists / blocklists / follow graphs from list use case discussion (moved to tag patterns)
+
+### What was kept
+
+- Always-wrapped within the list primitive (only mode that's actually about lists)
+- `entryIdentity` with three values (target / occurrence / freeform)
+- Codex's schema redesign (`targetKind + targetSchema` instead of overloaded `bytes32 itemSchema`)
+- Singleton enforcement via custom resolver
+- All operational specs (page cap, snapshot consistency, indexer notes, validation rules)
+- The 20 list-pattern use cases (now correctly identified)
+- Entry-anchor squatting Pitfall (target-derived only)
+- `clientNonce` enforcement-boundary discussion
+
+### Reflection on the cross-agent process
+
+Round-11 was a substantive simplification that 10 prior rounds had missed. Round-12 was a substantive correction that round-11 had missed. The pattern: **agents don't easily question framing assumptions; humans do.** Round-11's "lists are folders" framing felt clean but forced unification where the actual graph model has separate parallel patterns. James's "anchors are containers, lists are things INSIDE containers" reframing is closer to the actual structural truth.
+
+Worth recording: cross-agent design needs periodic frame-level human review, not just within-frame validation. Agents are good at "is this design correct given these assumptions?" Less good at "are these the right assumptions?"
+
+This is now twelve rounds. The first ten converged on a two-mode design that all reviewers signed off on. Round-11 was the first major simplification (reversed by round-12). Round-12 corrected round-11's framing back to "separate things in containers." If the pattern holds, there's likely one more frame-level question that hasn't been asked. Future agents working in this space should expect at least one more meaningful structural reframe before mainnet launch.
+
+### Doc length impact
+
+Pre-round-12: 482 lines design + 700 notes.
+Post-round-12: ~575 lines design + ~830 notes.
+
+Doc grew because it now needs to:
+1. Clearly distinguish lists from folders / tags / files
+2. Describe the typed anchor + LIST attestation + entries pattern
+3. Document the 20 LIST use cases and 8 TAG patterns separately
+4. Add Pitfalls for the new structural concerns (anchor schemaUID mismatch with LIST attestation)
+5. Update the indexer notes for the new lifecycle events
+
+The clarity gain is worth the line count.
+
+---
+
 ## How to use this file
 
 Append-friendly. When adding:
