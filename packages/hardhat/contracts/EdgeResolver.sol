@@ -568,7 +568,7 @@ contract EdgeResolver is SchemaResolver {
         return _activeCount[_targetDefHash(targetID, definition)] > 0;
     }
 
-    /// @notice Edition-aware: true iff ANY of `attesters` has an active edge (PIN or TAG)
+    /// @notice Lens-aware: true iff ANY of `attesters` has an active edge (PIN or TAG)
     ///         on (targetID, definition). Two SLOADs per attester (PIN and TAG variants).
     ///         Schema-blind — use `hasActiveTagFromAny` for TAG-specific checks (e.g. folder
     ///         visibility per ADR-0038 which is TAG-only, not PIN-or-TAG).
@@ -586,12 +586,12 @@ contract EdgeResolver is SchemaResolver {
         return false;
     }
 
-    /// @notice Edition-aware, TAG-specific: true iff ANY of `attesters` has an active TAG on
+    /// @notice Lens-aware, TAG-specific: true iff ANY of `attesters` has an active TAG on
     ///         (targetID, definition). One SLOAD per attester.
     ///
     ///         Use this — not `hasActiveEdgeFromAny` — for folder-visibility checks (ADR-0038):
     ///         folder visibility is TAG-only; a PIN with `definition=DATA_SCHEMA_UID` targeting a
-    ///         folder must NOT make that folder appear in edition-scoped directory listings.
+    ///         folder must NOT make that folder appear in lens-scoped directory listings.
     function hasActiveTagFromAny(
         bytes32 targetID,
         bytes32 definition,

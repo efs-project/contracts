@@ -12,7 +12,7 @@ const DEFAULT_TAG_WEIGHT = 1n;
  *
  * Folder visibility is TAG-based (cardinality N): each attester emits
  * `TAG(definition=dataSchemaUID, refUID=folder)` to claim a folder in their
- * edition. A TAG is active iff it exists and is not EAS-revoked; weight is
+ * lens. A TAG is active iff it exists and is not EAS-revoked; weight is
  * opaque metadata the kernel does not interpret (ADR-0041 §4).
  *
  * File placement is PIN-based (cardinality 1) — each filename-anchor slot
@@ -263,7 +263,7 @@ describe("EFSFileView", function () {
     // Folder visibility is tag-only (ADR-0038, carried over to ADR-0041): a folder does NOT
     // appear in a schema-filtered listing just because it contains file-anchor children;
     // the attester must emit a TAG(definition=dataSchemaUID, refUID=folder) to claim that
-    // folder in their edition (weight is opaque; any existing non-revoked TAG counts). The client upload flow walks the ancestor chain
+    // folder in their lens (weight is opaque; any existing non-revoked TAG counts). The client upload flow walks the ancestor chain
     // and emits any missing visibility TAGs.
     const ownerAddr = await owner.getAddress();
 
@@ -326,8 +326,8 @@ describe("EFSFileView", function () {
   });
 
   it("Empty folders appear when explicitly tagged with the schema UID", async function () {
-    // A folder is visible in an edition iff it has an active (existing, not revoked) TAG with
-    // definition=dataSchemaUID by someone in the edition list. Weight is not checked.
+    // A folder is visible in an lens iff it has an active (existing, not revoked) TAG with
+    // definition=dataSchemaUID by someone in the lens list. Weight is not checked.
     const ownerAddr = await owner.getAddress();
 
     const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32);
@@ -477,7 +477,7 @@ describe("EFSFileView", function () {
   it("Should not return a tagged folder after its tag is revoked via EAS multiRevoke", async function () {
     // Regression: the client-driven folder delete flow issues EAS multiRevoke on the
     // visibility TAG. This must produce the same outcome as a single-revoke — folder
-    // disappears from the edition listing.
+    // disappears from the lens listing.
     const ownerAddr = await owner.getAddress();
 
     const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32);
@@ -639,7 +639,7 @@ describe("EFSFileView", function () {
     const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32);
     const folderUID = await createAnchor("folder", rootUID, ZERO_BYTES32);
 
-    // File slot — created by alice. Both editions PIN their own DATA into this slot.
+    // File slot — created by alice. Both lenses PIN their own DATA into this slot.
     const slotUID = await createAnchor("doc.txt", folderUID, dataSchemaUID, alice);
 
     // Alice's DATA payload.
@@ -695,7 +695,7 @@ describe("EFSFileView", function () {
     // Pre-fix: `getFilesAtPath` used `isActiveEdgeAnySchema` (schema-blind) for the
     // cross-attester dedup check. An earlier attester who happens to have a TAG on the
     // same (target, definition) would suppress a later attester's legitimate PIN placement
-    // — hiding valid file content in a multi-edition view.
+    // — hiding valid file content in a multi-lens view.
     //
     // Post-fix: the dedup uses `isActivePinEdge` (PIN-specific). Only a prior PIN from an
     // earlier attester can suppress a later attester's PIN. A TAG from the earlier attester

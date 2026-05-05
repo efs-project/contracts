@@ -175,7 +175,7 @@ export const ContainerInfoPanel = ({
   const publicClient = usePublicClient();
   // ENS lives on mainnet; calling `getEnsName` on the active (hardhat) client
   // throws because hardhat has no ENS registry. Same fix as the two Codex P1s
-  // on the editions resolver + top-level container classifier — pull the
+  // on the lenses resolver + top-level container classifier — pull the
   // mainnet client explicitly. wagmiConfig always registers mainnet for this
   // purpose (see `services/web3/wagmiConfig.tsx`).
   const mainnetPublicClient = usePublicClient({ chainId: 1 });

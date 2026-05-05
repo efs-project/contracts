@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-04-17
-**Related:** ADR-0011 (transport anchors), ADR-0013 (edition-scoped mirror selection), ADR-0016 (deployer fallback), ADR-0019 (non-reverting hex parser), ADR-0025 (anchor name validation), ADR-0031 (editions model)
+**Related:** ADR-0011 (transport anchors), ADR-0013 (lens-scoped mirror selection), ADR-0016 (deployer fallback), ADR-0019 (non-reverting hex parser), ADR-0025 (anchor name validation), ADR-0031 (lenses model)
 
 ## Context
 
@@ -55,11 +55,11 @@ At deploy, EFS reuses the pre-existing `/tags/` anchor (home for user tag defini
 
 When EFSIndexer's ANCHOR `onAttest` hook processes a new anchor whose parent is `rootAnchorUID` and whose name decodes as a valid 66-char `0x`-prefixed hex schema UID in SchemaRegistry, the kernel attests `TAG(refUID = newAnchorUID, definition = /tags/schema anchor UID)` from its own address. The TAG's attester is the kernel contract itself (`msg.sender == eas.attest()` invocation). No per-user gas overhead — the user pays for the same transaction that creates the alias anchor; the kernel piggybacks its TAG onto it.
 
-Sidebar "Schemas" enumerates by iterating TAGs whose `definition` is the `/tags/schema` anchor (using the kernel contract's edition).
+Sidebar "Schemas" enumerates by iterating TAGs whose `definition` is the `/tags/schema` anchor (using the kernel contract's lens).
 
-### 4. Default editions for address containers
+### 4. Default lenses for address containers
 
-When the root segment is an Address and the URL did not include `editions=` / `edition=` / `curator=`, the router seeds `editions = [caller, segmentAddr]` (dedup if equal; drop zero addresses). Anchor / schema / attestation containers keep the existing `[caller]` default. Explicit `?editions=` overrides wholesale (ADR-0031 first-attester-wins unchanged).
+When the root segment is an Address and the URL did not include `lenses=` / `lens=` / `curator=`, the router seeds `lenses = [caller, segmentAddr]` (dedup if equal; drop zero addresses). Anchor / schema / attestation containers keep the existing `[caller]` default. Explicit `?lenses=` overrides wholesale (ADR-0031 first-attester-wins unchanged).
 
 ### 5. Router raw-info JSON fallback
 
@@ -73,7 +73,7 @@ After the walk, if `_findDataAtPath` returns no DATA AND the final container UID
 - `web3://<router>/<schemaUID>` returns schema json by default; if an alias anchor exists with PROPERTYs/TAGs, those layer in naturally.
 - Schemas become first-class EFS citizens — commentable, taggable, nameable — without a synthetic folder taxonomy.
 - Sidebar "Schemas" section populates automatically from kernel `/tags/schema` tags; users don't configure it.
-- Address home pages (`/<addr>/`) fall out for free with the default-editions rule: visiting someone's address shows their content with my overrides on top.
+- Address home pages (`/<addr>/`) fall out for free with the default-lenses rule: visiting someone's address shows their content with my overrides on top.
 
 **Costs**
 
@@ -85,14 +85,14 @@ After the walk, if `_findDataAtPath` returns no DATA AND the final container UID
 
 **Load-bearing**
 
-- Kernel contract attests via EAS from its own address. That address becomes a well-known edition for system-attested TAGs. Router treats it as just another attester.
+- Kernel contract attests via EAS from its own address. That address becomes a well-known lens for system-attested TAGs. Router treats it as just another attester.
 - No storage migration. All new paths reuse existing indices.
-- ADR-0031's first-attester-wins semantics unchanged: address-in-path is a *default* for editions, not a new model.
+- ADR-0031's first-attester-wins semantics unchanged: address-in-path is a *default* for lenses, not a new model.
 
 ## Alternatives considered
 
 1. **`/addresses/vitalik.eth/…` folder wrapping (earlier draft of this ADR).** Rejected because a real `/addresses/` parent is either unenumerable (can't list every address ever interacted with cheaply) or pollutable (stray anchors named `bob` drop into the list). Direct children of root with precedence-based classification is cleaner.
 2. **On-chain ENS resolution.** Rejected — commits the mainnet router to an external dependency per ADR-0030. Keep ENS off-chain; router accepts raw hex only; frontend resolves ENS to hex before building the URL.
 3. **Schema-as-pure-bytes32 (no alias anchor).** Rejected because schemas have no `name` field in SchemaRegistry, and EFS-native comments/properties/tags need an attestation parent with EFS semantics. Overloading the raw schema UID as the parent conflates "this is EAS data" with "this is an EFS-managed object."
-4. **Edition-lens-only shortcut (`/memes/?editions=vitalik`).** Rejected because it loses the "address is a first-class container" property and the default-editions behavior (connected + viewed) has no natural place to attach.
+4. **Lens-only shortcut (`/memes/?lenses=vitalik`).** Rejected because it loses the "address is a first-class container" property and the default-lenses behavior (connected + viewed) has no natural place to attach.
 5. **Deploy-time seeding of per-address and per-attestation aliases.** Impossible at scale. Lazy client-driven creation is the only workable path.

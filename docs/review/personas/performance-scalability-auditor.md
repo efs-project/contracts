@@ -84,7 +84,7 @@ What to hunt for:
 - repeated resolver / contract-address lookups that should be cached per screen or per session
 - contract readers whose cost scales with the total global dataset instead of the visible page / requested scope
 - missing pagination caps or loops that could walk unbounded pages in the browser
-- scans over all attesters or all targets where the product surface only needs "the viewed items" or "the viewed editions"
+- scans over all attesters or all targets where the product surface only needs "the viewed items" or "the viewed lenses"
 - write paths that duplicate work already represented in resolver/indexer state
 - append-only data structures that are correct but now require impractical client reconstruction
 - misleading tests that prove correctness on tiny fixtures while hiding explosive RPC/gas behavior at scale

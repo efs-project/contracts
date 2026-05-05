@@ -22,7 +22,7 @@ import {
   TrashIcon,
   XMarkIcon,
 } from "@heroicons/react/24/outline";
-import { useEditionDirectoryPage } from "~~/hooks/efs/useEditionDirectoryPage";
+import { useLensesDirectoryPage } from "~~/hooks/efs/useLensesDirectoryPage";
 import { useSortedData } from "~~/hooks/efs/useSortedData";
 import { useDeployedContractInfo, useScaffoldReadContract, useScaffoldWriteContract } from "~~/hooks/scaffold-eth";
 import { useBackgroundOps } from "~~/services/store/backgroundOps";
@@ -127,8 +127,8 @@ export const FileBrowser = ({
   dataSchemaUID,
   anchorSchemaUID,
   currentPathNames,
-  editionAddresses,
-  explicitEditions = false,
+  lensAddresses,
+  explicitLenses = false,
   onNavigate,
   tagFilter = "",
   drawerTagFilters = {},
@@ -143,19 +143,19 @@ export const FileBrowser = ({
   /** ANCHOR_SCHEMA_UID from EFSIndexer — needed to query folder-level descriptive-label TAG buckets. */
   anchorSchemaUID?: string;
   currentPathNames: string[];
-  editionAddresses: string[];
+  lensAddresses: string[];
   /**
-   * True when the caller passed `?editions=…` explicitly — including the case
+   * True when the caller passed `?lenses=…` explicitly — including the case
    * where every token in the list failed ENS / hex parsing and
-   * `editionAddresses` ended up empty. Distinguishes "user asked for nothing"
-   * (stay edition-scoped, render empty) from "nothing available to scope to"
+   * `lensAddresses` ended up empty. Distinguishes "user asked for nothing"
+   * (stay lens-scoped, render empty) from "nothing available to scope to"
    * (wallet disconnected, no default set — fall through to unscoped). Without
-   * this flag, explicit-but-unresolved URLs like `?editions=doesnotexist.eth`
+   * this flag, explicit-but-unresolved URLs like `?lenses=doesnotexist.eth`
    * silently leak default/unfiltered content into a view the user told us to
    * scope down. Defaults false for back-compat with callers that don't know
-   * about `editionsParam`.
+   * about `lensesParam`.
    */
-  explicitEditions?: boolean;
+  explicitLenses?: boolean;
   onNavigate: (uid: string, name: string) => void;
   tagFilter?: string;
   drawerTagFilters?: Record<string, DrawerTagFilterState>;
@@ -167,11 +167,11 @@ export const FileBrowser = ({
    * that adds/removes items in the current directory — today: file upload and
    * folder creation, which land via `CreateItemModal` → `FileActionsBar` and
    * therefore can't call the internal `refetch*` functions directly. Delete is
-   * in-component and calls `refetchEditionItems` / `refetchStandardItems`
+   * in-component and calls `refetchLensItems` / `refetchStandardItems`
    * inline; this key is the parallel escape hatch for create.
    *
    * Each bump triggers exactly one refetch of whichever query is active
-   * (edition-scoped or standard). Initial mount is skipped — the hooks fetch
+   * (lens-scoped or standard). Initial mount is skipped — the hooks fetch
    * on their own when deps settle.
    */
   directoryRefreshKey?: number;
@@ -216,7 +216,7 @@ export const FileBrowser = ({
     fileCount: number;
     error?: string;
   } | null>(null);
-  // Maps anchor UID → set of DATA UIDs for all relevant edition attesters.
+  // Maps anchor UID → set of DATA UIDs for all relevant lens attesters.
   // Built when a tag filter is active; an item matches if ANY of its DATA UIDs is in the tag set.
   const [dataUIDMap, setDataUIDMap] = useState<Map<string, Set<string>>>(new Map());
 
@@ -331,13 +331,13 @@ export const FileBrowser = ({
 
       if (!definitionUID || definitionUID === zeroHash) return new Set();
 
-      // Only consider tags applied by the currently viewed attesters (editions list).
-      // Do NOT widen with connectedAddress — explicit ?editions= must not be overridden
+      // Only consider tags applied by the currently viewed attesters (lenses list).
+      // Do NOT widen with connectedAddress — explicit ?lenses= must not be overridden
       // (ADR-0031/0039: same URL must render identically for all viewers).
-      // Fall back to connectedAddress only when no editions are configured.
+      // Fall back to connectedAddress only when no lenses are configured.
       const tagAttesters: `0x${string}`[] =
-        editionAddresses.length > 0
-          ? editionAddresses.map(a => a as `0x${string}`)
+        lensAddresses.length > 0
+          ? lensAddresses.map(a => a as `0x${string}`)
           : connectedAddress
             ? [connectedAddress as `0x${string}`]
             : [];
@@ -456,7 +456,7 @@ export const FileBrowser = ({
     edgeResolverAddress,
     tagsRoot,
     connectedAddress,
-    editionAddresses,
+    lensAddresses,
     tagSchemaUID,
     dataSchemaUID,
     anchorSchemaUID,
@@ -476,7 +476,7 @@ export const FileBrowser = ({
     setFetchError(null);
     try {
       // Preview reads go straight through the same-origin wagmi transport:
-      //   EFSRouter.request([...pathSegs], [{key:"editions",value:csv}, ...]) via publicClient
+      //   EFSRouter.request([...pathSegs], [{key:"lenses",value:csv}, ...]) via publicClient
       // plus gateway fetches for external-body mirrors (IPFS/Arweave/HTTPS).
       //
       // We used to try `web3protocol.Client.fetchUrl(uri)` first and fall back
@@ -509,8 +509,8 @@ export const FileBrowser = ({
 
       while (hasMoreChunks) {
         const queryParams: any[] = [];
-        if (editionAddresses.length > 0) {
-          queryParams.push({ key: "editions", value: editionAddresses.join(",") });
+        if (lensAddresses.length > 0) {
+          queryParams.push({ key: "lenses", value: lensAddresses.join(",") });
         }
 
         // Chunk pagination: after the first response, `web3-next-chunk` header
@@ -665,7 +665,7 @@ export const FileBrowser = ({
     sortInfoUID: activeSortInfoUID,
     parentAnchor: currentAnchorUID ?? undefined,
     sortOverlayAddress,
-    editionAddresses,
+    lensAddresses,
     refreshKey: sortRefreshKey,
   });
 
@@ -851,24 +851,24 @@ export const FileBrowser = ({
     previewFetchKey,
   ]);
 
-  const hasEditions = editionAddresses && editionAddresses.length > 0;
+  const hasLenses = lensAddresses && lensAddresses.length > 0;
 
-  // Once we've ever been in editions mode, stay there — prevents the standard (show-all) query
-  // from firing its cached result during the brief window when editionAddresses is transitioning
+  // Once we've ever been in lens mode, stay there — prevents the standard (show-all) query
+  // from firing its cached result during the brief window when lensAddresses is transitioning
   // to a new address (e.g. wallet account switch causes a momentary empty array).
-  // BUT: if editionAddresses is empty (wallet disconnect, no default set), fall through to the
+  // BUT: if lensAddresses is empty (wallet disconnect, no default set), fall through to the
   // standard query rather than leaving both queries disabled — showing unfiltered data is better
   // than an indefinitely blank directory.
   //
-  // `explicitEditions` overrides that fallthrough: when the user passed
-  // `?editions=…` but every token failed to resolve, we STAY in edition mode
+  // `explicitLenses` overrides that fallthrough: when the user passed
+  // `?lenses=…` but every token failed to resolve, we STAY in lens mode
   // (against an empty address list → empty grid) rather than silently
   // broadening the view to unscoped default content the URL never asked for.
   // See Codex P2 on PR #9 and ADR-0031 (explicit param must not widen results).
-  const lockedToEditions = useRef(false);
-  if (hasEditions) lockedToEditions.current = true;
-  const useEditionsQuery =
-    explicitEditions || ((hasEditions || lockedToEditions.current) && editionAddresses.length > 0);
+  const lockedToLenses = useRef(false);
+  if (hasLenses) lockedToLenses.current = true;
+  const useLensesQuery =
+    explicitLenses || ((hasLenses || lockedToLenses.current) && lensAddresses.length > 0);
 
   const {
     data: standardItems,
@@ -885,36 +885,36 @@ export const FileBrowser = ({
       propertySchemaUID as `0x${string}`,
     ],
     query: {
-      enabled: !useEditionsQuery,
+      enabled: !useLensesQuery,
     },
   });
 
-  // Edition-scoped directory listing iterates the opaque cursor (ADR-0036) across
+  // Lens-scoped directory listing iterates the opaque cursor (ADR-0036) across
   // pages. The contract's phase-0 folder scan can return zero items with a
   // non-empty `nextCursor` when the 2048-entry per-call budget is burned on
   // revoked / wrong-attester entries; without cursor replay the UI would show
-  // "Topic is empty" even when phase-1 has matches. `useEditionDirectoryPage`
+  // "Topic is empty" even when phase-1 has matches. `useLensesDirectoryPage`
   // auto-advances on empty pages and exposes `loadMore` for user-triggered paging.
   const {
-    items: editionItems,
-    isLoading: isEditionLoading,
-    hasMore: hasMoreEditions,
-    loadMore: loadMoreEditions,
-    refresh: refetchEditionItems,
-  } = useEditionDirectoryPage({
+    items: lensItems,
+    isLoading: isLensLoading,
+    hasMore: hasMoreLenses,
+    loadMore: loadMoreLenses,
+    refresh: refetchLensItems,
+  } = useLensesDirectoryPage({
     parentAnchor: (currentAnchorUID ?? undefined) as `0x${string}` | undefined,
     dataSchemaUID: dataSchemaUID as `0x${string}` | undefined,
-    editionAddresses: editionAddresses as string[],
+    lensAddresses: lensAddresses as string[],
     fileViewAddress: efsFileViewInfo?.address as `0x${string}` | undefined,
     fileViewAbi: efsFileViewInfo?.abi as any,
     pageSize,
-    enabled: useEditionsQuery && editionAddresses.length > 0,
+    enabled: useLensesQuery && lensAddresses.length > 0,
   });
 
   // Parent-driven refetch for out-of-component mutations (create file/folder).
   // Skip the initial render — the queries fire on their own when deps settle.
   // Subsequent bumps route to whichever query is currently live. We snapshot
-  // `useEditionsQuery` at call time so a mid-flight mode switch (e.g. wallet
+  // `useLensesQuery` at call time so a mid-flight mode switch (e.g. wallet
   // disconnect between the create and the refetch) still hits the right
   // refetcher rather than racing the mode-flip.
   const firstRefreshRun = useRef(true);
@@ -924,28 +924,28 @@ export const FileBrowser = ({
       return;
     }
     if (directoryRefreshKey === 0) return;
-    if (useEditionsQuery) {
-      refetchEditionItems().catch(e => console.error("Directory refetch (editions) failed", e));
+    if (useLensesQuery) {
+      refetchLensItems().catch(e => console.error("Directory refetch (lenses) failed", e));
     } else {
       refetchStandardItems();
     }
-    // refetch* identities are stable per query; useEditionsQuery is the
+    // refetch* identities are stable per query; useLensesQuery is the
     // dispatch key and changes rarely. Intentionally scoped to the bump.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [directoryRefreshKey]);
 
-  const isLoading = useEditionsQuery ? isEditionLoading : isStandardLoading;
-  // When explicit-editions requested an empty list (all tokens unresolved), the
-  // edition hook is disabled and `editionItems` is undefined — without this
+  const isLoading = useLensesQuery ? isLensLoading : isStandardLoading;
+  // When explicit-lenses requested an empty list (all tokens unresolved), the
+  // lens hook is disabled and `lensItems` is undefined — without this
   // coercion, the grid would render neither items nor the "Topic is empty"
   // string (the empty-state check uses `items?.length === 0`, which is false
   // for undefined). Coerce to a stable `[]` so the user sees an explicit
   // empty result instead of a silently-blank pane. Memoized so downstream
   // effects that depend on `rawItems` identity don't refire every render.
   const rawItems = useMemo(() => {
-    if (useEditionsQuery) return editionAddresses.length === 0 ? [] : editionItems;
+    if (useLensesQuery) return lensAddresses.length === 0 ? [] : lensItems;
     return standardItems;
-  }, [useEditionsQuery, editionAddresses.length, editionItems, standardItems]);
+  }, [useLensesQuery, lensAddresses.length, lensItems, standardItems]);
 
   // When a tag filter is active, resolve DATA UIDs for each file item.
   // AGENT-NOTE (ADR-0041): file placement is now PIN (cardinality 1) — there's at
@@ -962,7 +962,7 @@ export const FileBrowser = ({
     setIsDataUIDMapLoading(true);
 
     const attesters: string[] =
-      editionAddresses.length > 0 ? editionAddresses : connectedAddress ? [connectedAddress] : [];
+      lensAddresses.length > 0 ? lensAddresses : connectedAddress ? [connectedAddress] : [];
 
     if (attesters.length === 0) {
       setDataUIDMap(new Map());
@@ -1019,7 +1019,7 @@ export const FileBrowser = ({
     edgeResolverAddress,
     dataSchemaUID,
     connectedAddress,
-    editionAddresses,
+    lensAddresses,
   ]);
 
   // Apply tag filters. Include filter (tagFilteredUIDs): item must be in set (null = no filter).
@@ -1142,7 +1142,7 @@ export const FileBrowser = ({
   // Delete a file/folder by revoking the connected user's edges (ADR-0041 — PIN+TAG split).
   // File: revoke the user's PIN(definition=fileAnchorUID, target=DATA_UID, schema=DATA_SCHEMA).
   //   File placement is now PIN cardinality 1, so there's at most one PIN per file per user.
-  //   Removes the file from this edition's view; other editions with their own PIN are unaffected.
+  //   Removes the file from this lens's view; other lenses with their own PIN are unaffected.
   //   DATA is permanent (ADR-0002).
   // Folder: full subtree cascade. Walks the folder and every subfolder, revoking
   //   (a) the user's visibility TAG on each folder (definition=dataSchemaUID, target=folder)
@@ -1331,8 +1331,8 @@ export const FileBrowser = ({
       );
       ops.complete(opId, `Deleted ${label}.`);
       if (selectedFile?.uid === item.uid) closePreview();
-      if (useEditionsQuery) {
-        await refetchEditionItems();
+      if (useLensesQuery) {
+        await refetchLensItems();
       } else {
         await refetchStandardItems();
       }
@@ -1375,8 +1375,8 @@ export const FileBrowser = ({
         `Deleted ${label} — revoked ${pinUIDs.length} PIN${pinUIDs.length === 1 ? "" : "s"} and ${tagUIDs.length} TAG${tagUIDs.length === 1 ? "" : "s"}.`,
       );
       if (selectedFile?.uid === item.uid) closePreview();
-      if (useEditionsQuery) {
-        await refetchEditionItems();
+      if (useLensesQuery) {
+        await refetchLensItems();
       } else {
         await refetchStandardItems();
       }
@@ -1513,7 +1513,7 @@ export const FileBrowser = ({
                     <h2 className="card-title text-sm break-all text-center leading-tight">{item.name || "Unnamed"}</h2>
                     <div className="text-xs text-base-content/40">
                       {isItemTopic
-                        ? useEditionsQuery
+                        ? useLensesQuery
                           ? "Folder"
                           : item.childCount > 0
                             ? `${item.childCount} items`
@@ -1534,11 +1534,11 @@ export const FileBrowser = ({
             </div>
           )}
         </div>
-        {/* Load more: edition-scoped mode keys on the opaque cursor (ADR-0036);
+        {/* Load more: lens-scoped mode keys on the opaque cursor (ADR-0036);
             standard mode keys on the kernel page heuristic + sort overlay. */}
         {(() => {
-          const showLoadMore = useEditionsQuery
-            ? hasMoreEditions
+          const showLoadMore = useLensesQuery
+            ? hasMoreLenses
             : items && items.length > 0 && items.length >= Number(pageSize);
           if (!showLoadMore) return null;
           return (
@@ -1546,10 +1546,10 @@ export const FileBrowser = ({
               <button
                 className="btn btn-sm btn-outline"
                 onClick={() => {
-                  if (useEditionsQuery) {
+                  if (useLensesQuery) {
                     // Iterate the opaque cursor via the hook; `pageSize` is the
                     // per-fetch target, not a cumulative cap.
-                    loadMoreEditions();
+                    loadMoreLenses();
                   } else {
                     setPageSize(prev => prev + 50n);
                     if (hasSortMore) loadMoreSorted();
@@ -1678,7 +1678,7 @@ export const FileBrowser = ({
 
           {/* Mirrors panel */}
           {!selectedFile.isFolder && (
-            <MirrorsPanel fileAnchorUID={selectedFile.uid} editionAddresses={editionAddresses} />
+            <MirrorsPanel fileAnchorUID={selectedFile.uid} lensAddresses={lensAddresses} />
           )}
         </div>
       )}
@@ -1834,7 +1834,7 @@ export const FileBrowser = ({
         <TagModal
           uid={tagModalUID}
           isFile={tagModalIsFile}
-          editionAddresses={editionAddresses}
+          lensAddresses={lensAddresses}
           onClose={() => {
             setTagModalUID(null);
             setTagModalIsFile(false);

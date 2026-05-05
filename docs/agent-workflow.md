@@ -140,7 +140,7 @@ Every comment, review, and issue reply an agent writes opens with a bracketed pr
 ```
 [claude-sonnet-4.6 · review]
 
-The edition-scope check at L42 misses the case where...
+The lens-scope check at L42 misses the case where...
 ```
 
 Role vocabulary (start minimal; extend only when a new role earns its keep):
@@ -236,9 +236,9 @@ When you escalate (Tier 1 or 2), the human's time is the constrained resource. M
 
 Good Tier 1 question:
 
-> Working on EFSRouter mirror selection. Found that `_getBestMirrorURI` returns the highest-priority mirror, but ADR-0013 says edition-scoped only. With `?editions=alice,bob` and Alice has only `https://`, Bob has `web3://`, current code serves Alice's https://. ADR-0013 implies first-attester-wins (so https:// is correct), but the user-facing behavior of "always serve the best transport" might be what's actually wanted. Two options:
+> Working on EFSRouter mirror selection. Found that `_getBestMirrorURI` returns the highest-priority mirror, but ADR-0013 says lens-scoped only. With `?lenses=alice,bob` and Alice has only `https://`, Bob has `web3://`, current code serves Alice's https://. ADR-0013 implies first-attester-wins (so https:// is correct), but the user-facing behavior of "always serve the best transport" might be what's actually wanted. Two options:
 > - A: Strict ADR-0013 — first attester with any mirror wins, even if low-priority.
-> - B: Promote priority across attesters — best mirror across the edition list.
+> - B: Promote priority across attesters — best mirror across the lenses list.
 > No path forward without your call. Defaulting to A if you don't reply for 30 minutes.
 
 ## When you make a decision

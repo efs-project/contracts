@@ -17,7 +17,7 @@ import { EDGE_RESOLVER_ABI } from "~~/utils/efs/edgeResolver";
  *
  * Hierarchy:
  *   1. ENS reverse-lookup (addresses only, mainnet).
- *   2. `name` PROPERTY bound via PIN, scoped to the `editions` list in order. First hit wins.
+ *   2. `name` PROPERTY bound via PIN, scoped to the `lenses` list in order. First hit wins.
  *   3. Short-hex fallback (`0xabcd…ef01`).
  *
  * `target` may be an EVM address or a raw 32-byte hex UID. Addresses are
@@ -57,7 +57,7 @@ const EAS_GET_ATTESTATION_ABI = [
 
 type UseDisplayNameArgs = {
   target: `0x${string}` | undefined;
-  editions?: readonly string[];
+  lenses?: readonly string[];
   /** Skip ENS reverse-lookup (e.g. for schema / attestation UIDs where it's meaningless). */
   skipEns?: boolean;
   /** Short-hex fallback max length — defaults to 10 ("0xabcd…ef01"). */
@@ -72,7 +72,7 @@ type UseDisplayNameResult = {
   /** True until both ENS and PROPERTY lookups have settled. */
   isLoading: boolean;
   /** The attester whose `name` binding resolved (when source === "property"). */
-  resolvedEdition?: `0x${string}`;
+  resolvedLens?: `0x${string}`;
 };
 
 function shortHex(hex: string, maxLen = 10): string {
@@ -113,7 +113,7 @@ function decodeValue(data: `0x${string}`): string {
 
 export const useDisplayName = ({
   target,
-  editions,
+  lenses,
   skipEns,
   shortLength = 10,
 }: UseDisplayNameArgs): UseDisplayNameResult => {
@@ -135,13 +135,13 @@ export const useDisplayName = ({
     },
   });
 
-  const editionsKey = useMemo(
+  const lensesKey = useMemo(
     () =>
-      (editions ?? [])
+      (lenses ?? [])
         .filter(e => e && e !== zeroAddress)
         .map(e => e.toLowerCase())
         .join(","),
-    [editions],
+    [lenses],
   );
 
   const [propertyLookup, setPropertyLookup] = useState<{
@@ -158,8 +158,8 @@ export const useDisplayName = ({
         if (!cancelled) setPropertyLookup({ name: null, attester: null, loading: false });
         return;
       }
-      const editionsList = (editions ?? []).filter(e => e && e !== zeroAddress);
-      if (editionsList.length === 0) {
+      const lensesList = (lenses ?? []).filter(e => e && e !== zeroAddress);
+      if (lensesList.length === 0) {
         if (!cancelled) setPropertyLookup({ name: null, attester: null, loading: false });
         return;
       }
@@ -199,17 +199,17 @@ export const useDisplayName = ({
           args: [],
         })) as `0x${string}`;
 
-        // 2. For each attester in edition order, fetch the active PROPERTY bound to the
+        // 2. For each attester in lens order, fetch the active PROPERTY bound to the
         //    key anchor via PIN. AGENT-NOTE (ADR-0041): PROPERTY value binding is now PIN
         //    (cardinality 1), so each attester has at most one active PROPERTY per key
         //    anchor — `getActivePinTarget` returns it in O(1), eliminating the old
         //    enumerate-and-pick-newest pattern that existed because TAG could accumulate.
-        for (const edition of editionsList) {
+        for (const lens of lensesList) {
           const propertyUID = (await publicClient.readContract({
             address: edgeResolverAddress,
             abi: EDGE_RESOLVER_ABI,
             functionName: "getActivePinTarget",
-            args: [keyAnchorUID, getAddress(edition), propertySchemaUID],
+            args: [keyAnchorUID, getAddress(lens), propertySchemaUID],
           })) as `0x${string}`;
           if (!propertyUID || propertyUID === zeroHash) continue;
 
@@ -231,11 +231,11 @@ export const useDisplayName = ({
             const value = decodeValue(att.data);
             if (!value || value.length === 0) continue;
             if (!cancelled) {
-              setPropertyLookup({ name: value, attester: getAddress(edition), loading: false });
+              setPropertyLookup({ name: value, attester: getAddress(lens), loading: false });
             }
             return;
           } catch {
-            // malformed PROPERTY — try the next edition
+            // malformed PROPERTY — try the next lens
           }
         }
 
@@ -250,7 +250,7 @@ export const useDisplayName = ({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [classified?.uid, editionsKey, indexerAddress, edgeResolverAddress, publicClient]);
+  }, [classified?.uid, lensesKey, indexerAddress, edgeResolverAddress, publicClient]);
 
   if (!classified) {
     return { displayName: target ?? "", source: "short-hex", isLoading: false };
@@ -265,7 +265,7 @@ export const useDisplayName = ({
       displayName: propertyLookup.name,
       source: "property",
       isLoading: false,
-      resolvedEdition: propertyLookup.attester ?? undefined,
+      resolvedLens: propertyLookup.attester ?? undefined,
     };
   }
 

@@ -18,7 +18,7 @@ The point is **permanent, credibly neutral archival**. Anyone can publish. Anyon
 - **DATA** is standalone file identity: `contentHash` + `size`. It does NOT belong to any specific path; it's pure content identity. Multiple paths can reference the same DATA.
 - **MIRRORs** are retrieval URIs. Each MIRROR references a DATA via `refUID` and carries one URI. Multiple MIRRORs per DATA (ipfs://, ar://, web3://, https://, magnet:) let the router pick the best available transport.
 
-**Edge attestations** (PIN, TAG) are the glue: `PIN(definition=anchorUID, refUID=dataUID, attester=alice)` means "Alice says this DATA lives at this path." Edges enable cross-referencing (same DATA at many paths) and per-attester **editions** (next section). The two edge schemas differ only in cardinality (ADR-0041):
+**Edge attestations** (PIN, TAG) are the glue: `PIN(definition=anchorUID, refUID=dataUID, attester=alice)` means "Alice says this DATA lives at this path." Edges enable cross-referencing (same DATA at many paths) and per-attester **lenses** (next section). The two edge schemas differ only in cardinality (ADR-0041):
 
 - **PIN** — cardinality 1. Used for file placement, PROPERTY value binding, and any predicate where one slot holds one thing. Re-attesting at the same `(attester, definition, targetSchema)` slot supersedes the prior PIN in O(1).
 - **TAG** — cardinality N. Used for folder visibility, descriptive labels, and any predicate where one slot accumulates many entries. Each entry carries an `int256 weight` for sort/score/ranking metadata.
@@ -27,19 +27,33 @@ Removal is always via `eas.revoke()` — there is no `applies=false` mechanism (
 
 Content-addressed dedup: the first DATA attestation for a given `contentHash` is canonical. Subsequent uploads of identical bytes reuse the existing DATA — only a new PIN is needed to place it at a new path.
 
-## Editions (whose content are you looking at?)
+## Lenses (whose content are you looking at?)
 
-Multiple attesters can place different DATA at the same Anchor. The router resolves which to serve via a URL parameter:
+Multiple attesters can place different DATA at the same Anchor. The
+router resolves which to serve via a URL parameter:
 
-```
-web3://<router>/docs/readme.md?editions=alice.eth,bob.eth
-```
+    web3://<router>/docs/readme.md?lenses=alice.eth,bob.eth
 
-Attesters are tried in order; the first with active content at that path wins ("fallback list" model, per ADR-0031). Alice's `readme.md` is served if she has any; otherwise Bob's.
+Each address in the list is a *lens* — a trusted attester whose
+attestations contribute to your view. The ordered list is your *lenses*.
+Lenses are tried in order; the first lens with active content at that
+path wins (first-attester-wins fallback, per ADR-0031). Alice's
+`readme.md` is served if she has any; otherwise Bob's. For properties
+and configs, lenses compose — overrides cascade through the list.
 
-Without `?editions=`, the router falls back to `?caller=` (the requesting address), then to the EFS deployer as a final default. **Nobody sees foreign content unless they explicitly opt in** — viewer sovereignty is a core design property.
+Without `?lenses=`, the router falls back to `?caller=` (the requesting
+address), then to the EFS deployer as a final default. **Nobody sees
+foreign content unless they explicitly opt in** — viewer sovereignty is
+a core design property.
 
-Reads are edition-scoped beyond just TAG resolution: mirrors and PROPERTYs on a DATA are also filtered to the winning attester. This prevents third parties from injecting a malicious mirror or a bogus `contentType` onto someone else's DATA.
+Reads are lens-scoped beyond just TAG resolution: mirrors and PROPERTYs
+on a DATA are also filtered to the winning attester. This prevents third
+parties from injecting a malicious mirror or a bogus `contentType` onto
+someone else's DATA.
+
+> *Note for readers of older ADRs (0013, 0014, 0026, 0031, 0039): the
+> term "edition" / "editions" in those documents is the same concept,
+> renamed in ADR-0043.*
 
 ## Seven EAS schemas
 
@@ -62,7 +76,7 @@ Full field definitions and resolver wiring: `02-Data-Models-and-Schemas.md`.
 | Contract | Role | State | Redeployable |
 |---|---|---|---|
 | EFSIndexer | Append-only kernel. All indices, path resolution, revocation tracking. | Yes (heavy) | No — schema UIDs encode its address |
-| EFSRouter | `web3://` URI resolution (ERC-5219). Edition-scoped content serving. | No | Yes — but URIs change |
+| EFSRouter | `web3://` URI resolution (ERC-5219). Lens-scoped content serving. | No | Yes — but URIs change |
 | EFSFileView | Directory listing views over EFSIndexer + EdgeResolver. | No | Yes — fully stateless |
 | EdgeResolver | PIN + TAG schema hooks (ADR-0041). `_activeBySlot` for PIN (O(1) singleton); `_activeByAAS` (struct-of-tuple) for TAG. | Yes | No — wired into EFSIndexer |
 | MirrorResolver | MIRROR schema hook. URI scheme allowlist + transport ancestry check. | Minimal | No — wired into EFSIndexer |
@@ -80,16 +94,16 @@ For a new file:
 4. **Attest contentType** — three attestations batched (ADR-0041 supersedes ADR-0035): `Anchor<PROPERTY>(refUID=DATA, name="contentType")` (skipped if already exists), a free-floating `PROPERTY(value="image/png")`, and a `PIN(definition=that anchor, refUID=that property)` that binds the value into the cardinality-1 slot.
 5. **Attest an ANCHOR** for the filename under the target folder (if the name slot doesn't already exist).
 6. **Attest a PIN** linking the DATA to the file Anchor under the uploader's address. Cardinality 1 — re-attesting at the same `(attester, definition, targetSchema)` slot supersedes the prior placement in O(1).
-7. **Ancestor-walk visibility TAGs** (ADR-0006 revised, ADR-0038, ADR-0041) — for every generic folder on the path from the immediate parent up to root exclusive, if the uploader has no active `TAG(definition=dataSchemaUID, refUID=folder)` yet, emit one. Weight defaults to 1 by convention; the kernel treats any existing, non-revoked TAG as active regardless of weight (ADR-0041 §4). Ensures the uploader's edition listing shows the folders that contain their content. Steady-state zero cost (walk exits once an existing TAG is found); pays 1 TAG per untagged ancestor on the first upload into a new subtree.
+7. **Ancestor-walk visibility TAGs** (ADR-0006 revised, ADR-0038, ADR-0041) — for every generic folder on the path from the immediate parent up to root exclusive, if the uploader has no active `TAG(definition=dataSchemaUID, refUID=folder)` yet, emit one. Weight defaults to 1 by convention; the kernel treats any existing, non-revoked TAG as active regardless of weight (ADR-0041 §4). Ensures the uploader's lens listing shows the folders that contain their content. Steady-state zero cost (walk exits once an existing TAG is found); pays 1 TAG per untagged ancestor on the first upload into a new subtree.
 
 Typical new upload: ~10 transactions. Gas-heavy by design — this is archival, not a commodity file service.
 
 ## Read flow (what `web3://<router>/path/file.png` does)
 
-1. Router parses the URL: path segments + `?editions=`, `?caller=`.
-2. **Top-level segment is classified** into one of four container flavors (ADR-0033): Ethereum address, EAS schema UID, EAS attestation UID, or anchor name. Address seeds `currentParent` with `bytes32(uint160(addr))`; anchor names seed `rootAnchorUID`. For schema and attestation UIDs, the router first checks for an **alias anchor** — a root-child anchor whose name is the UID in lowercase 0x-hex — and seeds `currentParent` with the alias if present; otherwise it seeds the raw UID. Alias anchors let schemas and attestations carry EFS-native metadata (human label PROPERTY, sub-anchors, TAGs) without conflating with the raw EAS record. When the container is an address and `?editions=` wasn't given, the router defaults editions to `[caller, segmentAddr]`.
+1. Router parses the URL: path segments + `?lenses=`, `?caller=`.
+2. **Top-level segment is classified** into one of four container flavors (ADR-0033): Ethereum address, EAS schema UID, EAS attestation UID, or anchor name. Address seeds `currentParent` with `bytes32(uint160(addr))`; anchor names seed `rootAnchorUID`. For schema and attestation UIDs, the router first checks for an **alias anchor** — a root-child anchor whose name is the UID in lowercase 0x-hex — and seeds `currentParent` with the alias if present; otherwise it seeds the raw UID. Alias anchors let schemas and attestations carry EFS-native metadata (human label PROPERTY, sub-anchors, TAGs) without conflating with the raw EAS record. When the container is an address and `?lenses=` wasn't given, the router defaults lenses to `[caller, segmentAddr]`.
 3. Walks the remaining path segments using `EFSIndexer.resolvePath` — every flavor reduces to a bytes32 parent, so the walk is the same code path.
-4. For each edition attester in order, queries `EdgeResolver` for the active placement PIN at that Anchor → DATA (cardinality-1, O(1) read). First attester with a match wins. Returns the DATA UID plus that attester's address.
+4. For each lens attester in order, queries `EdgeResolver` for the active placement PIN at that Anchor → DATA (cardinality-1, O(1) read). First attester with a match wins. Returns the DATA UID plus that attester's address.
 5. Finds the best MIRROR for the DATA **from the same attester**, by transport priority: `web3:// > ar:// > ipfs:// > magnet: > https://`. Skips revoked mirrors and invalid URIs. Capped at 500 mirror scans per request.
 6. Finds the `contentType` PROPERTY **from the same attester** on the DATA. Falls back to `application/octet-stream`.
 7. Serves:
@@ -103,7 +117,7 @@ Breaking these is painful or impossible to reverse:
 
 - **Append-only indices** (`03-Onchain-Indexing-Strategy.md`). Revocation sets an `_isRevoked` flag; never mutate or compact existing entries. Readers filter on iteration.
 - **Schema UIDs are immutable.** The UID hashes the field string; any field change produces a new schema UID. Old attestations stay under the old UID forever.
-- **Edition-scoped reads.** Mirrors and PROPERTYs on a DATA are filtered to the edition attester at read time — cross-attester injection of mirrors or MIME types is blocked by design.
+- **Lens-scoped reads.** Mirrors and PROPERTYs on a DATA are filtered to the lens attester at read time — cross-attester injection of mirrors or MIME types is blocked by design.
 - **Mainnet contracts are permanent.** No upgrades, no admin override, no migrations. Devnet uses upgradeable proxies for iteration; mainnet does not.
 
 ## Where to go next

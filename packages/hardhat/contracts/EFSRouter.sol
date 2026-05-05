@@ -128,9 +128,9 @@ contract EFSRouter is IDecentralizedApp {
         return "5219";
     }
 
-    /// @dev Maximum number of edition addresses accepted in a single `?editions=` query param.
+    /// @dev Maximum number of lens addresses accepted in a single `?lenses=` query param.
     ///      Prevents crafted URLs from causing unbounded `_parseAddressList` gas in RPC nodes.
-    uint256 private constant MAX_EDITIONS = 20;
+    uint256 private constant MAX_LENSES = 20;
 
     // String comparison helper
     function _stringsEqual(string memory a, string memory b) private pure returns (bool) {
@@ -233,18 +233,16 @@ contract EFSRouter is IDecentralizedApp {
         }
 
         // Combine parameter checks
-        address[] memory editions;
-        bool editionsExplicit = false;
+        address[] memory lenses;
+        bool lensesExplicit = false;
         address caller = msg.sender; // non-zero if web3:// client sets `from` on eth_call
         string memory chunkIndexStr = "";
         for (uint i = 0; i < params.length; i++) {
             if (
-                _stringsEqual(params[i].key, "editions") ||
-                _stringsEqual(params[i].key, "edition") ||
-                _stringsEqual(params[i].key, "curator")
+                _stringsEqual(params[i].key, "lenses")
             ) {
-                editions = _parseAddressList(params[i].value);
-                editionsExplicit = true;
+                lenses = _parseAddressList(params[i].value);
+                lensesExplicit = true;
             } else if (_stringsEqual(params[i].key, "chunk")) {
                 chunkIndexStr = params[i].value;
             } else if (_stringsEqual(params[i].key, "caller")) {
@@ -253,23 +251,23 @@ contract EFSRouter is IDecentralizedApp {
             }
         }
 
-        // Address-default editions: when browsing an address container with no explicit
-        // `?editions=`, default to `[caller, segmentAddr]` — "Vitalik's files, with my
-        // overrides on top". Consistent with ADR-0031 (explicit editions always override).
-        if (flavor == ContainerFlavor.Address && !editionsExplicit) {
+        // Address-default lenses: when browsing an address container with no explicit
+        // `?lenses=`, default to `[caller, segmentAddr]` — "Vitalik's files, with my
+        // overrides on top". Consistent with ADR-0031 (explicit lenses always override).
+        if (flavor == ContainerFlavor.Address && !lensesExplicit) {
             address segmentAddr = address(uint160(uint256(rawUID)));
             if (caller != address(0) && caller != segmentAddr) {
-                editions = new address[](2);
-                editions[0] = caller;
-                editions[1] = segmentAddr;
+                lenses = new address[](2);
+                lenses[0] = caller;
+                lenses[1] = segmentAddr;
             } else {
-                editions = new address[](1);
-                editions[0] = segmentAddr;
+                lenses = new address[](1);
+                lenses[0] = segmentAddr;
             }
         }
 
-        // 2. Find DATA via TAG query: resolve editions → TAG → DATA → MIRROR
-        (bytes32 dataUID, address dataAttester) = _findDataAtPath(targetAnchor, editions, caller);
+        // 2. Find DATA via TAG query: resolve lenses → TAG → DATA → MIRROR
+        (bytes32 dataUID, address dataAttester) = _findDataAtPath(targetAnchor, lenses, caller);
         if (dataUID == bytes32(0)) {
             // Schema/Attestation containers with no DATA attached fall back to raw-info JSON
             // instead of 404. Only fires when the user typed the container itself (no sub-path)
@@ -280,13 +278,13 @@ contract EFSRouter is IDecentralizedApp {
                 if (flavor == ContainerFlavor.Schema) return _respondSchemaJSON(rawUID);
                 if (flavor == ContainerFlavor.Attestation) return _respondAttestationJSON(rawUID);
             }
-            return (404, "Not Found: No data attached or curator unset", new KeyValue[](0));
+            return (404, "Not Found: No data attached or lens unset", new KeyValue[](0));
         }
 
-        // 3. Get best MIRROR for retrieval URI (scoped to the edition attester)
+        // 3. Get best MIRROR for retrieval URI (scoped to the lens attester)
         (string memory uri, bool hadMirrors) = _getBestMirrorURI(dataUID, dataAttester);
 
-        // 4. Get contentType from PROPERTY on DATA, scoped to the edition attester
+        // 4. Get contentType from PROPERTY on DATA, scoped to the lens attester
         string memory contentType = _getContentType(dataUID, dataAttester);
 
         // 5. Content Retrieval & Translation
@@ -450,7 +448,7 @@ contract EFSRouter is IDecentralizedApp {
         }
 
         // Guard against DoS via crafted URLs with hundreds of addresses
-        if (count > MAX_EDITIONS) count = MAX_EDITIONS;
+        if (count > MAX_LENSES) count = MAX_LENSES;
 
         address[] memory addresses = new address[](count);
         uint256 addrIdx = 0;
@@ -818,19 +816,19 @@ contract EFSRouter is IDecentralizedApp {
     // O(1) read per attester: `EdgeResolver.getActivePinTarget(anchor, attester, dataSchema)`.
     // Returns the DATA UID and the winning attester (used to scope mirror + PROPERTY selection).
     //
-    // Fallback priority when no ?editions= is specified:
+    // Fallback priority when no ?lenses= is specified:
     //   1. caller (from ?caller= param or msg.sender if non-zero) — user sees their own files
     //   2. EFS deployer — system-provided defaults (settings, docs, etc.)
     function _findDataAtPath(
         bytes32 targetAnchor,
-        address[] memory editions,
+        address[] memory lenses,
         address caller
     ) private view returns (bytes32, address) {
         bytes32 dataSchema = indexer.DATA_SCHEMA_UID();
 
         address[] memory attesters;
-        if (editions.length > 0) {
-            attesters = editions;
+        if (lenses.length > 0) {
+            attesters = lenses;
         } else if (caller != address(0)) {
             // Try caller first, then EFS deployer as fallback
             attesters = new address[](2);
@@ -853,9 +851,9 @@ contract EFSRouter is IDecentralizedApp {
         return (bytes32(0), address(0));
     }
 
-    // Get the best mirror URI for a DATA attestation, scoped to the edition attester.
+    // Get the best mirror URI for a DATA attestation, scoped to the lens attester.
     // Only mirrors attached by `attester` are considered — prevents third parties from
-    // injecting mirrors onto a DATA that is served under someone else's edition.
+    // injecting mirrors onto a DATA that is served under someone else's lens.
     //
     // Returns (uri, hadMirrors) where hadMirrors=true means at least one non-revoked mirror
     // from `attester` existed (even if none had a valid URI). Caller uses this to distinguish
@@ -924,7 +922,7 @@ contract EFSRouter is IDecentralizedApp {
         return (best, hadMirrors);
     }
 
-    // Get contentType from PROPERTY on DATA, scoped to the edition attester (ADR-0041,
+    // Get contentType from PROPERTY on DATA, scoped to the lens attester (ADR-0041,
     // superseding ADR-0035's append-only TAG-based singleton). PROPERTY value bindings
     // are Shape A (cardinality 1) and live on a PIN under `Anchor<PROPERTY>(parent=DATA,
     // name="contentType")`. Cross-attester protection comes from EdgeResolver._activeBySlot

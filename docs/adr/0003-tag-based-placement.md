@@ -6,7 +6,7 @@
 
 ## Context
 
-Originally, file placement was implicit: DATA's `refUID` pointed at an Anchor, so DATA was "in" that folder. This coupled file identity to placement and made multi-folder placement and per-attester editions impossible.
+Originally, file placement was implicit: DATA's `refUID` pointed at an Anchor, so DATA was "in" that folder. This coupled file identity to placement and made multi-folder placement and per-attester lenses impossible.
 
 ## Decision
 
@@ -19,14 +19,14 @@ TAG(definition = anchorUID, applies = true, refUID = dataUID, attester = msg.sen
 - `definition` — the path Anchor where the file appears
 - `refUID` — the DATA being placed
 - `applies = true/false` — placed or removed (singleton supersession via TagResolver)
-- `attester` — who placed it (this is the edition identity)
+- `attester` — who placed it (this is the lens identity)
 
 Removal: a new TAG with `applies = false` (clean) or EAS revocation of the TAG attestation (also clean, but irreversible).
 
 ## Consequences
 
 - **Cross-referencing**: same DATA can be TAGged at any number of paths.
-- **Per-attester editions**: Alice and Bob can independently TAG the same DATA at the same path; or different DATAs at the same path. The router resolves which to serve via the `?editions=` parameter (ADR-0031).
+- **Per-attester lenses**: Alice and Bob can independently TAG the same DATA at the same path; or different DATAs at the same path. The router resolves which to serve via the `?lenses=` parameter (ADR-0031).
 - **Clean untag semantics**: `applies=false` removes without revoking the historical attestation.
 - **Compact index**: `_activeByAttesterAndSchema` (ADR-0007) gives O(1) listings of "what's currently placed here by this attester."
 - More attestations per upload (ANCHOR + DATA + MIRROR + TAG vs. just DATA in the old model). Gas cost accepted.

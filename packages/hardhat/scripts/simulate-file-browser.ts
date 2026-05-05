@@ -255,28 +255,28 @@ async function main() {
   const petsUID = await anchor(owner, `pets_${S}`, rootUID);
   console.log(`  /pets_${S}/  created`);
 
-  // /pets/best.jpg — 3 editions via PIN-based placement
+  // /pets/best.jpg — 3 lenses via PIN-based placement
   const bestUID = await anchor(owner, "best.jpg", petsUID, dataSchemaUID);
 
-  // Owner's edition: DATA + PROPERTY(contentType) + MIRROR + PIN
+  // Owner's lens: DATA + PROPERTY(contentType) + MIRROR + PIN
   const ownerBestData = await createData(owner, "owner-best-jpeg-bytes");
   await property(owner, ownerBestData.uid, "contentType", "image/jpeg");
   await mirror(owner, ownerBestData.uid, ipfsTransportUID, "ipfs://owner-best");
   await placeData(owner, ownerBestData.uid, bestUID);
 
-  // User1's edition
+  // User1's lens
   const u1BestData = await createData(user1, "user1-best-jpeg-bytes");
   await property(user1, u1BestData.uid, "contentType", "image/jpeg");
   await mirror(user1, u1BestData.uid, ipfsTransportUID, "ipfs://user1-best");
   await placeData(user1, u1BestData.uid, bestUID);
 
-  // User2's edition
+  // User2's lens
   const u2BestData = await createData(user2, "user2-best-jpeg-bytes");
   await property(user2, u2BestData.uid, "contentType", "image/jpeg");
   await mirror(user2, u2BestData.uid, ipfsTransportUID, "ipfs://user2-best");
   await placeData(user2, u2BestData.uid, bestUID);
 
-  console.log(`  /pets/best.jpg  3 editions (PIN-placed)`);
+  console.log(`  /pets/best.jpg  3 lenses (PIN-placed)`);
 
   // /pets/cats/
   const catsUID = await anchor(owner, "cats", petsUID);
@@ -316,7 +316,7 @@ async function main() {
   await mirror(user1, u1VitalikData.uid, ipfsTransportUID, "ipfs://user1-vitalik");
   await placeData(user1, u1VitalikData.uid, vitalikUID);
 
-  console.log(`  /memes_${S}/vitalik.jpg  2 editions`);
+  console.log(`  /memes_${S}/vitalik.jpg  2 lenses`);
   console.log("\n  Tree built successfully.\n");
 
   // ══════════════════════════════════════════════════════════════
@@ -347,9 +347,9 @@ async function main() {
   const petsCount = await indexer.getChildrenCount(petsUID);
   assert("getChildrenCount matches", petsCount === 3n);
 
-  // ── Test 3: Edition Directory Listing (getChildrenByAddressList — dedup) ──
-  console.log("\n[3] Edition Directory Listing");
-  const [editionList] = await indexer.getChildrenByAddressList(
+  // ── Test 3: Lens Directory Listing (getChildrenByAddressList — dedup) ──
+  console.log("\n[3] Lens Directory Listing");
+  const [lensList] = await indexer.getChildrenByAddressList(
     petsUID,
     [u1Addr, u2Addr, ownerAddr],
     0n,
@@ -359,10 +359,10 @@ async function main() {
   );
   assert(
     "getChildrenByAddressList returns 3 unique items (best.jpg, cats, dogs)",
-    editionList.length === 3,
-    `got ${editionList.length} items`,
+    lensList.length === 3,
+    `got ${lensList.length} items`,
   );
-  assert("First item is best.jpg (insertion order)", editionList[0] === bestUID);
+  assert("First item is best.jpg (insertion order)", lensList[0] === bestUID);
 
   // ── Test 4: PIN-based File Placement + Folder Listing ──
   console.log("\n[4] PIN-based File Placement (getActivePinTarget — O(1))");

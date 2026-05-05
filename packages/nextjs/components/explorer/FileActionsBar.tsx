@@ -23,7 +23,7 @@ export type FileActionsBarProps = {
   indexerAddress?: `0x${string}`;
   easAddress?: `0x${string}`;
   sortOverlayAddress?: `0x${string}`;
-  editionAddresses?: string[];
+  lensAddresses?: string[];
 
   activeSortInfoUID?: string | null;
   onSortChange?: (uid: string | null) => void;
@@ -56,7 +56,7 @@ export const FileActionsBar = ({
   indexerAddress,
   easAddress,
   sortOverlayAddress,
-  editionAddresses,
+  lensAddresses,
   activeSortInfoUID,
   onSortChange,
   onSortProcessed,
@@ -80,7 +80,7 @@ export const FileActionsBar = ({
             indexerAddress={indexerAddress}
             easAddress={easAddress}
             sortOverlayAddress={sortOverlayAddress}
-            editionAddresses={editionAddresses ?? []}
+            lensAddresses={lensAddresses ?? []}
             activeSortInfoUID={activeSortInfoUID ?? null}
             onSortChange={onSortChange}
             onProcessComplete={onSortProcessed}
@@ -125,7 +125,7 @@ export const FileActionsBar = ({
         indexerAddress={indexerAddress}
         easAddress={easAddress}
         sortOverlayAddress={sortOverlayAddress}
-        editionAddresses={editionAddresses}
+        lensAddresses={lensAddresses}
         onFolderCreated={onFolderCreated}
         onFileCreated={onFileCreated}
       />

@@ -16,7 +16,7 @@ EFS has two distinct ordering mechanisms:
 
 ## Curated Lists via Positional Anchors
 
-A curated list is a directory of child **positional anchors** named "a0", "a1", "a2", etc. Each position is itself an anchor — it can have per-attester DATA attestations, enabling editions at the position level.
+A curated list is a directory of child **positional anchors** named "a0", "a1", "a2", etc. Each position is itself an anchor — it can have per-attester DATA attestations, enabling lenses at the position level.
 
 ```
 /my-playlist/
@@ -78,7 +78,7 @@ Future additions to `/sorts/` could include:
 - "ByPopularity" — sort by referencing attestation count
 - "ByCustom" — sort by a user-defined PROPERTY key
 
-Each global sort is a naming anchor + SORT_INFO; different attesters can provide competing implementations (e.g., different address for the rating sortFunc). Editions resolution picks the trusted implementation.
+Each global sort is a naming anchor + SORT_INFO; different attesters can provide competing implementations (e.g., different address for the rating sortFunc). Lenses resolution picks the trusted implementation.
 
 ---
 
@@ -99,7 +99,7 @@ These would require ISortFunc to resolve the DATA attestation for an anchor, not
 
 ## Web of Trust Integration
 
-Sort discovery today uses a flat editions list (ordered address list). A more sophisticated trust model could weight sort implementations:
+Sort discovery today uses a flat lenses list (ordered address list). A more sophisticated trust model could weight sort implementations:
 - Trust transitively through follows/vouches
 - Score implementations by how many trusted users use them
 - Surface "popular among people you trust" sorts
@@ -112,7 +112,7 @@ This integrates naturally with the naming anchor model: the naming anchor is the
 
 When a better ISortFunc is deployed for an existing sort concept:
 1. Curator creates a new SORT_INFO attestation referencing the same naming anchor
-2. Editions users who trusted the curator's address now get the new implementation
+2. Lenses users who trusted the curator's address now get the new implementation
 3. Old SORT_INFO can be revoked
 4. The shared sorted list for the old sortInfoUID persists — readable, no longer updateable after revoke
 
@@ -131,16 +131,16 @@ This is not required for v1 but the contract design accommodates it — `process
 
 ---
 
-## Positional Anchor Editions: Advanced Use
+## Positional Anchor Lenses: Advanced Use
 
-Since each positional anchor in a curated list can have per-attester DATA, curated lists naturally support editions:
+Since each positional anchor in a curated list can have per-attester DATA, curated lists naturally support lenses:
 
 ```
-Alice's playlist edition:  /a0/ → DATA(alice)="track-A"
-Bob's playlist edition:    /a0/ → DATA(bob)="track-B"
+Alice's playlist lens:  /a0/ → DATA(alice)="track-A"
+Bob's playlist lens:    /a0/ → DATA(bob)="track-B"
 ```
 
-Viewers choose whose playlist edition to see. This enables:
+Viewers choose whose playlist lens to see. This enables:
 - Collaborative playlists where each contributor proposes positions
 - Forked playlists (bob takes alice's list and substitutes some tracks)
 - Attested recommendations (sign that you endorse this ordering)

@@ -14,7 +14,7 @@ import {
   UserCircleIcon,
 } from "@heroicons/react/24/outline";
 import { useDisplayName } from "~~/hooks/efs/useDisplayName";
-import { useEditionDirectoryPage } from "~~/hooks/efs/useEditionDirectoryPage";
+import { useLensesDirectoryPage } from "~~/hooks/efs/useLensesDirectoryPage";
 import { useSortedData } from "~~/hooks/efs/useSortedData";
 import { useDeployedContractInfo, useScaffoldReadContract } from "~~/hooks/scaffold-eth";
 import { useTargetNetwork } from "~~/hooks/scaffold-eth/useTargetNetwork";
@@ -41,8 +41,8 @@ const TreeNode = ({
   propertySchemaUID,
   defaultOpen,
   expandedUIDs,
-  editionAddresses,
-  explicitEditions,
+  lensAddresses,
+  explicitLenses,
   systemTagsUID,
   systemSortsUID,
   hideAliasAnchors,
@@ -58,9 +58,9 @@ const TreeNode = ({
   propertySchemaUID: string;
   defaultOpen?: boolean;
   expandedUIDs?: Set<string>;
-  editionAddresses: string[];
-  /** True when the URL carries an explicit `?editions=` param (even empty). Keeps the tree edition-scoped for deliberately-empty lists per ADR-0031. */
-  explicitEditions?: boolean;
+  lensAddresses: string[];
+  /** True when the URL carries an explicit `?lenses=` param (even empty). Keeps the tree lens-scoped for deliberately-empty lists per ADR-0031. */
+  explicitLenses?: boolean;
   systemTagsUID?: string;
   systemSortsUID?: string;
   /** When true, filters out child anchors whose name looks like a schema/attestation UID alias. Applied only at root per ADR-0033. */
@@ -69,15 +69,15 @@ const TreeNode = ({
   sortOverlayAddress?: `0x${string}`;
   sortRefreshKey?: number;
 }) => {
-  const hasEditions = editionAddresses && editionAddresses.length > 0;
-  const lockedToEditions = useRef(false);
-  if (hasEditions) lockedToEditions.current = true;
-  // `explicitEditions` keeps the tree in edition-scoped mode even when the
-  // resolved list is empty, so `?editions=` (or a failed ENS lookup) renders
+  const hasLenses = lensAddresses && lensAddresses.length > 0;
+  const lockedToLenses = useRef(false);
+  if (hasLenses) lockedToLenses.current = true;
+  // `explicitLenses` keeps the tree in lens-scoped mode even when the
+  // resolved list is empty, so `?lenses=` (or a failed ENS lookup) renders
   // an empty tree instead of silently falling back to the unscoped query.
   // Codex P2 on PR #9, ADR-0031 "explicit param must not widen results".
-  const useEditionsQuery =
-    explicitEditions || ((hasEditions || lockedToEditions.current) && editionAddresses.length > 0);
+  const useLensesQuery =
+    explicitLenses || ((hasLenses || lockedToLenses.current) && lensAddresses.length > 0);
 
   const { data: efsFileViewInfo } = useDeployedContractInfo({ contractName: "EFSFileView" });
 
@@ -85,36 +85,36 @@ const TreeNode = ({
     contractName: "EFSFileView",
     functionName: "getDirectoryPage",
     args: [uid as `0x${string}`, 0n, 50n, dataSchemaUID as `0x${string}`, propertySchemaUID as `0x${string}`],
-    query: { enabled: !useEditionsQuery },
+    query: { enabled: !useLensesQuery },
   });
 
-  // Edition mode: iterate the opaque cursor so a phase-0 scan-budget burn doesn't
+  // Lens mode: iterate the opaque cursor so a phase-0 scan-budget burn doesn't
   // render the node as empty when phase-1 has matches. The hook auto-advances
   // on empty pages until at least one page of children is collected or the
   // cursor is exhausted (ADR-0036). The tree is a navigation summary, not a
   // complete listing — `loadMore` is intentionally unused here.
-  const { items: editionChildren, isLoading: isEditionLoading } = useEditionDirectoryPage({
+  const { items: lensChildren, isLoading: isLensLoading } = useLensesDirectoryPage({
     parentAnchor: uid as `0x${string}`,
     dataSchemaUID: dataSchemaUID as `0x${string}`,
-    editionAddresses,
+    lensAddresses,
     fileViewAddress: efsFileViewInfo?.address as `0x${string}` | undefined,
     fileViewAbi: efsFileViewInfo?.abi as any,
     pageSize: 50n,
-    // Skip the hook entirely when edition mode is explicit but the resolved
+    // Skip the hook entirely when lens mode is explicit but the resolved
     // list is empty — the result is trivially `[]` with no loading state.
     // Without this guard the hook would sit in `isLoading` forever and the
     // tree would render spinners for a deliberately-empty scope.
-    enabled: useEditionsQuery && editionAddresses.length > 0,
+    enabled: useLensesQuery && lensAddresses.length > 0,
   });
 
-  const isLoading = useEditionsQuery ? isEditionLoading : isStandardLoading;
-  const children = useEditionsQuery ? (editionAddresses.length === 0 ? [] : editionChildren) : standardChildren;
+  const isLoading = useLensesQuery ? isLensLoading : isStandardLoading;
+  const children = useLensesQuery ? (lensAddresses.length === 0 ? [] : lensChildren) : standardChildren;
 
   const { sortedUIDs } = useSortedData({
     sortInfoUID: activeSortInfoUID ?? null,
     parentAnchor: uid,
     sortOverlayAddress,
-    editionAddresses,
+    lensAddresses,
     refreshKey: sortRefreshKey,
   });
 
@@ -196,8 +196,8 @@ const TreeNode = ({
                 dataSchemaUID={dataSchemaUID}
                 propertySchemaUID={propertySchemaUID}
                 expandedUIDs={expandedUIDs}
-                editionAddresses={editionAddresses}
-                explicitEditions={explicitEditions}
+                lensAddresses={lensAddresses}
+                explicitLenses={explicitLenses}
                 systemTagsUID={systemTagsUID}
                 systemSortsUID={systemSortsUID}
                 activeSortInfoUID={activeSortInfoUID}
@@ -261,7 +261,7 @@ const AddressEntry = ({
   isActive?: boolean;
   onSelect: (addr: string) => void;
 }) => {
-  const editions = useMemo(() => {
+  const lenses = useMemo(() => {
     const out: string[] = [];
     const seen = new Set<string>();
     const push = (a: string | undefined) => {
@@ -277,7 +277,7 @@ const AddressEntry = ({
     return out;
   }, [connectedAddress, address, deployerAddress]);
 
-  const { displayName } = useDisplayName({ target: address as `0x${string}`, editions });
+  const { displayName } = useDisplayName({ target: address as `0x${string}`, lenses });
   const label = isYou ? "You" : displayName;
 
   return (
@@ -459,7 +459,7 @@ const AttestationEntry = ({
   isActive?: boolean;
   onSelect: (uid: string) => void;
 }) => {
-  const editions = useMemo(() => {
+  const lenses = useMemo(() => {
     const out: string[] = [];
     const seen = new Set<string>();
     const push = (a: string | undefined) => {
@@ -474,7 +474,7 @@ const AttestationEntry = ({
     return out;
   }, [connectedAddress, deployerAddress]);
 
-  const { displayName, source } = useDisplayName({ target: uid as `0x${string}`, editions, skipEns: true });
+  const { displayName, source } = useDisplayName({ target: uid as `0x${string}`, lenses, skipEns: true });
   // Show the resolved `name` PROPERTY on top when available; otherwise fall
   // back to the short UID as the primary label so the two-line layout stays
   // consistent with addresses and schemas.
@@ -590,9 +590,9 @@ export type TopicTreeProps = {
   activeContainer?: ClassifiedContainer | null;
   onSelect: (uid: string, path: PathItem[]) => void;
   expandedUIDs?: Set<string>;
-  editionAddresses: string[];
-  /** True when the URL carries an explicit `?editions=` param (even empty or unresolvable). Keeps the tree edition-scoped per ADR-0031. */
-  explicitEditions?: boolean;
+  lensAddresses: string[];
+  /** True when the URL carries an explicit `?lenses=` param (even empty or unresolvable). Keeps the tree lens-scoped per ADR-0031. */
+  explicitLenses?: boolean;
   activeSortInfoUID?: string | null;
   sortOverlayAddress?: `0x${string}`;
   sortRefreshKey?: number;
@@ -604,8 +604,8 @@ export const TopicTree = ({
   activeContainer,
   onSelect,
   expandedUIDs,
-  editionAddresses,
-  explicitEditions,
+  lensAddresses,
+  explicitLenses,
   activeSortInfoUID,
   sortOverlayAddress,
   sortRefreshKey,
@@ -658,8 +658,8 @@ export const TopicTree = ({
               propertySchemaUID={propertySchemaUID}
               defaultOpen
               expandedUIDs={expandedUIDs}
-              editionAddresses={editionAddresses}
-              explicitEditions={explicitEditions}
+              lensAddresses={lensAddresses}
+              explicitLenses={explicitLenses}
               systemTagsUID={systemTagsUID as string | undefined}
               systemSortsUID={systemSortsUID as string | undefined}
               hideAliasAnchors

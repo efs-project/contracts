@@ -40,9 +40,9 @@ Fix: deleted the web3protocol attempt entirely; the direct `publicClient.readCon
 
 ---
 
-### 2026-04-19 — [claude] Folder child-count renders as "Folder" in edition mode
+### 2026-04-19 — [claude] Folder child-count renders as "Folder" in lens mode
 
-In `FileBrowser.tsx` the folder row previously rendered `{childCount} items` using `indexer.getChildrenCount(uid)`, which is an append-only kernel count over all permanent anchors and never decreases when placements are revoked. In edition-scoped mode the count is always visually wrong after any delete. Replaced with the literal string `"Folder"` when `useEditionsQuery` is true; the raw count still shows in non-edition mode where it matches what's visible. An accurate edition-filtered count would require either a second indexer query per row or a new `_activeByAAS`-counting view — deferred to FUTURE_WORK.
+In `FileBrowser.tsx` the folder row previously rendered `{childCount} items` using `indexer.getChildrenCount(uid)`, which is an append-only kernel count over all permanent anchors and never decreases when placements are revoked. In lens-scoped mode the count is always visually wrong after any delete. Replaced with the literal string `"Folder"` when `useLensesQuery` is true; the raw count still shows in non-lens mode where it matches what's visible. An accurate lens-filtered count would require either a second indexer query per row or a new `_activeByAAS`-counting view — deferred to FUTURE_WORK.
 
 ---
 
@@ -59,3 +59,5 @@ Created `dev-process` branch from main with: lean `AGENTS.md` as canonical entry
 The production EFS Client (Vite/Lit) lives at https://github.com/efs-project/client. Recorded inline in `AGENTS.md`. Resolves the Tier 2 question on production client discoverability. Actual review of the client's code is still deferred to a dedicated session per `docs/LAUNCH_CHECKLIST.md`.
 
 2026-04-22: Pin invariant requires fresh fork + cleared `deployments/localhost/` cache. The hardhat deployer account (`0xf39Fd6e51...`) has 47,236 prior Sepolia transactions at the pinned block — deterministic, but only when the fork truly starts fresh. `pkill -f "hardhat node"` does NOT kill the running node (wrong pattern); use `kill <pid>` or `lsof -i :8545` to find the PID. Running `yarn deploy` on an already-used node advances nonces → different addresses → pin breaks. CI/devnet should always use a fresh node per deploy run. [claude-sonnet-4.6]
+
+- 2026-05-05: Renamed "editions" feature to "lenses." See ADR-0043. Pre-launch clean break, no URL aliases. Each trusted attester is a lens; the ordered list is your lenses. Includes one-time in-place terminology refresh of accepted ADRs (substance preserved).

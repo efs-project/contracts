@@ -8,7 +8,7 @@
  *      with the same schema
  *   3. Merge: local names override global names (same-name match)
  *   4. For each naming anchor, resolve the best SORT_INFO attestation via
- *      the editions address list (first match wins)
+ *      the lenses address list (first match wins)
  *
  * Returns: { availableSorts, isLoading, refetch }
  */
@@ -126,8 +126,8 @@ interface UseSortDiscoveryOptions {
   parentAnchor: string | undefined;
   indexerAddress: `0x${string}` | undefined;
   easAddress: `0x${string}` | undefined;
-  /** Editions addresses for SORT_INFO resolution (ordered, first match wins) */
-  editionAddresses: string[];
+  /** Lenses addresses for SORT_INFO resolution (ordered, first match wins) */
+  lensAddresses: string[];
   /** Only return sorts where targetSchema matches (bytes32(0) matches everything) */
   filterBySchema?: string;
 }
@@ -142,7 +142,7 @@ export function useSortDiscovery({
   parentAnchor,
   indexerAddress,
   easAddress,
-  editionAddresses,
+  lensAddresses,
   filterBySchema,
 }: UseSortDiscoveryOptions): UseSortDiscoveryResult {
   const publicClient = usePublicClient();
@@ -153,7 +153,7 @@ export function useSortDiscovery({
   const refetch = useCallback(() => setRefreshKey(k => k + 1), []);
 
   // Serialize to a stable string so array reference churn doesn't retrigger discovery
-  const editionsKey = editionAddresses.join(",");
+  const lensesKey = lensAddresses.join(",");
 
   useEffect(() => {
     if (!parentAnchor || !indexerAddress || !easAddress || !publicClient) return;
@@ -206,10 +206,10 @@ export function useSortDiscovery({
           }
         }
 
-        // Resolution chain for global sorts: user editions first, deployer as final fallback.
+        // Resolution chain for global sorts: user lenses first, deployer as final fallback.
         const globalResolutionChain: string[] = [
-          ...editionAddresses,
-          ...(systemDeployer && !editionAddresses.map(a => a.toLowerCase()).includes(systemDeployer.toLowerCase())
+          ...lensAddresses,
+          ...(systemDeployer && !lensAddresses.map(a => a.toLowerCase()).includes(systemDeployer.toLowerCase())
             ? [systemDeployer]
             : []),
         ];
@@ -261,7 +261,7 @@ export function useSortDiscovery({
 
         // 5. Build name → naming anchor maps (local and global kept separate).
         //    Do NOT pre-strip globals that also exist locally — the local name may
-        //    fail to resolve to a usable SORT_INFO for the current editions chain,
+        //    fail to resolve to a usable SORT_INFO for the current lenses chain,
         //    in which case we fall back to the global entry rather than lose the name.
         const localMap = new Map<string, `0x${string}`>();
         for (let i = 0; i < localNamingAnchors.length; i++) {
@@ -274,7 +274,7 @@ export function useSortDiscovery({
           if (name && !globalMap.has(name)) globalMap.set(name, globalNamingAnchors[i]);
         }
 
-        // Resolve a single naming anchor's best SORT_INFO by walking an editions chain.
+        // Resolve a single naming anchor's best SORT_INFO by walking a lenses chain.
         // Returns null if no non-revoked SORT_INFO is found.
         //
         // For each attester we request the LATEST SORT_INFO (reverseOrder=true) so
@@ -324,7 +324,7 @@ export function useSortDiscovery({
               let isLocal = false;
 
               if (localUID) {
-                const resolved = await resolveSortInfo(localUID, editionAddresses);
+                const resolved = await resolveSortInfo(localUID, lensAddresses);
                 if (resolved) {
                   namingUID = localUID;
                   sortInfoUID = resolved;
@@ -388,9 +388,9 @@ export function useSortDiscovery({
     return () => {
       cancelled = true;
     };
-    // editionsKey: serialize array so array reference changes don't retrigger the effect
+    // lensesKey: serialize array so array reference changes don't retrigger the effect
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [parentAnchor, indexerAddress, easAddress, publicClient, editionsKey, filterBySchema, refreshKey]);
+  }, [parentAnchor, indexerAddress, easAddress, publicClient, lensesKey, filterBySchema, refreshKey]);
 
   return { availableSorts, isLoading, refetch };
 }

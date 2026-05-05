@@ -2,7 +2,7 @@
 
 **Status:** Superseded by ADR-0041
 **Date:** 2026-04-18
-**Related:** ADR-0002 (DATA standalone), ADR-0003 (TAG-based placement), ADR-0005 (superseded — contentType moved to PROPERTY), ADR-0014 (edition-scoped PROPERTY lookup), ADR-0034 (`name` PROPERTY)
+**Related:** ADR-0002 (DATA standalone), ADR-0003 (TAG-based placement), ADR-0005 (superseded — contentType moved to PROPERTY), ADR-0014 (lens-scoped PROPERTY lookup), ADR-0034 (`name` PROPERTY)
 
 ## Context
 
@@ -108,7 +108,7 @@ Other non-reserved conventional keys (`"description"`, `"icon"`, `"previousVersi
 - Symmetric mental model: anchors are the static tree; DATA and PROPERTY are free-floating values, both placed via TAG. One model to reason about.
 - PROPERTY on any container (address, schema, attestation) works without indexer-side kind dispatch — the TAG validator handles it.
 - Per-attester singleton for "Alice's current value of contentType on this DATA" is automatic from `_activeByAAS`; no separate lookup structure.
-- Name-anchors give containers a navigable structure for metadata. `/<addr>/name/` resolves to the name anchor; a future UI can show all values attested by all editions without a bespoke query.
+- Name-anchors give containers a navigable structure for metadata. `/<addr>/name/` resolves to the name anchor; a future UI can show all values attested by all lenses without a bespoke query.
 - ADR-0034's `name` PROPERTY, ADR-0005's `contentType`, and future PROPERTYs all use the same attestation shape.
 
 **Costs**

@@ -48,7 +48,7 @@ const PERSONAS: { name: string; address: string }[] = [
  * O(1) `getActivePinTarget` call.
  *
  * Localhost/devnet only — skipped on live networks. The deployer attests;
- * unconfigured viewers fall through to the deployer's edition per ADR-0016,
+ * unconfigured viewers fall through to the deployer's lens per ADR-0016,
  * so the personas render correctly out of the box.
  */
 const deployPersonaNames: DeployFunction = async function (hre: HardhatRuntimeEnvironment) {

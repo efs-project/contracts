@@ -79,7 +79,7 @@ type AddressProps = {
    * Defaults to `[connectedAddress, viewedAddress]` — the viewer's own attestations
    * take precedence, with the viewed user's self-attestation as fallback.
    */
-  editions?: readonly string[];
+  lenses?: readonly string[];
 };
 
 export const Address = ({
@@ -88,15 +88,15 @@ export const Address = ({
   format,
   size = "base",
   onlyEnsOrAddress = false,
-  editions,
+  lenses,
 }: AddressProps) => {
   const checkSumAddress = address ? getAddress(address) : undefined;
 
   const { targetNetwork } = useTargetNetwork();
   const { address: connectedAddress } = useAccount();
 
-  const effectiveEditions =
-    editions ?? (checkSumAddress ? ([connectedAddress, checkSumAddress].filter(Boolean) as string[]) : []);
+  const effectiveLenses =
+    lenses ?? (checkSumAddress ? ([connectedAddress, checkSumAddress].filter(Boolean) as string[]) : []);
 
   const {
     displayName: resolvedName,
@@ -104,7 +104,7 @@ export const Address = ({
     isLoading: isNameLoading,
   } = useDisplayName({
     target: checkSumAddress,
-    editions: effectiveEditions,
+    lenses: effectiveLenses,
   });
 
   const ens = nameSource === "ens" ? resolvedName : undefined;

@@ -59,10 +59,10 @@ const FILE_VIEW_MIRRORS_ABI = [
 
 export const MirrorsPanel = ({
   fileAnchorUID,
-  editionAddresses,
+  lensAddresses,
 }: {
   fileAnchorUID: string;
-  editionAddresses: string[];
+  lensAddresses: string[];
 }) => {
   const [mirrors, setMirrors] = useState<MirrorItem[]>([]);
   const [dataUID, setDataUID] = useState<string | null>(null);
@@ -102,13 +102,13 @@ export const MirrorsPanel = ({
 
     const requestId = ++resolveIdRef.current;
 
-    const attesters = editionAddresses.length > 0 ? editionAddresses : connectedAddress ? [connectedAddress] : [];
+    const attesters = lensAddresses.length > 0 ? lensAddresses : connectedAddress ? [connectedAddress] : [];
     if (attesters.length === 0) {
       setDataUID(null);
       return;
     }
 
-    // First-attester-wins fallback (ADR-0031): walk the edition list in order; the first
+    // First-attester-wins fallback (ADR-0031): walk the lens list in order; the first
     // attester with an active PIN at this slot supplies the DATA.
     for (const attester of attesters) {
       try {
@@ -131,7 +131,7 @@ export const MirrorsPanel = ({
     }
     // No active PIN found for any attester — clear stale value
     if (requestId === resolveIdRef.current) setDataUID(null);
-  }, [publicClient, edgeResolverInfo, dataSchemaUID, fileAnchorUID, editionAddresses, connectedAddress]);
+  }, [publicClient, edgeResolverInfo, dataSchemaUID, fileAnchorUID, lensAddresses, connectedAddress]);
 
   // Monotonic request ID to prevent stale mirror fetch results from overwriting current state.
   const fetchMirrorsIdRef = useRef(0);

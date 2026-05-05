@@ -2,7 +2,7 @@ import { ethers } from "hardhat";
 import { EFSIndexer, EFSSortOverlay, NameSort, TimestampSort, EdgeResolver } from "../typechain-types";
 
 /**
- * EFS Sort Overlay + Editions + PINs/TAGs Simulation
+ * EFS Sort Overlay + Lenses + PINs/TAGs Simulation
  *
  * Exercises everything the UI will need against a deployed EFS stack using the
  * three-layer data model: paths (Anchors) → data (DATA) → retrieval (MIRRORs).
@@ -40,7 +40,7 @@ function assert(label: string, condition: boolean, detail: string = "") {
 async function main() {
   console.log("════════════════════════════════════════════════════════════");
   console.log("  EFS Full Integration Simulation");
-  console.log("  Sorts · DATA · MIRRORs · PINs · TAGs · Editions");
+  console.log("  Sorts · DATA · MIRRORs · PINs · TAGs · Lenses");
   console.log("════════════════════════════════════════════════════════════\n");
 
   const [deployer, alice, bob] = await ethers.getSigners();
@@ -341,7 +341,7 @@ async function main() {
    * (file placement under ADR-0041).
    * Returns {uid, uri} from the first attester that has an active PIN at the anchor.
    */
-  const resolveEdition = async (
+  const resolveLens = async (
     anchorUID: string,
     addressList: string[],
   ): Promise<{ uid: string; uri: string } | null> => {
@@ -462,9 +462,9 @@ async function main() {
   assert("overlay.computeHints returns correct array lengths", hintsMatch);
 
   // ════════════════════════════════════════════════════════════════════════════════
-  // PHASE 4: Edition-filtered sorted view via getSortedChunkByAddressList
+  // PHASE 4: Lens-filtered sorted view via getSortedChunkByAddressList
   // ════════════════════════════════════════════════════════════════════════════════
-  console.log("\n── Phase 4: Edition-filtered sorted views ──\n");
+  console.log("\n── Phase 4: Lens-filtered sorted views ──\n");
 
   // Alice's items only (filtered from shared sorted list)
   const [aliceFilteredSorted] = await overlay.getSortedChunkByAddressList(
@@ -477,9 +477,9 @@ async function main() {
     false,
   );
   const aliceFilteredNames = await Promise.all(aliceFilteredSorted.map(getName));
-  console.log("  Alice edition-filtered sorted:", aliceFilteredNames);
+  console.log("  Alice lens-filtered sorted:", aliceFilteredNames);
   assert(
-    "Alice edition-filtered sorted has 4 items",
+    "Alice lens-filtered sorted has 4 items",
     aliceFilteredSorted.length === 4,
     `got ${aliceFilteredSorted.length}`,
   );
@@ -495,8 +495,8 @@ async function main() {
     false,
   );
   const bobFilteredNames = await Promise.all(bobFilteredSorted.map(getName));
-  console.log("  Bob edition-filtered sorted:", bobFilteredNames);
-  assert("Bob edition-filtered has 3 items", bobFilteredSorted.length === 3, `got ${bobFilteredSorted.length}`);
+  console.log("  Bob lens-filtered sorted:", bobFilteredNames);
+  assert("Bob lens-filtered has 3 items", bobFilteredSorted.length === 3, `got ${bobFilteredSorted.length}`);
 
   // ════════════════════════════════════════════════════════════════════════════════
   // PHASE 5: Incremental processing — Alice adds 2 more items to shared list
@@ -547,9 +547,9 @@ async function main() {
   assert("Pagination order matches direct read", pagedNames.join(",") === finalNames.join(","));
 
   // ════════════════════════════════════════════════════════════════════════════════
-  // PHASE 7: DATA editions — place content at anchors via PINs
+  // PHASE 7: DATA lenses — place content at anchors via PINs
   // ════════════════════════════════════════════════════════════════════════════════
-  console.log("\n── Phase 7: DATA editions (three-layer: DATA + MIRROR + PIN) ──\n");
+  console.log("\n── Phase 7: DATA lenses (three-layer: DATA + MIRROR + PIN) ──\n");
 
   // Helper: create DATA + MIRROR + PIN (place at anchor) in sequence
   const uploadFile = async (
@@ -566,31 +566,31 @@ async function main() {
     return d;
   };
 
-  // Alice uploads her editions for all 6 of her anchors
+  // Alice uploads her lenses for all 6 of her anchors
   const aliceAppleData = await uploadFile(alice, aliceApple, "alice-apple-v1-bytes", "ipfs://alice-apple-v1");
   await uploadFile(alice, aliceBanana, "alice-banana-v1-bytes", "ipfs://alice-banana-v1");
   await uploadFile(alice, aliceMango, "alice-mango-v1-bytes", "ipfs://alice-mango-v1");
   const aliceZebraData = await uploadFile(alice, aliceZebra, "alice-zebra-v1-bytes", "ipfs://alice-zebra-v1");
   await uploadFile(alice, aliceCarrot, "alice-carrot-v1-bytes", "ipfs://alice-carrot-v1");
   await uploadFile(alice, aliceAardvark, "alice-aardvark-v1-bytes", "ipfs://alice-aardvark-v1");
-  console.log("  Alice uploaded editions for all 6 anchors");
+  console.log("  Alice uploaded lenses for all 6 anchors");
 
-  // Bob uploads editions for 3 of Alice's anchors (covering, remixing)
+  // Bob uploads lenses for 3 of Alice's anchors (covering, remixing)
   await uploadFile(bob, aliceApple, "bob-apple-v1-bytes", "ipfs://bob-apple-v1");
   await uploadFile(bob, aliceBanana, "bob-banana-v1-bytes", "ipfs://bob-banana-v1");
   const bobZebraData = await uploadFile(bob, aliceZebra, "bob-zebra-v1-bytes", "ipfs://bob-zebra-v1");
-  console.log("  Bob uploaded editions for apple.mp3, banana.mp3, zebra.mp3");
+  console.log("  Bob uploaded lenses for apple.mp3, banana.mp3, zebra.mp3");
 
   // Alice-only lookup
-  const appleAlice = await resolveEdition(aliceApple, [aliceAddr]);
+  const appleAlice = await resolveLens(aliceApple, [aliceAddr]);
   assert("apple.mp3 [alice] → alice's uri", appleAlice?.uri === "ipfs://alice-apple-v1", appleAlice?.uri ?? "null");
 
   // Bob-only lookup
-  const appleBob = await resolveEdition(aliceApple, [bobAddr]);
+  const appleBob = await resolveLens(aliceApple, [bobAddr]);
   assert("apple.mp3 [bob] → bob's uri", appleBob?.uri === "ipfs://bob-apple-v1", appleBob?.uri ?? "null");
 
   // Priority: Bob first
-  const appleBobFirst = await resolveEdition(aliceApple, [bobAddr, aliceAddr]);
+  const appleBobFirst = await resolveLens(aliceApple, [bobAddr, aliceAddr]);
   assert(
     "apple.mp3 [bob,alice] → bob wins",
     appleBobFirst?.uri === "ipfs://bob-apple-v1",
@@ -598,27 +598,27 @@ async function main() {
   );
 
   // Priority: Alice first
-  const appleAliceFirst = await resolveEdition(aliceApple, [aliceAddr, bobAddr]);
+  const appleAliceFirst = await resolveLens(aliceApple, [aliceAddr, bobAddr]);
   assert(
     "apple.mp3 [alice,bob] → alice wins",
     appleAliceFirst?.uri === "ipfs://alice-apple-v1",
     appleAliceFirst?.uri ?? "null",
   );
 
-  // Anchor with no edition from Bob
-  const carrotBob = await resolveEdition(aliceCarrot, [bobAddr]);
-  assert("carrot.mp3 [bob only] → null (no edition)", carrotBob === null);
+  // Anchor with no lens from Bob
+  const carrotBob = await resolveLens(aliceCarrot, [bobAddr]);
+  assert("carrot.mp3 [bob only] → null (no lens)", carrotBob === null);
 
   // ════════════════════════════════════════════════════════════════════════════════
-  // PHASE 8: Edition removal via PIN revoke + fallback
+  // PHASE 8: Lens removal via PIN revoke + fallback
   // ════════════════════════════════════════════════════════════════════════════════
-  console.log("\n── Phase 8: Edition removal + fallback ──\n");
+  console.log("\n── Phase 8: Lens removal + fallback ──\n");
 
   // Alice removes her zebra placement (eas.revoke on the active PIN — ADR-0041).
   await unplaceData(alice, aliceZebraData.uid, aliceZebra);
 
-  // Bob's edition should now win
-  const zebraAfterRemoval = await resolveEdition(aliceZebra, [aliceAddr, bobAddr]);
+  // Bob's lens should now win
+  const zebraAfterRemoval = await resolveLens(aliceZebra, [aliceAddr, bobAddr]);
   assert(
     "zebra.mp3 [alice,bob]: falls back to bob after alice revokes PIN",
     zebraAfterRemoval?.uri === "ipfs://bob-zebra-v1",
@@ -627,12 +627,12 @@ async function main() {
 
   // If both remove placement → null
   await unplaceData(bob, bobZebraData.uid, aliceZebra);
-  const zebraAllRemoved = await resolveEdition(aliceZebra, [aliceAddr, bobAddr]);
+  const zebraAllRemoved = await resolveLens(aliceZebra, [aliceAddr, bobAddr]);
   assert("zebra.mp3: all placements removed → null", zebraAllRemoved === null);
 
   // Re-place Alice's zebra (new PIN)
   await placeData(alice, aliceZebraData.uid, aliceZebra);
-  const zebraReplaced = await resolveEdition(aliceZebra, [aliceAddr]);
+  const zebraReplaced = await resolveLens(aliceZebra, [aliceAddr]);
   assert(
     "zebra.mp3: re-placed after removal",
     zebraReplaced?.uri === "ipfs://alice-zebra-v1",
@@ -640,9 +640,9 @@ async function main() {
   );
 
   // ════════════════════════════════════════════════════════════════════════════════
-  // PHASE 9: Sorted list + per-position edition resolution (main UI read path)
+  // PHASE 9: Sorted list + per-position lens resolution (main UI read path)
   // ════════════════════════════════════════════════════════════════════════════════
-  console.log("\n── Phase 9: Sorted list + edition resolution ──\n");
+  console.log("\n── Phase 9: Sorted list + lens resolution ──\n");
   console.log("  (Simulates: UI renders sorted list, resolves content per item for [alice, bob])");
 
   const sortedPositions = await readSortedAll(alphaInfoUID, musicUID);
@@ -650,14 +650,14 @@ async function main() {
 
   for (const posUID of sortedPositions) {
     const name = await getName(posUID);
-    const edition = await resolveEdition(posUID, [aliceAddr, bobAddr]);
-    resolved.push({ name, uri: edition?.uri ?? null });
+    const lens = await resolveLens(posUID, [aliceAddr, bobAddr]);
+    resolved.push({ name, uri: lens?.uri ?? null });
   }
 
-  console.log("  Sorted + editions:");
-  resolved.forEach(r => console.log(`    ${r.name} → ${r.uri ?? "(no edition)"}`));
+  console.log("  Sorted + lenses:");
+  resolved.forEach(r => console.log(`    ${r.name} → ${r.uri ?? "(no lens)"}`));
 
-  // aardvark and carrot only have Alice's editions; apple and banana have both; zebra was re-placed by alice; mango only alice
+  // aardvark and carrot only have Alice's lenses; apple and banana have both; zebra was re-placed by alice; mango only alice
   assert(
     "aardvark.mp3 → alice's uri",
     resolved.find(r => r.name === "aardvark.mp3")?.uri === "ipfs://alice-aardvark-v1",
@@ -680,8 +680,8 @@ async function main() {
   const resolvedBobFirst: { name: string; uri: string | null }[] = [];
   for (const posUID of sortedPositions) {
     const name = await getName(posUID);
-    const edition = await resolveEdition(posUID, [bobAddr, aliceAddr]);
-    resolvedBobFirst.push({ name, uri: edition?.uri ?? null });
+    const lens = await resolveLens(posUID, [bobAddr, aliceAddr]);
+    resolvedBobFirst.push({ name, uri: lens?.uri ?? null });
   }
   assert(
     "apple.mp3 [bob,alice] → bob's uri",
@@ -761,7 +761,7 @@ async function main() {
   console.log("  Alice uploaded apple.mp3 v2 — PIN supersedes v1 in O(1)");
 
   // Now only v2 should resolve
-  const appleAfterV2 = await resolveEdition(aliceApple, [aliceAddr]);
+  const appleAfterV2 = await resolveLens(aliceApple, [aliceAddr]);
   assert("After version swap, v2 resolves", appleAfterV2?.uri === "ipfs://alice-apple-v2", appleAfterV2?.uri ?? "null");
 
   // Verify previousVersion PROPERTY chain (PIN-bound under ADR-0041)
@@ -926,8 +926,8 @@ async function main() {
   await uploadFile(alice, vid2, "alice-second-mp4-bytes", "ipfs://alice-second-mp4", "video/mp4");
   await uploadFile(alice, vid3, "alice-third-mp4-bytes", "ipfs://alice-third-mp4", "video/mp4");
 
-  const vid1Edition = await resolveEdition(vid1, [aliceAddr]);
-  assert("vid1 edition resolves correctly", vid1Edition?.uri === "ipfs://alice-first-mp4", vid1Edition?.uri ?? "null");
+  const vid1Lens = await resolveLens(vid1, [aliceAddr]);
+  assert("vid1 lens resolves correctly", vid1Lens?.uri === "ipfs://alice-first-mp4", vid1Lens?.uri ?? "null");
 
   // ════════════════════════════════════════════════════════════════════════════════
   // PHASE 15: Revoke SORT_INFO — processItems blocked, existing data readable
@@ -955,12 +955,12 @@ async function main() {
   const afterRevoke = await readSortedAll(alphaInfoUID, musicUID);
   assert("Sorted data still readable after sort revoke", afterRevoke.length === 10, `got ${afterRevoke.length}`);
 
-  // Editions still resolve correctly after sort is revoked (sort ≠ content)
-  const appleEditionAfterSortRevoke = await resolveEdition(aliceApple, [aliceAddr]);
+  // Lenses still resolve correctly after sort is revoked (sort ≠ content)
+  const appleLensAfterSortRevoke = await resolveLens(aliceApple, [aliceAddr]);
   assert(
-    "Edition resolution unaffected by sort revoke",
-    appleEditionAfterSortRevoke?.uri === "ipfs://alice-apple-v2",
-    appleEditionAfterSortRevoke?.uri ?? "null",
+    "Lens resolution unaffected by sort revoke",
+    appleLensAfterSortRevoke?.uri === "ipfs://alice-apple-v2",
+    appleLensAfterSortRevoke?.uri ?? "null",
   );
 
   // Suppress unused-var lint on aliceMangoData / bobAppleData — they are used above.
