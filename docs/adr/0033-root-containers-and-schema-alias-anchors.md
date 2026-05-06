@@ -59,7 +59,7 @@ Sidebar "Schemas" enumerates by iterating TAGs whose `definition` is the `/tags/
 
 ### 4. Default lenses for address containers
 
-When the root segment is an Address and the URL did not include `lenses=` / `lens=` / `curator=`, the router seeds `lenses = [caller, segmentAddr]` (dedup if equal; drop zero addresses). Anchor / schema / attestation containers keep the existing `[caller]` default. Explicit `?lenses=` overrides wholesale (ADR-0031 first-attester-wins unchanged).
+When the root segment is an Address and the URL did not include `lenses=`, the router seeds `lenses = [caller, segmentAddr]` (dedup if equal; drop zero addresses). Anchor / schema / attestation containers keep the existing `[caller]` default. Explicit `?lenses=` overrides wholesale (ADR-0031 first-attester-wins unchanged).
 
 ### 5. Router raw-info JSON fallback
 
