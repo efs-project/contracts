@@ -508,10 +508,7 @@ async function main() {
   assert("Router resolves /gallery/sunset.jpg", sunsetRes[0] === 200n, `status ${sunsetRes[0]}`);
 
   // Non-existent path
-  const notFoundRes = await router.request(
-    [`gallery_${S}`, "nonexistent.txt"],
-    [{ key: "lenses", value: ownerAddr }],
-  );
+  const notFoundRes = await router.request([`gallery_${S}`, "nonexistent.txt"], [{ key: "lenses", value: ownerAddr }]);
   assert("Router returns 404 for missing file", notFoundRes[0] === 404n);
 
   // No lenses → should still find data via referencing fallback or return 404

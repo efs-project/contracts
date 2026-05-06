@@ -1070,8 +1070,7 @@ describe("EFS Data Model — E2E Integration", function () {
       // attester (cross-attester dedup is by target UID, not by slot). When alice
       // and bob PIN *different* DATAs to the same slot, both surface. Higher-level
       // first-attester-wins rendering uses `getActivePinTarget` directly.
-      const bothLenses = (await fileView.getFilesAtPath(slotUID, [aliceAddr, bobAddr], dataSchemaUID, "0x", 50))
-        .items;
+      const bothLenses = (await fileView.getFilesAtPath(slotUID, [aliceAddr, bobAddr], dataSchemaUID, "0x", 50)).items;
       expect(bothLenses.length).to.equal(2);
       const lensTargets = bothLenses.map((i: any) => i.uid).sort();
       expect(lensTargets).to.deep.equal([aliceData, bobData].sort());

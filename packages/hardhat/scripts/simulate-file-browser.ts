@@ -349,14 +349,7 @@ async function main() {
 
   // ── Test 3: Lens Directory Listing (getChildrenByAddressList — dedup) ──
   console.log("\n[3] Lens Directory Listing");
-  const [lensList] = await indexer.getChildrenByAddressList(
-    petsUID,
-    [u1Addr, u2Addr, ownerAddr],
-    0n,
-    10,
-    false,
-    false,
-  );
+  const [lensList] = await indexer.getChildrenByAddressList(petsUID, [u1Addr, u2Addr, ownerAddr], 0n, 10, false, false);
   assert(
     "getChildrenByAddressList returns 3 unique items (best.jpg, cats, dogs)",
     lensList.length === 3,
