@@ -15,13 +15,13 @@ To make "default to my own files" work, the router needs a reliable signal of wh
 
 ## Decision
 
-The router accepts a `?caller=<address>` query parameter. Web3:// clients (especially the production EFS Client UI) pass the connected wallet address explicitly. The router uses it for the editions fallback (ADR-0016) and any other identity-dependent behavior.
+The router accepts a `?caller=<address>` query parameter. Web3:// clients (especially the production EFS Client UI) pass the connected wallet address explicitly. The router uses it for the lenses fallback (ADR-0016) and any other identity-dependent behavior.
 
 `msg.sender` is no longer trusted for identity decisions.
 
 ## Consequences
 
 - **Reliable identity** in eth_call contexts.
-- Trivially spoofable (anyone can put any address in `?caller=`) — but that's fine, since it's just a hint for "whose default view to show," not an authentication mechanism. Real authentication comes from `?editions=` (the viewer explicitly chooses what to trust).
+- Trivially spoofable (anyone can put any address in `?caller=`) — but that's fine, since it's just a hint for "whose default view to show," not an authentication mechanism. Real authentication comes from `?lenses=` (the viewer explicitly chooses what to trust).
 - Production client must pass `?caller=` consistently for the UX to feel right.
 - Existing `web3://` libraries / w3link.io don't pass this by default — until they do, bookmarked URLs may surface deployer content rather than the user's own.

@@ -1409,7 +1409,7 @@ describe("EFSIndexer", function () {
     });
   });
 
-  describe("Editions & Recursive Indexing", function () {
+  describe("Lenses & Recursive Indexing", function () {
     const schemaEncoder = new ethers.AbiCoder();
     let rootUID: string;
     let folder1UID: string;

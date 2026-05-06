@@ -787,7 +787,7 @@ describe("EFS Data Model — E2E Integration", function () {
 
       // Folder visibility (per seed-impl.ts `walkAncestorVisibility`): the attester
       // TAGs each subfolder with `definition=dataSchemaUID` to declare "this folder
-      // is part of my edition and contains data." Cardinality N — many subfolders
+      // is part of my lens and contains data." Cardinality N — many subfolders
       // can carry the same definition under the same attester, so TAG (not PIN).
       await tagTarget(funnyUID, dataSchemaUID);
       await tagTarget(catsUID, dataSchemaUID);
@@ -1033,48 +1033,47 @@ describe("EFS Data Model — E2E Integration", function () {
   });
 
   // =========================================================================
-  // 8. EDITIONS (multi-attester scenarios)
+  // 8. LENSES (multi-attester scenarios)
   // =========================================================================
 
-  describe("Editions (Multi-Attester)", function () {
+  describe("Lenses (Multi-Attester)", function () {
     let memesUID: string;
 
     beforeEach(async function () {
       memesUID = await createAnchor(rootUID, "memes");
     });
 
-    it("each attester has independent edition at the same file slot", async function () {
+    it("each attester has independent lens at the same file slot", async function () {
       const aliceAddr = await alice.getAddress();
       const bobAddr = await bob.getAddress();
 
       // Shared file slot (filename anchor created by alice — could be anyone).
       const slotUID = await createAnchor(memesUID, "cat.jpg", dataSchemaUID, alice);
 
-      // Alice's edition.
+      // Alice's lens.
       const aliceData = await createData(hash("alice cat"), 9n, alice);
       await pinTarget(aliceData, slotUID, alice);
 
-      // Bob's edition — same slot, different DATA.
+      // Bob's lens — same slot, different DATA.
       const bobData = await createData(hash("bob cat"), 7n, bob);
       await pinTarget(bobData, slotUID, bob);
 
       // Per-attester O(1) PIN read at the slot — exactly the production pattern
-      // for "render this file slot under <attester>'s edition." First-attester-wins
+      // for "render this file slot under <attester>'s lens." First-attester-wins
       // resolution (ADR-0031) is done by trying each attester in order and taking
       // the first non-zero target.
       expect(await edgeResolver.getActivePinTarget(slotUID, aliceAddr, dataSchemaUID)).to.equal(aliceData);
       expect(await edgeResolver.getActivePinTarget(slotUID, bobAddr, dataSchemaUID)).to.equal(bobData);
 
-      // `getFilesAtPath(slot, …)` returns ALL editions of a slot — one DirectoryItem
+      // `getFilesAtPath(slot, …)` returns ALL lenses of a slot — one DirectoryItem
       // per attester whose PIN target hasn't already been claimed by an earlier
       // attester (cross-attester dedup is by target UID, not by slot). When alice
       // and bob PIN *different* DATAs to the same slot, both surface. Higher-level
       // first-attester-wins rendering uses `getActivePinTarget` directly.
-      const bothEditions = (await fileView.getFilesAtPath(slotUID, [aliceAddr, bobAddr], dataSchemaUID, "0x", 50))
-        .items;
-      expect(bothEditions.length).to.equal(2);
-      const editionTargets = bothEditions.map((i: any) => i.uid).sort();
-      expect(editionTargets).to.deep.equal([aliceData, bobData].sort());
+      const bothLenses = (await fileView.getFilesAtPath(slotUID, [aliceAddr, bobAddr], dataSchemaUID, "0x", 50)).items;
+      expect(bothLenses.length).to.equal(2);
+      const lensTargets = bothLenses.map((i: any) => i.uid).sort();
+      expect(lensTargets).to.deep.equal([aliceData, bobData].sort());
     });
 
     it("multiple attesters, multiple file slots: directory listing surfaces all slots", async function () {
@@ -1085,7 +1084,7 @@ describe("EFS Data Model — E2E Integration", function () {
       const slotShared = await createAnchor(memesUID, "shared.png", dataSchemaUID, alice);
       const slotAliceOnly = await createAnchor(memesUID, "alice-only.png", dataSchemaUID, alice);
 
-      // Both attesters PIN distinct DATAs to the shared slot (different editions of the same file).
+      // Both attesters PIN distinct DATAs to the shared slot (different lenses of the same file).
       const aliceShared = await createData(hash("alice's shared"), 11n, alice);
       const bobShared = await createData(hash("bob's shared"), 11n, bob);
       await pinTarget(aliceShared, slotShared, alice);
@@ -1111,7 +1110,7 @@ describe("EFS Data Model — E2E Integration", function () {
       const aliceAddr = await alice.getAddress();
       const bobAddr = await bob.getAddress();
 
-      // Shared slot, both editions PIN their own DATA.
+      // Shared slot, both lenses PIN their own DATA.
       const slotUID = await createAnchor(memesUID, "contested.png", dataSchemaUID, alice);
       const aliceData = await createData(hash("alice contested"), 9n, alice);
       const bobData = await createData(hash("bob contested"), 9n, bob);
@@ -1141,7 +1140,7 @@ describe("EFS Data Model — E2E Integration", function () {
       const d2 = await createData(hash("d2"), 2n);
       const d3 = await createData(hash("d3"), 2n);
 
-      // Editions overlap on different slots.
+      // Lenses overlap on different slots.
       await pinTarget(d1, slot1, alice);
       await pinTarget(d2, slot2, alice);
       await pinTarget(d2, slot2, bob);
@@ -1163,7 +1162,7 @@ describe("EFS Data Model — E2E Integration", function () {
       const names = all.map((i: any) => i.name).sort();
       expect(names).to.deep.equal(["f1.bin", "f2.bin", "f3.bin"]);
 
-      // Spot-check: per-attester PIN resolution at each slot returns the right edition.
+      // Spot-check: per-attester PIN resolution at each slot returns the right lens.
       expect(await edgeResolver.getActivePinTarget(slot2, aliceAddr, dataSchemaUID)).to.equal(d2);
       expect(await edgeResolver.getActivePinTarget(slot2, bobAddr, dataSchemaUID)).to.equal(d2);
       expect(await edgeResolver.getActivePinTarget(slot1, charlieAddr, dataSchemaUID)).to.equal(d1);
@@ -1431,7 +1430,7 @@ describe("EFS Data Model — E2E Integration", function () {
       );
       expect(children).to.deep.equal([folderUID]);
 
-      // Sanity: folder's flag is restored so it shows up in edition-filtered views again.
+      // Sanity: folder's flag is restored so it shows up in lens-filtered views again.
       expect(await indexer.containsAttestations(folderUID, aliceAddr)).to.equal(true);
     });
   });

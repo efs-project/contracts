@@ -327,7 +327,7 @@ export const PropertiesModal = ({ uid, onClose }: PropertiesModalProps) => {
 
 // Item Component: renders "Key: ConnectedUserValue" on a single line.
 // Reads EdgeResolver._activeBySlot[keyAnchor][viewer][PROPERTY_SCHEMA].pinUID's target
-// to get the viewer's current PROPERTY under this key. Edition-scoped lookups (non-viewer
+// to get the viewer's current PROPERTY under this key. Lens-scoped lookups (non-viewer
 // attesters) belong on the read-side viewing UIs, not this write-side modal.
 //
 // Under ADR-0041 PROPERTY value bindings are PIN (cardinality 1), so the read is O(1)

@@ -4,7 +4,7 @@
 **Date:** 2026-04-22
 **Permanence-tier:** Etched
 **Supersedes:** ADR-0035 (PROPERTY-as-TAG-placed singleton claim)
-**Related:** ADR-0003 (TAG-based placement), ADR-0007 (`_activeByAttesterAndSchema` swap-and-pop), ADR-0009 (append-only kernel), ADR-0014 (edition-scoped PROPERTY lookup), ADR-0034 (`name` PROPERTY), ADR-0038 (tag-only folder visibility)
+**Related:** ADR-0003 (TAG-based placement), ADR-0007 (`_activeByAttesterAndSchema` swap-and-pop), ADR-0009 (append-only kernel), ADR-0014 (lens-scoped PROPERTY lookup), ADR-0034 (`name` PROPERTY), ADR-0038 (tag-only folder visibility)
 
 ## Context
 
@@ -147,7 +147,7 @@ function isActiveEdgeAnySchema(address attester, bytes32 targetID, bytes32 defin
 function hasActiveEdge(bytes32 targetID, bytes32 definition)
     external view returns (bool);                              // any attester, any schema
 function hasActiveEdgeFromAny(bytes32 targetID, bytes32 definition, address[] attesters)
-    external view returns (bool);                              // edition-scoped
+    external view returns (bool);                              // lens-scoped
 function getEdgeDefinitions(bytes32 targetID, uint256 start, uint256 length)
     external view returns (bytes32[] memory);
 function getTargetsByDefinition(bytes32 definition, uint256 start, uint256 length)
@@ -199,7 +199,7 @@ Use-case authors pick PIN or TAG based on the nature of their predicate. The ker
 ## Alternatives considered
 
 1. **`cardinality: bool` (or `singleton: bool`) field on the TAG attestation.** Rejected. Fails the coordination test (Alice and Bob can disagree per attestation; no canonical shape). Poisons the smart-contract read API (a reader has to fetch the attestation to learn the cardinality before knowing whether to call `getActivePin` or `getActiveTags` — round-trip and ambiguity). Becomes the "weird EFS thing" subgraph indexers have to code around.
-2. **A "cardinality" PROPERTY attached to the definition anchor (declarative, graph-DB style).** Rejected. The cardinality declaration becomes mutable state (revocable, edition-scoped, contradictable across attesters). Bootstrapping circularity (what's the cardinality of "cardinality"?). Kernel read overhead per write (extra SLOAD + EAS read to look up the predicate's cardinality before routing storage). Still doesn't solve coordination.
+2. **A "cardinality" PROPERTY attached to the definition anchor (declarative, graph-DB style).** Rejected. The cardinality declaration becomes mutable state (revocable, lens-scoped, contradictable across attesters). Bootstrapping circularity (what's the cardinality of "cardinality"?). Kernel read overhead per write (extra SLOAD + EAS read to look up the predicate's cardinality before routing storage). Still doesn't solve coordination.
 3. **`weight ≤ 0` carries an "unassert" supersede signal.** Considered (wider than `applies: bool`, replacing it 1-for-1). Rejected because it conflates existence with ranking — orthogonal concepts that belong in distinct mechanisms. EAS already has revoke; using it keeps EFS edges aligned with the standard EAS lifecycle. The kernel reads cleaner without a "negative weight means gone" branch.
 4. **Two separate resolver contracts (`PinResolver`, `TagResolver`).** Considered. Rejected. The two would duplicate identical write-time bookkeeping (active-edge map, counts, discovery indices). A coordinator or extra cross-contract reads would be needed for the shared aggregate counters. One contract that branches on `attestation.schema` is simpler, cheaper at write-time (no cross-contract calls in resolver hot paths — saves ≥2.6k gas per attestation per ADR-0030 mainnet permanence concern), and keeps the mental model coherent.
 5. **Plain `bytes32[]` storage for TAG with weight in a side mapping.** Rejected. Any on-chain consumer trying to sort a TAG list by weight would hit an N+1 SLOAD pattern that collides with block gas limits on long lists. The struct-of-tuple cost (~+20k cold gas per insert) is the right trade for sort feasibility on the read side.

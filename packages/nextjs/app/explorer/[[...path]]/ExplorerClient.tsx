@@ -19,7 +19,7 @@ import {
   DEVNET_BOOTSTRAP_CURATOR,
   buildRouterPathNames,
   classifyTopLevelSegment,
-  defaultEditionsForContainer,
+  defaultLensesForContainer,
 } from "~~/utils/efs/containers";
 
 export default function ExplorerClient() {
@@ -29,8 +29,8 @@ export default function ExplorerClient() {
   const [isResolving, setIsResolving] = useState(false);
   const [pathError, setPathError] = useState<string | null>(null);
 
-  const [resolvedEditionAddresses, setResolvedEditionAddresses] = useState<string[]>([]);
-  const [isResolvingEditions, setIsResolvingEditions] = useState(false);
+  const [resolvedLensAddresses, setResolvedLensAddresses] = useState<string[]>([]);
+  const [isResolvingLenses, setIsResolvingLenses] = useState(false);
 
   const [isFilterDrawerOpen, setIsFilterDrawerOpen] = useState(false);
   const [drawerTagFilters, setDrawerTagFilters] = useState<Record<string, DrawerTagFilterState>>({ nsfw: "exclude" });
@@ -102,15 +102,15 @@ export default function ExplorerClient() {
   const mainnetPublicClient = usePublicClient({ chainId: 1 });
   const { address: connectedAddress } = useAccount();
 
-  const editionsParam = searchParams.get("editions");
+  const lensesParam = searchParams.get("lenses");
   // `URLSearchParams.get` returns `null` when the param is absent, `""` when
-  // present with empty value (`?editions=`), and the string otherwise. A
+  // present with empty value (`?lenses=`), and the string otherwise. A
   // truthy check collapses `null` and `""` into the same branch, but they
-  // mean different things under ADR-0031: `null` = "no explicit editions,
+  // mean different things under ADR-0031: `null` = "no explicit lenses,
   // use defaults"; `""` = "explicitly scope to nothing" (e.g. a share-link
-  // stripped of edition addresses — must NOT widen to default content).
+  // stripped of lens addresses — must NOT widen to default content).
   // Use `!== null` everywhere we care about the parameter's presence.
-  const hasEditionsParam = editionsParam !== null;
+  const hasLensesParam = lensesParam !== null;
 
   // System tail-fallback tier (ADR-0039). On devnet: a bootstrap curator
   // address + the EFS deployer, so fresh users see seeded content before
@@ -122,23 +122,23 @@ export default function ExplorerClient() {
     functionName: "DEPLOYER",
   });
 
-  const systemEditions = useMemo(() => {
+  const systemLenses = useMemo(() => {
     const out: string[] = [DEVNET_BOOTSTRAP_CURATOR];
     if (deployerAddress && typeof deployerAddress === "string") out.push(deployerAddress);
     return out;
   }, [deployerAddress]);
 
-  const editionAddresses = useMemo(() => {
-    return defaultEditionsForContainer({
+  const lensAddresses = useMemo(() => {
+    return defaultLensesForContainer({
       container: currentContainer,
       connectedAddress,
-      explicitEditions: hasEditionsParam ? resolvedEditionAddresses : null,
+      explicitLenses: hasLensesParam ? resolvedLensAddresses : null,
       // Web of trust is not yet designed (ADR-0039). Empty array today;
       // slot exists so adding it later is a config-only change.
       webOfTrust: [],
-      systemEditions,
+      systemLenses,
     });
-  }, [hasEditionsParam, connectedAddress, resolvedEditionAddresses, currentContainer, systemEditions]);
+  }, [hasLensesParam, connectedAddress, resolvedLensAddresses, currentContainer, systemLenses]);
 
   const { data: rootUID } = useScaffoldReadContract({
     contractName: "Indexer",
@@ -201,42 +201,42 @@ export default function ExplorerClient() {
     currentPath[0]?.uid ?? null,
   );
 
-  // Editions Resolution Effect — only needed for ENS name resolution in explicit ?editions= param.
-  // Cancel-guarded: ENS lookups are slow and a rapid `?editions=` change can
+  // Lenses Resolution Effect — only needed for ENS name resolution in explicit ?lenses= param.
+  // Cancel-guarded: ENS lookups are slow and a rapid `?lenses=` change can
   // complete out of order. Without the `cancelled` flag a stale query's
   // resolution could overwrite a newer one's addresses (or its "done" signal),
-  // leaving the explorer rendering with the wrong editions until the next nav.
+  // leaving the explorer rendering with the wrong lenses until the next nav.
   useEffect(() => {
-    // Skip ONLY when the param is absent. An empty string (`?editions=`) is
+    // Skip ONLY when the param is absent. An empty string (`?lenses=`) is
     // an explicit "scope to nothing" signal under ADR-0031 and must continue
     // through the resolver loop — `.split(",").filter(Boolean)` naturally
     // produces an empty name list, the loop is a no-op, and the resolver
-    // writes `resolvedEditionAddresses = []` at the bottom. Without this
-    // distinction, navigating from `?editions=alice.eth` to `?editions=` would
+    // writes `resolvedLensAddresses = []` at the bottom. Without this
+    // distinction, navigating from `?lenses=alice.eth` to `?lenses=` would
     // leave a stale resolved list in state and silently broaden results.
-    if (editionsParam === null) {
-      setIsResolvingEditions(false);
+    if (lensesParam === null) {
+      setIsResolvingLenses(false);
       return;
     }
 
     let cancelled = false;
 
-    const resolveEditions = async () => {
-      setIsResolvingEditions(true);
+    const resolveLenses = async () => {
+      setIsResolvingLenses(true);
 
-      const editionNames = editionsParam
+      const lensNames = lensesParam
         .split(",")
         .map(s => s.trim())
         .filter(Boolean);
       const resolvedAddresses: string[] = [];
 
-      for (const name of editionNames) {
+      for (const name of lensNames) {
         if (cancelled) return;
         // Lowercase once for suffix/prefix classification. ENS is
         // case-insensitive by spec (ENSIP-15 requires canonicalization before
         // resolution), and 0x/0X are equivalent for hex addresses. A URL like
-        // `?editions=Vitalik.ETH,0X1a2b…` must resolve identically to the
-        // lowercase version — otherwise `resolvedEditionAddresses` silently
+        // `?lenses=Vitalik.ETH,0X1a2b…` must resolve identically to the
+        // lowercase version — otherwise `resolvedLensAddresses` silently
         // drops the mixed-case tokens and the explorer falls back to the
         // default chain, breaking URL shareability (ADR-0031 / ADR-0033).
         const classifier = name.toLowerCase();
@@ -245,12 +245,12 @@ export default function ExplorerClient() {
             // Pass the lowercased label to viem; ENS resolution is insensitive
             // but some upstream libraries fail-closed on mixed case. A proper
             // UTS-46 `normalize()` is correct-er but lowercase covers the
-            // `?editions=Vitalik.ETH` class of regressions at zero cost.
+            // `?lenses=Vitalik.ETH` class of regressions at zero cost.
             //
             // Resolve on MAINNET, not the active (hardhat) chain — hardhat has
             // no ENS registry, so using `publicClient` throws and the catch
             // silently drops the token, leaving the explorer to render the
-            // wrong fallback edition. `mainnetPublicClient` is always present
+            // wrong fallback lens. `mainnetPublicClient` is always present
             // (mainnet is unconditionally added in wagmiConfig for this
             // purpose); guard + skip if somehow absent.
             const addr = mainnetPublicClient
@@ -268,9 +268,9 @@ export default function ExplorerClient() {
           }
         } else if (classifier.startsWith("0x") && name.length === 42) {
           // Validate raw-hex before forwarding downstream: wagmi/viem contract
-          // reads pass edition addresses as an `address[]` and throw
+          // reads pass lens addresses as an `address[]` and throw
           // InvalidAddressError on malformed entries, which would break
-          // edition-scoped browsing wholesale rather than ignoring the bad
+          // lens-scoped browsing wholesale rather than ignoring the bad
           // token. Accept any valid hex regardless of checksum case
           // (`strict: false`) — users hand-typing URLs won't have a correct
           // EIP-55 checksum — and normalize via getAddress so downstream
@@ -278,30 +278,30 @@ export default function ExplorerClient() {
           //
           // Validate against `classifier` (lowercased prefix) rather than the
           // original `name`: viem rejects `0X…`-prefixed strings as invalid,
-          // so an explicit token like `?editions=0X1a2b…` would silently drop
+          // so an explicit token like `?lenses=0X1a2b…` would silently drop
           // despite the classifier check accepting it. `getAddress` normalizes
           // to checksummed form regardless of input case.
           if (isAddress(classifier, { strict: false })) {
             resolvedAddresses.push(getAddress(classifier as `0x${string}`));
           } else {
-            console.warn(`Ignoring invalid edition address in ?editions=: ${name}`);
+            console.warn(`Ignoring invalid lens address in ?lenses=: ${name}`);
           }
         } else {
-          console.warn(`Ignoring unrecognized edition token in ?editions=: ${name}`);
+          console.warn(`Ignoring unrecognized lens token in ?lenses=: ${name}`);
         }
       }
 
       if (cancelled) return;
-      setResolvedEditionAddresses(resolvedAddresses);
-      setIsResolvingEditions(false);
+      setResolvedLensAddresses(resolvedAddresses);
+      setIsResolvingLenses(false);
     };
 
-    resolveEditions();
+    resolveLenses();
 
     return () => {
       cancelled = true;
     };
-  }, [editionsParam, mainnetPublicClient]);
+  }, [lensesParam, mainnetPublicClient]);
 
   // Path Resolution Effect — cancel-guarded.
   //
@@ -559,7 +559,7 @@ export default function ExplorerClient() {
     !mirrorSchemaUID
   )
     return <div>Loading System...</div>;
-  if (isResolvingEditions) return <div>Resolving Editions...</div>;
+  if (isResolvingLenses) return <div>Resolving Lenses...</div>;
 
   const containerKind = currentContainer?.kind ?? "anchor";
 
@@ -567,7 +567,7 @@ export default function ExplorerClient() {
     <div className="flex flex-col h-screen w-full bg-base-100 p-4 gap-3">
       <div
         className={`flex flex-col rounded-xl bg-base-200 shadow-lg flex-grow overflow-hidden terminal-panel ${
-          isResolving || isResolvingEditions ? "opacity-50 pointer-events-none" : ""
+          isResolving || isResolvingLenses ? "opacity-50 pointer-events-none" : ""
         }`}
       >
         {/* PathBar — prominent navigation control, inside the framed panel */}
@@ -575,13 +575,13 @@ export default function ExplorerClient() {
           <PathBar
             currentPath={currentPath}
             containerKind={containerKind}
-            editionAddresses={editionAddresses}
+            lensAddresses={lensAddresses}
             container={currentContainer}
             containerDisplayName={containerDisplayName}
             isInfoOpen={isInfoOpen}
             onToggleInfo={() => setIsInfoOpen(v => !v)}
             onToggleSidebar={() => setIsSidebarOpen(v => !v)}
-            disabled={isResolving || isResolvingEditions}
+            disabled={isResolving || isResolvingLenses}
           />
         </div>
 
@@ -638,12 +638,12 @@ export default function ExplorerClient() {
               rootUID={rootUID}
               selectedUID={currentAnchorUID}
               activeContainer={currentContainer}
-              editionAddresses={editionAddresses}
-              // Same semantics as FileBrowser.explicitEditions — whenever the
-              // URL carries `?editions=` (even empty), the sidebar must stay
-              // edition-scoped so it doesn't silently render the unscoped tree.
+              lensAddresses={lensAddresses}
+              // Same semantics as FileBrowser.explicitLenses — whenever the
+              // URL carries `?lenses=` (even empty), the sidebar must stay
+              // lens-scoped so it doesn't silently render the unscoped tree.
               // ADR-0031 "explicit param must not widen results".
-              explicitEditions={hasEditionsParam}
+              explicitLenses={hasLensesParam}
               activeSortInfoUID={activeSortInfoUID}
               sortOverlayAddress={sortOverlayAddress}
               sortRefreshKey={sortRefreshKey}
@@ -670,7 +670,7 @@ export default function ExplorerClient() {
                 indexerAddress={indexerAddress}
                 easAddress={easAddress}
                 sortOverlayAddress={sortOverlayAddress}
-                editionAddresses={editionAddresses}
+                lensAddresses={lensAddresses}
                 activeSortInfoUID={activeSortInfoUID}
                 onSortChange={handleSortChange}
                 onSortProcessed={() => setSortRefreshKey(k => k + 1)}
@@ -699,18 +699,18 @@ export default function ExplorerClient() {
                     currentAnchorUID={currentAnchorUID}
                     dataSchemaUID={dataSchemaUID}
                     anchorSchemaUID={anchorSchemaUID}
-                    editionAddresses={editionAddresses}
-                    // True whenever the URL carries `?editions=…`, INCLUDING
-                    // `?editions=` with an empty value (explicit "scope to
+                    lensAddresses={lensAddresses}
+                    // True whenever the URL carries `?lenses=…`, INCLUDING
+                    // `?lenses=` with an empty value (explicit "scope to
                     // nothing") and any failed-resolution case. FileBrowser
-                    // keeps the view edition-scoped so unresolved or
+                    // keeps the view lens-scoped so unresolved or
                     // deliberately-empty explicit links render empty instead
                     // of silently falling back to the unscoped default —
                     // Codex P2 on PR #9, ADR-0031 "explicit param must not
-                    // widen results". `hasEditionsParam` uses `!== null`
+                    // widen results". `hasLensesParam` uses `!== null`
                     // because `URLSearchParams.get` returns `""` for
-                    // `?editions=` and `null` only for the absent case.
-                    explicitEditions={hasEditionsParam}
+                    // `?lenses=` and `null` only for the absent case.
+                    explicitLenses={hasLensesParam}
                     tagFilter={searchParams.get("tags") || ""}
                     drawerTagFilters={drawerTagFilters}
                     currentPathNames={buildRouterPathNames(currentContainer, currentPath)}

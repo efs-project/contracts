@@ -7,7 +7,7 @@ import { useScaffoldReadContract } from "~~/hooks/scaffold-eth";
 import type { ClassifiedContainer } from "~~/utils/efs/containers";
 
 /**
- * Resolve a display name for an explorer container with the full editions
+ * Resolve a display name for an explorer container with the full lenses
  * cascade: connected wallet → viewed address → EFS deployer (ADR-0016 final
  * fallback). Wraps `useDisplayName` so individual call sites don't have to
  * rewire the deployer fetch each time.
@@ -40,7 +40,7 @@ export function useContainerName(
     return undefined;
   })();
 
-  const editions = useMemo(() => {
+  const lenses = useMemo(() => {
     const out: string[] = [];
     const push = (addr: string | undefined | null) => {
       if (!addr) return;
@@ -58,7 +58,7 @@ export function useContainerName(
 
   const { displayName, source } = useDisplayName({
     target,
-    editions,
+    lenses,
     // For schema / attestation containers ENS reverse-lookup is meaningless.
     skipEns: container?.kind !== "address",
   });

@@ -73,8 +73,8 @@ What else we looked at and why it lost.
 ### Transports & Mirrors
 - [ADR-0011 — Transport definitions as anchors under `/transports/`](./0011-transport-definitions-as-anchors.md)
 - [ADR-0012 — Transport priority order: web3 > ar > ipfs > magnet > https](./0012-transport-priority-order.md)
-- [ADR-0013 — Edition-scoped mirror selection](./0013-edition-scoped-mirror-selection.md)
-- [ADR-0014 — Edition-scoped PROPERTY lookup](./0014-edition-scoped-property-lookup.md)
+- [ADR-0013 — Lens-scoped mirror selection](./0013-lens-scoped-mirror-selection.md)
+- [ADR-0014 — Lens-scoped PROPERTY lookup](./0014-lens-scoped-property-lookup.md)
 - [ADR-0015 — No singleton enforcement for MIRRORs](./0015-no-singleton-mirrors.md)
 
 ### Router & Resolution
@@ -90,7 +90,7 @@ What else we looked at and why it lost.
 - [ADR-0023 — URI scheme allowlist in MirrorResolver](./0023-uri-scheme-allowlist.md)
 - [ADR-0024 — Content-Type sanitization](./0024-content-type-sanitization.md)
 - [ADR-0025 — Anchor name validation](./0025-anchor-name-validation.md)
-- [ADR-0026 — `MAX_EDITIONS = 20`](./0026-max-editions.md)
+- [ADR-0026 — `MAX_LENSES = 20`](./0026-max-lenses.md)
 
 ### Deploy & Infrastructure
 - [ADR-0027 — Deploy-before-register pattern](./0027-deploy-before-register.md)
@@ -100,15 +100,16 @@ What else we looked at and why it lost.
 
 ### Architectural Foundations
 - [ADR-0030 — Mainnet permanence (no upgradeability)](./0030-mainnet-permanence.md)
-- [ADR-0031 — Editions as URL query param with first-wins fallback](./0031-editions-url-param-model.md)
+- [ADR-0031 — Lenses as URL query param with first-wins fallback](./0031-lenses-url-param-model.md)
 - [ADR-0032 — EAS as foundational dependency](./0032-eas-as-foundation.md)
 
 ### Navigation & Containers
 - [ADR-0033 — Root containers and schema alias anchors](./0033-root-containers-and-schema-alias-anchors.md)
 - [ADR-0034 — `name` PROPERTY as display-name fallback](./0034-display-name-property-convention.md)
 - [ADR-0035 — PROPERTY as free-floating value placed via TAG](./0035-property-free-floating-and-tag-placed.md) *(Superseded by ADR-0041)*
-- [ADR-0039 — Default editions priority chain](./0039-default-editions-priority-chain.md)
+- [ADR-0039 — Default lenses priority chain](./0039-default-lenses-priority-chain.md)
 - [ADR-0041 — PIN/TAG schema split for cardinality, with weighted edges](./0041-pin-tag-schema-split-for-cardinality.md)
+- [ADR-0043 — Rename "editions" to "lenses"](./0043-rename-editions-to-lenses.md)
 
 ### View APIs
 - [ADR-0036 — Opaque-cursor pagination for multi-source views](./0036-opaque-cursor-pagination.md)

@@ -137,7 +137,7 @@ contract EFSIndexer is SchemaResolver {
     mapping(bytes32 => mapping(bytes32 => bool)) private _hasReferencingSchema;
 
     // ============================================================================================
-    // STORAGE: EDITIONS (APPEND-ONLY HISTORY)
+    // STORAGE: LENSES (APPEND-ONLY HISTORY)
     // ============================================================================================
     // These mappings are append-only. Revocations do NOT remove entries from these arrays.
     // This preserves the full edit history and allows clients to filter by showRevoked.
@@ -145,7 +145,7 @@ contract EFSIndexer is SchemaResolver {
     mapping(bytes32 => mapping(address => bytes32[])) private _referencingByAttester;
     mapping(bytes32 => mapping(bytes32 => mapping(address => bytes32[]))) private _referencingBySchemaAndAttester;
 
-    // Edition Activity Trackers
+    // Lens Activity Trackers
     // NOTE: These flags are SET-ONLY and never cleared on revocation.
     // `_containsAttestations[uid][attester]` means "attester has EVER contributed under this anchor",
     // not "attester currently has active/unrevoked data here". This is intentional:
@@ -658,7 +658,7 @@ contract EFSIndexer is SchemaResolver {
     }
 
     // ============================================================================================
-    // READ FUNCTIONS: EDITIONS (Address-Based Queries & History)
+    // READ FUNCTIONS: LENSES (Address-Based Queries & History)
     // ============================================================================================
 
     // --- Generic Referencing Mappings ---
@@ -933,10 +933,10 @@ contract EFSIndexer is SchemaResolver {
             _referencingByAttester[refUID][attester].push(uid);
             _referencingBySchemaAndAttester[refUID][schema][attester].push(uid);
 
-            // Edition Mappings (Recursive upward propagation for Folder Visibility)
+            // Lens Mappings (Recursive upward propagation for Folder Visibility)
             // This loop walks the _parents chain from refUID to root, marking each
             // ancestor as "containing activity by this attester". It also pushes each ancestor
-            // into its parent's _childrenByAttester, so edition-filtered directory listings
+            // into its parent's _childrenByAttester, so lens-filtered directory listings
             // transitively include intermediate folders that contain the attester's work.
             //
             // Example: User2 attests DATA on /pets/cats/fluffy.png
@@ -962,7 +962,7 @@ contract EFSIndexer is SchemaResolver {
                 _containsAttestations[currentUID][attester] = true;
 
                 // Drive the structural index: push this child into the parent's
-                // Edition array, guarded by the append-only dedup flag so a
+                // Lens array, guarded by the append-only dedup flag so a
                 // remove-then-readd cycle doesn't duplicate (`clearContains`
                 // resets `_containsAttestations` but never this flag).
                 bytes32 parentUID = _parents[currentUID];

@@ -65,7 +65,7 @@ All events are indexed on the most useful lookup fields. `DataCreated` includes 
 ### Single-Element Kernel Access
 `getChildrenByAttesterAt(parentUID, attester, idx)` exposes direct index-based access into the `_childrenByAttester` array. Used internally by `EFSSortOverlay.processItems` to validate submitted items against the kernel — callers cannot inject arbitrary UIDs into their sorted view.
 
-## Editions (Address-Based Namespaces)
+## Lenses (Address-Based Namespaces)
 To support subjective file resolution natively onchain, two coordinated index systems work together:
 
 ### EFSIndexer: Directory Structure
@@ -85,7 +85,7 @@ To support subjective file resolution natively onchain, two coordinated index sy
 - **`_activeByAASIndex[definition][attester][schema][edgeHash]`**: Position+1 index for O(1) swap-and-pop removal (0 = absent). `edgeHash` is the schema-aware `keccak256(attester, targetID, definition, TAG_SCHEMA_UID)` so PIN re-attestations cannot collide with TAG entries.
 - **Queried via**: `getActiveTagEntries(definition, attester, schema, start, length)` for `(uid, weight)` tuples; `getActiveTags(...)` for UID-only convenience; `getActiveTagsCount(...)` for length.
 
-**Do not use raw `_activeByAAS` queries for folder listing.** The index is keyed per file anchor, not per folder. Listing the files inside `/memes/` requires iterating the folder's child anchors. Use `EFSFileView` (next section) — it handles the iteration, pagination, edition merge, and revocation filtering for you.
+**Do not use raw `_activeByAAS` queries for folder listing.** The index is keyed per file anchor, not per folder. Listing the files inside `/memes/` requires iterating the folder's child anchors. Use `EFSFileView` (next section) — it handles the iteration, pagination, lens merge, and revocation filtering for you.
 
 ### EFSFileView: High-level directory views
 EFSFileView is the read-side wrapper most client code should call rather than composing EFSIndexer + EdgeResolver queries by hand. Three variants:
@@ -94,9 +94,9 @@ EFSFileView is the read-side wrapper most client code should call rather than co
 - `getDirectoryPageByAddressList(parent, attesters, startingCursor, pageSize)` — attester-filtered directory listing.
 - `getDirectoryPageBySchemaAndAddressList(parent, anchorSchema, attesters, startingCursor, pageSize)` — schema + attester filtered (e.g. file anchors only).
 
-Use `getDirectoryPageBySchemaAndAddressList(folderUID, DATA_SCHEMA_UID, [alice, bob], 0, 50)` to list files in `/memes/` from Alice and Bob's editions. EFSFileView also exposes `getFilesAtPath(fileAnchorUID, attesters, schema, start, length)` for the narrower case of "what DATA attestations are on this specific anchor" — callers pass a file anchor, not a folder.
+Use `getDirectoryPageBySchemaAndAddressList(folderUID, DATA_SCHEMA_UID, [alice, bob], 0, 50)` to list files in `/memes/` from Alice and Bob's lenses. EFSFileView also exposes `getFilesAtPath(fileAnchorUID, attesters, schema, start, length)` for the narrower case of "what DATA attestations are on this specific anchor" — callers pass a file anchor, not a folder.
 
-**Subfolder visibility in edition listings is tag-only** (ADR-0038, revised by ADR-0041). `getDirectoryPageBySchemaAndAddressList` returns generic subfolders iff at least one edition attester has an active `TAG(definition=anchorSchema, refUID=folder)`. There is no write-time folder-qualifying index. The upload flow (client side) walks the ancestor chain from the immediate parent up to root exclusive and emits a visibility TAG at every generic ancestor the attester hasn't already claimed; this keeps every folder on the path to an uploaded file visible in the uploader's edition. `_containsAttestations` is still populated (used below for file-anchor child filtering), but is no longer consulted for folder visibility.
+**Subfolder visibility in lens listings is tag-only** (ADR-0038, revised by ADR-0041). `getDirectoryPageBySchemaAndAddressList` returns generic subfolders iff at least one lens attester has an active `TAG(definition=anchorSchema, refUID=folder)`. There is no write-time folder-qualifying index. The upload flow (client side) walks the ancestor chain from the immediate parent up to root exclusive and emits a visibility TAG at every generic ancestor the attester hasn't already claimed; this keeps every folder on the path to an uploaded file visible in the uploader's lens. `_containsAttestations` is still populated (used below for file-anchor child filtering), but is no longer consulted for folder visibility.
 
 ### `propagateContains` (Tree Visibility)
 When a PIN or TAG places content at a structural Anchor, EdgeResolver calls `indexer.propagateContains(definition, attester)`. This walks up the `_parents` chain from the definition Anchor, setting `_containsAttestations[ancestor][attester] = true` at each level. Early-exit on already-flagged ancestors makes repeated contributions amortized O(1). This enables the sidebar tree to show which folders contain content from a given attester without scanning their children.
@@ -122,7 +122,7 @@ In practice this means:
 When a web client needs to load a directory:
 1. It queries the Indexer contract for the list of names (Anchors) inside the target Folder.
 2. For each name returned, the client receives the associated resolved state (the newest/most valid Data or Property attestation).
-3. Under the hood, this requires indexing based on the *schema type* and the *attester's address*, as the active state of a directory is a subjective compilation based on a specific user's web of trust or explicit edition request.
+3. Under the hood, this requires indexing based on the *schema type* and the *attester's address*, as the active state of a directory is a subjective compilation based on a specific user's web of trust or explicit lens request.
 
 ## Edge Indexing via EdgeResolver
 
@@ -176,7 +176,7 @@ indexer.getOutgoingAttestations(attester, PIN_SCHEMA_UID, 0, 100, false)
 ### On-Chain Query Functions
 **Schema-blind aggregate (PIN ∪ TAG):**
 - `hasActiveEdge(targetID, definition)` — Returns true if any attester has any active edge (PIN or TAG) on the pair. O(1) via `_activeCount`.
-- `hasActiveEdgeFromAny(targetID, definition, attesters[])` — Edition-scoped: true iff any of `attesters` has an active edge (PIN or TAG). Two SLOADs per attester.
+- `hasActiveEdgeFromAny(targetID, definition, attesters[])` — Lens-scoped: true iff any of `attesters` has an active edge (PIN or TAG). Two SLOADs per attester.
 - `isActiveEdgeAnySchema(attester, targetID, definition)` — True iff a specific attester has an active edge of either kind. Two SLOADs.
 - `getEdgeDefinitions(targetID, start, length)` and `getEdgeDefinitionCount(targetID)` — Paginated discovery: which definitions have been attested against the target.
 - `getTargetsByDefinition(definition, start, length)` and `getTargetsByDefinitionCount(definition)` — Paginated discovery: which targets have been attested under the definition.
@@ -197,7 +197,7 @@ indexer.getOutgoingAttestations(attester, PIN_SCHEMA_UID, 0, 100, false)
 - `getActiveTargetsByAttesterAndSchema(definition, attester, schema, start, length) → bytes32[]` — Resolves entries back to their target IDs (one EAS read per entry; prefer `getActiveTagEntries` when you also need the weight).
 - `getActiveTagsCount(definition, attester, schema)` — Count of active TAG entries in the slot.
 
-### Edition-Aware Label Filtering
+### Lens-Aware Label Filtering
 When filtering a directory listing by descriptive TAG labels, the client uses direct per-attester reads — not a global definition scan. Labels target specific DATA UIDs (for file items) or Anchor UIDs (for folder items), not the shared Anchor UID of the file slot.
 
 **Terminology (ADR-0041 + ADR-0042):**
@@ -207,7 +207,7 @@ When filtering a directory listing by descriptive TAG labels, the client uses di
 **Algorithm (`resolveTagSet(tagName)` in `FileBrowser`):**
 
 1. **Resolve the tag definition**: `resolvePath(tagsAnchorUID, tagName)` → `definitionUID`. Definitions can be nested (e.g. `/tags/nsfw/language/`).
-2. **Iterate per attester, per target schema**: For each `targetSchema` in `[DATA_SCHEMA_UID, ANCHOR_SCHEMA_UID]` and each attester in the editions list:
+2. **Iterate per attester, per target schema**: For each `targetSchema` in `[DATA_SCHEMA_UID, ANCHOR_SCHEMA_UID]` and each attester in the lenses list:
    a. `getActiveTagsCount(definitionUID, attester, targetSchema)` — skip bucket if count is 0.
    b. Paginate (500-entry pages) with two parallel reads: `getActiveTagEntries(...)` → `(tagUID, weight)` tuples; `getActiveTargetsByAttesterAndSchema(...)` → resolved target IDs.
    c. Iterate to `min(entries.length, targets.length)` (guards against a revocation landing between the two RPC calls). For each pair: if `weight >= 0`, add `targetID` to the effective-targets set.
@@ -215,11 +215,11 @@ When filtering a directory listing by descriptive TAG labels, the client uses di
 
 This approach reads directly from the per-attester active-TAG buckets (`_activeByAAS[definition][attester][schema]`). It does **not** use `getTargetsByDefinition` for filtering — that function returns an append-only list of ever-attested targets including revoked ones and is only appropriate for discovery/history views.
 
-**Edition isolation**: tagging User A's edition of `test.txt` as "nsfw" (stores the tag under User A's attester key) does not cause User B's DATA UID for the same file to match the filter — each attester's active-TAG bucket is independent.
+**Lens isolation**: tagging User A's lens of `test.txt` as "nsfw" (stores the tag under User A's attester key) does not cause User B's DATA UID for the same file to match the filter — each attester's active-TAG bucket is independent.
 
 ### Edge Cases and Caveats
 - **Updated DATA (new uploads)**: When a user uploads a new version, they PIN the new DATA at the file Anchor — the prior PIN supersedes automatically. Descriptive labels (TAGs) on the old DATA UID do not carry over to the new DATA UID; users must re-tag after a new upload.
-- **Cross-user tagging**: User B can TAG User A's DATA UID directly. The tag lives in User B's bucket under `_activeByAAS[definition][userB][DATA_SCHEMA_UID]`. When the filter iterates User B's editions, User A's DATA UID will appear in the effective-target set. This is intentional: cross-user curation is supported by design.
+- **Cross-user tagging**: User B can TAG User A's DATA UID directly. The tag lives in User B's bucket under `_activeByAAS[definition][userB][DATA_SCHEMA_UID]`. When the filter iterates User B's lenses, User A's DATA UID will appear in the effective-target set. This is intentional: cross-user curation is supported by design.
 - **Folder-level tags**: TAGs on Anchor UIDs use `ANCHOR_SCHEMA_UID` as the target schema bucket, checked in the same loop alongside `DATA_SCHEMA_UID`. No DATA indirection.
 - **Non-atomic RPC reads**: `getActiveTagEntries` and `getActiveTargetsByAttesterAndSchema` are two independent RPC calls. A revocation between them can return arrays of different lengths. The `min(entries.length, targets.length)` bound guards against an out-of-bounds read; the mismatched entry would have been stale anyway.
 
@@ -238,7 +238,7 @@ Sort overlays are **not populated in the resolver hook** — they are populated 
 
 ### Shared Sorted Linked Lists
 
-The `EFSSortOverlay` maintains a shared doubly linked list **per `(sortInfoUID, parentAnchor)` pair**. All attesters contribute to a single ordering per directory. Edition filtering is applied at read time via `getSortedChunkByAddressList`.
+The `EFSSortOverlay` maintains a shared doubly linked list **per `(sortInfoUID, parentAnchor)` pair**. All attesters contribute to a single ordering per directory. Lens filtering is applied at read time via `getSortedChunkByAddressList`.
 
 ```
 _sortNodes[sortInfoUID][parentAnchor][itemUID]  → Node { prev, next }
@@ -258,7 +258,7 @@ The kernel (EFSIndexer) remains the source of truth. The sort overlay is a secon
 ### On-Chain Query Functions
 
 **Sorted pagination:**
-- `getSortedChunk(sortInfoUID, parentAnchor, startNode, limit, showRevoked)` — Cursor-based pagination. `startNode = bytes32(0)` starts at head. Returns `(items[], nextCursor)`. Hard cap: `limit ≤ 100`. Use `getSortedChunkByAddressList` for edition-filtered reads.
+- `getSortedChunk(sortInfoUID, parentAnchor, startNode, limit, showRevoked)` — Cursor-based pagination. `startNode = bytes32(0)` starts at head. Returns `(items[], nextCursor)`. Hard cap: `limit ≤ 100`. Use `getSortedChunkByAddressList` for lens-filtered reads.
 - `getSortLength(sortInfoUID, parentAnchor)` — Sorted item count.
 - `getSortHead(sortInfoUID, parentAnchor)` — First (smallest) item UID.
 - `getSortTail(sortInfoUID, parentAnchor)` — Last (largest) item UID.

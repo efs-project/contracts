@@ -459,9 +459,9 @@ describe("EFSRouter Web3 Capabilities", function () {
     return dataUID;
   }
 
-  /** Builds params array with owner's address as editions (required for PIN-based lookup) */
+  /** Builds params array with owner's address as lenses (required for PIN-based lookup) */
   function ownerParams(...extra: { key: string; value: string }[]): { key: string; value: string }[] {
-    return [{ key: "editions", value: ownerAddr }, ...extra];
+    return [{ key: "lenses", value: ownerAddr }, ...extra];
   }
 
   // ─── Tests ────────────────────────────────────────────────────────────────
@@ -738,8 +738,8 @@ describe("EFSRouter Web3 Capabilities", function () {
     });
   });
 
-  describe("Editions (multi-attester)", function () {
-    it("Should parse comma-separated editions list and filter file visibility", async function () {
+  describe("Lenses (multi-attester)", function () {
+    it("Should parse comma-separated lenses list and filter file visibility", async function () {
       const u1 = "0x1111111111111111111111111111111111111111";
       const u2 = "0x2222222222222222222222222222222222222222";
 
@@ -772,14 +772,14 @@ describe("EFSRouter Web3 Capabilities", function () {
       await pinAtPath(data2UID, fileAnchorUID, signer2);
 
       // Request with ONLY User 2
-      const [statusCode2, body2] = await router.request(["ideas", "shared.txt"], [{ key: "editions", value: u2 }]);
+      const [statusCode2, body2] = await router.request(["ideas", "shared.txt"], [{ key: "lenses", value: u2 }]);
       expect(statusCode2).to.equal(200);
       expect(Buffer.from(ethers.getBytes(body2)).toString()).to.equal("User 2 Data");
 
       // Request with [u1, u2] -> should resolve u1 (first match)
       const [statusCodeRev, bodyRev] = await router.request(
         ["ideas", "shared.txt"],
-        [{ key: "editions", value: `${u1},${u2}` }],
+        [{ key: "lenses", value: `${u1},${u2}` }],
       );
       expect(statusCodeRev).to.equal(200);
       expect(Buffer.from(ethers.getBytes(bodyRev)).toString()).to.equal("User 1 Data");
@@ -842,9 +842,9 @@ describe("EFSRouter Web3 Capabilities", function () {
       expect(statusCode).to.equal(500);
     });
 
-    it("Should ignore mirrors attached by third parties not in editions", async function () {
+    it("Should ignore mirrors attached by third parties not in lenses", async function () {
       // owner places the file and attaches a valid onchain mirror
-      // user1 (not in editions) attaches an https mirror to the same DATA
+      // user1 (not in lenses) attaches an https mirror to the same DATA
       // Router should only consider owner's mirror
       const u1 = "0x1111111111111111111111111111111111111113";
       await ethers.provider.send("hardhat_impersonateAccount", [u1]);
@@ -900,8 +900,8 @@ describe("EFSRouter Web3 Capabilities", function () {
       expect(headers.find((h: any) => h.key === "Content-Type")?.value).to.equal("application/octet-stream");
     });
 
-    it("Should serve content with no ?editions= param (falls back to EFS deployer)", async function () {
-      // When no editions param is supplied, _findDataAtPath falls back to
+    it("Should serve content with no ?lenses= param (falls back to EFS deployer)", async function () {
+      // When no lenses param is supplied, _findDataAtPath falls back to
       // indexer.DEPLOYER(). In tests owner IS the deployer, so owner's DATA
       // (placed via PIN) should be found.
       const targetAddress = ethers.getAddress("0x00000000000000000000000000000000000000A0");
@@ -913,14 +913,14 @@ describe("EFSRouter Web3 Capabilities", function () {
       await addMirror(dataUID, onchainTransportUID, `web3://${targetAddress}`);
       await pinAtPath(dataUID, fileAnchorUID);
 
-      // Request with NO editions param — empty array
+      // Request with NO lenses param — empty array
       const [statusCode, body] = await router.request(["ideas", "bare_web3.txt"], []);
       expect(statusCode).to.equal(200);
       expect(Buffer.from(ethers.getBytes(body)).toString()).to.equal("bare web3 content");
     });
 
-    it("Should resolve ?caller= param to serve that user's files when no editions", async function () {
-      // user1 creates a file, requesting with ?caller=user1 (no editions) should find it
+    it("Should resolve ?caller= param to serve that user's files when no lenses", async function () {
+      // user1 creates a file, requesting with ?caller=user1 (no lenses) should find it
       const [, user1] = await ethers.getSigners();
       const user1Addr = await user1.getAddress();
 
@@ -930,7 +930,7 @@ describe("EFSRouter Web3 Capabilities", function () {
       await addMirror(dataUID, ipfsTransportUID, "ipfs://QmCallerTest", user1);
       await pinAtPath(dataUID, fileAnchorUID, user1);
 
-      // With ?caller=user1 and no editions — should find user1's file
+      // With ?caller=user1 and no lenses — should find user1's file
       const [statusCode, , headers] = await router.request(
         ["ideas", "caller_test.txt"],
         [{ key: "caller", value: user1Addr }],
@@ -1024,8 +1024,8 @@ describe("EFSRouter Web3 Capabilities", function () {
       expect(ct).to.include("QmFallbackHash");
     });
 
-    it("Should continue past editions with no DATA and serve from a later edition", async function () {
-      // First edition has no DATA at this anchor; second edition has a file.
+    it("Should continue past lenses with no DATA and serve from a later lens", async function () {
+      // First lens has no DATA at this anchor; second lens has a file.
       // Router should skip the first and serve from the second.
       const [, , user2] = await ethers.getSigners();
       const u2Addr = await user2.getAddress();
@@ -1044,7 +1044,7 @@ describe("EFSRouter Web3 Capabilities", function () {
       const noDataAddr = ownerAddr;
       const [statusCode, body] = await router.request(
         ["ideas", "fallthrough.txt"],
-        [{ key: "editions", value: `${noDataAddr},${u2Addr}` }],
+        [{ key: "lenses", value: `${noDataAddr},${u2Addr}` }],
       );
       expect(statusCode).to.equal(200);
       expect(Buffer.from(ethers.getBytes(body)).toString()).to.equal("user2 file content");
@@ -1242,7 +1242,7 @@ describe("EFSRouter Web3 Capabilities", function () {
       expect(statusCode).to.equal(404);
     });
 
-    it("Should default editions to [caller, addr] when browsing an address with no ?editions=", async function () {
+    it("Should default lenses to [caller, addr] when browsing an address with no ?lenses=", async function () {
       // User1 attests a DATA at `/ownerAddr/onlyuser1.txt` — but queries come from owner (caller).
       // With `[caller, addr]` default, owner sees the file because user1's TAG falls back to addr side.
       // Wait — actually default is [caller, segmentAddr]. Here caller=owner, segmentAddr=ownerAddr (same).
@@ -1259,7 +1259,7 @@ describe("EFSRouter Web3 Capabilities", function () {
       await addMirror(dataUID, onchainTransportUID, `web3://${codeAddr}`, _user1);
       await pinAtPath(dataUID, fileAnchor, _user1);
 
-      // No ?editions= passed — router should auto-default to [caller, segAddr].
+      // No ?lenses= passed — router should auto-default to [caller, segAddr].
       // caller comes from msg.sender (owner calling via ethers), but eth_call from owner sets msg.sender=owner.
       // The fallback [caller, segAddr] will try owner first (no match), then segAddr (=user1, match).
       const [statusCode, body] = await router.request([segAddr, "hello.txt"], []);
@@ -1267,7 +1267,7 @@ describe("EFSRouter Web3 Capabilities", function () {
       expect(Buffer.from(ethers.getBytes(body)).toString()).to.equal("hi from user1");
     });
 
-    it("Should explicit ?editions= override address-default", async function () {
+    it("Should explicit ?lenses= override address-default", async function () {
       const segAddr = await _user1.getAddress();
       const fileAnchor = await createAnchorUnderAddress(segAddr, "onlyuser1.txt", dataSchemaUID);
 
@@ -1278,8 +1278,8 @@ describe("EFSRouter Web3 Capabilities", function () {
       await addMirror(dataUID, onchainTransportUID, `web3://${codeAddr}`, _user1);
       await pinAtPath(dataUID, fileAnchor, _user1);
 
-      // Explicit editions=owner (no match) should 404 — the default-[caller, segAddr] doesn't apply.
-      const [statusCode] = await router.request([segAddr, "onlyuser1.txt"], [{ key: "editions", value: ownerAddr }]);
+      // Explicit lenses=owner (no match) should 404 — the default-[caller, segAddr] doesn't apply.
+      const [statusCode] = await router.request([segAddr, "onlyuser1.txt"], [{ key: "lenses", value: ownerAddr }]);
       expect(statusCode).to.equal(404);
     });
 
@@ -1412,8 +1412,8 @@ describe("EFSRouter Web3 Capabilities", function () {
       expect(json.uid.toLowerCase()).to.equal(dataSchemaUID.toLowerCase());
     });
 
-    it("Should dedupe when caller == segmentAddr on address-container default editions", async function () {
-      // Default editions for address containers is [caller, segmentAddr]. When they match,
+    it("Should dedupe when caller == segmentAddr on address-container default lenses", async function () {
+      // Default lenses for address containers is [caller, segmentAddr]. When they match,
       // the duplicate must be collapsed so the attester is not scanned twice.
       const fileAnchor = await createAnchorUnderAddress(ownerAddr, "self.txt", dataSchemaUID);
       const codeAddr = ethers.getAddress("0x00000000000000000000000000000000000000E4");

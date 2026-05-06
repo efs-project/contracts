@@ -39,7 +39,7 @@ A use case picks PIN or TAG based on the nature of its predicate. Smart-contract
 2. The **value** is the PROPERTY attestation's sole field.
 3. The **binding** is a **PIN** with `definition = keyAnchorUID`, `refUID = propertyUID`. PIN is cardinality-1 (ADR-0041) — re-PINning the same key anchor from the same attester supersedes the previous binding in O(1).
 
-`EFSIndexer.onAttest` enforces only that PROPERTY is standalone (`refUID = 0x0`) and non-revocable — no target-kind validation. Per-attester singleton is a hard guarantee from `EdgeResolver._activeBySlot[keyAnchor][attester][PROPERTY_SCHEMA_UID]`. Reads are edition-scoped per ADR-0014.
+`EFSIndexer.onAttest` enforces only that PROPERTY is standalone (`refUID = 0x0`) and non-revocable — no target-kind validation. Per-attester singleton is a hard guarantee from `EdgeResolver._activeBySlot[keyAnchor][attester][PROPERTY_SCHEMA_UID]`. Reads are lens-scoped per ADR-0014.
 
 ### Example — contentType on a DATA
 
@@ -68,7 +68,7 @@ PROPERTY(value = "Vitalik Buterin")
 ### Reserved key anchors
 
 - `"contentType"` — MIME type of a DATA (see ADR-0005 → ADR-0035 → ADR-0041).
-- `"name"` — human-readable display name for any container (see ADR-0034). Clients render the hierarchy `ENS reverse-lookup (addresses only) → "name" key anchor resolved via PIN + PROPERTY scoped to the active editions → short-hex fallback`.
+- `"name"` — human-readable display name for any container (see ADR-0034). Clients render the hierarchy `ENS reverse-lookup (addresses only) → "name" key anchor resolved via PIN + PROPERTY scoped to the active lenses → short-hex fallback`.
 
 Other common (non-reserved) key anchors: `"previousVersion"` (value is a DATA UID of the prior version), `"description"`, `"icon"`.
 
@@ -160,10 +160,10 @@ Call `eas.revoke(pinUID)`. `EdgeResolver.onRevoke` clears the slot if the revoke
 ### Tag Definitions as Anchors
 Tag definitions for descriptive labels are stored as normal Anchors under a reserved `/tags/` folder (created at deploy time). For example, the "nsfw" tag definition is `resolvePath(tagsAnchorUID, "nsfw")`. The UI hides `/tags/` from standard browsing while keeping definitions discoverable. Folder-visibility TAGs use the schema UID itself as the definition — no `/tags/` anchor required.
 
-### Edition-Specific Tagging (DATA UID Targeting)
-When tagging files (descriptive labels), TAGs should target the **DATA attestation UID** (the specific edition) rather than the Anchor UID (the shared filename). This is critical because multiple users can attach different DATA attestations to the same file Anchor, and each edition should be independently taggable.
+### Lens-Specific Tagging (DATA UID Targeting)
+When tagging files (descriptive labels), TAGs should target the **DATA attestation UID** (the specific lens) rather than the Anchor UID (the shared filename). This is critical because multiple users can attach different DATA attestations to the same file Anchor, and each lens should be independently taggable.
 
-**Example**: User A and User B both have a `test.txt` file (same Anchor). User A tags their DATA attestation as "nsfw". Because the tag targets User A's DATA UID specifically, User B's edition is not affected.
+**Example**: User A and User B both have a `test.txt` file (same Anchor). User A tags their DATA attestation as "nsfw". Because the tag targets User A's DATA UID specifically, User B's lens is not affected.
 
 For folder-level descriptive tags (e.g., marking a folder as "important"), the TAG targets the Anchor UID directly since folders have no per-user DATA attestations.
 
@@ -200,7 +200,7 @@ If you write a PIN where a TAG is correct, the slot can only hold one value (sub
 - `sourceType` (uint8) — Source-list selector for what gets sorted. Reserved for future variants (kernel-shared vs per-attester children); current default is 0.
 - Revocable: `true` — revoking signals "I'm done maintaining this sort; hide from menu"
 
-**Details**: A SORT_INFO attestation names a sort by creating a naming Anchor as a child of the directory. The naming Anchor's `anchorSchema = SORT_INFO_SCHEMA` distinguishes it from file Anchors. The `EFSSortOverlay` contract is the resolver — it validates the `sortFunc` address and caches the sort config. The sorted data lives in the sort overlay's linked lists keyed by `(sortInfoUID, parentAnchor)` — **one shared list per parent**, not per-attester. Edition filtering is applied at read time via `getSortedChunkByAddressList`.
+**Details**: A SORT_INFO attestation names a sort by creating a naming Anchor as a child of the directory. The naming Anchor's `anchorSchema = SORT_INFO_SCHEMA` distinguishes it from file Anchors. The `EFSSortOverlay` contract is the resolver — it validates the `sortFunc` address and caches the sort config. The sorted data lives in the sort overlay's linked lists keyed by `(sortInfoUID, parentAnchor)` — **one shared list per parent**, not per-attester. Lens filtering is applied at read time via `getSortedChunkByAddressList`.
 
 The `getSortStaleness(sortInfoUID, parentAnchor)` function reports how many kernel items are unprocessed. Any attester may call `processItems` to advance the shared sorted list.
 

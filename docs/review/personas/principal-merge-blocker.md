@@ -37,7 +37,7 @@ Then read:
 - specs/03-Onchain-Indexing-Strategy.md
 - specs/04-Core-Workflows.md
 - docs/adr/0041-pin-tag-schema-split-for-cardinality.md
-- any ADR/spec governing folder visibility, pagination, display-name/property binding, schema aliases, editions behavior, router resolution, and safety limits
+- any ADR/spec governing folder visibility, pagination, display-name/property binding, schema aliases, lenses behavior, router resolution, and safety limits
 
 Review standard:
 - specs are authoritative for current intended behavior

@@ -93,7 +93,7 @@ Add specialists as needed:
 
 - a screen adds or changes contract reads
 - a flow adds or changes EAS writes
-- pagination, sorting, filtering, or editions logic changes
+- pagination, sorting, filtering, or lenses logic changes
 - contract helpers are added or removed
 - any branch could increase RPC calls, transaction count, or wallet confirmations
 
