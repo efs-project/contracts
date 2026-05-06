@@ -169,8 +169,7 @@ export const PathBar = ({
   };
 
   const lensesCount = lensAddresses.length;
-  const lensesLabel =
-    lensesCount === 0 ? "No lenses" : `${lensesCount} lens${lensesCount === 1 ? "" : "es"}`;
+  const lensesLabel = lensesCount === 0 ? "No lenses" : `${lensesCount} lens${lensesCount === 1 ? "" : "es"}`;
 
   return (
     <div className="flex flex-wrap items-stretch gap-2 w-full">

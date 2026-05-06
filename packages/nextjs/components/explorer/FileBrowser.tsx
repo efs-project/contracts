@@ -867,8 +867,7 @@ export const FileBrowser = ({
   // See Codex P2 on PR #9 and ADR-0031 (explicit param must not widen results).
   const lockedToLenses = useRef(false);
   if (hasLenses) lockedToLenses.current = true;
-  const useLensesQuery =
-    explicitLenses || ((hasLenses || lockedToLenses.current) && lensAddresses.length > 0);
+  const useLensesQuery = explicitLenses || ((hasLenses || lockedToLenses.current) && lensAddresses.length > 0);
 
   const {
     data: standardItems,
@@ -961,8 +960,7 @@ export const FileBrowser = ({
 
     setIsDataUIDMapLoading(true);
 
-    const attesters: string[] =
-      lensAddresses.length > 0 ? lensAddresses : connectedAddress ? [connectedAddress] : [];
+    const attesters: string[] = lensAddresses.length > 0 ? lensAddresses : connectedAddress ? [connectedAddress] : [];
 
     if (attesters.length === 0) {
       setDataUIDMap(new Map());
@@ -1677,9 +1675,7 @@ export const FileBrowser = ({
           </div>
 
           {/* Mirrors panel */}
-          {!selectedFile.isFolder && (
-            <MirrorsPanel fileAnchorUID={selectedFile.uid} lensAddresses={lensAddresses} />
-          )}
+          {!selectedFile.isFolder && <MirrorsPanel fileAnchorUID={selectedFile.uid} lensAddresses={lensAddresses} />}
         </div>
       )}
 

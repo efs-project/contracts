@@ -57,13 +57,7 @@ const FILE_VIEW_MIRRORS_ABI = [
   },
 ] as const;
 
-export const MirrorsPanel = ({
-  fileAnchorUID,
-  lensAddresses,
-}: {
-  fileAnchorUID: string;
-  lensAddresses: string[];
-}) => {
+export const MirrorsPanel = ({ fileAnchorUID, lensAddresses }: { fileAnchorUID: string; lensAddresses: string[] }) => {
   const [mirrors, setMirrors] = useState<MirrorItem[]>([]);
   const [dataUID, setDataUID] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);

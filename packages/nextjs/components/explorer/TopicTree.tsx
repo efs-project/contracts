@@ -76,8 +76,7 @@ const TreeNode = ({
   // resolved list is empty, so `?lenses=` (or a failed ENS lookup) renders
   // an empty tree instead of silently falling back to the unscoped query.
   // Codex P2 on PR #9, ADR-0031 "explicit param must not widen results".
-  const useLensesQuery =
-    explicitLenses || ((hasLenses || lockedToLenses.current) && lensAddresses.length > 0);
+  const useLensesQuery = explicitLenses || ((hasLenses || lockedToLenses.current) && lensAddresses.length > 0);
 
   const { data: efsFileViewInfo } = useDeployedContractInfo({ contractName: "EFSFileView" });
 
