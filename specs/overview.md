@@ -51,9 +51,10 @@ on a DATA are also filtered to the winning attester. This prevents third
 parties from injecting a malicious mirror or a bogus `contentType` onto
 someone else's DATA.
 
-> *Note for readers of older ADRs (0013, 0014, 0026, 0031, 0039): the
-> term "edition" / "editions" in those documents is the same concept,
-> renamed in ADR-0043.*
+> *Note for readers encountering the term "edition" / "editions" in external
+> references, git history, or cached EFS documentation: that was the previous
+> name for this concept. ADR-0043 (2026-05-05) renamed it to "lenses" across
+> the entire codebase, including ADRs 0013, 0014, 0026, 0031, and 0039.*
 
 ## Seven EAS schemas
 

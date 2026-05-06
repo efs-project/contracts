@@ -55,14 +55,14 @@ project lead.
 ## Consequences
 
 - Mechanical rename across code, specs, top-level docs, tests, scripts,
-  the debug UI, and the ADR index. 73 files (excluding the 19 immutable
-  accepted ADRs).
+  the debug UI, and the ADR index. 77 files total (including 19 accepted
+  ADRs updated in-place per the policy exception above).
 - One file rename: `useEditionDirectoryPage.ts` → `useLensesDirectoryPage.ts`.
 - One new constant name: `MAX_EDITIONS` → `MAX_LENSES`.
 - No schema UID changes — schema field strings do not contain the term.
 - No backwards-compatible URL aliases. Pre-launch break is acceptable.
-- Glossary entry added to `specs/overview.md` for future readers
-  encountering the old term in accepted ADRs.
+- Reader note added to `specs/overview.md` to orient future readers who
+  encounter the old term in external references or git history.
 
 ## Alternatives considered
 
