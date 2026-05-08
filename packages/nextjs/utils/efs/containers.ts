@@ -316,6 +316,15 @@ export function buildRouterPathNames(
 export const DEVNET_BOOTSTRAP_CURATOR = "0xaCf4C2950107eF9b1C37faA1F9a866C8F0da88b9" as const;
 
 /**
+ * Devnet dev/demo attester (James Carnley's dev account). Included in the
+ * default `system` fallback tier alongside the bootstrap curator so live-demo
+ * attestations from this account are visible to fresh viewers without having
+ * to specify `?lenses=`. Devnet-only; same mainnet replacement path as
+ * `DEVNET_BOOTSTRAP_CURATOR`.
+ */
+export const DEVNET_DEV_ATTESTER = "0x8626f6940E2eb28930eFb4CeF49B2d1F2C9C1199" as const;
+
+/**
  * Compute the effective lenses list for a container. Implements the default
  * lenses priority chain from ADR-0039:
  *
