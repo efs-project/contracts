@@ -17,6 +17,7 @@ import { useDeployedContractInfo, useScaffoldReadContract } from "~~/hooks/scaff
 import {
   ClassifiedContainer,
   DEVNET_BOOTSTRAP_CURATOR,
+  DEVNET_DEV_ATTESTER,
   buildRouterPathNames,
   classifyTopLevelSegment,
   defaultLensesForContainer,
@@ -113,17 +114,18 @@ export default function ExplorerClient() {
   const hasLensesParam = lensesParam !== null;
 
   // System tail-fallback tier (ADR-0039). On devnet: a bootstrap curator
-  // address + the EFS deployer, so fresh users see seeded content before
-  // configuring any web of trust. Deployer is a runtime read from the indexer;
-  // `Indexer.DEPLOYER` is an immutable set in its constructor. Mainnet will
-  // replace both with a user-configurable list.
+  // address, the dev/demo attester, and the EFS deployer, so fresh users
+  // see seeded + live-demo content before configuring any web of trust.
+  // Deployer is a runtime read from the indexer; `Indexer.DEPLOYER` is an
+  // immutable set in its constructor. Mainnet will replace all three with
+  // a user-configurable list.
   const { data: deployerAddress } = useScaffoldReadContract({
     contractName: "Indexer",
     functionName: "DEPLOYER",
   });
 
   const systemLenses = useMemo(() => {
-    const out: string[] = [DEVNET_BOOTSTRAP_CURATOR];
+    const out: string[] = [DEVNET_BOOTSTRAP_CURATOR, DEVNET_DEV_ATTESTER];
     if (deployerAddress && typeof deployerAddress === "string") out.push(deployerAddress);
     return out;
   }, [deployerAddress]);
