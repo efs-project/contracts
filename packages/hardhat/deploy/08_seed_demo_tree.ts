@@ -1,6 +1,7 @@
 import { HardhatRuntimeEnvironment } from "hardhat/types";
 import { DeployFunction } from "hardhat-deploy/types";
-import { seedDemoTree } from "../scripts/seed-impl";
+// TEMPORARILY DISABLED — re-enable alongside the `await seedDemoTree()` call below.
+// import { seedDemoTree } from "../scripts/seed-impl";
 
 /**
  * Run the `/docs`, `/images`, `/shared` demo seed as a hardhat-deploy step so
@@ -25,7 +26,11 @@ const seedDemoTreeStep: DeployFunction = async function (hre: HardhatRuntimeEnvi
     console.log(`Skipping demo tree seed on network "${hre.network.name}" (localhost/hardhat only).`);
     return;
   }
-  await seedDemoTree();
+  // TEMPORARILY DISABLED for live-demo prep — clean-slate fork wanted.
+  // Re-enable by uncommenting the `await seedDemoTree()` line below.
+  console.log("Skipping demo tree seed (disabled for clean-slate live demo).");
+  return;
+  // await seedDemoTree();
 };
 
 export default seedDemoTreeStep;
