@@ -1,8 +1,58 @@
 # ADR-0043: EFS Edge Constraint Callbacks
 
-**Status:** Proposed
+**Status:** Deferred (not pursued for Sepolia v1; revisit triggers below)
 **Date:** 2026-05-21
+**Date deferred:** 2026-05-21
 **Related:** ADR-0030 (mainnet permanence), ADR-0032 (EAS as foundation), ADR-0041 (PIN/TAG schema split), ADR-0042 (effective-TAG filter); upcoming ADR-0044 (LIST schema), ADR-0045 (PIN-trust-extension)
+
+## Deferral note (2026-05-21)
+
+After three external review passes (Gemini, Codex, fresh Claude) on the draft at commit `f260e59`, all three returned RED verdicts converging on a single conclusion:
+
+**The mechanism doesn't solve a v1 problem.**
+
+- `allowsDuplicates=false` (the ADR's stated motivating use case) is already conditionally kernel-enforced by ADR-0025 name uniqueness + target-derived naming convention. The round-16 LIST design at L86-95 documents this. The ADR misread the failure mode: the second-write revert happens at *anchor creation* (kernel name uniqueness), not at PIN write.
+- The forward use cases (bounded-N TAG, append-only via revoke veto, PROPERTY value-type conformance, cross-schema preconditions) are speculative — none are needed in round-16 LIST, and none have concrete v1 requirements.
+
+Additionally, the draft mechanism had structural issues that aren't trivially patchable in the 10-day Sepolia window:
+
+- **Wrong trigger relation** (Codex): the ADR keyed dispatch on `definition.parent.schema`, but LIST TAGs have `definition = LIST_UID` directly (free-floating, no parent). The mechanism as designed wouldn't actually fire for LIST TAGs — `allowsDuplicates` would remain bypassable via the TAG path even WITH ADR-0043 implemented.
+- **PIN supersession breaks revoke veto** (Codex, Claude): the proposed append-only invariant via `onEdgeRevoke` veto can't work because PIN supersession clears slots in-place without firing `onEdgeRevoke`.
+- **multiAttest indexer state bypass** (Gemini): `_indexer.getParent(definition)` returns `bytes32(0)` mid-batch because the parent anchor hasn't been indexed yet. Silent dispatch bypass.
+- **Multiple Solidity-level bugs** (Gemini's adversarial pass): assembly memory alignment in the reentrancy guard (revert returns null selector instead of error), returndata griefing via quadratic memory expansion, EOA/proxy empty-success silent bypass, constructor `code.length == 0` blocks self-registration.
+- **Failsafe-open security hazard** (Gemini, Codex): selfdestructed callback contracts silently disable invariants on protected lists.
+
+## Why deferral is preferred over fixing
+
+Cost asymmetry strongly favors waiting:
+
+**Cost of shipping a wrong dispatch surface to Sepolia:** EdgeResolver's address is baked into PIN and TAG schema UIDs at registration. A wrong dispatch surface is permanent unless we migrate ALL EFS PIN/TAG attestations (effectively a full EFS reset). The 6 BLOCKING findings across three reviewers suggest "wrong" is the more likely outcome of trying to fix this in 10 days.
+
+**Cost of deferring:** v1 ships with the round-16 model unchanged. `allowsDuplicates=false` is documented as "kernel-enforced when client uses target-derived naming" — the exact conditional that's already true. No regression from the deferral.
+
+**Cost of adding the mechanism later, if needed:** Bounded. EFS's natural extension mechanism is schema variants (PIN_V2, TAG_V2 with a different resolver implementing constraint dispatch). Curators wanting strong invariant enforcement opt into the new schema. Old PINs/TAGs keep working. This is the same pattern ADR-0041 establishes for any cross-schema variation.
+
+## Revisit triggers
+
+Re-open this ADR (or supersede with a new one) when ANY of:
+
+1. **A concrete production-blocking case for set semantics emerges** where target-derived naming + ADR-0025 enforcement is insufficient (e.g., a curator-trust scenario where the curator's own discipline can't be relied on).
+2. **Append-only governance lists become a real near-term need** (e.g., on-chain DAO ballot patterns that require kernel-enforced immutability of entries).
+3. **PROPERTY value-type conformance** becomes load-bearing for a smart-contract consumer pattern where client-side type-checking is insufficient.
+4. **Multiple structural-invariant use cases emerge simultaneously**, justifying the dispatch infrastructure as shared mechanism rather than ad-hoc resolvers.
+
+When revisited, the next iteration MUST address:
+
+- **Trigger relation model:** the design must explicitly handle `definition.schema`, `definition.parent.schema`, `target.parent.schema`, and prior slot state for PIN supersession — not just `definition.parent.schema` as ADR-0043 v1 did.
+- **multiAttest atomicity:** the dispatch can't depend on indexer state that hasn't been written yet mid-batch.
+- **Failsafe-closed for "constraint" semantics:** silently failing open is incompatible with the word "constraint."
+- **Bounded-but-not-hardcoded gas budget:** static 100k gas was a 50-year fragility.
+
+## Original design (preserved for context)
+
+The original "Proposed" text follows below for historical reference. **Do not treat as current EFS state.**
+
+---
 
 ## Context
 

@@ -32,6 +32,16 @@ Round-15's side thread (testing round-14's structure against ablations) produced
 
 **Lesson:** before any Etched-tier review, surface every implicit invariant the system depends on. Write them down even if they feel obvious. If you find yourself thinking "well of course X" while reading reviewer feedback, X probably needs to be documented.
 
+### Internal synthesis can frame the problem to presuppose the answer
+
+ADR-0043 (EFS Edge Constraint Callbacks) was drafted via three parallel internal subagents synthesizing into a "permanent Etched commitment." The framing prompts all assumed "the mechanism is needed; design it well." External reviewers (round-17, 2026-05-21) returned RED on all three passes with the same convergent finding: **the mechanism doesn't solve a v1 problem.** `allowsDuplicates=false` was already conditionally kernel-enforced by ADR-0025 name uniqueness + target-derived naming. The "forward use cases" (bounded-N TAG, append-only, PROPERTY value-type) were speculative.
+
+The ADR shipped to external review, was deferred (not accepted), and ~$week of design work could have been avoided by a single inverted-framing internal pass: *"for each LIST use case ADR-0043 claims to enable, identify which existing EFS mechanism already handles it."*
+
+**Lesson:** when drafting a permanent Etched commitment, the FIRST internal pass should be the inverted-framing pass — explicitly asking "is this mechanism needed?" not "design this mechanism." Only after that returns "yes, here are the gaps" should follow-on passes design the mechanism. Otherwise the framing bias compounds across subagents and the resulting design is "well-engineered, wrong problem."
+
+This is the same shape as design-lessons L36-41 ("sub-agent verification can ask the wrong question") but at the level of *whether to do something* rather than *whether something works*.
+
 ### Sub-agent verification can ask the wrong question
 
 The SortOverlay validation pass (round-15) asked "can SortOverlay sort entries by TAG.weight?" — answer: yes. The right question was "does SortOverlay's source set match the list's actual membership set?" — answer: no (`_children` is append-only; active membership is the TAG bucket; they diverge after revokes).
