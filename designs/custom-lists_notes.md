@@ -1000,6 +1000,112 @@ The doc grew because:
 
 ---
 
+## Round 15 — schema simplification + principled stances + extracted ADRs + SortOverlay validated
+
+**Date:** 2026-05-20
+**Trigger:** Three outside-agent review passes on round-14 (Gemini GREEN+5th-frame, Codex RED/conditional, fresh-Claude YELLOW + extensive blocker list). James ran a side thread to stress-test round-14 against alternatives and converged on a refined round-14 shape with several changes.
+
+### Side-thread output
+
+The side thread tested several reframe candidates against round-14:
+
+- **A-loose** (shared `_entries/` container for cross-list item reuse) — rejected. Canonical-target PIN pattern handles reuse cleaner. List-context notes belong per-list, not on shared anchors.
+- **Dissolving LIST attestation** (typed anchor IS the list) — rejected. LIST attestation gives stable identity separate from path placement, mirroring DATA.
+- **Pure-TAG entries** (no entry anchor; weight on TAG; 1 attestation per entry) — rejected. Re-attesting weight produces a new TAG UID, orphaning per-entry metadata that referenced the prior TAG UID. Catastrophic for annotated lists.
+- **TAG + listIndex PROPERTY** (move weight off TAG; kernel change to ADR-0041) — rejected. PROPERTYs cost 3 attestations each. Heavier than round-14, not lighter.
+- **`coContributionPolicy` field** — rejected as **category error**. EFS does not have a write-gating concept. Editions ARE the access control; viewers choose what they read. Adding this field would imply a model EFS doesn't have.
+- **Mandatory curator-write-gate resolver** — rejected for the same reason.
+- **Free-floating folders** (Gemini's fourth-frame) — out of scope for v1.
+- **One-enum schema field** (combine `allowsDuplicates`, `targetType` into one enum) — rejected. Discrete fields more self-documenting; enums need lookup tables.
+- **Cross-list ITEM reuse via shared entry anchors** — rejected. Solved by canonical-target PIN at `/food/apple/` etc.
+- **Ownership transfer mechanism** — accepted non-transferability. Old curator stays in editions chain forever.
+
+### Schema field changes from round-14
+
+- Dropped `uint8 entryIdentity` (3 enum values) — naming is a client convention, not a kernel concern. The kernel just enforces ADR-0025 anchor-name uniqueness.
+- Dropped `uint8 targetKind` (5 effective values) → replaced with `uint8 targetType` (3 values: ANY / ADDR / SCHEMA). DATA collapsed into SCHEMA (use `targetSchema=DATA_SCHEMA_UID`). NONE-target handled by entries optionally omitting their inner PIN.
+- Added `bool allowsDuplicates` — explicit replacement for what was inferred from `entryIdentity`.
+- Added `bool sorted` — declares whether the curator maintains a SortOverlay-backed sorted index. **Default true in SDK helpers**, opt-out via `sorted: false` per James's call ("(a) but have a parameter to opt out of sorting").
+
+### Other refinements from round-14
+
+- **`revocable: true` → `revocable: false`** finally confirmed (was already in round-14; held under stress).
+- **`title` → `name`** (align with ADR-0034 — round-14 had convention drift).
+- **Optional resolver → mandatory `ListResolver`** for field-validation only. Validates `targetType ≤ 2`, (targetType, targetSchema) coherence, free-floating envelope.
+- **Drop `MAX_LIST_PAGE_SIZE` cap and `PageSizeTooLarge` revert.** James's call ("Denial of service on who? The RPC providers? I doubt they'd care and would just cut your connection after a bit"). View reads are billed to the caller; memory expansion is quadratic-priced; RPC providers handle their own timeouts. Kernel paternalism dropped. SDK default `length = 100` as hint only.
+- **Drop `validateAnchorNameMatchesPinTarget` reader** — naming is a client convention now; the validator was useful only with the `entryIdentity` enum.
+
+### Cross-cutting extractions (separate ADRs)
+
+Two findings from earlier rounds apply broader than lists. Pulled out:
+
+- **PIN-trust-extension** — when a reader follows a PIN from attester A's anchor to attester B's target attestation, lens trust extends to B for that subtree. Applies to files, lists, properties — anywhere PIN-following crosses attester boundaries. Symlink-trust semantic. Deserves its own system-wide ADR.
+
+- **Per-schema namespace + URL syntax** — anchors with different `schemaUID`s at the same parent + name coexist (kernel-level), but the file browser UX presents a unified-by-default view with cross-schema awareness. URL syntax disambiguates type. DNS precedent: `dig MX example.com` vs `dig A example.com`. Separate ADR governs the URL syntax (`/foo` vs `/foo[]` vs `/foo{}` vs `/foo<schemaUID>`).
+
+Both are referenced from `custom-lists.md` but not duplicated.
+
+### SortOverlay validation pass (background subagent)
+
+Question: can `EFSSortOverlay` sort list entries by their TAG weight?
+
+Findings:
+1. **Source compatibility works.** `sourceType=1` filters children by schema; a LIST attestation's children with `ANCHOR_SCHEMA_UID` can be the sort source.
+2. **`WeightSort` comparator needs custom path.** It can't read TAG.weight from an entry anchor UID directly; must look up the active TAG via EdgeResolver edgeHash index for `(curator, entryUID, listUID, ANCHOR_SCHEMA_UID)`, then read the TAG attestation, decode `weight`. ~2 EAS reads per comparison.
+3. **Re-sort on weight change is NOT automatic.** Re-attesting a TAG with new weight updates EdgeResolver's in-place storage but does NOT trigger SortOverlay re-position. Caller must explicitly call `repositionItem(sortInfoUID, parentAnchor, entryUID, leftHint, rightHint)`. ~5.5k gas per call.
+4. **Pagination via cursor.** `getSortedChunk` returns paginated sorted slices with `nextCursor` for following pages. O(1) per page.
+5. **Verdict: feasible with manual repositioning.** SDK helpers handle `repositionItem` transparently for the curator on weight changes. No kernel changes needed for v1.
+
+Result: round-15 commits to "sorted lists via SortOverlay" as opt-in default (`sorted: true`), with SDK auto-creating the SORT_INFO at LIST creation time and handling `repositionItem` on weight updates. Opt-out via `sorted: false` for small lists that don't need on-chain sorted reads.
+
+### "Drill-into collections" mental model
+
+A unifying frame for the spec rewrite. Lists, folders, and any future browse-into container types are siblings in the user's mental model. Kernel-level distinction is implementation detail. UX treats them as "things you click into to see what's inside." Surfaced this round; will land in `specs/06` rewrite.
+
+### What round-15 changed concretely
+
+| Item | Round-14 | Round-15 |
+|---|---|---|
+| Schema fields | `(uint8 entryIdentity, uint8 targetKind, bytes32 targetSchema)` | `(bool sorted, bool allowsDuplicates, uint8 targetType, bytes32 targetSchema)` |
+| Resolver | "no resolver OR optional" | mandatory `ListResolver` (field validation only) |
+| Page-size cap | `MAX_LIST_PAGE_SIZE = 100` + `PageSizeTooLarge()` revert | no kernel cap; SDK hint `length = 100` |
+| `validateAnchorNameMatchesPinTarget` | shipped reader | dropped (naming is client convention) |
+| Display-name PROPERTY | `title` (drift) | `name` (ADR-0034 alignment) |
+| Co-contribution framing | "we keep it" + shaky defense | **principled: editions ARE the access control** |
+| Sorting framing | "via SortOverlay or page reads" | `bool sorted` field (default true); SortOverlay opt-in/out |
+| PIN-trust-extension | inline | extracted to separate ADR |
+| URL/namespace | mentioned | extracted to separate ADR |
+| Cross-list item reuse | unstated | explicit: canonical-target PIN pattern |
+| Folder/list mental model | separate concepts | **"drill-into collections" — same UX-layer concept** |
+
+### Open items remaining
+
+- PIN-trust-extension ADR drafting (separate)
+- URL/path-resolution ADR drafting (separate)
+- `specs/06` rewrite (blocking before dev writes list data)
+- Outside-agent review of round-15 (paste-ready prompt to be drafted)
+- Implementation: LIST schema registration, ListResolver, WeightSort, EdgeResolver extensions, SDK helpers, frontend, conformance tests
+
+### Pattern across rounds 11–15
+
+Five frame-level refinements in fifteen rounds. Each was caught by James from outside the agent-convergence loop:
+- Round 11: lists are folders (overshoot)
+- Round 12: lists are NOT folders; membership is tags
+- Round 13: free-floating LIST attestation, file-like portability
+- Round 14: typed list anchors + revocable=false + freeform-no-PIN + placer/curator split
+- Round 15: schema simplification + principled stances + extracted ADRs + drop kernel paternalism
+
+The pattern: **agents converge inside a frame; humans question the frame.** Round-15's reframes came primarily from James-led side-thread stress-testing of round-14. A sixth frame-level refinement may still emerge; future agents reading this should expect a high bar but not assume the design space is exhausted.
+
+### Doc length impact
+
+Pre-round-15: 750 lines design + 1020 notes.
+Post-round-15: ~932 lines design + ~1180 notes.
+
+Growth driven by: three worked examples (Top 10 memes, grocery list, music playlist with repeats), WeightSort sketch, expanded decisions list, rejected-alternatives list with reasoning, frame-history recap.
+
+---
+
 ## How to use this file
 
 Append-friendly. When adding:
