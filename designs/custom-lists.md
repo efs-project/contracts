@@ -1,6 +1,6 @@
 # EFS Lists — Design
 
-**Status:** Draft (round 15 — schema simplification + principled editions stance + extracted ADRs)
+**Status:** Draft (round 16 — anchors-are-neutral framing, schema final (3 fields), SortOverlay TAG-source committed for v1)
 **Date:** 2026-05-20
 **Permanence-tier:** Etched-adjacent (introduces one new EAS schema; the data model is permanent post-1.0)
 **Authors:** Claude Sonnet 4.7 (cross-agent brainstorming across 14 prior rounds with Codex GPT-5, Gemini 2.5 Pro, and a fresh Claude review pass) + James Carnley (architectural direction; final-frame decisions)
@@ -36,10 +36,12 @@ The structural model:
 
 ```
 LIST attestation L1                              (free-floating; has its own UID; revocable: false)
-  ├── sorted           = true/false
   ├── allowsDuplicates = true/false
   ├── targetType       = ANY / ADDR / SCHEMA
   └── targetSchema     = bytes32
+
+  Optional: SORT_INFO(parentAnchor=L1, sortFunc=WeightSort, attester=curator)
+            ← presence signals on-chain sorted reads; absence = unsorted
 
   List-level metadata (name, description, cover, etc.) attaches to L1 via PROPERTY slots:
     Anchor<PROPERTY>(name="name", refUID=L1)          ← ADR-0034 display-name PROPERTY
@@ -62,6 +64,58 @@ at. Bob can place Alice's LIST in his namespace — Alice still owns the list
 ```
 
 **Lists, folders, files, and tags are independent things that can live inside any anchor.** They're not unifications of each other.
+
+**Anchors are neutral.** They are pure namespace slots — pieces of shared infrastructure. ANCHOR attestations technically have an `attester` field (every EAS attestation does), but **EFS never treats the anchor's attester as meaningful**. Whoever happens to attest an anchor first establishes the slot; everyone has equal access to attach PINs, TAGs, and PROPERTYs to it from their own attester identity. Editions/lenses filter which attester's attached content a viewer sees at read time. There is no concept of "anchor ownership." This is load-bearing: it's what makes shared schelling-point names work (everyone references the same `/alice.eth/file.txt` UID regardless of who first attested it).
+
+---
+
+## What changed in round 16
+
+Round 16 finalizes the schema (3 fields), commits the SortOverlay kernel change for v1, and surfaces the "anchors are neutral" principle that was implicit in EFS's design.
+
+### Anchors-are-neutral (principled stance, made explicit)
+
+Round-15 reviewers raised a "namespace squatting attack" — Mallory creates an anchor at a path slot first, blocking someone else from "owning" that name. The framing assumed anchor attesters were meaningful. **They aren't.** EFS never uses an anchor's attester field. The slot-first-creator gets nothing special; anyone can attach PINs/TAGs/PROPERTYs to any anchor with their own attester identity, and editions filter at the read layer.
+
+This isn't a new design decision — it's load-bearing existing behavior that wasn't surfaced. Round-16 makes it explicit in the doc and in the upcoming PIN-trust-extension ADR. The "squatting attack" framing dissolves once you read anchors as neutral infrastructure rather than ownable property.
+
+### Schema final (`sorted` field removed)
+
+Round-15 added a `bool sorted` field. Reviewers flagged it as overlay state masquerading as identity (Codex: "carrying more architectural weight than the system underneath it can hold"). The reframe: **the existence of a SORT_INFO attestation against `(LIST_UID, curator)` is the on-chain signal for sorted lists.** Smart contracts probe `EFSSortOverlay.getSortInfo(LIST_UID, curator)`; if present, sorted path; if absent, unsorted path.
+
+Final LIST schema (3 fields, all load-bearing):
+
+```solidity
+LIST schema:
+  bool    allowsDuplicates   // false = set semantics (kernel enforces via name uniqueness with target-derived naming); true = duplicates allowed
+  uint8   targetType         // 0 = ANY, 1 = ADDR, 2 = SCHEMA
+  bytes32 targetSchema       // EAS schema UID when targetType=SCHEMA; else bytes32(0)
+revocable: false
+resolver: ListResolver       // mandatory; field validation only
+```
+
+### SortOverlay TAG-source mode (kernel change committed for v1)
+
+Reviewers (Codex + Gemini independently) caught: `EFSSortOverlay` walks `_children[parentAnchor]`, an append-only kernel array. List membership lives in `EdgeResolver._activeByAAS[L1][curator][ANCHOR_SCHEMA_UID]` (active TAG bucket). **These are different sets.** A removed entry (revoked TAG) stays in `_children` forever, so SortOverlay sorted reads would surface ghosts.
+
+Round-16 commits a kernel change: **add a new `sourceType` to `EFSSortOverlay` that reads from EdgeResolver's active-TAG bucket instead of `_children`.** WeightSort comparator reads each entry's active weight TAG via EdgeResolver edgeHash index. SortOverlay also gets a hook from EdgeResolver on TAG revoke to call `_unlink(entryUID)` automatically. ~100-150 lines of Solidity plus tests.
+
+Ships in v1 (before Sepolia) so on-chain sorted reads work correctly from day one.
+
+### Smart-contract consumer warning extended
+
+NatSpec on readers now warns on TWO caller-supplied parameters:
+- `curator` — contracts MUST derive from `eas.getAttestation(listUID).attester`
+- `sortInfoUID` — contracts MUST derive from `EFSSortOverlay.getSortInfo(LIST_UID, curator)`
+
+Same structural pattern; same conformance test pattern.
+
+### Two ADRs to land alongside
+
+- **LIST ADR** (`docs/adr/0043-list-schema.md`) — captures the schema and rationale.
+- **PIN-trust-extension ADR** (`docs/adr/0044-pin-trust-extension.md`) — system-wide invariant: when reading across a PIN to a target attestation, lens trust extends to that target's attester for the subtree. Independent of LIST but referenced from this design.
+
+The previously planned per-schema namespace + URL syntax ADR is **deferred**. The current shared-anchor model handles the bookmark use case; URL-syntax disambiguation across schemas is nice-to-have but not blocking.
 
 ---
 
@@ -198,7 +252,7 @@ LIST attestation L1                                  (free-floating; UID=L1; rev
     └── TAG(definition=L1, refUID=entry, weight=90, attester=alice)
 ```
 
-Path resolution: `web3://...alice.eth/memes/top10/` walks anchors to `top10`. The reader sees `top10`'s schemaUID = `LIST_SCHEMA_UID` and knows this is a list slot. Reading its PIN with `targetSchema = LIST_SCHEMA_UID` returns the LIST UID. Reading the LIST attestation gives the configuration; `sorted=true` directs ranked reads via `EFSSortOverlay.getSortedChunk(L1's SORT_INFO, ...)`.
+Path resolution: `web3://...alice.eth/memes/top10/` walks anchors to `top10`. The reader sees `top10`'s schemaUID = `LIST_SCHEMA_UID` and knows this is a list slot. Reading its PIN with `targetSchema = LIST_SCHEMA_UID` returns the LIST UID. Reading the LIST attestation gives the configuration; a probe for `EFSSortOverlay.getSortInfo(LIST_UID, curator)` reveals whether on-chain sorted reads are available (presence → sorted path; absence → unsorted path).
 
 **Example B — Grocery list** (freeform, no inner PINs, unsorted):
 
@@ -256,8 +310,6 @@ Entry names are `keccak256("efs:list-occurrence:v1", L3_UID, alice_addr, clientN
 
 ```solidity
 LIST schema:
-  bool    sorted             // true (default) = maintains SortOverlay-backed sorted index;
-                             //   false = unsorted active-entry set
   bool    allowsDuplicates   // false = set semantics; true = playlist/duplicates allowed
   uint8   targetType         // 0 = ANY, 1 = ADDR, 2 = SCHEMA
   bytes32 targetSchema       // EAS schema UID when targetType=SCHEMA; else bytes32(0)
@@ -265,13 +317,11 @@ revocable: false
 resolver: ListResolver       // mandatory; validates field ranges + coherence at attest time
 ```
 
-Field semantics:
+**Sorted vs unsorted is signaled by SORT_INFO existence, not by a schema field.** A curator who wants on-chain sorted reads attests `SORT_INFO(parentAnchor=LIST_UID, sortFunc=WeightSort, attester=curator)` alongside the LIST (SDK does this by default; opt out via `sorted: false` at the create-time API). Smart contracts probe `EFSSortOverlay.getSortInfo(LIST_UID, curator)`; if present → sorted path; if absent → unsorted path.
 
-- **`sorted`** declares whether the curator maintains a SortOverlay-backed sorted index for this list.
-  - `true` (SDK default) — at LIST creation, SDK additionally attests `SORT_INFO(parentAnchor=LIST_UID, sortFunc=WeightSort)` so entries are kept ordered by `weight desc` via SortOverlay. Smart contracts read via `EFSSortOverlay.getSortedChunk(...)` for globally-ranked top-N. Cost: ~5.5k gas per `repositionItem` on weight change (handled by SDK on the curator's behalf).
-  - `false` — no SortOverlay index. Entries are read as an unsorted active-entry set via `EdgeResolver.getActiveTagPinTargetsWithWeights(...)`; clients sort client-side. Use for small lists, freeform lists where order doesn't matter, or write-heavy lists where the per-update overhead isn't worth it.
-  
-  The field is a **read-path declaration**, not a write-gate. The curator declares intent; readers honor it. Changing the sort discipline post-creation requires publishing a new LIST at a fresh UID (per `revocable: false` permanence).
+This means sort discipline is *mutable* (curator can attest a SORT_INFO later) and *per-curator* (each curator can independently choose), unlike a schema field which would be permanent. No migration trap from `revocable: false`.
+
+Field semantics:
 
 - **`allowsDuplicates`** declares whether the list permits multiple entries that PIN to the same target.
   - `false` — set semantics. Two entries can't PIN to the same target from the same curator. Use for top-N favorites, allowlists, ranked picks. Clients SHOULD name entries with target-derived hex for natural deduplication (target → unique anchor name).
@@ -407,13 +457,13 @@ Lists are heavy (LIST + entries + anchor PIN); they exist to serve use cases tag
 
 ## Reader API (v1)
 
-Smart contracts and clients read lists via two paths depending on whether the LIST declares `sorted = true`:
+Smart contracts and clients read lists via two paths depending on whether a SORT_INFO exists for `(LIST_UID, curator)`:
 
-**Path A — sorted lists** (`sorted = true`): read via `EFSSortOverlay`:
-- `getSortedChunk(sortInfoUID, parentAnchor, startNode, limit, showRevoked) → (items[], nextCursor)` — paginated, cursor-driven, returns entries in `weight desc` order. Per ADR-0007's SortOverlay pattern.
-- `sortInfoUID` is the curator's `SORT_INFO(parentAnchor=LIST_UID, sortFunc=WeightSort)` attestation UID — discoverable via `EFSSortOverlay.getSortInfo(LIST_UID)`.
+**Path A — sorted lists** (SORT_INFO present): read via `EFSSortOverlay`:
+- `getSortedChunk(sortInfoUID, parentAnchor, startNode, limit, showRevoked) → (items[], nextCursor)` — paginated, cursor-driven, returns entries in `weight desc` order using the new TAG-source sourceType. Per ADR-0007's SortOverlay pattern + the v1 TAG-source extension.
+- `sortInfoUID` is the curator's `SORT_INFO(parentAnchor=LIST_UID, sortFunc=WeightSort, attester=curator)` attestation UID — discoverable via `EFSSortOverlay.getSortInfo(LIST_UID, curator)`. Smart contracts MUST derive `curator` from `eas.getAttestation(LIST_UID).attester`, never from caller input.
 
-**Path B — unsorted lists** (`sorted = false`): read via existing `EdgeResolver`:
+**Path B — unsorted lists** (SORT_INFO absent): read via existing `EdgeResolver`:
 - `getActiveTagEntries(definition, attester, targetSchema, start, length) → (tagUID, weight)[]` (per ADR-0041 §8)
 - `getActiveTagPinTargetsWithWeights(definition, attester, tagTargetSchema, start, length) → (tagTargetID, tagUID, pinTargetID, pinTargetSchema, weight, attester)[]` — **canonical unsorted list-entry reader** when called with `definition = LIST_UID`, `tagTargetSchema = ANCHOR_SCHEMA_UID`. `pinTargetID = bytes32(0)` is a valid result for freeform entries without inner PIN.
 
@@ -438,35 +488,52 @@ entries = EdgeResolver.getActiveTagPinTargetsWithWeights(
 
 Reader-method NatSpec MUST carry this warning. Conformance test asserts the attack reproduces against a vulnerable consumer and fails against the recommended pattern.
 
-### WeightSort comparator (NEW for v1)
+### SortOverlay TAG-source mode + WeightSort comparator (NEW kernel work for v1)
 
-A new `ISortFunc` implementation deployed alongside the LIST schema:
+**Why a kernel change is needed.** Existing `EFSSortOverlay` walks `_children[parentAnchor]` — an append-only kernel array. List membership lives in `EdgeResolver._activeByAAS[L1][curator][ANCHOR_SCHEMA_UID]` (active TAG bucket). These diverge: a removed entry (revoked TAG) stays in `_children` forever, so sorted reads from the existing SortOverlay would surface "ghost" entries.
+
+**The kernel change.** Add a new `sourceType` (e.g., `sourceType = 2`) to `EFSSortOverlay` that reads from EdgeResolver's active-TAG bucket instead of `_children`. SortOverlay also gets a hook from EdgeResolver on TAG revoke that calls `_unlink(entryUID)` automatically. Sorted reads now reflect the actual active set.
 
 ```solidity
+// EFSSortOverlay additions (sketch; ~100-150 lines + tests)
+
+// New sourceType=2 path in _getKernelItemAt
+function _getKernelItemAt(SortInfo memory si, uint256 idx) internal view returns (bytes32) {
+    if (si.sourceType == 0) return indexer.getChildAt(si.parentAnchor, idx);
+    if (si.sourceType == 1) return indexer.getChildBySchemaAt(si.parentAnchor, si.targetSchema, idx);
+    if (si.sourceType == 2) {
+        // NEW: read from active TAG bucket
+        TagEntry memory entry = edgeResolver.getActiveTagEntryAt(
+            si.parentAnchor,    // = LIST UID
+            si.attester,        // = curator
+            ANCHOR_SCHEMA_UID,
+            idx
+        );
+        return entry.tagUID;  // sorted source is TAG UIDs; consumers map to entry anchors
+    }
+    revert UnsupportedSourceType();
+}
+
+// New hook called from EdgeResolver._onRevokeTag
+function onTagRevoked(bytes32 listUID, address curator, bytes32 entryUID) external {
+    require(msg.sender == address(edgeResolver), "only EdgeResolver");
+    bytes32 sortInfoUID = _findSortInfo(listUID, curator);
+    if (sortInfoUID != bytes32(0)) _unlink(sortInfoUID, listUID, entryUID);
+}
+
+// WeightSort comparator reads entry's active weight TAG via EdgeResolver
 contract WeightSort is ISortFunc {
-    IEAS public immutable eas;
-    EdgeResolver public immutable edgeResolver;
-    
     function isLessThan(bytes32 a, bytes32 b, bytes32 sortInfoUID) external view returns (bool) {
-        // a, b are entry anchor UIDs. The sort key is each entry's active weight TAG.
-        bytes32 listUID = _getParent(sortInfoUID);     // parentAnchor from SORT_INFO
-        address curator = _getCurator(sortInfoUID);    // curator from SORT_INFO
-        
-        int256 weightA = _getEntryWeight(a, curator, listUID);
-        int256 weightB = _getEntryWeight(b, curator, listUID);
-        
+        (bytes32 listUID, address curator) = _decodeSortInfo(sortInfoUID);
+        int256 weightA = edgeResolver.getActiveTagWeight(a, curator, listUID, ANCHOR_SCHEMA_UID);
+        int256 weightB = edgeResolver.getActiveTagWeight(b, curator, listUID, ANCHOR_SCHEMA_UID);
         if (weightA != weightB) return weightA > weightB;  // desc order
         return a < b;  // tie-break by entry UID asc
-    }
-    
-    function _getEntryWeight(bytes32 entryUID, address curator, bytes32 listUID) internal view returns (int256) {
-        // Look up the active weight TAG for (curator, entryUID, listUID, ANCHOR_SCHEMA_UID)
-        // via EdgeResolver's edgeHash index, then decode weight from TAG attestation.
     }
 }
 ```
 
-Two EAS reads per comparison. O(N log N) reads to build initial sort; O(1) `repositionItem` per weight update.
+Cost: O(N log N) reads for initial sort; O(1) `repositionItem` per weight update; ~5.5k gas per insert. Permissionless `repositionItem` remains safe per round-15 verification (validation is tight; only correctness-restoring moves succeed).
 
 ### Placer vs curator: two scopes for two questions
 
@@ -572,7 +639,7 @@ For a typed list anchor at a path, placer `bob`, curator `alice` (where `alice` 
 
 The recipe makes the placer/curator split explicit. For single-attester reads (Alice reads Alice's list at Alice's path), `placer == curator == alice` — the split is invisible. For shared/bookmarked lists, the split prevents reading Bob's empty bucket when the actual contents are Alice's.
 
-**Smart-contract top-N reads.** If `sorted == true`, contracts call `getSortedChunk` with `limit = N` and ignore `nextCursor` — single atomic call returns the top N. If `sorted == false`, contracts must either (a) accept that they only see a single arbitrary page, or (b) read multiple pages and sort in-contract (gas-bounded by the caller). For governance use cases that need reliable top-N, curate with `sorted = true`.
+**Smart-contract top-N reads.** If the curator attested a SORT_INFO, contracts call `getSortedChunk` with `limit = N` and ignore `nextCursor` — single atomic call returns the actual top N (TAG-source SortOverlay reflects revoked TAGs correctly). If no SORT_INFO exists, contracts must either (a) accept that they only see a single arbitrary page, or (b) read multiple pages and sort in-contract (gas-bounded by the caller). For governance use cases that need reliable top-N, curate the list with a SORT_INFO from day one.
 
 ### Snapshot consistency
 
@@ -797,7 +864,7 @@ These are operational triggers; they represent conditions under which "conventio
 ## Decisions resolved (round-15)
 
 1. **LIST attestations are free-floating, `revocable: false`.** Like DATA. The LIST UID is permanent at its UID; deletion happens at the placement-PIN layer, not the LIST itself.
-2. **Schema fields: `(bool sorted, bool allowsDuplicates, uint8 targetType, bytes32 targetSchema)`.** No `entryIdentity` — naming is a client convention. No `coContributionPolicy` — category error in EFS (editions ARE the access control).
+2. **Schema fields (round-16 FINAL): `(bool allowsDuplicates, uint8 targetType, bytes32 targetSchema)`.** No `entryIdentity` — naming is a client convention. No `sorted` — overlay state belongs to SORT_INFO existence, not schema. No `coContributionPolicy` — category error in EFS (editions ARE the access control).
 3. **Path placement is a typed list anchor + PIN.** `Anchor<schemaUID=LIST_SCHEMA_UID>` declares "this slot holds a list"; the PIN attaches the specific LIST UID. Same shape as `Anchor<PROPERTY>` slots.
 4. **Same LIST can be placed at multiple typed list anchors.** Multiple PINs from different list anchors all reference the same LIST UID.
 5. **Cross-attester sharing and contribution work natively.** Bob can create his own typed list anchor and PIN to Alice's LIST UID (bookmark); Bob can write entries/weights against Alice's LIST UID (co-contribution). **Editions handle spam-resistance at read time** — kernel does not gate writes at any layer.
@@ -807,7 +874,8 @@ These are operational triggers; they represent conditions under which "conventio
 9. **Membership patterns use TAGs**, not lists. Allowlists, blocklists, follow graphs, DAO membership, categorization, permissions — all are tagging patterns. `isActiveEdge` is the membership primitive.
 10. **Entry inner PIN is always optional.** Target-bearing entries (typical for `targetType=SCHEMA` or `targetType=ADDR`) PIN to their target. Freeform/intrinsic entries (`targetType=ANY` shopping-list style) skip the inner PIN; the anchor name IS the entry.
 11. **Mandatory `ListResolver`** for field-validation only. Validates `targetType ≤ 2`, (targetType, targetSchema) coherence, free-floating envelope (refUID=0, recipient=0). Does NOT gate writes by attester.
-12. **Ranked reads via `sorted` field.** `sorted=true` (SDK default) creates a SORT_INFO + WeightSort; smart contracts read via `EFSSortOverlay.getSortedChunk`. `sorted=false` skips SortOverlay; reads are unsorted active-entry pages. SDK transparently handles `repositionItem` on weight changes when `sorted=true`.
+12. **Ranked reads via SORT_INFO existence (not schema field).** SDK default at LIST creation: also attest `SORT_INFO(parentAnchor=LIST_UID, sortFunc=WeightSort, attester=curator)`. Curator can opt out via `sorted: false` SDK parameter (no SORT_INFO attested). Curators can attest a SORT_INFO later if they want to upgrade an unsorted list. Smart contracts probe `getSortInfo(LIST_UID, curator)` and branch read path on presence/absence. SDK transparently handles `repositionItem` on weight changes when a SORT_INFO exists.
+12a. **SortOverlay TAG-source kernel change (v1).** New `sourceType` reading from `EdgeResolver._activeByAAS` instead of `_children`. Sorted reads reflect actual active TAG set (revoked entries unlinked automatically via EdgeResolver→SortOverlay hook).
 13. **Reader API splits placer from curator scope.** `resolveListPlacement(anchor, placer) → listUID`; `readListByUID(listUID, curator)`; convenience `read(anchor, placer, curator?)` with curator defaulting to `LIST.attester`.
 14. **Single-curator-scoped reads as default.** Multi-attester is opt-in. Subgraphs MUST scope active-set queries to a curator (anti-spam invariant).
 15. **Default ordering: `weight desc`, tie-break by entry-UID asc, then `tagUID` asc.**
@@ -862,14 +930,16 @@ Lists are: **weighted membership claims by one (or more) attester(s) at a free-f
 **v1 shipping units (committed pre-launch):**
 
 1. **New EAS schema: `LIST`**
-   - `(bool sorted, bool allowsDuplicates, uint8 targetType, bytes32 targetSchema)`
+   - `(bool allowsDuplicates, uint8 targetType, bytes32 targetSchema)`
    - `revocable: false`
    - `resolver: ListResolver` (mandatory; field-validation only)
    - Registered in deploy script.
 
 2. **New contract: `ListResolver`** — minimal field validator (see schema section). ~50 lines of Solidity.
 
-3. **New contract: `WeightSort`** — `ISortFunc` implementation that reads each entry's active weight TAG via EdgeResolver and compares by `int256 weight desc`, tie-break by entry UID asc. Deployed once; reused as the `sortFunc` for every `sorted=true` LIST. ~80 lines of Solidity.
+3. **New contract: `WeightSort`** — `ISortFunc` implementation that reads each entry's active weight TAG via EdgeResolver and compares by `int256 weight desc`, tie-break by entry UID asc. Deployed once; reused as the `sortFunc` for every SORT_INFO attested by any LIST curator. ~80 lines of Solidity.
+
+3a. **`EFSSortOverlay` kernel change** — add `sourceType = 2` (TAG-source) reading from `EdgeResolver._activeByAAS`. Add `onTagRevoked` hook so SortOverlay auto-unlinks entries when their TAG is revoked. ~100-150 lines + tests.
 
 4. **`EdgeResolver` extensions** (carried from rounds 7/8 — generic graph-composition names, no list-specific vocabulary):
    - `getActiveTagTargetsWithWeights(definition, attester, tagTargetSchema, start, length) → (tagTargetID, tagUID, weight, attester)[]`
@@ -881,12 +951,12 @@ Lists are: **weighted membership claims by one (or more) attester(s) at a free-f
    - **List-level** (on LIST attestation): `name` (per ADR-0034), `description`, `cover`, `icon`, `category`.
 
 6. **SDK helpers**:
-   - `efs.lists.create(opts) → listUID` — creates free-floating LIST attestation; if `opts.sorted !== false`, also attests `SORT_INFO(parentAnchor=listUID, sortFunc=WeightSort)`
+   - `efs.lists.create(opts) → listUID` — creates free-floating LIST attestation; if `opts.sorted !== false` (default true), also attests `SORT_INFO(parentAnchor=listUID, sortFunc=WeightSort, attester=curator)` so sorted reads work on-chain. The SORT_INFO is just an attestation, not a schema field — curators can attest one later to upgrade an unsorted list, or have multiple curators independently attest their own.
    - `efs.lists.placeAt(listUID, parentAnchor, anchorName) → {listAnchorUID, pinUID}` — creates typed list anchor + placement PIN
    - `efs.lists.unplaceFrom(listAnchorUID)` — revokes placement PIN
    - `efs.lists.bookmarkAtMyPath(listUID, parentAnchor, anchorName)` — Bob creates his typed list anchor + PIN to Alice's LIST UID
-   - `efs.lists.addEntry(listUID, opts) → entryAnchorUID` — creates entry anchor + (optional) inner PIN + weight TAG; if `sorted=true` on the LIST, also calls `EFSSortOverlay.processItems` and `repositionItem` for the new entry
-   - `efs.lists.setEntryWeight(entryUID, newWeight)` — re-attests weight TAG; if `sorted=true`, also calls `repositionItem`
+   - `efs.lists.addEntry(listUID, opts) → entryAnchorUID` — creates entry anchor + (optional) inner PIN + weight TAG; if a SORT_INFO exists for `(listUID, curator)`, also calls `EFSSortOverlay.processItems` and `repositionItem` for the new entry
+   - `efs.lists.setEntryWeight(entryUID, newWeight)` — re-attests weight TAG; if a SORT_INFO exists, also calls `repositionItem`
    - `efs.lists.setEntryMetadata(entryAnchor, key, value)` — per-entry PROPERTY
    - `efs.lists.setListMetadata(listUID, key, value)` — list-level PROPERTY (uses `name` for display name per ADR-0034)
    - `efs.lists.resolveListPlacement(anchor, placer) → listUID | null`
@@ -911,7 +981,7 @@ Lists are: **weighted membership claims by one (or more) attester(s) at a free-f
 | 1 | LIST creation | Create free-floating LIST attestation; UID exists; `revocable: false` |
 | 2 | LIST placement | Create `Anchor<LIST>` typed anchor + placement PIN; reader resolves via `getActivePinTarget(anchor, placer, LIST_SCHEMA_UID)` |
 | 3 | LIST entries (unsorted) | Add 5 entries; read via `getActiveTagPinTargetsWithWeights(LIST_UID, curator, ANCHOR_SCHEMA_UID, ...)` |
-| 4 | LIST entries (sorted) | Add 5 entries to `sorted=true` LIST; SDK creates SORT_INFO; read via `getSortedChunk` returns weight-desc order |
+| 4 | LIST entries (sorted) | Add 5 entries to LIST with SORT_INFO; read via `getSortedChunk` (TAG-source sourceType) returns weight-desc order; revoke one entry's TAG → entry disappears from sorted reads automatically (no ghost) |
 | 5 | WeightSort | Re-attest weight TAG via SDK; SortOverlay `repositionItem` is called; subsequent `getSortedChunk` reflects new order |
 | 6 | LIST | Revoke entry TAG; swap-and-pop semantics in EdgeResolver; SortOverlay unlinks the entry |
 | 7 | LIST | Address-target entries via PIN `recipient` (`targetType=ADDR`) |
@@ -937,11 +1007,13 @@ Lists are: **weighted membership claims by one (or more) attester(s) at a free-f
 | 27 | Tag patterns | Allowlist via TAG + isActiveEdge works (no list infrastructure) |
 | 28 | Cross-targetSchema | Typed list anchor's schemaUID prevents file-PIN collision (anchor's own type signals intent) |
 | 29 | Pagination | `length=10000` does NOT revert; gas-bounded by caller |
-| 30 | `sorted=false` path | Reader returns unsorted active-entry page; client sorts client-side |
+| 30 | No-SORT_INFO path | Reader returns unsorted active-entry page from EdgeResolver; client sorts client-side |
+| 33 | Upgrade unsorted→sorted | Curator attests SORT_INFO later for an existing LIST; subsequent reads use sorted path; existing entries indexed via `processItems` |
+| 34 | Anchors-are-neutral | Verify that anchor's `attester` field is never used in path resolution, PIN/TAG storage, or any reader; first-attester is purely incidental |
 | 31 | Attacker-supplied curator (consumer pattern) | Vulnerable consumer (`curator` from caller param) reads attacker's self-promoting bucket; recommended consumer (`curator = eas.getAttestation(listUID).attester`) reads canonical entries only |
 | 32 | Permissionless `repositionItem` (verified safe) | Third-party caller can sort an item to its correct position (gas-pay-to-repair feature); cannot move item to wrong position (adjacency + weight checks block); cannot move item to current position (`UnnecessaryReposition` revert) |
 
-**NatSpec requirements** (carried from earlier rounds): document address-target encoding, `pinTargetID = bytes32(0)` semantics, occurrence-derived trust model, placer-vs-curator semantics, `sorted=true` vs `sorted=false` read path branching.
+**NatSpec requirements**: document address-target encoding, `pinTargetID = bytes32(0)` semantics, occurrence-derived trust model, placer-vs-curator semantics, SORT_INFO-presence vs absence read path branching, the warning that contracts MUST derive both `curator` and `sortInfoUID` from canonical LIST attester (never from caller input).
 
 ---
 
@@ -952,4 +1024,5 @@ Design produced through cross-agent brainstorming between Claude Sonnet 4.7 and 
 **Round trajectory:**
 - Round 13: free-floating LIST attestation, file-like portability via PIN.
 - Round 14: typed list anchors (parallel to PROPERTY slots), `revocable: false`, list-level metadata on LIST attestation, freeform-no-PIN, placer/curator API split.
-- Round 15: schema field simplification (`bool sorted, bool allowsDuplicates, uint8 targetType`), principled editions-as-access-control stance, drop kernel page-cap paternalism, extract cross-cutting ADRs (PIN-trust-extension, per-schema-namespace+URL syntax), "drill-into collections" mental model.
+- Round 15: schema simplification, principled editions-as-access-control stance, drop kernel page-cap paternalism, extract cross-cutting ADRs (PIN-trust-extension), "drill-into collections" mental model.
+- Round 16: **anchors-are-neutral principle surfaced** (load-bearing existing behavior, never previously documented); schema **finalized at 3 fields** (`sorted` dropped — SORT_INFO existence is the on-chain signal); **SortOverlay TAG-source kernel change committed for v1** (sorted reads reflect actual active TAG set, not append-only children); URL/namespace ADR deferred (current shared-anchor model handles use cases).

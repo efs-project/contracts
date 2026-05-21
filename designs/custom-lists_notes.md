@@ -1106,6 +1106,71 @@ Growth driven by: three worked examples (Top 10 memes, grocery list, music playl
 
 ---
 
+## Round 16 — anchors-are-neutral + final schema + SortOverlay TAG-source committed
+
+**Date:** 2026-05-20
+**Trigger:** Three outside-agent review passes on round-15 (Codex RED, fresh-Claude RED, Gemini YELLOW/NO-GO) plus James-driven clarifications.
+
+### Key reframings from external review + James's pushback
+
+**1. Anchors are neutral.** The architect's "name-slot squatting attack" framing was wrong because it assumed anchor attesters were meaningful. James clarified: "Nobody owns anchors. Sure they have an attester but we NEVER use it. Anchors are neutral." This is load-bearing existing EFS behavior that hadn't been surfaced in docs. Round-16 makes it explicit. Squatting concerns collapse: first-creator gets nothing special; anyone can attach PINs/TAGs/PROPERTYs with their own attester; editions filter at the read layer.
+
+**2. `_nameToAnchor` verified as single shared slot.** A focused code-read confirmed: `_nameToAnchor[parent][name][schemaUID] → bytes32` is a single slot, NOT per-attester. EFSIndexer reverts the second attestation at the same slot with `DuplicateFileName()`. Per-attester editions happen at the PIN/TAG layer below. This matches James's mental model (`/pizza/deepdish/file.txt` with James and Vitalik works via PIN-layer editions, not per-attester anchors). The earlier-considered kernel change to make `_nameToAnchor` per-attester is **NOT needed** — it would have been a major architectural shift away from shared schelling-point anchors. The current model is good.
+
+**3. `sorted` field removed from schema.** Codex and the fresh Claude review both flagged it: `sorted` was overlay state masquerading as identity. With `revocable: false`, baking it into the schema created a migration trap. Reframe: **SORT_INFO existence is the on-chain signal.** SDK default at LIST creation attests a SORT_INFO; opt out via SDK parameter. Curators can attest a SORT_INFO later to upgrade an unsorted list. Per-curator (multiple curators can each have their own SORT_INFO for the same LIST UID).
+
+**4. SortOverlay TAG-source kernel change committed for v1.** Codex and Gemini independently identified that SortOverlay walks `_children[L1]` (append-only) but list membership lives in `_activeByAAS[L1][curator][ANCHOR_SCHEMA]` (active TAG bucket). These diverge after revokes → sorted reads would show ghosts. Round-16 commits ~100-150 lines of Solidity: new `sourceType = 2` reading from EdgeResolver's active TAG bucket + an `onTagRevoked` hook from EdgeResolver to SortOverlay for auto-unlink. This is the only kernel change required for v1.
+
+**5. Smart-contract NatSpec extended to `sortInfoUID`.** Same pattern as the curator warning: contracts MUST derive `sortInfoUID` from `EFSSortOverlay.getSortInfo(LIST_UID, canonical_curator)`, never accept it from caller input.
+
+### Final round-16 schema (committed; permanent post-Sepolia)
+
+```solidity
+LIST schema:
+  bool    allowsDuplicates   // false = set semantics (kernel enforces via name uniqueness with target-derived naming)
+  uint8   targetType         // 0 = ANY, 1 = ADDR, 2 = SCHEMA
+  bytes32 targetSchema       // EAS schema UID when targetType=SCHEMA; else bytes32(0)
+revocable: false
+resolver: ListResolver       // mandatory; field validation only
+```
+
+Three fields. Each is load-bearing per ADR-0041's "what earns a schema-encoded slot" test.
+
+### Rejected in round-16
+
+- **Per-attester `_nameToAnchor`** — verifier confirmed current shared-anchor model handles use cases; per-attester would be major architectural shift.
+- **URL/namespace ADR** — deferred; current model works.
+- **`sorted` as schema field** — moved to SORT_INFO existence.
+- **`uint8 flags` / `uint8 version` reserved field** — schema UID IS the version mechanism; future variants ship as new schemas.
+
+### Open items going into implementation
+
+- LIST ADR drafting (`docs/adr/0043-list-schema.md`)
+- PIN-trust-extension ADR drafting (`docs/adr/0044-pin-trust-extension.md`)
+- `specs/06` rewrite (replacing stale content)
+- EFSSortOverlay TAG-source mode + onTagRevoked hook implementation
+- ListResolver + WeightSort implementation
+- EdgeResolver view method extensions (no PageSizeTooLarge cap)
+- SDK helpers
+- Frontend renderer in packages/nextjs debug UI
+- Conformance tests per round-16 §"Required pre-launch tests"
+
+### Frame-history recap
+
+Six frame-level refinements across sixteen rounds:
+- Round 11: lists are folders (overshoot)
+- Round 12: lists are NOT folders; membership is tags
+- Round 13: free-floating LIST + file-like portability
+- Round 14: typed list anchors + revocable=false + freeform-no-PIN + placer/curator
+- Round 15: schema simplification + principled editions stance + drop kernel paternalism
+- Round 16: anchors-are-neutral surfaced + schema finalized + SortOverlay TAG-source committed
+
+Pattern: agents converge inside frames; humans question frames and surface load-bearing implicit invariants. Round-16's anchors-are-neutral wasn't a new design — it was making explicit something the system had been doing implicitly for years. The frame the architect picked up was wrong because they reasoned from "anchor attester = ownership" rather than "anchor attester = irrelevant artifact."
+
+Round-16 should be terminal for the LIST design proper. The implementation may surface new questions but the schema and structural model are frozen.
+
+---
+
 ## How to use this file
 
 Append-friendly. When adding:
