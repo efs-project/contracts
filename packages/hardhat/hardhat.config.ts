@@ -12,9 +12,12 @@ import "hardhat-deploy-ethers";
 import { task } from "hardhat/config";
 import generateTsAbis from "./scripts/generateTsAbis";
 
-// If not set, it uses ours Alchemy's default API key.
-// You can get your own at https://dashboard.alchemyapi.io
-const providerApiKey = process.env.ALCHEMY_API_KEY || "cR4WnXePioePZ5fFrnSiR";
+// If not set, it uses Scaffold-ETH-2's public default Alchemy API key.
+// You can get your own at https://dashboard.alchemyapi.io.
+// This default is shared with the Scaffold-ETH community and rotates
+// occasionally — keep this value synced with upstream:
+// https://github.com/scaffold-eth/scaffold-eth-2/blob/main/packages/hardhat/hardhat.config.ts
+const providerApiKey = process.env.ALCHEMY_API_KEY || "IZYEU2cWBgnFmgiTAgpWD";
 // If not set, it uses the hardhat account 0 private key.
 // You can generate a random account with `yarn generate` or `yarn account:import` to import your existing PK
 const deployerPrivateKey =

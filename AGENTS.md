@@ -22,6 +22,21 @@ EFS — Ethereum File System. On-chain file system built on EAS attestations. Pr
 - **[docs/LAUNCH_CHECKLIST.md](./docs/LAUNCH_CHECKLIST.md)** — pre-launch blockers
 - **[reference/README.md](./reference/README.md)** — EAS, EIP, Scaffold-ETH docs (indexed by task)
 
+## Cross-repo coordination — the planning vault
+
+EFS uses a separate **planning vault** as the cross-repo coordination point across this repo, the production client (`efs-project/client`), and the future SDK. Repo: [efs-project/planning](https://github.com/efs-project/planning); typically cloned alongside this one (target layout: `/efs/{contracts,client,sdk,planning}/`).
+
+The vault holds:
+
+- **Cross-repo designs** with a name-first → numbered-at-promotion lifecycle. Designs that span multiple repos are tracked there; per-repo decisions stay here as ADRs.
+- **Cross-repo Kanban board**, milestones (e.g., OnionDAO hackathon 2026-06-01), and an append-only decisions log.
+- **Glossary** of cross-cutting EFS terms.
+- **Onboarding** for AI agents (start-here, conventions, escalation, write-a-design walkthrough).
+
+Read the vault's [`AGENTS.md`](https://github.com/efs-project/planning/blob/main/AGENTS.md) on init when your task is cross-repo. **A landed cross-repo design typically produces one or more ADRs here** — the planning design is the cross-cutting proposal; the resulting ADR(s) in this repo's `docs/adr/` are the per-repo decision artifacts. Don't duplicate substantive content; the design tombstones to point at the per-repo ADRs once implementation lands.
+
+For tasks fully scoped to this repo, the planning vault is optional context. For tasks spanning repos or unblocking a milestone, it's required reading.
+
 ## PR review quick start
 
 When reviewing a PR, do not prompt agents with only `review PR #<N>`. That is
