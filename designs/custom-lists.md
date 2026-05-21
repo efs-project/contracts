@@ -286,7 +286,9 @@ Field semantics:
 
 **Entry naming is a client convention, not a kernel concern.** The kernel enforces `(parent, name, schemaUID)` uniqueness per ADR-0025. Target-derived, occurrence-derived, and freeform naming patterns are all client choices. Different clients reading the same list MAY disagree about whether names are valid; this is acceptable because reads are edition-scoped and the curator's own choices define their list.
 
-**`revocable: false`**: a LIST attestation is permanent at its UID, like DATA. There is no "revoke the LIST" operation. To remove a list from a path, revoke the typed list anchor's placement PIN — the LIST attestation stays at its UID (still readable; if it was placed at other anchors, it's still reachable there). To deprecate a list entirely, revoke all its placement PINs and entry TAGs. Bookmark PINs from other curators' anchors stay valid as long as the bookmarker doesn't revoke them. Curator key-compromise note: `revocable: false` protects UID resolution but does not protect contents — a compromised curator key can revoke entry TAGs and metadata PINs from the curator's own slot. Recovery requires the curator to publish a new LIST at a fresh UID and re-PIN their typed list anchors to it; bookmarkers choose whether to re-bookmark.
+**`revocable: false`**: a LIST attestation is permanent at its UID, like DATA. There is no "revoke the LIST" operation. To remove a list from a path, revoke the typed list anchor's placement PIN — the LIST attestation stays at its UID (still readable; if it was placed at other anchors, it's still reachable there). To deprecate a list entirely, revoke all its placement PINs and entry TAGs. Bookmark PINs from other curators' anchors stay valid as long as the bookmarker doesn't revoke them.
+
+**Stewardship and key rotation (recommended pattern).** Like every EAS attestation in EFS, a LIST is bound to its attester address. Curators wanting key-rotation flexibility or stewardship-transfer capability should **curate from a smart wallet** (ERC-4337 / smart account). The wallet contract IS the attester address; rotating signer keys inside the wallet doesn't change the attester. This is the EFS-wide answer to "what if I lose my key" — not list-specific. EOAs that lose their key abandon all their attestations (files, anchors, properties, lists alike); this isn't an EFS limitation but how EAS / Ethereum identity works.
 
 **`ListResolver` (mandatory).** Validates at attest time:
 - `targetType ≤ 2`
@@ -421,6 +423,20 @@ Smart contracts and clients read lists via two paths depending on whether the LI
 - `getActiveTagTargetsWithWeights(definition, attester, tagTargetSchema, start, length) → (tagTargetID, tagUID, weight, attester)[]` — generic TAG bucket reader (lighter than the PIN-resolving variant when entries don't need their inner PIN dereferenced)
 
 **Pagination is not capped at the kernel.** `length` is a caller hint; caller pays the gas. SDK helpers default to `length = 100` for safety, but callers may pass any value. View calls (`eth_call`) are bounded by RPC provider timeouts; in-transaction calls are bounded by the caller's gas. No `PageSizeTooLarge` revert (round-14 paternalism dropped).
+
+**Smart-contract consumer warning (NatSpec MUST).** The reader API takes a `curator` argument because EFS supports multi-attester views — but this means a naive contract that accepts `curator` from a caller-supplied parameter can be tricked. Example: a grants contract distributing funds to "the top 10 on Alice's list" must NOT accept `curator` from a proposal field; Mallory could submit `distribute(L1, mallory)` and pull her own self-promoting bucket from the same LIST UID.
+
+**Contract pattern:** on-chain consumers MUST derive the curator from the LIST attestation itself:
+
+```solidity
+Attestation memory listAtt = eas.getAttestation(listUID);
+address curator = listAtt.attester;  // canonical curator; cannot be spoofed
+entries = EdgeResolver.getActiveTagPinTargetsWithWeights(
+  listUID, curator, ANCHOR_SCHEMA_UID, start, length
+);
+```
+
+Reader-method NatSpec MUST carry this warning. Conformance test asserts the attack reproduces against a vulnerable consumer and fails against the recommended pattern.
 
 ### WeightSort comparator (NEW for v1)
 
@@ -922,6 +938,8 @@ Lists are: **weighted membership claims by one (or more) attester(s) at a free-f
 | 28 | Cross-targetSchema | Typed list anchor's schemaUID prevents file-PIN collision (anchor's own type signals intent) |
 | 29 | Pagination | `length=10000` does NOT revert; gas-bounded by caller |
 | 30 | `sorted=false` path | Reader returns unsorted active-entry page; client sorts client-side |
+| 31 | Attacker-supplied curator (consumer pattern) | Vulnerable consumer (`curator` from caller param) reads attacker's self-promoting bucket; recommended consumer (`curator = eas.getAttestation(listUID).attester`) reads canonical entries only |
+| 32 | Permissionless `repositionItem` (verified safe) | Third-party caller can sort an item to its correct position (gas-pay-to-repair feature); cannot move item to wrong position (adjacency + weight checks block); cannot move item to current position (`UnnecessaryReposition` revert) |
 
 **NatSpec requirements** (carried from earlier rounds): document address-target encoding, `pinTargetID = bytes32(0)` semantics, occurrence-derived trust model, placer-vs-curator semantics, `sorted=true` vs `sorted=false` read path branching.
 
