@@ -1,1028 +1,666 @@
 # EFS Lists — Design
 
-**Status:** Draft (round 16 — anchors-are-neutral framing, schema final (3 fields), SortOverlay TAG-source committed for v1)
-**Date:** 2026-05-20
-**Permanence-tier:** Etched-adjacent (introduces one new EAS schema; the data model is permanent post-1.0)
-**Authors:** Claude Sonnet 4.7 (cross-agent brainstorming across 14 prior rounds with Codex GPT-5, Gemini 2.5 Pro, and a fresh Claude review pass) + James Carnley (architectural direction; final-frame decisions)
-**Related:** ADR-0007, ADR-0025, ADR-0033, ADR-0034, ADR-0038, ADR-0041, ADR-0042; specs/02, specs/03, specs/06, specs/07, specs/08
-**Notes / scratchpad:** [`custom-lists_notes.md`](./custom-lists_notes.md) — design history, parked ideas, fifteen rounds of refinement
-**Sibling ADRs being drafted in parallel** (governance, not list-specific):
-- PIN-trust-extension — system-wide invariant about how lens/editions interact with PIN-following
-- Per-schema namespace + UX-layer cross-schema view + type-qualified URL syntax
+**Status:** Draft (round 18 — converged on LIST + LIST_ENTRY architecture via 5-agent parallel design proposals; pending external review before ADR freeze)
+**Date:** 2026-05-27
+**Permanence-tier:** Etched-adjacent (introduces two new EAS schemas; the data model is permanent post-mainnet freeze)
+**Authors:** Claude Sonnet 4.7 (round-18 convergence synthesis; 17 prior rounds with Codex GPT-5, Gemini 2.5 Pro, and fresh-Claude review passes) + James Carnley (architectural direction; requirements crystallization; final-frame decisions)
+**Related:** ADR-0007, ADR-0025, ADR-0030, ADR-0033, ADR-0034, ADR-0038, ADR-0041, ADR-0042; specs/02, specs/03, specs/06, specs/07
+**Notes / scratchpad:** [`custom-lists_notes.md`](./custom-lists_notes.md) — design history through 18 rounds, parked ideas, rejected reframes
+**Supersedes:** rounds 11-17 (entry-anchor + weight-TAG model). Historical content preserved in notes file.
 
 ---
 
 ## TL;DR
 
-**Lists are free-floating attestations attached at typed list anchors via PIN. The typed anchor declares "this slot is a list"; the LIST attestation carries the configuration and entries.**
+**Two new schemas: `LIST` (declaration, non-revocable) + `LIST_ENTRY` (membership, revocable, gated by `ListEntryResolver`).** All declared list options — duplicates policy, target type, append-only, capped, intrinsic-allowed — are enforced at write time by the resolver. Smart contracts can iterate active entries with O(N) reads and full type confidence. O(1) membership check for all modes.
 
 ```
-Files:      DATA (free-floating) + Anchor<generic>      + PIN(anchor → DATA, targetSchema=DATA)
-Lists:      LIST (free-floating) + Anchor<schemaUID=LIST> + PIN(anchor → LIST, targetSchema=LIST)
-PROPERTYs:  PROPERTY (free-floating) + Anchor<schemaUID=PROPERTY> + PIN(anchor → PROPERTY)
+                   ┌─────────────────────────────────────────────────────┐
+LIST (declaration) │  allowsDuplicates, appendOnly, targetType,          │
+                   │  targetSchema, maxEntries, allowIntrinsic           │
+                   │  refUID = 0x0 (free-floating, like DATA)            │
+                   │  revocable: false                                    │
+                   │  resolver: ListResolver (field-shape validation)     │
+                   └─────────────────────────────────────────────────────┘
+                                          ▲
+                                          │ (referenced via field, not refUID)
+                                          │
+                   ┌─────────────────────────────────────────────────────┐
+LIST_ENTRY         │  bytes32 listUID                                    │
+(membership)       │  bytes32 target  (attestation UID, or addr-as-     │
+                   │                   bytes32, or 0x0 for intrinsic)    │
+                   │  int256  weight  (sort/rank metadata)               │
+                   │  revocable: true (resolver rejects revoke if list   │
+                   │              is appendOnly)                          │
+                   │  resolver: ListEntryResolver                         │
+                   └─────────────────────────────────────────────────────┘
 ```
 
-Each kind of attached thing has its own anchor namespace: typed name anchors signal what kind of slot they are. Reading a typed anchor tells you its category before you fetch the attached attestation.
+**Per-attester editions** are preserved via attester-keyed resolver state. **Per-entry metadata** uses the standard PROPERTY-on-attestation pattern attached to the LIST_ENTRY UID. **List placement** in paths uses a standard PIN (`Anchor → PIN → LIST`).
 
-**The picker decision:**
+**Picker decision (when to use what):**
 
-> *Need ordering or per-entry metadata?*
->   Yes → use a list  
->   No  → use TAGs
+> *Need write-time-enforced shape (no-dupes, typed, append-only) or curated rank/order?*
+>   Yes → use a LIST
+>   No  → use TAGs directly
 
-Lists are exclusively for ranked/curated/metadata-bearing collections. Pure membership (allowlists, blocklists, follow graphs, DAO membership, categorization, permissions) uses TAGs directly. See [Lists vs Tags vs Folders](#lists-vs-tags-vs-folders-when-to-use-which) below.
-
-The structural model:
-
-```
-LIST attestation L1                              (free-floating; has its own UID; revocable: false)
-  ├── allowsDuplicates = true/false
-  ├── targetType       = ANY / ADDR / SCHEMA
-  └── targetSchema     = bytes32
-
-  Optional: SORT_INFO(parentAnchor=L1, sortFunc=WeightSort, attester=curator)
-            ← presence signals on-chain sorted reads; absence = unsorted
-
-  List-level metadata (name, description, cover, etc.) attaches to L1 via PROPERTY slots:
-    Anchor<PROPERTY>(name="name", refUID=L1)          ← ADR-0034 display-name PROPERTY
-      └── PIN(refUID=nameValuePropertyUID)
-
-  Entry anchors are children of L1:
-    Anchor<generic>("<entry-name>", refUID=L1)
-      ├── PIN(definition=entry, target)         ← target-bearing entries
-      │                                            (omitted for freeform "entry IS the data")
-      └── weight TAG(definition=L1, refUID=entry, weight=N)
-
-Path placement (typed anchor → LIST attestation):
-  Anchor<schemaUID=LIST_SCHEMA_UID>("mylist", refUID=parent_anchor)
-    └── PIN(definition=mylist_anchor, refUID=L1, targetSchema=LIST_SCHEMA_UID)
-
-The same LIST can be placed at multiple typed list anchors. Editing the LIST
-(its entries, weights, metadata) updates the view at every path it's placed
-at. Bob can place Alice's LIST in his namespace — Alice still owns the list
-(entries are her attestations); Bob just exposes it via his path.
-```
-
-**Lists, folders, files, and tags are independent things that can live inside any anchor.** They're not unifications of each other.
-
-**Anchors are neutral.** They are pure namespace slots — pieces of shared infrastructure. ANCHOR attestations technically have an `attester` field (every EAS attestation does), but **EFS never treats the anchor's attester as meaningful**. Whoever happens to attest an anchor first establishes the slot; everyone has equal access to attach PINs, TAGs, and PROPERTYs to it from their own attester identity. Editions/lenses filter which attester's attached content a viewer sees at read time. There is no concept of "anchor ownership." This is load-bearing: it's what makes shared schelling-point names work (everyone references the same `/alice.eth/file.txt` UID regardless of who first attested it).
+Lists are for curated/ranked/typed/shape-enforced collections. Pure membership without shape guarantees (allowlists with no type constraint, follow graphs, casual labeling) uses TAGs.
 
 ---
 
-## What changed in round 16
+## What this design replaces and why
 
-Round 16 finalizes the schema (3 fields), commits the SortOverlay kernel change for v1, and surfaces the "anchors are neutral" principle that was implicit in EFS's design.
+Rounds 11-16 explored an **entry-anchor model**: each entry was an anchor child of the LIST UID, with a PIN to the target and a weight TAG for ordering (3 attestations per entry). Round 17 attempted to plug write-time enforcement gaps with a generic constraint-callback mechanism (ADR-0043) — three external reviewers independently returned RED on the same finding: the mechanism solved a non-problem inside a frame that presupposed it was needed.
 
-### Anchors-are-neutral (principled stance, made explicit)
+Round 18 started by crystallizing requirements with the human (MUST/NICE/DEFERRED) and then ran 5 parallel agents with different design framings (defend round-16; refine LIST+LIST_ENTRY; greenfield; consumer-first; hybrid). **4 of 5 independently converged on the LIST + LIST_ENTRY architecture documented here.** The round-16 defender admitted MEDIUM confidence and recommended a head-to-head bake-off; the hybrid agent collapsed to LIST+LIST_ENTRY when its "escape hatch" was removed.
 
-Round-15 reviewers raised a "namespace squatting attack" — Mallory creates an anchor at a path slot first, blocking someone else from "owning" that name. The framing assumed anchor attesters were meaningful. **They aren't.** EFS never uses an anchor's attester field. The slot-first-creator gets nothing special; anyone can attach PINs/TAGs/PROPERTYs to any anchor with their own attester identity, and editions filter at the read layer.
+**What round-16 couldn't deliver without surgery:**
+- `targetType` write-time enforcement: EdgeResolver doesn't validate target.schema against any declared field
+- `appendOnly` write-time enforcement: requires cross-resolver coordination
+- `allowsDuplicates=false` enforcement: relies on convention (target-derived naming) + ADR-0025, not direct enforcement
+- All three together: not achievable without polluting EdgeResolver (shared kernel) or introducing the constraint-callback mechanism that ADR-0043 deferred
 
-This isn't a new design decision — it's load-bearing existing behavior that wasn't surfaced. Round-16 makes it explicit in the doc and in the upcoming PIN-trust-extension ADR. The "squatting attack" framing dissolves once you read anchors as neutral infrastructure rather than ownable property.
+**What round-18 delivers cleanly:**
+- All three above enforced by `ListEntryResolver` at write time
+- Per-attester editions, O(1) membership, O(N) iteration unchanged
+- Per-entry metadata via standard PROPERTY-on-attestation (LIST_ENTRY UID is the scope target)
+- ADR-0041 (cardinality-in-schema-UID) reconciled, not violated
 
-### Schema final (`sorted` field removed)
+---
 
-Round-15 added a `bool sorted` field. Reviewers flagged it as overlay state masquerading as identity (Codex: "carrying more architectural weight than the system underneath it can hold"). The reframe: **the existence of a SORT_INFO attestation against `(LIST_UID, curator)` is the on-chain signal for sorted lists.** Smart contracts probe `EFSSortOverlay.getSortInfo(LIST_UID, curator)`; if present, sorted path; if absent, unsorted path.
+## Locked requirements
 
-Final LIST schema (3 fields, all load-bearing):
+These are the requirements crystallized with the human before round-18's design pass. They are not revisited by this design; they are the goalposts.
+
+### MUST satisfy
+
+- **Ordered lists** (rank/weight semantics) + **Unordered lists** (membership only)
+- **No-duplicates lists** (write-time enforced) + **Duplicates-allowed lists**
+- **Typed lists** (declared target schema, write-time enforced) + **Untyped lists** (any bytes32 as target) + **Address-typed lists** (target is an Ethereum address, including `address(0)`)
+- **Append-only lists, list-level** (write-time enforced — revokes rejected)
+- **Per-attester editions preserved** (each attester has their own version of any list)
+- **Smart contracts iterate active entries with O(N) reads + full type confidence** (no per-entry validation in the consumer)
+- **O(1) membership check** ("X in list L by attester A?") **for ALL list modes**
+
+### NICE (support if cheap; design must not preclude)
+
+- **Per-entry metadata** — notes, ratings, status flags (via PROPERTY-on-LIST_ENTRY-UID)
+- **Per-entry deprecation/tombstone flags** — pairs with append-only (entry stays, flagged)
+- **Intrinsic items** — items that aren't pre-existing attestations (shopping-list "milk")
+- **Reorderable** via sparse int256 weights
+- **Capped / max-N** lists
+
+### DEFERRED (out of scope for v1)
+
+- Generic constraint-callback / extension mechanism (ADR-0043 — wrong abstraction)
+- Cross-attester merged on-chain view (client/SDK concern)
+- On-chain reverse-lookup index ("what lists contain X?" for arbitrary X — subgraph concern)
+- Mainnet 50-year freeze (devnet ships first; mainnet freeze applies later)
+
+### Validation model
+
+**Write-time, by resolver.** When a `LIST_ENTRY` is attested, `ListEntryResolver` validates against the parent `LIST`'s declared options before storage. Once written, downstream readers trust without re-validation. `address(0)` is a valid target for ADDR-typed lists.
+
+---
+
+## Architecture
+
+### Schemas
+
+**`LIST` — declaration (the list's identity and configuration)**
 
 ```solidity
 LIST schema:
-  bool    allowsDuplicates   // false = set semantics (kernel enforces via name uniqueness with target-derived naming); true = duplicates allowed
-  uint8   targetType         // 0 = ANY, 1 = ADDR, 2 = SCHEMA
-  bytes32 targetSchema       // EAS schema UID when targetType=SCHEMA; else bytes32(0)
+  bool    allowsDuplicates    // false = no-duplicates enforced at write time
+  bool    appendOnly          // true  = entry revokes rejected by resolver
+  uint8   targetType          // 0=ANY, 1=ADDR, 2=SCHEMA
+  bytes32 targetSchema        // non-zero iff targetType==SCHEMA
+  uint32  maxEntries          // 0 = uncapped; per-attester cap
+  bool    allowIntrinsic      // true = entries may have target=bytes32(0)
 revocable: false
-resolver: ListResolver       // mandatory; field validation only
+resolver:  ListResolver       // field-shape validation only (see below)
+refUID:    bytes32(0)          // free-floating, like DATA
+recipient: address(0)          // never directed
 ```
 
-### SortOverlay TAG-source mode (kernel change committed for v1)
+**Field rationale:**
 
-Reviewers (Codex + Gemini independently) caught: `EFSSortOverlay` walks `_children[parentAnchor]`, an append-only kernel array. List membership lives in `EdgeResolver._activeByAAS[L1][curator][ANCHOR_SCHEMA_UID]` (active TAG bucket). **These are different sets.** A removed entry (revoked TAG) stays in `_children` forever, so SortOverlay sorted reads would surface ghosts.
+- `allowsDuplicates` — bool, not bitfield. Programmers thank us in 2076.
+- `appendOnly` — bool, list-level. When true, the resolver rejects every entry revoke for this list. Use cases: software version registries, on-chain receipts, immutable references. Pairs with per-entry deprecation PROPERTYs (NPM/crates.io model — entries can be flagged "deprecated" without being removed).
+- `targetType` — uint8 enum: `0=ANY`, `1=ADDR`, `2=SCHEMA`. Not a bitfield. A future targetType=3 (e.g., DELEGATED) requires a new schema, not a flag.
+- `targetSchema` — non-zero iff `targetType==SCHEMA`; the EAS schema UID every entry's target must match. The resolver checks `eas.getAttestation(target).schema == targetSchema` at every entry write.
+- `maxEntries` — uint32, 0 = uncapped. Per-attester (matches editions model). Included now because adding it later would require a new schema UID.
+- `allowIntrinsic` — bool. When true, entries may have `target = bytes32(0)` (the "milk" case in a shopping list). When false, target==0 is rejected. Implies `targetType==ANY` (only ANY-typed lists may have intrinsic entries).
 
-Round-16 commits a kernel change: **add a new `sourceType` to `EFSSortOverlay` that reads from EdgeResolver's active-TAG bucket instead of `_children`.** WeightSort comparator reads each entry's active weight TAG via EdgeResolver edgeHash index. SortOverlay also gets a hook from EdgeResolver on TAG revoke to call `_unlink(entryUID)` automatically. ~100-150 lines of Solidity plus tests.
+**Why these fields are on LIST (not on each LIST_ENTRY):** The list's *configuration* is the predicate-coordination layer (see ADR-0041 reconciliation below). Putting it on each entry would be redundant and contradictory if entries diverged. Putting it on LIST once, with LIST being non-revocable, means every entry reader can derive the constraints from one immutable source.
 
-Ships in v1 (before Sepolia) so on-chain sorted reads work correctly from day one.
-
-### Smart-contract consumer warning extended
-
-NatSpec on readers now warns on TWO caller-supplied parameters:
-- `curator` — contracts MUST derive from `eas.getAttestation(listUID).attester`
-- `sortInfoUID` — contracts MUST derive from `EFSSortOverlay.getSortInfo(LIST_UID, curator)`
-
-Same structural pattern; same conformance test pattern.
-
-### Two ADRs to land alongside
-
-- **LIST ADR** (`docs/adr/0043-list-schema.md`) — captures the schema and rationale.
-- **PIN-trust-extension ADR** (`docs/adr/0044-pin-trust-extension.md`) — system-wide invariant: when reading across a PIN to a target attestation, lens trust extends to that target's attester for the subtree. Independent of LIST but referenced from this design.
-
-The previously planned per-schema namespace + URL syntax ADR is **deferred**. The current shared-anchor model handles the bookmark use case; URL-syntax disambiguation across schemas is nice-to-have but not blocking.
+**Why LIST is non-revocable:** The list's *identity* is permanent. Deletion is per-entry (revoking entries) or impossible (when `appendOnly=true`). A user who wants to abandon a list stops adding to it; the declaration persists as historical fact. This matches DATA (also non-revocable — content identity is permanent; specific placements via MIRROR are revocable).
 
 ---
 
-## What changed in round 15
-
-Round 15 keeps round-14's structural shape (it survived four rounds of adversarial reframe stress-testing) but simplifies the schema, takes a principled stance on co-contribution, drops kernel paternalism on page-size, and extracts two cross-cutting concerns to their own ADRs.
-
-### Schema field changes
-
-| Round-14 | Round-15 |
-|---|---|
-| `uint8 entryIdentity` (3 enum values) | dropped — entry naming is a client convention, not a kernel concern |
-| `uint8 targetKind` (5 effective values) | `uint8 targetType` (3 values: ANY / ADDR / SCHEMA) |
-| `bytes32 targetSchema` | unchanged |
-| `revocable: true` | `revocable: false` (matches DATA) |
-| — | `bool allowsDuplicates` (NEW — explicit, replaces inference from `entryIdentity`) |
-| optional resolver | mandatory `ListResolver` (field-validation only) |
-
-Final shape:
+**`LIST_ENTRY` — membership (one entry in one list)**
 
 ```solidity
-LIST schema:
-  bool    allowsDuplicates   // false = set semantics; true = playlist semantics
-  uint8   targetType         // 0=ANY, 1=ADDR, 2=SCHEMA
-  bytes32 targetSchema       // schema UID when targetType=SCHEMA, else bytes32(0)
-revocable: false
-resolver: ListResolver       // validates field ranges + (targetType, targetSchema) coherence
+LIST_ENTRY schema:
+  bytes32 listUID             // the LIST attestation this entry belongs to
+  bytes32 target              // attestation UID, or bytes32(uint160(addr)),
+                              //   or bytes32(0) for intrinsic items
+  int256  weight              // sort/rank metadata (ignored when no SORT_INFO)
+revocable: true               // resolver rejects revoke when LIST.appendOnly=true
+resolver:  ListEntryResolver
+refUID:    bytes32(0)          // listUID is in the data payload, not refUID
+recipient: address(0)          // never directed
 ```
 
-### Principled stance changes
+**Field rationale:**
 
-**Editions ARE the access control.** The kernel does not gate writes at any layer. Anyone can attest entries against any LIST UID. Spam-resistance happens at the viewer layer through edition-scoped reads. The doc previously framed this as "we keep co-contribution"; round-15 frames it as "the kernel does not have a concept of write-gating, ever." Future agents (and reviewers) reading this should understand that `coContributionPolicy`-style fields are a category error in EFS — the model doesn't have a slot for them.
+- `listUID` — explicit field, not `refUID`. Using `refUID` would conflate "this entry is in this list" with EAS's generic refUID semantics. Putting it in the data payload makes indexers' jobs explicit.
+- `target` — explicit field for the entry's target. Three encodings:
+  - Attestation UID (for `targetType=ANY` or `targetType=SCHEMA`)
+  - `bytes32(uint160(addr))` (for `targetType=ADDR`)
+  - `bytes32(0)` (for intrinsic items, only when `allowIntrinsic=true`)
+- `weight` — int256, kept on every entry regardless of order semantics. The gas saved by removing it from unordered entries doesn't justify a schema UID split; unordered readers simply ignore the field. Sparse int256 spacing gives infinite room for re-ordering without rewriting other entries.
 
-**Page-size is not enforced.** Round-14's `MAX_LIST_PAGE_SIZE = 100` + `PageSizeTooLarge` revert was paternalism. View reads are billed to the caller (memory expansion is quadratic-priced; callers hit their own gas ceiling before causing harm). RPC providers handle their own timeouts and connection budgets. **Round-15: no kernel cap.** SDK default `length = 100` as a sensible hint; callers may pass any value.
+**Why a single attestation per entry (not 3 like round-16):** Round-16's entry-anchor + PIN + weight-TAG required 3 attestations per entry. The flat LIST_ENTRY needs 1. Per-entry metadata still uses the standard PROPERTY pattern (3 attestations per metadata field) but only when actually wanted — most entries don't have metadata.
 
-**Naming is a client convention.** Target-derived hex names, occurrence-derived nonce names, freeform names — all are client patterns above the kernel. The kernel just enforces `(parent, name, schemaUID)` uniqueness per ADR-0025. The round-14 `validateAnchorNameMatchesPinTarget` reader is dropped — clients that want to validate name-content consistency can do so themselves.
-
-### Extracted ADRs
-
-Two concerns surfaced in earlier rounds were broader than lists. Pulled out:
-
-- **PIN-trust-extension.** When a reader follows a PIN from attester A's anchor to attester B's target attestation, lens trust extends to B for that subtree. Applies to files, lists, properties — anywhere PIN-following crosses attester boundaries. Deserves its own ADR; round-15 just references it.
-
-- **Per-schema namespace + URL syntax.** Anchors with different `schemaUID`s at the same parent + name coexist (kernel-level), but the file browser UX presents a unified-by-default view with cross-schema awareness. URL syntax disambiguates type. DNS precedent: `dig MX example.com` vs `dig A example.com`. Separate ADR governs the syntax (`/foo` vs `/foo[]` vs `/foo{}` vs `/foo<schemaUID>`).
-
-### What the side-thread stress-tested and rejected
-
-Each was a real reframe candidate. Each lost on merits. Recording so future agents don't re-litigate:
-
-- **Dissolving LIST attestation** (typed anchor IS the list): LIST attestation gives stable identity separate from path placement, mirroring DATA. Kept.
-- **Pure-TAG entries** (1 attestation per entry, weight on TAG, no entry anchor): metadata fragility on weight updates is unacceptable. A TAG re-attest with new weight orphans per-entry metadata that referenced the prior TAG UID. Catastrophic for annotated lists. Rejected.
-- **TAG + listIndex PROPERTY** (move weight off TAG, kernel change to ADR-0041): phantom advantage. PROPERTYs cost 3 attestations each, heavier than round-14, not lighter. Rejected.
-- **Shared `_entries/` container for cross-list reuse:** the reusable thing is the canonical target (`/food/apple/`), not the per-list entry anchor. List-context notes ARE per-list and should not be shared. Rejected.
-- **Free-floating folders** (Gemini's fourth-frame): out of scope for v1. Folder hierarchy stays `refUID`-bound.
-- **One-enum schema field instead of discrete fields:** discrete fields are more self-documenting. Enums require lookup tables to interpret.
-- **`coContributionPolicy` field:** category error per principled stance above. Editions are the access control; the kernel has no write-gating concept.
-- **Mandatory curator-write-gate resolver:** same reasoning.
-- **Ownership transfer mechanism:** accept non-transferability. Old curator stays in editions chain forever.
-
-### "Drill-into collections" mental model
-
-A unifying frame for the spec rewrite: lists, folders, and any future browse-into container types are siblings in the user's mental model. The kernel-level distinction (folder = anchor with child anchors; list = anchor PINed to LIST attestation with TAG-ordered entries) is implementation detail. UX treats them as "things you click into to see what's inside."
-
-This is round-15's most clarifying framing improvement. The file browser doesn't need separate "folder mode" and "list mode" — both are containers; the difference is presentation (unordered tree vs ordered + scored entries with metadata).
-
-### Frame-history recap
-
-Five frame-level refinements across fifteen rounds:
-- Round 11: lists are folders (overshoot; unification didn't match the graph model)
-- Round 12: lists are NOT folders; membership is tags (separates the patterns)
-- Round 13: free-floating LIST attestation, placed via PIN (file-like portability)
-- Round 14: typed list anchors (parallel to PROPERTY slots) + free-floating LIST + revocable=false + freeform-no-PIN + placer/curator split
-- Round 15: schema simplification + principled editions stance + drop kernel paternalism + extract cross-cutting ADRs + "drill-into collections" mental model
-
-The pattern across all five: agents converge inside a frame; humans question the frame. Round-15's reframes were caught primarily through a side-thread that explicitly stress-tested round-14 against alternatives. Future agents proposing a sixth frame-level refinement should expect a higher bar — but should not silently assume the design space is exhausted.
+**Why revocable:** Non-append-only lists need revocable entries. The resolver branches on the parent LIST's `appendOnly` flag: revocable in spirit, rejected at write-time if the list says append-only.
 
 ---
 
-## Why this matters
+### Resolver behavior
 
-EFS is a graph-database substrate. The graph kernel (Anchors, PINs, TAGs) supports many overlay patterns. Each pattern should do one thing well; they coexist in the graph.
+#### `ListResolver` (on LIST schema)
 
-EFS's existing design separates content from placement: DATA (free-floating content) + Anchor (path) + PIN (placement). This is what makes content portable — you can place the same DATA at multiple paths, share it via cross-attester PINs, and edit content without changing path identity. Lists adopt the same pattern in round-13.
-
-Smart contracts read these structures directly. The data layer + public reader APIs MUST be sufficient on their own; the design cannot rely on SDK enforcement of invariants.
-
----
-
-## The list primitive
-
-A list has three layers, mirroring the file model:
-
-1. **A LIST attestation** (free-floating; no `refUID` required) — the canonical list. Carries the configuration: whether the list is sorted on-chain, whether duplicates are allowed, what types of items entries point at. Has its own UID. List-level metadata (`name`, `description`, `cover`) attaches to the LIST attestation as PROPERTYs.
-
-2. **Entry anchors and their content** — children of the LIST UID (`refUID = LIST UID`). Target-bearing entries PIN to their target item; freeform entries skip the inner PIN (the anchor IS the entry). Weight TAGs against the LIST UID provide ordering. PROPERTYs on the entry carry per-entry metadata.
-
-3. **One or more typed list anchor placements** — `Anchor<schemaUID=LIST_SCHEMA_UID>` at paths, each with a PIN to the LIST UID. The typed anchor names the list at a path AND signals "this slot is a list"; the PIN binds the anchor to the list. The same LIST can have multiple placements.
-
-### Concrete example
-
-**Example A — Top 10 memes** (typed-schema target, set semantics, sorted):
-
-```
-/alice.eth/                                          (Anchor<generic> — Alice's identity)
-  └── memes/                                         (Anchor<generic> — a folder)
-        └── top10/                                   (Anchor<schemaUID=LIST_SCHEMA_UID>
-                                                      — typed list slot, refUID=memes)
-              └── PIN(definition=top10_anchor,
-                      refUID=L1,
-                      targetSchema=LIST_SCHEMA_UID,
-                      attester=alice)                ← places list L1 at this path
-
-LIST attestation L1                                  (free-floating; UID=L1; revocable: false)
-  sorted           = true                            ← SDK auto-creates SORT_INFO
-  allowsDuplicates = false                           ← set semantics
-  targetType       = 2 (SCHEMA)
-  targetSchema     = DATA_SCHEMA_UID
-
-  SORT_INFO(parentAnchor=L1, sortFunc=WeightSort, attester=alice)
-                                                     ← created by SDK alongside the LIST
-
-  List-level metadata (travels with L1, not the path anchor):
-    Anchor<PROPERTY>(name="name", refUID=L1)
-      └── PIN(refUID=nameProp_attestation_uid)       ← name = "Alice's Top 10 Memes"
-    Anchor<PROPERTY>(name="description", refUID=L1)
-      └── PIN(refUID=descProp_attestation_uid)
-
-  Entry anchor "0xMemeAHash..."  (Anchor<generic>, refUID=L1, target-derived name)
-    ├── PIN(definition=entry, refUID=memeA_DATA, attester=alice)
-    └── TAG(definition=L1, refUID=entry, weight=100, attester=alice)
-
-  Entry anchor "0xMemeBHash..."  (Anchor<generic>, refUID=L1)
-    ├── PIN(definition=entry, refUID=memeB_DATA, attester=alice)
-    └── TAG(definition=L1, refUID=entry, weight=90, attester=alice)
-```
-
-Path resolution: `web3://...alice.eth/memes/top10/` walks anchors to `top10`. The reader sees `top10`'s schemaUID = `LIST_SCHEMA_UID` and knows this is a list slot. Reading its PIN with `targetSchema = LIST_SCHEMA_UID` returns the LIST UID. Reading the LIST attestation gives the configuration; a probe for `EFSSortOverlay.getSortInfo(LIST_UID, curator)` reveals whether on-chain sorted reads are available (presence → sorted path; absence → unsorted path).
-
-**Example B — Grocery list** (freeform, no inner PINs, unsorted):
-
-```
-/alice.eth/groceries/                                (Anchor<schemaUID=LIST_SCHEMA_UID>)
-  └── PIN(refUID=L2, targetSchema=LIST_SCHEMA_UID, attester=alice)
-
-LIST attestation L2
-  sorted           = false                           ← no SortOverlay
-  allowsDuplicates = false
-  targetType       = 0 (ANY)
-  targetSchema     = bytes32(0)
-
-  Anchor<PROPERTY>(name="name", refUID=L2)
-    └── PIN(refUID="Groceries" property)
-
-  Entry anchor "milk"  (refUID=L2, freeform name; NO inner PIN — the anchor IS the entry)
-    ├── Anchor<PROPERTY>(name="status",   refUID=milk_entry) → PIN to "to-buy"
-    └── Anchor<PROPERTY>(name="quantity", refUID=milk_entry) → PIN to "2 gal"
-  Entry anchor "eggs"  (refUID=L2)
-    └── Anchor<PROPERTY>(name="status",   refUID=eggs_entry) → PIN to "to-buy"
-  Entry anchor "bread" (refUID=L2)
-    └── Anchor<PROPERTY>(name="status",   refUID=bread_entry) → PIN to "bought"
-
-  TAG(definition=L2, refUID=milk_entry,  weight=1, attester=alice)
-  TAG(definition=L2, refUID=eggs_entry,  weight=2, attester=alice)
-  TAG(definition=L2, refUID=bread_entry, weight=3, attester=alice)
-```
-
-**Example C — Music playlist with repeats** (allowsDuplicates, occurrence-derived names, sorted):
-
-```
-/alice.eth/playlist/                                 (Anchor<schemaUID=LIST_SCHEMA_UID>)
-  └── PIN(refUID=L3, targetSchema=LIST_SCHEMA_UID, attester=alice)
-
-LIST attestation L3
-  sorted           = true
-  allowsDuplicates = true                            ← enables Waterfalls × 3
-  targetType       = 2 (SCHEMA)
-  targetSchema     = DATA_SCHEMA_UID
-
-  Entry anchors (names use occurrence-derived hex — each unique even when target repeats):
-    Anchor("0x91a2c...{nonce1}", refUID=L3) → PIN(refUID=tlc_waterfalls_DATA)  ← #1
-    Anchor("0x4f8e3...{nonce2}", refUID=L3) → PIN(refUID=mariah_vision_DATA)
-    Anchor("0x2cb7a...{nonce3}", refUID=L3) → PIN(refUID=tlc_waterfalls_DATA)  ← #2
-    Anchor("0x9de1f...{nonce4}", refUID=L3) → PIN(refUID=adele_someone_DATA)
-    Anchor("0x5ab38...{nonce5}", refUID=L3) → PIN(refUID=tlc_waterfalls_DATA)  ← #3
-
-  TAGs assign track order (weight=1,2,3,4,5).
-```
-
-Entry names are `keccak256("efs:list-occurrence:v1", L3_UID, alice_addr, clientNonce)` rendered as 66-char `0x` + 64 hex. Different nonces → distinct anchor names → no namespace collision even though three of them PIN to the same `tlc_waterfalls_DATA` UID.
-
-### LIST schema (NEW — Etched commitment)
+Field-shape validation only. Does NOT maintain state. The expensive work happens in `ListEntryResolver`.
 
 ```solidity
-LIST schema:
-  bool    allowsDuplicates   // false = set semantics; true = playlist/duplicates allowed
-  uint8   targetType         // 0 = ANY, 1 = ADDR, 2 = SCHEMA
-  bytes32 targetSchema       // EAS schema UID when targetType=SCHEMA; else bytes32(0)
-revocable: false
-resolver: ListResolver       // mandatory; validates field ranges + coherence at attest time
-```
-
-**Sorted vs unsorted is signaled by SORT_INFO existence, not by a schema field.** A curator who wants on-chain sorted reads attests `SORT_INFO(parentAnchor=LIST_UID, sortFunc=WeightSort, attester=curator)` alongside the LIST (SDK does this by default; opt out via `sorted: false` at the create-time API). Smart contracts probe `EFSSortOverlay.getSortInfo(LIST_UID, curator)`; if present → sorted path; if absent → unsorted path.
-
-This means sort discipline is *mutable* (curator can attest a SORT_INFO later) and *per-curator* (each curator can independently choose), unlike a schema field which would be permanent. No migration trap from `revocable: false`.
-
-Field semantics:
-
-- **`allowsDuplicates`** declares whether the list permits multiple entries that PIN to the same target.
-  - `false` — set semantics. Two entries can't PIN to the same target from the same curator. Use for top-N favorites, allowlists, ranked picks. Clients SHOULD name entries with target-derived hex for natural deduplication (target → unique anchor name).
-  - `true` — playlist semantics. Multiple entries can PIN to the same target. Use for playlists with repeats, ranked ballots, syllabi. Clients SHOULD name entries with nonce-derived hex (`keccak256(abi.encode("efs:list-occurrence:v1", listUID, attester, clientNonce))`) so identical targets get distinct anchor names. `clientNonce` MUST be ≥128 bits CSPRNG entropy (convention, unenforceable at kernel).
-
-- **`targetType`** declares what each entry's optional inner PIN binds to:
-  - `0` (ANY) — entries may PIN any UID type or skip the inner PIN entirely. Use for heterogeneous lists or freeform lists (shopping lists, todos) where the entry IS the data.
-  - `1` (ADDR) — entries' inner PIN uses `recipient` for an Ethereum address. Use for address-typed lists (top friends, DAO delegates, follow graph as ordered list).
-  - `2` (SCHEMA) — entries' inner PIN refUID points to an attestation of `targetSchema`. Use for typed lists (top-N memes pointing to DATA, curated NFT collections pointing to a specific schema).
-
-- **`targetSchema`** is the EAS schema UID required for entry inner PINs when `targetType = SCHEMA`. Must equal `bytes32(0)` when `targetType ≠ SCHEMA`.
-
-**Entry naming is a client convention, not a kernel concern.** The kernel enforces `(parent, name, schemaUID)` uniqueness per ADR-0025. Target-derived, occurrence-derived, and freeform naming patterns are all client choices. Different clients reading the same list MAY disagree about whether names are valid; this is acceptable because reads are edition-scoped and the curator's own choices define their list.
-
-**`revocable: false`**: a LIST attestation is permanent at its UID, like DATA. There is no "revoke the LIST" operation. To remove a list from a path, revoke the typed list anchor's placement PIN — the LIST attestation stays at its UID (still readable; if it was placed at other anchors, it's still reachable there). To deprecate a list entirely, revoke all its placement PINs and entry TAGs. Bookmark PINs from other curators' anchors stay valid as long as the bookmarker doesn't revoke them.
-
-**Stewardship and key rotation (recommended pattern).** Like every EAS attestation in EFS, a LIST is bound to its attester address. Curators wanting key-rotation flexibility or stewardship-transfer capability should **curate from a smart wallet** (ERC-4337 / smart account). The wallet contract IS the attester address; rotating signer keys inside the wallet doesn't change the attester. This is the EFS-wide answer to "what if I lose my key" — not list-specific. EOAs that lose their key abandon all their attestations (files, anchors, properties, lists alike); this isn't an EFS limitation but how EAS / Ethereum identity works.
-
-**`ListResolver` (mandatory).** Validates at attest time:
-- `targetType ≤ 2`
-- If `targetType == SCHEMA`: `targetSchema != bytes32(0)`
-- If `targetType != SCHEMA`: `targetSchema == bytes32(0)`
-- `refUID == bytes32(0)` (LIST attestations are free-floating)
-- No expiration unless explicitly supported in a future field
-- `recipient == address(0)` (LIST attestations are not directed at a recipient)
-
-Field-validation only for v1. No SortOverlay hooks until SortOverlay integration is wired (see Reader API §"Ordered reads via SortOverlay (opt-in)"). The resolver does NOT gate writes by attester — anyone may attest a LIST. Co-contribution + spam-resistance is handled by viewer-side edition scoping, not by kernel write-gating.
-
-### List-level metadata
-
-List-level metadata (`name`, `description`, cover, etc.) attaches to the **LIST attestation**, not the path anchor. Metadata travels with the LIST UID — when Bob bookmarks Alice's LIST at his path, Bob's view sees Alice's name automatically.
-
-The pattern follows ADR-0034/ADR-0041 PROPERTY conventions:
-
-```
-LIST attestation L1
-  └── Anchor<schemaUID=PROPERTY_SCHEMA_UID>(name="name", refUID=L1)
-        └── PIN(definition=nameAnchor, refUID=nameValue_PROPERTY_UID, attester=alice)
-```
-
-**Reserved key anchor names for list-level metadata** (apps SHOULD NOT shadow):
-- `name` — display name per ADR-0034
-- `description` — longer description
-- `cover` — DATA UID for cover image
-- `icon` — DATA UID for small icon
-- `category` — string category label
-
-Updating metadata: re-PIN at the same `(curator, key_anchor, PROPERTY_SCHEMA)` slot — O(1) supersede. Per-curator: each curator's metadata PINs are independent. Default reads scope to the LIST's attester (the curator).
-
-### Entry anchors
-
-Entries are children of the LIST UID (`refUID = LIST UID`). Each entry is a regular `Anchor<generic>` attestation. The entry's `schemaUID` field declares the inner target's schema (when an inner PIN is present):
-
-- `targetType == SCHEMA`: entry's `schemaUID == targetSchema` (e.g., `DATA_SCHEMA_UID` for a books list).
-- `targetType == ADDR`: entry's `schemaUID == bytes32(0)` (`ADDRESS_TARGET` sentinel); inner PIN uses `recipient` rather than `refUID`.
-- `targetType == ANY`: entry's `schemaUID` declares per-entry; entries can be heterogeneous within one list, or skip the inner PIN entirely.
-- Entry with no inner PIN: entry's `schemaUID == bytes32(0)`. The entry stands alone (intrinsic entry); the anchor name IS the entry.
-
-Entry naming is a client convention (see "Identity convergence" section): target-derived, occurrence-derived, or freeform. The kernel just enforces `(parent, name, schemaUID)` uniqueness per ADR-0025.
-
-### PIN: binding the entry to its target (optional)
-
-When an entry has an inner PIN, it has at most one active PIN per attester per target schema:
-
-- For UID targets: `PIN(definition=entry, refUID=targetUID, attester=curator)`
-- For address targets: `PIN(definition=entry, recipient=address, attester=curator)`
-
-Re-PINning supersedes O(1). For occurrence-derived and freeform entries, re-PINning to a different target is the *intended* affordance — the entry's identity is its name, not its current target binding. For target-derived entries, the canonical name → target invariant is a client convention; clients that care should validate themselves.
-
-**Intrinsic entries without inner PIN.** When the entry IS the data (e.g., a grocery list item "milk", a todo task description), the inner PIN is omitted entirely. The entry anchor's name carries the meaning; per-entry PROPERTYs (`status`, `quantity`, `completedAt`) carry mutable state. The reader returns `pinTargetID = bytes32(0)` for such entries — clients render them as intrinsic entries (no link follow-through). Most common with `targetType=ANY`, but legal for any `targetType` if the curator chooses.
-
-### Weight TAG: ordering
-
-Each entry has at most one active weight TAG per attester:
-
-```
-TAG(definition=LIST_UID, refUID=entry, weight=N, attester=curator)
-```
-
-The TAG's definition is the **LIST UID**, not any anchor. This means `_activeByAAS[LIST_UID][curator][ANCHOR_SCHEMA_UID]` enumerates the list's active entries with weights — entries follow the LIST regardless of which anchors place it.
-
-Re-attesting at the same edgeHash supersedes weight in O(1). Default ordering is `weight desc`, with deterministic tie-break by entry-anchor UID asc, then `tagUID` asc.
-
-For lists where the curator manually orders entries, SDKs SHOULD use sparse `int256` weights (e.g., 2^32 spacing) with periodic rebalance. Sparse weights are NOT a universal MUST — ratings, votes, and scores use weights with intrinsic meaning.
-
-### Per-entry metadata
-
-PROPERTYs on the entry anchor carry per-entry state (per ADR-0034):
-
-- A reserved key anchor under the entry (e.g., `note`, `status`)
-- A free PROPERTY attestation with the value
-- A PIN binding the value at the key anchor (cardinality-1 per attester)
-
-Updating a metadata value re-binds the PIN at the same slot — O(1) supersede.
-
-**Reserved generic PROPERTY keys**: `note`, `name`, `description`, `icon`, `cover`, `status`, `quantity`, `completedAt`. Apps SHOULD NOT shadow these with conflicting semantics. Other PROPERTY keys are app-defined. Use `name` (per ADR-0034) for the display-name PROPERTY at both list level and entry level.
-
-### Anchor placements (typed list anchor + PIN to LIST)
-
-Connecting a path to a LIST is a typed list anchor plus a PIN:
-
-```
-Anchor<schemaUID=LIST_SCHEMA_UID>("mylist", refUID=parent_anchor, attester=curator)
-  └── PIN(definition=mylist_anchor, refUID=LIST_UID, targetSchema=LIST_SCHEMA_UID, attester=curator)
-```
-
-The typed anchor's `schemaUID = LIST_SCHEMA_UID` signals "this slot is a list" — readers see the slot type without probing. The PIN attaches the specific LIST attestation. Same shape as `Anchor<PROPERTY>` slots that hold property values.
-
-PIN cardinality-1 per `(attester, definition, targetSchema)` means each curator can place exactly one LIST at a given typed list anchor. Re-PINning supersedes (the anchor now points at a different LIST; the previous LIST attestation still exists at its UID but is no longer attached at this path). Revoking the placement PIN removes the placement (the anchor's list slot is empty).
-
-**The same LIST can be placed at multiple typed list anchors** by having multiple PINs from different anchors all referencing the same LIST UID. **Multi-attester sharing**: Bob can create his own typed list anchor (`Anchor<LIST>("alices-favs", refUID=bob_path)`) and PIN it to Alice's LIST UID; the LIST is still Alice's (entries are her attestations), but Bob's path renders it.
-
-**Why typed anchors here?** A typed list anchor cannot accidentally hold a file or other primitive — readers see `schemaUID = LIST_SCHEMA_UID` and know what to expect. This eliminates the cross-`targetSchema` ambiguity round-13 introduced (where a generic anchor could have both a DATA PIN and a LIST PIN from the same attester at the same path slot, causing client divergence).
-
----
-
-## Lists vs Tags vs Folders: when to use which
-
-| Need | Pattern |
-|---|---|
-| Membership claim ("X is in Alice's allowlist") | **TAG** — `TAG(definition=anchor, recipient=X)`. Use `isActiveEdge(...)` for O(1) check. No list needed. |
-| Follow / friend graph | **TAG** — `TAG(definition=alice_follows, recipient=Y)`. Per ADR-0038. |
-| Ranked or ordered collection | **List** — free-floating LIST + entries + anchor placement. |
-| Per-entry metadata (notes, status, captions) | **List** — entries are anchors, can carry PROPERTYs. |
-| Sequence with duplicates (playlists, ballots) | **List** with `allowsDuplicates=true` (client uses occurrence-derived names). |
-| Folder of files | **Anchor + child anchors with PINs to DATA** (existing EFS folder pattern). No list. |
-| Categorization (`#nsfw`, `#favorites`) | **TAG** — at a tag anchor. ADR-0038. |
-| Permissions / roles / DAO membership | **TAG** — membership claim. |
-
-Lists are heavy (LIST + entries + anchor PIN); they exist to serve use cases tags can't (ranking, per-entry mutable state). Don't make lists do tag work.
-
----
-
-## Reader API (v1)
-
-Smart contracts and clients read lists via two paths depending on whether a SORT_INFO exists for `(LIST_UID, curator)`:
-
-**Path A — sorted lists** (SORT_INFO present): read via `EFSSortOverlay`:
-- `getSortedChunk(sortInfoUID, parentAnchor, startNode, limit, showRevoked) → (items[], nextCursor)` — paginated, cursor-driven, returns entries in `weight desc` order using the new TAG-source sourceType. Per ADR-0007's SortOverlay pattern + the v1 TAG-source extension.
-- `sortInfoUID` is the curator's `SORT_INFO(parentAnchor=LIST_UID, sortFunc=WeightSort, attester=curator)` attestation UID — discoverable via `EFSSortOverlay.getSortInfo(LIST_UID, curator)`. Smart contracts MUST derive `curator` from `eas.getAttestation(LIST_UID).attester`, never from caller input.
-
-**Path B — unsorted lists** (SORT_INFO absent): read via existing `EdgeResolver`:
-- `getActiveTagEntries(definition, attester, targetSchema, start, length) → (tagUID, weight)[]` (per ADR-0041 §8)
-- `getActiveTagPinTargetsWithWeights(definition, attester, tagTargetSchema, start, length) → (tagTargetID, tagUID, pinTargetID, pinTargetSchema, weight, attester)[]` — **canonical unsorted list-entry reader** when called with `definition = LIST_UID`, `tagTargetSchema = ANCHOR_SCHEMA_UID`. `pinTargetID = bytes32(0)` is a valid result for freeform entries without inner PIN.
-
-**Generic readers used by both paths**:
-- `getActivePinTarget(definition, attester, targetSchema) → targetID` — for placement resolution
-- `isActiveEdge(attester, targetID, definition, schema) → bool` — for tag-based membership patterns (used outside lists)
-- `getActiveTagTargetsWithWeights(definition, attester, tagTargetSchema, start, length) → (tagTargetID, tagUID, weight, attester)[]` — generic TAG bucket reader (lighter than the PIN-resolving variant when entries don't need their inner PIN dereferenced)
-
-**Pagination is not capped at the kernel.** `length` is a caller hint; caller pays the gas. SDK helpers default to `length = 100` for safety, but callers may pass any value. View calls (`eth_call`) are bounded by RPC provider timeouts; in-transaction calls are bounded by the caller's gas. No `PageSizeTooLarge` revert (round-14 paternalism dropped).
-
-**Smart-contract consumer warning (NatSpec MUST).** The reader API takes a `curator` argument because EFS supports multi-attester views — but this means a naive contract that accepts `curator` from a caller-supplied parameter can be tricked. Example: a grants contract distributing funds to "the top 10 on Alice's list" must NOT accept `curator` from a proposal field; Mallory could submit `distribute(L1, mallory)` and pull her own self-promoting bucket from the same LIST UID.
-
-**Contract pattern:** on-chain consumers MUST derive the curator from the LIST attestation itself:
-
-```solidity
-Attestation memory listAtt = eas.getAttestation(listUID);
-address curator = listAtt.attester;  // canonical curator; cannot be spoofed
-entries = EdgeResolver.getActiveTagPinTargetsWithWeights(
-  listUID, curator, ANCHOR_SCHEMA_UID, start, length
-);
-```
-
-Reader-method NatSpec MUST carry this warning. Conformance test asserts the attack reproduces against a vulnerable consumer and fails against the recommended pattern.
-
-### SortOverlay TAG-source mode + WeightSort comparator (NEW kernel work for v1)
-
-**Why a kernel change is needed.** Existing `EFSSortOverlay` walks `_children[parentAnchor]` — an append-only kernel array. List membership lives in `EdgeResolver._activeByAAS[L1][curator][ANCHOR_SCHEMA_UID]` (active TAG bucket). These diverge: a removed entry (revoked TAG) stays in `_children` forever, so sorted reads from the existing SortOverlay would surface "ghost" entries.
-
-**The kernel change.** Add a new `sourceType` (e.g., `sourceType = 2`) to `EFSSortOverlay` that reads from EdgeResolver's active-TAG bucket instead of `_children`. SortOverlay also gets a hook from EdgeResolver on TAG revoke that calls `_unlink(entryUID)` automatically. Sorted reads now reflect the actual active set.
-
-```solidity
-// EFSSortOverlay additions (sketch; ~100-150 lines + tests)
-
-// New sourceType=2 path in _getKernelItemAt
-function _getKernelItemAt(SortInfo memory si, uint256 idx) internal view returns (bytes32) {
-    if (si.sourceType == 0) return indexer.getChildAt(si.parentAnchor, idx);
-    if (si.sourceType == 1) return indexer.getChildBySchemaAt(si.parentAnchor, si.targetSchema, idx);
-    if (si.sourceType == 2) {
-        // NEW: read from active TAG bucket
-        TagEntry memory entry = edgeResolver.getActiveTagEntryAt(
-            si.parentAnchor,    // = LIST UID
-            si.attester,        // = curator
-            ANCHOR_SCHEMA_UID,
-            idx
-        );
-        return entry.tagUID;  // sorted source is TAG UIDs; consumers map to entry anchors
+function onAttest(Attestation calldata a, uint256) returns (bool) {
+    require(a.data.length == EXPECTED_LIST_DATA_LENGTH, "bad LIST payload");
+    (
+      bool allowsDuplicates,
+      bool appendOnly,
+      uint8 targetType,
+      bytes32 targetSchema,
+      uint32 maxEntries,
+      bool allowIntrinsic
+    ) = abi.decode(a.data, (bool, bool, uint8, bytes32, uint32, bool));
+
+    require(a.refUID == bytes32(0),    "LIST must be free-floating");
+    require(a.recipient == address(0), "LIST must not be directed");
+    require(targetType <= 2,            "invalid targetType");
+
+    // (targetType, targetSchema) coherence
+    if (targetType == 2 /* SCHEMA */) {
+        require(targetSchema != bytes32(0), "SCHEMA targetType requires targetSchema");
+    } else {
+        require(targetSchema == bytes32(0), "non-SCHEMA targetType must have zero targetSchema");
     }
-    revert UnsupportedSourceType();
+
+    // allowIntrinsic only meaningful with ANY-typed lists
+    if (allowIntrinsic) {
+        require(targetType == 0 /* ANY */, "allowIntrinsic requires targetType=ANY");
+    }
+
+    emit ListAttested(a.uid, a.attester, allowsDuplicates, appendOnly, targetType, targetSchema, maxEntries, allowIntrinsic);
+    return true;
+}
+// onRevoke unreachable: LIST is revocable: false.
+```
+
+#### `ListEntryResolver` (on LIST_ENTRY schema)
+
+State maps:
+
+```solidity
+struct CachedListDecl {
+    bool    exists;
+    bool    allowsDuplicates;
+    bool    appendOnly;
+    uint8   targetType;
+    bytes32 targetSchema;
+    uint32  maxEntries;
+    bool    allowIntrinsic;
 }
 
-// New hook called from EdgeResolver._onRevokeTag
-function onTagRevoked(bytes32 listUID, address curator, bytes32 entryUID) external {
-    require(msg.sender == address(edgeResolver), "only EdgeResolver");
-    bytes32 sortInfoUID = _findSortInfo(listUID, curator);
-    if (sortInfoUID != bytes32(0)) _unlink(sortInfoUID, listUID, entryUID);
-}
+// Cache the LIST's declaration on first touch (cold path: 1 EAS read; warm: 1 SLOAD)
+mapping(bytes32 listUID => CachedListDecl) private _decl;
 
-// WeightSort comparator reads entry's active weight TAG via EdgeResolver
-contract WeightSort is ISortFunc {
-    function isLessThan(bytes32 a, bytes32 b, bytes32 sortInfoUID) external view returns (bool) {
-        (bytes32 listUID, address curator) = _decodeSortInfo(sortInfoUID);
-        int256 weightA = edgeResolver.getActiveTagWeight(a, curator, listUID, ANCHOR_SCHEMA_UID);
-        int256 weightB = edgeResolver.getActiveTagWeight(b, curator, listUID, ANCHOR_SCHEMA_UID);
-        if (weightA != weightB) return weightA > weightB;  // desc order
-        return a < b;  // tie-break by entry UID asc
+// Per-list, per-attester active entries (insertion order; iteration source)
+mapping(bytes32 listUID => mapping(address attester => bytes32[])) private _entries;
+
+// O(1) membership + no-dupes counter
+//   serves both: enforces "count == 0" when !allowsDuplicates, and provides "count > 0" for isMember
+mapping(bytes32 listUID => mapping(bytes32 target => mapping(address attester => uint256))) private _entryCount;
+
+// Swap-and-pop index for revoke
+mapping(bytes32 entryUID => uint256) private _entryPosPlusOne;
+```
+
+`onAttest`:
+
+```solidity
+function onAttest(Attestation calldata a, uint256) returns (bool) {
+    require(a.data.length == EXPECTED_ENTRY_DATA_LENGTH, "bad LIST_ENTRY payload");
+    (bytes32 listUID, bytes32 target, int256 weight) =
+        abi.decode(a.data, (bytes32, bytes32, int256));
+    require(listUID != bytes32(0), "missing listUID");
+
+    // Hydrate declaration on first touch
+    CachedListDecl memory d = _decl[listUID];
+    if (!d.exists) {
+        Attestation memory L = eas.getAttestation(listUID);
+        require(L.schema == LIST_SCHEMA_UID, "listUID is not a LIST");
+        (d.allowsDuplicates, d.appendOnly, d.targetType, d.targetSchema,
+         d.maxEntries, d.allowIntrinsic) =
+            abi.decode(L.data, (bool, bool, uint8, bytes32, uint32, bool));
+        d.exists = true;
+        _decl[listUID] = d;
+    }
+
+    // Type enforcement (write-time)
+    if (target == bytes32(0)) {
+        // Intrinsic item
+        require(d.allowIntrinsic, "intrinsic entries not allowed");
+        // targetType MUST be ANY (enforced at LIST attest time)
+    } else if (d.targetType == 1 /* ADDR */) {
+        // Address-typed: target must fit in 160 bits (high 96 bits zero)
+        // address(0) is rejected by target==bytes32(0) check above only if
+        // allowIntrinsic; otherwise address(0) is a valid ADDR target.
+        // BUT: ADDR-typed lists must NOT have allowIntrinsic (enforced at LIST attest).
+        // So address(0) for ADDR-typed list: target encoding is bytes32(uint160(0)) == bytes32(0),
+        // which gets caught above. To support address(0) for ADDR lists, we use a sentinel:
+        // ADDR encoding is `bytes32(uint160(addr) | (1 << 160))` — high bit set distinguishes
+        // "this is an address" from "this is intrinsic/empty".
+        // [OPEN: this needs review — see Open Concerns §3]
+        require(uint256(target) >> 160 != 0 || addrSentinelSet(target), "invalid ADDR encoding");
+    } else if (d.targetType == 2 /* SCHEMA */) {
+        Attestation memory t = eas.getAttestation(target);
+        require(t.uid != bytes32(0), "target attestation missing");
+        require(t.schema == d.targetSchema, "target schema mismatch");
+    }
+    // targetType == ANY with target != 0: any UID accepted
+
+    // No-duplicates enforcement
+    if (!d.allowsDuplicates) {
+        require(_entryCount[listUID][target][a.attester] == 0, "duplicate target");
+    }
+
+    // Cap enforcement (per-attester)
+    if (d.maxEntries != 0) {
+        require(_entries[listUID][a.attester].length < d.maxEntries, "list full");
+    }
+
+    // Append + index
+    _entries[listUID][a.attester].push(a.uid);
+    _entryPosPlusOne[a.uid] = _entries[listUID][a.attester].length;
+    _entryCount[listUID][target][a.attester] += 1;
+
+    emit ListEntryAttested(listUID, a.attester, a.uid, target, weight);
+    return true;
+}
+```
+
+`onRevoke`:
+
+```solidity
+function onRevoke(Attestation calldata a, uint256) returns (bool) {
+    (bytes32 listUID, bytes32 target, ) = abi.decode(a.data, (bytes32, bytes32, int256));
+
+    CachedListDecl memory d = _decl[listUID];
+    require(d.exists, "unknown listUID");
+
+    // Append-only enforcement: reject revocation entirely
+    require(!d.appendOnly, "list is append-only");
+
+    // Gate cleanup behind position check (idempotent on stale revoke)
+    uint256 pp1 = _entryPosPlusOne[a.uid];
+    if (pp1 == 0) return true;
+
+    // Swap-and-pop
+    uint256 idx = pp1 - 1;
+    bytes32[] storage arr = _entries[listUID][a.attester];
+    uint256 last = arr.length - 1;
+    if (idx != last) {
+        bytes32 movedUID = arr[last];
+        arr[idx] = movedUID;
+        _entryPosPlusOne[movedUID] = idx + 1;
+    }
+    arr.pop();
+    delete _entryPosPlusOne[a.uid];
+    _entryCount[listUID][target][a.attester] -= 1;
+
+    emit ListEntryRevoked(listUID, a.attester, a.uid, target);
+    return true;
+}
+```
+
+**Reentrancy note:** `eas.getAttestation()` is a pure storage read in EAS 1.x — no resolver callbacks fire. The resolver has no untrusted external calls and no ETH-handling surface. Documented as load-bearing assumption; if EAS adds callback hooks in a future version, re-audit. (Not blocking for v1.)
+
+**Events:** `ListAttested` on declaration; `ListEntryAttested` / `ListEntryRevoked` on membership changes. These are sufficient for any subgraph to materialize lists without reading resolver mappings.
+
+---
+
+### Smart contract reader (`ListReader`)
+
+A stateless view contract on top of `ListEntryResolver`. Provides a stable ABI for consumers; lets the resolver evolve internal layout without breaking integrations.
+
+```solidity
+interface IListReader {
+    struct ListMode {
+        bool    exists;
+        bool    allowsDuplicates;
+        bool    appendOnly;
+        uint8   targetType;
+        bytes32 targetSchema;
+        uint32  maxEntries;
+        bool    allowIntrinsic;
+    }
+
+    struct ListEntry {
+        bytes32 entryUID;
+        bytes32 target;
+        int256  weight;
+    }
+
+    /// Returns the list's declared configuration. One SLOAD via resolver cache.
+    function getMode(bytes32 listUID) external view returns (ListMode memory);
+
+    /// Number of active entries for (list, attester). O(1).
+    function length(bytes32 listUID, address attester) external view returns (uint256);
+
+    /// Page of active entries. Insertion order; O(N) reads, one SLOAD per entry.
+    function entries(bytes32 listUID, address attester, uint256 start, uint256 len)
+        external view returns (ListEntry[] memory);
+
+    /// O(1) membership check. Works for all modes (no-dupes, dups-allowed, append-only, etc.).
+    /// For duplicates-allowed lists: returns true iff at least one entry with this target exists.
+    function isMember(bytes32 listUID, address attester, bytes32 target)
+        external view returns (bool);
+
+    /// O(1) entry count for a specific target (== 1 for no-dupes; can be > 1 for dups-allowed).
+    function countOf(bytes32 listUID, address attester, bytes32 target)
+        external view returns (uint256);
+}
+```
+
+**Consumer pattern (NFT allowlist):**
+
+```solidity
+function buy(uint256 tokenId, address curator) external payable {
+    require(
+        listReader.isMember(allowlistUID, curator, bytes32(uint256(uint160(msg.sender)))),
+        "not on allowlist"
+    );
+    _executePurchase(msg.sender, tokenId);
+}
+```
+
+**Consumer pattern (DAO weighted distribution):**
+
+```solidity
+function distribute(bytes32 listUID, address curator, uint256 pool) external {
+    IListReader.ListMode memory m = listReader.getMode(listUID);
+    require(m.exists && m.targetType == 1 /* ADDR */, "wrong list type");
+
+    uint256 n = listReader.length(listUID, curator);
+    IListReader.ListEntry[] memory es = listReader.entries(listUID, curator, 0, n);
+
+    int256 totalWeight;
+    for (uint i; i < es.length; i++) totalWeight += es[i].weight;
+    require(totalWeight > 0, "no positive weights");
+
+    for (uint i; i < es.length; i++) {
+        if (es[i].weight <= 0) continue;
+        address recipient = address(uint160(uint256(es[i].target)));
+        uint256 share = (pool * uint256(es[i].weight)) / uint256(totalWeight);
+        payable(recipient).transfer(share);
     }
 }
 ```
 
-Cost: O(N log N) reads for initial sort; O(1) `repositionItem` per weight update; ~5.5k gas per insert. Permissionless `repositionItem` remains safe per round-15 verification (validation is tight; only correctness-restoring moves succeed).
-
-### Placer vs curator: two scopes for two questions
-
-A list read involves two distinct attester scopes:
-
-- **Placer** — who attests "this LIST is at this path"? This is the attester of the **placement PIN** at the typed list anchor. When Bob bookmarks Alice's list, Bob is the placer.
-- **Curator** — who attests "these entries belong to this LIST"? This is the attester of the LIST attestation, the entries (`refUID = LIST_UID`), the weight TAGs, and the metadata PROPERTYs. When Bob bookmarks Alice's list, Alice is still the curator.
-
-**By default**: when the placer reads "their" path, the curator defaults to the LIST attestation's `attester` field — the originator. This means Bob's bookmark of Alice's list naturally reads Alice's contents.
-
-**SDK shape** reflects the split:
-
-```typescript
-// Step 1: anchor → LIST UID (uses placer scope)
-listUID = efs.lists.resolveListPlacement(
-  anchor: AnchorUID,
-  placer: Address    // who attested the placement PIN
-) → ListUID | null
-
-// Step 2: LIST UID → entries (uses curator scope)
-entries = efs.lists.readListByUID(
-  listUID: ListUID,
-  curator?: Address  // defaults to LIST attestation's attester
-) → ListView
-
-// Convenience wrapper for the common case:
-view = efs.lists.read(
-  anchor: AnchorUID,
-  placer: Address,
-  curator?: Address  // optional override; defaults to LIST creator
-) → ListView
-```
-
-Smart contracts MAY call the underlying `EdgeResolver` view methods directly with the appropriate attester arguments. The on-chain readers don't bake in placer/curator semantics — they take an `attester` argument and clients decide what it means at each step.
-
-### Canonical read recipe (single-curator scope, default)
-
-For a typed list anchor at a path, placer `bob`, curator `alice` (where `alice` may equal `bob` in the single-attester case):
-
-```
-1. Path-walk to the typed list anchor (mylist_anchor).
-   - Verify anchor.schemaUID == LIST_SCHEMA_UID.
-   - If not, this isn't a list slot; render appropriate other primitive.
-
-2. Resolve the LIST UID via the placer's PIN:
-   listUID = EdgeResolver.getActivePinTarget(
-     mylist_anchor,
-     bob,                 // placer
-     LIST_SCHEMA_UID
-   )
-   - If bytes32(0): the placer has no list at this path; render empty.
-
-3. Determine the curator (default = LIST's own attester):
-   listAttestation = eas.getAttestation(listUID)
-   curator = curator_override ?? listAttestation.attester
-   - Decode (sorted, allowsDuplicates, targetType, targetSchema) from listAttestation.data.
-   - LIST is revocable: false; no revocation check needed.
-
-4. Read list-level metadata (curator-scoped):
-   name        = readPropertyAt(listUID, "name", curator)        // per ADR-0034
-   description = readPropertyAt(listUID, "description", curator)
-   ...
-
-5. Enumerate entries with weights (curator-scoped):
-
-   If sorted == true:
-     sortInfoUID = EFSSortOverlay.getSortInfo(listUID, curator)
-     (entries, nextCursor) = EFSSortOverlay.getSortedChunk(
-       sortInfoUID,
-       listUID,            // parentAnchor
-       cursor,             // bytes32(0) on first call; nextCursor on subsequent
-       limit,              // caller hint; uncapped at kernel
-       showRevoked=false
-     )
-     // entries[] returned in weight desc order.
-     // For each entry UID, dereference inner PIN + metadata as in step 6+.
-
-   If sorted == false:
-     entries = EdgeResolver.getActiveTagPinTargetsWithWeights(
-       listUID,
-       curator,
-       ANCHOR_SCHEMA_UID,
-       start,
-       length              // caller hint; uncapped
-     )
-     // Returns (entryUID, tagUID, innerTargetID, innerTargetSchema, weight, attester)[]
-     // Caller sorts client-side if order is desired.
-
-6. For each entry:
-   - If targetType == SCHEMA AND innerTargetID != bytes32(0):
-       validate innerTargetSchema matches targetSchema.
-   - If targetType == ADDR: inner PIN binds via recipient (innerTargetID = bytes32(uint160(addr))).
-   - If innerTargetID == bytes32(0):
-       render as intrinsic entry (no inner PIN; the anchor name IS the entry).
-       (Valid for any targetType; common for targetType=ANY freeform lists.)
-
-7. For per-entry metadata PROPERTYs (note, status, quantity, etc.):
-   - Resolve named key anchor under entry; read PROPERTY value (curator-scoped).
-
-8. Tie-break (sorted=false path) and final ordering:
-   - Sort by weight desc, tie-break by entryUID asc, then tagUID asc.
-```
-
-The recipe makes the placer/curator split explicit. For single-attester reads (Alice reads Alice's list at Alice's path), `placer == curator == alice` — the split is invisible. For shared/bookmarked lists, the split prevents reading Bob's empty bucket when the actual contents are Alice's.
-
-**Smart-contract top-N reads.** If the curator attested a SORT_INFO, contracts call `getSortedChunk` with `limit = N` and ignore `nextCursor` — single atomic call returns the actual top N (TAG-source SortOverlay reflects revoked TAGs correctly). If no SORT_INFO exists, contracts must either (a) accept that they only see a single arbitrary page, or (b) read multiple pages and sort in-contract (gas-bounded by the caller). For governance use cases that need reliable top-N, curate the list with a SORT_INFO from day one.
-
-### Snapshot consistency
-
-Smart contracts calling the v1 readers in a single transaction get atomic snapshot consistency for free — EVM atomicity per call. Off-chain clients paginating across multiple RPC calls MUST pin all reads to the same `blockTag`. Governance / on-chain consumers SHOULD read from finalized blocks.
+The consumer trusts target encoding (no per-entry validation), trusts schema correctness (for TYPED lists), and pays a single bulk SLOAD for the entry array. Type confidence comes from the resolver's write-time enforcement.
 
 ---
 
-## Editions and multi-attester reads
+## Per-entry metadata pattern
 
-Default reads are **single-curator-scoped**. The curator's LIST attestation, weight TAGs, entry PINs, and entry metadata all come from one attester.
+EFS already has a generic mechanism for attaching strings to any attestation UID: the PROPERTY pattern. Per-entry metadata uses it directly.
 
-### Per-attester ownership
+**Three metadata scopes, three different UIDs to attach to:**
 
-The LIST attestation has an attester (the curator who created it). Entries (`refUID = LIST UID`) are also typically authored by the curator. Weight TAGs against the LIST UID and entry PINs are per-attester.
-
-If Bob places Alice's LIST UID at Bob's anchor, Bob is just exposing Alice's list at Bob's namespace — Alice is still the curator (her LIST attestation, her entries, her weights). Bob's PIN is a "shortcut" or "bookmark."
-
-### Cross-attester contributions to the same LIST
-
-Bob can write his own weight TAGs and entry anchors against Alice's LIST UID (`refUID = Alice's LIST UID`). This makes Bob a co-contributor to the list's per-attester storage:
-
-- `_activeByAAS[LIST_UID][alice][ANCHOR_SCHEMA_UID]` → Alice's entries and weights
-- `_activeByAAS[LIST_UID][bob][ANCHOR_SCHEMA_UID]` → Bob's entries and weights
-
-Single-curator reads still scope to one attester. Multi-attester views (compare/merge UI) read both buckets. Edition independence is preserved: each curator's contributions are stored independently.
-
-### Identity convergence (client-naming conventions)
-
-The kernel doesn't care about naming patterns; it just enforces `(parent, name, schemaUID)` uniqueness. Three client conventions are useful, each with different multi-attester convergence properties:
-
-**Target-derived names (Example A pattern):** clients name entries by the canonical hex of their target. Alice and Bob's "entry for book X" land at the same anchor name (deterministic name → shared anchor UID). Each writes their own PIN, weight TAG, and metadata under that shared name. Readers filter at the PIN/TAG layer (per-curator). Use for set-semantics lists where the same target shouldn't appear twice (top-N favorites, allowlists).
-
-**Occurrence-derived names (Example C pattern):** clients name entries by `keccak256(abi.encode("efs:list-occurrence:v1", listUID, attester, clientNonce))`. Each occurrence is independent — same target can appear at multiple distinct entries. Entry-anchor sets are per-curator. Use with `allowsDuplicates=true` for playlists, ballots, syllabi.
-
-**Freeform names (Example B pattern):** entry name = curator's choice (subject to ADR-0025 anchor name validation). No deterministic structure. Multi-attester convergence is opportunistic. Use for human-meaningful named lists (groceries, todos).
-
-### List sharing patterns enabled by free-floating LISTs
-
-- **Same list at multiple paths (single curator):** Alice creates LIST `L1`, then places it at typed list anchors at `/alice/memes/mylist/` AND `/alice/categorized/favs/`. Two paths, one list. Edits propagate.
-- **Bob bookmarks Alice's list:** Bob creates `Anchor<LIST>("alices-favs", refUID=bob_path)` at `/bob/i-like/alices-favs/` and PINs Alice's `L1`. Bob is the placer; Alice is the curator. Reader uses placer/curator split: `read(anchor=alices-favs, placer=bob, curator=alice)`. Alice's edits show up in Bob's view. Bob can leave it as a read-only reference, or write his own entries against `L1` (becomes co-contributor; see below).
-- **DAO-curated lists:** A Safe (smart account) is the LIST attester (curator). Members propose entry adds via Safe transactions. Other addresses bookmark the Safe-curated LIST UID in their own typed list anchors.
-
-**Merge semantics** are not part of this design. Clients pick how to render multi-attester per use case. Default is single-curator-scoped; multi-attester is advisory and clients MUST preserve attribution.
-
-### Why co-contribution is safe (and why we keep it)
-
-Anyone can write entries with `refUID = L1` from any address. The kernel doesn't gate this. Some of those writers are legitimate co-contributors (Bob adding his picks to a shared DAO list); some could be spammers (Mallory writing 1000 entries to grief Alice's list).
-
-**Editions handle this at read time.** Every active-set storage slot is keyed by attester. Default reads scope to a single curator (the LIST's `attester` field by default), so:
-
-- Reader of "Alice's L1" → curator=alice → sees Alice's 5 entries. Mallory invisible.
-- Reader of "Bob's contributions to L1" → curator=bob → sees Bob's 3 entries.
-- Multi-attester compare/merge UI → reads `[alice, bob, ...]` → labels each entry by attester. Mallory not in the explicit attester list → not surfaced.
-
-Mallory's spam writes are visible only to clients that explicitly ask for "all attesters" — which is itself a deliberate UX choice, not a default. The kernel cannot prevent the writes, and shouldn't; that's edition sovereignty: viewers choose what they read.
-
-**Secondary effects** (the concerns reviewers raised):
-- A subgraph indexing "every attestation against L1" sees Mallory's spam permanently (append-only discovery indexes can't be cleaned). Mitigation: subgraph implementers MUST scope active-set queries to a curator, not aggregate across all attesters.
-- A naive client that defaults to "show all" would surface spam. Mitigation: SDK defaults to single-curator scope; clients deviating from the default opt in deliberately.
-
-These are client/indexer-layer responsibilities, not kernel concerns. Co-contribution is a real affordance for shared/DAO lists; the alternative (gate writes via resolver) would block the legitimate use case to defend against an attack the read layer already filters.
-
----
-
-## Use cases (split between LIST and TAG patterns)
-
-### LIST patterns (use the list primitive)
-
-Schema configuration shorthand: `dup` = `allowsDuplicates`; `target` = `targetType`; `sort` = `sorted`. Naming convention is a client choice (see "Identity convergence" above).
-
-| # | Use case | dup | target | sort | Naming | Notes |
-|---|---|---|---|---|---|---|
-| 1 | Top-N favorites (memes, books, etc.) | false | SCHEMA | true | target-derived | Weight = ranking |
-| 2 | Annotated favorites with notes per entry | false | SCHEMA | true | target-derived | `note` PROPERTY on entry |
-| 3 | Ratings (1–5★ per item) | false | SCHEMA | false | target-derived | Weight = rating value; sort optional |
-| 4 | Reading list (priority order) | false | SCHEMA | true | target-derived | Weight = read order |
-| 5 | Wishlist (priority order, with details) | false | SCHEMA | true | target-derived | Weight = priority; `note` PROPERTY |
-| 6 | Tier list (S/A/B with sub-rank) | false | SCHEMA | true | target-derived | Weight encodes tier+rank, or `tier` PROPERTY |
-| 7 | Curated awesome-EFS guide | false | ANY | true | target-derived | Per-entry rationale |
-| 8 | DAO delegate slate (ranked candidates) | false | ADDR | true | target-derived | Weight = preference; smart-contract reads top-N |
-| 9 | "People I trust for X topic" | false | ADDR | true | target-derived | Per-list context note |
-| 10 | Cross-list reuse (same target in multiple lists) | varies | varies | varies | target-derived | Independent LIST UIDs sharing target via canonical-target PIN |
-| 11 | Annotated bookmarks | false | SCHEMA | true | target-derived | URL via DATA wrapper; `note` PROPERTY |
-| 12 | Inventory / stock list | false | SCHEMA | false | target-derived | `stock`, `price` PROPERTYs |
-| 13 | Achievements with date earned | false | SCHEMA | true | target-derived | `earnedAt` PROPERTY |
-| 14 | **Same list at multiple paths** | varies | varies | varies | any | Multiple typed list anchors PIN to same LIST UID |
-| 15 | **Bob bookmarks Alice's list** | varies | varies | varies | any | Bob's typed list anchor PINs Alice's LIST UID |
-| 16 | **Moving a list between folders** | varies | varies | varies | any | Revoke old placement PIN; create new typed list anchor at new path |
-| 16a | **DAO co-contribution to shared list** | varies | varies | varies | any | Multiple attesters write entries against same LIST UID; viewer chooses scope |
-| 17 | Playlist with duplicates | **true** | SCHEMA | true | occurrence-derived | Same DATA at multiple entries |
-| 18 | Syllabus / step-by-step guide | **true** | ANY | true | occurrence-derived | Per-step prose |
-| 19 | Ranked ballot | **true** | ADDR or SCHEMA | true | occurrence-derived | Position is meaningful |
-| 20 | Shopping list (items with status) | false | ANY | false or true | freeform | Names like "milk", "eggs"; no inner PIN; `status` PROPERTY |
-| 21 | Todo list (status per task) | false | ANY | false or true | freeform | Names are task descriptions; no inner PIN; `status` PROPERTY |
-| 22 | Custom-named curated catalogue | false | varies | varies | freeform | Curator chooses entry names |
-| 23 | Course curriculum (lessons with status) | **true** | ANY | true | occurrence-derived | `status` per lesson |
-
-### TAG patterns (use TAGs directly — NOT lists)
-
-| # | Use case | Pattern | Membership check |
-|---|---|---|---|
-| A | Allowlists | `TAG(definition=allowlist_anchor, recipient=X)` | `isActiveEdge(...)` |
-| B | Blocklists / mutelists | `TAG(definition=blocklist_anchor, recipient=X)` | `isActiveEdge(...)` |
-| C | Follow / friend graph | `TAG(definition=alice_follows, recipient=Y)` | `isActiveEdge(...)` |
-| D | DAO membership (boolean) | `TAG(definition=dao_members, recipient=member)` | `isActiveEdge(...)` |
-| E | Verified addresses | `TAG(definition=verified_anchor, recipient=X)` | `isActiveEdge(...)` |
-| F | Categorization tags (#nsfw, #favorites) | `TAG(definition=tag_anchor, refUID=item)` | Per ADR-0038 |
-| G | Permissions / roles | `TAG(definition=role_anchor, recipient=member)` | `isActiveEdge(...)` |
-| H | Folder visibility | `TAG(definition=schemaUID, refUID=folder)` | Per ADR-0038 |
-
-For TAG patterns, no list infrastructure is needed. The anchor is just a regular anchor; TAGs directly target items. Cheap O(1) writes and reads.
-
----
-
-## Pitfalls and safety
-
-### Removing a list from a path (revocable: false interaction)
-
-Because LIST is `revocable: false`, "deleting" a list at a path is done by **revoking the placement PIN**, not the LIST attestation:
-
-1. To remove the list at one path: revoke the typed list anchor's placement PIN.
-2. To remove the list everywhere the curator placed it: revoke each placement PIN one by one.
-3. The LIST attestation itself stays at its UID forever. If Bob bookmarked it, Bob's bookmark PIN is still valid; Bob's view still renders Alice's list (the entries Alice authored stay valid until Alice individually revokes them).
-
-If a curator wants the list to genuinely "disappear" from all viewers, they must:
-- Revoke their own placement PINs at all anchors.
-- Revoke the entry TAGs (so even direct LIST-UID readers see an empty bucket).
-- Bookmarks from other attesters cannot be force-removed; the bookmarker controls their own anchor.
-
-**The list cannot be "fully deleted."** This is intentional and matches DATA's permanence. Curators creating lists SHOULD treat them as durable — putting people on a list is a public, permanent claim modulo revocation of individual entry edges.
-
-### Entry naming inconsistency (client convention only)
-
-Since entry naming is a client convention, not a kernel concern, a buggy or malicious attester can author an entry anchor with a name that doesn't match its claimed convention. Examples:
-- Target-derived list with an entry named `0xBob…` that PINs to a different target.
-- Occurrence-derived entry name not actually derived from `keccak256(...)`.
-- Freeform name that violates the curator's own UX expectations.
-
-This is a **trust-the-curator** invariant. The kernel doesn't validate it; clients reading lists should treat the entry's TAG attestation and its `(attester, weight, target via PIN)` tuple as the trust unit, not the anchor's name pattern. Smart contracts consuming on-chain reads should reason about target UIDs, not name strings.
-
-If naming hygiene becomes a real problem post-launch, a future ADR can add an optional `EntryNameValidator` reader as a soft check. v1 ships without it.
-
-### `clientNonce` convention is unenforceable at the kernel
-
-Sequential nonces and CSPRNG output produce identical-looking `keccak256` hashes. The kernel cannot distinguish.
-
-Smart contracts consuming `allowsDuplicates=true` lists SHOULD treat the entry's UID and the curator's TAG attestation as the trust unit — NOT the entry name pattern.
-
-### Attribution confusion in shared / bookmarked lists
-
-When Bob bookmarks Alice's LIST in his namespace, viewers walking Bob's path see Alice's list. Apps MUST clearly label the **curator** (Alice — whose contents are these?), not just the **placer** (Bob — whose path are we on?). The `read(anchor, placer, curator)` API makes this distinction explicit; UI MUST surface it.
-
-If Bob is also a co-contributor (writing his own TAGs/PINs against Alice's LIST UID), the multi-attester rendering MUST distinguish "Alice's entry weighted N" from "Bob's entry weighted M." Default single-curator scope simplifies the common case (rendering shows only one curator's contributions); apps offering compare/merge UI must preserve attribution explicitly.
-
-### Lists of people are public, durable, attribution-labeled
-
-Publishing a list of addresses puts them on-chain durably. Clients SHOULD label issuer attribution clearly; treat lists as durable; remember revocation removes active claim but not historical attestation.
-
-For blocklist-style use cases, the right primitive is TAGs (see Lists vs Tags section), not lists.
-
-### "Lists containing X" is an anti-feature in default UX
-
-Anyone can put anyone on any list. Profile pages MUST NOT default-render reverse lookups. Reverse lookups MAY be exposed only to the viewing user themselves, opt-in only.
-
-### Reverse lookups: which anchors place this LIST?
-
-For "show all paths where Alice's list X appears," use `getEdgeDefinitions(LIST_UID)` per ADR-0041 §8. Returns all definitions (anchors) that have this LIST UID as a PIN target. Useful but not a default-render.
-
-### Target universe — not everything is a PIN target
-
-PIN's `refUID` must point at an existing EAS attestation. Raw schema UIDs are NOT valid PIN targets. Schema registries MUST target schema-alias anchors per ADR-0033.
-
-URLs and other off-chain identifiers similarly need a wrapper (DATA attestation with the URL as content) to be PIN'd.
-
-### ADR-0042 effective-TAG filter does NOT apply to lists
-
-ADR-0042's "effective TAG = active TAG with `weight ≥ 0`" convention does NOT apply to custom lists. Negative weights are valid and meaningful. Apps MAY apply a `weight ≥ 0` filter for UX reasons; the canonical default is "active = unrevoked."
-
----
-
-## Indexer notes (for subgraph implementers)
-
-**Free-floating LIST events.** A LIST attestation arrives as an EAS event without anchor context (no `refUID`). Indexers track LISTs by UID. Path discovery requires correlating LIST UIDs with placement PINs that target them.
-
-**Typed list anchor events.** A typed list anchor arrives as an Anchor attestation with `schemaUID = LIST_SCHEMA_UID`. Indexers detect "this anchor is a list slot" by matching the anchor's `schemaUID`. Path-walking code that knows about lists can short-circuit at the typed anchor and switch to list-resolution mode.
-
-**Placement PIN events.** Indexers detect "list placed at this list slot" via PIN events with `targetSchema = LIST_SCHEMA_UID`. Track these to maintain placement → LIST UID associations. The placement PIN's attester is the **placer**; the LIST attestation's attester is the **curator**. They may differ (Bob bookmarks Alice's list).
-
-**Active state vs historical state.** `_activeByAAS` reflects current active TAGs (post-revocation). Track revocation events and apply swap-and-pop semantics (per ADR-0007).
-
-**TAG supersession via re-attest at same edgeHash** (per ADR-0041 §4). Re-attesting a TAG updates the active entry's UID and weight in place, **without emitting a `Revoked` event for the prior TAG**. Indexers MUST detect this:
-- Compute `edgeHash = (attester, targetID, definition, schema)`.
-- If a prior TAG with same `edgeHash` exists in active set, treat as superseded — replace, don't double-count.
-
-**PIN supersession is slot-based, not edgeHash-based.** Re-attesting a PIN at slot `(definition, attester, targetSchema)` supersedes the prior — **even when the target changes**. Placement PINs follow this rule: if a curator changes which LIST is placed at a typed list anchor, the slot supersedes (no `Revoked` event for the old PIN). Note the cardinality is per-`targetSchema`, but typed list anchors only accept `LIST_SCHEMA_UID` PINs in practice (the anchor's schemaUID signals intent).
-
-**LIST attestations are permanent.** `revocable: false`. Indexers do not need to track revocation events for LIST attestations themselves. Lifecycle changes happen at the placement-PIN layer (revoked) and entry/TAG layer (revoked or superseded).
-
-**Discovery indexes vs active state.** `_targetsByDef`, `_edgeDefinitions`, etc. are append-only discovery indexes including historical entries; NOT ground truth for current active state. Cross-reference active-set storage. **Important for spam-resistance**: when querying "entries against LIST_UID," subgraphs MUST scope to a specific curator (`_activeByAAS[LIST_UID][curator]`), not aggregate across all attesters — else co-contribution surface area becomes spam exposure.
-
-**Reverse-lookup support.** `getEdgeDefinitions(LIST_UID)` returns all definitions (anchors) that have this LIST UID as a PIN target — useful for "show all paths where this list appears" queries. Filter to typed list anchors (`anchor.schemaUID == LIST_SCHEMA_UID`) to get just placement anchors.
-
-**Orphan LIST tracking.** A LIST attestation with no placement PINs is path-unreachable but exists in EAS forever. Indexers SHOULD index orphan LISTs separately (e.g., by creator) for "lists I created but haven't placed yet" UX. Absence of placement is NOT proof of deletion.
-
----
-
-## Conventions vs enforcement — long-tail risk
-
-This design relies on convention enforcement for invariants the kernel cannot validate: `clientNonce` CSPRNG entropy, target-derived entry name consistency, indexer scoping discipline.
-
-Revisit triggers fire if convention compliance drops below tolerance post-launch:
-
-- **Target-derived entry name mismatches exceed measurable share** → ship enforcement via custom resolver on entry anchors.
-- **Squatting-pattern signals appear post-launch** → ship kernel-side nonce-entropy or rate-limit resolver.
-- **Co-contribution spam surfaces in client UIs because subgraphs aggregate across attesters** → publish a reference subgraph schema enforcing curator-scoped active-set queries; consider kernel-side discovery-index pagination caps.
-- **Cross-client divergence on read recipes** → ship a canonical reference SDK as the de facto interpreter.
-
-These are operational triggers; they represent conditions under which "convention only" becomes load-bearing tech debt.
-
----
-
-## Decisions resolved (round-15)
-
-1. **LIST attestations are free-floating, `revocable: false`.** Like DATA. The LIST UID is permanent at its UID; deletion happens at the placement-PIN layer, not the LIST itself.
-2. **Schema fields (round-16 FINAL): `(bool allowsDuplicates, uint8 targetType, bytes32 targetSchema)`.** No `entryIdentity` — naming is a client convention. No `sorted` — overlay state belongs to SORT_INFO existence, not schema. No `coContributionPolicy` — category error in EFS (editions ARE the access control).
-3. **Path placement is a typed list anchor + PIN.** `Anchor<schemaUID=LIST_SCHEMA_UID>` declares "this slot holds a list"; the PIN attaches the specific LIST UID. Same shape as `Anchor<PROPERTY>` slots.
-4. **Same LIST can be placed at multiple typed list anchors.** Multiple PINs from different list anchors all reference the same LIST UID.
-5. **Cross-attester sharing and contribution work natively.** Bob can create his own typed list anchor and PIN to Alice's LIST UID (bookmark); Bob can write entries/weights against Alice's LIST UID (co-contribution). **Editions handle spam-resistance at read time** — kernel does not gate writes at any layer.
-6. **List-level metadata attaches to the LIST attestation**, not the path anchor. Uses ADR-0034 `name` PROPERTY for display name. `description`, `cover`, `icon`, `category` follow the same pattern.
-7. **Singleton-per-list-anchor is enforced by PIN cardinality** (`(attester, list_anchor, LIST_SCHEMA)`). Typed list anchor's own schemaUID prevents cross-`targetSchema` collisions.
-8. **Lists are NOT folders, BUT both are "drill-into containers" at the UX layer.** Kernel-level: lists = typed anchor + LIST attestation + TAG-ordered entries; folders = generic anchor + child anchors. UX-level: both are "click to see contents."
-9. **Membership patterns use TAGs**, not lists. Allowlists, blocklists, follow graphs, DAO membership, categorization, permissions — all are tagging patterns. `isActiveEdge` is the membership primitive.
-10. **Entry inner PIN is always optional.** Target-bearing entries (typical for `targetType=SCHEMA` or `targetType=ADDR`) PIN to their target. Freeform/intrinsic entries (`targetType=ANY` shopping-list style) skip the inner PIN; the anchor name IS the entry.
-11. **Mandatory `ListResolver`** for field-validation only. Validates `targetType ≤ 2`, (targetType, targetSchema) coherence, free-floating envelope (refUID=0, recipient=0). Does NOT gate writes by attester.
-12. **Ranked reads via SORT_INFO existence (not schema field).** SDK default at LIST creation: also attest `SORT_INFO(parentAnchor=LIST_UID, sortFunc=WeightSort, attester=curator)`. Curator can opt out via `sorted: false` SDK parameter (no SORT_INFO attested). Curators can attest a SORT_INFO later if they want to upgrade an unsorted list. Smart contracts probe `getSortInfo(LIST_UID, curator)` and branch read path on presence/absence. SDK transparently handles `repositionItem` on weight changes when a SORT_INFO exists.
-12a. **SortOverlay TAG-source kernel change (v1).** New `sourceType` reading from `EdgeResolver._activeByAAS` instead of `_children`. Sorted reads reflect actual active TAG set (revoked entries unlinked automatically via EdgeResolver→SortOverlay hook).
-13. **Reader API splits placer from curator scope.** `resolveListPlacement(anchor, placer) → listUID`; `readListByUID(listUID, curator)`; convenience `read(anchor, placer, curator?)` with curator defaulting to `LIST.attester`.
-14. **Single-curator-scoped reads as default.** Multi-attester is opt-in. Subgraphs MUST scope active-set queries to a curator (anti-spam invariant).
-15. **Default ordering: `weight desc`, tie-break by entry-UID asc, then `tagUID` asc.**
-16. **Sparse `int256` weights are an SDK SHOULD for manual ordering**, NOT a universal MUST.
-17. **No kernel page-size cap.** Round-14's `PageSizeTooLarge` revert dropped. Caller pays for what they read; RPC providers handle their own timeouts. SDK default hint `length = 100`.
-18. **Client `clientNonce` for occurrence-derived naming MUST be ≥128 bits CSPRNG** — convention only; kernel cannot enforce.
-19. **Snapshot consistency MUST**: smart contracts get atomicity per call; off-chain clients pin `blockTag`; governance reads finalized.
-20. **Convention-violating lists are accepted v1 risk** with named revisit triggers in §"Conventions vs enforcement."
-21. **Shopping lists, todos, stateful per-entry items are core supported use cases** via `targetType=ANY` + freeform entries + per-entry PROPERTYs.
-22. **`specs/06` rewrite required before dev** writes list data. `specs/08` superseded.
-23. **`specs/02` and `specs/03` SHOULD note the lists-vs-tags distinction** explicitly.
-24. **List "deletion" semantics**: revoke placement PINs to remove from path. The LIST attestation is permanent. Curators wanting full disappearance must revoke entry TAGs too. Bookmarks from other curators cannot be force-removed.
-25. **`name` is the canonical display-key PROPERTY** per ADR-0034. Round-14's `title` is dropped (was convention drift; reverted).
-26. **PIN-trust-extension** (system-wide; not list-specific) is extracted to its own ADR. References from this design link to that ADR.
-27. **Per-schema namespace + URL syntax** (system-wide; not list-specific) is extracted to its own ADR.
-
----
-
-## Out of scope for v1 / future work
-
-- **Stand-alone `EFSListView` contract** — the v1 `EdgeResolver` extensions cover canonical paths.
-- **Multi-attester merge conventions** — needs its own ADR.
-- **Sort overlay extension for TAG sources** — defer.
-- **Cross-attester aggregation primitives** — Sybil-resistance scoping required.
-- **Computed lists** — predicate-derived membership.
-- **Reverse-lookup APIs as default UX** — anti-feature; opt-in only.
-- **`specs/06` rewrite** — required before dev writes list data.
-- **`specs/08` supersession** — historical.
-- **FractionalSort** — parked.
-- **`web3://<list-anchor>` ERC-5219 read shape** — router-layer concern.
-- **`ListSchemaResolver` enum-range validation** — optional v1 soft check; not strictly required since clients reject unknown values per advisory rule.
-- **Kernel-side nonce-entropy resolver** — long-tail-risk-trigger response.
-- **Free-floating folders** (Gemini's "fourth frame" suggestion — placement portability for folders via PIN) — defer to v2; folder hierarchy via `refUID` ownership is fine for v1.
-
----
-
-## Non-goals
-
-- **Real-time collaborative single-list editing** — CRDT territory.
-- **Computed lists from arbitrary queries** — needs a different primitive.
-- **Time-windowed temporal queries** — indexer concern.
-- **Cross-attester aggregation primitives at the kernel layer** — governance scope.
-- **Reverse-lookup APIs as default UX surface** — anti-feature.
-- **Complex per-item state machines with transitions and validations** — simple status PROPERTYs supported; multi-step workflows are app-layer.
-
-Lists are: **weighted membership claims by one (or more) attester(s) at a free-floating LIST UID, ordered by `int256` weight, with optional per-entry metadata, placed at one or more anchor paths via PIN.** Membership-only use cases are TAG patterns, not list patterns.
-
----
-
-## Implementation sketch (informative)
-
-**v1 shipping units (committed pre-launch):**
-
-1. **New EAS schema: `LIST`**
-   - `(bool allowsDuplicates, uint8 targetType, bytes32 targetSchema)`
-   - `revocable: false`
-   - `resolver: ListResolver` (mandatory; field-validation only)
-   - Registered in deploy script.
-
-2. **New contract: `ListResolver`** — minimal field validator (see schema section). ~50 lines of Solidity.
-
-3. **New contract: `WeightSort`** — `ISortFunc` implementation that reads each entry's active weight TAG via EdgeResolver and compares by `int256 weight desc`, tie-break by entry UID asc. Deployed once; reused as the `sortFunc` for every SORT_INFO attested by any LIST curator. ~80 lines of Solidity.
-
-3a. **`EFSSortOverlay` kernel change** — add `sourceType = 2` (TAG-source) reading from `EdgeResolver._activeByAAS`. Add `onTagRevoked` hook so SortOverlay auto-unlinks entries when their TAG is revoked. ~100-150 lines + tests.
-
-4. **`EdgeResolver` extensions** (carried from rounds 7/8 — generic graph-composition names, no list-specific vocabulary):
-   - `getActiveTagTargetsWithWeights(definition, attester, tagTargetSchema, start, length) → (tagTargetID, tagUID, weight, attester)[]`
-   - `getActiveTagPinTargetsWithWeights(definition, attester, tagTargetSchema, start, length) → (tagTargetID, tagUID, pinTargetID, pinTargetSchema, weight, attester)[]`
-   - No `PageSizeTooLarge` revert; `length` is a caller hint.
-
-5. **Reserved-key anchor names**:
-   - **Entry-level**: `note`, `status`, `quantity`, `completedAt`.
-   - **List-level** (on LIST attestation): `name` (per ADR-0034), `description`, `cover`, `icon`, `category`.
-
-6. **SDK helpers**:
-   - `efs.lists.create(opts) → listUID` — creates free-floating LIST attestation; if `opts.sorted !== false` (default true), also attests `SORT_INFO(parentAnchor=listUID, sortFunc=WeightSort, attester=curator)` so sorted reads work on-chain. The SORT_INFO is just an attestation, not a schema field — curators can attest one later to upgrade an unsorted list, or have multiple curators independently attest their own.
-   - `efs.lists.placeAt(listUID, parentAnchor, anchorName) → {listAnchorUID, pinUID}` — creates typed list anchor + placement PIN
-   - `efs.lists.unplaceFrom(listAnchorUID)` — revokes placement PIN
-   - `efs.lists.bookmarkAtMyPath(listUID, parentAnchor, anchorName)` — Bob creates his typed list anchor + PIN to Alice's LIST UID
-   - `efs.lists.addEntry(listUID, opts) → entryAnchorUID` — creates entry anchor + (optional) inner PIN + weight TAG; if a SORT_INFO exists for `(listUID, curator)`, also calls `EFSSortOverlay.processItems` and `repositionItem` for the new entry
-   - `efs.lists.setEntryWeight(entryUID, newWeight)` — re-attests weight TAG; if a SORT_INFO exists, also calls `repositionItem`
-   - `efs.lists.setEntryMetadata(entryAnchor, key, value)` — per-entry PROPERTY
-   - `efs.lists.setListMetadata(listUID, key, value)` — list-level PROPERTY (uses `name` for display name per ADR-0034)
-   - `efs.lists.resolveListPlacement(anchor, placer) → listUID | null`
-   - `efs.lists.readListByUID(listUID, curator?, opts) → ListView` — uses sorted vs unsorted path based on LIST's `sorted` field
-   - `efs.lists.read(anchor, placer, curator?, opts) → ListView` — convenience wrapper
-   - `canonicalTargetDerivedName(targetID) → string` — for target-derived naming convention
-   - `canonicalOccurrenceName(listUID, attester, clientNonce) → string` — for occurrence-derived naming
-   - `cryptoRandomNonce() → bytes32`
-
-5. **Frontend list-renderer** in `packages/nextjs/` debug UI.
-
-6. **Spec rewrite:** `specs/06` describes round-14 typed-anchor + free-floating LIST model; `specs/08` marked superseded.
-
-7. **Doc note in `specs/02` and `specs/03`** clarifying lists-vs-tags distinction and list-level metadata location.
-
-8. **Optional demo seed:** one LIST + one typed list anchor placement + a freeform-entry shopping-list demo.
-
-**Required pre-launch tests (conformance matrix):**
-
-| # | Category | Test |
+| Scope | Attach PROPERTY to | Example |
 |---|---|---|
-| 1 | LIST creation | Create free-floating LIST attestation; UID exists; `revocable: false` |
-| 2 | LIST placement | Create `Anchor<LIST>` typed anchor + placement PIN; reader resolves via `getActivePinTarget(anchor, placer, LIST_SCHEMA_UID)` |
-| 3 | LIST entries (unsorted) | Add 5 entries; read via `getActiveTagPinTargetsWithWeights(LIST_UID, curator, ANCHOR_SCHEMA_UID, ...)` |
-| 4 | LIST entries (sorted) | Add 5 entries to LIST with SORT_INFO; read via `getSortedChunk` (TAG-source sourceType) returns weight-desc order; revoke one entry's TAG → entry disappears from sorted reads automatically (no ghost) |
-| 5 | WeightSort | Re-attest weight TAG via SDK; SortOverlay `repositionItem` is called; subsequent `getSortedChunk` reflects new order |
-| 6 | LIST | Revoke entry TAG; swap-and-pop semantics in EdgeResolver; SortOverlay unlinks the entry |
-| 7 | LIST | Address-target entries via PIN `recipient` (`targetType=ADDR`) |
-| 8 | LIST | Negative weight stays active (ADR-0042 doesn't apply); negative weights sort below positive ones |
-| 9 | LIST | Add `note` PROPERTY to entry; update via PIN re-attest |
-| 10 | LIST | Multi-attester at shared target-derived entry anchor (each curator's PIN/weight independent) |
-| 11 | LIST | Two distinct entries, same target (occurrence-derived names, `allowsDuplicates=true`) |
-| 12 | LIST | Freeform entry "milk" with no inner PIN; reader returns `pinTargetID = bytes32(0)`; clients render as intrinsic |
-| 13 | LIST | Freeform entry with optional inner PIN; reader returns target |
-| 14 | LIST | List-level `name` PROPERTY attaches to LIST attestation; bookmark resolves with same name (ADR-0034 alignment) |
-| 15 | **Same LIST, two anchors** | Place LIST at typed list anchor A1; place same LIST at A2; both paths resolve to same LIST UID |
-| 16 | **Bob bookmarks Alice's LIST** | Bob's typed list anchor PINs Alice's LIST UID; `read(anchor, placer=bob, curator=alice)` returns Alice's entries; `read(anchor, placer=bob)` defaults curator to LIST attester (alice) |
-| 17 | **Move LIST between anchors** | Revoke placement PIN at A1; create new typed list anchor + PIN at A2; LIST follows |
-| 18 | **List "deletion"** | Revoke placement PIN; LIST UID still readable via direct `readListByUID`; placement-based read returns null |
-| 19 | **DAO co-contribution** | Multiple attesters write entries against same LIST UID; per-attester reads return only that attester's entries |
-| 20 | LIST schema (`revocable: false`) | Revoke attempt on LIST attestation fails or has no effect; entries and TAGs are individually revocable |
-| 21 | `ListResolver` validation | Attest LIST with `targetType=3` reverts; attest LIST with `targetType=SCHEMA, targetSchema=0` reverts |
-| 22 | Snapshot | Read at finalized block tag matches active state |
-| 23 | Anchor names | Validator passes on 42-char address hex + 66-char UID hex (ADR-0025) |
-| 24 | Indexer | TAG re-attest detected as supersession via edgeHash |
-| 25 | Indexer | PIN re-attest at same slot detected as supersession (target may change) |
-| 26 | Indexer | Reverse lookup `getEdgeDefinitions(LIST_UID)` returns all placement anchors |
-| 27 | Tag patterns | Allowlist via TAG + isActiveEdge works (no list infrastructure) |
-| 28 | Cross-targetSchema | Typed list anchor's schemaUID prevents file-PIN collision (anchor's own type signals intent) |
-| 29 | Pagination | `length=10000` does NOT revert; gas-bounded by caller |
-| 30 | No-SORT_INFO path | Reader returns unsorted active-entry page from EdgeResolver; client sorts client-side |
-| 33 | Upgrade unsorted→sorted | Curator attests SORT_INFO later for an existing LIST; subsequent reads use sorted path; existing entries indexed via `processItems` |
-| 34 | Anchors-are-neutral | Verify that anchor's `attester` field is never used in path resolution, PIN/TAG storage, or any reader; first-attester is purely incidental |
-| 31 | Attacker-supplied curator (consumer pattern) | Vulnerable consumer (`curator` from caller param) reads attacker's self-promoting bucket; recommended consumer (`curator = eas.getAttestation(listUID).attester`) reads canonical entries only |
-| 32 | Permissionless `repositionItem` (verified safe) | Third-party caller can sort an item to its correct position (gas-pay-to-repair feature); cannot move item to wrong position (adjacency + weight checks block); cannot move item to current position (`UnnecessaryReposition` revert) |
+| Intrinsic to the content | DATA UID (or other target) | Avatar's release year (2009) — affects every list referencing Avatar |
+| Per-entry in this list | LIST_ENTRY UID | Alice's rating of Avatar in her Top-10 (9/10) — affects only Alice's entry |
+| Per-list (whole list) | LIST UID | List display name, description, cover image |
 
-**NatSpec requirements**: document address-target encoding, `pinTargetID = bytes32(0)` semantics, occurrence-derived trust model, placer-vs-curator semantics, SORT_INFO-presence vs absence read path branching, the warning that contracts MUST derive both `curator` and `sortInfoUID` from canonical LIST attester (never from caller input).
+**Concrete example — Alice's Letterboxd-style top-10 with per-entry ratings:**
+
+```
+LIST L1
+  ├── allowsDuplicates=false, appendOnly=false, targetType=SCHEMA,
+  │   targetSchema=FILM_SCHEMA, maxEntries=10, allowIntrinsic=false
+  │
+  ├── PROPERTY on L1: name="Alice's Top 10 of 2009" (list-scope metadata)
+  │
+  ├── LIST_ENTRY E1: target=avatar_film_uid, weight=900
+  │   └── PROPERTY on E1: rating="9/10"      (entry-scope metadata)
+  │
+  └── LIST_ENTRY E2: target=district9_film_uid, weight=850
+      └── PROPERTY on E2: rating="8.5/10"   (entry-scope metadata)
+
+(Films themselves carry release-year PROPERTYs on their FILM UIDs — content-scope.
+These are independent of any list.)
+```
+
+Each metadata attestation costs 3 attestations (Anchor + PIN + PROPERTY). Apps choose how heavy their metadata layer is. No special design needed; the LIST_ENTRY UID is just another attestation that PROPERTYs can hang off.
 
 ---
 
-## Provenance
+## ADR-0041 reconciliation
 
-Design produced through cross-agent brainstorming between Claude Sonnet 4.7 and Codex GPT-5, with independent validation passes from Gemini 2.5 Pro and a fresh Claude review at rounds 13 and 14, plus a focused side-thread that stress-tested round-14 against alternatives. Mediated and decided by James Carnley throughout. Fifteen rounds of refinement preserved in [`custom-lists_notes.md`](./custom-lists_notes.md).
+ADR-0041 establishes that **cardinality lives in the schema UID** because the schema UID is the only "Etched" globally-coordinated slot. PIN (cardinality 1) and TAG (cardinality N) are distinct schema UIDs for this reason. Putting cardinality switches on individual attestations was explicitly rejected.
 
-**Round trajectory:**
-- Round 13: free-floating LIST attestation, file-like portability via PIN.
-- Round 14: typed list anchors (parallel to PROPERTY slots), `revocable: false`, list-level metadata on LIST attestation, freeform-no-PIN, placer/curator API split.
-- Round 15: schema simplification, principled editions-as-access-control stance, drop kernel page-cap paternalism, extract cross-cutting ADRs (PIN-trust-extension), "drill-into collections" mental model.
-- Round 16: **anchors-are-neutral principle surfaced** (load-bearing existing behavior, never previously documented); schema **finalized at 3 fields** (`sorted` dropped — SORT_INFO existence is the on-chain signal); **SortOverlay TAG-source kernel change committed for v1** (sorted reads reflect actual active TAG set, not append-only children); URL/namespace ADR deferred (current shared-anchor model handles use cases).
+This design has cardinality (`allowsDuplicates`) and type (`targetType`) switches as fields on the LIST attestation. This *looks* like the pattern ADR-0041 rejected. It isn't — here's why:
+
+**ADR-0041's principle, restated:** A predicate's cardinality coordination point must be permanent, coordinated, machine-readable, and located at the right layer.
+
+**For PIN/TAG**, the predicate is the schema itself (`isPinned(target, definition)`). The coordination point is the schema UID.
+
+**For LIST**, the predicate is not the LIST_ENTRY schema in general — it's *this specific list's membership*. The predicate is "is X in LIST L by attester A?" Each LIST has its own coordination point: its declaration attestation.
+
+That declaration:
+- **Permanent** — LIST is non-revocable; the cardinality field can never change after attest
+- **Coordinated** — every reader of "list L" agrees on its UID and reads its fields the same way
+- **Machine-readable** — `eas.getAttestation(L).data` exposes the fields directly; one read
+- **Located at the right layer** — at the predicate's coordination object (the LIST), not on each instance (the LIST_ENTRY)
+
+This satisfies ADR-0041's principle one level of indirection deeper than the PIN/TAG case. **The LIST attestation IS the predicate-coordination layer for that specific list.** A subgraph indexing LIST_ENTRYs reads each entry's LIST and knows the coordination layout deterministically.
+
+**ADR-0041 supersession is NOT required.** What IS required is a sibling ADR documenting this reconciliation so a 2076 reader doesn't conclude (wrongly) that ADR-0041 was violated. That sibling ADR is the LIST ADR itself.
+
+---
+
+## Use case walkthrough
+
+Confirming the design handles the use cases that drove the requirements.
+
+### MySpace top-8 friends (ranked, no-dupes, addresses)
+
+```
+LIST: allowsDuplicates=false, appendOnly=false, targetType=ADDR,
+      maxEntries=8, allowIntrinsic=false
+LIST_ENTRY × 8: target=friend_addr, weight=rank (1=highest)
+```
+
+Consumer: `listReader.entries(top8, alice, 0, 8)` returns all 8, ordered by insertion. Client sorts by weight in memory. O(1) "is X in Alice's top 8?" via `isMember`.
+
+### NFT allowlist (no-dupes, addresses, on-chain read)
+
+```
+LIST: allowsDuplicates=false, appendOnly=false, targetType=ADDR
+LIST_ENTRY × N: target=member_addr, weight=0
+```
+
+Marketplace contract: `listReader.isMember(allowlist, curator, bytes32(uint256(uint160(msg.sender))))` — single SLOAD, ~4k gas.
+
+### Letterboxd top-10 films with ratings (ranked, no-dupes, typed, per-entry metadata)
+
+```
+LIST: allowsDuplicates=false, appendOnly=false, targetType=SCHEMA,
+      targetSchema=FILM_SCHEMA, maxEntries=10
+LIST_ENTRY × 10: target=film_uid, weight=rank
+  PROPERTY on each LIST_ENTRY: rating="X/10"
+```
+
+Per-entry rating is independent of the film's intrinsic year (PROPERTY on film UID).
+
+### Spotify-style playlist with repeats (ranked, duplicates-allowed, typed)
+
+```
+LIST: allowsDuplicates=true, appendOnly=false, targetType=SCHEMA,
+      targetSchema=DATA_SCHEMA
+LIST_ENTRY × N: target=song_data_uid, weight=position
+```
+
+"Waterfalls" can appear 3 times. `isMember(playlist, alice, waterfalls_uid)` returns true; `countOf(...)` returns 3.
+
+### Shopping list with intrinsic items (unordered, no-dupes, ANY, intrinsic-allowed)
+
+```
+LIST: allowsDuplicates=false, appendOnly=false, targetType=ANY,
+      allowIntrinsic=true, maxEntries=0
+LIST_ENTRY × N: target=bytes32(0), weight=N
+  PROPERTY on each LIST_ENTRY: name="milk", status="to-buy"
+```
+
+The list permits intrinsic entries (target=0). The item identity lives in the PROPERTY name on the LIST_ENTRY UID. Bob marks "milk" as bought → PROPERTY on his LIST_ENTRY changes status to "bought" (or he revokes the entry; non-append-only).
+
+### Software version registry (append-only, typed, capped or uncapped)
+
+```
+LIST: allowsDuplicates=false, appendOnly=true, targetType=SCHEMA,
+      targetSchema=RELEASE_SCHEMA, maxEntries=0
+LIST_ENTRY × N: target=release_uid, weight=release_timestamp
+```
+
+Version 1.2.3 is permanent. If buggy, attach a `deprecated=true` PROPERTY to the LIST_ENTRY — the entry stays in the list (dependents can still reference v1.2.3) but consumers see the signal. NPM/crates.io model.
+
+### DAO delegate weighted slate (ranked, no-dupes, addresses, capped)
+
+```
+LIST: allowsDuplicates=false, appendOnly=false, targetType=ADDR,
+      maxEntries=15
+LIST_ENTRY × ≤15: target=delegate_addr, weight=delegation_amount
+```
+
+Governance contract iterates the slate, multiplies vote weight by each delegate's allocation share. Type confidence: every target is an address; the governance contract `address(uint160(uint256(entry.target)))` without validation.
+
+---
+
+## What's deferred and why
+
+**Generic constraint-callback / extension mechanism (ADR-0043).** Three external reviewers killed it in round 17: solves a non-problem inside a frame that presupposed it was needed. Stays deferred. If future use cases genuinely need extension, they get their own purpose-built schema following this design's pattern.
+
+**Cross-attester merged on-chain view.** ("Show me the union of Alice's and Bob's lists at this name.") Per-attester editions ARE the kernel model; merging is presentation/composition logic that lives in clients or subgraphs. On-chain merge would force a viewer-sovereignty violation. Deferred indefinitely.
+
+**On-chain reverse-lookup "what lists contain X?"** Maintaining this index requires writes proportional to the cardinality of (target × list × attester) — quadratic-ish state growth. Subgraphs handle this efficiently off-chain. The on-chain "X in list L by A?" check (O(1)) covers the most-frequent use case (DAO checks msg.sender against a known list); cross-list scans are subgraph queries.
+
+**Mainnet 50-year freeze.** This design targets devnet; mainnet freeze happens months later. The 50-year test will be applied rigorously then. Devnet usage will surface issues that pure design review cannot.
+
+---
+
+## Open concerns / honest ugly bits
+
+Things we want external reviewers to attack.
+
+### 1. Two new schemas + two new resolvers is real Etched surface
+
+EFS goes from 7 schemas to 9. The reconciliation argument (LIST as predicate-coordination layer) is sound but adds complexity to a 2076 reader's mental model. A reviewer who can show how to do this with one schema (or zero — extending TAG with a sibling resolver) without losing a MUST capability would dissolve significant complexity.
+
+### 2. `address(0)` encoding for ADDR-typed lists
+
+The current encoding is `target = bytes32(uint160(addr))`. For `addr = address(0)`, this yields `target = bytes32(0)`, which collides with the intrinsic-item sentinel. The resolver pseudocode above sketches a fix (high-bit sentinel for ADDR encoding), but this is the place I'm least sure. Options:
+
+- **A**: Reject `address(0)` despite the locked requirement ("address(0) is valid"). Honest but goes against the lock.
+- **B**: Use a sentinel-bit encoding for ADDR (e.g., `bytes32(uint256(uint160(addr)) | (1 << 160))`). Distinguishes "this is an address" from "this is empty/intrinsic" cleanly but uglier in tooling.
+- **C**: Forbid intrinsic entries on ADDR-typed lists structurally (already enforced by `allowIntrinsic ⇒ targetType=ANY`) and accept that ADDR-typed lists can have `target=bytes32(0)` only when it actually means `address(0)`. The resolver still needs to distinguish; this only works if we trust the LIST's `allowIntrinsic` flag.
+- **D**: Add a separate `address recipient` field on LIST_ENTRY, used only for ADDR-typed lists. Cleaner but adds a field.
+
+Recommendation: **C** if we can prove the type-check ordering works; **D** if not. Reviewer input wanted.
+
+### 3. Duplicates-allowed `isMember` semantics
+
+For a duplicates-allowed list with target X appearing 3 times, `isMember(list, attester, X)` returns true (count > 0). `countOf(...)` returns 3. Is there a real consumer where this causes correctness bugs? Should we expose only `countOf` and let consumers compare to 0?
+
+### 4. State growth for append-only uncapped lists
+
+Worst case: an attacker creates an `appendOnly=true, maxEntries=0` LIST and spams entries. Per-attester storage liability is real. Mitigation: each attester pays their own gas; storage is keyed `[listUID][attester]` so attackers can't bloat other curators' state. But a curator's own genuine append-only list (versioning) has unbounded growth over decades. Acceptable?
+
+### 5. `_entryCount` cleanup on revoke for NO_DUPES + revocable lists
+
+Mechanical but needs careful testing. Sequence: attest E1 with target X (count=1) → revoke E1 (count=0) → attest E2 with target X (must succeed). Resolver pseudocode handles this via decrement on revoke, but the test matrix needs to cover all permutations.
+
+### 6. Resolver cache poisoning
+
+`_decl[listUID]` is hydrated from `eas.getAttestation(listUID)` on first LIST_ENTRY write. Because LIST is non-revocable and its data is immutable, the cache is correct forever. But: if an attacker can attest a LIST_ENTRY pointing at a `listUID` that doesn't exist yet, then later create the LIST with that exact UID... EAS UIDs are content-derived; this would require finding a hash collision. Not feasible. Confirmed safe but worth documenting as a load-bearing assumption.
+
+### 7. The frame question
+
+We've spent 18 rounds on this design. The frame has shifted four times:
+- "lists are folders" (R11-12) → unwound
+- "free-floating LIST is enough" (R13-14) → refined
+- "TAG-with-weight covers it" (R15-16) → ADR-0043 attempt
+- "constraint callbacks" (R17) → rejected
+- "LIST + LIST_ENTRY with dedicated resolver" (R18) → current
+
+Each prior frame felt right inside the room. What's the next-frame question we haven't asked?
+
+---
+
+## Field-set decisions
+
+### Locked (no further iteration)
+
+- LIST options expressed as **explicit bools and discrete enum values** (no bitfields)
+- `targetType` as enum `0=ANY, 1=ADDR, 2=SCHEMA` (not bitfield)
+- LIST attestation is **non-revocable**
+- LIST_ENTRY is **revocable** (resolver rejects when LIST.appendOnly=true)
+- `listUID` is in LIST_ENTRY's data payload, not `refUID`
+- `target` is an explicit field on LIST_ENTRY (admits attestation UID, address encoding, or sentinel-zero)
+- `weight` is always present on LIST_ENTRY (unordered readers ignore)
+- **Stateless `ListReader` view contract** as the documented consumer ABI
+- Per-entry metadata via **standard PROPERTY-on-attestation pattern**, scoped to LIST_ENTRY UID
+- `address(0)` is a valid target for ADDR-typed lists (encoding details TBD per Open Concern §2)
+- `maxEntries` included as a `uint32` field on LIST (0 = uncapped)
+- `allowIntrinsic` is a separate bool, required to be true for `target=bytes32(0)` entries
+
+### Open (pending external review)
+
+- `address(0)` encoding mechanism (Open Concern §2 — options A/B/C/D)
+- Whether to expose `countOf` only or both `isMember` + `countOf` (Open Concern §3)
+- Exact event schema and indexed parameter choices for `ListAttested` / `ListEntryAttested` / `ListEntryRevoked`
+- Whether to defer or include reverse-target lookup as a NICE (currently deferred)
+
+---
+
+## Frame history recap
+
+Five frame-level refinements across 18 rounds:
+
+- **Round 11-12**: lists are folders → unwound (unification didn't match the graph model)
+- **Round 13-14**: free-floating LIST attestation + typed list anchors + PIN placement
+- **Round 15-16**: schema simplification + principled editions stance + SortOverlay TAG-source + entry-anchor + weight TAG (3 attestations per entry)
+- **Round 17**: constraint-callback / IEFSConstraintCallback mechanism (ADR-0043) → rejected by 3 external reviewers (wrong abstraction)
+- **Round 18** (this design): LIST + LIST_ENTRY with dedicated `ListEntryResolver` enforcing all declared options at write time; single attestation per entry; per-entry metadata via standard PROPERTY pattern on LIST_ENTRY UID
+
+The pattern across all five: agents converge inside a frame; humans question the frame. Round-18's convergence was validated by 4-of-5 independently-framed parallel agents arriving at the same architecture — but the convergence is internal-only; external review has not yet seen this design.
+
+---
+
+## Open questions for human / external review
+
+1. Should `address(0)` encoding use a sentinel-bit (Open Concern §2 option B/D), live with the collision (option C), or break the lock and reject `address(0)` (option A)?
+2. Should `isMember` return bool, or should we expose only `countOf(...) > 0`?
+3. Is the schema-count cost (7 → 9) justified, or should we attempt a one-schema or extend-TAG variant?
+4. What's the next-frame question we haven't asked?
