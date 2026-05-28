@@ -1404,6 +1404,46 @@ Pattern: agents converge inside frames; humans question frames; external reviewe
 
 ---
 
+## Round 18c — Second external review punch list
+
+### What triggered round 18c
+
+All three round-18b external reviewers (Codex, Gemini, Claude) returned **READY-WITH-SHOULD-FIX, zero blockers**. The architecture is validated — no reviewer requested an architectural change. Round 18c applies the SHOULD-FIX punch list.
+
+### The one decision that gated the schema freeze
+
+**Storage layout: wide vs lean.** Claude SF1 + Gemini A circled the same point from opposite ends — the `_entries` array stored bare entry UIDs, but the reader and DAO example read weight/recipient directly, which would require N+1 `eas.getAttestation` per entry. Since storage layout determines resolver bytecode → CREATE2 address → schema UID, this had to be decided before freeze.
+
+James's call (2026-05-28): **go wide.** Store `EntryRecord { entryUID, identityKey, weight }` inline. Rationale: fail-safe direction (over-provision = wasted write gas, tolerable; under-provision = block-gas-limit wall for on-chain iterators, functional break), and consistent with ADR-0041's deliberate `TagEntry[]` widening for the same reason. "Optimize later" is valid only until mainnet freeze — past that, layout is etched into the schema UID.
+
+The wide layout also subsumed Gemini A's optimization: storing identityKey inline in the record eliminated the separate `_entryIdentityKey` side map (revoke reads it from the array element directly).
+
+### Punch-list items applied
+
+Security:
+- Typed accessors (`targetAsAddress/UID/MemberKey`) now verify BOTH mode match AND that entryUID belongs to listUID (Codex #4 + Gemini B — cross-list injection)
+- `getMode` must check `L.schema == LIST_SCHEMA_UID` before decoding data (Claude SF2)
+
+Example bugs:
+- DAO distribution: sum only positive eligible weights for the denominator (Codex #5); bound iteration to a sane maxEntries (Codex #6)
+
+Doc hardening:
+- Stale "intrinsic-allowed" removed from TL;DR (Codex #1)
+- ADDR-via-recipient: documented that generic EAS indexers read these as "received by address" (Codex #2)
+- maxEntries reframed as contract-safety bound, not future-proofing (Codex #8)
+- Metadata-orphaning on weight-rewrite vs SortOverlay stable-UID (Gemini C)
+- Pagination not snapshot-isolated note (Claude SF3)
+- SCHEMA-mode revoked-target consumer guidance louder (Claude SF4)
+- isPayable / offchain-revocation lifecycle notes (Claude SF5)
+- ANY no-dupes dedups on derived key not human meaning; canonical normalization in SDK guide (Claude SF6 + Codex #7)
+- Events: index (listUID, attester, identityKey) instead of entryUID — enables raw-RPC reverse lookup by member (Codex #3)
+
+### Status going into next external pass
+
+Round 18c is a hardening pass on a validated architecture. The expectation is this is the last substantive design iteration before ADR drafting — but one more external confirmation pass is warranted since the wide-storage change and typed-accessor cross-list checks are new surface.
+
+---
+
 ## How to use this file
 
 Append-friendly. When adding:
