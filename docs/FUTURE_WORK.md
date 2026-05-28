@@ -185,3 +185,13 @@ Document how third parties can run their own EFS-aware web3:// gateway. Lower th
 
 ### Subgraph / The Graph integration
 Build and publish a subgraph that aggregates EFS attestations into queryable views. Off-chain indexing closes the gap on rich queries the on-chain kernel doesn't support.
+
+---
+
+## Write-flow & future schemas (flagged 2026-05-28, PM + brainstorm swarm)
+
+### EFSUploadGateway batch-wrapper (write-flow ergonomics)
+A single EFS write today detonates into ~8 wallet prompts (chunk SSTORE2 + DATA + MIRROR + contentType triple + ANCHOR + PIN + ancestor visibility TAGs). **Lists add to this** — a single list placement is LIST + LIST_ENTRY + PIN + per-entry PROPERTY attestations. The leading fix is an `EFSUploadGateway` batch-wrapper contract that composes the multi-attestation flow behind one signature (EAS `multiAttest` + the gateway orchestrating chunk deploys). Keep in the back pocket; **do not scope-creep into Lists v1.** This is a system-wide write-ergonomics concern, orthogonal to the Lists data model. Cross-ref ADR-0041 (PIN/TAG), ADR-0044 (LIST/LIST_ENTRY), `specs/04-Core-Workflows.md` §Upload.
+
+### EVENT / TRANSITION schema for state-transition edges
+The brainstorm swarm flagged a future need for a schema expressing **state-transition edges** — provenance, ownership handoff, synonymy-with-citation, "X superseded by Y," etc. This is a *directed transition* primitive, distinct from PIN/TAG (membership/placement edges) and from LIST/LIST_ENTRY (collection membership). **Explicitly NOT Lists' job** — noted here so it doesn't get shoehorned into the LIST primitive. If pursued, it gets its own ADR following the purpose-built-schema pattern (ADR-0041/0044 shape), not a generic mechanism (cf. ADR-0045's deferral).

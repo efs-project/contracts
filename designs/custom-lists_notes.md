@@ -1145,7 +1145,7 @@ Three fields. Each is load-bearing per ADR-0041's "what earns a schema-encoded s
 
 ### Open items going into implementation
 
-- LIST ADR drafting (`docs/adr/0043-list-schema.md`)
+- LIST ADR drafting (`docs/adr/0044-list-and-list-entry-schemas.md`)
 - PIN-trust-extension ADR drafting (`docs/adr/0044-pin-trust-extension.md`)
 - `specs/06` rewrite (replacing stale content)
 - EFSSortOverlay TAG-source mode + onTagRevoked hook implementation
@@ -1173,11 +1173,11 @@ Round-16 should be terminal for the LIST design proper. The implementation may s
 
 ---
 
-## Round 17 — ADR-0043 constraint callbacks (rejected)
+## Round 17 — ADR-0045 constraint callbacks (rejected)
 
 ### Context
 
-Round-16 framed `allowsDuplicates=false` and `targetType` enforcement as "expressed by ADR-0025 name-uniqueness when entries use target-derived naming" and "kernel-derived from ANCHOR resolver behavior." Implementation drafting (`docs/adr/0043-list-schema.md` first pass) surfaced that this only worked for specific naming schemes — occurrence-derived naming (used for `allowsDuplicates=true` lists with same-target repeats) bypassed it.
+Round-16 framed `allowsDuplicates=false` and `targetType` enforcement as "expressed by ADR-0025 name-uniqueness when entries use target-derived naming" and "kernel-derived from ANCHOR resolver behavior." Implementation drafting (`docs/adr/0044-list-and-list-entry-schemas.md` first pass) surfaced that this only worked for specific naming schemes — occurrence-derived naming (used for `allowsDuplicates=true` lists with same-target repeats) bypassed it.
 
 The internal subagents proposed a generalized solution: **`IEFSConstraintCallback`** — a kernel-level extension mechanism where schema resolvers could register cross-attestation invariant predicates that fire at attest time, scoped to specific (definition, target, attester) tuples. The intent was to make LIST-specific constraints (and any future cross-attestation invariants) declarable without polluting EdgeResolver.
 
@@ -1185,19 +1185,19 @@ Three parallel internal subagents synthesized the mechanism. The framing prompts
 
 ### What happened
 
-ADR-0043 was drafted and submitted for external review (Codex GPT-5, Gemini 2.5 Pro, fresh Claude). **All three returned RED on the same convergent finding:** the mechanism solves a non-problem in v1.
+ADR-0045 was drafted and submitted for external review (Codex GPT-5, Gemini 2.5 Pro, fresh Claude). **All three returned RED on the same convergent finding:** the mechanism solves a non-problem in v1.
 
 - `allowsDuplicates=false` was already conditionally kernel-enforced via ADR-0025 name uniqueness + target-derived naming. The "occurrence-derived edge case" was a use case for `allowsDuplicates=true` lists, where dup prevention wasn't required.
 - The "forward use cases" (bounded-N TAG, append-only TAG, PROPERTY value-type, etc.) were speculative — none had concrete v1 requirements.
 - The mechanism was a permanent Etched commitment (constraint registry baked into resolver storage at deploy time) for hypothetical future flexibility, on a surface where any wrong commitment is irreversible at mainnet.
 
-ADR-0043 was deferred (not accepted). Status set to "Proposed — deferred per round-17 external review."
+ADR-0045 was deferred (not accepted). Status set to "Proposed — deferred per round-17 external review."
 
 ### Lesson captured
 
 `docs/process/design-lessons.md` records the meta-pattern: when drafting a permanent Etched commitment, the FIRST internal pass must be the **inverted-framing pass** — explicitly asking "is this mechanism needed?" not "design this mechanism." Only after that returns "yes, here are the gaps" should follow-on passes design the mechanism. The cost of skipping this step in round 17 was ~1 week of design work that didn't ship.
 
-ADR-0043 stays as a documented deferral so future agents see why generic extension mechanisms were considered and rejected — and don't re-propose them without facing the same review.
+ADR-0045 stays as a documented deferral so future agents see why generic extension mechanisms were considered and rejected — and don't re-propose them without facing the same review.
 
 ---
 
@@ -1205,7 +1205,7 @@ ADR-0043 stays as a documented deferral so future agents see why generic extensi
 
 ### What triggered round 18
 
-After ADR-0043's deferral, the design returned to round-16's structure with the unenforced-invariant gap still open. James pushed back on the agent's framing of round-16 as "good enough":
+After ADR-0045's deferral, the design returned to round-16's structure with the unenforced-invariant gap still open. James pushed back on the agent's framing of round-16 as "good enough":
 
 > "You make this sound good but it looks like 'logic / ordering / uniqueness' enforced onchain isn't in this design? So smart contracts need to do a ton of work (which gas prevents them from doing well) to ensure EFS lists actually meet their needs? What else is alarming? Are we actually in a good spot?"
 
@@ -1217,7 +1217,7 @@ Rather than design another mechanism, the round 18 process started by **locking 
 
 - MUST: ordered, unordered, no-dupes (write-time enforced), dupes-allowed, typed (write-time), untyped, address-typed, append-only (list-level, write-time), per-attester editions, smart-contract O(N) typed iteration, O(1) membership for ALL modes.
 - NICE: per-entry metadata, deprecation flags, intrinsic items, reorderable, capped.
-- DEFERRED: generic constraint-callback (ADR-0043), cross-attester merged view, on-chain reverse-lookup, mainnet 50-year freeze.
+- DEFERRED: generic constraint-callback (ADR-0045), cross-attester merged view, on-chain reverse-lookup, mainnet 50-year freeze.
 - Validation: write-time, by resolver. `address(0)` valid.
 
 Key James-clarifications during crystallization:
@@ -1249,7 +1249,7 @@ Each produced a complete design (1500-2500 words) with explicit MUST coverage, u
 - Agent 4 (reader-first): MEDIUM-HIGH — consumer API requirements drove same architecture
 - Agent 5 (hybrid): MEDIUM — recommends dropping the entry-anchor escape hatch, collapsing the hybrid to Agent 2's design
 
-Agent 1 (round-16 defender) admitted MEDIUM confidence and recommended a head-to-head bake-off before mainnet. Specifically flagged the cross-resolver coordination required for write-time enforcement as "exactly the ADR-0043 surface the team explicitly deferred."
+Agent 1 (round-16 defender) admitted MEDIUM confidence and recommended a head-to-head bake-off before mainnet. Specifically flagged the cross-resolver coordination required for write-time enforcement as "exactly the ADR-0045 surface the team explicitly deferred."
 
 ### Key resolution: ADR-0041 reconciliation
 
@@ -1298,7 +1298,7 @@ The round-18 design explicitly invites external review attack on:
 
 ### Open items going into implementation (post external review)
 
-- LIST ADR drafting (replaces deferred ADR-0043 numbering; ADR-0043 stays as a documented deferral)
+- LIST ADR drafting (replaces deferred ADR-0045 numbering; ADR-0045 stays as a documented deferral)
 - Sibling ADR documenting ADR-0041 reconciliation
 - `specs/06` rewrite (replacing stale round-16 content)
 - ListResolver + ListEntryResolver implementation
@@ -1317,7 +1317,7 @@ Seven frame-level refinements across eighteen rounds:
 - R14: typed list anchors + revocable=false + freeform-no-PIN + placer/curator
 - R15: schema simplification + principled editions stance + drop kernel paternalism
 - R16: anchors-are-neutral surfaced + schema finalized + SortOverlay TAG-source committed
-- R17: IEFSConstraintCallback / ADR-0043 → rejected by external reviewers (wrong abstraction)
+- R17: IEFSConstraintCallback / ADR-0045 → rejected by external reviewers (wrong abstraction)
 - R18 (current): LIST + LIST_ENTRY with dedicated resolver — convergence via 5-agent parallel design proposals; write-time enforcement of all declared options; per-entry metadata via standard PROPERTY pattern on LIST_ENTRY UID
 
 Pattern across all seven: agents converge inside frames; humans question frames; reviewers (internal or external) find what was implicit. R18's convergence is the first where 4-of-5 independently-framed agents arrived at the same architecture — strong signal, but internal-only. External review on R18 has NOT yet happened; the convergence is conditional on external validation.
@@ -1396,7 +1396,7 @@ Seven frame-level refinements + one post-external-review hardening:
 - R14: typed list anchors + revocable=false + freeform-no-PIN + placer/curator
 - R15: schema simplification + principled editions stance + drop kernel paternalism
 - R16: anchors-are-neutral surfaced + schema finalized + SortOverlay TAG-source committed
-- R17: IEFSConstraintCallback / ADR-0043 → rejected by external reviewers
+- R17: IEFSConstraintCallback / ADR-0045 → rejected by external reviewers
 - R18: LIST + LIST_ENTRY with dedicated resolver — convergence via 5-agent parallel proposals
 - R18b: post-external-review hardening — Codex member-key reframe + EAS-recipient encoding for ADDR + lifecycle invariants + ADR-0041 honest reframe + worked example + CREATE2 invariant
 

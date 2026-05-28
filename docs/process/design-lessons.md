@@ -34,9 +34,9 @@ Round-15's side thread (testing round-14's structure against ablations) produced
 
 ### Internal synthesis can frame the problem to presuppose the answer
 
-ADR-0043 (EFS Edge Constraint Callbacks) was drafted via three parallel internal subagents synthesizing into a "permanent Etched commitment." The framing prompts all assumed "the mechanism is needed; design it well." External reviewers (round-17, 2026-05-21) returned RED on all three passes with the same convergent finding: **the mechanism doesn't solve a v1 problem.** `allowsDuplicates=false` was already conditionally kernel-enforced by ADR-0025 name uniqueness + target-derived naming. The "forward use cases" (bounded-N TAG, append-only, PROPERTY value-type) were speculative.
+ADR-0045 (EFS Edge Constraint Callbacks) was drafted via three parallel internal subagents synthesizing into a "permanent Etched commitment." The framing prompts all assumed "the mechanism is needed; design it well." External reviewers (round-17, 2026-05-21) returned RED on all three passes with the same convergent finding: **the mechanism doesn't solve a v1 problem.** `allowsDuplicates=false` was already conditionally kernel-enforced by ADR-0025 name uniqueness + target-derived naming. The "forward use cases" (bounded-N TAG, append-only, PROPERTY value-type) were speculative.
 
-The ADR shipped to external review, was deferred (not accepted), and ~$week of design work could have been avoided by a single inverted-framing internal pass: *"for each LIST use case ADR-0043 claims to enable, identify which existing EFS mechanism already handles it."*
+The ADR shipped to external review, was deferred (not accepted), and ~$week of design work could have been avoided by a single inverted-framing internal pass: *"for each LIST use case ADR-0045 claims to enable, identify which existing EFS mechanism already handles it."*
 
 **Lesson:** when drafting a permanent Etched commitment, the FIRST internal pass should be the inverted-framing pass — explicitly asking "is this mechanism needed?" not "design this mechanism." Only after that returns "yes, here are the gaps" should follow-on passes design the mechanism. Otherwise the framing bias compounds across subagents and the resulting design is "well-engineered, wrong problem."
 
@@ -155,7 +155,7 @@ ADR-0041's deepest argument. When tempted to encode an invariant in a schema fie
 
 Don't invent new coordination mechanisms (bitfield encodings, resolver chains, generic constraint-callback registries). The pattern that ships: **a schema's own resolver maintains O(1) indices, reads kernel + EAS state at attest time, and reverts on violation.** ADR-0044's `ListEntryResolver` is the canonical example — it enforces typing / no-duplicates / append-only at write time for one purpose-built schema.
 
-*Correction to the round-17 framing:* an earlier draft of this note described a **generic** structural-constraint-callback mechanism (ADR-0043) as the answer. That mechanism was **deferred/rejected** by three external reviewers as the wrong abstraction — it solved a non-problem inside a frame that presupposed it was needed. The lesson stuck the right way around: when you need to enforce a cross-attestation invariant, give that specific predicate its own schema + resolver (the ADR-0041 / ADR-0044 shape), rather than building a general-purpose callback substrate for hypothetical future invariants.
+*Correction to the round-17 framing:* an earlier draft of this note described a **generic** structural-constraint-callback mechanism (ADR-0045) as the answer. That mechanism was **deferred/rejected** by three external reviewers as the wrong abstraction — it solved a non-problem inside a frame that presupposed it was needed. The lesson stuck the right way around: when you need to enforce a cross-attestation invariant, give that specific predicate its own schema + resolver (the ADR-0041 / ADR-0044 shape), rather than building a general-purpose callback substrate for hypothetical future invariants.
 
 ### Editions ARE the access control
 

@@ -1,9 +1,10 @@
-# ADR-0043: EFS Edge Constraint Callbacks
+# ADR-0045: EFS Edge Constraint Callbacks
 
 **Status:** Deferred (not pursued for Sepolia v1; revisit triggers below)
 **Date:** 2026-05-21
 **Date deferred:** 2026-05-21
-**Related:** ADR-0030 (mainnet permanence), ADR-0032 (EAS as foundation), ADR-0041 (PIN/TAG schema split), ADR-0042 (effective-TAG filter); upcoming ADR-0044 (LIST schema), ADR-0045 (PIN-trust-extension)
+**Renumbered:** 2026-05-28 — was ADR-0043 on the `custom-lists` branch; renumbered to 0045 to avoid colliding with `main`'s ADR-0043 (rename editions→lenses). The PIN-trust-extension ADR that earlier drafts reserved 0045 for was abandoned, so 0045 is free for this record.
+**Related:** ADR-0030 (mainnet permanence), ADR-0032 (EAS as foundation), ADR-0041 (PIN/TAG schema split), ADR-0042 (effective-TAG filter), ADR-0044 (LIST + LIST_ENTRY schemas — the purpose-built approach that replaced this generic mechanism)
 
 ## Deferral note (2026-05-21)
 
@@ -16,7 +17,7 @@ After three external review passes (Gemini, Codex, fresh Claude) on the draft at
 
 Additionally, the draft mechanism had structural issues that aren't trivially patchable in the 10-day Sepolia window:
 
-- **Wrong trigger relation** (Codex): the ADR keyed dispatch on `definition.parent.schema`, but LIST TAGs have `definition = LIST_UID` directly (free-floating, no parent). The mechanism as designed wouldn't actually fire for LIST TAGs — `allowsDuplicates` would remain bypassable via the TAG path even WITH ADR-0043 implemented.
+- **Wrong trigger relation** (Codex): the ADR keyed dispatch on `definition.parent.schema`, but LIST TAGs have `definition = LIST_UID` directly (free-floating, no parent). The mechanism as designed wouldn't actually fire for LIST TAGs — `allowsDuplicates` would remain bypassable via the TAG path even WITH this mechanism implemented.
 - **PIN supersession breaks revoke veto** (Codex, Claude): the proposed append-only invariant via `onEdgeRevoke` veto can't work because PIN supersession clears slots in-place without firing `onEdgeRevoke`.
 - **multiAttest indexer state bypass** (Gemini): `_indexer.getParent(definition)` returns `bytes32(0)` mid-batch because the parent anchor hasn't been indexed yet. Silent dispatch bypass.
 - **Multiple Solidity-level bugs** (Gemini's adversarial pass): assembly memory alignment in the reentrancy guard (revert returns null selector instead of error), returndata griefing via quadratic memory expansion, EOA/proxy empty-success silent bypass, constructor `code.length == 0` blocks self-registration.
@@ -43,7 +44,7 @@ Re-open this ADR (or supersede with a new one) when ANY of:
 
 When revisited, the next iteration MUST address:
 
-- **Trigger relation model:** the design must explicitly handle `definition.schema`, `definition.parent.schema`, `target.parent.schema`, and prior slot state for PIN supersession — not just `definition.parent.schema` as ADR-0043 v1 did.
+- **Trigger relation model:** the design must explicitly handle `definition.schema`, `definition.parent.schema`, `target.parent.schema`, and prior slot state for PIN supersession — not just `definition.parent.schema` as this ADR's v1 draft did.
 - **multiAttest atomicity:** the dispatch can't depend on indexer state that hasn't been written yet mid-batch.
 - **Failsafe-closed for "constraint" semantics:** silently failing open is incompatible with the word "constraint."
 - **Bounded-but-not-hardcoded gas budget:** static 100k gas was a 50-year fragility.
@@ -282,7 +283,7 @@ The dispatch call is added at the end of `_onAttestPin`, `_onAttestTag`, `_onRev
 
 ### Explicit out-of-scope (architecturally rejected)
 
-1. **ANCHOR write callbacks.** Anchor name uniqueness via `_nameToAnchor` is the existing gating story. Adding cross-schema callbacks on anchor creation re-introduces ownership semantics through a side door. Anchors are neutral (see ADR-0045 once written).
+1. **ANCHOR write callbacks.** Anchor name uniqueness via `_nameToAnchor` is the existing gating story. Adding cross-schema callbacks on anchor creation re-introduces ownership semantics through a side door. Anchors are neutral (load-bearing EFS invariant; see `designs/custom-lists.md` and `docs/process/design-lessons.md`).
 2. **DATA write callbacks.** DATA is content identity. Gating its creation breaks the "anyone can publish" core property.
 3. **Read-side enforcement.** Reads are arbitrary `eth_call`s; the kernel never sees the question. Editions are the only legitimate read-side filter.
 4. **Cross-edition state inspection that gates by attester identity.** A callback inspecting other attesters' state to gate the current attester's write is attester-based write-gating in disguise. Editions ARE the access control (see design-lessons.md and the rounds-11-16 "category error" line). Callbacks MUST NOT veto based on `attester` identity beyond per-attester scoping of their own indices.

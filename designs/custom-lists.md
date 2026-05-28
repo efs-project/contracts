@@ -54,7 +54,7 @@ Lists are for curated/ranked/typed/shape-enforced collections. Pure membership w
 
 ## What this design replaces and why
 
-Rounds 11-16 explored an **entry-anchor model**: each entry was an anchor child of the LIST UID, with a PIN to the target and a weight TAG for ordering (3 attestations per entry). Round 17 attempted to plug write-time enforcement gaps with a generic constraint-callback mechanism (ADR-0043) — three external reviewers independently returned RED on the same finding: the mechanism solved a non-problem inside a frame that presupposed it was needed.
+Rounds 11-16 explored an **entry-anchor model**: each entry was an anchor child of the LIST UID, with a PIN to the target and a weight TAG for ordering (3 attestations per entry). Round 17 attempted to plug write-time enforcement gaps with a generic constraint-callback mechanism (ADR-0045) — three external reviewers independently returned RED on the same finding: the mechanism solved a non-problem inside a frame that presupposed it was needed.
 
 Round 18 started by crystallizing requirements with the human (MUST/NICE/DEFERRED) and then ran 5 parallel agents with different design framings (defend round-16; refine LIST+LIST_ENTRY; greenfield; consumer-first; hybrid). **4 of 5 independently converged on the LIST + LIST_ENTRY architecture documented here.** The round-16 defender admitted MEDIUM confidence and recommended a head-to-head bake-off; the hybrid agent collapsed to LIST+LIST_ENTRY when its "escape hatch" was removed.
 
@@ -62,7 +62,7 @@ Round 18 started by crystallizing requirements with the human (MUST/NICE/DEFERRE
 - `targetType` write-time enforcement: EdgeResolver doesn't validate target.schema against any declared field
 - `appendOnly` write-time enforcement: requires cross-resolver coordination
 - `allowsDuplicates=false` enforcement: relies on convention (target-derived naming) + ADR-0025, not direct enforcement
-- All three together: not achievable without polluting EdgeResolver (shared kernel) or introducing the constraint-callback mechanism that ADR-0043 deferred
+- All three together: not achievable without polluting EdgeResolver (shared kernel) or introducing the constraint-callback mechanism that ADR-0045 deferred
 
 **What round-18 delivers cleanly:**
 - All three above enforced by `ListEntryResolver` at write time
@@ -96,7 +96,7 @@ These are the requirements crystallized with the human before round-18's design 
 
 ### DEFERRED (out of scope for v1)
 
-- Generic constraint-callback / extension mechanism (ADR-0043 — wrong abstraction)
+- Generic constraint-callback / extension mechanism (ADR-0045 — wrong abstraction)
 - Cross-attester merged on-chain view (client/SDK concern)
 - On-chain reverse-lookup index ("what lists contain X?" for arbitrary X — subgraph concern)
 - Mainnet 50-year freeze (devnet ships first; mainnet freeze applies later)
@@ -905,7 +905,7 @@ Governance contract reads `recipient` (the delegate address) and `weight` (the a
 
 ## What's deferred and why
 
-**Generic constraint-callback / extension mechanism (ADR-0043).** Three external reviewers killed it in round 17: solves a non-problem inside a frame that presupposed it was needed. Stays deferred. If future use cases genuinely need extension, they get their own purpose-built schema following this design's pattern.
+**Generic constraint-callback / extension mechanism (ADR-0045).** Three external reviewers killed it in round 17: solves a non-problem inside a frame that presupposed it was needed. Stays deferred. If future use cases genuinely need extension, they get their own purpose-built schema following this design's pattern.
 
 **Cross-attester merged on-chain view.** ("Show me the union of Alice's and Bob's lists at this name.") Per-attester editions ARE the kernel model; merging is presentation/composition logic that lives in clients or subgraphs. On-chain merge would force a viewer-sovereignty violation. Deferred indefinitely.
 
@@ -985,7 +985,7 @@ Round-16's pinned-Sepolia-fork pattern (ADR-0037) handles PIN/TAG correctly; LIS
 We've spent 18 rounds + a post-external-review pass on this design. The frame has shifted multiple times:
 - "lists are folders" (R11-12) → unwound
 - "free-floating LIST is enough" (R13-14) → refined
-- "TAG-with-weight covers it" (R15-16) → ADR-0043 attempt
+- "TAG-with-weight covers it" (R15-16) → ADR-0045 attempt
 - "constraint callbacks" (R17) → rejected
 - "LIST + LIST_ENTRY with dedicated resolver" (R18) → current
 - Round-18b internal S1 inverted-framing pass: tested "can existing schemas + a new resolver only" — verdict RED, four MUSTs cannot be satisfied without new schemas (typed write-time, append-only write-time, per-attester editions, on-iteration type confidence)
@@ -1043,7 +1043,7 @@ Six frame-level refinements across 18 rounds + 1 post-external-review revision:
 - **Round 11-12**: lists are folders → unwound (unification didn't match the graph model)
 - **Round 13-14**: free-floating LIST attestation + typed list anchors + PIN placement
 - **Round 15-16**: schema simplification + principled editions stance + SortOverlay TAG-source + entry-anchor + weight TAG (3 attestations per entry)
-- **Round 17**: constraint-callback / IEFSConstraintCallback mechanism (ADR-0043) → rejected by 3 external reviewers (wrong abstraction)
+- **Round 17**: constraint-callback / IEFSConstraintCallback mechanism (ADR-0045) → rejected by 3 external reviewers (wrong abstraction)
 - **Round 18**: LIST + LIST_ENTRY with dedicated `ListEntryResolver` enforcing all declared options at write time; single attestation per entry; per-entry metadata via standard PROPERTY pattern on LIST_ENTRY UID
 - **Round 18b** (this revision): post-external-review hardening — Codex's member-key reframe adopted for ANY; `address(0)` resolved via EAS native `recipient` field for ADDR; `isMember` dropped; lifecycle invariants enforced (revocable, expirationTime, refUID); CREATE2 deploy pinned; `appendOnly + allowsDuplicates + uncapped` combo rejected; ADR-0041 reconciliation framed honestly as deliberate deviation at the predicate-coordination layer
 

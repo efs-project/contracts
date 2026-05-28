@@ -3,7 +3,7 @@
 **Status:** Proposed
 **Date:** 2026-05-28
 **Permanence-tier:** Etched (two new EAS schema field strings; resolver address baked into LIST_ENTRY's schema UID)
-**Related:** ADR-0041 (PIN/TAG cardinality split — the precedent this builds on and deliberately deviates from), ADR-0043 (EFS Edge Constraint Callbacks — deferred; what this replaces), ADR-0030 (mainnet permanence), ADR-0025 (anchor name uniqueness), ADR-0037 (pinned Sepolia fork / deterministic deploy), ADR-0009 (append-only kernel), ADR-0042 (effective-TAG weight filter / editions)
+**Related:** ADR-0041 (PIN/TAG cardinality split — the precedent this builds on and deliberately deviates from), ADR-0045 (EFS Edge Constraint Callbacks — deferred; what this replaces), ADR-0030 (mainnet permanence), ADR-0025 (anchor name uniqueness), ADR-0037 (pinned Sepolia fork / deterministic deploy), ADR-0009 (append-only kernel), ADR-0042 (effective-TAG weight filter / editions)
 **Design doc:** [`designs/custom-lists.md`](../../designs/custom-lists.md) (full mechanical detail, resolver pseudocode, worked example, use-case walkthrough). **History:** [`designs/custom-lists_notes.md`](../../designs/custom-lists_notes.md) (18 rounds + 3 external review cycles).
 
 ## Context
@@ -14,7 +14,7 @@ The locked requirements (crystallized with the human before the converging desig
 
 - **MUST:** ordered + unordered; no-duplicates (write-time enforced) + duplicates-allowed; typed (write-time enforced) + untyped + address-typed (incl. `address(0)`); append-only list-level (write-time enforced); per-attester editions preserved; smart contracts iterate active entries with O(N) reads + full type confidence; O(1) membership check for all modes.
 - **NICE:** per-entry metadata; deprecation flags; intrinsic items; reorderable; capped.
-- **DEFERRED:** generic constraint-callback mechanism (ADR-0043); cross-attester merged on-chain view; on-chain reverse-lookup index; mainnet 50-year freeze (devnet first).
+- **DEFERRED:** generic constraint-callback mechanism (ADR-0045); cross-attester merged on-chain view; on-chain reverse-lookup index; mainnet 50-year freeze (devnet first).
 
 ### Why not existing schemas
 
@@ -25,7 +25,7 @@ An internal inverted-framing pass ("implement every MUST using only PIN/TAG/ANCH
 3. **Per-attester editions for membership state** — ADR-0025 anchor-name uniqueness is **global per `(parent, name, schemaUID)`**, not per-attester. Any anchor-based entry scheme collides across editions. List membership needs attester-keyed resolver state.
 4. **On-iteration type confidence** — a generic edge gives a UID; trusting "every entry is type X" requires the resolver to have enforced it at write time.
 
-The earlier attempt to plug these gaps with a generic constraint-callback mechanism (ADR-0043) was rejected by three external reviewers as the wrong abstraction ("solves a non-problem inside a frame that presupposed it was needed"). This ADR takes the other path: a purpose-built schema pair, following the ADR-0041 precedent that **a predicate whose cardinality/shape the kernel must enforce gets its own schema UID.**
+The earlier attempt to plug these gaps with a generic constraint-callback mechanism (ADR-0045) was rejected by three external reviewers as the wrong abstraction ("solves a non-problem inside a frame that presupposed it was needed"). This ADR takes the other path: a purpose-built schema pair, following the ADR-0041 precedent that **a predicate whose cardinality/shape the kernel must enforce gets its own schema UID.**
 
 ## Decision
 
@@ -149,7 +149,7 @@ ADR-0041 established that **cardinality lives in the schema UID** because a gene
 ## Alternatives considered
 
 1. **Round-16 entry-anchor model** (entry = child anchor + PIN + weight TAG; 3 attestations/entry). Rejected: cannot enforce typing/append-only/no-dupes at write time without EdgeResolver pollution or cross-resolver coordination; per-attester editions collide with ADR-0025 global anchor-name uniqueness; ambiguous which of 3 UIDs carries per-entry metadata.
-2. **ADR-0043 generic constraint callbacks.** Deferred by three external reviewers — wrong abstraction, speculative, permanent commitment for hypothetical flexibility.
+2. **ADR-0045 generic constraint callbacks.** Deferred by three external reviewers — wrong abstraction, speculative, permanent commitment for hypothetical flexibility.
 3. **Existing schemas only (no new schema UID).** S1 inverted-framing pass: RED. Four MUSTs unsatisfiable (see Context).
 4. **Single LIST schema with inline entries / config-on-every-entry.** Rejected: contradicts per-entry divergence; loses empty-list declarations; bloats every entry.
 5. **Split LIST_ENTRY by cardinality (LIST_ENTRY_UNIQUE / LIST_ENTRY_MULTI), mirroring PIN/TAG.** Considered. Rejected: cardinality here is one of several per-list options (with type, append-only, cap); enumerating the cross-product is 18+ schemas. The LIST declaration is the right coordination object.

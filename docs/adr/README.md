@@ -111,8 +111,8 @@ What else we looked at and why it lost.
 - [ADR-0041 — PIN/TAG schema split for cardinality, with weighted edges](./0041-pin-tag-schema-split-for-cardinality.md)
 
 ### Lists & Collections
-- [ADR-0043 — EFS Edge Constraint Callbacks](./0043-efs-edge-constraint-callbacks.md) *(Deferred — wrong abstraction per round-17 external review; superseded in spirit by ADR-0044's purpose-built schema approach)*
 - [ADR-0044 — LIST + LIST_ENTRY schemas for curated, shape-enforced collections](./0044-list-and-list-entry-schemas.md) *(Proposed)*
+- [ADR-0045 — EFS Edge Constraint Callbacks](./0045-efs-edge-constraint-callbacks.md) *(Deferred — wrong abstraction per round-17 external review; superseded in spirit by ADR-0044's purpose-built schema approach. Renumbered from 0043 to avoid colliding with main's editions→lenses rename.)*
 
 ### View APIs
 - [ADR-0036 — Opaque-cursor pagination for multi-source views](./0036-opaque-cursor-pagination.md)
