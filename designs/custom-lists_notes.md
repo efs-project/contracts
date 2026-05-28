@@ -1324,6 +1324,86 @@ Pattern across all seven: agents converge inside frames; humans question frames;
 
 ---
 
+## Round 18b — Post-external-review revision
+
+### What triggered round 18b
+
+Three external reviewers (Claude, Codex GPT-5, Gemini 2.5 Pro) returned the round-18 doc with NOT-READY verdicts and concrete findings. Synthesis with James produced two-line directives: "Do what you need to do. Subagent review. Doc cleanup. Fixes. Iterate."
+
+### Internal validation passes before doc revisions
+
+Two parallel subagent passes:
+
+1. **S1 inverted-framing pass**: Tried to satisfy every locked MUST using only existing schemas (PIN, TAG, ANCHOR, PROPERTY) with at most a new resolver and view contract. **Verdict: RED.** Four MUSTs fail without new schemas — typed write-time enforcement, append-only write-time enforcement, per-attester editions (ADR-0025 anchor names are GLOBALLY unique per parent, surprising failure), and on-iteration type confidence. The new schemas are load-bearing.
+
+2. **Adversarial review of Codex's member-key reframe**: Found 9 potential new bugs. Most-dangerous: collapsing three encodings into one polymorphic `bytes32 target` field. Recommended ADOPT WITH MITIGATION: typed view accessors, key-derivation convention, indexed event field, optional existence check.
+
+### What changed in round 18b
+
+**Adopted Codex's member-key reframe** for `targetType=ANY`:
+- ANY = opaque bytes32 member key, no EAS existence check
+- `allowIntrinsic` field REMOVED — intrinsic items use ANY mode with key derivation `keccak256(abi.encode("efs-list-intrinsic", payload))`
+
+**Adopted refined Option D for `address(0)` encoding** (use EAS's native `recipient` field):
+- ADDR-typed entries: target=`bytes32(0)`, recipient=addr (address(0) fully supported)
+- SCHEMA-typed: target=UID, recipient=`address(0)`
+- ANY-typed: target=opaque key, recipient=`address(0)`
+- No sentinel bits, no polymorphic single field — structural separation via different EAS native fields per mode
+
+**Dropped `isMember` from ListReader** — `countOf` only; consumers explicitly compare to 0.
+
+**Added typed accessors** to ListReader: `targetAsAddress`, `targetAsUID`, `targetAsMemberKey` that revert on mode mismatch.
+
+**Lifecycle invariants enforced by resolver** (BLOCKING B3):
+- LIST_ENTRY: per-attestation `revocable=true`, `expirationTime=0`, `refUID=0`
+- LIST: per-attestation `revocable=false`, `expirationTime=0`, `refUID=0`, `recipient=0`
+
+**`appendOnly + allowsDuplicates + uncapped` combination rejected** at ListResolver: `maxEntries` must be >0 in that combo (closes unbounded-growth gap).
+
+**`getMode` decodes LIST directly via EAS** (not from resolver cache) — works for empty lists (BLOCKING B3-derived).
+
+**Allowlist consumer pattern rewritten** — curator from `LIST.attester` or hardcoded trusted address, NOT caller-supplied (BLOCKING B4).
+
+**CREATE2 deploy invariant** documented as launch-prerequisite — resolver address must be deterministic across Sepolia/mainnet so LIST_ENTRY schema UID is stable.
+
+**Events frozen** with `targetType` denormalized into entry events for subgraph efficiency.
+
+**ADR-0041 reconciliation reframed honestly** as deliberate deviation at the predicate-coordination layer (not "no supersession needed"). Sibling LIST ADR must document this in Consequences.
+
+**Worked example added** showing one entry's full lifecycle through resolver state — surfaces invariants the design relies on and lets reviewers verify state transitions concretely.
+
+### Final internal adversarial pass on round-18b
+
+Surfaced two BLOCKING issues introduced by the revisions, both fixed before commit:
+- C1: `onRevoke` idempotency check was unreachable (early-return after revert). Reordered.
+- C5: Revoked-target policy for SCHEMA mode was undocumented. Documented as "entries immune to target lifecycle" matching editions principle.
+
+Plus SHOULD-FIX items: identityKey derivation helpers on ListReader, forward-compat note for `targetType` additions.
+
+### What's still open in round 18b
+
+- External review of the revised design (this is the deliverable)
+- Specifically: does EAS-native-recipient encoding hold up? Does the member-key reframe with key-derivation convention sufficiently coordinate clients? Are lifecycle invariants complete?
+- The frame question remains open (Claude W1 "kernel enforces nothing; advisory", Gemini WA "lists as files" still candidate next-frames)
+
+### Frame-history recap (updated)
+
+Seven frame-level refinements + one post-external-review hardening:
+
+- R11: lists are folders (overshoot)
+- R12: lists are NOT folders; membership is tags
+- R13: free-floating LIST + file-like portability
+- R14: typed list anchors + revocable=false + freeform-no-PIN + placer/curator
+- R15: schema simplification + principled editions stance + drop kernel paternalism
+- R16: anchors-are-neutral surfaced + schema finalized + SortOverlay TAG-source committed
+- R17: IEFSConstraintCallback / ADR-0043 → rejected by external reviewers
+- R18: LIST + LIST_ENTRY with dedicated resolver — convergence via 5-agent parallel proposals
+- R18b: post-external-review hardening — Codex member-key reframe + EAS-recipient encoding for ADDR + lifecycle invariants + ADR-0041 honest reframe + worked example + CREATE2 invariant
+
+Pattern: agents converge inside frames; humans question frames; external reviewers find what internal convergence missed. Round-18 added a new dynamic: three independent external reviewers in parallel produced overlapping critical findings, validating the design-lessons.md prediction that internal convergence is a stability signal, not a correctness signal. Round-18b is the integration of that feedback.
+
+---
+
 ## How to use this file
 
 Append-friendly. When adding:

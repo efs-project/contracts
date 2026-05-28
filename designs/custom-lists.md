@@ -1,6 +1,6 @@
 # EFS Lists — Design
 
-**Status:** Draft (round 18 — converged on LIST + LIST_ENTRY architecture via 5-agent parallel design proposals; pending external review before ADR freeze)
+**Status:** Draft (round 18b — post-external-review revision; member-key reframe adopted; lifecycle hardening; address(0) resolved via EAS recipient field)
 **Date:** 2026-05-27
 **Permanence-tier:** Etched-adjacent (introduces two new EAS schemas; the data model is permanent post-mainnet freeze)
 **Authors:** Claude Sonnet 4.7 (round-18 convergence synthesis; 17 prior rounds with Codex GPT-5, Gemini 2.5 Pro, and fresh-Claude review passes) + James Carnley (architectural direction; requirements crystallization; final-frame decisions)
@@ -17,7 +17,7 @@
 ```
                    ┌─────────────────────────────────────────────────────┐
 LIST (declaration) │  allowsDuplicates, appendOnly, targetType,          │
-                   │  targetSchema, maxEntries, allowIntrinsic           │
+                   │  targetSchema, maxEntries                            │
                    │  refUID = 0x0 (free-floating, like DATA)            │
                    │  revocable: false                                    │
                    │  resolver: ListResolver (field-shape validation)     │
@@ -27,12 +27,16 @@ LIST (declaration) │  allowsDuplicates, appendOnly, targetType,          │
                                           │
                    ┌─────────────────────────────────────────────────────┐
 LIST_ENTRY         │  bytes32 listUID                                    │
-(membership)       │  bytes32 target  (attestation UID, or addr-as-     │
-                   │                   bytes32, or 0x0 for intrinsic)    │
-                   │  int256  weight  (sort/rank metadata)               │
+(membership)       │  bytes32 target  (per-mode encoding — see below)    │
+                   │  int256  weight  (opaque metadata; consumer-defined)│
                    │  revocable: true (resolver rejects revoke if list   │
                    │              is appendOnly)                          │
                    │  resolver: ListEntryResolver                         │
+                   │                                                      │
+                   │  Per-mode encoding:                                  │
+                   │   ADDR:   target=0,   recipient=addr (incl. addr 0) │
+                   │   SCHEMA: target=UID, recipient=0                    │
+                   │   ANY:    target=opaque key (nonzero), recipient=0   │
                    └─────────────────────────────────────────────────────┘
 ```
 
@@ -99,7 +103,15 @@ These are the requirements crystallized with the human before round-18's design 
 
 ### Validation model
 
-**Write-time, by resolver.** When a `LIST_ENTRY` is attested, `ListEntryResolver` validates against the parent `LIST`'s declared options before storage. Once written, downstream readers trust without re-validation. `address(0)` is a valid target for ADDR-typed lists.
+**Write-time, by resolver.** When a `LIST_ENTRY` is attested, `ListEntryResolver` validates against the parent `LIST`'s declared options before storage. Once written, downstream readers trust without re-validation.
+
+**Encoding by target type** (resolves the round-18 `address(0)` collision):
+
+- **ADDR-typed lists** use EAS's native `recipient` field. The LIST_ENTRY's `target` field MUST be `bytes32(0)`. `address(0)` is fully supported (recipient field carries the address; sentinel-bit hacks rejected).
+- **SCHEMA-typed lists** put the target attestation UID in the `target` field. `recipient` MUST be `address(0)`.
+- **ANY-typed lists** put an opaque caller-chosen nonzero member key in the `target` field. The resolver does NOT check existence — `target` is an opaque identifier, not necessarily an attestation UID. `recipient` MUST be `address(0)`. Conventions for member keys (e.g., `keccak256(abi.encode("efs-list-intrinsic", payload))`) are documented in the SDK guide.
+
+This structural separation means each `targetType` uses a different EAS field for its primary identity, and consumers branch on `targetType` to decide which field to read. There is no in-band polymorphism on a single field.
 
 ---
 
@@ -113,10 +125,10 @@ These are the requirements crystallized with the human before round-18's design 
 LIST schema:
   bool    allowsDuplicates    // false = no-duplicates enforced at write time
   bool    appendOnly          // true  = entry revokes rejected by resolver
-  uint8   targetType          // 0=ANY, 1=ADDR, 2=SCHEMA
+  uint8   targetType          // 0=ANY (opaque member key), 1=ADDR, 2=SCHEMA
   bytes32 targetSchema        // non-zero iff targetType==SCHEMA
-  uint32  maxEntries          // 0 = uncapped; per-attester cap
-  bool    allowIntrinsic      // true = entries may have target=bytes32(0)
+  uint32  maxEntries          // 0 = uncapped; per-attester cap.
+                              //   Required (>0) when appendOnly && allowsDuplicates.
 revocable: false
 resolver:  ListResolver       // field-shape validation only (see below)
 refUID:    bytes32(0)          // free-floating, like DATA
@@ -126,11 +138,15 @@ recipient: address(0)          // never directed
 **Field rationale:**
 
 - `allowsDuplicates` — bool, not bitfield. Programmers thank us in 2076.
-- `appendOnly` — bool, list-level. When true, the resolver rejects every entry revoke for this list. Use cases: software version registries, on-chain receipts, immutable references. Pairs with per-entry deprecation PROPERTYs (NPM/crates.io model — entries can be flagged "deprecated" without being removed).
-- `targetType` — uint8 enum: `0=ANY`, `1=ADDR`, `2=SCHEMA`. Not a bitfield. A future targetType=3 (e.g., DELEGATED) requires a new schema, not a flag.
-- `targetSchema` — non-zero iff `targetType==SCHEMA`; the EAS schema UID every entry's target must match. The resolver checks `eas.getAttestation(target).schema == targetSchema` at every entry write.
-- `maxEntries` — uint32, 0 = uncapped. Per-attester (matches editions model). Included now because adding it later would require a new schema UID.
-- `allowIntrinsic` — bool. When true, entries may have `target = bytes32(0)` (the "milk" case in a shopping list). When false, target==0 is rejected. Implies `targetType==ANY` (only ANY-typed lists may have intrinsic entries).
+- `appendOnly` — bool, list-level. When true, the resolver rejects every entry revoke for this list. Use cases: software version registries, on-chain receipts, immutable references. Pairs with per-entry deprecation PROPERTYs (NPM/crates.io model — entries can be flagged "deprecated" without being removed). **When combined with `allowsDuplicates=true`, `maxEntries` MUST be non-zero** — append-only multisets have no natural upper bound and would permit unbounded state growth.
+- `targetType` — uint8 enum: `0=ANY`, `1=ADDR`, `2=SCHEMA`. Each value selects a different *encoding* (which EAS field carries the entry's identity) and a different *validation* (whether existence is checked):
+  - **ANY**: entry identity is in `LIST_ENTRY.target` as an opaque nonzero bytes32 member key. No existence check.
+  - **ADDR**: entry identity is in `LIST_ENTRY.recipient` (EAS native field). `address(0)` valid. No existence check.
+  - **SCHEMA**: entry identity is in `LIST_ENTRY.target` as an attestation UID. Existence + schema match enforced.
+- `targetSchema` — non-zero iff `targetType==SCHEMA`; the EAS schema UID every entry's target must match.
+- `maxEntries` — uint32, 0 = uncapped. Per-attester (matches editions model). Included now because adding it later would require a new schema UID. **Required >0 when `appendOnly && allowsDuplicates`** — this is the only combination where unbounded growth is possible without further constraints.
+
+**Note on intrinsic items:** The earlier `allowIntrinsic` flag has been REMOVED. Intrinsic items (shopping-list "milk", todo "buy groceries") use `targetType=ANY` with an opaque member key — e.g., `keccak256(abi.encode("efs-list-intrinsic", "milk"))`. This dissolves the `address(0)`/intrinsic collision the prior design had Open Concern §2 about. Documented intrinsic-key derivation conventions live in the SDK guide so clients agree on key encoding.
 
 **Why these fields are on LIST (not on each LIST_ENTRY):** The list's *configuration* is the predicate-coordination layer (see ADR-0041 reconciliation below). Putting it on each entry would be redundant and contradictory if entries diverged. Putting it on LIST once, with LIST being non-revocable, means every entry reader can derive the constraints from one immutable source.
 
@@ -143,23 +159,54 @@ recipient: address(0)          // never directed
 ```solidity
 LIST_ENTRY schema:
   bytes32 listUID             // the LIST attestation this entry belongs to
-  bytes32 target              // attestation UID, or bytes32(uint160(addr)),
-                              //   or bytes32(0) for intrinsic items
-  int256  weight              // sort/rank metadata (ignored when no SORT_INFO)
+  bytes32 target              // SCHEMA: attestation UID; ANY: opaque member key (nonzero); ADDR: MUST be 0
+  int256  weight              // opaque int256 metadata; consumer interprets (see below)
 revocable: true               // resolver rejects revoke when LIST.appendOnly=true
 resolver:  ListEntryResolver
-refUID:    bytes32(0)          // listUID is in the data payload, not refUID
-recipient: address(0)          // never directed
+
+Per-mode encoding (enforced by resolver at write time):
+  ADDR-typed lists:
+    target    = bytes32(0)     (must be zero)
+    recipient = the address    (EAS native field; address(0) valid)
+    refUID    = bytes32(0)
+  SCHEMA-typed lists:
+    target    = attestation UID (must exist; must match LIST.targetSchema)
+    recipient = address(0)
+    refUID    = bytes32(0)
+  ANY-typed lists:
+    target    = opaque member key (must be nonzero bytes32; no EAS existence check)
+    recipient = address(0)
+    refUID    = bytes32(0)
+
+Plus universal lifecycle invariants (enforced by resolver):
+  revocable        = true            (NOT allowed to be revocable=false at the attestation level)
+  expirationTime   = 0               (entries never expire)
 ```
 
 **Field rationale:**
 
 - `listUID` — explicit field, not `refUID`. Using `refUID` would conflate "this entry is in this list" with EAS's generic refUID semantics. Putting it in the data payload makes indexers' jobs explicit.
-- `target` — explicit field for the entry's target. Three encodings:
-  - Attestation UID (for `targetType=ANY` or `targetType=SCHEMA`)
-  - `bytes32(uint160(addr))` (for `targetType=ADDR`)
-  - `bytes32(0)` (for intrinsic items, only when `allowIntrinsic=true`)
-- `weight` — int256, kept on every entry regardless of order semantics. The gas saved by removing it from unordered entries doesn't justify a schema UID split; unordered readers simply ignore the field. Sparse int256 spacing gives infinite room for re-ordering without rewriting other entries.
+- `target` — explicit field for the entry's identity *when ADDR is not the mode*. Two encodings:
+  - **SCHEMA mode**: attestation UID. Existence + schema-match validated at write time.
+  - **ANY mode**: opaque nonzero bytes32 (any 32-byte member key the curator picks). No existence check; opaque identity per the member-key reframe.
+  - **ADDR mode**: must be `bytes32(0)` (address lives in the EAS `recipient` field instead).
+- `weight` — opaque int256 metadata. The kernel does not interpret it. Consumers and curators must agree on meaning out-of-band — common conventions: rank position, score, allocation share, timestamp, vote weight. SORT_INFO (when present) is one such interpretation (ordering); absence of SORT_INFO does NOT mean weight is meaningless. The doc-level convention is "consumers documented in their own ADR/spec how they interpret weight." Sparse int256 spacing gives infinite room for re-ordering without rewriting other entries.
+
+**Lifecycle invariants enforced by ListEntryResolver** (closes external review BLOCKING item B3):
+
+The resolver rejects entry attestations that don't satisfy the lifecycle shape, because EAS permits attestation-level overrides that would corrupt resolver state:
+
+| Field | Required value | Why |
+|---|---|---|
+| `revocable` (per-attestation) | `true` | A `revocable=false` entry can never be removed even from non-append-only lists, breaking `maxEntries` and no-dupe slot reuse. |
+| `expirationTime` | `0` | Expiring entries silently leave but resolver state still counts them. |
+| `refUID` | `bytes32(0)` | `listUID` is in the data payload; mixing with EAS's generic refUID semantic invites indexer confusion. |
+| ADDR mode: `target` | `bytes32(0)` | Address lives in recipient; nonzero target is a misencoding. |
+| ADDR mode: `recipient` | any address (incl. 0) | The address being listed; `address(0)` is permitted. |
+| SCHEMA mode: `target` | existing UID with matching schema | Type confidence at iteration depends on this. |
+| SCHEMA mode: `recipient` | `address(0)` | recipient field unused. |
+| ANY mode: `target` | nonzero bytes32 | The opaque member key. |
+| ANY mode: `recipient` | `address(0)` | recipient field unused. |
 
 **Why a single attestation per entry (not 3 like round-16):** Round-16's entry-anchor + PIN + weight-TAG required 3 attestations per entry. The flat LIST_ENTRY needs 1. Per-entry metadata still uses the standard PROPERTY pattern (3 attestations per metadata field) but only when actually wanted — most entries don't have metadata.
 
@@ -176,18 +223,20 @@ Field-shape validation only. Does NOT maintain state. The expensive work happens
 ```solidity
 function onAttest(Attestation calldata a, uint256) returns (bool) {
     require(a.data.length == EXPECTED_LIST_DATA_LENGTH, "bad LIST payload");
+    require(a.revocable == false,       "LIST must be non-revocable");
+    require(a.expirationTime == 0,      "LIST must not expire");
+    require(a.refUID == bytes32(0),     "LIST must be free-floating");
+    require(a.recipient == address(0),  "LIST must not be directed");
+
     (
       bool allowsDuplicates,
       bool appendOnly,
       uint8 targetType,
       bytes32 targetSchema,
-      uint32 maxEntries,
-      bool allowIntrinsic
-    ) = abi.decode(a.data, (bool, bool, uint8, bytes32, uint32, bool));
+      uint32 maxEntries
+    ) = abi.decode(a.data, (bool, bool, uint8, bytes32, uint32));
 
-    require(a.refUID == bytes32(0),    "LIST must be free-floating");
-    require(a.recipient == address(0), "LIST must not be directed");
-    require(targetType <= 2,            "invalid targetType");
+    require(targetType <= 2, "invalid targetType");
 
     // (targetType, targetSchema) coherence
     if (targetType == 2 /* SCHEMA */) {
@@ -196,12 +245,15 @@ function onAttest(Attestation calldata a, uint256) returns (bool) {
         require(targetSchema == bytes32(0), "non-SCHEMA targetType must have zero targetSchema");
     }
 
-    // allowIntrinsic only meaningful with ANY-typed lists
-    if (allowIntrinsic) {
-        require(targetType == 0 /* ANY */, "allowIntrinsic requires targetType=ANY");
+    // Forbid the unbounded combination: append-only + duplicates-allowed + uncapped
+    if (appendOnly && allowsDuplicates) {
+        require(maxEntries != 0, "appendOnly + allowsDuplicates requires maxEntries cap");
     }
 
-    emit ListAttested(a.uid, a.attester, allowsDuplicates, appendOnly, targetType, targetSchema, maxEntries, allowIntrinsic);
+    emit ListAttested(
+      a.uid, a.attester,
+      allowsDuplicates, appendOnly, targetType, targetSchema, maxEntries
+    );
     return true;
 }
 // onRevoke unreachable: LIST is revocable: false.
@@ -219,7 +271,6 @@ struct CachedListDecl {
     uint8   targetType;
     bytes32 targetSchema;
     uint32  maxEntries;
-    bool    allowIntrinsic;
 }
 
 // Cache the LIST's declaration on first touch (cold path: 1 EAS read; warm: 1 SLOAD)
@@ -228,12 +279,21 @@ mapping(bytes32 listUID => CachedListDecl) private _decl;
 // Per-list, per-attester active entries (insertion order; iteration source)
 mapping(bytes32 listUID => mapping(address attester => bytes32[])) private _entries;
 
-// O(1) membership + no-dupes counter
-//   serves both: enforces "count == 0" when !allowsDuplicates, and provides "count > 0" for isMember
-mapping(bytes32 listUID => mapping(bytes32 target => mapping(address attester => uint256))) private _entryCount;
+// O(1) membership + no-dupes counter — keyed by the canonical "identity key"
+//   ADDR-typed:   identityKey = bytes32(uint160(recipient))
+//   SCHEMA-typed: identityKey = target (the attestation UID)
+//   ANY-typed:    identityKey = target (the opaque member key)
+//
+// Serves two purposes simultaneously:
+//   - enforces "count == 0" when !allowsDuplicates (no-dupe gate)
+//   - provides "count > 0" for membership check
+mapping(bytes32 listUID => mapping(bytes32 identityKey => mapping(address attester => uint256))) private _entryCount;
 
 // Swap-and-pop index for revoke
 mapping(bytes32 entryUID => uint256) private _entryPosPlusOne;
+
+// Per-entry identity key (needed to clear _entryCount on revoke without re-deriving)
+mapping(bytes32 entryUID => bytes32) private _entryIdentityKey;
 ```
 
 `onAttest`:
@@ -241,48 +301,58 @@ mapping(bytes32 entryUID => uint256) private _entryPosPlusOne;
 ```solidity
 function onAttest(Attestation calldata a, uint256) returns (bool) {
     require(a.data.length == EXPECTED_ENTRY_DATA_LENGTH, "bad LIST_ENTRY payload");
+
+    // Lifecycle invariants (close BLOCKING B3 from external review)
+    require(a.revocable == true,      "LIST_ENTRY must be revocable");
+    require(a.expirationTime == 0,    "LIST_ENTRY must not expire");
+    require(a.refUID == bytes32(0),   "LIST_ENTRY must not use refUID (listUID is in payload)");
+
     (bytes32 listUID, bytes32 target, int256 weight) =
         abi.decode(a.data, (bytes32, bytes32, int256));
     require(listUID != bytes32(0), "missing listUID");
 
-    // Hydrate declaration on first touch
+    // Hydrate declaration on first touch (LIST is non-revocable, immutable; cache valid forever)
     CachedListDecl memory d = _decl[listUID];
     if (!d.exists) {
         Attestation memory L = eas.getAttestation(listUID);
         require(L.schema == LIST_SCHEMA_UID, "listUID is not a LIST");
-        (d.allowsDuplicates, d.appendOnly, d.targetType, d.targetSchema,
-         d.maxEntries, d.allowIntrinsic) =
-            abi.decode(L.data, (bool, bool, uint8, bytes32, uint32, bool));
+        (d.allowsDuplicates, d.appendOnly, d.targetType, d.targetSchema, d.maxEntries) =
+            abi.decode(L.data, (bool, bool, uint8, bytes32, uint32));
         d.exists = true;
         _decl[listUID] = d;
     }
 
-    // Type enforcement (write-time)
-    if (target == bytes32(0)) {
-        // Intrinsic item
-        require(d.allowIntrinsic, "intrinsic entries not allowed");
-        // targetType MUST be ANY (enforced at LIST attest time)
-    } else if (d.targetType == 1 /* ADDR */) {
-        // Address-typed: target must fit in 160 bits (high 96 bits zero)
-        // address(0) is rejected by target==bytes32(0) check above only if
-        // allowIntrinsic; otherwise address(0) is a valid ADDR target.
-        // BUT: ADDR-typed lists must NOT have allowIntrinsic (enforced at LIST attest).
-        // So address(0) for ADDR-typed list: target encoding is bytes32(uint160(0)) == bytes32(0),
-        // which gets caught above. To support address(0) for ADDR lists, we use a sentinel:
-        // ADDR encoding is `bytes32(uint160(addr) | (1 << 160))` — high bit set distinguishes
-        // "this is an address" from "this is intrinsic/empty".
-        // [OPEN: this needs review — see Open Concerns §3]
-        require(uint256(target) >> 160 != 0 || addrSentinelSet(target), "invalid ADDR encoding");
-    } else if (d.targetType == 2 /* SCHEMA */) {
-        Attestation memory t = eas.getAttestation(target);
-        require(t.uid != bytes32(0), "target attestation missing");
-        require(t.schema == d.targetSchema, "target schema mismatch");
-    }
-    // targetType == ANY with target != 0: any UID accepted
+    // Per-mode encoding + identity-key derivation
+    bytes32 identityKey;
 
-    // No-duplicates enforcement
+    if (d.targetType == 1 /* ADDR */) {
+        require(target == bytes32(0),         "ADDR mode: target must be 0 (use recipient)");
+        // a.recipient holds the address; address(0) is permitted
+        identityKey = bytes32(uint256(uint160(a.recipient)));
+
+    } else if (d.targetType == 2 /* SCHEMA */) {
+        require(a.recipient == address(0),    "SCHEMA mode: recipient must be 0");
+        require(target != bytes32(0),         "SCHEMA mode: target must be set");
+        Attestation memory t = eas.getAttestation(target);
+        require(t.uid != bytes32(0),          "SCHEMA mode: target attestation missing");
+        require(t.schema == d.targetSchema,   "SCHEMA mode: target schema mismatch");
+        // NOTE: We do NOT check t.revocationTime. Entries are immune to target lifecycle —
+        // a list entry remains valid even if the underlying target attestation is later
+        // revoked. Consumers that care about target liveness should check revocation
+        // status themselves at read time. This policy matches the editions principle:
+        // each attester's view is permanent; downstream churn doesn't unwind history.
+        identityKey = target;
+
+    } else /* ANY */ {
+        require(a.recipient == address(0),    "ANY mode: recipient must be 0");
+        require(target != bytes32(0),         "ANY mode: target must be nonzero member key");
+        // No existence check — target is opaque per the member-key reframe
+        identityKey = target;
+    }
+
+    // No-duplicates enforcement (per-attester edition)
     if (!d.allowsDuplicates) {
-        require(_entryCount[listUID][target][a.attester] == 0, "duplicate target");
+        require(_entryCount[listUID][identityKey][a.attester] == 0, "duplicate identity");
     }
 
     // Cap enforcement (per-attester)
@@ -293,9 +363,10 @@ function onAttest(Attestation calldata a, uint256) returns (bool) {
     // Append + index
     _entries[listUID][a.attester].push(a.uid);
     _entryPosPlusOne[a.uid] = _entries[listUID][a.attester].length;
-    _entryCount[listUID][target][a.attester] += 1;
+    _entryIdentityKey[a.uid] = identityKey;
+    _entryCount[listUID][identityKey][a.attester] += 1;
 
-    emit ListEntryAttested(listUID, a.attester, a.uid, target, weight);
+    emit ListEntryAttested(listUID, a.attester, a.uid, d.targetType, identityKey, weight);
     return true;
 }
 ```
@@ -304,17 +375,25 @@ function onAttest(Attestation calldata a, uint256) returns (bool) {
 
 ```solidity
 function onRevoke(Attestation calldata a, uint256) returns (bool) {
-    (bytes32 listUID, bytes32 target, ) = abi.decode(a.data, (bytes32, bytes32, int256));
+    require(a.data.length == EXPECTED_ENTRY_DATA_LENGTH, "bad LIST_ENTRY payload");
+
+    // Idempotency check FIRST: if this entry was never indexed (e.g., stale revoke
+    // on an attestation our state doesn't know about — possible after resolver
+    // redeploy or in test scenarios), bail before touching anything else.
+    uint256 pp1 = _entryPosPlusOne[a.uid];
+    if (pp1 == 0) return true;
+
+    (bytes32 listUID, , ) = abi.decode(a.data, (bytes32, bytes32, int256));
 
     CachedListDecl memory d = _decl[listUID];
-    require(d.exists, "unknown listUID");
+    // d.exists MUST be true at this point — we wouldn't have an _entryPosPlusOne
+    // unless onAttest ran successfully (which hydrates _decl). Defensive require:
+    require(d.exists, "unknown listUID (resolver state inconsistency)");
 
     // Append-only enforcement: reject revocation entirely
     require(!d.appendOnly, "list is append-only");
 
-    // Gate cleanup behind position check (idempotent on stale revoke)
-    uint256 pp1 = _entryPosPlusOne[a.uid];
-    if (pp1 == 0) return true;
+    bytes32 identityKey = _entryIdentityKey[a.uid];
 
     // Swap-and-pop
     uint256 idx = pp1 - 1;
@@ -327,16 +406,136 @@ function onRevoke(Attestation calldata a, uint256) returns (bool) {
     }
     arr.pop();
     delete _entryPosPlusOne[a.uid];
-    _entryCount[listUID][target][a.attester] -= 1;
+    delete _entryIdentityKey[a.uid];
+    _entryCount[listUID][identityKey][a.attester] -= 1;
 
-    emit ListEntryRevoked(listUID, a.attester, a.uid, target);
+    emit ListEntryRevoked(listUID, a.attester, a.uid, d.targetType, identityKey);
     return true;
 }
 ```
 
 **Reentrancy note:** `eas.getAttestation()` is a pure storage read in EAS 1.x — no resolver callbacks fire. The resolver has no untrusted external calls and no ETH-handling surface. Documented as load-bearing assumption; if EAS adds callback hooks in a future version, re-audit. (Not blocking for v1.)
 
-**Events:** `ListAttested` on declaration; `ListEntryAttested` / `ListEntryRevoked` on membership changes. These are sufficient for any subgraph to materialize lists without reading resolver mappings.
+**Events** (frozen as part of ABI contract — subgraphs and indexers depend on this shape):
+
+```solidity
+event ListAttested(
+    bytes32 indexed listUID,
+    address indexed attester,
+    bool    allowsDuplicates,
+    bool    appendOnly,
+    uint8   indexed targetType,
+    bytes32 targetSchema,
+    uint32  maxEntries
+);
+
+event ListEntryAttested(
+    bytes32 indexed listUID,
+    address indexed attester,
+    bytes32 indexed entryUID,
+    uint8   targetType,        // denormalized from parent LIST for indexer convenience
+    bytes32 identityKey,        // recipient (ADDR), target UID (SCHEMA), or member key (ANY)
+    int256  weight
+);
+
+event ListEntryRevoked(
+    bytes32 indexed listUID,
+    address indexed attester,
+    bytes32 indexed entryUID,
+    uint8   targetType,
+    bytes32 identityKey
+);
+```
+
+`targetType` is included as an indexed field on `ListAttested` and as a regular field on entry events specifically so subgraphs can filter and decode without a parent-LIST lookup per entry (closes adversarial review I6).
+
+---
+
+### Worked example: lifecycle of a no-dupes ADDR-typed allowlist entry
+
+To make resolver state changes concrete, here is the full lifecycle of one entry. Curator Alice (address `0xA110…`) runs an NFT allowlist with `targetType=ADDR, allowsDuplicates=false, appendOnly=false`. Alice adds Bob (address `0xB0B…`), then later removes him.
+
+**State before any LIST operations:**
+
+```
+_decl                 = {} (empty)
+_entries              = {} (empty)
+_entryCount           = {} (empty)
+_entryPosPlusOne      = {} (empty)
+_entryIdentityKey     = {} (empty)
+```
+
+**Step 1 — Alice attests the LIST.** `ListResolver.onAttest` validates field shape; LIST is non-revocable. Resolver maintains no state. LIST gets UID `0xL1`.
+
+**Step 2 — Alice attests her first LIST_ENTRY:** `LIST_ENTRY(listUID=0xL1, target=0x0, weight=0)` with `recipient=0xB0B…`. EAS assigns entry UID `0xE1`.
+
+`ListEntryResolver.onAttest` flow:
+1. Lifecycle checks pass (`revocable=true`, `expirationTime=0`, `refUID=0`)
+2. `_decl[0xL1]` cold path: reads `eas.getAttestation(0xL1)`, decodes, hydrates cache (1 EAS read + 1 SSTORE — cold cost paid by first writer)
+3. `targetType=1 (ADDR)`: requires `target==0` ✓; `identityKey = bytes32(uint256(uint160(0xB0B…))) = 0x000000000000000000000000B0B…`
+4. `!allowsDuplicates`: `_entryCount[0xL1][0x000…B0B][0xA110…] == 0` ✓
+5. `maxEntries=0`: no cap check
+6. State writes:
+   - `_entries[0xL1][0xA110…].push(0xE1)` → length now 1
+   - `_entryPosPlusOne[0xE1] = 1`
+   - `_entryIdentityKey[0xE1] = 0x000…B0B`
+   - `_entryCount[0xL1][0x000…B0B][0xA110…] = 1`
+
+**State after Step 2:**
+
+```
+_decl[0xL1]                     = { exists, allowsDup=false, appendOnly=false,
+                                    targetType=1, targetSchema=0x0, maxEntries=0 }
+_entries[0xL1][0xA110…]         = [0xE1]
+_entryCount[0xL1][0x000…B0B][0xA110…] = 1
+_entryPosPlusOne[0xE1]          = 1
+_entryIdentityKey[0xE1]         = 0x000…B0B
+```
+
+A marketplace contract reading `listReader.countOf(0xL1, 0xA110…, identityKeyForAddress(0xB0B…))` returns `1`. Membership check passes.
+
+**Step 3 — Alice attempts to add Bob again** (`recipient=0xB0B…`): EAS assigns entry UID `0xE2`. `ListEntryResolver.onAttest`:
+1. Lifecycle checks pass
+2. `_decl[0xL1]` warm path: cache hit
+3. `targetType=ADDR`: `identityKey = 0x000…B0B`
+4. `!allowsDuplicates`: `_entryCount[0xL1][0x000…B0B][0xA110…] == 1` ≠ 0 → **REVERT** "duplicate identity"
+
+No state changes. Resolver correctly blocked the duplicate.
+
+**Step 4 — Alice revokes 0xE1.** EAS calls `ListEntryResolver.onRevoke`:
+1. Idempotency check: `_entryPosPlusOne[0xE1] = 1 ≠ 0` → proceed
+2. Decode payload, hit cache: `_decl[0xL1].exists = true ✓`
+3. `!d.appendOnly` ✓
+4. `identityKey = _entryIdentityKey[0xE1] = 0x000…B0B`
+5. Swap-and-pop on `_entries[0xL1][0xA110…]`: only entry, so `arr.pop()` → empty
+6. `delete _entryPosPlusOne[0xE1]` → 0
+7. `delete _entryIdentityKey[0xE1]` → 0
+8. `_entryCount[0xL1][0x000…B0B][0xA110…] -= 1` → 0
+
+**State after Step 4:**
+
+```
+_decl[0xL1]                     = { ... unchanged ... }
+_entries[0xL1][0xA110…]         = []  (empty array, still allocated)
+_entryCount[0xL1][0x000…B0B][0xA110…] = 0
+_entryPosPlusOne[0xE1]          = 0  (deleted)
+_entryIdentityKey[0xE1]         = 0  (deleted)
+```
+
+Bob is now removable AND re-addable. The no-dupes slot is freed (`_entryCount = 0`); Alice can now attest `0xE3` for Bob again if she wants, and it'll succeed (`count == 0` check passes).
+
+**Step 5 — A stale revoke of `0xE1` arrives** (e.g., transaction included twice in some adversarial scenario). EAS calls `onRevoke` again:
+1. Idempotency check: `_entryPosPlusOne[0xE1] = 0` → return true (no-op)
+
+No state changes; resolver correctly idempotent.
+
+---
+
+This walkthrough surfaces several invariants the design relies on:
+- The resolver's maps remain consistent across `attest`/`revoke` cycles (no orphaned `_entryIdentityKey` after revoke).
+- The no-dupes slot is correctly freed on revoke (`count → 0`).
+- Stale revokes are no-ops, not reverts.
+- `_decl` cache is populated cold on first entry write and is correct forever (LIST non-revocable).
 
 ---
 
@@ -344,66 +543,114 @@ function onRevoke(Attestation calldata a, uint256) returns (bool) {
 
 A stateless view contract on top of `ListEntryResolver`. Provides a stable ABI for consumers; lets the resolver evolve internal layout without breaking integrations.
 
+`getMode` decodes the LIST attestation directly via EAS (NOT from the resolver cache). This means empty lists — those with no entries yet — return a valid mode (closes external review S3). The resolver cache exists for entry-write fast-path; it is not the source of truth for queries about declared mode.
+
 ```solidity
 interface IListReader {
     struct ListMode {
         bool    exists;
+        address curator;            // LIST.attester — the canonical curator address
         bool    allowsDuplicates;
         bool    appendOnly;
-        uint8   targetType;
-        bytes32 targetSchema;
+        uint8   targetType;          // 0=ANY, 1=ADDR, 2=SCHEMA
+        bytes32 targetSchema;        // nonzero iff targetType=SCHEMA
         uint32  maxEntries;
-        bool    allowIntrinsic;
     }
 
-    struct ListEntry {
-        bytes32 entryUID;
-        bytes32 target;
-        int256  weight;
-    }
-
-    /// Returns the list's declared configuration. One SLOAD via resolver cache.
+    /// Returns the list's declared configuration. Decoded directly from the LIST attestation
+    /// via EAS (works for empty lists). `exists=false` if listUID is not a LIST attestation.
     function getMode(bytes32 listUID) external view returns (ListMode memory);
 
     /// Number of active entries for (list, attester). O(1).
     function length(bytes32 listUID, address attester) external view returns (uint256);
 
     /// Page of active entries. Insertion order; O(N) reads, one SLOAD per entry.
+    /// Returns raw entries; use the typed accessors below for safe target decoding.
+    struct RawEntry {
+        bytes32 entryUID;
+        uint8   targetType;          // denormalized from LIST.targetType
+        bytes32 target;              // raw target field (interpretation depends on targetType)
+        address recipient;           // raw recipient field (only set for ADDR-typed entries)
+        int256  weight;
+    }
     function entries(bytes32 listUID, address attester, uint256 start, uint256 len)
-        external view returns (ListEntry[] memory);
+        external view returns (RawEntry[] memory);
 
-    /// O(1) membership check. Works for all modes (no-dupes, dups-allowed, append-only, etc.).
-    /// For duplicates-allowed lists: returns true iff at least one entry with this target exists.
-    function isMember(bytes32 listUID, address attester, bytes32 target)
-        external view returns (bool);
+    /// Typed accessors — preferred over raw casting. Reverts if mode mismatch.
+    /// Closes adversarial review I1 (high-bits ambiguity): consumers must declare their
+    /// expected interpretation, and ListReader rejects mode mismatches.
 
-    /// O(1) entry count for a specific target (== 1 for no-dupes; can be > 1 for dups-allowed).
-    function countOf(bytes32 listUID, address attester, bytes32 target)
+    /// Decode entry as ADDR-typed. Reverts unless listUID is ADDR-typed.
+    function targetAsAddress(bytes32 listUID, bytes32 entryUID)
+        external view returns (address);
+
+    /// Decode entry as SCHEMA-typed UID. Reverts unless listUID is SCHEMA-typed.
+    function targetAsUID(bytes32 listUID, bytes32 entryUID)
+        external view returns (bytes32);
+
+    /// Decode entry as ANY-typed opaque member key. Reverts unless listUID is ANY-typed.
+    function targetAsMemberKey(bytes32 listUID, bytes32 entryUID)
+        external view returns (bytes32);
+
+    /// O(1) entry count for a specific identity key (== 1 for no-dupes; can be > 1 for dups).
+    /// `identityKey` semantics:
+    ///   ADDR mode:   bytes32(uint160(address))
+    ///   SCHEMA mode: the attestation UID
+    ///   ANY mode:    the opaque member key
+    /// For no-dupes lists, `countOf(...) > 0` is the membership check.
+    /// For dupes-allowed lists, callers must explicitly compare to 0 — there is no
+    /// `isMember` bool (closes external review BLOCKING B2: bool semantics on a multiset
+    /// are a footgun; force explicit comparison at the call site).
+    function countOf(bytes32 listUID, address attester, bytes32 identityKey)
         external view returns (uint256);
+
+    /// Identity-key derivation helpers — pure functions documenting the canonical
+    /// encoding for each mode. Callsite documentation is the point; bytecode cost is trivial.
+    function identityKeyForAddress(address a) external pure returns (bytes32);   // = bytes32(uint256(uint160(a)))
+    function identityKeyForUID(bytes32 uid)   external pure returns (bytes32);   // = uid
+    function identityKeyForMemberKey(bytes32 k) external pure returns (bytes32); // = k
 }
 ```
 
-**Consumer pattern (NFT allowlist):**
+**Consumer pattern (NFT allowlist — SECURE):**
 
 ```solidity
-function buy(uint256 tokenId, address curator) external payable {
-    require(
-        listReader.isMember(allowlistUID, curator, bytes32(uint256(uint160(msg.sender)))),
-        "not on allowlist"
-    );
+function buy(uint256 tokenId) external payable {
+    // Curator is fixed at construction; NOT taken from caller (closes BLOCKING B4)
+    IListReader.ListMode memory m = listReader.getMode(allowlistUID);
+    require(m.exists && m.targetType == 1 /* ADDR */, "wrong list type");
+    require(m.curator == trustedCurator, "untrusted list curator");
+
+    // Membership check via countOf — explicit comparison, no bool footgun
+    bytes32 identityKey = bytes32(uint256(uint160(msg.sender)));
+    require(listReader.countOf(allowlistUID, m.curator, identityKey) > 0, "not on allowlist");
+
     _executePurchase(msg.sender, tokenId);
 }
 ```
 
-**Consumer pattern (DAO weighted distribution):**
+**Anti-pattern (DO NOT DO THIS):**
 
 ```solidity
-function distribute(bytes32 listUID, address curator, uint256 pool) external {
-    IListReader.ListMode memory m = listReader.getMode(listUID);
-    require(m.exists && m.targetType == 1 /* ADDR */, "wrong list type");
+function buy(uint256 tokenId, address curator) external payable {  // ❌ caller picks curator
+    require(listReader.countOf(allowlistUID, curator, ...) > 0, "not on allowlist");
+    // Attacker passes their own curator-edition of the same allowlistUID and bypasses.
+}
+```
 
-    uint256 n = listReader.length(listUID, curator);
-    IListReader.ListEntry[] memory es = listReader.entries(listUID, curator, 0, n);
+The curator MUST be derived from a trusted source — either `LIST.attester` (when the curator is the list's original publisher) or a contract constant (when one specific curator is trusted regardless of who published the LIST UID).
+
+**Consumer pattern (DAO weighted distribution — SECURE):**
+
+```solidity
+function distribute(uint256 pool) external {
+    // Curator and listUID are constants known at construction
+    IListReader.ListMode memory m = listReader.getMode(slateListUID);
+    require(m.exists && m.targetType == 1 /* ADDR */, "wrong list type");
+    require(m.curator == trustedSlateAuthor, "untrusted slate");
+
+    uint256 n = listReader.length(slateListUID, m.curator);
+    IListReader.RawEntry[] memory es = listReader.entries(slateListUID, m.curator, 0, n);
 
     int256 totalWeight;
     for (uint i; i < es.length; i++) totalWeight += es[i].weight;
@@ -411,14 +658,15 @@ function distribute(bytes32 listUID, address curator, uint256 pool) external {
 
     for (uint i; i < es.length; i++) {
         if (es[i].weight <= 0) continue;
-        address recipient = address(uint160(uint256(es[i].target)));
+        // Safe because ADDR-typed entries' recipient was validated at write time;
+        // we are NOT casting es[i].target (which is 0 for ADDR entries — see encoding rules).
         uint256 share = (pool * uint256(es[i].weight)) / uint256(totalWeight);
-        payable(recipient).transfer(share);
+        payable(es[i].recipient).transfer(share);
     }
 }
 ```
 
-The consumer trusts target encoding (no per-entry validation), trusts schema correctness (for TYPED lists), and pays a single bulk SLOAD for the entry array. Type confidence comes from the resolver's write-time enforcement.
+The consumer trusts target encoding (no per-entry validation), trusts schema correctness (for SCHEMA-typed lists), and pays a single bulk SLOAD for the entry array. Type confidence comes from the resolver's write-time enforcement. **Smart-contract consumers should ALWAYS check `m.targetType` matches expectations before reading entries** — a mismatch indicates either misconfiguration or an attack.
 
 ---
 
@@ -439,7 +687,7 @@ EFS already has a generic mechanism for attaching strings to any attestation UID
 ```
 LIST L1
   ├── allowsDuplicates=false, appendOnly=false, targetType=SCHEMA,
-  │   targetSchema=FILM_SCHEMA, maxEntries=10, allowIntrinsic=false
+  │   targetSchema=FILM_SCHEMA, maxEntries=10
   │
   ├── PROPERTY on L1: name="Alice's Top 10 of 2009" (list-scope metadata)
   │
@@ -457,27 +705,51 @@ Each metadata attestation costs 3 attestations (Anchor + PIN + PROPERTY). Apps c
 
 ---
 
-## ADR-0041 reconciliation
+## ADR-0041 reconciliation (honest version)
 
-ADR-0041 establishes that **cardinality lives in the schema UID** because the schema UID is the only "Etched" globally-coordinated slot. PIN (cardinality 1) and TAG (cardinality N) are distinct schema UIDs for this reason. Putting cardinality switches on individual attestations was explicitly rejected.
+ADR-0041 establishes that **cardinality lives in the schema UID** because the schema UID is the only Etched, globally-coordinated slot at the edge-predicate layer. PIN (cardinality 1) and TAG (cardinality N) are distinct schema UIDs for this reason.
 
-This design has cardinality (`allowsDuplicates`) and type (`targetType`) switches as fields on the LIST attestation. This *looks* like the pattern ADR-0041 rejected. It isn't — here's why:
+This design puts cardinality (`allowsDuplicates`) and type (`targetType`) switches as fields on the LIST attestation, not on the LIST_ENTRY schema UID. **Two external reviewers in round-18 flagged this as rationalization-shaped.** They were right to scrutinize it; here is the more-honest reckoning.
 
-**ADR-0041's principle, restated:** A predicate's cardinality coordination point must be permanent, coordinated, machine-readable, and located at the right layer.
+### What ADR-0041 actually rejected
 
-**For PIN/TAG**, the predicate is the schema itself (`isPinned(target, definition)`). The coordination point is the schema UID.
+ADR-0041 §"Alternatives considered" rejected two specific patterns:
 
-**For LIST**, the predicate is not the LIST_ENTRY schema in general — it's *this specific list's membership*. The predicate is "is X in LIST L by attester A?" Each LIST has its own coordination point: its declaration attestation.
+1. **Cardinality as a per-attestation flag on a generic EDGE schema.** E.g., `EDGE(target, definition, cardinality)` where cardinality is a field. Reviewers (correctly) noted that a generic edge reader cannot tell from the schema UID alone whether `(target, definition)` is set-shaped or bag-shaped.
+2. **Cardinality as a PROPERTY on a definition anchor.** E.g., `definition anchor has a PROPERTY('cardinality', '1')`. Same problem one indirection deeper: the kernel must read PROPERTY state to know how to handle a generic edge.
 
-That declaration:
-- **Permanent** — LIST is non-revocable; the cardinality field can never change after attest
-- **Coordinated** — every reader of "list L" agrees on its UID and reads its fields the same way
-- **Machine-readable** — `eas.getAttestation(L).data` exposes the fields directly; one read
-- **Located at the right layer** — at the predicate's coordination object (the LIST), not on each instance (the LIST_ENTRY)
+ADR-0041's deeper principle was: **a generic edge resolver must not need to look up predicate metadata to know how to process the edge.** Each schema must be self-coordinating.
 
-This satisfies ADR-0041's principle one level of indirection deeper than the PIN/TAG case. **The LIST attestation IS the predicate-coordination layer for that specific list.** A subgraph indexing LIST_ENTRYs reads each entry's LIST and knows the coordination layout deterministically.
+### Where this design genuinely deviates
 
-**ADR-0041 supersession is NOT required.** What IS required is a sibling ADR documenting this reconciliation so a 2076 reader doesn't conclude (wrongly) that ADR-0041 was violated. That sibling ADR is the LIST ADR itself.
+`ListEntryResolver.onAttest` performs **exactly the pattern ADR-0041 worried about**: it reads the parent LIST attestation to learn `allowsDuplicates`, `appendOnly`, `targetType` before processing the entry. The cache reduces this to one EAS read per LIST-first-touch (warm path is one SLOAD), but the *shape* is still "kernel reads predicate metadata before processing the edge."
+
+This is a real deviation. The mitigations:
+
+- **The metadata read is bounded.** Per-LIST, one-time, immutable result (LIST is non-revocable). Not "every consumer of every edge must look up every predicate's flags" — that's the PIN/TAG-with-cardinality pattern ADR-0041 killed. Here, the resolver looks up the LIST once and caches; subsequent entries hit the cache. Indexers do the same.
+- **The metadata source is a specific named attestation, not a generic flag.** Consumers don't need to ask "is this edge a Set or Bag?" They ask "what is the configuration of LIST L?" — and L's UID is the coordination handle. This is structurally cleaner than per-edge flags but does add one level of indirection vs. PIN/TAG.
+- **LIST is not an edge.** PIN and TAG are edges (relationships between two existing things). LIST is a predicate-coordination object that *describes* a class of relationships. The two are different layers; ADR-0041's principle applies cleanly to the edge layer, and this design respects it there: PIN and TAG remain untouched.
+
+### What the design accepts as cost
+
+A 2076 reader of LIST_ENTRY must always fetch the parent LIST to know:
+- Whether `target == X` means "X exists" (SCHEMA), "X is an address" (ADDR), or "X is an opaque member key" (ANY)
+- Whether duplicates are permitted
+- Whether entries can be revoked
+
+This is the "kernel-read-per-write" cost ADR-0041 sought to avoid at the edge layer. We pay it here, justified by:
+
+1. The cache makes the marginal cost one SLOAD per warm-path entry write (acceptable for archival semantics).
+2. The alternative — splitting LIST_ENTRY into 6+ schemas (one per combination of allowsDuplicates × targetType × appendOnly) — produces 18+ schemas and an unusable enumeration.
+3. Indexer cost is one EAS read per LIST (cached client-side), not per entry.
+
+### Verdict
+
+**This design deliberately deviates from ADR-0041's strictest reading.** ADR-0041 expresses a principle (no kernel-read-per-write at the edge layer); this design accepts that principle at the edge layer (PIN/TAG unchanged) but introduces a new layer above it (LIST predicate-coordination) where the cost is acceptable.
+
+The sibling ADR that documents this — the LIST ADR — must explicitly note this deviation in its Consequences section, NOT claim "no supersession needed." A 2076 reader sees both ADR-0041 and the LIST ADR and understands: "ADR-0041 was about the edge layer; the LIST ADR introduces a higher layer where the trade-off is different."
+
+**The earlier framing of "ADR-0041 supersession is NOT required, just a sibling ADR" was technically correct but read as rationalization.** The honest framing is: ADR-0041's principle is preserved at the edge layer; the LIST ADR introduces a new layer with a deliberate, documented trade-off. Both ADRs stand, both apply at their respective layers, and a 2076 reader can reconstruct why each made sense.
 
 ---
 
@@ -489,27 +761,28 @@ Confirming the design handles the use cases that drove the requirements.
 
 ```
 LIST: allowsDuplicates=false, appendOnly=false, targetType=ADDR,
-      maxEntries=8, allowIntrinsic=false
-LIST_ENTRY × 8: target=friend_addr, weight=rank (1=highest)
+      targetSchema=0x0, maxEntries=8
+LIST_ENTRY × 8: target=0x0, recipient=friend_addr, weight=rank (1=highest)
 ```
 
-Consumer: `listReader.entries(top8, alice, 0, 8)` returns all 8, ordered by insertion. Client sorts by weight in memory. O(1) "is X in Alice's top 8?" via `isMember`.
+Consumer: `listReader.entries(top8, alice, 0, 8)` returns RawEntry[]; each `.recipient` holds the friend address. Client sorts by weight in memory. O(1) "is X in Alice's top 8?" via `countOf(top8, alice, bytes32(uint256(uint160(X)))) > 0`.
 
 ### NFT allowlist (no-dupes, addresses, on-chain read)
 
 ```
-LIST: allowsDuplicates=false, appendOnly=false, targetType=ADDR
-LIST_ENTRY × N: target=member_addr, weight=0
+LIST: allowsDuplicates=false, appendOnly=false, targetType=ADDR,
+      targetSchema=0x0, maxEntries=0
+LIST_ENTRY × N: target=0x0, recipient=member_addr, weight=0
 ```
 
-Marketplace contract: `listReader.isMember(allowlist, curator, bytes32(uint256(uint160(msg.sender))))` — single SLOAD, ~4k gas.
+Marketplace contract: see the "Consumer pattern (NFT allowlist — SECURE)" example above. Single SLOAD via `countOf`, ~4k gas.
 
 ### Letterboxd top-10 films with ratings (ranked, no-dupes, typed, per-entry metadata)
 
 ```
 LIST: allowsDuplicates=false, appendOnly=false, targetType=SCHEMA,
       targetSchema=FILM_SCHEMA, maxEntries=10
-LIST_ENTRY × 10: target=film_uid, weight=rank
+LIST_ENTRY × 10: target=film_uid, recipient=0x0, weight=rank
   PROPERTY on each LIST_ENTRY: rating="X/10"
 ```
 
@@ -519,42 +792,45 @@ Per-entry rating is independent of the film's intrinsic year (PROPERTY on film U
 
 ```
 LIST: allowsDuplicates=true, appendOnly=false, targetType=SCHEMA,
-      targetSchema=DATA_SCHEMA
-LIST_ENTRY × N: target=song_data_uid, weight=position
+      targetSchema=DATA_SCHEMA, maxEntries=0
+LIST_ENTRY × N: target=song_data_uid, recipient=0x0, weight=position
 ```
 
-"Waterfalls" can appear 3 times. `isMember(playlist, alice, waterfalls_uid)` returns true; `countOf(...)` returns 3.
+"Waterfalls" can appear 3 times. `countOf(playlist, alice, waterfalls_uid)` returns 3. Consumer must explicitly compare to expected count for correctness; no `isMember` bool to misuse.
 
-### Shopping list with intrinsic items (unordered, no-dupes, ANY, intrinsic-allowed)
+### Shopping list with intrinsic items (unordered, no-dupes, ANY with opaque keys)
 
 ```
 LIST: allowsDuplicates=false, appendOnly=false, targetType=ANY,
-      allowIntrinsic=true, maxEntries=0
-LIST_ENTRY × N: target=bytes32(0), weight=N
+      targetSchema=0x0, maxEntries=0
+LIST_ENTRY × N: target=keccak256(abi.encode("efs-list-intrinsic", "milk")),
+                recipient=0x0, weight=N
   PROPERTY on each LIST_ENTRY: name="milk", status="to-buy"
 ```
 
-The list permits intrinsic entries (target=0). The item identity lives in the PROPERTY name on the LIST_ENTRY UID. Bob marks "milk" as bought → PROPERTY on his LIST_ENTRY changes status to "bought" (or he revokes the entry; non-append-only).
+Items use a documented key-derivation convention (`keccak256(abi.encode("efs-list-intrinsic", payload))`) so different clients converge on the same key for the same item name. The PROPERTY on the LIST_ENTRY carries the human-readable name and status. Bob marks "milk" as bought → PROPERTY on his LIST_ENTRY changes status to "bought" (or he revokes the entry; non-append-only).
 
-### Software version registry (append-only, typed, capped or uncapped)
+### Software version registry (append-only, typed, uncapped)
 
 ```
 LIST: allowsDuplicates=false, appendOnly=true, targetType=SCHEMA,
       targetSchema=RELEASE_SCHEMA, maxEntries=0
-LIST_ENTRY × N: target=release_uid, weight=release_timestamp
+LIST_ENTRY × N: target=release_uid, recipient=0x0, weight=release_timestamp
 ```
 
 Version 1.2.3 is permanent. If buggy, attach a `deprecated=true` PROPERTY to the LIST_ENTRY — the entry stays in the list (dependents can still reference v1.2.3) but consumers see the signal. NPM/crates.io model.
+
+(Note: `appendOnly=true` + `allowsDuplicates=false` does NOT require `maxEntries`; the no-dupe rule provides the natural bound. The required-cap rule only triggers when both `appendOnly=true` AND `allowsDuplicates=true`.)
 
 ### DAO delegate weighted slate (ranked, no-dupes, addresses, capped)
 
 ```
 LIST: allowsDuplicates=false, appendOnly=false, targetType=ADDR,
-      maxEntries=15
-LIST_ENTRY × ≤15: target=delegate_addr, weight=delegation_amount
+      targetSchema=0x0, maxEntries=15
+LIST_ENTRY × ≤15: target=0x0, recipient=delegate_addr, weight=delegation_amount
 ```
 
-Governance contract iterates the slate, multiplies vote weight by each delegate's allocation share. Type confidence: every target is an address; the governance contract `address(uint160(uint256(entry.target)))` without validation.
+Governance contract reads `recipient` (the delegate address) and `weight` (the allocation share). Type confidence: every entry's recipient was validated as an address at write time. The contract `payable(entry.recipient)` without validation.
 
 ---
 
@@ -576,91 +852,133 @@ Things we want external reviewers to attack.
 
 ### 1. Two new schemas + two new resolvers is real Etched surface
 
-EFS goes from 7 schemas to 9. The reconciliation argument (LIST as predicate-coordination layer) is sound but adds complexity to a 2076 reader's mental model. A reviewer who can show how to do this with one schema (or zero — extending TAG with a sibling resolver) without losing a MUST capability would dissolve significant complexity.
+EFS goes from 7 schemas to 9. The reconciliation argument (LIST as predicate-coordination layer) is sound but adds complexity to a 2076 reader's mental model. The S1 inverted-framing pass (round-18b internal) verified that 4 MUSTs cannot be satisfied with existing schemas — the new schemas are load-bearing for the locked requirements.
 
-### 2. `address(0)` encoding for ADDR-typed lists
+**Forward compatibility note:** the LIST schema's field set is frozen at registration. Adding a fourth `targetType` value (e.g., `DELEGATED`, `MERKLE_ROOT`, `BLS12_PUBKEY`) post-launch requires a new LIST schema UID. This is the same constraint as PIN/TAG (ADR-0041) and is accepted. The `require(targetType <= 2)` in ListResolver makes the bound explicit; future additions are a deliberate Etched commitment, not a silent feature creep.
 
-The current encoding is `target = bytes32(uint160(addr))`. For `addr = address(0)`, this yields `target = bytes32(0)`, which collides with the intrinsic-item sentinel. The resolver pseudocode above sketches a fix (high-bit sentinel for ADDR encoding), but this is the place I'm least sure. Options:
+### 2. RESOLVED — `address(0)` encoding via EAS recipient field
 
-- **A**: Reject `address(0)` despite the locked requirement ("address(0) is valid"). Honest but goes against the lock.
-- **B**: Use a sentinel-bit encoding for ADDR (e.g., `bytes32(uint256(uint160(addr)) | (1 << 160))`). Distinguishes "this is an address" from "this is empty/intrinsic" cleanly but uglier in tooling.
-- **C**: Forbid intrinsic entries on ADDR-typed lists structurally (already enforced by `allowIntrinsic ⇒ targetType=ANY`) and accept that ADDR-typed lists can have `target=bytes32(0)` only when it actually means `address(0)`. The resolver still needs to distinguish; this only works if we trust the LIST's `allowIntrinsic` flag.
-- **D**: Add a separate `address recipient` field on LIST_ENTRY, used only for ADDR-typed lists. Cleaner but adds a field.
+Round-18 had four candidate options (A/B/C/D). Adopted in round-18b: **a refined Option D** that uses EAS's native `recipient` field for ADDR-typed entries instead of adding a new field. `target` is `bytes32(0)` for ADDR mode; `recipient` carries the address; `address(0)` is fully supported because `recipient=address(0)` is a normal EAS value, not a sentinel collision.
 
-Recommendation: **C** if we can prove the type-check ordering works; **D** if not. Reviewer input wanted.
+This dissolves the original concern. The structural separation also closes adversarial review I1 (high-bits ambiguity) — ADDR-typed entries use a different EAS field than ANY-typed, so the polymorphism is between fields, not within one field.
 
-### 3. Duplicates-allowed `isMember` semantics
+### 3. RESOLVED — `isMember` dropped; only `countOf` exposed
 
-For a duplicates-allowed list with target X appearing 3 times, `isMember(list, attester, X)` returns true (count > 0). `countOf(...)` returns 3. Is there a real consumer where this causes correctness bugs? Should we expose only `countOf` and let consumers compare to 0?
+Round-18 asked whether to expose `isMember` bool. Round-18b answer: **drop it.** Three independent external reviewers (Claude, Codex, Gemini) flagged that bool semantics on a multiset is a footgun — quorum contracts reading `length` vs `isMember` semantics drift; consumer code on the same list gives different answers depending on which API it picks. `countOf(...) > 0` forces the comparison to be explicit at the call site.
 
-### 4. State growth for append-only uncapped lists
+### 4. Member-key collisions and ANY-typed safety (adversarial review I3, I8)
 
-Worst case: an attacker creates an `appendOnly=true, maxEntries=0` LIST and spams entries. Per-attester storage liability is real. Mitigation: each attester pays their own gas; storage is keyed `[listUID][attester]` so attackers can't bloat other curators' state. But a curator's own genuine append-only list (versioning) has unbounded growth over decades. Acceptable?
+The member-key reframe for `targetType=ANY` puts opaque bytes32 keys in `target`. Different clients picking different conventions (`keccak256("milk")` vs `bytes32(bytes("milk"))` padded) get different keys for the same human concept.
 
-### 5. `_entryCount` cleanup on revoke for NO_DUPES + revocable lists
+**Mitigations adopted:**
+- Document a canonical key-derivation convention in the SDK guide: `keccak256(abi.encode("efs-list-intrinsic", payload))` (domain-separated namespace).
+- `ListReader.targetAsMemberKey()` is a typed accessor — consumers explicitly opt into "member key" semantics for ANY lists; can't silently misinterpret as an address or UID.
+- `targetType` is denormalized into `ListEntryAttested` events so subgraphs filter correctly without parent-LIST lookups.
 
-Mechanical but needs careful testing. Sequence: attest E1 with target X (count=1) → revoke E1 (count=0) → attest E2 with target X (must succeed). Resolver pseudocode handles this via decrement on revoke, but the test matrix needs to cover all permutations.
+**Not mitigated (accepted cost):** different SDKs may derive different keys for the same logical item. This is a UX coordination problem at the client layer, not a protocol-level issue. The SDK guide is the coordination point.
 
-### 6. Resolver cache poisoning
+### 5. State growth for append-only uncapped lists
 
-`_decl[listUID]` is hydrated from `eas.getAttestation(listUID)` on first LIST_ENTRY write. Because LIST is non-revocable and its data is immutable, the cache is correct forever. But: if an attacker can attest a LIST_ENTRY pointing at a `listUID` that doesn't exist yet, then later create the LIST with that exact UID... EAS UIDs are content-derived; this would require finding a hash collision. Not feasible. Confirmed safe but worth documenting as a load-bearing assumption.
+Worst case: a curator creates an `appendOnly=true, maxEntries=0` LIST with `allowsDuplicates=false`. The no-dupe rule provides a natural bound (one entry per identity key per attester) — only weakly griefable. State storage is per-attester-keyed, so attackers can't bloat the curator's edition.
 
-### 7. The frame question
+The truly unbounded case (`appendOnly=true + allowsDuplicates=true + maxEntries=0`) is now **rejected by ListResolver** at LIST attest time (closes Claude external review B4). The trio requires a `maxEntries > 0` declaration to be accepted.
 
-We've spent 18 rounds on this design. The frame has shifted four times:
+A curator's own genuine append-only list with `allowsDuplicates=false` (e.g., a version registry adding ~10 versions per year) has bounded growth over decades. Acceptable.
+
+### 6. Implicit invariants — load-bearing assumptions to document
+
+Surfaced explicitly (closes round-18 implicit-invariant gap):
+
+- **`IEAS.getAttestation` is a pure storage read in EAS 1.x.** No callback hooks fire. If EAS upgrades to add resolver callbacks at read time, ListEntryResolver must be re-audited (reentrancy surface).
+- **LIST attestations are immutable after attest** (non-revocable, no expiration). `_decl` cache is correct forever; cache invalidation never required.
+- **EAS UIDs are content-derived.** Attacker cannot precommit a `LIST_ENTRY` with a `listUID` that hasn't been minted yet — the LIST's UID is determined by its own attestation data, which the attacker can't predict for an arbitrary curator.
+- **ADR-0025 anchor name uniqueness is (parent, name, schemaUID)-keyed and GLOBAL across attesters.** This is why per-attester editions of a list cannot be expressed as same-name anchors under one parent — and is why LIST + LIST_ENTRY's resolver-maintained per-attester state is necessary rather than reusable existing infrastructure. Documented because round-16's design assumed per-attester anchor scoping that doesn't exist.
+
+### 7. CREATE2 deploy invariant for ListEntryResolver
+
+Closes external review BLOCKING B5 (Claude). Because the resolver address is baked into LIST_ENTRY's schema UID at registration, deploying ListEntryResolver to different addresses on Sepolia vs mainnet would produce different schema UIDs, orphaning all Sepolia entries at mainnet cutover.
+
+**Required pre-launch:**
+- CREATE2-deploy ListEntryResolver and ListResolver with deterministic salts
+- Document the resolver addresses in the freeze ADR
+- Add a deploy-time invariant: `assert(LIST_ENTRY_SCHEMA_UID == expected)` that fails fast on drift
+- Add CI check (analogous to existing `deployedContracts.ts` pin check from ADR-0037) verifying the schema UID matches the expected value
+
+Round-16's pinned-Sepolia-fork pattern (ADR-0037) handles PIN/TAG correctly; LIST + LIST_ENTRY entering this same window must follow the same discipline.
+
+### 8. The frame question (remains open)
+
+We've spent 18 rounds + a post-external-review pass on this design. The frame has shifted multiple times:
 - "lists are folders" (R11-12) → unwound
 - "free-floating LIST is enough" (R13-14) → refined
 - "TAG-with-weight covers it" (R15-16) → ADR-0043 attempt
 - "constraint callbacks" (R17) → rejected
 - "LIST + LIST_ENTRY with dedicated resolver" (R18) → current
+- Round-18b internal S1 inverted-framing pass: tested "can existing schemas + a new resolver only" — verdict RED, four MUSTs cannot be satisfied without new schemas (typed write-time, append-only write-time, per-attester editions, on-iteration type confidence)
 
-Each prior frame felt right inside the room. What's the next-frame question we haven't asked?
+Three reviewers in round-18 surfaced candidate next frames:
+- "Kernel enforces nothing; declared constraints are advisory" (Claude W1)
+- "Lists as files" (Gemini WA)
+- "target is a member key" (Codex W last) — **adopted into round-18b**
+
+Codex's reframe was adopted. The other two remain candidates for a future iteration if v1 surfaces issues, but they each require relaxing the MUSTs as currently locked.
 
 ---
 
 ## Field-set decisions
 
-### Locked (no further iteration)
+### Locked (round-18b — post-external-review)
 
 - LIST options expressed as **explicit bools and discrete enum values** (no bitfields)
 - `targetType` as enum `0=ANY, 1=ADDR, 2=SCHEMA` (not bitfield)
 - LIST attestation is **non-revocable**
 - LIST_ENTRY is **revocable** (resolver rejects when LIST.appendOnly=true)
+- LIST_ENTRY lifecycle: resolver REQUIRES per-attestation `revocable=true`, `expirationTime=0`, `refUID=0` (closes external review B3)
 - `listUID` is in LIST_ENTRY's data payload, not `refUID`
-- `target` is an explicit field on LIST_ENTRY (admits attestation UID, address encoding, or sentinel-zero)
-- `weight` is always present on LIST_ENTRY (unordered readers ignore)
+- **Per-mode encoding via EAS native fields:**
+  - ADDR: target=`bytes32(0)`, address in EAS `recipient` field (address(0) valid)
+  - SCHEMA: target=UID, recipient=`address(0)` (existence + schema validated)
+  - ANY: target=opaque nonzero member key, recipient=`address(0)` (no existence check)
+- `weight` is always present on LIST_ENTRY; opaque int256 metadata, consumer interprets
 - **Stateless `ListReader` view contract** as the documented consumer ABI
+- **Typed accessors on ListReader** (`targetAsAddress`, `targetAsUID`, `targetAsMemberKey`) reject mode mismatches
+- `getMode` decodes LIST attestation directly via EAS (NOT from resolver cache — works for empty lists)
 - Per-entry metadata via **standard PROPERTY-on-attestation pattern**, scoped to LIST_ENTRY UID
-- `address(0)` is a valid target for ADDR-typed lists (encoding details TBD per Open Concern §2)
-- `maxEntries` included as a `uint32` field on LIST (0 = uncapped)
-- `allowIntrinsic` is a separate bool, required to be true for `target=bytes32(0)` entries
+- `maxEntries` included as a `uint32` field on LIST (0 = uncapped; REQUIRED >0 when appendOnly+allowsDuplicates)
+- **No `isMember` bool** — `countOf` only; consumers explicitly compare to 0
+- **`allowIntrinsic` field removed** — replaced by `targetType=ANY` with opaque member keys (Codex reframe)
+- **CREATE2 deterministic resolver deploy** with schema UID invariant + CI pin check
+- **Events frozen** with `targetType` denormalized for subgraph efficiency (see Resolver behavior §Events)
+- **ADR-0041 reconciliation framed honestly** as deliberate deviation at predicate-coordination layer (not "no supersession needed")
 
-### Open (pending external review)
+### Open (pending next external review pass)
 
-- `address(0)` encoding mechanism (Open Concern §2 — options A/B/C/D)
-- Whether to expose `countOf` only or both `isMember` + `countOf` (Open Concern §3)
-- Exact event schema and indexed parameter choices for `ListAttested` / `ListEntryAttested` / `ListEntryRevoked`
-- Whether to defer or include reverse-target lookup as a NICE (currently deferred)
+- Final review of round-18b revisions
+- Specifically: does the encoding-via-EAS-native-fields design hold up under scrutiny?
+- Does the member-key reframe with documented key-derivation convention resolve the polymorphism concerns?
+- Are the lifecycle enforcement requirements complete?
 
 ---
 
 ## Frame history recap
 
-Five frame-level refinements across 18 rounds:
+Six frame-level refinements across 18 rounds + 1 post-external-review revision:
 
 - **Round 11-12**: lists are folders → unwound (unification didn't match the graph model)
 - **Round 13-14**: free-floating LIST attestation + typed list anchors + PIN placement
 - **Round 15-16**: schema simplification + principled editions stance + SortOverlay TAG-source + entry-anchor + weight TAG (3 attestations per entry)
 - **Round 17**: constraint-callback / IEFSConstraintCallback mechanism (ADR-0043) → rejected by 3 external reviewers (wrong abstraction)
-- **Round 18** (this design): LIST + LIST_ENTRY with dedicated `ListEntryResolver` enforcing all declared options at write time; single attestation per entry; per-entry metadata via standard PROPERTY pattern on LIST_ENTRY UID
+- **Round 18**: LIST + LIST_ENTRY with dedicated `ListEntryResolver` enforcing all declared options at write time; single attestation per entry; per-entry metadata via standard PROPERTY pattern on LIST_ENTRY UID
+- **Round 18b** (this revision): post-external-review hardening — Codex's member-key reframe adopted for ANY; `address(0)` resolved via EAS native `recipient` field for ADDR; `isMember` dropped; lifecycle invariants enforced (revocable, expirationTime, refUID); CREATE2 deploy pinned; `appendOnly + allowsDuplicates + uncapped` combo rejected; ADR-0041 reconciliation framed honestly as deliberate deviation at the predicate-coordination layer
 
-The pattern across all five: agents converge inside a frame; humans question the frame. Round-18's convergence was validated by 4-of-5 independently-framed parallel agents arriving at the same architecture — but the convergence is internal-only; external review has not yet seen this design.
+The pattern across all six: agents converge inside a frame; humans question the frame. Round-18 added a new dynamic: external reviewers (Claude/Codex/Gemini in parallel) found issues that the 4-of-5 internal convergence missed — including correctness bugs (allowlist example), missing lifecycle enforcement, and a clean reframe (member-key) that dissolved the design's biggest unresolved concern. Round-18b is the integration of that feedback + an internal S1 inverted-framing pass (verdict: RED, architecture justified).
 
 ---
 
-## Open questions for human / external review
+## Open questions for human / external review (round-18b)
 
-1. Should `address(0)` encoding use a sentinel-bit (Open Concern §2 option B/D), live with the collision (option C), or break the lock and reject `address(0)` (option A)?
-2. Should `isMember` return bool, or should we expose only `countOf(...) > 0`?
-3. Is the schema-count cost (7 → 9) justified, or should we attempt a one-schema or extend-TAG variant?
-4. What's the next-frame question we haven't asked?
+1. Does the EAS-native-`recipient` encoding for ADDR-typed lists hold up? Any indexer / SDK / EAS-quirk concerns we missed?
+2. Does the documented key-derivation convention for ANY-typed lists (`keccak256(abi.encode("efs-list-intrinsic", payload))`) sufficiently coordinate clients, or do we need stronger protocol-level enforcement?
+3. Are the lifecycle invariants (revocable, expirationTime, refUID) complete, or are there other EAS-level fields that need explicit resolver-side requires?
+4. Is the ADR-0041 reconciliation now honest enough — is "deliberate deviation at a new layer" the right framing, or does it still read as rationalization?
+5. The frame question stays open: what next-frame question haven't we asked?
