@@ -95,15 +95,67 @@ Internal subagent rounds: ~30 minutes wall time, several dollars. External round
 
 6. **Document the meta-process.** This file. Future EFS architectural work benefits from this list as much as the LIST design did.
 
+## AI-focused design process — lessons from the Lists arc (rounds 11–18d, closed 2026-05-28)
+
+The Lists design ran 18 rounds + 3 external review cycles before freezing. It ended in a good place, but it oscillated badly in the middle. These lessons are specifically about running a *high-stakes design with AI agents as the primary labor* — they generalize to future AI-driven EFS work. Earned, not theoretical.
+
+### Crystallize requirements with the human BEFORE exploring solutions
+
+The single biggest unlock. Rounds 11–17 oscillated because each round discovered a new requirement and then reframed the prior round's design as "insufficient" against a goalpost that was still moving. The cure was a deliberate stop to lock **MUST / NICE / DEFERRED** with the human, explicitly, before running another design pass. Once the goalpost stopped moving, the design space collapsed to one shape within a single round.
+
+AI agents are eager to design — they'll happily produce a beautiful solution to an under-specified problem, then produce a *different* beautiful solution next round when a new requirement surfaces. Tiered, human-ratified requirements are the anchor that makes convergence possible. Do this first.
+
+### Diagnose oscillation vs. progress
+
+A design is *oscillating* (not progressing) when a round produces **more** options than it received, or **reframes** the problem rather than **refining** the prior answer. Progress narrows; oscillation widens or pivots. If you can't tell, count the live options at the end of each round — if the count isn't trending down, stop and crystallize requirements. Recognizing the difference is itself a skill; AI rounds *feel* productive even when they're spinning.
+
+### The parallel-divergent-frames convergence round
+
+The technique that finally converged Lists: dispatch ~5 agents **in parallel, each with a different starting frame** ("defend the incumbent design", "greenfield from requirements", "design backwards from the consumer", "use existing primitives only", "find the hybrid"). Each must commit to ONE complete design. Then compare side-by-side and pick. This exploits AI parallelism while *deliberately countering single-frame bias* — no agent inherits another's frame. 4 of 5 independently landed on the same architecture, which was strong signal — but see the next lesson.
+
+### Convergence is a stability signal, not a correctness signal
+
+4-of-5 internal agents agreeing means the *frame is stable*, not that the design is *correct*. External review (different models, different training, different frame-blindness) still found real bugs after internal convergence — an exploitable allowlist example, missing lifecycle enforcement, a rationalization-shaped ADR section. **For Etched work, external cross-model review is non-negotiable, and convergence is never a substitute for it.** Treat internal agreement as "ready to *show* outsiders," never "done."
+
+### The inverted-framing gate before committing to any new permanent primitive
+
+Before adding a new schema / mechanism / abstraction, run one pass that *tries to prove you don't need it*: "implement every MUST using only existing primitives; you may add a resolver or a view, but no new permanent coordination slot." A RED verdict (here: four MUSTs genuinely couldn't be met without a new schema) is the strongest possible justification — it converts "we think we need this" into "here's specifically what fails without it." A GREEN verdict saves you from over-building. This pass, recommended in the round-17 retro, *actually ran* in round 18 and paid off. Make it standard before any Etched commitment.
+
+### Reviewer disagreement on severity = under-specification
+
+Two careful reviewers split on the typed-accessor issue (one "non-blocking nit," one "BLOCKING"). The disagreement itself was the signal: the accessor's contract was ambiguous (decode-helper vs. membership-proof). When sharp reviewers disagree on *how bad* something is, the underlying thing is usually under-specified — resolve the ambiguity rather than averaging the severity.
+
+### Look for the reframe that dissolves a cluster of bugs
+
+Several separate edge-case bugs (intrinsic-item collision, `address(0)` encoding, `targetType=ANY` equivocation) all dissolved at once under a single conceptual reframe ("the target field is a *member key*, not necessarily a target"). A cluster of related edge cases is often a symptom of a wrong frame, not N independent defects. Before patching each, ask whether one reframe kills the cluster.
+
+### Honest deviation beats rationalization — and reviewers can smell the difference
+
+When a design deviates from a hardened invariant (here: ADR-0041's "cardinality lives in the schema UID"), state it plainly — "this deviates, at this layer, for this bounded cost" — rather than constructing an argument that it doesn't *really* deviate. Two reviewers independently flagged the original "no supersession needed" framing as rationalization-shaped. Rewriting it as an honest, bounded deviation was both more correct and more defensible. AI prose drifts toward defending the frame it's in; rationalization is a tell reviewers catch.
+
+### Etched layout decisions are fail-safe-directional
+
+When uncertain about a permanent storage/encoding choice, pick the direction whose failure mode you can *recover from*. Wide-vs-lean storage: over-provisioning is wasted gas (trimmable before freeze); under-provisioning is a functional wall (block-gas-limit; un-fixable post-freeze without orphaning data). Choose "wasteful but recoverable" over "lean but possibly broken." And name the deadline: on Etched surfaces "optimize later" means "before mainnet freeze," never "after launch."
+
+### The human's load-bearing contribution is frame-puncturing, not labor
+
+Across this arc, the human's highest-value moves were not doing design work — they were the frame-puncturing questions: *"you make this sound good, but is logic actually enforced on-chain?"*, *"is this a problem for files and folders too?"*, *"explain it simply with examples."* Each broke the agents out of a confident-but-wrong frame. For AI-driven design, structure the process so the human is repeatedly invited to challenge the frame, and treat their "dumb-sounding" questions as the most valuable input — they're usually pointing at the unexamined assumption.
+
+### Durable artifacts are the AI's memory; the conversation is not
+
+This design survived at least one context compaction — the conversation was summarized and partially lost, but work resumed cleanly because the **design doc + notes file + ADR** held the state. For any long AI design process, the durable artifacts ARE the memory. Invest in them continuously (every round, not just at the end), keep a notes file that records *why* rejected paths were rejected, and never let the live conversation be the only place a decision exists.
+
 ## EFS-specific patterns worth remembering
 
 ### Schema UID is the only Etched coordination slot
 
 ADR-0041's deepest argument. When tempted to encode an invariant in a schema field, ask: does this field earn a permanent globally-coordinated slot? If not, it belongs as a PROPERTY, an SDK convention, or a resolver-enforced constraint — not a schema field.
 
-### Resolvers are the mechanism for cross-attestation invariants
+### Resolvers are the mechanism for cross-attestation invariants — but purpose-built, not generic
 
-Don't invent new ones (bitfield encodings, resolver chains, etc.). EFS extends EAS's resolver model with structural-constraint callbacks (the round-17 EFS-resolver mechanism). The pattern: schema's resolver maintains O(1) indices; reads kernel + EAS state at attest time; reverts on violation. Generic enough to handle any computable cross-attestation invariant.
+Don't invent new coordination mechanisms (bitfield encodings, resolver chains, generic constraint-callback registries). The pattern that ships: **a schema's own resolver maintains O(1) indices, reads kernel + EAS state at attest time, and reverts on violation.** ADR-0044's `ListEntryResolver` is the canonical example — it enforces typing / no-duplicates / append-only at write time for one purpose-built schema.
+
+*Correction to the round-17 framing:* an earlier draft of this note described a **generic** structural-constraint-callback mechanism (ADR-0043) as the answer. That mechanism was **deferred/rejected** by three external reviewers as the wrong abstraction — it solved a non-problem inside a frame that presupposed it was needed. The lesson stuck the right way around: when you need to enforce a cross-attestation invariant, give that specific predicate its own schema + resolver (the ADR-0041 / ADR-0044 shape), rather than building a general-purpose callback substrate for hypothetical future invariants.
 
 ### Editions ARE the access control
 
