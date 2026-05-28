@@ -166,12 +166,14 @@ describe("Lists — Conformance (worked example lifecycle)", function () {
     const e3UID = getUID(await e3Tx.wait());
     expect(await ler.getMemberCount(listUID, identityKeyBob, aliceAddr)).to.equal(1n);
 
-    // Step 6: Stale revoke of e1 (already removed) — must be a no-op, not a revert
-    await expect(
-      eas.connect(alice).revoke({ schema: listEntrySchemaUID, data: { uid: e1UID, value: 0n } }),
-    ).to.not.be.reverted;
-    // State unchanged after stale revoke
+    // Step 6: Stale revoke — NOTE: EAS itself reverts with AlreadyRevoked() if you try to
+    // revoke an already-revoked attestation (EAS.sol:539). The resolver's pp1==0 idempotency
+    // guard is defensive code for CREATE2-redeployment / multi-chain scenarios where the
+    // resolver might have empty state but receive revoke calls for existing EAS attestations.
+    // It is not exercisable through EAS's normal revoke() path in tests.
+    // We verify instead that the post-revoke+re-add state is still consistent.
     expect(await ler.getMemberCount(listUID, identityKeyBob, aliceAddr)).to.equal(1n);
+    expect(await ler.getLength(listUID, aliceAddr)).to.equal(1n);
 
     // Cleanup: revoke e3 so later asserts don't see stale state
     await eas.connect(alice).revoke({ schema: listEntrySchemaUID, data: { uid: e3UID, value: 0n } });
