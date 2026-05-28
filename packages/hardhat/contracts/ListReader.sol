@@ -80,15 +80,19 @@ contract ListReader is IListReader {
     }
 
     // ── Typed accessors ──────────────────────────────────────────────────────────
+    // `curator` is the lens address — the attester whose entries you want to read.
+    // For a single-curator list this equals the list creator (getMode().curator).
+    // For an open-curation list any contributing attester can be queried.
+    // Mode is checked before entry validation to fail cheaply on wrong-type calls.
 
     function targetAsAddress(
         bytes32 listUID,
         address curator,
         bytes32 entryUID
     ) external view override returns (address) {
-        Attestation memory e = _validateEntry(listUID, curator, entryUID);
         (, , uint8 mode) = _getListMode(listUID);
         require(mode == 1, "not ADDR-typed list");
+        Attestation memory e = _validateEntry(listUID, curator, entryUID);
         return e.recipient;
     }
 
@@ -97,10 +101,9 @@ contract ListReader is IListReader {
         address curator,
         bytes32 entryUID
     ) external view override returns (bytes32) {
-        _validateEntry(listUID, curator, entryUID);
         (, , uint8 mode) = _getListMode(listUID);
         require(mode == 2, "not SCHEMA-typed list");
-        Attestation memory e = eas.getAttestation(entryUID);
+        Attestation memory e = _validateEntry(listUID, curator, entryUID);
         (, bytes32 target,) = abi.decode(e.data, (bytes32, bytes32, int256));
         return target;
     }
@@ -110,10 +113,9 @@ contract ListReader is IListReader {
         address curator,
         bytes32 entryUID
     ) external view override returns (bytes32) {
-        _validateEntry(listUID, curator, entryUID);
         (, , uint8 mode) = _getListMode(listUID);
         require(mode == 0, "not ANY-typed list");
-        Attestation memory e = eas.getAttestation(entryUID);
+        Attestation memory e = _validateEntry(listUID, curator, entryUID);
         (, bytes32 target,) = abi.decode(e.data, (bytes32, bytes32, int256));
         return target;
     }
