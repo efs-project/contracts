@@ -889,7 +889,7 @@ LIST_ENTRY × N: target=release_uid, recipient=0x0, weight=release_timestamp
 
 Version 1.2.3 is permanent. If buggy, attach a `deprecated=true` PROPERTY to the LIST_ENTRY — the entry stays in the list (dependents can still reference v1.2.3) but consumers see the signal. NPM/crates.io model.
 
-(Note: `appendOnly=true` + `allowsDuplicates=false` does NOT require `maxEntries`; the no-dupe rule provides the natural bound. The required-cap rule only triggers when both `appendOnly=true` AND `allowsDuplicates=true`.)
+(Note: `appendOnly=true` + `allowsDuplicates=false` does NOT require `maxEntries` — the required-cap rule only triggers when both `appendOnly=true` AND `allowsDuplicates=true`. This is NOT because no-dupes bounds total entries — it doesn't; an attester can add unboundedly many distinct release UIDs. It's because the only combination with *no possible* per-key limit is the append-only multiset, which is the one we force a cap on. A version registry's growth is bounded by its release cadence, not by the kernel.)
 
 ### DAO delegate weighted slate (ranked, no-dupes, addresses, capped)
 
