@@ -117,7 +117,7 @@ Because `ListEntryResolver`'s address is hashed into LIST_ENTRY's schema UID, th
 - **Trustable on-chain reads.** A contract iterates a list and trusts every entry's type and shape without per-entry validation. This is the property that makes EFS list data useful to other contracts — the core motivation.
 - **Write-time-enforced no-duplicates, append-only, and typing.** "If a list says no duplicates, the chain refuses the duplicate." Declared shape is a guarantee, not a convention.
 - **O(1) membership for all modes** via `_entryCount` (which doubles as the no-dupe gate).
-- **Per-attester lenses for free** from attester-keyed state — consistent with the rest of EFS's viewer-sovereignty model.
+- **Per-attester lenses for free** from attester-keyed state — consistent with the rest of EFS's viewer-sovereignty model. Multi-lens resolution follows the same first-wins semantics as ADR-0031/0039 for path content: given an ordered lens list `[L1, L2, …]`, the first lens `L` where `length(listUID, L) > 0` is used for the entire read. If `L1` has any entries, `L2`'s entries are not consulted — `L1`'s list is a complete replacement, not a partial override. SDK/client layers implement this waterfall; raw contract reads (`countOf`, `length`, `entries`) take a single `attester` by design.
 - **Per-entry metadata** via the existing PROPERTY pattern, scoped cleanly by UID.
 - **Partial reverse-lookup** (member → lists) via indexed event topics, without an on-chain index.
 
