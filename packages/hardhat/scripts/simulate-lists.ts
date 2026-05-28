@@ -271,7 +271,7 @@ async function main() {
   const sharedListUID = getUID(await sharedListTx.wait());
 
   const signers = await ethers.getSigners();
-  const carol = signers[2];
+  const carol = signers[3]; // signers[2] is bob; carol must be a distinct address
   const carolAddr = await carol.getAddress();
 
   // Alice adds Bob; Bob adds Carol (each attester's own lens)
