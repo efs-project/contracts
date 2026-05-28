@@ -1444,6 +1444,23 @@ Round 18c is a hardening pass on a validated architecture. The expectation is th
 
 ---
 
+## Round 18d — Confirmation review outcome
+
+Third external pass (confirmation gate, commit 1bdb34d). Result: **schema field strings GO from all three** (Claude, Codex, Gemini). Architecture and schema are freeze-ready.
+
+Codex returned NO-GO on the *ListReader typed-accessor ABI handoff* (not the schema) — a real catch: the cross-list check I added in 18c proved only that an entry *claims* the trusted listUID, not that it's in the *trusted curator's edition*. Because editions are permissionless, Mallory can attest her own LIST_ENTRY against a trusted listUID with recipient=Mallory; a victim calling `targetAsAddress(L, entryUID)` would get Mallory's address. Claude had flagged the same thing as a "non-blocking nit" (secure consumers use countOf); Codex correctly weighted it as blocking because the accessor is *documented* as a membership check and is a footgun otherwise.
+
+Round 18d fixes (all on Durable/redeployable surfaces, none schema-gating):
+- Typed accessors now take `(listUID, curator, entryUID)` and check: LIST_ENTRY schema, `attester == curator`, `revocationTime == 0`, `entryListUID == listUID`, mode match. Safe-by-construction.
+- Event emit arg order corrected to match the indexed declaration `(listUID, attester, identityKey, entryUID, targetType, …)` — 18c updated the declaration but not the emits.
+- State-growth "natural bound" overclaim deleted (Codex): no-dupes bounds duplicates per key, not total entries; only `maxEntries` bounds totals.
+- Swap-and-pop simplified to direct copy (Gemini nit).
+- Worked example: added `address(0)` / `identityKey == bytes32(0)` conformance-test vector (Claude nit).
+
+All three reviewers' own prior findings confirmed resolved in-text. Net: schema is frozen; the design phase is closed; remaining work is ADR + implementation. The accessor ABI lives on the stateless ListReader (redeployable), so its late hardening doesn't affect the Etched schema freeze.
+
+---
+
 ## How to use this file
 
 Append-friendly. When adding:

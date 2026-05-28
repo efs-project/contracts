@@ -1,6 +1,6 @@
 # EFS Lists — Design
 
-**Status:** Draft (round 18c — second-external-review punch list applied; wide storage layout locked; typed-accessor cross-list checks; example bug fixes; doc hardening. All three round-18b reviewers returned READY-WITH-SHOULD-FIX, zero blockers.)
+**Status:** Draft (round 18d — schema field strings GO from all three confirmation reviewers; ListReader typed-accessor ABI hardened with curator+schema+active checks per Codex; emit arg order fixed; state-growth overclaim corrected. Schema is freeze-ready; reader contract is Durable/redeployable.)
 **Date:** 2026-05-28
 **Permanence-tier:** Etched-adjacent (introduces two new EAS schemas; the data model is permanent post-mainnet freeze)
 **Authors:** Claude Sonnet 4.7 (round-18 convergence synthesis; 17 prior rounds with Codex GPT-5, Gemini 2.5 Pro, and fresh-Claude review passes) + James Carnley (architectural direction; requirements crystallization; final-frame decisions)
@@ -384,7 +384,8 @@ function onAttest(Attestation calldata a, uint256) returns (bool) {
     _entryPosPlusOne[a.uid] = _entries[listUID][a.attester].length;
     _entryCount[listUID][identityKey][a.attester] += 1;
 
-    emit ListEntryAttested(listUID, a.attester, a.uid, d.targetType, identityKey, weight);
+    // Event arg order matches the indexed declaration: (listUID, attester, identityKey) indexed.
+    emit ListEntryAttested(listUID, a.attester, identityKey, a.uid, d.targetType, weight);
     return true;
 }
 ```
@@ -417,15 +418,17 @@ function onRevoke(Attestation calldata a, uint256) returns (bool) {
     bytes32 identityKey = arr[idx].identityKey;
     uint256 last = arr.length - 1;
     if (idx != last) {
-        EntryRecord storage moved = arr[last];
-        arr[idx] = moved;
-        _entryPosPlusOne[moved.entryUID] = idx + 1;
+        // Direct copy (Gemini nit): avoids a local storage-pointer alias; read the
+        // moved element's uid AFTER the copy so the index update is unambiguous.
+        arr[idx] = arr[last];
+        _entryPosPlusOne[arr[idx].entryUID] = idx + 1;
     }
     arr.pop();
     delete _entryPosPlusOne[a.uid];
     _entryCount[listUID][identityKey][a.attester] -= 1;
 
-    emit ListEntryRevoked(listUID, a.attester, a.uid, d.targetType, identityKey);
+    // Event arg order matches the indexed declaration.
+    emit ListEntryRevoked(listUID, a.attester, identityKey, a.uid, d.targetType);
     return true;
 }
 ```
@@ -552,6 +555,8 @@ This walkthrough surfaces several invariants the design relies on:
 - Stale revokes are no-ops, not reverts.
 - `_decl` cache is populated cold on first entry write and is correct forever (LIST non-revocable).
 
+**Conformance-test note (implementation):** port this exact lifecycle (attest → dup-reject → revoke → re-add → stale-revoke) into a test verbatim — it's the precise state machine the wide-storage layout touches. Add one more vector the walkthrough doesn't exercise: an ADDR-typed entry with `recipient = address(0)`, where `identityKey = bytes32(0)`. Confirm it's storable, dedup-gated, membership-checkable, and revocable like any other key (the zero-key path is the trickiest and least-walked).
+
 ---
 
 ### Smart contract reader (`ListReader`)
@@ -599,26 +604,43 @@ interface IListReader {
     function entries(bytes32 listUID, address attester, uint256 start, uint256 len)
         external view returns (Entry[] memory);
 
-    /// Typed accessors — preferred over raw casting. Each reverts if (a) the listUID is not
-    /// the expected mode, OR (b) the entryUID does not belong to listUID. The second check
-    /// closes the cross-list injection flagged by Codex #4 + Gemini B: without it, a caller
-    /// could pass an entryUID from a DIFFERENT attacker-controlled ADDR list and have its
-    /// recipient returned under the guise of a trusted list. Implementation MUST:
+    /// Typed accessors — SAFE-BY-CONSTRUCTION decode of a single entry. Each takes the
+    /// trusted `curator` explicitly and reverts unless ALL of:
+    ///   1. listUID is the expected mode (ADDR / SCHEMA / ANY)
+    ///   2. e.schema == LIST_ENTRY_SCHEMA_UID            (it's actually a list entry)
+    ///   3. e.attester == curator                        (it's in the TRUSTED curator's edition)
+    ///   4. e.revocationTime == 0                        (it's currently active)
+    ///   5. decoded entryListUID == listUID              (it belongs to this list)
+    ///
+    /// Checks 2–4 close the same-list wrong-edition injection Codex flagged: without the
+    /// curator+schema+active checks, Mallory could attest her own LIST_ENTRY against a
+    /// trusted listUID (permissionless editions allow this) with recipient=Mallory, and a
+    /// victim calling targetAsAddress(L, entryUID) would receive Mallory's address as if the
+    /// trusted curator had listed it. Requiring `e.attester == curator` scopes the decode to
+    /// the trusted edition; the curator comes from getMode(listUID).curator or a contract
+    /// constant, NEVER from the calling user.
+    ///
+    /// These are single-entry decode helpers. For membership/iteration use countOf / entries,
+    /// which are already attester-keyed.
+    /// Implementation sketch:
     ///   Attestation memory e = eas.getAttestation(entryUID);
-    ///   (bytes32 entryListUID,,) = abi.decode(e.data, (bytes32, bytes32, int256));
-    ///   require(entryListUID == listUID, "entry not in this list");
-    /// then decode per the list's mode.
+    ///   require(e.schema == LIST_ENTRY_SCHEMA_UID, "not a list entry");
+    ///   require(e.attester == curator,            "wrong curator edition");
+    ///   require(e.revocationTime == 0,            "entry revoked");
+    ///   (bytes32 entryListUID, bytes32 target,) = abi.decode(e.data, (bytes32,bytes32,int256));
+    ///   require(entryListUID == listUID,          "entry not in this list");
+    ///   // then mode-check listUID and decode target/recipient per mode
 
-    /// Decode entry as ADDR-typed. Reverts unless listUID is ADDR-typed AND entry ∈ listUID.
-    function targetAsAddress(bytes32 listUID, bytes32 entryUID)
+    /// Decode entry as ADDR-typed. Reverts unless ADDR-typed, entry ∈ (listUID, curator), active.
+    function targetAsAddress(bytes32 listUID, address curator, bytes32 entryUID)
         external view returns (address);
 
-    /// Decode entry as SCHEMA-typed UID. Reverts unless listUID is SCHEMA-typed AND entry ∈ listUID.
-    function targetAsUID(bytes32 listUID, bytes32 entryUID)
+    /// Decode entry as SCHEMA-typed UID. Reverts unless SCHEMA-typed, entry ∈ (listUID, curator), active.
+    function targetAsUID(bytes32 listUID, address curator, bytes32 entryUID)
         external view returns (bytes32);
 
-    /// Decode entry as ANY-typed opaque member key. Reverts unless listUID is ANY-typed AND entry ∈ listUID.
-    function targetAsMemberKey(bytes32 listUID, bytes32 entryUID)
+    /// Decode entry as ANY-typed opaque member key. Reverts unless ANY-typed, entry ∈ (listUID, curator), active.
+    function targetAsMemberKey(bytes32 listUID, address curator, bytes32 entryUID)
         external view returns (bytes32);
 
     /// O(1) entry count for a specific identity key (== 1 for no-dupes; can be > 1 for dups).
@@ -928,11 +950,14 @@ The member-key reframe for `targetType=ANY` puts opaque bytes32 keys in `target`
 
 ### 5. State growth for append-only uncapped lists
 
-Worst case: a curator creates an `appendOnly=true, maxEntries=0` LIST with `allowsDuplicates=false`. The no-dupe rule provides a natural bound (one entry per identity key per attester) — only weakly griefable. State storage is per-attester-keyed, so attackers can't bloat the curator's edition.
+**Correction (Codex): no-dupes does NOT provide a total-entry bound.** `allowsDuplicates=false` bounds *duplicates per identity key* (at most one entry per `(list, identityKey, attester)`), but it does NOT bound total entries — an ANY-typed or SCHEMA-typed list can grow without limit via distinct keys/UIDs. So the only real ceiling on an uncapped list is gas cost plus per-attester storage liability. The earlier "natural bound" framing was wrong; deleting it.
 
-The truly unbounded case (`appendOnly=true + allowsDuplicates=true + maxEntries=0`) is now **rejected by ListResolver** at LIST attest time (closes Claude external review B4). The trio requires a `maxEntries > 0` declaration to be accepted.
+What IS true:
+- State is per-attester-keyed, so a griefer can only bloat *their own* edition's storage, not the curator's. A consumer reading the trusted curator's edition is unaffected by spam editions.
+- The truly pathological case (`appendOnly=true + allowsDuplicates=true + maxEntries=0` — unbounded multiset that can never shrink) is **rejected by ListResolver** at LIST attest time: that trio requires `maxEntries > 0` (closes Claude external review B4).
+- On-chain full-iteration consumers must self-protect by requiring `maxEntries != 0 && maxEntries <= LOCAL_MAX` (shown in the DAO example) — they cannot assume an arbitrary list is safely iterable.
 
-A curator's own genuine append-only list with `allowsDuplicates=false` (e.g., a version registry adding ~10 versions per year) has bounded growth over decades. Acceptable.
+A curator's own genuine append-only list (e.g., a version registry adding ~10 entries/year) grows slowly and is fine. The point is the *primitive* doesn't promise a bound unless `maxEntries` is set; consumers and the SDK must treat unbounded lists accordingly.
 
 ### 6. Implicit invariants — load-bearing assumptions to document
 
@@ -992,7 +1017,7 @@ Codex's reframe was adopted. The other two remain candidates for a future iterat
 - **WIDE resolver storage layout (locked 2026-05-28):** `_entries` stores `EntryRecord { entryUID, identityKey, weight }` inline so on-chain consumers iterate with no per-entry `eas.getAttestation()`. Mirrors ADR-0041's `TagEntry[]` widening. Subsumes the `_entryIdentityKey` side map. Trimmable on devnet, etched at mainnet freeze.
 - `weight` is always present on LIST_ENTRY; opaque int256 metadata, consumer interprets
 - **Stateless `ListReader` view contract** as the documented consumer ABI
-- **Typed accessors on ListReader** (`targetAsAddress`, `targetAsUID`, `targetAsMemberKey`) reject BOTH mode mismatch AND cross-list injection (entry must belong to listUID)
+- **Typed accessors on ListReader** take `(listUID, curator, entryUID)` and are safe-by-construction: reject mode mismatch, wrong schema, wrong curator edition, revoked entry, and cross-list injection. Curator comes from `getMode().curator` or a contract constant, never the caller (closes Codex same-list wrong-edition injection)
 - `getMode` decodes LIST attestation directly via EAS, **schema-check before data-decode** (works for empty lists; rejects non-LIST UIDs)
 - Per-entry metadata via **standard PROPERTY-on-attestation pattern**, scoped to LIST_ENTRY UID; ordered metadata-bearing lists use SortOverlay (stable UID) not weight-rewrites (orphans metadata)
 - `maxEntries` included as a `uint32` field on LIST (0 = uncapped; REQUIRED >0 when appendOnly+allowsDuplicates). Primary rationale: contract-safety bound for on-chain iterators.
