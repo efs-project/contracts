@@ -102,13 +102,28 @@ export const FileActionsBar = ({
         )}
       </div>
 
-      <div className="flex gap-2 items-center flex-shrink-0">
-        <button className="btn btn-sm btn-ghost" onClick={() => setCreationType("Folder")} disabled={!currentAnchorUID}>
-          New Folder
-        </button>
-        <button className="btn btn-sm btn-primary" onClick={() => setCreationType("File")} disabled={!currentAnchorUID}>
-          Add File
-        </button>
+      {/* ADD dropdown — Folder/File require an anchor context; List does not */}
+      <div className="dropdown dropdown-end flex-shrink-0">
+        <div tabIndex={0} role="button" className="btn btn-sm btn-primary">
+          + Add ▾
+        </div>
+        <ul tabIndex={0} className="dropdown-content menu menu-sm bg-base-100 rounded-box z-[1] w-40 p-1 shadow border border-base-300">
+          <li>
+            <button onClick={() => setCreationType("Folder")} disabled={!currentAnchorUID}>
+              📁 Folder
+            </button>
+          </li>
+          <li>
+            <button onClick={() => setCreationType("File")} disabled={!currentAnchorUID}>
+              📄 File
+            </button>
+          </li>
+          <li>
+            <button onClick={() => setCreationType("List")}>
+              📋 List
+            </button>
+          </li>
+        </ul>
       </div>
 
       <CreateItemModal

@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { ethers } from "ethers";
-import { decodeEventLog, encodeDeployData, parseAbiItem, toHex } from "viem";
-import { usePublicClient, useWalletClient } from "wagmi";
+import { decodeEventLog, encodeAbiParameters, encodeDeployData, parseAbiItem, toHex, zeroAddress, zeroHash } from "viem";
+import { usePublicClient, useReadContract, useWalletClient } from "wagmi";
 import { Cog6ToothIcon, StopIcon } from "@heroicons/react/24/outline";
 import { useSortDiscovery } from "~~/hooks/efs/useSortDiscovery";
 import { useDeployedContractInfo, useScaffoldWriteContract } from "~~/hooks/scaffold-eth";
@@ -15,7 +16,7 @@ import { SORT_OVERLAY_ABI } from "~~/utils/efs/sortOverlay";
 import { TRANSPORT_LABELS, computeContentHash, detectTransport, resolveGatewayUrl } from "~~/utils/efs/transports";
 import { notification } from "~~/utils/scaffold-eth";
 
-export type CreationType = "Folder" | "File" | "PasteLink";
+export type CreationType = "Folder" | "File" | "PasteLink" | "List";
 
 const MOCK_CHUNKED_FILE_ABI = [
   {
@@ -144,6 +145,8 @@ export type CreateItemModalProps = {
   onFolderCreated?: (uid: string, name: string) => void;
   /** Called after a file is uploaded. Passes the sort UIDs the user wants auto-processed. */
   onFileCreated?: (enabledSortUIDs: string[]) => void;
+  /** Called after a list is created. Receives the new list UID. */
+  onListCreated?: (uid: string) => void;
 };
 
 export const CreateItemModal = ({
@@ -163,9 +166,21 @@ export const CreateItemModal = ({
   lensAddresses,
   onFolderCreated,
   onFileCreated,
+  onListCreated,
 }: CreateItemModalProps) => {
+  const router = useRouter();
   const { writeContractAsync: attest } = useScaffoldWriteContract({ contractName: "EAS" });
   const { data: indexer } = useDeployedContractInfo({ contractName: "Indexer" });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: listReaderInfo } = useDeployedContractInfo({ contractName: "ListReader" as any });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const listReaderAddress = (listReaderInfo as any)?.address as `0x${string}` | undefined;
+  const { data: listSchemaUID } = useReadContract({
+    address: listReaderAddress,
+    abi: [{ inputs: [], name: "LIST_SCHEMA_UID", outputs: [{ name: "", type: "bytes32" }], stateMutability: "view", type: "function" }] as const,
+    functionName: "LIST_SCHEMA_UID",
+    query: { enabled: !!listReaderAddress },
+  });
   const { targetNetwork } = useTargetNetwork();
 
   const [internalType, setInternalType] = useState<CreationType | null>(creationType);
@@ -179,6 +194,14 @@ export const CreateItemModal = ({
   const [showPasteDetails, setShowPasteDetails] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [existingAnchorWarning, setExistingAnchorWarning] = useState(false);
+
+  // List-specific state (ADR-0044)
+  const [listTargetType, setListTargetType] = useState<0 | 1 | 2>(1); // default ADDR
+  const [listAllowsDuplicates, setListAllowsDuplicates] = useState(false);
+  const [listAppendOnly, setListAppendOnly] = useState(false);
+  const [listTargetSchema, setListTargetSchema] = useState("");
+  const [listMaxEntries, setListMaxEntries] = useState("0");
+  const [showListRules, setShowListRules] = useState(false);
 
   // Only surface the inline error once the user has typed something; empty-name
   // is already covered by the disabled submit button.
@@ -372,6 +395,83 @@ export const CreateItemModal = ({
       return { refUID: ethers.ZeroHash as `0x${string}`, recipient: container.address };
     }
     return { refUID: currentAnchorUID as `0x${string}`, recipient: ethers.ZeroAddress as `0x${string}` };
+  };
+
+  // ── List creation handler (ADR-0044) ──────────────────────────────────────
+  const handleCreateList = async () => {
+    if (!listSchemaUID) {
+      notification.error("LIST_SCHEMA_UID not available. Is ListReader deployed?");
+      return;
+    }
+    if (listTargetType === 2 && !listTargetSchema.startsWith("0x")) {
+      notification.error("EFS Files mode requires a target schema UID (0x…)");
+      return;
+    }
+    const maxE = parseInt(listMaxEntries, 10);
+    if (isNaN(maxE) || maxE < 0) {
+      notification.error("Max entries must be a non-negative integer");
+      return;
+    }
+    setIsSubmitting(true);
+    try {
+      const schemaBytes = (listTargetType === 2 ? listTargetSchema : zeroHash) as `0x${string}`;
+      const encoded = encodeAbiParameters(
+        [
+          { name: "allowsDuplicates", type: "bool" },
+          { name: "appendOnly", type: "bool" },
+          { name: "targetType", type: "uint8" },
+          { name: "targetSchema", type: "bytes32" },
+          { name: "maxEntries", type: "uint32" },
+        ],
+        [listAllowsDuplicates, listAppendOnly, listTargetType, schemaBytes, maxE],
+      );
+      const txHash = await attest({
+        functionName: "attest",
+        args: [
+          {
+            schema: listSchemaUID as `0x${string}`,
+            data: {
+              recipient: zeroAddress,
+              expirationTime: 0n,
+              revocable: false,
+              refUID: zeroHash,
+              data: encoded,
+              value: 0n,
+            },
+          },
+        ],
+      });
+      if (!txHash) throw new Error("No transaction hash returned");
+      const receipt = await publicClient!.waitForTransactionReceipt({ hash: txHash });
+      // Decode the Attested event to get the list UID
+      const attestedAbi = parseAbiItem(
+        "event Attested(address indexed recipient, address indexed attester, bytes32 uid, bytes32 indexed schema)",
+      );
+      let listUID: string | null = null;
+      for (const log of receipt.logs) {
+        try {
+          const decoded = decodeEventLog({ abi: [attestedAbi], data: log.data, topics: log.topics });
+          if (decoded.args && "uid" in decoded.args) {
+            listUID = decoded.args.uid as string;
+            break;
+          }
+        } catch {
+          // not this log
+        }
+      }
+      handleClose();
+      if (listUID) {
+        onListCreated?.(listUID);
+        router.push(`/lists/${listUID}`);
+      } else {
+        notification.success("List created! Find its UID in the EAS Explorer.");
+      }
+    } catch (e) {
+      const msg = extractErrorMessage(e);
+      notification.error(msg);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleSubmit = async () => {
@@ -1053,8 +1153,10 @@ export const CreateItemModal = ({
   return (
     <dialog id="create_modal" className="modal" ref={modalRef}>
       <div className="modal-box">
-        <h3 className="font-bold text-lg">{internalType === "Folder" ? "Create New Folder" : "Add File"}</h3>
-        {internalType !== "Folder" && internalType !== null && (
+        <h3 className="font-bold text-lg">
+          {internalType === "Folder" ? "Create New Folder" : internalType === "List" ? "Create List" : "Add File"}
+        </h3>
+        {internalType !== "Folder" && internalType !== "List" && internalType !== null && (
           <div className="tabs tabs-bordered mt-2">
             <button
               className={`tab ${internalType === "File" ? "tab-active" : ""}`}
@@ -1070,7 +1172,80 @@ export const CreateItemModal = ({
             </button>
           </div>
         )}
-        <div className="py-4 form-control w-full">
+        {/* List creation form — shown instead of the name/file inputs */}
+        {internalType === "List" && (
+          <div className="py-3 flex flex-col gap-3">
+            <p className="text-xs text-base-content/50">
+              Creates a permanent LIST attestation (non-revocable). You add entries after creation.
+            </p>
+            <div className="form-control w-full">
+              <label className="label pb-1"><span className="label-text font-medium">What are you collecting?</span></label>
+              <div className="flex gap-2 flex-wrap">
+                {([
+                  [1, "📋 Addresses", "Allowlists, social graphs"],
+                  [0, "🔑 Custom Keys", "Arbitrary bytes32 identifiers"],
+                  [2, "📂 EFS Files", "Curated attestation UIDs"],
+                ] as const).map(([val, label, hint]) => (
+                  <button
+                    key={val}
+                    type="button"
+                    className={`btn btn-sm flex-1 min-w-fit ${listTargetType === val ? "btn-primary" : "btn-ghost border border-base-300"}`}
+                    onClick={() => setListTargetType(val)}
+                  >
+                    <span>{label}</span>
+                    <span className="text-xs opacity-60 hidden sm:inline"> — {hint}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+            {listTargetType === 2 && (
+              <div className="form-control w-full">
+                <label className="label pb-1"><span className="label-text">Target Schema UID</span></label>
+                <input
+                  type="text"
+                  className="input input-bordered input-sm font-mono"
+                  placeholder="0x…"
+                  value={listTargetSchema}
+                  onChange={e => setListTargetSchema(e.target.value)}
+                />
+              </div>
+            )}
+            <div>
+              <button
+                type="button"
+                className="text-sm text-base-content/50 hover:text-base-content flex items-center gap-1 transition-colors"
+                onClick={() => setShowListRules(v => !v)}
+              >
+                {showListRules ? "▾" : "▸"} Rules
+              </button>
+              {showListRules && (
+                <div className="mt-2 pl-3 border-l-2 border-base-300 flex flex-col gap-2">
+                  <label className="flex items-center gap-2 cursor-pointer text-sm">
+                    <input type="checkbox" className="checkbox checkbox-sm" checked={listAllowsDuplicates} onChange={e => setListAllowsDuplicates(e.target.checked)} />
+                    Allow duplicates
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer text-sm">
+                    <input type="checkbox" className="checkbox checkbox-sm" checked={listAppendOnly} onChange={e => setListAppendOnly(e.target.checked)} />
+                    Append-only <span className="text-xs text-base-content/40">(entries permanent once added)</span>
+                  </label>
+                  <div className="flex items-center gap-2 text-sm">
+                    <span>Max entries</span>
+                    <input
+                      type="number"
+                      className="input input-bordered input-xs w-24"
+                      value={listMaxEntries}
+                      min={0}
+                      onChange={e => setListMaxEntries(e.target.value)}
+                    />
+                    <span className="text-xs text-base-content/40">0 = unlimited</span>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        <div className={`py-4 form-control w-full ${internalType === "List" ? "hidden" : ""}`}>
           <label className="label">
             <span className="label-text">Name</span>
           </label>
@@ -1245,7 +1420,7 @@ export const CreateItemModal = ({
         )}
 
         <div className="modal-action items-center">
-          {internalType !== "Folder" && availableSorts.length > 0 ? (
+          {internalType !== "Folder" && internalType !== "List" && availableSorts.length > 0 ? (
             <div className="flex-1">
               <button
                 type="button"
@@ -1305,22 +1480,25 @@ export const CreateItemModal = ({
             </button>
           )}
           <button
-            className={`btn ${existingAnchorWarning && internalType !== "Folder" ? "btn-warning" : "btn-primary"}`}
-            onClick={handleSubmit}
+            className={`btn ${existingAnchorWarning && internalType !== "Folder" && internalType !== "List" ? "btn-warning" : "btn-primary"}`}
+            onClick={internalType === "List" ? handleCreateList : handleSubmit}
             disabled={
-              !newName ||
-              !!nameValidationError ||
               isSubmitting ||
+              (internalType !== "List" && (!newName || !!nameValidationError)) ||
               (internalType === "File" && !fileToUpload) ||
-              (internalType === "PasteLink" && !pasteUri)
+              (internalType === "PasteLink" && !pasteUri) ||
+              (internalType === "List" && !listSchemaUID) ||
+              (internalType === "List" && listTargetType === 2 && !listTargetSchema.startsWith("0x"))
             }
           >
             {isSubmitting && <span className="loading loading-spinner loading-xs" />}
             {isSubmitting
               ? "Creating..."
-              : existingAnchorWarning && internalType !== "Folder"
+              : existingAnchorWarning && internalType !== "Folder" && internalType !== "List"
                 ? "Update Existing"
-                : "Create"}
+                : internalType === "List"
+                  ? "Create List"
+                  : "Create"}
           </button>
         </div>
       </div>

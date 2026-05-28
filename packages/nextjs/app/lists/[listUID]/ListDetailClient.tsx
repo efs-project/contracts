@@ -1,9 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import { encodeAbiParameters, zeroAddress, zeroHash } from "viem";
-import { useAccount, useReadContract, useWriteContract } from "wagmi";
+import { useAccount, useReadContract, useWaitForTransactionReceipt, useWriteContract } from "wagmi";
 import { useDeployedContractInfo } from "~~/hooks/scaffold-eth";
 import { notification } from "~~/utils/scaffold-eth";
 
@@ -113,7 +113,6 @@ const LIST_READER_ABI = [
 ] as const;
 
 const TARGET_TYPE_LABELS = ["ANY", "ADDR", "SCHEMA"];
-const EAS_ADDRESS = "0xC2679fBD37d54388Ce493F1DB75320D236e1815e";
 
 export default function ListDetailPage() {
   const pathname = usePathname();
@@ -127,6 +126,12 @@ export default function ListDetailPage() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const listReaderAddress = (listReaderInfo as any)?.address as `0x${string}` | undefined;
 
+  // Use the deployed EAS contract address (matches the fork — no hardcoding).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: easInfo } = useDeployedContractInfo("EAS" as any);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const easAddress = (easInfo as any)?.address as `0x${string}` | undefined;
+
   const lensAddress = connectedAddress ?? zeroAddress;
 
   const { data: mode } = useReadContract({
@@ -137,7 +142,7 @@ export default function ListDetailPage() {
     query: { enabled: !!listReaderAddress && !!listUID },
   });
 
-  const { data: listLen } = useReadContract({
+  const { data: listLen, refetch: refetchLength } = useReadContract({
     address: listReaderAddress,
     abi: LIST_READER_ABI,
     functionName: "length",
@@ -160,6 +165,19 @@ export default function ListDetailPage() {
     query: { enabled: !!listReaderAddress },
   });
 
+  // Pending tx hash — watched by useWaitForTransactionReceipt to trigger refetch.
+  const [pendingTxHash, setPendingTxHash] = useState<`0x${string}` | undefined>(undefined);
+  const { data: txReceipt } = useWaitForTransactionReceipt({ hash: pendingTxHash });
+
+  // Refetch both length and entries once the pending tx confirms.
+  useEffect(() => {
+    if (txReceipt) {
+      refetchLength();
+      refetchEntries();
+      setPendingTxHash(undefined);
+    }
+  }, [txReceipt, refetchLength, refetchEntries]);
+
   // ADD ENTRY form
   const [entryTarget, setEntryTarget] = useState("");
   const [entryRecipient, setEntryRecipient] = useState("");
@@ -168,8 +186,8 @@ export default function ListDetailPage() {
   const targetType = mode ? Number(mode.targetType) : 0;
 
   const handleAddEntry = async () => {
-    if (!listUID || !listEntrySchemaUID) {
-      notification.error("List UID or schema not available");
+    if (!listUID || !listEntrySchemaUID || !easAddress) {
+      notification.error("List UID, schema, or EAS address not available");
       return;
     }
 
@@ -208,7 +226,7 @@ export default function ListDetailPage() {
 
     try {
       const tx = await writeContractAsync({
-        address: EAS_ADDRESS,
+        address: easAddress,
         abi: EAS_ABI,
         functionName: "attest",
         args: [
@@ -225,8 +243,11 @@ export default function ListDetailPage() {
           },
         ],
       });
-      notification.success(`Entry added! Tx: ${tx.slice(0, 10)}…`);
-      setTimeout(() => refetchEntries(), 2000);
+      notification.success("Entry submitted — waiting for confirmation…");
+      setPendingTxHash(tx);
+      setEntryTarget("");
+      setEntryRecipient("");
+      setEntryWeight("0");
     } catch (e) {
       console.error(e);
       notification.error("Failed to add entry. Check console.");
@@ -234,16 +255,16 @@ export default function ListDetailPage() {
   };
 
   const handleRemoveEntry = async (entryUID: `0x${string}`) => {
-    if (!listEntrySchemaUID) return;
+    if (!listEntrySchemaUID || !easAddress) return;
     try {
-      await writeContractAsync({
-        address: EAS_ADDRESS,
+      const tx = await writeContractAsync({
+        address: easAddress,
         abi: EAS_ABI,
         functionName: "revoke",
         args: [{ schema: listEntrySchemaUID, data: { uid: entryUID, value: 0n } }],
       });
-      notification.success("Entry revoked");
-      setTimeout(() => refetchEntries(), 2000);
+      notification.success("Revoke submitted — waiting for confirmation…");
+      setPendingTxHash(tx);
     } catch (e) {
       console.error(e);
       notification.error("Revoke failed. Check console.");
@@ -303,6 +324,13 @@ export default function ListDetailPage() {
         </div>
       )}
 
+      {/* APPEND-ONLY BANNER */}
+      {mode?.appendOnly && (
+        <div className="alert alert-info w-full max-w-xl text-sm py-2">
+          🔒 Append-only — entries cannot be removed once added.
+        </div>
+      )}
+
       {/* ENTRIES */}
       {entries && entries.length > 0 && (
         <div className="card w-full max-w-xl bg-base-100 shadow border border-base-200">
@@ -319,8 +347,8 @@ export default function ListDetailPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {entries.map((e, i) => (
-                    <tr key={i}>
+                  {entries.map(e => (
+                    <tr key={e.entryUID}>
                       <td className="font-mono text-xs">
                         {e.entryUID.slice(0, 8)}…{e.entryUID.slice(-6)}
                       </td>
@@ -332,7 +360,7 @@ export default function ListDetailPage() {
                         <td>
                           <button
                             className="btn btn-xs btn-error btn-outline"
-                            disabled={isPending}
+                            disabled={isPending || !!pendingTxHash}
                             onClick={() => handleRemoveEntry(e.entryUID as `0x${string}`)}
                           >
                             Remove
@@ -407,10 +435,10 @@ export default function ListDetailPage() {
             <div className="card-actions justify-end mt-2">
               <button
                 className="btn btn-primary"
-                disabled={isPending || !connectedAddress}
+                disabled={isPending || !!pendingTxHash || !connectedAddress}
                 onClick={handleAddEntry}
               >
-                {isPending ? <span className="loading loading-spinner" /> : "Add Entry"}
+                {(isPending || !!pendingTxHash) ? <span className="loading loading-spinner" /> : "Add Entry"}
               </button>
             </div>
           </div>
