@@ -40,14 +40,16 @@ interface IListReader {
     function countOf(bytes32 listUID, address attester, bytes32 identityKey) external view returns (uint256);
 
     // ── Typed accessors (safe-by-construction) ──────────────────────────────────
-    // Each requires: LIST_ENTRY schema, attester==curator, active, entryListUID==listUID, mode match.
-    // curator must come from getMode().curator or a contract constant, NEVER from caller.
+    // Each requires: LIST_ENTRY schema, entry.attester==lens, active, entryListUID==listUID, mode match.
+    // `lens` is the attester whose entries you want to read (same semantics as `attester` in
+    // length/entries/countOf). For a single-curator list, lens == getMode().curator.
+    // For open-curation lists, pass any contributing attester.
 
-    function targetAsAddress(bytes32 listUID, address curator, bytes32 entryUID) external view returns (address);
+    function targetAsAddress(bytes32 listUID, address lens, bytes32 entryUID) external view returns (address);
 
-    function targetAsUID(bytes32 listUID, address curator, bytes32 entryUID) external view returns (bytes32);
+    function targetAsUID(bytes32 listUID, address lens, bytes32 entryUID) external view returns (bytes32);
 
-    function targetAsMemberKey(bytes32 listUID, address curator, bytes32 entryUID) external view returns (bytes32);
+    function targetAsMemberKey(bytes32 listUID, address lens, bytes32 entryUID) external view returns (bytes32);
 
     // ── Identity-key derivation helpers (pure) ──────────────────────────────────
     function identityKeyForAddress(address a) external pure returns (bytes32);

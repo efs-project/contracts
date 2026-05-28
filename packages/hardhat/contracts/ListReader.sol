@@ -12,7 +12,7 @@ import { ListEntryResolver } from "./ListEntryResolver.sol";
  *
  *      getMode() reads LIST attestation directly from EAS (schema-check BEFORE decode).
  *      entries() reads EntryRecord[] from resolver storage — zero per-entry EAS calls.
- *      Typed accessors are safe-by-construction: validate schema, curator, active, listUID, mode.
+ *      Typed accessors are safe-by-construction: validate schema, lens, active, listUID, mode.
  */
 contract ListReader is IListReader {
     IEAS public immutable eas;
@@ -80,42 +80,42 @@ contract ListReader is IListReader {
     }
 
     // ── Typed accessors ──────────────────────────────────────────────────────────
-    // `curator` is the lens address — the attester whose entries you want to read.
-    // For a single-curator list this equals the list creator (getMode().curator).
-    // For an open-curation list any contributing attester can be queried.
+    // `lens` is the attester whose entries you want to read.
+    // For a single-curator list this equals getMode().curator.
+    // For an open-curation list, pass any contributing attester.
     // Mode is checked before entry validation to fail cheaply on wrong-type calls.
 
     function targetAsAddress(
         bytes32 listUID,
-        address curator,
+        address lens,
         bytes32 entryUID
     ) external view override returns (address) {
         (, , uint8 mode) = _getListMode(listUID);
         require(mode == 1, "not ADDR-typed list");
-        Attestation memory e = _validateEntry(listUID, curator, entryUID);
+        Attestation memory e = _validateEntry(listUID, lens, entryUID);
         return e.recipient;
     }
 
     function targetAsUID(
         bytes32 listUID,
-        address curator,
+        address lens,
         bytes32 entryUID
     ) external view override returns (bytes32) {
         (, , uint8 mode) = _getListMode(listUID);
         require(mode == 2, "not SCHEMA-typed list");
-        Attestation memory e = _validateEntry(listUID, curator, entryUID);
+        Attestation memory e = _validateEntry(listUID, lens, entryUID);
         (, bytes32 target,) = abi.decode(e.data, (bytes32, bytes32, int256));
         return target;
     }
 
     function targetAsMemberKey(
         bytes32 listUID,
-        address curator,
+        address lens,
         bytes32 entryUID
     ) external view override returns (bytes32) {
         (, , uint8 mode) = _getListMode(listUID);
         require(mode == 0, "not ANY-typed list");
-        Attestation memory e = _validateEntry(listUID, curator, entryUID);
+        Attestation memory e = _validateEntry(listUID, lens, entryUID);
         (, bytes32 target,) = abi.decode(e.data, (bytes32, bytes32, int256));
         return target;
     }
@@ -138,17 +138,17 @@ contract ListReader is IListReader {
 
     /// Validates a single LIST_ENTRY attestation. Reverts unless:
     /// 1. schema == LIST_ENTRY_SCHEMA_UID
-    /// 2. attester == curator (trusted lens)
+    /// 2. attester == lens (trusted lens)
     /// 3. revocationTime == 0 (active)
     /// 4. decoded entryListUID == listUID (belongs to this list)
     function _validateEntry(
         bytes32 listUID,
-        address curator,
+        address lens,
         bytes32 entryUID
     ) internal view returns (Attestation memory e) {
         e = eas.getAttestation(entryUID);
         require(e.schema == LIST_ENTRY_SCHEMA_UID, "not a list entry");
-        require(e.attester == curator, "wrong curator lens");
+        require(e.attester == lens, "wrong lens");
         require(e.revocationTime == 0, "entry revoked");
         (bytes32 entryListUID,,) = abi.decode(e.data, (bytes32, bytes32, int256));
         require(entryListUID == listUID, "entry not in this list");

@@ -857,12 +857,12 @@ describe("Lists — Unit Tests", function () {
       await expect(listReader.targetAsAddress(listUID, aliceAddr, uid)).to.be.revertedWith("entry revoked");
     });
 
-    it("C14: targetAsAddress() reverts for wrong curator", async function () {
+    it("C14: targetAsAddress() reverts for wrong lens", async function () {
       const listUID = await attestList(alice, false, false, 1);
       const uid = await attestAddrEntry(alice, listUID, await bob.getAddress());
-      // Bob is not the curator; alice is
+      // Bob is not the attester of this entry; alice is
       await expect(listReader.targetAsAddress(listUID, await bob.getAddress(), uid)).to.be.revertedWith(
-        "wrong curator lens",
+        "wrong lens",
       );
     });
   });
