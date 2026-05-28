@@ -4,13 +4,13 @@
  * Creates a small realistic file tree for manual UI testing:
  *
  *   /docs/
- *     readme.txt   (owner edition)
- *     notes.txt    (owner edition)
+ *     readme.txt   (owner lens)
+ *     notes.txt    (owner lens)
  *   /images/
- *     cat.jpg      (owner edition, https mirror)
- *     dog.jpg      (owner edition, https mirror)
+ *     cat.jpg      (owner lens, https mirror)
+ *     dog.jpg      (owner lens, https mirror)
  *   /shared/
- *     photo.png    (owner edition + user1 edition — editions demo)
+ *     photo.png    (owner lens + user1 lens — lenses demo)
  *
  * This file exports `seedDemoTree` as a pure function — no auto-invocation at
  * module load — so it can be imported safely from both:
@@ -39,9 +39,9 @@
  * seed is a no-op (one read per anchor, one read per file for the placement
  * check). Re-running after a **partial** failure — say `/docs/` got created
  * but `readme.txt`'s PIN never landed — fills in only the missing files; the
- * fully-seeded ones are skipped. For the editions demo, the owner and user1
+ * fully-seeded ones are skipped. For the lenses demo, the owner and user1
  * placements on `shared/photo.png` are guarded independently, so either
- * edition can be backfilled without touching the other.
+ * lens can be backfilled without touching the other.
  *
  * Fail-soft at the top: if the Indexer contract isn't registered (e.g. CI
  * against vanilla hardhat without EAS), log a skip and return cleanly — don't
@@ -348,7 +348,7 @@ export async function seedDemoTree() {
    * After placing a file at a file-slot anchor, every generic folder from the
    * file-slot's parent up to root (exclusive) must have an active TAG
    * (definition=dataSchemaUID, refUID=folder) so EFSFileView phase-0 includes
-   * it in edition-scoped directory listings. Walk stops early when an already-
+   * it in lens-scoped directory listings. Walk stops early when an already-
    * tagged ancestor is found — steady-state cost is zero extra writes.
    *
    * Folder visibility is Shape B (list semantics: multiple attesters can tag
@@ -463,11 +463,11 @@ export async function seedDemoTree() {
     "https://placedog.net/300/200",
   );
 
-  console.log("\n── /shared/ (editions demo) ──");
+  console.log("\n── /shared/ (lenses demo) ──");
   const shared = await getOrCreateFolder(deployerSigner, rootUID, "shared");
   const sharedUID = shared.uid;
-  // One file-slot anchor, two editions. The file-slot is created by whoever
-  // runs first (idempotent via findAnchor); each edition is then guarded by
+  // One file-slot anchor, two lenses. The file-slot is created by whoever
+  // runs first (idempotent via findAnchor); each lens is then guarded by
   // its own `hasActivePlacement` check so either can be backfilled
   // independently after a partial failure.
   let photoUID = await findAnchor(sharedUID, "photo.png", dataSchemaUID);
@@ -477,11 +477,11 @@ export async function seedDemoTree() {
 
   const deployerAddr = await deployerSigner.getAddress();
   if (await hasActivePlacement(photoUID, deployerAddr)) {
-    console.log(`  Edition   owner (exists, skipping)`);
+    console.log(`  Lens      owner (exists, skipping)`);
   } else {
     const ownerPhotoData = await makeData(deployerSigner, "owner-photo-png-bytes");
     await makeProperty(deployerSigner, ownerPhotoData, "contentType", "image/png");
-    // Real HTTPS URLs so the editions demo loads in the browser.
+    // Real HTTPS URLs so the lenses demo loads in the browser.
     // Two different picsum seeds give visually distinct images for owner vs user1.
     await makeMirror(deployerSigner, ownerPhotoData, httpsTransportUID, "https://picsum.photos/seed/efs-owner/400/300");
     await makePin(deployerSigner, ownerPhotoData, photoUID);
@@ -490,7 +490,7 @@ export async function seedDemoTree() {
 
   const user1Addr = await user1.getAddress();
   if (await hasActivePlacement(photoUID, user1Addr)) {
-    console.log(`  Edition   user1 (exists, skipping)`);
+    console.log(`  Lens      user1 (exists, skipping)`);
   } else {
     const user1PhotoData = await makeData(user1, "user1-photo-png-bytes");
     await makeProperty(user1, user1PhotoData, "contentType", "image/png");

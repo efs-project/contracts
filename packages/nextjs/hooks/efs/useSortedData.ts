@@ -3,14 +3,14 @@
  *
  * When sortInfoUID is null, returns null (caller falls back to kernel order).
  * When sortInfoUID is set, fetches sorted UIDs from the shared sorted list,
- * filtered by the editions address list.
+ * filtered by the lenses address list.
  *
  * Usage:
  *   const { sortedUIDs, isLoading, hasMore, loadMore, reset } = useSortedData({
  *     sortInfoUID,
  *     parentAnchor,
  *     sortOverlayAddress,
- *     editionAddresses,
+ *     lensAddresses,
  *     pageSize: 50,
  *   });
  *
@@ -26,7 +26,7 @@ interface UseSortedDataOptions {
   sortInfoUID: string | null;
   parentAnchor: string | undefined;
   sortOverlayAddress: `0x${string}` | undefined;
-  editionAddresses: string[];
+  lensAddresses: string[];
   pageSize?: number;
   showRevoked?: boolean;
   /** Increment to force a full re-fetch from the start (e.g. after processItems completes) */
@@ -49,7 +49,7 @@ export function useSortedData({
   sortInfoUID,
   parentAnchor,
   sortOverlayAddress,
-  editionAddresses,
+  lensAddresses,
   pageSize = 50,
   showRevoked = false,
   refreshKey = 0,
@@ -64,23 +64,23 @@ export function useSortedData({
   // Track the current sort/anchor to detect changes
   const currentSortRef = useRef<string | null>(null);
   const currentAnchorRef = useRef<string | undefined>(undefined);
-  const currentEditionsRef = useRef<string>("");
+  const currentLensesRef = useRef<string>("");
   const currentRefreshKeyRef = useRef<number>(0);
 
-  const editionsKey = editionAddresses.join(",");
+  const lensesKey = lensAddresses.join(",");
 
-  // Reset when sort, anchor, editions, or refreshKey change
+  // Reset when sort, anchor, lenses, or refreshKey change
   useEffect(() => {
     const changed =
       currentSortRef.current !== sortInfoUID ||
       currentAnchorRef.current !== parentAnchor ||
-      currentEditionsRef.current !== editionsKey ||
+      currentLensesRef.current !== lensesKey ||
       currentRefreshKeyRef.current !== refreshKey;
 
     if (changed) {
       currentSortRef.current = sortInfoUID;
       currentAnchorRef.current = parentAnchor;
-      currentEditionsRef.current = editionsKey;
+      currentLensesRef.current = lensesKey;
       currentRefreshKeyRef.current = refreshKey;
 
       setSortedUIDs(sortInfoUID ? [] : null);
@@ -89,7 +89,7 @@ export function useSortedData({
       // Trigger initial page load (0 → 1)
       setLoadTrigger(1);
     }
-  }, [sortInfoUID, parentAnchor, editionsKey, refreshKey]);
+  }, [sortInfoUID, parentAnchor, lensesKey, refreshKey]);
 
   const reset = useCallback(() => {
     setSortedUIDs(sortInfoUID ? [] : null);
@@ -121,7 +121,7 @@ export function useSortedData({
 
         const currentCursor = cursorRef.current;
 
-        if (editionAddresses.length > 0) {
+        if (lensAddresses.length > 0) {
           result = await publicClient.readContract({
             address: sortOverlayAddress,
             abi: SORT_OVERLAY_ABI,
@@ -132,7 +132,7 @@ export function useSortedData({
               currentCursor as `0x${string}`,
               BigInt(pageSize),
               DEFAULT_MAX_TRAVERSAL,
-              editionAddresses as `0x${string}`[],
+              lensAddresses as `0x${string}`[],
               showRevoked,
             ],
           });
@@ -180,7 +180,7 @@ export function useSortedData({
     parentAnchor,
     sortOverlayAddress,
     publicClient,
-    editionAddresses,
+    lensAddresses,
     showRevoked,
     pageSize,
     loadTrigger,

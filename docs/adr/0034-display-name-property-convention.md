@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-04-18
-**Related:** ADR-0002 (DATA standalone), ADR-0003 (TAG-based placement), ADR-0005 (contentType as PROPERTY), ADR-0014 (edition-scoped PROPERTY lookup), ADR-0016 (deployer fallback), ADR-0031 (editions model), ADR-0033 (root containers)
+**Related:** ADR-0002 (DATA standalone), ADR-0003 (TAG-based placement), ADR-0005 (contentType as PROPERTY), ADR-0014 (lens-scoped PROPERTY lookup), ADR-0016 (deployer fallback), ADR-0031 (lenses model), ADR-0033 (root containers)
 
 ## Context
 
@@ -66,20 +66,20 @@ Length: names SHOULD be ≤ 64 characters; clients SHOULD truncate with ellipsis
 When a client needs a display name for a container UID `C`, it resolves in order and stops at the first hit:
 
 1. **If `C` is an address:** ENS reverse-lookup (off-chain, `publicClient.getEnsName`). Mainnet only; skipped otherwise. Clients cache aggressively.
-2. **`name` via PIN + PROPERTY, edition-scoped:**
+2. **`name` via PIN + PROPERTY, lens-scoped:**
    - Look up `nameAnchor = Indexer.resolveAnchor(C, "name", PROPERTY_SCHEMA_UID)`. If missing, go to step 3.
-   - For each attester in the active editions list (ADR-0031 order: explicit `?editions=` → `[caller]` → `[DEPLOYER]`), call `EdgeResolver.getActivePinTarget(nameAnchor, attester, PROPERTY_SCHEMA_UID)`.
+   - For each attester in the active lenses list (ADR-0031 order: explicit `?lenses=` → `[caller]` → `[DEPLOYER]`), call `EdgeResolver.getActivePinTarget(nameAnchor, attester, PROPERTY_SCHEMA_UID)`.
    - First attester with a non-zero result wins. Read the PIN's target UID, fetch the PROPERTY attestation, decode `value`.
 3. **Schema fallback:** if `C` is a schema UID and `SchemaRegistry.getSchema(C).uid != 0`, show the field-list string (deployer-seeded alias anchors handled transparently by step 2).
 4. **Short-hex fallback:** `0x8626…1199` for addresses, `0x3f4a…12ab` for other 32-byte UIDs.
 
 Step 2 is the load-bearing step. Steps 1, 3, 4 are narrow-purpose.
 
-### 4. Edition scoping
+### 4. Lens scoping
 
 The default viewer is the connected wallet; the default fallback is the deployer (ADR-0016). Unconfigured viewers see the deployer's naming — which is what the pre-seeded aliases produce. A viewer who PINs their own `name` PROPERTY under any container's name anchor overrides the deployer's label *for themselves* — matching ADR-0014's "your view, your names" property.
 
-Cross-attester injection is blocked by the `_activeBySlot[nameAnchor][attester][…]` split: a malicious attester cannot force their naming of Vitalik into my view. I'd have to add them to `?editions=` first.
+Cross-attester injection is blocked by the `_activeBySlot[nameAnchor][attester][…]` split: a malicious attester cannot force their naming of Vitalik into my view. I'd have to add them to `?lenses=` first.
 
 ### 5. Deploy-time seeding
 
@@ -100,7 +100,7 @@ A container's info panel gets an editable "Name" field. Submitting:
 
 Can be batched into a single `multiAttest`. The new PIN supersedes the caller's previous name binding at the same `(attester, definition, targetSchema)` slot in O(1) (ADR-0041).
 
-*Prose-accuracy corrections 2026-04-22 (within 30-day grace window): (1) Throughout Context, Decision, §4, §5, §6, and Consequences, all references to "placed via TAG", "TAG binds them", "TagResolver._activeByAAS", "tag binding", "anchor + property + tag", and "read the TAG" have been updated to the PIN equivalents — per ADR-0041, which introduced the PIN schema (cardinality-1 edge) to replace the singleton-TAG pattern for PROPERTY value binding. (2) In §4, "a viewer who TAGs their own name PROPERTY" → "PINs"; "`_activeByAAS[nameAnchor][attester]`" → "`_activeBySlot[nameAnchor][attester]`". (3) In Consequences, "TAG singleton machinery" → "PIN singleton machinery"; "anchor + property + tag" → "anchor + property + pin"; "`TagResolver._activeByAAS` is the security boundary" → "`EdgeResolver._activeBySlot` is the security boundary". The core decision — `name` PROPERTY as display-name fallback, resolved in edition order via a cardinality-1 key anchor — is unchanged.*
+*Prose-accuracy corrections 2026-04-22 (within 30-day grace window): (1) Throughout Context, Decision, §4, §5, §6, and Consequences, all references to "placed via TAG", "TAG binds them", "TagResolver._activeByAAS", "tag binding", "anchor + property + tag", and "read the TAG" have been updated to the PIN equivalents — per ADR-0041, which introduced the PIN schema (cardinality-1 edge) to replace the singleton-TAG pattern for PROPERTY value binding. (2) In §4, "a viewer who TAGs their own name PROPERTY" → "PINs"; "`_activeByAAS[nameAnchor][attester]`" → "`_activeBySlot[nameAnchor][attester]`". (3) In Consequences, "TAG singleton machinery" → "PIN singleton machinery"; "anchor + property + tag" → "anchor + property + pin"; "`TagResolver._activeByAAS` is the security boundary" → "`EdgeResolver._activeBySlot` is the security boundary". The core decision — `name` PROPERTY as display-name fallback, resolved in lens order via a cardinality-1 key anchor — is unchanged.*
 
 ## Consequences
 
@@ -127,7 +127,7 @@ Can be batched into a single `multiAttest`. The new PIN supersedes the caller's 
 
 1. **Direct PROPERTY on container** via `refUID = containerUID`. Drafted first, rejected: breaks symmetry with DATA, needs per-container-kind validation in the PROPERTY resolver, and conflates value with placement.
 2. **A dedicated `NAME` schema with fields `(bytes32 target, string name)`.** Rejected — duplicates the TAG-placement pattern, needs its own per-attester singleton index, no structural gain.
-3. **An anchor-based name registry under `/names/<name>/ → TAG(address)`.** Rejected — forces reverse lookup ("what is this address called?") to scan the name space; doesn't edition-scope naturally.
+3. **An anchor-based name registry under `/names/<name>/ → TAG(address)`.** Rejected — forces reverse lookup ("what is this address called?") to scan the name space; doesn't lens-scope naturally.
 4. **ENS-only; no EFS-native names.** Rejected — doesn't cover schemas/attestations/anchors, and forces mainnet dependency for a primitive we already have.
 5. **Global name registry (first-attester-wins or dictator).** Rejected — violates per-viewer sovereignty. My label should never leak to your view unless you trust me.
 6. **Store names in the anchor's `name` field directly.** Rejected — the anchor's `name` is the path segment (used for routing; unique via `_nameToAnchor`). Overloading would fight the invariant and wouldn't cover addresses/schemas/attestations at all.

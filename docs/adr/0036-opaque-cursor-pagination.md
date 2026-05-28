@@ -84,7 +84,7 @@ Both schemes are deploy-mutable: since `EFSFileView` is stateless (and marked re
 
 ### Dedup semantics
 
-Multi-attester views (the "editions" model, ADR-0031) must return each target at most once. File placement is Shape A (PIN only — cardinality 1 per `(attester, definition, targetSchema)` slot, ADR-0041). Dedup is expressed as: when processing attester `a`'s active PIN target `t`, skip `t` if any earlier attester `b` already has an active PIN on `(t, definition)`. Checked via `EdgeResolver.isActivePinEdge(b, t, definition)`, which is O(1) per check. Total dedup cost is O(attesters × page_size), replacing the prior O(n²) scratch-buffer scan.
+Multi-attester views (the "lenses" model, ADR-0031) must return each target at most once. File placement is Shape A (PIN only — cardinality 1 per `(attester, definition, targetSchema)` slot, ADR-0041). Dedup is expressed as: when processing attester `a`'s active PIN target `t`, skip `t` if any earlier attester `b` already has an active PIN on `(t, definition)`. Checked via `EdgeResolver.isActivePinEdge(b, t, definition)`, which is O(1) per check. Total dedup cost is O(attesters × page_size), replacing the prior O(n²) scratch-buffer scan.
 
 ### No result cap
 

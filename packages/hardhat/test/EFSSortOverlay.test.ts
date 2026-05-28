@@ -514,7 +514,7 @@ describe("EFSSortOverlay", function () {
       const [allItems] = await sortOverlay.getSortedChunk(sortInfoUID, dirUID, ZERO_BYTES32, 10, false);
       expect(allItems.length).to.equal(4);
 
-      // Edition-filtered: only alice's items
+      // Lens-filtered: only alice's items
       const [aliceItems] = await sortOverlay.getSortedChunkByAddressList(
         sortInfoUID,
         dirUID,

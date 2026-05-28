@@ -49,11 +49,11 @@ The SORT_INFO attestation's `refUID` points to a **naming anchor** — an ANCHOR
 
 ## Sort Identity: Naming Anchors and SORT_INFO
 
-Sort concepts use the same **editions model** as file content:
+Sort concepts use the same **lenses model** as file content:
 
 - **Naming anchor** = the sort concept (stable, permanent, shared reference point)
 - **SORT_INFO attestation** = a per-attester implementation
-- **Editions resolution** = first matching SORT_INFO from the editions hierarchy wins
+- **Lenses resolution** = first matching SORT_INFO from the lenses hierarchy wins
 
 This mirrors how DATA attestations work on file anchors: the anchor is the concept, DATA is the per-attester content.
 
@@ -70,11 +70,11 @@ For a given parent anchor, available sort concepts are discovered in two layers:
 
 Local names override global names (same-name match wins).
 
-For each naming anchor, the best SORT_INFO implementation is resolved via the editions hierarchy:
+For each naming anchor, the best SORT_INFO implementation is resolved via the lenses hierarchy:
 
 ```
-editions = [user, trusted_friend, system_deployer]
-For each editions address:
+lenses = [user, trusted_friend, system_deployer]
+For each lenses address:
   getReferencingBySchemaAndAttester(namingAnchorUID, SORT_INFO_SCHEMA_UID, attester)
   → first non-revoked result wins
 ```
@@ -287,8 +287,8 @@ Processing system sorts (ByName, ByDate) is left to the user's explicit action v
 ## Griefing Resistance
 
 - **Fabricated UIDs** rejected — `processItems` validates each item against the kernel via `getChildAt`; arbitrary UIDs cannot be injected
-- **Edition filtering** — `getSortedChunkByAddressList` ensures readers only see items from trusted attesters
-- **Name squatting** — naming anchors are not the SORT_INFO; any attester can create a competing SORT_INFO on the same naming anchor, and editions resolution picks the trusted one
+- **Lens filtering** — `getSortedChunkByAddressList` ensures readers only see items from trusted attesters
+- **Name squatting** — naming anchors are not the SORT_INFO; any attester can create a competing SORT_INFO on the same naming anchor, and lenses resolution picks the trusted one
 - **No-op repositionItem** — `UnnecessaryReposition()` prevents griefing via no-op calls
 - **Sort/anchor mismatch** — callers can sort any anchor's children with any sort (wrong combos waste the caller's own gas, no harm to others)
 - **Auto-process scope** — UI auto-processes only the active sort on item add, never all sorts (prevents wallet prompt flooding in hostile directories)
@@ -299,7 +299,7 @@ Processing system sorts (ByName, ByDate) is left to the user's explicit action v
 
 ```
 1. User's own SORT_INFO (self-sovereign)
-2. Editions/trusted addresses (curated by user)
+2. Lenses/trusted addresses (curated by user)
 3. EFS system defaults (deployer-attested ByName, ByDate)
 ```
 

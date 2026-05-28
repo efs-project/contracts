@@ -11,7 +11,7 @@ import { notification } from "~~/utils/scaffold-eth";
 interface TagModalProps {
   uid: string; // The anchor UID of the item being tagged
   isFile?: boolean; // When true, tags are attached to the connected user's DATA attestation for this anchor
-  editionAddresses?: string[]; // Edition addresses for resolving DATA UID when viewing others' files
+  lensAddresses?: string[]; // Lens addresses for resolving DATA UID when viewing others' files
   onClose: () => void;
   /** Called after any successful tag add or remove so the parent can refresh filtered results. */
   onTagChange?: () => void;
@@ -26,7 +26,7 @@ interface UserTag {
 // AGENT-NOTE (ADR-0041): TAGs are cardinality-N with `int256 weight`. There is no longer
 // an `applies` boolean and no "negate" semantic — removal is solely via eas.revoke().
 // Default weight=1 mirrors the test idioms.
-export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagChange }: TagModalProps) => {
+export const TagModal = ({ uid, isFile, lensAddresses = [], onClose, onTagChange }: TagModalProps) => {
   const [tagName, setTagName] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [userTags, setUserTags] = useState<UserTag[]>([]);
@@ -35,13 +35,13 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
   const [tagsRoot, setTagsRoot] = useState<`0x${string}` | undefined>();
   const [refreshKey, setRefreshKey] = useState(0);
 
-  // effectiveUID: for files this is the DATA attestation UID (edition-specific);
-  // for folders it stays as the anchor UID. Tags on DATA UIDs are per-user per-edition.
+  // effectiveUID: for files this is the DATA attestation UID (lens-specific);
+  // for folders it stays as the anchor UID. Tags on DATA UIDs are per-user per-lens.
   const [effectiveUID, setEffectiveUID] = useState<string>(uid);
   // True while the async DATA UID lookup is in flight for file items.
   // Submission is blocked until this resolves so we never accidentally tag the anchor UID.
   const [isResolvingDataUID, setIsResolvingDataUID] = useState(!!isFile);
-  // True when isFile=true but no active PIN was found for any edition attester.
+  // True when isFile=true but no active PIN was found for any lens attester.
   // Submission is blocked — tagging the anchor UID for a file is incorrect (specs/02 §Tag).
   const [dataUIDMissing, setDataUIDMissing] = useState(false);
 
@@ -82,8 +82,8 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
   // active DATA per (attester, anchor) so we can use the O(1) `getActivePinTarget` reader
   // instead of the old TAG count → enumerate → newest-by-time scan.
   // The TagModal targets the DATA the user is actually *viewing*:
-  //   - editions set → resolve via editionAddresses (what's on screen)
-  //   - no editions → resolve via connectedAddress (own-files default view)
+  //   - lenses set → resolve via lensAddresses (what's on screen)
+  //   - no lenses → resolve via connectedAddress (own-files default view)
   //   - neither resolves → fall back to anchor UID (folder-level semantics)
   useEffect(() => {
     if (!isFile || !publicClient || !edgeResolverAddress || !dataSchemaUID || !pinSchemaUID) {
@@ -94,15 +94,15 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
 
     let cancelled = false;
     // Reset both flags at the start of each resolution cycle so a prior failure doesn't
-    // block the UI if a dependency change (new editions, reconnected wallet) leads to success.
+    // block the UI if a dependency change (new lenses, reconnected wallet) leads to success.
     setDataUIDMissing(false);
     setIsResolvingDataUID(true);
 
     const resolve = async () => {
       try {
         const viewAttesters: `0x${string}`[] =
-          editionAddresses.length > 0
-            ? (editionAddresses.map(a => a as `0x${string}`) as `0x${string}`[])
+          lensAddresses.length > 0
+            ? (lensAddresses.map(a => a as `0x${string}`) as `0x${string}`[])
             : connectedAddress
               ? [connectedAddress as `0x${string}`]
               : [];
@@ -153,7 +153,7 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
     return () => {
       cancelled = true;
     };
-  }, [uid, isFile, publicClient, connectedAddress, editionAddresses, edgeResolverAddress, dataSchemaUID, pinSchemaUID]);
+  }, [uid, isFile, publicClient, connectedAddress, lensAddresses, edgeResolverAddress, dataSchemaUID, pinSchemaUID]);
 
   // Load EdgeResolver address and the "tags" anchor UID (discovered from the normal tree).
   useEffect(() => {
@@ -492,10 +492,10 @@ export const TagModal = ({ uid, isFile, editionAddresses = [], onClose, onTagCha
         {isFile && (
           <p className="text-xs text-base-content/50 mb-3">
             {isResolvingDataUID
-              ? "Resolving edition..."
+              ? "Resolving lens..."
               : dataUIDMissing
-                ? "No edition data found — tagging unavailable for this file."
-                : "Tagging the viewed edition of this file."}
+                ? "No lens data found — tagging unavailable for this file."
+                : "Tagging the viewed lens of this file."}
           </p>
         )}
 

@@ -193,7 +193,7 @@ export async function classifyTopLevelSegment(raw: string, deps: ClassifyDeps): 
   // anchor branch — mirroring EFSRouter._classifyTopLevel (see ADR-0033). The
   // router treats address(0) as "no container" (EAS uses it as the "no
   // recipient" sentinel, not a user), and address containers default their
-  // editions to `[connected, viewed]`, which would inject zero into the list
+  // lenses to `[connected, viewed]`, which would inject zero into the list
   // if we let it through. Keeping the two classifiers byte-identical avoids a
   // UI/router split that's invisible in local dev but drifts at the edges.
   const hexBody = segment.startsWith("0x") || segment.startsWith("0X") ? segment.slice(2) : segment;
@@ -316,15 +316,24 @@ export function buildRouterPathNames(
 export const DEVNET_BOOTSTRAP_CURATOR = "0xaCf4C2950107eF9b1C37faA1F9a866C8F0da88b9" as const;
 
 /**
- * Compute the effective editions list for a container. Implements the default
- * editions priority chain from ADR-0039:
+ * Devnet dev/demo attester (James Carnley's dev account). Included in the
+ * default `system` fallback tier alongside the bootstrap curator so live-demo
+ * attestations from this account are visible to fresh viewers without having
+ * to specify `?lenses=`. Devnet-only; same mainnet replacement path as
+ * `DEVNET_BOOTSTRAP_CURATOR`.
+ */
+export const DEVNET_DEV_ATTESTER = "0x8626f6940E2eb28930eFb4CeF49B2d1F2C9C1199" as const;
+
+/**
+ * Compute the effective lenses list for a container. Implements the default
+ * lenses priority chain from ADR-0039:
  *
- *   explicit ?editions=  →  wholesale override (ADR-0031 / ADR-0033 invariant).
- *   otherwise:            connected → viewed (address container) → webOfTrust → system
+ *   explicit ?lenses=  →  wholesale override (ADR-0031 / ADR-0033 invariant).
+ *   otherwise:          connected → viewed (address container) → webOfTrust → system
  *
- * `explicitEditions` preserves URL shareability — a link with `?editions=…`
+ * `explicitLenses` preserves URL shareability — a link with `?lenses=…`
  * means exactly what it says to every viewer. The default chain only applies
- * when the URL carries no editions param.
+ * when the URL carries no lenses param.
  *
  * The tiers themselves:
  *   - **connected**: the user's own wallet. Their attestations always win
@@ -340,10 +349,10 @@ export const DEVNET_BOOTSTRAP_CURATOR = "0xaCf4C2950107eF9b1C37faA1F9a866C8F0da8
  * Dedupes case-insensitively; drops zero addresses; preserves order so
  * first-attester-wins semantics (ADR-0031) still apply inside the chain.
  */
-export function defaultEditionsForContainer(args: {
+export function defaultLensesForContainer(args: {
   container: ClassifiedContainer | null;
   connectedAddress: string | undefined;
-  explicitEditions: string[] | null;
+  explicitLenses: string[] | null;
   /** Future web-of-trust attesters (user-configured). Empty array until the
    *  WoT UX ships — the param exists so callers don't need plumbing changes
    *  when it does. */
@@ -351,18 +360,18 @@ export function defaultEditionsForContainer(args: {
   /** System tail attesters (devnet: bootstrap curator + deployer). Populated
    *  by the caller because the deployer address is a runtime read from the
    *  indexer. */
-  systemEditions?: string[];
+  systemLenses?: string[];
 }): string[] {
-  // `explicitEditions !== null` means the URL carried `?editions=` — preserve
+  // `explicitLenses !== null` means the URL carried `?lenses=` — preserve
   // that intent as a wholesale override even when the resolved list is empty.
-  // An explicit `?editions=alice.eth,bob.eth` whose tokens all fail to resolve
+  // An explicit `?lenses=alice.eth,bob.eth` whose tokens all fail to resolve
   // (ENS outage, invalid hex, unregistered name) must NOT silently fall back
   // to the default chain — that would change the meaning of a shared link and
   // surface unintended content. Empty explicit = show nothing; the caller's
   // directory hook early-returns on a zero-length list, so the user sees an
-  // empty grid until the URL is fixed, not someone else's edition.
+  // empty grid until the URL is fixed, not someone else's lens.
   // See ADR-0031 (wholesale override) + P2 review on #9.
-  if (args.explicitEditions !== null) return args.explicitEditions;
+  if (args.explicitLenses !== null) return args.explicitLenses;
 
   const out: string[] = [];
   const push = (addr: string | undefined) => {
@@ -377,6 +386,6 @@ export function defaultEditionsForContainer(args: {
     push(args.container.address);
   }
   (args.webOfTrust ?? []).forEach(push);
-  (args.systemEditions ?? []).forEach(push);
+  (args.systemLenses ?? []).forEach(push);
   return out;
 }

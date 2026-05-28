@@ -31,20 +31,20 @@ For EFS the gas-sensitive path is the EFSIndexer hot path (every attestation). W
 
 **Blocks:** any work on the devnet upgradeability branch.
 
-### [tier-2, 2026-04-16, claude] Multi-edition merge semantics
+### [tier-2, 2026-04-16, claude] Multi-lens merge semantics
 
-ADR-0031 establishes first-attester-wins fallback semantics. Holistic review noted that for `?editions=alice,bob,carol` users may expect "merge by newest timestamp across all editions" rather than strict precedence.
+ADR-0031 establishes first-attester-wins fallback semantics. Holistic review noted that for `?lenses=alice,bob,carol` users may expect "merge by newest timestamp across all lenses" rather than strict precedence.
 
 Should we:
 - **A**: keep first-wins as the only model, document it loudly in the production UI ("attesters are tried in order").
-- **B**: add a second router function `_findDataAtPathMerge()` that returns newest-by-timestamp across all editions; UI offers a toggle.
+- **B**: add a second router function `_findDataAtPathMerge()` that returns newest-by-timestamp across all lenses; UI offers a toggle.
 - **C**: add a query param `?merge=newest` that switches the existing function's behavior.
 
 C is cleanest for URLs. B is cleanest for code. A is cheapest.
 
 **Default if not answered:** A for v1; revisit based on production UI feedback.
 
-**Blocks:** anything that depends on multi-edition resolution semantics being final. Doesn't block this PR.
+**Blocks:** anything that depends on multi-lens resolution semantics being final. Doesn't block this PR.
 
 ---
 

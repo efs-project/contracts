@@ -138,7 +138,7 @@ export type CreateItemModalProps = {
   indexerAddress?: `0x${string}`;
   easAddress?: `0x${string}`;
   sortOverlayAddress?: `0x${string}`;
-  editionAddresses?: string[];
+  lensAddresses?: string[];
 
   /** Called after a folder is created. */
   onFolderCreated?: (uid: string, name: string) => void;
@@ -160,7 +160,7 @@ export const CreateItemModal = ({
   indexerAddress,
   easAddress: _easAddress,
   sortOverlayAddress,
-  editionAddresses,
+  lensAddresses,
   onFolderCreated,
   onFileCreated,
 }: CreateItemModalProps) => {
@@ -188,7 +188,7 @@ export const CreateItemModal = ({
     parentAnchor: currentAnchorUID ?? undefined,
     indexerAddress,
     easAddress: _easAddress,
-    editionAddresses: editionAddresses ?? [],
+    lensAddresses: lensAddresses ?? [],
   });
   const [disabledAutoSorts, setDisabledAutoSorts] = useState<Set<string>>(new Set());
   const [showSortConfig, setShowSortConfig] = useState(false);
@@ -469,7 +469,7 @@ export const CreateItemModal = ({
           if (!newAnchorUID) throw new Error("Could not extract new Anchor UID");
 
           // Visibility TAG — folder visibility is tag-only (ADR-0038 / ADR-0041).
-          // A folder appears in an edition-scoped listing iff at least one edition attester
+          // A folder appears in a lens-scoped listing iff at least one lens attester
           // has an active TAG(definition=dataSchemaUID, refUID=folder). A TAG is active iff
           // it exists and is not EAS-revoked — weight is opaque metadata (ADR-0041 §4).
           // weight=1n is the conventional default; the kernel does not interpret it.
@@ -950,11 +950,12 @@ export const CreateItemModal = ({
       checkCancelled();
 
       // Ancestor-walk visibility TAGs (tag-only folder-visibility model, ADR-0038 / ADR-0041).
-      // A folder appears in an edition listing iff at least one edition attester has an
+      // Ancestor-walk visibility TAGs (tag-only folder-visibility model, ADR-0038 / ADR-0041).
+      // A folder appears in a lens listing iff at least one lens attester has an
       // active TAG(definition=dataSchemaUID, refUID=folder). Active = exists and not revoked;
       // weight is opaque metadata (ADR-0041 §4). On upload, the uploader must emit that TAG
       // at every generic-folder ancestor from the immediate parent up to (but excluding) root,
-      // or those folders stay hidden in the uploader's edition. Skip already-tagged ancestors.
+      // or those folders stay hidden in the uploader's lens. Skip already-tagged ancestors.
       if (indexer) {
         const edgeResolverAddress = await getEdgeResolverAddress(targetNetwork.id);
         if (edgeResolverAddress) {

@@ -8,7 +8,7 @@ export type ScaffoldConfig = {
   onlyLocalBurnerWallet: boolean;
 };
 
-export const DEFAULT_ALCHEMY_API_KEY = "cR4WnXePioePZ5fFrnSiR";
+export const DEFAULT_ALCHEMY_API_KEY = "IZYEU2cWBgnFmgiTAgpWD";
 
 // Agents running a parallel hardhat node (e.g. on 8546) set NEXT_PUBLIC_HARDHAT_RPC_URL
 // so wagmi clients AND the burner-connector both target the same node. The burner

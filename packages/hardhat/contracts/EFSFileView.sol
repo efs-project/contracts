@@ -4,10 +4,10 @@ pragma solidity 0.8.26;
 import { IEAS, Attestation } from "@ethereum-attestation-service/eas-contracts/contracts/IEAS.sol";
 
 interface IEdgeResolverForFileView {
-    /// @notice TAG-specific edition-aware check: true iff any of `attesters` has an active
+    /// @notice TAG-specific lens-aware check: true iff any of `attesters` has an active
     ///         TAG on (targetID, definition). Used for phase-0 folder visibility (ADR-0038):
     ///         folder visibility is TAG-only; a PIN with `definition=DATA_SCHEMA_UID` targeting
-    ///         a folder must NOT make that folder appear in edition-scoped directory listings.
+    ///         a folder must NOT make that folder appear in lens-scoped directory listings.
     ///         One SLOAD per attester.
     function hasActiveTagFromAny(
         bytes32 targetID,
@@ -169,9 +169,9 @@ contract EFSFileView {
         return (items, nextCur);
     }
 
-    /// @dev Maximum attesters per multi-edition view call.
+    /// @dev Maximum attesters per multi-lens view call.
     ///      Bounds per-call gas on the attester-scoped walkers; does not bound returned items.
-    ///      Callers wanting more than this many editions need a different aggregation model.
+    ///      Callers wanting more than this many lenses need a different aggregation model.
     uint256 private constant MAX_ATTESTERS_PER_QUERY = 20;
 
     /// @dev Internal batch size for `_childrenWithEdge` chunk fetches during the folder
@@ -204,14 +204,14 @@ contract EFSFileView {
      *
      *         Each call advances internal walkers by whatever it takes to produce up to
      *         `maxItems` items or exhaust both sources. Filtered-out entries (revoked,
-     *         edition-out-of-scope) still advance the walker — `maxItems` bounds result
+     *         lens-out-of-scope) still advance the walker — `maxItems` bounds result
      *         size, not work.
      *
      * @param parentAnchor  Directory Anchor UID.
      * @param anchorSchema  Schema to filter on. Generic folders with an active tag of this
      *                      schema are included in phase 0; direct children of this schema
      *                      are included in phase 1.
-     * @param attesters     Edition addresses (ADR-0031). An entry qualifies if ANY listed
+     * @param attesters     Lens addresses (ADR-0031). An entry qualifies if ANY listed
      *                      attester has contributed it.
      * @param cursor        Opaque token from a prior call. Empty bytes = start from the
      *                      beginning. Never introspected by callers; encoding is an
@@ -386,7 +386,7 @@ contract EFSFileView {
      *         the walker; `maxItems` bounds result size, not work.
      *
      * @param anchorUID  The path anchor (e.g. /memes/).
-     * @param attesters  Edition addresses to query, in precedence order.
+     * @param attesters  Lens addresses to query, in precedence order.
      * @param schema     Target schema to filter. **Must be DATA_SCHEMA_UID or
      *                   ANCHOR_SCHEMA_UID** — those are the only two payload shapes
      *                   the per-item decode below understands. Calling with any other
@@ -433,7 +433,7 @@ contract EFSFileView {
             if (target == bytes32(0)) continue;
 
             // Cross-attester dedup (ADR-0031 first-attester-wins): if an earlier attester
-            // already has an active PIN placing this DATA at this anchor, skip — this edition
+            // already has an active PIN placing this DATA at this anchor, skip — this lens
             // is already represented. PIN-specific check: file placement is Shape A (PIN only).
             // A TAG from an earlier attester must NOT suppress a later attester's valid PIN.
             bool taken = false;

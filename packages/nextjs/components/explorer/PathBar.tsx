@@ -32,9 +32,9 @@ export type PathBarProps = {
   currentPath: PathItem[];
   /** The kind of the *top-level* container, drives the leaf badge. */
   containerKind: ContainerKind;
-  /** Addresses currently filtering the view. Drives the editions chip count. */
-  editionAddresses: string[];
-  /** The resolved top-level container — used to label the "Current" row in the editions popover. */
+  /** Addresses currently filtering the view. Drives the lenses chip count. */
+  lensAddresses: string[];
+  /** The resolved top-level container — used to label the "Current" row in the lenses popover. */
   container?: ClassifiedContainer | null;
   /**
    * Resolved display name for the container (ADR-0034 `name` PROPERTY / ENS /
@@ -95,14 +95,14 @@ function buildUrlFromPath(currentPath: PathItem[], containerKind: ContainerKind)
 
 /**
  * Primary navigation control. A typeable URL bar with a leading ITEM button that
- * toggles the container info band, and a trailing EDITIONS chip for attester
+ * toggles the container info band, and a trailing LENSES chip for attester
  * filtering. Shipping the bar as its own component lets the user edit the whole
  * path freely (ENS, raw addresses, schema/attestation UIDs, nested sub-paths).
  */
 export const PathBar = ({
   currentPath,
   containerKind,
-  editionAddresses,
+  lensAddresses,
   container,
   containerDisplayName,
   isInfoOpen,
@@ -115,14 +115,14 @@ export const PathBar = ({
   const { address: connectedAddress } = useAccount();
   const [input, setInput] = useState(() => buildUrlFromPath(currentPath, containerKind));
   const [isEditing, setIsEditing] = useState(false);
-  const [editionsInput, setEditionsInput] = useState(searchParams.get("editions") || "");
+  const [lensesInput, setLensesInput] = useState(searchParams.get("lenses") || "");
 
   useEffect(() => {
     if (!isEditing) setInput(buildUrlFromPath(currentPath, containerKind));
   }, [currentPath, containerKind, isEditing]);
 
   useEffect(() => {
-    setEditionsInput(searchParams.get("editions") || "");
+    setLensesInput(searchParams.get("lenses") || "");
   }, [searchParams]);
 
   const leaf = currentPath[currentPath.length - 1];
@@ -156,11 +156,11 @@ export const PathBar = ({
     navigate(input);
   };
 
-  const applyEditions = () => {
+  const applyLenses = () => {
     const next = new URLSearchParams(searchParams.toString());
-    const trimmed = editionsInput.trim();
-    if (trimmed) next.set("editions", trimmed);
-    else next.delete("editions");
+    const trimmed = lensesInput.trim();
+    if (trimmed) next.set("lenses", trimmed);
+    else next.delete("lenses");
     const tailSegments = currentPath
       .slice(containerKind === "anchor" ? 1 : 0)
       .map(p => p.urlSegment ?? encodeURIComponent(p.name));
@@ -168,9 +168,8 @@ export const PathBar = ({
     router.push(`/explorer/${tailSegments.join("/")}${q ? `?${q}` : ""}`);
   };
 
-  const editionsCount = editionAddresses.length;
-  const editionsLabel =
-    editionsCount === 0 ? "No editions" : `${editionsCount} edition${editionsCount === 1 ? "" : "s"}`;
+  const lensesCount = lensAddresses.length;
+  const lensesLabel = lensesCount === 0 ? "No lenses" : `${lensesCount} lens${lensesCount === 1 ? "" : "es"}`;
 
   return (
     <div className="flex flex-wrap items-stretch gap-2 w-full">
@@ -248,7 +247,7 @@ export const PathBar = ({
         </button>
       </form>
 
-      {/* EDITIONS chip — below `lg` the chip wraps to its own row so we left-anchor the popover;
+      {/* LENSES chip — below `lg` the chip wraps to its own row so we left-anchor the popover;
           at `lg+` the chip sits at the right of the PathBar so we right-anchor to keep it on-screen. */}
       <details className="dropdown lg:dropdown-end flex-shrink-0">
         <summary
@@ -256,13 +255,13 @@ export const PathBar = ({
           title="Filter by attester (ENS or 0x address, comma-separated)"
         >
           <span aria-hidden>👥</span>
-          <span className="text-xs">{editionsLabel}</span>
+          <span className="text-xs">{lensesLabel}</span>
           <span className="text-xs opacity-60">▾</span>
         </summary>
         <div className="dropdown-content z-50 !bg-base-100 border border-base-300 rounded-box shadow-lg p-3 mt-1 w-80 max-w-[calc(100vw-2rem)]">
-          {editionAddresses.length > 0 && (
+          {lensAddresses.length > 0 && (
             <div className="mb-2 rounded-md bg-base-200 p-2 text-xs font-mono flex flex-col gap-1">
-              {editionAddresses.map((addr, i) => {
+              {lensAddresses.map((addr, i) => {
                 const isYou = connectedAddress && addr.toLowerCase() === connectedAddress.toLowerCase();
                 const isContainer =
                   container?.kind === "address" &&
@@ -285,19 +284,19 @@ export const PathBar = ({
             type="text"
             className="input input-bordered input-sm w-full"
             placeholder="vitalik.eth, 0x..."
-            value={editionsInput}
-            onChange={e => setEditionsInput(e.target.value)}
+            value={lensesInput}
+            onChange={e => setLensesInput(e.target.value)}
             onKeyDown={e => {
-              if (e.key === "Enter") applyEditions();
+              if (e.key === "Enter") applyLenses();
             }}
           />
           <div className="flex justify-end gap-2 mt-2">
             <button
               className="btn btn-xs btn-ghost"
               onClick={() => {
-                setEditionsInput("");
+                setLensesInput("");
                 const next = new URLSearchParams(searchParams.toString());
-                next.delete("editions");
+                next.delete("lenses");
                 const tailSegments = currentPath
                   .slice(containerKind === "anchor" ? 1 : 0)
                   .map(p => p.urlSegment ?? encodeURIComponent(p.name));
@@ -307,7 +306,7 @@ export const PathBar = ({
             >
               Clear
             </button>
-            <button className="btn btn-xs btn-primary" onClick={applyEditions}>
+            <button className="btn btn-xs btn-primary" onClick={applyLenses}>
               Apply
             </button>
           </div>

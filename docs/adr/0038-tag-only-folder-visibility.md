@@ -18,20 +18,20 @@ EFS is pre-ship; no deployed data relies on the older dual-source semantics.
 
 ## Decision
 
-Folder visibility in an edition-scoped directory listing is **single-source**: a folder appears iff at least one edition attester has an active (existing and not revoked) `TAG(definition=dataSchemaUID, refUID=folder)`.
+Folder visibility in a lens-scoped directory listing is **single-source**: a folder appears iff at least one lens attester has an active (existing and not revoked) `TAG(definition=dataSchemaUID, refUID=folder)`.
 
 ### What this means concretely
 
-- **Folder creation** is unchanged: it's an ANCHOR attestation whose `refUID` points at the parent folder. That ANCHOR is the structural membership record, consumed by non-edition-filtered views (anchor walk, `getDirectoryPage`) and by the `web3://` router's path walk.
-- **Edition visibility** is a separate, per-attester claim, expressed through a TAG. The kernel does not emit this TAG implicitly — clients do.
+- **Folder creation** is unchanged: it's an ANCHOR attestation whose `refUID` points at the parent folder. That ANCHOR is the structural membership record, consumed by non-lens-filtered views (anchor walk, `getDirectoryPage`) and by the `web3://` router's path walk.
+- **Lens visibility** is a separate, per-attester claim, expressed through a TAG. The kernel does not emit this TAG implicitly — clients do.
 - **Upload flow** (client-side): after placing a file at `/a/b/file.txt`, the client walks the ancestor chain `/a/b → /a` (stopping at root exclusive). For each ancestor that the uploader has not already actively tagged with `(definition=dataSchemaUID)`, the client emits a visibility TAG. Weight defaults to 1 by convention; the kernel does not interpret weight. Steady-state cost: zero (walk exits on the first hit). First upload into a new subtree: one extra TAG per generic ancestor.
 - **Empty-folder visibility** (the `CreateItemModal` "make an empty folder that's visible immediately" case): the creator emits the same visibility TAG as the upload flow. Same mechanism, no special case.
 - **Folder deletion**: revoke the attester's visibility TAG on the target folder, then cascade-revoke the attester's file-placement PINs in the subtree. No orphan placements.
-- **Cross-edition**: Alice's visibility TAG on `/a` does not make `/a` visible to Bob's edition. Bob must tag it himself. Matches ADR-0031 first-attester-wins.
+- **Cross-lens**: Alice's visibility TAG on `/a` does not make `/a` visible to Bob's lens. Bob must tag it himself. Matches ADR-0031 first-attester-wins.
 
 ### View wiring
 
-`EFSFileView` schema-filtered directory reads consume `EdgeResolver._childrenWithEdge[parent][dataSchemaUID]` and filter on active (existing and not revoked) TAGs by any edition attester via `hasActiveTagFromAny`. The old `_getQualifyingTaggedFolders` helper, the `MAX_TAGGED_FOLDERS = 10000` cap, and the dual-source `_qualifyingFolders` fallback are all removed. The schema-filtered walker is now the opaque-cursor paginator from ADR-0036, so there is no silent truncation at any fan-out size.
+`EFSFileView` schema-filtered directory reads consume `EdgeResolver._childrenWithEdge[parent][dataSchemaUID]` and filter on active (existing and not revoked) TAGs by any lens attester via `hasActiveTagFromAny`. The old `_getQualifyingTaggedFolders` helper, the `MAX_TAGGED_FOLDERS = 10000` cap, and the dual-source `_qualifyingFolders` fallback are all removed. The schema-filtered walker is now the opaque-cursor paginator from ADR-0036, so there is no silent truncation at any fan-out size.
 
 ### Kernel storage
 
@@ -40,18 +40,18 @@ Folder visibility in an edition-scoped directory listing is **single-source**: a
 ## Consequences
 
 - **Ghost folders on revoke disappear structurally.** A folder with no active placement or visibility TAG is not in the listing — the listing reflects active TAGs, and active TAGs are what drives inclusion.
-- **Single source of truth for edition visibility.** One index to read, one index to mutate. Future indexing work doesn't have to keep two stores consistent.
+- **Single source of truth for lens visibility.** One index to read, one index to mutate. Future indexing work doesn't have to keep two stores consistent.
 - **Upload cost.** Best case (steady state, subtree already tagged): zero extra attestations beyond the file itself. Worst case (first upload into a fresh `/a/b/c/…/z/`): up to `MAX_ANCHOR_DEPTH = 32` visibility TAGs. Each is a cheap TAG (~50k gas) against a single `onAttest` hook. Acceptable — archival-grade uploads were never commodity-cheap.
 - **Delete cascade is now well-defined.** Revoke the visibility TAG on the root of the delete target + revoke placement TAGs on every file in the subtree. No per-attester orphan placements.
 - **Client responsibility.** The ancestor-walk visibility emitter lives in client code (`CreateItemModal` and equivalent in the production Vite/Lit client). Two clients must stay consistent on the rule "walk up to root exclusive, emit if not-already-actively-tagged."
-- **Symmetry with files is partial.** Files and folder *visibility* both flow through TAGs. Folder *creation* still does not require a TAG — the ANCHOR attestation is the structural record. This is intentional: folder existence is a fact about the structure (and can't be unseen by any edition); folder visibility is an edition-scoped claim.
+- **Symmetry with files is partial.** Files and folder *visibility* both flow through TAGs. Folder *creation* still does not require a TAG — the ANCHOR attestation is the structural record. This is intentional: folder existence is a fact about the structure (and can't be unseen by any lens); folder visibility is a lens-scoped claim.
 - **No silent truncation at any fan-out size** (ADR-0036 paginator). Previously `MAX_TAGGED_FOLDERS = 10000` was a gas-ceiling cap that quietly dropped folders past 10k; with opaque-cursor pagination the walker processes whatever exists across as many paginated calls as needed.
 - **Kernel shrinks.** `_qualifyingFolders` storage and the ancestor-walk code in EFSIndexer's `onAttest` go away. Net reduction in kernel complexity.
 
 ## Alternatives considered
 
-- **Keep dual-source, add de-propagation.** Reference-count `_qualifyingFolders` entries and walk up on every revoke. Rejected: gas cost at every untag (every file delete), still-complex semantics, and doesn't address "is this my folder" being fundamentally per-edition.
-- **Auto-emit visibility TAG on folder creation in the kernel.** Reduces client responsibility but bloats `onAttest` with conditional work and still needs the ancestor walk on deep uploads (the anchor attestation only knows its immediate parent). Rejected for the same reasons auto-tagging generally is — the kernel should index, not express edition claims.
+- **Keep dual-source, add de-propagation.** Reference-count `_qualifyingFolders` entries and walk up on every revoke. Rejected: gas cost at every untag (every file delete), still-complex semantics, and doesn't address "is this my folder" being fundamentally per-lens.
+- **Auto-emit visibility TAG on folder creation in the kernel.** Reduces client responsibility but bloats `onAttest` with conditional work and still needs the ancestor walk on deep uploads (the anchor attestation only knows its immediate parent). Rejected for the same reasons auto-tagging generally is — the kernel should index, not express lens claims.
 - **Skip the upload-time ancestor walk and require the user to tag each ancestor manually.** Rejected as bad UX; nobody wants to tag five folders to see their file show up.
 - **Edit ADR-0006 in place (the status quo before this ADR).** Rejected on repeat: the ADR discipline treats Decision content as historical record. Two rounds of in-place edits on the same ADR crossed the threshold where supersession is clearly the right form.
 

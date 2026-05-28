@@ -21,7 +21,7 @@ const NO_EXPIRATION = 0n;
  *   `clearContains` regardless of target shape. So an attester who created an anchor and
  *   then attached a single address-target tag to it would see their anchor-creation
  *   contains bit silently cleared on revoke of that tag, hiding the anchor from their
- *   own edition listing.
+ *   own lens listing.
  *
  *   Fix (ADR-0041 follow-up): the contains-flag bookkeeping in onAttest and onRevoke is
  *   gated on `refUID != EMPTY_UID` (i.e. structural edges only). Increment and decrement

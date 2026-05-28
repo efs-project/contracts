@@ -24,7 +24,7 @@ import { EFSIndexer } from "./EFSIndexer.sol";
  *      Sort overlay storage: per (sortInfoUID, parentAnchor) shared doubly linked list
  *        - sorted via client-supplied position hints validated by ISortFunc.isLessThan
  *        - lazy: processItems advances a shared _lastProcessedIndex
- *        - editions filtering at read time via getSortedChunkByAddressList
+ *        - lenses filtering at read time via getSortedChunkByAddressList
  *
  *      Staleness: getSortStaleness(sortInfoUID, parentAnchor) returns unprocessed kernel items.
  */
@@ -546,7 +546,7 @@ contract EFSSortOverlay is SchemaResolver {
     }
 
     /**
-     * @notice Edition-filtered sorted pagination. Returns only items where any of the given
+     * @notice Lens-filtered sorted pagination. Returns only items where any of the given
      *         attesters contributed (using indexer.containsAttestations).
      *
      * @param sortInfoUID   The SORT_INFO attestation UID.
@@ -554,9 +554,9 @@ contract EFSSortOverlay is SchemaResolver {
      * @param startNode     Item UID to begin from. bytes32(0) = start at head.
      * @param limit         Max items to RETURN.
      * @param maxTraversal  Max nodes to WALK (0 = DEFAULT_MAX_TRAVERSAL).
-     *                      Prevents RPC timeouts for sparse edition filters on large lists.
+     *                      Prevents RPC timeouts for sparse lens filters on large lists.
      *                      Caller keeps paginating until nextCursor = bytes32(0).
-     * @param attesters     Edition list. Item qualifies if ANY attester contributed to it.
+     * @param attesters     Lens list. Item qualifies if ANY attester contributed to it.
      * @param showRevoked   If false (default), revoked items are skipped.
      * @return items        Qualifying item UIDs in sorted order.
      * @return nextCursor   Resume cursor. bytes32(0) = end of list.

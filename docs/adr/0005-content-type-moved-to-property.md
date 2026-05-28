@@ -19,7 +19,7 @@ DATA schema is `bytes32 contentHash, uint64 size`. ContentType is a separate PRO
 PROPERTY(key = "contentType", value = "image/jpeg", refUID = dataUID, attester = msg.sender)
 ```
 
-The router's `_getContentType` reads PROPERTYs on the DATA, scoped to the edition attester (ADR-0014), and returns the value or `application/octet-stream` as fallback.
+The router's `_getContentType` reads PROPERTYs on the DATA, scoped to the lens attester (ADR-0014), and returns the value or `application/octet-stream` as fallback.
 
 ## Consequences
 

@@ -1,5 +1,5 @@
 /**
- * useEditionDirectoryPage — Cursor-paginated edition-scoped directory listing.
+ * useLensesDirectoryPage — Cursor-paginated lenses-scoped directory listing.
  *
  * Wraps `EFSFileView.getDirectoryPageBySchemaAndAddressList` with ADR-0036
  * opaque-cursor iteration. The contract walks two phases — (0) tagged generic
@@ -14,24 +14,24 @@
  * the first cursor.
  *
  * Usage:
- *   const { items, isLoading, hasMore, loadMore, refresh } = useEditionDirectoryPage({
+ *   const { items, isLoading, hasMore, loadMore, refresh } = useLensesDirectoryPage({
  *     parentAnchor,
  *     dataSchemaUID,
- *     editionAddresses,
+ *     lensAddresses,
  *     fileViewAddress,
  *     fileViewAbi,
  *     pageSize: 50n,
- *     enabled: useEditionsQuery,
+ *     enabled: useLensesQuery,
  *   });
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Abi } from "viem";
 import { usePublicClient } from "wagmi";
 
-interface UseEditionDirectoryPageOptions {
+interface UseLensesDirectoryPageOptions {
   parentAnchor: `0x${string}` | undefined;
   dataSchemaUID: `0x${string}` | undefined;
-  editionAddresses: string[];
+  lensAddresses: string[];
   fileViewAddress: `0x${string}` | undefined;
   fileViewAbi: Abi | undefined;
   /** Target items per user-facing page. Default 50. */
@@ -40,7 +40,7 @@ interface UseEditionDirectoryPageOptions {
   enabled: boolean;
 }
 
-interface UseEditionDirectoryPageResult {
+interface UseLensesDirectoryPageResult {
   items: any[] | undefined;
   isLoading: boolean;
   /** True when the cursor is non-empty (more pages available). */
@@ -62,15 +62,15 @@ const EMPTY_CURSOR = "0x" as `0x${string}`;
  */
 const MAX_AUTO_ADVANCE_PAGES = 20;
 
-export function useEditionDirectoryPage({
+export function useLensesDirectoryPage({
   parentAnchor,
   dataSchemaUID,
-  editionAddresses,
+  lensAddresses,
   fileViewAddress,
   fileViewAbi,
   pageSize = 50n,
   enabled,
-}: UseEditionDirectoryPageOptions): UseEditionDirectoryPageResult {
+}: UseLensesDirectoryPageOptions): UseLensesDirectoryPageResult {
   const publicClient = usePublicClient();
   const [items, setItems] = useState<any[] | undefined>(undefined);
   const [isLoading, setIsLoading] = useState(false);
@@ -78,14 +78,14 @@ export function useEditionDirectoryPage({
   const [loadTrigger, setLoadTrigger] = useState(0);
   const cursorRef = useRef<`0x${string}`>(EMPTY_CURSOR);
 
-  const editionsKey = editionAddresses.join(",").toLowerCase();
-  const depsKey = `${enabled ? "1" : "0"}|${parentAnchor ?? ""}|${dataSchemaUID ?? ""}|${editionsKey}|${pageSize.toString()}`;
+  const lensesKey = lensAddresses.join(",").toLowerCase();
+  const depsKey = `${enabled ? "1" : "0"}|${parentAnchor ?? ""}|${dataSchemaUID ?? ""}|${lensesKey}|${pageSize.toString()}`;
   const lastDepsRef = useRef<string>("");
   // NOTE: There was previously an `inFlightRef` guard at the top of the fetch
   // effect (`if (inFlightRef.current) return;`) intended to prevent concurrent
   // reads. It silently dropped `loadTrigger` bumps that landed while a prior
   // fetch was still settling — including refresh() bumps — so callers awaiting
-  // `await refetchEditionItems()` after a delete could hang forever with the
+  // `await refetchLensItems()` after a delete could hang forever with the
   // resolver never installed. See P1 review on #9.
   //
   // The `cancelled` closure flag + the `ownedResolver` identity check already
@@ -136,8 +136,8 @@ export function useEditionDirectoryPage({
   // cursor returns empty (ADR-0036 terminator).
   useEffect(() => {
     // Settle any pending `refresh()` awaiter on early-return so callers doing
-    // `await refetchEditionItems()` can't hang when preconditions go false
-    // (enabled flipped, editions emptied, wagmi deps transiently undefined).
+    // `await refetchLensItems()` can't hang when preconditions go false
+    // (enabled flipped, lenses emptied, wagmi deps transiently undefined).
     // The fetch will re-fire if preconditions restore, but the awaiter has
     // already moved on — matching the "at most one render cycle of stale UI"
     // semantic used elsewhere in this hook.
@@ -162,7 +162,7 @@ export function useEditionDirectoryPage({
       settlePending();
       return;
     }
-    if (editionAddresses.length === 0) {
+    if (lensAddresses.length === 0) {
       settlePending();
       return;
     }
@@ -197,7 +197,7 @@ export function useEditionDirectoryPage({
             address: fileViewAddress,
             abi: fileViewAbi,
             functionName: "getDirectoryPageBySchemaAndAddressList",
-            args: [parentAnchor, dataSchemaUID, editionAddresses as `0x${string}`[], cursor, pageSize],
+            args: [parentAnchor, dataSchemaUID, lensAddresses as `0x${string}`[], cursor, pageSize],
           })) as any;
 
           if (cancelled) return;
@@ -231,12 +231,12 @@ export function useEditionDirectoryPage({
         setHasMore(!exhausted);
         setItems(prev => [...(prev ?? []), ...collected]);
       } catch (err) {
-        console.error("useEditionDirectoryPage: fetch failed", err);
+        console.error("useLensesDirectoryPage: fetch failed", err);
         if (!cancelled) setHasMore(false);
       } finally {
         if (!cancelled) setIsLoading(false);
         // Resolve the awaiter from `refresh()` so callers that do
-        // `await refetchEditionItems()` see the post-fetch state before
+        // `await refetchLensItems()` see the post-fetch state before
         // continuing (delete-then-refresh flow). Two gates:
         //   1. `!cancelled` — a cancelled fetch never committed state,
         //      so resolving here would hand stale data to the awaiter.
@@ -255,7 +255,7 @@ export function useEditionDirectoryPage({
     return () => {
       cancelled = true;
     };
-    // cursorRef is mutable-ref; editionsKey stands in for editionAddresses equality.
+    // cursorRef is mutable-ref; lensesKey stands in for lensAddresses equality.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     loadTrigger,
@@ -265,7 +265,7 @@ export function useEditionDirectoryPage({
     fileViewAbi,
     parentAnchor,
     dataSchemaUID,
-    editionsKey,
+    lensesKey,
     pageSize,
   ]);
 

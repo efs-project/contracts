@@ -1,6 +1,6 @@
 # Core Workflows
 
-This document maps the step-by-step execution for specific developer and user interactions within the EFS, relying on the [Onchain Indexing Strategy](./03-Onchain-Indexing-Strategy.md) and [Data Models and Schemas](./02-Data-Models-and-Schemas.md). Because EFS is subjective and permissionless, any data can be written, but the read state depends on the querier's perspective (Edition or Web of Trust).
+This document maps the step-by-step execution for specific developer and user interactions within the EFS, relying on the [Onchain Indexing Strategy](./03-Onchain-Indexing-Strategy.md) and [Data Models and Schemas](./02-Data-Models-and-Schemas.md). Because EFS is subjective and permissionless, any data can be written, but the read state depends on the querier's perspective (Lens or Web of Trust).
 
 ### 1. Upload a file to `/memes/cat.jpg` (on-chain)
 - **Action**: Atomic upload via EAS `multiAttest` — all attestations in a single transaction.
@@ -12,8 +12,8 @@ This document maps the step-by-step execution for specific developer and user in
   2. **contentType binding** (ADR-0041 supersedes ADR-0035): three sub-attestations — (a) `Anchor(refUID=DATA, anchorSchema=PROPERTY_SCHEMA_UID, name="contentType")` (skipped if already exists from a prior upload of this DATA), (b) `PROPERTY(value="image/jpeg")` — free-floating, `refUID = 0x0`, (c) `PIN(definition=contentType keyAnchor, refUID=PROPERTY UID)` — binds the value into the cardinality-1 slot.
   3. `MIRROR(transportDef=/transports/onchain, uri=web3://0xABC)` — `refUID = DATA UID`
   4. `PIN(definition=cat.jpg Anchor)` — `refUID = DATA UID` (places DATA at path; cardinality-1 — re-PIN at the same `(attester, definition, targetSchema)` slot supersedes the prior placement in O(1))
-  5. One visibility TAG per queued ancestor from Step 3: `TAG(definition=DATA_SCHEMA_UID, refUID=ancestorFolder, weight=1)`. Weight=1 is the conventional default; any existing non-revoked TAG makes the folder appear in the attester's edition listing.
-- **Result**: EdgeResolver indexes the placement PIN in `_activeBySlot[catAnchor][alice][DATA_SCHEMA]` (cardinality-1, O(1) supersede) and each visibility TAG in `_activeByAAS[ancestor][alice][DATA_SCHEMA]`. EFSIndexer's `_containsAttestations[ancestor][alice]` is set as the kernel-level "this attester has anchored content somewhere under here" flag. `EFSFileView.getDirectoryPageBySchemaAndAddressList` paginates child anchors via opaque cursor (ADR-0036) and filters single-source — untagged folders, even ones containing the attester's files, do not appear in that attester's edition (tag-only model, ADR-0038).
+  5. One visibility TAG per queued ancestor from Step 3: `TAG(definition=DATA_SCHEMA_UID, refUID=ancestorFolder, weight=1)`. Weight=1 is the conventional default; any existing non-revoked TAG makes the folder appear in the attester's lens listing.
+- **Result**: EdgeResolver indexes the placement PIN in `_activeBySlot[catAnchor][alice][DATA_SCHEMA]` (cardinality-1, O(1) supersede) and each visibility TAG in `_activeByAAS[ancestor][alice][DATA_SCHEMA]`. EFSIndexer's `_containsAttestations[ancestor][alice]` is set as the kernel-level "this attester has anchored content somewhere under here" flag. `EFSFileView.getDirectoryPageBySchemaAndAddressList` paginates child anchors via opaque cursor (ADR-0036) and filters single-source — untagged folders, even ones containing the attester's files, do not appear in that attester's lens (tag-only model, ADR-0038).
 
 ### 2. Paste an IPFS link to `/docs/paper.pdf`
 - **Action**: Same as upload but MIRROR uses a different transport.
@@ -40,12 +40,12 @@ This document maps the step-by-step execution for specific developer and user in
 - **Step 1**: Off-chain, the UI resolves `vitalik.eth` via `publicClient.getEnsAddress` → checksummed address `0xd8dA…6045`. The on-chain router accepts raw 40-char hex only; ENS stays in the client per ADR-0030.
 - **Step 2**: Classify the segment (address → schema → attestation → anchor precedence). An address turns into `seedUID = bytes32(uint160(addr))`.
 - **Step 3**: Walk `resolvePath(seedUID, "memes")` → `resolvePath(<that>, "cat.jpg")` using the existing anchor-walk loop. `_nameToAnchor[parentUID][name][schema]` already indexes anchors parented at an address (via `EFSIndexer.onAttest`'s `refUID=0 && recipient!=0` fallback).
-- **Step 4**: If no `?editions=` was given, the router defaults editions to `[caller, vitalikAddr]` — the connected wallet wins, vitalik's edition fills the gaps. Explicit `?editions=` overrides wholesale (ADR-0031).
-- **Result**: A file under vitalik's home resolves exactly like any anchor path, scoped to his editions. The UI renders a `ContainerInfoPanel` showing the ENS name, a "You" chip when connected matches, and an Etherscan link.
+- **Step 4**: If no `?lenses=` was given, the router defaults lenses to `[caller, vitalikAddr]` — the connected wallet wins, vitalik's lens fills the gaps. Explicit `?lenses=` overrides wholesale (ADR-0031).
+- **Result**: A file under vitalik's home resolves exactly like any anchor path, scoped to his lenses. The UI renders a `ContainerInfoPanel` showing the ENS name, a "You" chip when connected matches, and an Etherscan link.
 
 ### 5. Navigate to `/memes/` and list files
 - **Action**: Query EFSFileView (which composes EFSIndexer's child indices with EdgeResolver edge checks) for DATAs and sub-folders at an Anchor, filtered by attester.
-- **Execution**: call EFSFileView — it iterates child anchors, merges editions, and paginates.
+- **Execution**: call EFSFileView — it iterates child anchors, merges lenses, and paginates.
   ```
   items = efsFileView.getDirectoryPageBySchemaAndAddressList(
     memesAnchor, DATA_SCHEMA_UID, [attesterA, attesterB], startingCursor, pageSize
@@ -53,13 +53,13 @@ This document maps the step-by-step execution for specific developer and user in
   ```
   A single `DATA_SCHEMA_UID` call covers both folders and files. Phase 0 returns sub-folders that any listed attester has made visible via a TAG (ADR-0038); phase 1 returns file anchors where any listed attester has an active PIN. Do not pass `bytes32(0)` as the schema argument — that bypasses ADR-0038 visibility TAG checks and returns all child anchors regardless of whether any attester has tagged the folder visible.
 - **Do not** call `edgeResolver.getActivePinTarget(memesAnchor, ...)` directly. The placement PIN's `definition` is the file anchor (e.g. `cat.jpg`'s Anchor), not the parent folder — a direct query on the folder anchor returns nothing. See `specs/03-Onchain-Indexing-Strategy.md` for the discovery indices that EFSFileView uses to enumerate children.
-- **Result**: EFSFileView returns `FileSystemItem[]` with deduplicated edition-merged results, revocation-filtered. The returned cursor paginates the next page.
+- **Result**: EFSFileView returns `FileSystemItem[]` with deduplicated lens-merged results, revocation-filtered. The returned cursor paginates the next page.
 
 ### 6. Show items tagged 'Funny', hide items tagged 'NSFW'
-- **Action**: When rendering the children of an Anchor, resolve tag definitions and cross-reference against the edition-specific DATA UIDs.
+- **Action**: When rendering the children of an Anchor, resolve tag definitions and cross-reference against the lens-specific DATA UIDs.
 - **Resolve definitions**: Look up `resolvePath(tagsAnchorUID, "funny")` and `resolvePath(tagsAnchorUID, "nsfw")` to get the definition Anchor UIDs.
-- **Per-item check** (scoped to trusted editions): Call `edgeResolver.hasActiveTagFromAny(dataUID, defUID, [editionAttesters])` for each DATA UID against each definition. This scopes the check to **active TAGs by trusted attesters only** — no revoked edges, no untrusted attesters. Descriptive file labels are always TAG (cardinality N, ADR-0041). Include if any edition tagged "Funny"; exclude if any edition tagged "NSFW".
-- **Key invariant**: Tags are on DATA UIDs, not Anchor UIDs. If User A tagged their edition as NSFW, User B's edition of the same filename is unaffected.
+- **Per-item check** (scoped to trusted lenses): Call `edgeResolver.hasActiveTagFromAny(dataUID, defUID, [lensAttesters])` for each DATA UID against each definition. This scopes the check to **active TAGs by trusted attesters only** — no revoked edges, no untrusted attesters. Descriptive file labels are always TAG (cardinality N, ADR-0041). Include if any lens tagged "Funny"; exclude if any lens tagged "NSFW".
+- **Key invariant**: Tags are on DATA UIDs, not Anchor UIDs. If User A tagged their lens as NSFW, User B's lens of the same filename is unaffected.
 
 ### 7. Get property 'icon' in `/memes/` made by `0x123...`
 - **Action**: Find the PROPERTY value bound to the "icon" key anchor under `/memes/` by attester `0x123...` (ADR-0041 binding model).
@@ -71,25 +71,25 @@ This document maps the step-by-step execution for specific developer and user in
 EFS files are modified by issuing new attestations.
 - **Edit (new version)**: Create new DATA + contentType binding + MIRROR. Attest `PIN(definition=path Anchor, refUID=newDataUID)` — the new PIN automatically supersedes the prior placement in O(1) at the same `(attester, definition, targetSchema)` slot; no separate "deactivate old" attestation is needed (ADR-0041). Optionally bind a `previousVersion` PROPERTY on the new DATA. Batch in a single `multiAttest`.
 - **Remove from folder**: Fetch the active PIN via `edgeResolver.getActivePin(pathAnchor, attester, DATA_SCHEMA_UID)`, then `eas.revoke(PIN_SCHEMA_UID, activePinUID)`. EdgeResolver's `onRevoke` clears `_activeBySlot[pathAnchor][attester][DATA_SCHEMA]`. DATA + mirrors + metadata survive at other paths.
-- **Delete a folder (client-driven cascade)**: Collect every active edge the attester owns in the folder's subtree — the visibility TAG on the **target folder only** (NOT ancestors — revoking an ancestor would hide sibling content the attester still owns elsewhere in that subtree) plus every file-placement PIN on descendant anchors. Batch via EAS `multiRevoke` (chunked 50 per tx — ADR-0026 analog). EdgeResolver's `onRevoke` clears the corresponding `_activeBySlot` (PIN) / `_activeByAAS` (TAG) entries; when an attester's active edge count on a given anchor drops to zero, EdgeResolver also calls `EFSIndexer.clearContains(anchor, attester)` so `_containsAttestations` no longer reports the attester as a contributor to that subtree (refines ADR-0010). The folder anchor itself is non-revocable and persists in the kernel forever; it simply stops appearing in the attester's edition listing because no visibility TAG is active.
+- **Delete a folder (client-driven cascade)**: Collect every active edge the attester owns in the folder's subtree — the visibility TAG on the **target folder only** (NOT ancestors — revoking an ancestor would hide sibling content the attester still owns elsewhere in that subtree) plus every file-placement PIN on descendant anchors. Batch via EAS `multiRevoke` (chunked 50 per tx — ADR-0026 analog). EdgeResolver's `onRevoke` clears the corresponding `_activeBySlot` (PIN) / `_activeByAAS` (TAG) entries; when an attester's active edge count on a given anchor drops to zero, EdgeResolver also calls `EFSIndexer.clearContains(anchor, attester)` so `_containsAttestations` no longer reports the attester as a contributor to that subtree (refines ADR-0010). The folder anchor itself is non-revocable and persists in the kernel forever; it simply stops appearing in the attester's lens listing because no visibility TAG is active.
 - **Cross-reference**: `PIN(definition=new path Anchor, refUID=existing DATA)`. Same DATA appears at multiple locations.
 
-### 9. Resolve Subjective File Content (Editions)
+### 9. Resolve Subjective File Content (Lenses)
 - **Action**: User wants to load `/pets/best.jpg`, trusting "Vitalik", "LocalDAO", and "Self".
 - **Execution**: The client calls `edgeResolver.getActivePinTarget(bestJpgAnchor, attester, DATA_SCHEMA_UID)` for each attester in priority order. Returns the DATA UID actively pinned at that path, or `bytes32(0)` if none.
 - **Result**: The first attester with an active DATA placement wins. The client then resolves MIRRORs and PROPERTYs on that DATA UID, scoped to the same attester (ADR-0013, ADR-0014).
 
 ### 10. List Merged Directory by Trusted Addresses
 - **Action**: User opens `/pets/` and wants to see files uploaded by both "Vitalik" and "Self".
-- **Execution**: `efsFileView.getDirectoryPageBySchemaAndAddressList(petsAnchor, DATA_SCHEMA_UID, [vitalik, self], cursor, pageSize)`. EFSFileView iterates child file anchors and merges edition placements internally.
-- **Result**: Deduplicated, edition-merged, revocation-filtered list of file anchors under `/pets/` that have active DATA from any listed attester.
+- **Execution**: `efsFileView.getDirectoryPageBySchemaAndAddressList(petsAnchor, DATA_SCHEMA_UID, [vitalik, self], cursor, pageSize)`. EFSFileView iterates child file anchors and merges lens placements internally.
+- **Result**: Deduplicated, lens-merged, revocation-filtered list of file anchors under `/pets/` that have active DATA from any listed attester.
 
-### 11. Tag a File (Edition-Specific)
-- **Action**: User wants to tag their edition of `/memes/vitalik.jpg` as "funny".
+### 11. Tag a File (Lens-Specific)
+- **Action**: User wants to tag their lens of `/memes/vitalik.jpg` as "funny".
 - **Step 1 — Resolve or create the tag definition**: Look up `resolvePath(tagsAnchorUID, "funny")`. If zero, create an Anchor named "funny" under the `/tags/` folder (one EAS `attest` transaction). Tags can be hierarchical (e.g., `/tags/nsfw/orgy/`).
 - **Step 2 — Resolve the user's DATA UID**: Call `edgeResolver.getActivePinTarget(anchorUID, connectedAddress, DATA_SCHEMA_UID)` to get the DATA the user has pinned at this anchor.
 - **Step 3 — Create the tag**: Create a `TAG(refUID=dataUID, definition=funnyDefUID, weight=1)` attestation. Weight defaults to 1; non-default values are consumer-defined sort/score metadata.
-- **Result**: EdgeResolver indexes the tag in `_activeByAAS[funnyDefUID][attester][DATA_SCHEMA]` and registers it in the schema-aware edge slot keyed by `_edgeHash(attester, dataUID, funnyDefUID, TAG_SCHEMA_UID)`. The file appears when filtering by "funny" while viewing this user's edition, but other users' editions of the same filename are unaffected.
+- **Result**: EdgeResolver indexes the tag in `_activeByAAS[funnyDefUID][attester][DATA_SCHEMA]` and registers it in the schema-aware edge slot keyed by `_edgeHash(attester, dataUID, funnyDefUID, TAG_SCHEMA_UID)`. The file appears when filtering by "funny" while viewing this user's lens, but other users' lenses of the same filename are unaffected.
 
 ### 12. Remove a Tag
 - **Action**: User wants to remove their "nsfw" tag from a file.
@@ -97,18 +97,18 @@ EFS files are modified by issuing new attestations.
 - **Step 2 — Revoke it**: Call `eas.revoke(TAG_SCHEMA_UID, activeTagUID)`. EdgeResolver's `onRevoke` swap-and-pops the entry from `_activeByAAS` and clears the schema-aware edge slot. There is no `applies=false` self-revoke path under ADR-0041 — removal is always via `eas.revoke()`.
 - **Result**: The tag no longer appears as active. The DATA UID remains in the append-only discovery indices (`getEdgeDefinitions` / `getTargetsByDefinition`) but `getActiveEdgeUID` returns zero and `isActiveEdge` returns false.
 
-### 13. Filter by Tags Across Editions
-- **Action**: User is viewing `/memes/` with `editions=[Alice, Bob]` and applies tag filter "funny".
+### 13. Filter by Tags Across Lenses
+- **Action**: User is viewing `/memes/` with `lenses=[Alice, Bob]` and applies tag filter "funny".
 - **Resolve**: Look up the "funny" definition UID via `resolvePath(tagsAnchorUID, "funny")`.
-- **Filter per DATA** (effective-TAG path, ADR-0042): For each DATA UID surfaced by the directory listing, for each edition attester, call `edgeResolver.getActiveTagEntries(funnyDefUID, attester, DATA_SCHEMA_UID, 0, pageSize)` and include the DATA only if at least one returned entry has `weight >= 0`. This is the **effective TAG** convention: active (unrevoked) TAGs with `weight < 0` are suppressed from include/exclude filters — a `weight < 0` TAG is still on-chain but treated as "hidden" by the client layer. Descriptive file labels are always TAG (cardinality N, ADR-0041).
+- **Filter per DATA** (effective-TAG path, ADR-0042): For each DATA UID surfaced by the directory listing, for each lens attester, call `edgeResolver.getActiveTagEntries(funnyDefUID, attester, DATA_SCHEMA_UID, 0, pageSize)` and include the DATA only if at least one returned entry has `weight >= 0`. This is the **effective TAG** convention: active (unrevoked) TAGs with `weight < 0` are suppressed from include/exclude filters — a `weight < 0` TAG is still on-chain but treated as "hidden" by the client layer. Descriptive file labels are always TAG (cardinality N, ADR-0041).
 - **Kernel check alternative**: `edgeResolver.hasActiveTagFromAny(dataUID, funnyDefUID, [alice, bob])` returns true for any unrevoked TAG regardless of weight — use this only when weight-blind activity is what you want (e.g. on-chain guards, indexer logic). Do not use it for the explorer's include/exclude filter.
 - **Do not** use raw `getTargetsByDefinition(funnyDefUID, ...)` for this — it is an append-only discovery index that includes revoked edges and edges from untrusted attesters.
-- **Result**: Only files where at least one of the viewed editions has an effective "funny" tag (active, weight ≥ 0) appear in the listing.
+- **Result**: Only files where at least one of the viewed lenses has an effective "funny" tag (active, weight ≥ 0) appear in the listing.
 
 ### 14. Cross-User Tagging (Curating Someone Else's Content)
-- **Action**: User B wants to mark User A's edition of `/memes/cat.gif` as "nsfw".
+- **Action**: User B wants to mark User A's lens of `/memes/cat.gif` as "nsfw".
 - **Execution**: User B creates a `TAG(refUID=dataA_UID, definition=nsfwDefUID, weight=1)` attestation against User A's DATA UID.
-- **Result**: EdgeResolver indexes the tag in `_activeByAAS[nsfwDefUID][userB][DATA_SCHEMA]` and the schema-aware edge slot. User A's DATA UID now appears in `getTargetsByDefinition(nsfwDefUID)`. When anyone views User A's edition and filters by "nsfw", the file matches. User B's own edition is unaffected. Multiple users can independently tag the same DATA UID; each tag is stored under a separate attester slot.
+- **Result**: EdgeResolver indexes the tag in `_activeByAAS[nsfwDefUID][userB][DATA_SCHEMA]` and the schema-aware edge slot. User A's DATA UID now appears in `getTargetsByDefinition(nsfwDefUID)`. When anyone views User A's lens and filters by "nsfw", the file matches. User B's own lens is unaffected. Multiple users can independently tag the same DATA UID; each tag is stored under a separate attester slot.
 
 ### 15. "Where does this file live?" (Reverse Lookup)
 - **Action**: Given a DATA UID, find all paths where it's been placed by a given attester.
@@ -119,7 +119,7 @@ EFS files are modified by issuing new attestations.
 
 ## List Workflows
 
-EFS lists use the kernel/overlay architecture: the kernel (EFSIndexer) tracks items in insertion order; the sort overlay (EFSSortOverlay) maintains shared sorted linked lists on top (keyed by `(sortInfoUID, parentAnchor)` — edition filtering is applied at read time). There is no separate list contract. See [Lists and Collections](./06-Lists-and-Collections.md) for the full design.
+EFS lists use the kernel/overlay architecture: the kernel (EFSIndexer) tracks items in insertion order; the sort overlay (EFSSortOverlay) maintains shared sorted linked lists on top (keyed by `(sortInfoUID, parentAnchor)` — lens filtering is applied at read time). There is no separate list contract. See [Lists and Collections](./06-Lists-and-Collections.md) for the full design.
 
 ### 16. Create a New Sort and Add Items
 
@@ -127,7 +127,7 @@ EFS lists use the kernel/overlay architecture: the kernel (EFSIndexer) tracks it
 - **Step 2 — Add items**: For each item, attest an Anchor as a child of the list directory. Set `anchorSchema = DATA_SCHEMA_UID` for file items. Items accumulate in the kernel in insertion order.
 - **Step 3 — Create a sort**: Attest an Anchor for the sort name (e.g. "alphabetical") under the list directory with `anchorSchema = SORT_INFO_SCHEMA_UID` as the naming anchor. Then attest a SORT_INFO attestation with `refUID = namingAnchorUID`, `sortFunc = <ISortFunc address>`, `targetSchema = bytes32(0)` (or restrict to a specific schema).
 - **Step 4 — Populate the sort**: Call `EFSSortOverlay.processItems(sortInfoUID, parentAnchor, expectedStartIndex, items, leftHints, rightHints)`. See workflow 17 for the hint computation algorithm.
-- **Result**: Items are pageable via `getSortedChunk(sortInfoUID, parentAnchor, bytes32(0), 10, false)`. The sorted list is shared — all attesters contribute to a single ordering per `(sortInfoUID, parentAnchor)`. Edition filtering is applied at read time via `getSortedChunkByAddressList`.
+- **Result**: Items are pageable via `getSortedChunk(sortInfoUID, parentAnchor, bytes32(0), 10, false)`. The sorted list is shared — all attesters contribute to a single ordering per `(sortInfoUID, parentAnchor)`. Lens filtering is applied at read time via `getSortedChunkByAddressList`.
 
 ### 17. Populate a Sort (processItems Client Algorithm)
 
@@ -137,7 +137,7 @@ EFS lists use the kernel/overlay architecture: the kernel (EFSIndexer) tracks it
 - `sortInfoUID` — the SORT_INFO attestation UID
 - `parentAnchor` — the directory anchor the sort belongs to (read from `SortConfig.parentUID`)
 
-Note: the sorted list is **shared across attesters** — `processItems` is keyed by `(sortInfoUID, parentAnchor)`, not by `attester`. Edition filtering is applied at read time.
+Note: the sorted list is **shared across attesters** — `processItems` is keyed by `(sortInfoUID, parentAnchor)`, not by `attester`. Lens filtering is applied at read time.
 
 **Step 1 — Determine what to process:**
 ```
@@ -179,7 +179,7 @@ The overlay validates each position with `ISortFunc.isLessThan` on-chain and rev
 ### 18. Paginate Through a Sorted List
 
 - **Action**: SPA renders a sorted list.
-- **Step 1**: Call `getSortedChunk(sortInfoUID, parentAnchor, bytes32(0), 20, false)` → returns `items[0..19]` and `nextCursor`. To filter by attester/edition, use `getSortedChunkByAddressList(sortInfoUID, parentAnchor, bytes32(0), 20, attesters)` instead.
+- **Step 1**: Call `getSortedChunk(sortInfoUID, parentAnchor, bytes32(0), 20, false)` → returns `items[0..19]` and `nextCursor`. To filter by attester/lens, use `getSortedChunkByAddressList(sortInfoUID, parentAnchor, bytes32(0), 20, attesters)` instead.
 - **Step 2**: On scroll, call `getSortedChunk(sortInfoUID, parentAnchor, nextCursor, 20, false)` → next page.
 - **Step 3**: For each item UID, resolve content via EdgeResolver queries and MIRROR resolution.
 - **Staleness check**: Call `getSortStaleness(sortInfoUID, parentAnchor)` before rendering. If `> 0`, prompt the user: "N items unprocessed — pay gas to update sort?".
@@ -189,13 +189,13 @@ The overlay validates each position with `ISortFunc.isLessThan` on-chain and rev
 
 - **Action**: Remove a file from a path or revoke an Anchor.
 - **PIN replace or revoke**: To swap the active DATA at a path, attest a new `PIN(definition=path Anchor, refUID=newDataUID)` — the new PIN automatically supersedes the prior one in O(1) at the same `(attester, definition, targetSchema)` slot. To remove the placement entirely, fetch the active PIN UID via `edgeResolver.getActivePin(pathAnchor, attester, DATA_SCHEMA_UID)` and `eas.revoke(PIN_SCHEMA_UID, activePinUID)` — EdgeResolver clears `_activeBySlot`. DATA + mirrors + metadata survive at other paths. Both paths leave the prior PIN UID in the append-only discovery list.
-- **Anchor revoke**: anchors are non-revocable under ADR-0002 (file anchors and folder anchors persist forever in the kernel). To make an anchor disappear from a viewer's edition, revoke their visibility/placement edges instead. Sort overlay items that are visible only because of an active PIN/TAG will fall out of edition-filtered views once those edges are revoked.
-- **Sort overlay**: Items already processed into a sorted linked list remain there — the overlay is a snapshot. The UI should check edge activeness via EdgeResolver and treat anchors with no active edges from the trusted editions as hidden.
+- **Anchor revoke**: anchors are non-revocable under ADR-0002 (file anchors and folder anchors persist forever in the kernel). To make an anchor disappear from a viewer's lens, revoke their visibility/placement edges instead. Sort overlay items that are visible only because of an active PIN/TAG will fall out of lens-filtered views once those edges are revoked.
+- **Sort overlay**: Items already processed into a sorted linked list remain there — the overlay is a snapshot. The UI should check edge activeness via EdgeResolver and treat anchors with no active edges from the trusted lenses as hidden.
 
 ### 20. View a Merged Sorted List from Multiple Attesters
 
 - **Action**: SPA displays a sorted list filtered to Alice's and Bob's contributions.
-- **Shared list model**: The sorted linked list is shared — all attesters contribute items to a single ordering keyed by `(sortInfoUID, parentAnchor)`. Edition filtering is applied at read time, not at write time.
+- **Shared list model**: The sorted linked list is shared — all attesters contribute items to a single ordering keyed by `(sortInfoUID, parentAnchor)`. Lens filtering is applied at read time, not at write time.
 - **Step 1**: Call `getSortedChunkByAddressList(sortInfoUID, parentAnchor, bytes32(0), 20, [alice, bob])` → returns only items contributed by Alice or Bob, in sorted order.
 - **Step 2**: On scroll, pass the returned `nextCursor` to the next call.
 - **Step 3**: For each item UID, resolve content via EdgeResolver queries and MIRROR resolution.

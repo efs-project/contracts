@@ -75,7 +75,7 @@ interface SortDropdownProps {
   indexerAddress: `0x${string}` | undefined;
   easAddress: `0x${string}` | undefined;
   sortOverlayAddress: `0x${string}` | undefined;
-  editionAddresses: string[];
+  lensAddresses: string[];
   activeSortInfoUID: string | null;
   onSortChange: (sortInfoUID: string | null) => void;
   onProcessComplete?: () => void;
@@ -94,7 +94,7 @@ export const SortDropdown = ({
   indexerAddress,
   easAddress,
   sortOverlayAddress,
-  editionAddresses,
+  lensAddresses,
   activeSortInfoUID,
   onSortChange,
   onProcessComplete,
@@ -123,7 +123,7 @@ export const SortDropdown = ({
     parentAnchor,
     indexerAddress,
     easAddress,
-    editionAddresses,
+    lensAddresses,
     filterBySchema,
   });
 

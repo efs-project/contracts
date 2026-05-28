@@ -19,9 +19,9 @@ A curated list is just a directory whose children are **positional Anchors**:
       └── SORT_INFO: { sortFunc: <FractionalSort address> }
 ```
 
-The **kernel** (EFSIndexer) tracks these children in insertion order. The **sort overlay** (EFSSortOverlay) maintains a **shared** sorted linked list per `(sortInfoUID, parentAnchor)` on top of the kernel arrays, using any pluggable `ISortFunc` comparator. Edition filtering is applied at read time via `getSortedChunkByAddressList`.
+The **kernel** (EFSIndexer) tracks these children in insertion order. The **sort overlay** (EFSSortOverlay) maintains a **shared** sorted linked list per `(sortInfoUID, parentAnchor)` on top of the kernel arrays, using any pluggable `ISortFunc` comparator. Lens filtering is applied at read time via `getSortedChunkByAddressList`.
 
-**Editions on lists:** Positional Anchors ("a0", "a1", …) enable per-position Editions. Alice pins her DATA at "a1" = hamster.gif, Bob pins his DATA at "a1" = dragon.jpg. The existing PIN-based placement via `edgeResolver.getActivePinTarget(positionAnchor, attester, DATA_SCHEMA_UID)` handles this — no new mechanism needed (ADR-0041).
+**Lenses on lists:** Positional Anchors ("a0", "a1", …) enable per-position Lenses. Alice pins her DATA at "a1" = hamster.gif, Bob pins his DATA at "a1" = dragon.jpg. The existing PIN-based placement via `edgeResolver.getActivePinTarget(positionAnchor, attester, DATA_SCHEMA_UID)` handles this — no new mechanism needed (ADR-0041).
 
 ---
 
@@ -42,7 +42,7 @@ The naming Anchor's parent (`EFSIndexer.getParent(namingAnchorUID)`) is the dire
 
 **Client discovery:** `getAnchorsBySchema(parentUID, SORT_INFO_SCHEMA, 0, 100, false, false)` returns all sort definition Anchors under a directory. The client reads SORT_INFO data for each to get `sortFunc` and `targetSchema`.
 
-**Default sort:** A PROPERTY attestation on the parent Anchor with `key = "defaultSort"`, `value = <SORT_INFO UID>` signals the preferred default. Per-attester (Editions model) — each viewer can set their own default.
+**Default sort:** A PROPERTY attestation on the parent Anchor with `key = "defaultSort"`, `value = <SORT_INFO UID>` signals the preferred default. Per-attester (Lenses model) — each viewer can set their own default.
 
 ---
 
@@ -112,7 +112,7 @@ Returns `(items[], nextCursor)`. Pass `nextCursor` as `startNode` on the next ca
 
 ---
 
-## 4. Shared List + Edition Filtering at Read Time
+## 4. Shared List + Lens Filtering at Read Time
 
 The sorted linked list is keyed by `(sortInfoUID, parentAnchor)` — one shared ordering per directory:
 
@@ -124,7 +124,7 @@ _sortLengths[sortInfoUID][parentAnchor]        → count
 _lastProcessedIndex[sortInfoUID][parentAnchor] → kernel items acknowledged
 ```
 
-All attesters contribute to a single sorted list per `(sortInfoUID, parentAnchor)`. Anyone can call `processItems` and pay gas to maintain it. Edition filtering is applied at read time via `getSortedChunkByAddressList(sortInfoUID, parentAnchor, startNode, limit, attesters)` — only items contributed by the specified attesters are returned, in sorted order.
+All attesters contribute to a single sorted list per `(sortInfoUID, parentAnchor)`. Anyone can call `processItems` and pay gas to maintain it. Lens filtering is applied at read time via `getSortedChunkByAddressList(sortInfoUID, parentAnchor, startNode, limit, attesters)` — only items contributed by the specified attesters are returned, in sorted order.
 
 ---
 
@@ -163,7 +163,7 @@ When browsing `/memes/` (Anchor uid=0xAAA, attester = alice):
 
 5. On sort selection:
    - Call getSortedChunk(sortInfoUID, 0xAAA, bytes32(0), 20, false) for all items
-   - Or getSortedChunkByAddressList(sortInfoUID, 0xAAA, bytes32(0), 20, [alice]) for edition-filtered
+   - Or getSortedChunkByAddressList(sortInfoUID, 0xAAA, bytes32(0), 20, [alice]) for lens-filtered
    - If staleness > 0, prompt: "N items unprocessed — pay gas to maintain?"
    - If user accepts, run processItems (see workflow 14 in Core Workflows)
 ```

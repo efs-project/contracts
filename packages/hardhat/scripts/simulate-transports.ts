@@ -468,7 +468,7 @@ async function main() {
 
   // Router request — should pick ipfs or https (no web3:// mirror, so first non-web3 wins)
   // Since _getBestMirrorURI prefers web3://, and there's none, it picks the first available
-  const routerRes = await router.request([`gallery_${S}`, `pref_${S}.txt`], [{ key: "editions", value: ownerAddr }]);
+  const routerRes = await router.request([`gallery_${S}`, `pref_${S}.txt`], [{ key: "lenses", value: ownerAddr }]);
   assert("Router returns 200", routerRes[0] === 200n, `got ${routerRes[0]}`);
   // External URI → message/external-body response
   const _headerStr = new TextDecoder().decode(ethers.getBytes(routerRes[1]));
@@ -504,25 +504,22 @@ async function main() {
   console.log("\n[13] Router Full Path Walk\n");
 
   // Resolve sunset.jpg through the Router (gallery path)
-  const sunsetRes = await router.request([`gallery_${S}`, "sunset.jpg"], [{ key: "editions", value: ownerAddr }]);
+  const sunsetRes = await router.request([`gallery_${S}`, "sunset.jpg"], [{ key: "lenses", value: ownerAddr }]);
   assert("Router resolves /gallery/sunset.jpg", sunsetRes[0] === 200n, `status ${sunsetRes[0]}`);
 
   // Non-existent path
-  const notFoundRes = await router.request(
-    [`gallery_${S}`, "nonexistent.txt"],
-    [{ key: "editions", value: ownerAddr }],
-  );
+  const notFoundRes = await router.request([`gallery_${S}`, "nonexistent.txt"], [{ key: "lenses", value: ownerAddr }]);
   assert("Router returns 404 for missing file", notFoundRes[0] === 404n);
 
-  // No editions → should still find data via referencing fallback or return 404
-  const noEditionsRes = await router.request([`gallery_${S}`, "sunset.jpg"], []);
-  // Without editions, Router falls back to default-editions chain (caller → segment owner → deployer).
+  // No lenses → should still find data via referencing fallback or return 404
+  const noLensesRes = await router.request([`gallery_${S}`, "sunset.jpg"], []);
+  // Without lenses, Router falls back to default-lenses chain (caller → segment owner → deployer).
   // sunset.jpg under /gallery/ is a normal anchor (not an address-container), so the fallback walks
   // [caller, EFS_DEPLOYER]. caller=owner=deployer here, so the active PIN is found and 200 is returned.
   assert(
-    "Router with no editions returns 200 (default-editions resolves to deployer)",
-    noEditionsRes[0] === 200n,
-    `got ${noEditionsRes[0]}`,
+    "Router with no lenses returns 200 (default-lenses resolves to deployer)",
+    noLensesRes[0] === 200n,
+    `got ${noLensesRes[0]}`,
   );
 
   // ======================================================================
@@ -540,7 +537,7 @@ async function main() {
   // Router should return 404 (no mirror available)
   const orphanRouterRes = await router.request(
     [`gallery_${S}`, `orphan_${S}.txt`],
-    [{ key: "editions", value: ownerAddr }],
+    [{ key: "lenses", value: ownerAddr }],
   );
   assert("Router returns 404 for mirrorless DATA", orphanRouterRes[0] === 404n);
 

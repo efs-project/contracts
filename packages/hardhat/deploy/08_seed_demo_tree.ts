@@ -32,5 +32,5 @@ export default seedDemoTreeStep;
 seedDemoTreeStep.tags = ["SeedDemoTree"];
 // Must run after the root anchor, transports, schema aliases, and persona
 // names are all in place — the seed emits anchors + TAGs under /transports
-// and uses the persona names for edition demos.
+// and uses the persona names for lens demos.
 seedDemoTreeStep.dependencies = ["Indexer", "Mirrors", "SchemaAliases", "PersonaNames"];

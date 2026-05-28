@@ -22,6 +22,21 @@ EFS — Ethereum File System. On-chain file system built on EAS attestations. Pr
 - **[docs/LAUNCH_CHECKLIST.md](./docs/LAUNCH_CHECKLIST.md)** — pre-launch blockers
 - **[reference/README.md](./reference/README.md)** — EAS, EIP, Scaffold-ETH docs (indexed by task)
 
+## Cross-repo coordination — the planning vault
+
+EFS uses a separate **planning vault** as the cross-repo coordination point across this repo, the production client (`efs-project/client`), and the future SDK. Repo: [efs-project/planning](https://github.com/efs-project/planning); typically cloned alongside this one (target layout: `/efs/{contracts,client,sdk,planning}/`).
+
+The vault holds:
+
+- **Cross-repo designs** with a name-first → numbered-at-promotion lifecycle. Designs that span multiple repos are tracked there; per-repo decisions stay here as ADRs.
+- **Cross-repo Kanban board**, milestones (e.g., OnionDAO hackathon 2026-06-01), and an append-only decisions log.
+- **Glossary** of cross-cutting EFS terms.
+- **Onboarding** for AI agents (start-here, conventions, escalation, write-a-design walkthrough).
+
+Read the vault's [`AGENTS.md`](https://github.com/efs-project/planning/blob/main/AGENTS.md) on init when your task is cross-repo. **A landed cross-repo design typically produces one or more ADRs here** — the planning design is the cross-cutting proposal; the resulting ADR(s) in this repo's `docs/adr/` are the per-repo decision artifacts. Don't duplicate substantive content; the design tombstones to point at the per-repo ADRs once implementation lands.
+
+For tasks fully scoped to this repo, the planning vault is optional context. For tasks spanning repos or unblocking a milestone, it's required reading.
+
 ## PR review quick start
 
 When reviewing a PR, do not prompt agents with only `review PR #<N>`. That is
@@ -50,7 +65,7 @@ If your task fits one of these categories, load the listed ADRs *before* writing
 | New transport type or priority change | ADR-0011, ADR-0012, ADR-0023, `specs/02` §Mirror |
 | Kernel index / indexing logic (EFSIndexer / EdgeResolver) | ADR-0007, ADR-0008, ADR-0009, ADR-0010, ADR-0021, ADR-0041, `specs/03-Onchain-Indexing-Strategy.md` |
 | Edge writes (PIN vs TAG choice; cardinality) | ADR-0041, `specs/02-Data-Models-and-Schemas.md` §Pin/Tag |
-| Editions / router resolution | ADR-0013, ADR-0014, ADR-0016, ADR-0017, ADR-0020, ADR-0031, ADR-0033, `specs/04-Core-Workflows.md` |
+| Lenses / router resolution | ADR-0013, ADR-0014, ADR-0016, ADR-0017, ADR-0020, ADR-0031, ADR-0033, `specs/04-Core-Workflows.md` |
 | Root URL classification / schema alias anchors | ADR-0033, ADR-0019, ADR-0025 |
 | Display-name / address-label rendering | ADR-0014, ADR-0034, `specs/02` §Property |
 | Security limits (MAX_*) | ADR-0021 through ADR-0026 |
@@ -116,7 +131,7 @@ wagmi client. Set both to the same URL when running end-to-end.
 
 Demo data is seeded as a hardhat-deploy step (`deploy/08_seed_demo_tree.ts`),
 so a fresh deploy populates a small demo tree (`/docs/`, `/images/`, `/shared/`)
-with an editions demo on `shared/photo.png` automatically. The step runs as
+with a lenses demo on `shared/photo.png` automatically. The step runs as
 part of `hardhat deploy` itself, not as a chained-after-deploy script —
 meaning **any** deploy entry point auto-seeds: root `yarn deploy`,
 `yarn workspace @se-2/hardhat deploy` (devnet VPS path), `yarn preview`, CI.

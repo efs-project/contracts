@@ -6,12 +6,12 @@
 
 ## Context
 
-The router parses addresses from URL parameters (`?editions=0x...`, `?caller=0x...`) and from web3:// mirror URIs. If parsing reverts on invalid hex characters, a single malformed input bricks the entire request — even when valid fallbacks exist (other editions, lower-priority mirrors).
+The router parses addresses from URL parameters (`?lenses=0x...`, `?caller=0x...`) and from web3:// mirror URIs. If parsing reverts on invalid hex characters, a single malformed input bricks the entire request — even when valid fallbacks exist (other lenses, lower-priority mirrors).
 
 ## Decision
 
 `_hexCharToByte` returns `0xFF` as a sentinel for invalid hex characters instead of reverting. Callers check the sentinel and handle gracefully:
-- Malformed `?editions=` address → that address becomes `address(0)` (no results from it; other editions still tried).
+- Malformed `?lenses=` address → that address becomes `address(0)` (no results from it; other lenses still tried).
 - Malformed `web3://` mirror URI → skip and try lower-priority mirrors.
 - Malformed `?caller=` → `address(0)` → fall back to deployer (ADR-0016).
 

@@ -10,8 +10,8 @@ Backlog of known improvements, scale concerns, and architectural enhancements th
 
 ## Architecture & Extensibility
 
-### Web-of-trust UX + user-configurable system editions
-ADR-0039 reserves two tiers in the default editions chain — `webOfTrust[]` and `systemEditions[]` — that are hardcoded / empty today. Shipping needs: (a) a Settings UI for users to add/remove WoT attesters (address + optional label), stored in localStorage; (b) user override of the system tier (defaults to a project-blessed seed list that ships in the repo); (c) an Editions chip in the toolbar that surfaces the effective chain so users can see "why am I seeing this file?" Client-side only — no contract changes. Critical pre-mainnet, because the devnet's hardcoded bootstrap curator + deployer system tier isn't appropriate once real users are attesting.
+### Web-of-trust UX + user-configurable system lenses
+ADR-0039 reserves two tiers in the default lenses chain — `webOfTrust[]` and `systemLenses[]` — that are hardcoded / empty today. Shipping needs: (a) a Settings UI for users to add/remove WoT attesters (address + optional label), stored in localStorage; (b) user override of the system tier (defaults to a project-blessed seed list that ships in the repo); (c) a Lenses chip in the toolbar that surfaces the effective chain so users can see "why am I seeing this file?" Client-side only — no contract changes. Critical pre-mainnet, because the devnet's hardcoded bootstrap curator + deployer system tier isn't appropriate once real users are attesting.
 
 ### Kernel auto-tag `/tags/schema` on alias anchor creation
 Per ADR-0033, schema alias anchors (root-child anchors whose name is a registered schema UID in lowercase 0x-hex) are today **only** tagged with `/tags/schema` for the six system schemas seeded at deploy (`06_schema_aliases.ts`). User-created aliases (when someone registers a custom schema and attests a root anchor at its UID) need a follow-up tx to attach the tag before the sidebar enumerator sees them. Proper fix: in `EFSIndexer.onAttest` (or a kernel hook on ANCHOR attestations with `refUID == rootAnchorUID`), detect when `name` is a registered schema UID via `SchemaRegistry.getSchema` and auto-attest the `/tags/schema` TAG from the kernel. Care needed to avoid gas griefing — only triggered when name parses as bytes32 AND the UID exists in SchemaRegistry.
@@ -19,11 +19,11 @@ Per ADR-0033, schema alias anchors (root-child anchors whose name is a registere
 ### Schema extensibility escape hatch
 Mainnet schema UIDs are baked in (ADR-0030). Adding a field to ANCHOR or DATA requires full system redeploy. A minimal `mapping(bytes32 uid => bytes data) extensions` in EFSIndexer would let future versions store extra data per attestation without re-deploying everything. Worth considering before mainnet — once frozen, no longer possible.
 
-### Edition lists as first-class on-chain objects
-URLs with `?editions=alice,bob,carol,dave,...` get long. Capped at 20 (ADR-0026). A future enhancement: register an edition list as an Anchor with member PROPERTYs, then reference the list by UID. URLs become `?editionList=<uid>` — short and shareable. Composes with existing edition resolution.
+### Lens lists as first-class on-chain objects
+URLs with `?lenses=alice,bob,carol,dave,...` get long. Capped at 20 (ADR-0026). A future enhancement: register a lens list as an Anchor with member PROPERTYs, then reference the list by UID. URLs become `?lensList=<uid>` — short and shareable. Composes with existing lens resolution.
 
-### Multi-edition merge semantics
-Currently first-attester-wins (ADR-0031). Users may want "newest by timestamp across all editions" or "consensus." Could be a second router function or a query parameter. See `docs/QUESTIONS.md` for current open question.
+### Multi-lens merge semantics
+Currently first-attester-wins (ADR-0031). Users may want "newest by timestamp across all lenses" or "consensus." Could be a second router function or a query parameter. See `docs/QUESTIONS.md` for current open question.
 
 ### Forward-compatible event schema
 EFSIndexer emits events for off-chain indexing. Adding a field to an event later breaks indexers that decode strictly. Consider a versioning scheme or extra `bytes` field per event for future expansion.
@@ -42,7 +42,7 @@ EFSIndexer emits events for off-chain indexing. Adding a field to an event later
 `TagModal` paginates the full append-only `getEdgeDefinitions` set for a target, then does an active-edge lookup and ancestor walk per definition to classify it under `/tags/`. On a heavily-reused DATA UID this scales with all-time edge history, not active tags. Fix: expose a TAG-schema-specific reverse index or `/tags/` classification cache so modal-open cost is O(active tag count). Dev UI / Ephemeral tier.
 
 ### EFSFileView phase-0 folder pagination scales with append-only history
-`getDirectoryPageBySchemaAndAddressList` (phase 0) walks `getChildrenWithEdge` history under a fixed scan budget; a hot folder with many revoked or out-of-edition edges can exhaust the budget before returning a full page. Latency scales with historical churn, not live child count. Long-term: add a direct active-visibility index in EFSIndexer or EdgeResolver so phase-0 pagination is O(page) on active children. Tracked alongside ADR-0009 append-only implications.
+`getDirectoryPageBySchemaAndAddressList` (phase 0) walks `getChildrenWithEdge` history under a fixed scan budget; a hot folder with many revoked or out-of-lens edges can exhaust the budget before returning a full page. Latency scales with historical churn, not live child count. Long-term: add a direct active-visibility index in EFSIndexer or EdgeResolver so phase-0 pagination is O(page) on active children. Tracked alongside ADR-0009 append-only implications.
 
 ### Sort overlay at >10K items
 `computeHints` punts to client-side for lists >1K. `getSortedChunk` is O(N) traversal capped by `maxTraversal`. For lists of 100K+ items, pagination is sequential — no random access. Consider: time-bucketed secondary indices, hashed offset support, or accepting that very large lists need off-chain sort hints.
@@ -75,7 +75,7 @@ EFSIndexer has `dataByContentKey`. EFSFileView doesn't expose "where is this con
 ### Bulk revocation
 Revoking 1000 old TAGs = 1000 transactions. EAS supports multi-revoke; consider exposing a router/helper that batches.
 
-### Edition discovery — "who has attested under this folder?"
+### Lens discovery — "who has attested under this folder?"
 Currently you must know attester addresses to query. An `attestersInFolder(uid, start, length)` enumerable would help discovery layers bootstrap. Cost: another append-only index.
 
 ---
@@ -88,8 +88,8 @@ The current `NetworkChip` in the header is **read-only**: it displays the active
 ### Per-container home pages ("Myspace mode")
 Every container (anchor / address / schema / attestation) is currently rendered with a minimal info panel + directory grid. A future enhancement is per-container user-defined "home pages" — e.g. a `description` / `icon` / `homeDataUID` PROPERTY attached to the container, which the panel picks up and expands into a rich header. Works for any container flavor. No schema changes needed; only PROPERTY keys + UI rendering.
 
-### Accurate edition-filtered child count on folder rows
-Folder rows in `FileBrowser.tsx` currently render the literal `"Folder"` in edition mode because `indexer.getChildrenCount(uid)` is a kernel-level count over permanent anchors and never shrinks when placements are revoked (see `docs/decisions.md` 2026-04-19). A true count would require either a per-row view call (file-placement TAGs active under this folder for this edition list + tagged subfolders) or a new counting helper in `EFSFileView`. Low priority — cosmetic — but worth wiring once a pattern exists.
+### Accurate lens-filtered child count on folder rows
+Folder rows in `FileBrowser.tsx` currently render the literal `"Folder"` in lens mode because `indexer.getChildrenCount(uid)` is a kernel-level count over permanent anchors and never shrinks when placements are revoked (see `docs/decisions.md` 2026-04-19). A true count would require either a per-row view call (file-placement TAGs active under this folder for this lenses list + tagged subfolders) or a new counting helper in `EFSFileView`. Low priority — cosmetic — but worth wiring once a pattern exists.
 
 ### Attestations section in sidebar
 The sidebar has Anchors, Addresses, and Schemas sections. An Attestations section would complete the set, but top-N-recent heuristics aren't obvious — skip until a usage pattern emerges.
@@ -97,11 +97,11 @@ The sidebar has Anchors, Addresses, and Schemas sections. An Attestations sectio
 ### ENS reverse lookup everywhere in the UI
 v1 does ENS reverse lookup only for the address in the URL bar and the Addresses sidebar list. Attester chips on file cards, mirror panels, etc. still show 0x… hex. A shared `useEnsName(addr)` hook with cache would make it ubiquitous at low cost.
 
-### Empty-folder filtering in edition view
-Sticky `_containsAttestations` (ADR-0010) means empty folders appear in edition listings. The UI could cross-check with `containsAttestations()` to hide them — cosmetic improvement, no on-chain change.
+### Empty-folder filtering in lens view
+Sticky `_containsAttestations` (ADR-0010) means empty folders appear in lens listings. The UI could cross-check with `containsAttestations()` to hide them — cosmetic improvement, no on-chain change.
 
-### Attester attribution in multi-edition listings
-When `?editions=alice,bob` shows two files named `readme.md` (one from each), the UI doesn't visually distinguish them. Add per-card attester badge.
+### Attester attribution in multi-lens listings
+When `?lenses=alice,bob` shows two files named `readme.md` (one from each), the UI doesn't visually distinguish them. Add per-card attester badge.
 
 ### Mirror staleness indicator
 External transports (ipfs, https) can break. UI could attempt a HEAD request from the user's browser and show a "mirror unavailable" badge. Doesn't break the file itself; just signals.

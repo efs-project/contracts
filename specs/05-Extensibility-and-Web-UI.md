@@ -8,7 +8,7 @@ EFS is meant to serve as foundational infrastructure rather than a highly opinio
 
 ## Avoid Centralized Infrastructure
 - Web UI clients should query directly from standard Ethereum RPC nodes or credibly neutral indexing networks (like The Graph/envio, if utilizing a standard subgraph schema identical to the onchain logic).
-- To adhere to EFS's vision, indexers must accurately reflect the subjective nature of EFS (Editions). They should allow querying by Edition (specific address graph) or a user's local web of trust, without forcing a globally curated feed.
+- To adhere to EFS's vision, indexers must accurately reflect the subjective nature of EFS (Lenses). They should allow querying by Lens (specific address graph) or a user's local web of trust, without forcing a globally curated feed.
 - The File Explorer should allow users to configure their "Trusted List" of addresses, and use EdgeResolver's `getActivePinTarget(anchor, attester, DATA_SCHEMA_UID)` to resolve file placements per attester (cardinality-1, O(1) per lookup), and `getChildrenByAddressList(parent, trustedList)` (on EFSIndexer) to discover Anchors where trusted attesters have contributed. File content is resolved through the DATA → MIRROR → transport chain, with content integrity verified via `DATA.contentHash`.
 
 ## Supporting New Workflows

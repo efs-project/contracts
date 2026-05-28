@@ -465,7 +465,7 @@ describe("EdgeResolver — PIN", function () {
       expect(await edgeResolver.getActivePin(definition, u1Addr, dummySchemaUID)).to.equal(uidA);
       expect(await edgeResolver.getActivePin(definition, u2Addr, dummySchemaUID)).to.equal(uidB);
 
-      // Edition-aware aggregate read returns true for either edition.
+      // Lens-aware aggregate read returns true for either lens.
       expect(await edgeResolver.hasActiveEdgeFromAny(targetA, definition, [u1Addr])).to.be.true;
       expect(await edgeResolver.hasActiveEdgeFromAny(targetA, definition, [u2Addr])).to.be.false;
       expect(await edgeResolver.hasActiveEdgeFromAny(targetB, definition, [u2Addr])).to.be.true;
