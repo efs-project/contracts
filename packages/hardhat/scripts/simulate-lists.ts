@@ -253,11 +253,20 @@ async function main() {
   assert("milk is in list", (await listReader.countOf(shopListUID, aliceAddr, milkKey)) === 1n);
   assert("eggs are in list", (await listReader.countOf(shopListUID, aliceAddr, eggKey)) === 1n);
 
-  // ── Section 4: Lens switching ─────────────────────────────────────────────
+  // ── Section 4: Multi-lens scenarios ──────────────────────────────────────────
 
-  console.log("\nSection 4: Lens switching (per-attester views)");
+  console.log("\nSection 4: Multi-lens scenarios (per-attester views)");
 
-  const sharedListTx = await eas.connect(alice).attest({
+  const signers = await ethers.getSigners();
+  const carol = signers[3]; // signers[2] is bob; carol must be a distinct address
+  const carolAddr = await carol.getAddress();
+  const deployerAddr = await deployer.getAddress();
+
+  const identityKeyCarol = ethers.zeroPadValue(ethers.toBeHex(BigInt(carolAddr)), 32);
+  const identityKeyDeployer = ethers.zeroPadValue(ethers.toBeHex(BigInt(deployerAddr)), 32);
+
+  // One open ADDR list (no dups, not appendOnly, no cap) shared across 4-a through 4-h
+  const openListTx = await eas.connect(alice).attest({
     schema: listSchemaUID,
     data: {
       recipient: ethers.ZeroAddress,
@@ -268,24 +277,22 @@ async function main() {
       value: 0n,
     },
   });
-  const sharedListUID = getUID(await sharedListTx.wait());
+  const openListUID = getUID(await openListTx.wait());
 
-  const signers = await ethers.getSigners();
-  const carol = signers[3]; // signers[2] is bob; carol must be a distinct address
-  const carolAddr = await carol.getAddress();
-
-  // Alice adds Bob; Bob adds Carol (each attester's own lens)
-  await eas.connect(alice).attest({
+  // 4-a: Basic per-attester isolation — Alice adds Bob, Bob adds Carol
+  console.log("  4-a: Basic per-attester isolation");
+  const aliceAddsBobTx = await eas.connect(alice).attest({
     schema: listEntrySchemaUID,
     data: {
       recipient: bobAddr,
       expirationTime: 0n,
       revocable: true,
       refUID: ethers.ZeroHash,
-      data: encodeEntry(sharedListUID, ethers.ZeroHash, 0n),
+      data: encodeEntry(openListUID, ethers.ZeroHash, 0n),
       value: 0n,
     },
   });
+  const aliceAddsBobUID = getUID(await aliceAddsBobTx.wait());
   await eas.connect(bob).attest({
     schema: listEntrySchemaUID,
     data: {
@@ -293,28 +300,137 @@ async function main() {
       expirationTime: 0n,
       revocable: true,
       refUID: ethers.ZeroHash,
-      data: encodeEntry(sharedListUID, ethers.ZeroHash, 0n),
+      data: encodeEntry(openListUID, ethers.ZeroHash, 0n),
       value: 0n,
     },
   });
+  assert("4-a Alice's lens: Bob=1", (await listReader.countOf(openListUID, aliceAddr, identityKeyBob)) === 1n);
+  assert("4-a Alice's lens: Carol=0", (await listReader.countOf(openListUID, aliceAddr, identityKeyCarol)) === 0n);
+  assert("4-a Bob's lens: Carol=1", (await listReader.countOf(openListUID, bobAddr, identityKeyCarol)) === 1n);
+  assert("4-a Bob's lens: Bob=0", (await listReader.countOf(openListUID, bobAddr, identityKeyBob)) === 0n);
 
-  const identityKeyCarol = ethers.zeroPadValue(ethers.toBeHex(BigInt(carolAddr)), 32);
-  assert(
-    "Alice's lens: Bob is listed",
-    (await listReader.countOf(sharedListUID, aliceAddr, identityKeyBob)) === 1n,
-  );
-  assert(
-    "Alice's lens: Carol is NOT listed",
-    (await listReader.countOf(sharedListUID, aliceAddr, identityKeyCarol)) === 0n,
-  );
-  assert(
-    "Bob's lens: Carol is listed",
-    (await listReader.countOf(sharedListUID, bobAddr, identityKeyCarol)) === 1n,
-  );
-  assert(
-    "Bob's lens: Bob is NOT listed (different attester)",
-    (await listReader.countOf(sharedListUID, bobAddr, identityKeyBob)) === 0n,
-  );
+  // 4-b: Same member in two lenses (open curation) — Alice also adds Carol
+  console.log("  4-b: Same member in two lenses");
+  const aliceAddsCarolTx = await eas.connect(alice).attest({
+    schema: listEntrySchemaUID,
+    data: {
+      recipient: carolAddr,
+      expirationTime: 0n,
+      revocable: true,
+      refUID: ethers.ZeroHash,
+      data: encodeEntry(openListUID, ethers.ZeroHash, 0n),
+      value: 0n,
+    },
+  });
+  const aliceAddsCarolUID = getUID(await aliceAddsCarolTx.wait());
+  assert("4-b Alice's lens: Carol=1 (now added)", (await listReader.countOf(openListUID, aliceAddr, identityKeyCarol)) === 1n);
+  assert("4-b Bob's lens: Carol still=1 (independent)", (await listReader.countOf(openListUID, bobAddr, identityKeyCarol)) === 1n);
+
+  // 4-c: entries() and length() are scoped per lens
+  console.log("  4-c: entries()/length() per lens");
+  const aliceEntriesSec4 = await listReader.entries(openListUID, aliceAddr, 0n, 10n);
+  const bobEntriesSec4 = await listReader.entries(openListUID, bobAddr, 0n, 10n);
+  assert("4-c Alice has 2 entries (Bob + Carol)", aliceEntriesSec4.length === 2);
+  assert("4-c Bob has 1 entry (Carol only)", bobEntriesSec4.length === 1);
+  assert("4-c length(list, alice) == 2", (await listReader.length(openListUID, aliceAddr)) === 2n);
+  assert("4-c length(list, bob) == 1", (await listReader.length(openListUID, bobAddr)) === 1n);
+
+  // 4-d: Revoke in one lens, other lens unaffected
+  console.log("  4-d: Revoke in one lens, other unaffected");
+  await eas.connect(alice).revoke({ schema: listEntrySchemaUID, data: { uid: aliceAddsCarolUID, value: 0n } });
+  assert("4-d Alice's lens: Carol removed", (await listReader.countOf(openListUID, aliceAddr, identityKeyCarol)) === 0n);
+  assert("4-d Bob's lens: Carol still present", (await listReader.countOf(openListUID, bobAddr, identityKeyCarol)) === 1n);
+  assert("4-d Alice now has 1 entry", (await listReader.length(openListUID, aliceAddr)) === 1n);
+
+  // 4-e: Typed accessor with wrong lens reverts
+  console.log("  4-e: Wrong-lens revert on typed accessor");
+  let wrongLensReverted = false;
+  try {
+    // aliceAddsBobUID was attested by alice; passing bob as lens should revert "wrong lens"
+    await listReader.targetAsAddress(openListUID, bobAddr, aliceAddsBobUID);
+  } catch {
+    wrongLensReverted = true;
+  }
+  assert("4-e targetAsAddress with wrong lens reverts", wrongLensReverted);
+
+  // 4-f: maxEntries cap is per-attester, not global
+  console.log("  4-f: maxEntries cap is per-attester");
+  const cappedListTx = await eas.connect(alice).attest({
+    schema: listSchemaUID,
+    data: {
+      recipient: ethers.ZeroAddress,
+      expirationTime: 0n,
+      revocable: false,
+      refUID: ethers.ZeroHash,
+      data: encodeList(false, false, 1, ethers.ZeroHash, 2), // maxEntries=2
+      value: 0n,
+    },
+  });
+  const cappedListUID = getUID(await cappedListTx.wait());
+  // Alice fills both her slots
+  await eas.connect(alice).attest({
+    schema: listEntrySchemaUID,
+    data: { recipient: deployerAddr, expirationTime: 0n, revocable: true, refUID: ethers.ZeroHash, data: encodeEntry(cappedListUID, ethers.ZeroHash, 0n), value: 0n },
+  });
+  await eas.connect(alice).attest({
+    schema: listEntrySchemaUID,
+    data: { recipient: carolAddr, expirationTime: 0n, revocable: true, refUID: ethers.ZeroHash, data: encodeEntry(cappedListUID, ethers.ZeroHash, 0n), value: 0n },
+  });
+  assert("4-f Alice fills 2 slots", (await listReader.length(cappedListUID, aliceAddr)) === 2n);
+  // Bob can independently fill his own 2 slots (cap is not shared)
+  await eas.connect(bob).attest({
+    schema: listEntrySchemaUID,
+    data: { recipient: deployerAddr, expirationTime: 0n, revocable: true, refUID: ethers.ZeroHash, data: encodeEntry(cappedListUID, ethers.ZeroHash, 0n), value: 0n },
+  });
+  await eas.connect(bob).attest({
+    schema: listEntrySchemaUID,
+    data: { recipient: carolAddr, expirationTime: 0n, revocable: true, refUID: ethers.ZeroHash, data: encodeEntry(cappedListUID, ethers.ZeroHash, 0n), value: 0n },
+  });
+  assert("4-f Bob fills 2 slots (independent cap)", (await listReader.length(cappedListUID, bobAddr)) === 2n);
+  // Alice cannot add a 3rd
+  let aliceCapped = false;
+  try {
+    await eas.connect(alice).attest({
+      schema: listEntrySchemaUID,
+      data: { recipient: bobAddr, expirationTime: 0n, revocable: true, refUID: ethers.ZeroHash, data: encodeEntry(cappedListUID, ethers.ZeroHash, 0n), value: 0n },
+    });
+  } catch {
+    aliceCapped = true;
+  }
+  assert("4-f Alice's 3rd entry rejected (per-attester cap)", aliceCapped);
+
+  // 4-g: Non-curator attester can add entries (open curation)
+  console.log("  4-g: Non-curator can add entries");
+  await eas.connect(carol).attest({
+    schema: listEntrySchemaUID,
+    data: {
+      recipient: deployerAddr,
+      expirationTime: 0n,
+      revocable: true,
+      refUID: ethers.ZeroHash,
+      data: encodeEntry(openListUID, ethers.ZeroHash, 0n),
+      value: 0n,
+    },
+  });
+  assert("4-g Carol (non-curator) has her own lens", (await listReader.length(openListUID, carolAddr)) === 1n);
+  assert("4-g Carol's countOf is independent", (await listReader.countOf(openListUID, carolAddr, identityKeyDeployer)) === 1n);
+
+  // 4-h: allowsDuplicates=false is per-lens — Bob can add an identity Alice already added
+  console.log("  4-h: dup-rejection is per-lens, not global");
+  // Alice has Bob in her lens of openListUID. Bob adding himself to his own lens must succeed.
+  await eas.connect(bob).attest({
+    schema: listEntrySchemaUID,
+    data: {
+      recipient: bobAddr,
+      expirationTime: 0n,
+      revocable: true,
+      refUID: ethers.ZeroHash,
+      data: encodeEntry(openListUID, ethers.ZeroHash, 0n),
+      value: 0n,
+    },
+  });
+  assert("4-h Bob can add himself (dup-check is per-lens, not global)", (await listReader.countOf(openListUID, bobAddr, identityKeyBob)) === 1n);
+  assert("4-h Alice's Bob entry unaffected", (await listReader.countOf(openListUID, aliceAddr, identityKeyBob)) === 1n);
 
   // ── Summary ────────────────────────────────────────────────────────────────
 
