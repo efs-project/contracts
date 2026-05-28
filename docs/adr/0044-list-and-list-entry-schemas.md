@@ -3,7 +3,7 @@
 **Status:** Proposed
 **Date:** 2026-05-28
 **Permanence-tier:** Etched (two new EAS schema field strings; resolver address baked into LIST_ENTRY's schema UID)
-**Related:** ADR-0041 (PIN/TAG cardinality split — the precedent this builds on and deliberately deviates from), ADR-0045 (EFS Edge Constraint Callbacks — deferred; what this replaces), ADR-0030 (mainnet permanence), ADR-0025 (anchor name uniqueness), ADR-0037 (pinned Sepolia fork / deterministic deploy), ADR-0009 (append-only kernel), ADR-0042 (effective-TAG weight filter / editions)
+**Related:** ADR-0041 (PIN/TAG cardinality split — the precedent this builds on and deliberately deviates from), ADR-0045 (EFS Edge Constraint Callbacks — deferred; what this replaces), ADR-0030 (mainnet permanence), ADR-0025 (anchor name uniqueness), ADR-0037 (pinned Sepolia fork / deterministic deploy), ADR-0009 (append-only kernel), ADR-0042 (effective-TAG weight filter / lenses)
 **Design doc:** [`designs/custom-lists.md`](../../designs/custom-lists.md) (full mechanical detail, resolver pseudocode, worked example, use-case walkthrough). **History:** [`designs/custom-lists_notes.md`](../../designs/custom-lists_notes.md) (18 rounds + 3 external review cycles).
 
 ## Context
@@ -12,7 +12,7 @@ EFS needs a **list primitive**: an ordered-or-unordered, typed-or-untyped, dedup
 
 The locked requirements (crystallized with the human before the converging design round):
 
-- **MUST:** ordered + unordered; no-duplicates (write-time enforced) + duplicates-allowed; typed (write-time enforced) + untyped + address-typed (incl. `address(0)`); append-only list-level (write-time enforced); per-attester editions preserved; smart contracts iterate active entries with O(N) reads + full type confidence; O(1) membership check for all modes.
+- **MUST:** ordered + unordered; no-duplicates (write-time enforced) + duplicates-allowed; typed (write-time enforced) + untyped + address-typed (incl. `address(0)`); append-only list-level (write-time enforced); per-attester lenses preserved; smart contracts iterate active entries with O(N) reads + full type confidence; O(1) membership check for all modes.
 - **NICE:** per-entry metadata; deprecation flags; intrinsic items; reorderable; capped.
 - **DEFERRED:** generic constraint-callback mechanism (ADR-0045); cross-attester merged on-chain view; on-chain reverse-lookup index; mainnet 50-year freeze (devnet first).
 
@@ -22,7 +22,7 @@ An internal inverted-framing pass ("implement every MUST using only PIN/TAG/ANCH
 
 1. **Typed write-time enforcement** — no existing resolver compares a target's schema against a per-list declared type at attest time. EdgeResolver is frozen (its address is in PIN/TAG's schema UIDs per ADR-0041); EFSIndexer is the kernel and must not learn list semantics.
 2. **Append-only write-time enforcement** — rejecting an entry revoke requires a resolver that knows the parent list's policy. No existing resolver does.
-3. **Per-attester editions for membership state** — ADR-0025 anchor-name uniqueness is **global per `(parent, name, schemaUID)`**, not per-attester. Any anchor-based entry scheme collides across editions. List membership needs attester-keyed resolver state.
+3. **Per-attester lenses for membership state** — ADR-0025 anchor-name uniqueness is **global per `(parent, name, schemaUID)`**, not per-attester. Any anchor-based entry scheme collides across lenses. List membership needs attester-keyed resolver state.
 4. **On-iteration type confidence** — a generic edge gives a UID; trusting "every entry is type X" requires the resolver to have enforced it at write time.
 
 The earlier attempt to plug these gaps with a generic constraint-callback mechanism (ADR-0045) was rejected by three external reviewers as the wrong abstraction ("solves a non-problem inside a frame that presupposed it was needed"). This ADR takes the other path: a purpose-built schema pair, following the ADR-0041 precedent that **a predicate whose cardinality/shape the kernel must enforce gets its own schema UID.**
@@ -79,7 +79,7 @@ On `LIST_ENTRY` attest, `ListEntryResolver`:
 
 On revoke: rejects if `appendOnly`; otherwise swap-and-pops the entry and decrements the count. `ListResolver` rejects the `appendOnly && allowsDuplicates && maxEntries == 0` combination at LIST attest time (the only unbounded-growth combination).
 
-All enforcement is at write time. Downstream readers trust without re-validation. Membership state is keyed `[listUID][identityKey][attester]` — **per-attester editions fall out naturally**; an attacker can only bloat their own edition.
+All enforcement is at write time. Downstream readers trust without re-validation. Membership state is keyed `[listUID][identityKey][attester]` — **per-attester lenses fall out naturally**; an attacker can only bloat their own lens.
 
 ### 4. Wide storage layout
 
@@ -96,11 +96,11 @@ On-chain consumers iterate `(identityKey, weight)` with **no per-entry `eas.getA
 
 A stateless, redeployable `ListReader` is the documented consumer ABI. `getMode(listUID)` decodes the LIST attestation directly via EAS (schema-check before data-decode; works for empty lists). `entries(...)` returns the inline `EntryRecord` page. `countOf(listUID, attester, identityKey)` is the O(1) membership primitive — **there is no `isMember` bool** (bool semantics on a multiset is a footgun; consumers compare to 0 explicitly).
 
-Typed accessors `targetAs{Address,UID,MemberKey}(listUID, curator, entryUID)` are safe-by-construction: each requires LIST_ENTRY schema, `attester == curator` (the trusted edition), `revocationTime == 0`, `entryListUID == listUID`, and mode match. The `curator` comes from `getMode().curator` or a contract constant, **never the caller** — because editions are permissionless, scoping to the trusted curator is what prevents a same-list wrong-edition injection.
+Typed accessors `targetAs{Address,UID,MemberKey}(listUID, curator, entryUID)` are safe-by-construction: each requires LIST_ENTRY schema, `attester == curator` (the trusted lens), `revocationTime == 0`, `entryListUID == listUID`, and mode match. The `curator` comes from `getMode().curator` or a contract constant, **never the caller** — because lenses are permissionless, scoping to the trusted curator is what prevents a same-list wrong-lens injection.
 
 ### 6. Events
 
-`ListEntryAttested` / `ListEntryRevoked` index `(listUID, attester, identityKey)` and carry `entryUID`, `targetType` (denormalized), `weight` as data. Indexing `identityKey` enables raw-RPC "is member X in list L?" log filtering across editions — the partial reverse-lookup otherwise deferred to subgraphs. `targetType` denormalization lets indexers decode without a parent-LIST lookup per entry.
+`ListEntryAttested` / `ListEntryRevoked` index `(listUID, attester, identityKey)` and carry `entryUID`, `targetType` (denormalized), `weight` as data. Indexing `identityKey` enables raw-RPC "is member X in list L?" log filtering across lenses — the partial reverse-lookup otherwise deferred to subgraphs. `targetType` denormalization lets indexers decode without a parent-LIST lookup per entry.
 
 ### 7. Per-entry metadata via the standard PROPERTY pattern
 
@@ -117,7 +117,7 @@ Because `ListEntryResolver`'s address is hashed into LIST_ENTRY's schema UID, th
 - **Trustable on-chain reads.** A contract iterates a list and trusts every entry's type and shape without per-entry validation. This is the property that makes EFS list data useful to other contracts — the core motivation.
 - **Write-time-enforced no-duplicates, append-only, and typing.** "If a list says no duplicates, the chain refuses the duplicate." Declared shape is a guarantee, not a convention.
 - **O(1) membership for all modes** via `_entryCount` (which doubles as the no-dupe gate).
-- **Per-attester editions for free** from attester-keyed state — consistent with the rest of EFS's viewer-sovereignty model.
+- **Per-attester lenses for free** from attester-keyed state — consistent with the rest of EFS's viewer-sovereignty model.
 - **Per-entry metadata** via the existing PROPERTY pattern, scoped cleanly by UID.
 - **Partial reverse-lookup** (member → lists) via indexed event topics, without an on-chain index.
 
@@ -126,13 +126,13 @@ Because `ListEntryResolver`'s address is hashed into LIST_ENTRY's schema UID, th
 - **Two new schema UIDs + two new resolvers.** EFS goes from 7 schemas to 9. Justified by the S1 RED verdict — the MUSTs cannot be met otherwise.
 - **Wide storage costs ~2 extra slots per entry write** (~+40k cold gas). Accepted: EFS is gas-heavy by design (archival, not commodity), and the alternative breaks on-chain iteration.
 - **Field set is frozen at registration.** A fourth `targetType`, an extra option, or a storage-layout change each requires a new schema UID post-mainnet. `require(targetType <= 2)` makes the bound explicit.
-- **State growth is NOT bounded by no-duplicates** — only by `maxEntries`. No-dupes bounds duplicates per identity key, not total entries; an attester can add unboundedly many distinct keys/UIDs to an uncapped list. On-chain full-iteration consumers must require `maxEntries != 0 && maxEntries <= LOCAL_MAX` to protect themselves. Per-attester keying confines any one griefer to their own edition.
-- **Entries are immune to target lifecycle.** A SCHEMA-typed entry stays valid even if its target attestation is later revoked. Consumers needing target liveness must check `revocationTime` themselves. (Deliberate: matches the editions principle — your view is permanent; downstream churn doesn't unwind it.)
+- **State growth is NOT bounded by no-duplicates** — only by `maxEntries`. No-dupes bounds duplicates per identity key, not total entries; an attester can add unboundedly many distinct keys/UIDs to an uncapped list. On-chain full-iteration consumers must require `maxEntries != 0 && maxEntries <= LOCAL_MAX` to protect themselves. Per-attester keying confines any one griefer to their own lens.
+- **Entries are immune to target lifecycle.** A SCHEMA-typed entry stays valid even if its target attestation is later revoked. Consumers needing target liveness must check `revocationTime` themselves. (Deliberate: matches the lenses principle — your view is permanent; downstream churn doesn't unwind it.)
 
 **Load-bearing**
 
 - **Write-time enforcement is the whole point.** Moving any declared-shape check to read time or SDK convention defeats the requirement and reopens the round-16 gap.
-- **`identityKey` keying is per-`(listUID, identityKey, attester)`.** This is what makes editions, dedup, and O(1) membership all work from one map. Changing the key shape is a Tier-1 change.
+- **`identityKey` keying is per-`(listUID, identityKey, attester)`.** This is what makes lenses, dedup, and O(1) membership all work from one map. Changing the key shape is a Tier-1 change.
 - **Wide `EntryRecord[]` storage (not bare `bytes32[]`).** Required for on-chain iteration feasibility. Slimming it is a schema-UID-changing event.
 - **CREATE2 deterministic resolver deploy.** Required for cross-environment schema-UID stability; without it, devnet and mainnet diverge and entries orphan.
 
@@ -148,7 +148,7 @@ ADR-0041 established that **cardinality lives in the schema UID** because a gene
 
 ## Alternatives considered
 
-1. **Round-16 entry-anchor model** (entry = child anchor + PIN + weight TAG; 3 attestations/entry). Rejected: cannot enforce typing/append-only/no-dupes at write time without EdgeResolver pollution or cross-resolver coordination; per-attester editions collide with ADR-0025 global anchor-name uniqueness; ambiguous which of 3 UIDs carries per-entry metadata.
+1. **Round-16 entry-anchor model** (entry = child anchor + PIN + weight TAG; 3 attestations/entry). Rejected: cannot enforce typing/append-only/no-dupes at write time without EdgeResolver pollution or cross-resolver coordination; per-attester lenses collide with ADR-0025 global anchor-name uniqueness; ambiguous which of 3 UIDs carries per-entry metadata.
 2. **ADR-0045 generic constraint callbacks.** Deferred by three external reviewers — wrong abstraction, speculative, permanent commitment for hypothetical flexibility.
 3. **Existing schemas only (no new schema UID).** S1 inverted-framing pass: RED. Four MUSTs unsatisfiable (see Context).
 4. **Single LIST schema with inline entries / config-on-every-entry.** Rejected: contradicts per-entry divergence; loses empty-list declarations; bloats every entry.

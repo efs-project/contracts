@@ -157,9 +157,9 @@ Don't invent new coordination mechanisms (bitfield encodings, resolver chains, g
 
 *Correction to the round-17 framing:* an earlier draft of this note described a **generic** structural-constraint-callback mechanism (ADR-0045) as the answer. That mechanism was **deferred/rejected** by three external reviewers as the wrong abstraction — it solved a non-problem inside a frame that presupposed it was needed. The lesson stuck the right way around: when you need to enforce a cross-attestation invariant, give that specific predicate its own schema + resolver (the ADR-0041 / ADR-0044 shape), rather than building a general-purpose callback substrate for hypothetical future invariants.
 
-### Editions ARE the access control
+### Lenses ARE the access control
 
-The kernel doesn't gate writes by attester at any layer. Spam-resistance happens at the viewer layer through edition-scoped reads. Concepts that imply attester-based write-gating (`coContributionPolicy`, mandatory curator-write-gate resolvers) are category errors in EFS. Frame violations of this principle as "category errors" rather than "design choices."
+The kernel doesn't gate writes by attester at any layer. Spam-resistance happens at the viewer layer through lens-scoped reads. Concepts that imply attester-based write-gating (`coContributionPolicy`, mandatory curator-write-gate resolvers) are category errors in EFS. Frame violations of this principle as "category errors" rather than "design choices."
 
 ### Anchors are neutral
 

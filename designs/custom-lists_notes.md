@@ -25,7 +25,7 @@ This change cut typical P1.5 cost from ~5–8 attestations per entry to ~4–7 a
 Initial proposal had `getRankedSet(listAnchor, attesters[], targetSchema, limit, cursor)` returning a merged result across attesters with an opaque cursor. Codex flagged two problems:
 
 1. Multi-attester pagination needs per-attester offsets — an opaque cursor would either re-fragment per attester or hide that complexity.
-2. The helper would accidentally bake in a merge default before Q1 (multi-edition merge) is resolved.
+2. The helper would accidentally bake in a merge default before Q1 (multi-lens merge) is resolved.
 
 Switched to `getRankedSetPage(listAnchor, attester, targetSchema, start, length)` — single-attester, single-schema, numeric pagination. Multi-attester views and allowlist composition are explicit client concerns layered on top. This keeps Q1 out of the helper.
 
@@ -119,11 +119,11 @@ The doc previously had a heavy "Q1 BLOCKING" framing for merge mode selection. R
 
 ### Rightmost-wins, not leftmost-wins
 
-Round-3 doc had leftmost-priority for editions. James pushed back: URLs and paths go least-to-most-specific left-to-right (`/app/section/feature/`); config inheritance treats most-specific (rightmost/leaf) as the winner. Editions should match. Adopted **rightmost = highest priority** as the v1 client convention. URL `?editions=alice,bob` reads naturally as "Alice base, Bob layered on top."
+Round-3 doc had leftmost-priority for lenses. James pushed back: URLs and paths go least-to-most-specific left-to-right (`/app/section/feature/`); config inheritance treats most-specific (rightmost/leaf) as the winner. Lenses should match. Adopted **rightmost = highest priority** as the v1 client convention. URL `?lenses=alice,bob` reads naturally as "Alice base, Bob layered on top."
 
 This is consistent with CSS cascade (later rules override earlier) and most config-file inheritance systems.
 
-**ADR-0039 alignment concern**: ADR-0039 currently documents the default editions chain with leftmost-priority semantics (caller leftmost). Adopting rightmost-wins for lists implies the chain order should flip for consistency. Tracked as a follow-up alignment ADR; not blocking this design. Documented in the Read primitive section's "Recommended URL conventions" subsection.
+**ADR-0039 alignment concern**: ADR-0039 currently documents the default lenses chain with leftmost-priority semantics (caller leftmost). Adopting rightmost-wins for lists implies the chain order should flip for consistency. Tracked as a follow-up alignment ADR; not blocking this design. Documented in the Read primitive section's "Recommended URL conventions" subsection.
 
 ### UX warning softened
 
@@ -144,16 +144,16 @@ Three independent subagents (use cases / engineering / adversarial) converged on
 - **Priority-union default + `?merge=parallel` opt-in for v1.**
 - **Defer math aggregate** — Sybil-vulnerable, incompatible with default chain (system tier pollutes math), incoherent for P1.5/P2 (whose target binding wins?), weight-scale normalization unsolved.
 - **Defer intersection** — incompatible with default chain (system-tier zero-TAGs → empty intersection for fresh users).
-- **Defer explicit last-write-wins** — overlaps with priority-union via reversed editions list; URL-reorder attacks make it unsafe to default-on.
+- **Defer explicit last-write-wins** — overlaps with priority-union via reversed lenses list; URL-reorder attacks make it unsafe to default-on.
 - **C-iv parallel side-by-side** is the only mode with clean revocation UX and best attribution preservation; ships as opt-in.
 
-Only C-i (priority) is paginatable in any meaningful sense — every other mode requires reading all attesters' full buckets before top-N can render. With `MAX_EDITIONS = 20` and N≤1000 per attester, worst case ~400 RPC calls; realistic ~6.
+Only C-i (priority) is paginatable in any meaningful sense — every other mode requires reading all attesters' full buckets before top-N can render. With `MAX_LENSES = 20` and N≤1000 per attester, worst case ~400 RPC calls; realistic ~6.
 
 The strongest cross-survey signal: **the merge rule should be part of the artifact's contract** (legible to the reader), not a hidden default. Adopted via the `?merge=` URL flag convention.
 
 Adversarial review's loud warnings:
 - C-iii (aggregate) MUST NOT ship in v1 by default — multiple unsolved problems.
-- C-ii (last-write) unsafe under shareable URL model — reordering editions list silently flips trust authority.
+- C-ii (last-write) unsafe under shareable URL model — reordering lenses list silently flips trust authority.
 - C-v (intersection) incompatible with ADR-0039 tail-fallback — almost always empty for fresh users.
 - C-i and C-iv are the only modes safe to default-on; ship in that exact configuration.
 
@@ -185,14 +185,14 @@ Codex's parallel synthesis pushed simplification further than my agent passes di
 - **Singular `itemSchema`, not `allowedTargetSchemas`.** Drop the multi-schema allowlist case from v1. Mixed-schema lists are an Entry List with diverse inner PINs; a future plural variant can be added without breaking the design.
 - **Drop `displayLimit`, `weightMeaning`, `weightDirection`, `tieBreak`, etc.** These are presentation conventions; apps use generic PROPERTYs. Spec stays minimal until cross-app interop demands a convention.
 
-### Edition flexibility preserved deliberately
+### Lens flexibility preserved deliberately
 
-James flagged: "We should try our hardest not to design in a way that makes editions very hard." The two-mode design preserves edition independence at every layer:
+James flagged: "We should try our hardest not to design in a way that makes lenses very hard." The two-mode design preserves lens independence at every layer:
 
 - Per-attester storage (`_activeByAAS`) is independent — both modes read per-attester.
-- Item List editions: trivial (parallel reads per attester).
-- Entry List editions, target-derived naming: entry anchors are shared schelling points across attesters; per-attester PINs and TAGs filter naturally.
-- Entry List editions, occurrence-derived naming: per-curator entry anchors; intentional patching possible by reusing existing occurrence anchors.
+- Item List lenses: trivial (parallel reads per attester).
+- Entry List lenses, target-derived naming: entry anchors are shared schelling points across attesters; per-attester PINs and TAGs filter naturally.
+- Entry List lenses, occurrence-derived naming: per-curator entry anchors; intentional patching possible by reusing existing occurrence anchors.
 
 No mode forces merge to happen on-chain; all merging is client-side composition. Future merge conventions can ship without contract changes. **This was explicitly considered and validated as part of the round-5 simplification, not added as a constraint after the fact.**
 
@@ -205,9 +205,9 @@ James asked: "is `listKind` a proxy for two different schemas?" No. Both modes u
 Pre-round-5: ~648 lines of design + ~284 of notes.
 Post-round-5: ~250 lines of design + ~340 of notes.
 
-Notes file accumulates design history; design doc is the canonical pre-ADR artifact. The simplified design eliminates entire sections: Q1 multi-edition merge, recommended URL conventions, `EFSListView` signature + composition patterns, split P1/P1.5 schema-semantics discussion, multi-schema sort-before-truncate pitfall, large rejected-alternatives matrix.
+Notes file accumulates design history; design doc is the canonical pre-ADR artifact. The simplified design eliminates entire sections: Q1 multi-lens merge, recommended URL conventions, `EFSListView` signature + composition patterns, split P1/P1.5 schema-semantics discussion, multi-schema sort-before-truncate pitfall, large rejected-alternatives matrix.
 
-What stays load-bearing: the two modes, the picker question, list metadata convention (just `listKind` + `itemSchema`), reading conventions via existing kernel reader, editions composition, the entry-anchor squatting pitfall (now Entry List specific), the `listKind` advisory rule.
+What stays load-bearing: the two modes, the picker question, list metadata convention (just `listKind` + `itemSchema`), reading conventions via existing kernel reader, lenses composition, the entry-anchor squatting pitfall (now Entry List specific), the `listKind` advisory rule.
 
 The round-5 simplification was tested against the 100-year-design lens explicitly: a future agent inheriting this in 2076 reads "lists are ordered tagging; two modes by what TAG targets" and is done. Compare with the round-4 model where they'd need to learn 4 patterns + merge conventions + helper contract semantics + multi-schema rules.
 
@@ -241,7 +241,7 @@ The round-5 simplification removed several things that turn out to be load-beari
 - **Reframing**: "weighted TAG set + direct/wrapped member patterns" replaces "two modes." One primitive, two recipes. Codex's framing; both threads adopted.
 - **`memberMode` rename** from `listKind`. Codex's vote: clearer, less "two protocol types" connotation. Values: `"direct"` | `"wrapped"`. Locked v1 enum.
 - **`entryIdentity` PROPERTY** for wrapped lists. Codex's catch: making the entry naming convention machine-readable (vs writer-convention-only) is required for reliable client validation. Values: `"target"` | `"occurrence"`.
-- **Single-curator metadata authority rule.** Codex's catch: `memberMode`, `itemSchema`, `entryIdentity` are PROPERTYs and therefore edition-scoped. Default reads are scoped to one curator attester for ALL metadata + TAGs + entry PINs + entry metadata. Multi-attester is explicit opt-in.
+- **Single-curator metadata authority rule.** Codex's catch: `memberMode`, `itemSchema`, `entryIdentity` are PROPERTYs and therefore lens-scoped. Default reads are scoped to one curator attester for ALL metadata + TAGs + entry PINs + entry metadata. Multi-attester is explicit opt-in.
 - **`itemSchema` REQUIRED for direct mode** (vs Recommended). A direct reader can't enumerate without `itemSchema` (it picks the `_activeByAAS` bucket). For wrapped, the outer bucket is always `ANCHOR_SCHEMA_UID` so `itemSchema` is recommended-not-required (describes inner targets).
 - **`clientNonce` ≥ 128 bits CSPRNG MUST.** Sequential nonces enable squatting attacks where an attacker pre-computes the next entry-anchor name. Exact formula: `keccak256(abi.encode("efs:list-occurrence:v1", listAnchor, creatorAddress, clientNonce))`.
 - **Default total order**: `weight desc`, tie-break by target/entry UID asc, then `tagUID` asc. Apps may declare alternatives.
@@ -285,7 +285,7 @@ The validation pass surfaced ~17 items; this round closed all of them in the can
 1. ADR-A drafting (canonical decision record from this design)
 2. specs/06 rewrite (REQUIRED before dev writes list data, per round-6 decisions)
 3. Spike: end-to-end direct + wrapped contract test
-4. Spike: multi-attester edition test (shared schelling-point entry anchors under `entryIdentity = "target"`)
+4. Spike: multi-attester lens test (shared schelling-point entry anchors under `entryIdentity = "target"`)
 5. Spike: `getActiveTagTargetsWithWeights` reader gas measurement
 6. Spike: anchor-name validator dry-run
 
@@ -933,9 +933,9 @@ Translation: list-level metadata (title, description, etc.) attaches to the LIST
 
 Translation for entries: the entry anchor IS the static identity; for freeform entries the anchor name carries the meaning, no inner PIN required. Per-entry mutable state (status, quantity) goes via PROPERTYs (which are dynamic). (Codex's targetless-entries fix.)
 
-> "Editions seem to work fine as I understood it." (on co-contribution)
+> "Lenses seem to work fine as I understood it." (on co-contribution)
 
-Translation: keep co-contribution as a feature. Editions filter spam at read time; default reads are single-curator-scoped. Mallory writing entries against Alice's LIST UID is invisible to viewers reading "Alice's L1." Subgraphs that aggregate across attesters need to scope to a curator — that's an indexer-layer responsibility, not a kernel concern.
+Translation: keep co-contribution as a feature. Lenses filter spam at read time; default reads are single-curator-scoped. Mallory writing entries against Alice's LIST UID is invisible to viewers reading "Alice's L1." Subgraphs that aggregate across attesters need to scope to a curator — that's an indexer-layer responsibility, not a kernel concern.
 
 ### What round-14 changed concretely
 
@@ -944,7 +944,7 @@ Translation: keep co-contribution as a feature. Editions filter spam at read tim
 - **List-level metadata location:** undefined (round-13) → PROPERTY slots on LIST attestation (round-14).
 - **Freeform entry inner PIN:** required (round-13) → optional (round-14); when absent, the entry anchor IS the entry.
 - **Reader API:** single `read(anchor, attester)` (round-13) → split `resolveListPlacement(anchor, placer)` + `readListByUID(listUID, curator)` + convenience `read(anchor, placer, curator?)` (round-14).
-- **Co-contribution:** kept as feature; documented "why this is safe at read time" with edition scoping rationale.
+- **Co-contribution:** kept as feature; documented "why this is safe at read time" with lens scoping rationale.
 - **Cross-targetSchema PIN ambiguity pitfall:** gone (typed list anchors prevent it structurally).
 - **Stale-PIN-to-revoked-LIST pitfall:** gone (`revocable: false` removes the lifecycle).
 
@@ -1013,12 +1013,12 @@ The side thread tested several reframe candidates against round-14:
 - **Dissolving LIST attestation** (typed anchor IS the list) — rejected. LIST attestation gives stable identity separate from path placement, mirroring DATA.
 - **Pure-TAG entries** (no entry anchor; weight on TAG; 1 attestation per entry) — rejected. Re-attesting weight produces a new TAG UID, orphaning per-entry metadata that referenced the prior TAG UID. Catastrophic for annotated lists.
 - **TAG + listIndex PROPERTY** (move weight off TAG; kernel change to ADR-0041) — rejected. PROPERTYs cost 3 attestations each. Heavier than round-14, not lighter.
-- **`coContributionPolicy` field** — rejected as **category error**. EFS does not have a write-gating concept. Editions ARE the access control; viewers choose what they read. Adding this field would imply a model EFS doesn't have.
+- **`coContributionPolicy` field** — rejected as **category error**. EFS does not have a write-gating concept. Lenses ARE the access control; viewers choose what they read. Adding this field would imply a model EFS doesn't have.
 - **Mandatory curator-write-gate resolver** — rejected for the same reason.
 - **Free-floating folders** (Gemini's fourth-frame) — out of scope for v1.
 - **One-enum schema field** (combine `allowsDuplicates`, `targetType` into one enum) — rejected. Discrete fields more self-documenting; enums need lookup tables.
 - **Cross-list ITEM reuse via shared entry anchors** — rejected. Solved by canonical-target PIN at `/food/apple/` etc.
-- **Ownership transfer mechanism** — accepted non-transferability. Old curator stays in editions chain forever.
+- **Ownership transfer mechanism** — accepted non-transferability. Old curator stays in lenses chain forever.
 
 ### Schema field changes from round-14
 
@@ -1071,7 +1071,7 @@ A unifying frame for the spec rewrite. Lists, folders, and any future browse-int
 | Page-size cap | `MAX_LIST_PAGE_SIZE = 100` + `PageSizeTooLarge()` revert | no kernel cap; SDK hint `length = 100` |
 | `validateAnchorNameMatchesPinTarget` | shipped reader | dropped (naming is client convention) |
 | Display-name PROPERTY | `title` (drift) | `name` (ADR-0034 alignment) |
-| Co-contribution framing | "we keep it" + shaky defense | **principled: editions ARE the access control** |
+| Co-contribution framing | "we keep it" + shaky defense | **principled: lenses ARE the access control** |
 | Sorting framing | "via SortOverlay or page reads" | `bool sorted` field (default true); SortOverlay opt-in/out |
 | PIN-trust-extension | inline | extracted to separate ADR |
 | URL/namespace | mentioned | extracted to separate ADR |
@@ -1113,9 +1113,9 @@ Growth driven by: three worked examples (Top 10 memes, grocery list, music playl
 
 ### Key reframings from external review + James's pushback
 
-**1. Anchors are neutral.** The architect's "name-slot squatting attack" framing was wrong because it assumed anchor attesters were meaningful. James clarified: "Nobody owns anchors. Sure they have an attester but we NEVER use it. Anchors are neutral." This is load-bearing existing EFS behavior that hadn't been surfaced in docs. Round-16 makes it explicit. Squatting concerns collapse: first-creator gets nothing special; anyone can attach PINs/TAGs/PROPERTYs with their own attester; editions filter at the read layer.
+**1. Anchors are neutral.** The architect's "name-slot squatting attack" framing was wrong because it assumed anchor attesters were meaningful. James clarified: "Nobody owns anchors. Sure they have an attester but we NEVER use it. Anchors are neutral." This is load-bearing existing EFS behavior that hadn't been surfaced in docs. Round-16 makes it explicit. Squatting concerns collapse: first-creator gets nothing special; anyone can attach PINs/TAGs/PROPERTYs with their own attester; lenses filter at the read layer.
 
-**2. `_nameToAnchor` verified as single shared slot.** A focused code-read confirmed: `_nameToAnchor[parent][name][schemaUID] → bytes32` is a single slot, NOT per-attester. EFSIndexer reverts the second attestation at the same slot with `DuplicateFileName()`. Per-attester editions happen at the PIN/TAG layer below. This matches James's mental model (`/pizza/deepdish/file.txt` with James and Vitalik works via PIN-layer editions, not per-attester anchors). The earlier-considered kernel change to make `_nameToAnchor` per-attester is **NOT needed** — it would have been a major architectural shift away from shared schelling-point anchors. The current model is good.
+**2. `_nameToAnchor` verified as single shared slot.** A focused code-read confirmed: `_nameToAnchor[parent][name][schemaUID] → bytes32` is a single slot, NOT per-attester. EFSIndexer reverts the second attestation at the same slot with `DuplicateFileName()`. Per-attester lenses happen at the PIN/TAG layer below. This matches James's mental model (`/pizza/deepdish/file.txt` with James and Vitalik works via PIN-layer lenses, not per-attester anchors). The earlier-considered kernel change to make `_nameToAnchor` per-attester is **NOT needed** — it would have been a major architectural shift away from shared schelling-point anchors. The current model is good.
 
 **3. `sorted` field removed from schema.** Codex and the fresh Claude review both flagged it: `sorted` was overlay state masquerading as identity. With `revocable: false`, baking it into the schema created a migration trap. Reframe: **SORT_INFO existence is the on-chain signal.** SDK default at LIST creation attests a SORT_INFO; opt out via SDK parameter. Curators can attest a SORT_INFO later to upgrade an unsorted list. Per-curator (multiple curators can each have their own SORT_INFO for the same LIST UID).
 
@@ -1162,7 +1162,7 @@ Six frame-level refinements across sixteen rounds:
 - Round 12: lists are NOT folders; membership is tags
 - Round 13: free-floating LIST + file-like portability
 - Round 14: typed list anchors + revocable=false + freeform-no-PIN + placer/curator
-- Round 15: schema simplification + principled editions stance + drop kernel paternalism
+- Round 15: schema simplification + principled lenses stance + drop kernel paternalism
 - Round 16: anchors-are-neutral surfaced + schema finalized + SortOverlay TAG-source committed
 
 Pattern: agents converge inside frames; humans question frames and surface load-bearing implicit invariants. Round-16's anchors-are-neutral wasn't a new design — it was making explicit something the system had been doing implicitly for years. The frame the architect picked up was wrong because they reasoned from "anchor attester = ownership" rather than "anchor attester = irrelevant artifact."
@@ -1215,7 +1215,7 @@ This was the inflection. The agent had been describing round-16 as enforcing wha
 
 Rather than design another mechanism, the round 18 process started by **locking the requirements explicitly with the human**:
 
-- MUST: ordered, unordered, no-dupes (write-time enforced), dupes-allowed, typed (write-time), untyped, address-typed, append-only (list-level, write-time), per-attester editions, smart-contract O(N) typed iteration, O(1) membership for ALL modes.
+- MUST: ordered, unordered, no-dupes (write-time enforced), dupes-allowed, typed (write-time), untyped, address-typed, append-only (list-level, write-time), per-attester lenses, smart-contract O(N) typed iteration, O(1) membership for ALL modes.
 - NICE: per-entry metadata, deprecation flags, intrinsic items, reorderable, capped.
 - DEFERRED: generic constraint-callback (ADR-0045), cross-attester merged view, on-chain reverse-lookup, mainnet 50-year freeze.
 - Validation: write-time, by resolver. `address(0)` valid.
@@ -1315,7 +1315,7 @@ Seven frame-level refinements across eighteen rounds:
 - R12: lists are NOT folders; membership is tags
 - R13: free-floating LIST + file-like portability
 - R14: typed list anchors + revocable=false + freeform-no-PIN + placer/curator
-- R15: schema simplification + principled editions stance + drop kernel paternalism
+- R15: schema simplification + principled lenses stance + drop kernel paternalism
 - R16: anchors-are-neutral surfaced + schema finalized + SortOverlay TAG-source committed
 - R17: IEFSConstraintCallback / ADR-0045 → rejected by external reviewers (wrong abstraction)
 - R18 (current): LIST + LIST_ENTRY with dedicated resolver — convergence via 5-agent parallel design proposals; write-time enforcement of all declared options; per-entry metadata via standard PROPERTY pattern on LIST_ENTRY UID
@@ -1334,7 +1334,7 @@ Three external reviewers (Claude, Codex GPT-5, Gemini 2.5 Pro) returned the roun
 
 Two parallel subagent passes:
 
-1. **S1 inverted-framing pass**: Tried to satisfy every locked MUST using only existing schemas (PIN, TAG, ANCHOR, PROPERTY) with at most a new resolver and view contract. **Verdict: RED.** Four MUSTs fail without new schemas — typed write-time enforcement, append-only write-time enforcement, per-attester editions (ADR-0025 anchor names are GLOBALLY unique per parent, surprising failure), and on-iteration type confidence. The new schemas are load-bearing.
+1. **S1 inverted-framing pass**: Tried to satisfy every locked MUST using only existing schemas (PIN, TAG, ANCHOR, PROPERTY) with at most a new resolver and view contract. **Verdict: RED.** Four MUSTs fail without new schemas — typed write-time enforcement, append-only write-time enforcement, per-attester lenses (ADR-0025 anchor names are GLOBALLY unique per parent, surprising failure), and on-iteration type confidence. The new schemas are load-bearing.
 
 2. **Adversarial review of Codex's member-key reframe**: Found 9 potential new bugs. Most-dangerous: collapsing three encodings into one polymorphic `bytes32 target` field. Recommended ADOPT WITH MITIGATION: typed view accessors, key-derivation convention, indexed event field, optional existence check.
 
@@ -1376,7 +1376,7 @@ Two parallel subagent passes:
 
 Surfaced two BLOCKING issues introduced by the revisions, both fixed before commit:
 - C1: `onRevoke` idempotency check was unreachable (early-return after revert). Reordered.
-- C5: Revoked-target policy for SCHEMA mode was undocumented. Documented as "entries immune to target lifecycle" matching editions principle.
+- C5: Revoked-target policy for SCHEMA mode was undocumented. Documented as "entries immune to target lifecycle" matching lenses principle.
 
 Plus SHOULD-FIX items: identityKey derivation helpers on ListReader, forward-compat note for `targetType` additions.
 
@@ -1394,7 +1394,7 @@ Seven frame-level refinements + one post-external-review hardening:
 - R12: lists are NOT folders; membership is tags
 - R13: free-floating LIST + file-like portability
 - R14: typed list anchors + revocable=false + freeform-no-PIN + placer/curator
-- R15: schema simplification + principled editions stance + drop kernel paternalism
+- R15: schema simplification + principled lenses stance + drop kernel paternalism
 - R16: anchors-are-neutral surfaced + schema finalized + SortOverlay TAG-source committed
 - R17: IEFSConstraintCallback / ADR-0045 → rejected by external reviewers
 - R18: LIST + LIST_ENTRY with dedicated resolver — convergence via 5-agent parallel proposals
@@ -1448,7 +1448,7 @@ Round 18c is a hardening pass on a validated architecture. The expectation is th
 
 Third external pass (confirmation gate, commit 1bdb34d). Result: **schema field strings GO from all three** (Claude, Codex, Gemini). Architecture and schema are freeze-ready.
 
-Codex returned NO-GO on the *ListReader typed-accessor ABI handoff* (not the schema) — a real catch: the cross-list check I added in 18c proved only that an entry *claims* the trusted listUID, not that it's in the *trusted curator's edition*. Because editions are permissionless, Mallory can attest her own LIST_ENTRY against a trusted listUID with recipient=Mallory; a victim calling `targetAsAddress(L, entryUID)` would get Mallory's address. Claude had flagged the same thing as a "non-blocking nit" (secure consumers use countOf); Codex correctly weighted it as blocking because the accessor is *documented* as a membership check and is a footgun otherwise.
+Codex returned NO-GO on the *ListReader typed-accessor ABI handoff* (not the schema) — a real catch: the cross-list check I added in 18c proved only that an entry *claims* the trusted listUID, not that it's in the *trusted curator's lens*. Because lenses are permissionless, Mallory can attest her own LIST_ENTRY against a trusted listUID with recipient=Mallory; a victim calling `targetAsAddress(L, entryUID)` would get Mallory's address. Claude had flagged the same thing as a "non-blocking nit" (secure consumers use countOf); Codex correctly weighted it as blocking because the accessor is *documented* as a membership check and is a footgun otherwise.
 
 Round 18d fixes (all on Durable/redeployable surfaces, none schema-gating):
 - Typed accessors now take `(listUID, curator, entryUID)` and check: LIST_ENTRY schema, `attester == curator`, `revocationTime == 0`, `entryListUID == listUID`, mode match. Safe-by-construction.

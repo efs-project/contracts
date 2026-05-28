@@ -285,8 +285,8 @@ The dispatch call is added at the end of `_onAttestPin`, `_onAttestTag`, `_onRev
 
 1. **ANCHOR write callbacks.** Anchor name uniqueness via `_nameToAnchor` is the existing gating story. Adding cross-schema callbacks on anchor creation re-introduces ownership semantics through a side door. Anchors are neutral (load-bearing EFS invariant; see `designs/custom-lists.md` and `docs/process/design-lessons.md`).
 2. **DATA write callbacks.** DATA is content identity. Gating its creation breaks the "anyone can publish" core property.
-3. **Read-side enforcement.** Reads are arbitrary `eth_call`s; the kernel never sees the question. Editions are the only legitimate read-side filter.
-4. **Cross-edition state inspection that gates by attester identity.** A callback inspecting other attesters' state to gate the current attester's write is attester-based write-gating in disguise. Editions ARE the access control (see design-lessons.md and the rounds-11-16 "category error" line). Callbacks MUST NOT veto based on `attester` identity beyond per-attester scoping of their own indices.
+3. **Read-side enforcement.** Reads are arbitrary `eth_call`s; the kernel never sees the question. Lenses are the only legitimate read-side filter.
+4. **Cross-lens state inspection that gates by attester identity.** A callback inspecting other attesters' state to gate the current attester's write is attester-based write-gating in disguise. Lenses ARE the access control (see design-lessons.md and the rounds-11-16 "category error" line). Callbacks MUST NOT veto based on `attester` identity beyond per-attester scoping of their own indices.
 5. **Async / multi-block constraints.** All checks are single-call, synchronous, on current state.
 6. **Constraint chaining.** One callback per parent schema. Composition lives in callback code if desired (coordinator pattern).
 7. **Generic precondition framework over arbitrary remote state.** Specific cross-schema reads inside a callback's implementation are fine (already what MirrorResolver does). A generic "declare X must exist before Y" framework adds enormous surface for unclear gain.

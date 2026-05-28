@@ -40,7 +40,7 @@ LIST_ENTRY         │  bytes32 listUID                                    │
                    └─────────────────────────────────────────────────────┘
 ```
 
-**Per-attester editions** are preserved via attester-keyed resolver state. **Per-entry metadata** uses the standard PROPERTY-on-attestation pattern attached to the LIST_ENTRY UID. **List placement** in paths uses a standard PIN (`Anchor → PIN → LIST`).
+**Per-attester lenses** are preserved via attester-keyed resolver state. **Per-entry metadata** uses the standard PROPERTY-on-attestation pattern attached to the LIST_ENTRY UID. **List placement** in paths uses a standard PIN (`Anchor → PIN → LIST`).
 
 **Picker decision (when to use what):**
 
@@ -66,7 +66,7 @@ Round 18 started by crystallizing requirements with the human (MUST/NICE/DEFERRE
 
 **What round-18 delivers cleanly:**
 - All three above enforced by `ListEntryResolver` at write time
-- Per-attester editions, O(1) membership, O(N) iteration unchanged
+- Per-attester lenses, O(1) membership, O(N) iteration unchanged
 - Per-entry metadata via standard PROPERTY-on-attestation (LIST_ENTRY UID is the scope target)
 - ADR-0041 (cardinality-in-schema-UID) reconciled, not violated
 
@@ -82,7 +82,7 @@ These are the requirements crystallized with the human before round-18's design 
 - **No-duplicates lists** (write-time enforced) + **Duplicates-allowed lists**
 - **Typed lists** (declared target schema, write-time enforced) + **Untyped lists** (any bytes32 as target) + **Address-typed lists** (target is an Ethereum address, including `address(0)`)
 - **Append-only lists, list-level** (write-time enforced — revokes rejected)
-- **Per-attester editions preserved** (each attester has their own version of any list)
+- **Per-attester lenses preserved** (each attester has their own version of any list)
 - **Smart contracts iterate active entries with O(N) reads + full type confidence** (no per-entry validation in the consumer)
 - **O(1) membership check** ("X in list L by attester A?") **for ALL list modes**
 
@@ -146,7 +146,7 @@ recipient: address(0)          // never directed
   - **ADDR**: entry identity is in `LIST_ENTRY.recipient` (EAS native field). `address(0)` valid. No existence check.
   - **SCHEMA**: entry identity is in `LIST_ENTRY.target` as an attestation UID. Existence + schema match enforced.
 - `targetSchema` — non-zero iff `targetType==SCHEMA`; the EAS schema UID every entry's target must match.
-- `maxEntries` — uint32, 0 = uncapped. Per-attester (matches editions model). **Primary rationale: contract-safety and bounded-list semantics.** On-chain consumers that iterate a list need a schema-visible upper bound to protect themselves from block-gas-limit DoS; a capped list is a promise the consumer can rely on. (Secondary: it's also impossible to add later without a new schema UID — but the load-bearing reason is the bound itself, not future-proofing.) **Required >0 when `appendOnly && allowsDuplicates`** — that combination is the only one where unbounded growth is possible without any other constraint.
+- `maxEntries` — uint32, 0 = uncapped. Per-attester (matches lenses model). **Primary rationale: contract-safety and bounded-list semantics.** On-chain consumers that iterate a list need a schema-visible upper bound to protect themselves from block-gas-limit DoS; a capped list is a promise the consumer can rely on. (Secondary: it's also impossible to add later without a new schema UID — but the load-bearing reason is the bound itself, not future-proofing.) **Required >0 when `appendOnly && allowsDuplicates`** — that combination is the only one where unbounded growth is possible without any other constraint.
 
 **Note on intrinsic items:** The earlier `allowIntrinsic` flag has been REMOVED. Intrinsic items (shopping-list "milk", todo "buy groceries") use `targetType=ANY` with an opaque member key — e.g., `keccak256(abi.encode("efs-list-intrinsic", "milk"))`. This dissolves the `address(0)`/intrinsic collision the prior design had Open Concern §2 about. Documented intrinsic-key derivation conventions live in the SDK guide so clients agree on key encoding.
 
@@ -354,7 +354,7 @@ function onAttest(Attestation calldata a, uint256) returns (bool) {
         // NOTE: We do NOT check t.revocationTime. Entries are immune to target lifecycle —
         // a list entry remains valid even if the underlying target attestation is later
         // revoked. Consumers that care about target liveness should check revocation
-        // status themselves at read time. This policy matches the editions principle:
+        // status themselves at read time. This policy matches the lenses principle:
         // each attester's view is permanent; downstream churn doesn't unwind history.
         identityKey = target;
 
@@ -365,7 +365,7 @@ function onAttest(Attestation calldata a, uint256) returns (bool) {
         identityKey = target;
     }
 
-    // No-duplicates enforcement (per-attester edition)
+    // No-duplicates enforcement (per-attester lens)
     if (!d.allowsDuplicates) {
         require(_entryCount[listUID][identityKey][a.attester] == 0, "duplicate identity");
     }
@@ -470,7 +470,7 @@ event ListEntryRevoked(
 );
 ```
 
-**Indexed-topic choice (closes Codex #3):** non-anonymous events allow 3 indexed topics. We index `listUID`, `attester`, and `identityKey` — NOT `entryUID`. Rationale: the natural raw-RPC log filter is "show me all entries where member X appears in list L" (`listUID + identityKey`), which directly serves the "is X listed?" reverse-lookup that on-chain `countOf` answers per-(list,attester) but raw log consumers want across editions. `entryUID` is rarely a filter key (if you have the entryUID you already have the entry); it stays as data. `targetType` is denormalized into entry events so subgraphs filter and decode without a parent-LIST lookup per entry (closes adversarial review I6). This is the partial reverse-lookup the design otherwise defers to subgraphs — available now via log topics, without an on-chain index.
+**Indexed-topic choice (closes Codex #3):** non-anonymous events allow 3 indexed topics. We index `listUID`, `attester`, and `identityKey` — NOT `entryUID`. Rationale: the natural raw-RPC log filter is "show me all entries where member X appears in list L" (`listUID + identityKey`), which directly serves the "is X listed?" reverse-lookup that on-chain `countOf` answers per-(list,attester) but raw log consumers want across lenses. `entryUID` is rarely a filter key (if you have the entryUID you already have the entry); it stays as data. `targetType` is denormalized into entry events so subgraphs filter and decode without a parent-LIST lookup per entry (closes adversarial review I6). This is the partial reverse-lookup the design otherwise defers to subgraphs — available now via log topics, without an on-chain index.
 
 ---
 
@@ -608,16 +608,16 @@ interface IListReader {
     /// trusted `curator` explicitly and reverts unless ALL of:
     ///   1. listUID is the expected mode (ADDR / SCHEMA / ANY)
     ///   2. e.schema == LIST_ENTRY_SCHEMA_UID            (it's actually a list entry)
-    ///   3. e.attester == curator                        (it's in the TRUSTED curator's edition)
+    ///   3. e.attester == curator                        (it's in the TRUSTED curator's lens)
     ///   4. e.revocationTime == 0                        (it's currently active)
     ///   5. decoded entryListUID == listUID              (it belongs to this list)
     ///
-    /// Checks 2–4 close the same-list wrong-edition injection Codex flagged: without the
+    /// Checks 2–4 close the same-list wrong-lens injection Codex flagged: without the
     /// curator+schema+active checks, Mallory could attest her own LIST_ENTRY against a
-    /// trusted listUID (permissionless editions allow this) with recipient=Mallory, and a
+    /// trusted listUID (permissionless lenses allow this) with recipient=Mallory, and a
     /// victim calling targetAsAddress(L, entryUID) would receive Mallory's address as if the
     /// trusted curator had listed it. Requiring `e.attester == curator` scopes the decode to
-    /// the trusted edition; the curator comes from getMode(listUID).curator or a contract
+    /// the trusted lens; the curator comes from getMode(listUID).curator or a contract
     /// constant, NEVER from the calling user.
     ///
     /// These are single-entry decode helpers. For membership/iteration use countOf / entries,
@@ -625,7 +625,7 @@ interface IListReader {
     /// Implementation sketch:
     ///   Attestation memory e = eas.getAttestation(entryUID);
     ///   require(e.schema == LIST_ENTRY_SCHEMA_UID, "not a list entry");
-    ///   require(e.attester == curator,            "wrong curator edition");
+    ///   require(e.attester == curator,            "wrong curator lens");
     ///   require(e.revocationTime == 0,            "entry revoked");
     ///   (bytes32 entryListUID, bytes32 target,) = abi.decode(e.data, (bytes32,bytes32,int256));
     ///   require(entryListUID == listUID,          "entry not in this list");
@@ -685,7 +685,7 @@ function buy(uint256 tokenId) external payable {
 ```solidity
 function buy(uint256 tokenId, address curator) external payable {  // ❌ caller picks curator
     require(listReader.countOf(allowlistUID, curator, ...) > 0, "not on allowlist");
-    // Attacker passes their own curator-edition of the same allowlistUID and bypasses.
+    // Attacker passes their own curator-lens of the same allowlistUID and bypasses.
 }
 ```
 
@@ -907,7 +907,7 @@ Governance contract reads `recipient` (the delegate address) and `weight` (the a
 
 **Generic constraint-callback / extension mechanism (ADR-0045).** Three external reviewers killed it in round 17: solves a non-problem inside a frame that presupposed it was needed. Stays deferred. If future use cases genuinely need extension, they get their own purpose-built schema following this design's pattern.
 
-**Cross-attester merged on-chain view.** ("Show me the union of Alice's and Bob's lists at this name.") Per-attester editions ARE the kernel model; merging is presentation/composition logic that lives in clients or subgraphs. On-chain merge would force a viewer-sovereignty violation. Deferred indefinitely.
+**Cross-attester merged on-chain view.** ("Show me the union of Alice's and Bob's lists at this name.") Per-attester lenses ARE the kernel model; merging is presentation/composition logic that lives in clients or subgraphs. On-chain merge would force a viewer-sovereignty violation. Deferred indefinitely.
 
 **On-chain reverse-lookup "what lists contain X?"** Maintaining this index requires writes proportional to the cardinality of (target × list × attester) — quadratic-ish state growth. Subgraphs handle this efficiently off-chain. The on-chain "X in list L by A?" check (O(1)) covers the most-frequent use case (DAO checks msg.sender against a known list); cross-list scans are subgraph queries.
 
@@ -953,7 +953,7 @@ The member-key reframe for `targetType=ANY` puts opaque bytes32 keys in `target`
 **Correction (Codex): no-dupes does NOT provide a total-entry bound.** `allowsDuplicates=false` bounds *duplicates per identity key* (at most one entry per `(list, identityKey, attester)`), but it does NOT bound total entries — an ANY-typed or SCHEMA-typed list can grow without limit via distinct keys/UIDs. So the only real ceiling on an uncapped list is gas cost plus per-attester storage liability. The earlier "natural bound" framing was wrong; deleting it.
 
 What IS true:
-- State is per-attester-keyed, so a griefer can only bloat *their own* edition's storage, not the curator's. A consumer reading the trusted curator's edition is unaffected by spam editions.
+- State is per-attester-keyed, so a griefer can only bloat *their own* lens's storage, not the curator's. A consumer reading the trusted curator's lens is unaffected by spam lenses.
 - The truly pathological case (`appendOnly=true + allowsDuplicates=true + maxEntries=0` — unbounded multiset that can never shrink) is **rejected by ListResolver** at LIST attest time: that trio requires `maxEntries > 0` (closes Claude external review B4).
 - On-chain full-iteration consumers must self-protect by requiring `maxEntries != 0 && maxEntries <= LOCAL_MAX` (shown in the DAO example) — they cannot assume an arbitrary list is safely iterable.
 
@@ -966,7 +966,7 @@ Surfaced explicitly (closes round-18 implicit-invariant gap):
 - **`IEAS.getAttestation` is a pure storage read in EAS 1.x.** No callback hooks fire. If EAS upgrades to add resolver callbacks at read time, ListEntryResolver must be re-audited (reentrancy surface).
 - **LIST attestations are immutable after attest** (non-revocable, no expiration). `_decl` cache is correct forever; cache invalidation never required.
 - **EAS UIDs are content-derived.** Attacker cannot precommit a `LIST_ENTRY` with a `listUID` that hasn't been minted yet — the LIST's UID is determined by its own attestation data, which the attacker can't predict for an arbitrary curator.
-- **ADR-0025 anchor name uniqueness is (parent, name, schemaUID)-keyed and GLOBAL across attesters.** This is why per-attester editions of a list cannot be expressed as same-name anchors under one parent — and is why LIST + LIST_ENTRY's resolver-maintained per-attester state is necessary rather than reusable existing infrastructure. Documented because round-16's design assumed per-attester anchor scoping that doesn't exist.
+- **ADR-0025 anchor name uniqueness is (parent, name, schemaUID)-keyed and GLOBAL across attesters.** This is why per-attester lenses of a list cannot be expressed as same-name anchors under one parent — and is why LIST + LIST_ENTRY's resolver-maintained per-attester state is necessary rather than reusable existing infrastructure. Documented because round-16's design assumed per-attester anchor scoping that doesn't exist.
 
 ### 7. CREATE2 deploy invariant for ListEntryResolver
 
@@ -988,7 +988,7 @@ We've spent 18 rounds + a post-external-review pass on this design. The frame ha
 - "TAG-with-weight covers it" (R15-16) → ADR-0045 attempt
 - "constraint callbacks" (R17) → rejected
 - "LIST + LIST_ENTRY with dedicated resolver" (R18) → current
-- Round-18b internal S1 inverted-framing pass: tested "can existing schemas + a new resolver only" — verdict RED, four MUSTs cannot be satisfied without new schemas (typed write-time, append-only write-time, per-attester editions, on-iteration type confidence)
+- Round-18b internal S1 inverted-framing pass: tested "can existing schemas + a new resolver only" — verdict RED, four MUSTs cannot be satisfied without new schemas (typed write-time, append-only write-time, per-attester lenses, on-iteration type confidence)
 
 Three reviewers in round-18 surfaced candidate next frames:
 - "Kernel enforces nothing; declared constraints are advisory" (Claude W1)
@@ -1017,7 +1017,7 @@ Codex's reframe was adopted. The other two remain candidates for a future iterat
 - **WIDE resolver storage layout (locked 2026-05-28):** `_entries` stores `EntryRecord { entryUID, identityKey, weight }` inline so on-chain consumers iterate with no per-entry `eas.getAttestation()`. Mirrors ADR-0041's `TagEntry[]` widening. Subsumes the `_entryIdentityKey` side map. Trimmable on devnet, etched at mainnet freeze.
 - `weight` is always present on LIST_ENTRY; opaque int256 metadata, consumer interprets
 - **Stateless `ListReader` view contract** as the documented consumer ABI
-- **Typed accessors on ListReader** take `(listUID, curator, entryUID)` and are safe-by-construction: reject mode mismatch, wrong schema, wrong curator edition, revoked entry, and cross-list injection. Curator comes from `getMode().curator` or a contract constant, never the caller (closes Codex same-list wrong-edition injection)
+- **Typed accessors on ListReader** take `(listUID, curator, entryUID)` and are safe-by-construction: reject mode mismatch, wrong schema, wrong curator lens, revoked entry, and cross-list injection. Curator comes from `getMode().curator` or a contract constant, never the caller (closes Codex same-list wrong-lens injection)
 - `getMode` decodes LIST attestation directly via EAS, **schema-check before data-decode** (works for empty lists; rejects non-LIST UIDs)
 - Per-entry metadata via **standard PROPERTY-on-attestation pattern**, scoped to LIST_ENTRY UID; ordered metadata-bearing lists use SortOverlay (stable UID) not weight-rewrites (orphans metadata)
 - `maxEntries` included as a `uint32` field on LIST (0 = uncapped; REQUIRED >0 when appendOnly+allowsDuplicates). Primary rationale: contract-safety bound for on-chain iterators.
@@ -1042,7 +1042,7 @@ Six frame-level refinements across 18 rounds + 1 post-external-review revision:
 
 - **Round 11-12**: lists are folders → unwound (unification didn't match the graph model)
 - **Round 13-14**: free-floating LIST attestation + typed list anchors + PIN placement
-- **Round 15-16**: schema simplification + principled editions stance + SortOverlay TAG-source + entry-anchor + weight TAG (3 attestations per entry)
+- **Round 15-16**: schema simplification + principled lenses stance + SortOverlay TAG-source + entry-anchor + weight TAG (3 attestations per entry)
 - **Round 17**: constraint-callback / IEFSConstraintCallback mechanism (ADR-0045) → rejected by 3 external reviewers (wrong abstraction)
 - **Round 18**: LIST + LIST_ENTRY with dedicated `ListEntryResolver` enforcing all declared options at write time; single attestation per entry; per-entry metadata via standard PROPERTY pattern on LIST_ENTRY UID
 - **Round 18b** (this revision): post-external-review hardening — Codex's member-key reframe adopted for ANY; `address(0)` resolved via EAS native `recipient` field for ADDR; `isMember` dropped; lifecycle invariants enforced (revocable, expirationTime, refUID); CREATE2 deploy pinned; `appendOnly + allowsDuplicates + uncapped` combo rejected; ADR-0041 reconciliation framed honestly as deliberate deviation at the predicate-coordination layer
