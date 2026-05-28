@@ -112,7 +112,7 @@ What else we looked at and why it lost.
 - [ADR-0043 — Rename "editions" to "lenses"](./0043-rename-editions-to-lenses.md)
 
 ### Lists & Collections
-- [ADR-0044 — LIST + LIST_ENTRY schemas for curated, shape-enforced collections](./0044-list-and-list-entry-schemas.md) *(Proposed)*
+- [ADR-0044 — LIST + LIST_ENTRY schemas for curated, shape-enforced collections](./0044-list-and-list-entry-schemas.md)
 - [ADR-0045 — EFS Edge Constraint Callbacks](./0045-efs-edge-constraint-callbacks.md) *(Deferred — wrong abstraction per round-17 external review; superseded in spirit by ADR-0044's purpose-built schema approach. Renumbered from 0043 to avoid colliding with main's editions→lenses rename.)*
 
 ### View APIs

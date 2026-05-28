@@ -56,7 +56,7 @@ someone else's DATA.
 > name for this concept. ADR-0043 (2026-05-05) renamed it to "lenses" across
 > the entire codebase, including ADRs 0013, 0014, 0026, 0031, and 0039.*
 
-## Seven EAS schemas
+## Nine EAS schemas
 
 | Schema | Revocable | Purpose |
 |---|---|---|
@@ -67,6 +67,8 @@ someone else's DATA.
 | **TAG** | yes | Cardinality-N edge. Accumulates entries per slot. Folder visibility (ADR-0038), descriptive labels (`#nsfw`, …), schema-alias discovery. Each entry carries an `int256 weight` for sort/score metadata. ADR-0041. Active = unrevoked (kernel). For the explorer label-filter only, *effective* = active with `weight >= 0` (ADR-0042). |
 | PROPERTY | no | Free-floating string value, placed on a container via PIN under a PROPERTY-typed "key" anchor (ADR-0035 → ADR-0041). Symmetric with DATA. Reserved key anchor names: `contentType` (ADR-0005), `name` (ADR-0034). |
 | SORT_INFO | yes | Declares a sort scheme for a folder (sort function + target schema). |
+| **LIST** | no | Curated collection declaration. Permanent identity (like DATA). Fields: `bool allowsDuplicates, bool appendOnly, uint8 targetType, bytes32 targetSchema, uint32 maxEntries`. Three modes: ANY (0), ADDR (1), SCHEMA (2). Enforced by ListResolver. ADR-0044. |
+| **LIST_ENTRY** | yes | Member entry in a LIST. Fields: `bytes32 listUID, bytes32 target, int256 weight`. Per-attester lens storage with wide EntryRecord[] for O(N) on-chain iteration. Enforced by ListEntryResolver. ADR-0044. |
 
 Full field definitions and resolver wiring: `02-Data-Models-and-Schemas.md`.
 
@@ -82,6 +84,9 @@ Full field definitions and resolver wiring: `02-Data-Models-and-Schemas.md`.
 | EdgeResolver | PIN + TAG schema hooks (ADR-0041). `_activeBySlot` for PIN (O(1) singleton); `_activeByAAS` (struct-of-tuple) for TAG. | Yes | No — wired into EFSIndexer |
 | MirrorResolver | MIRROR schema hook. URI scheme allowlist + transport ancestry check. | Minimal | No — wired into EFSIndexer |
 | EFSSortOverlay | Per-parent sorted linked lists. Lazy overlay on EFSIndexer. | Yes | No — wired into EFSIndexer |
+| ListResolver | LIST schema hook. Validates shape; no state. | No | No — baked into LIST_SCHEMA_UID at registration |
+| ListEntryResolver | LIST_ENTRY schema hook. Wide EntryRecord[] storage, swap-and-pop removal, per-attester lens. | Yes | No — baked into LIST_ENTRY_SCHEMA_UID at registration |
+| ListReader | Stateless view over ListEntryResolver + EAS. getMode, length, entries, countOf, typed accessors. | No | Yes — address not baked into any schema UID |
 
 "Not redeployable" means the contract's address is baked into one or more schema UIDs at registration. Replacing it breaks every attestation under those schemas.
 

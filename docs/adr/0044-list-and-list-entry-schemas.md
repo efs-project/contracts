@@ -1,6 +1,6 @@
 # ADR-0044: LIST + LIST_ENTRY schemas for curated, shape-enforced collections
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-05-28
 **Permanence-tier:** Etched (two new EAS schema field strings; resolver address baked into LIST_ENTRY's schema UID)
 **Related:** ADR-0041 (PIN/TAG cardinality split — the precedent this builds on and deliberately deviates from), ADR-0045 (EFS Edge Constraint Callbacks — deferred; what this replaces), ADR-0030 (mainnet permanence), ADR-0025 (anchor name uniqueness), ADR-0037 (pinned Sepolia fork / deterministic deploy), ADR-0009 (append-only kernel), ADR-0042 (effective-TAG weight filter / lenses)
