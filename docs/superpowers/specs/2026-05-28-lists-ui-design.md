@@ -5,6 +5,8 @@
 **Branch:** custom-lists  
 **Governing ADR:** ADR-0044 (LIST + LIST_ENTRY schemas)  
 
+> **Pivot note (mid-session):** The primary creation path is the **File Explorer**, not the `/lists` index page. End users create lists via **+ Add ▾ → List** in `FileActionsBar.tsx`, which opens `CreateItemModal.tsx`. The `/lists` index page retains its create form as a **dev tools / nice-to-have** surface (useful for script-level testing), but it is not the primary UX and is lower-priority. The detail page at `/lists/[listUID]` remains the canonical post-create destination for both paths.
+
 ---
 
 ## Goal
@@ -53,12 +55,23 @@ Lists are **per-attester**. `length(listUID, attester)` and `entries(listUID, at
 ### File changes
 
 ```
-packages/nextjs/app/lists/
-├── page.tsx                    # Lists index — create + recent
-└── [listUID]/
-    ├── page.tsx                # Server wrapper (generateStaticParams only)
-    └── ListDetailClient.tsx    # "use client" — all hooks and UI
+packages/nextjs/
+├── components/explorer/
+│   ├── FileActionsBar.tsx      # + Add ▾ dropdown: Folder / File / List  [BUILT]
+│   └── CreateItemModal.tsx     # "List" CreationType: mode picker, Rules, Create → /lists/[uid]  [BUILT]
+└── app/lists/
+    ├── page.tsx                # Lists index — create + recent  [dev tools / nice-to-have]
+    └── [listUID]/
+        ├── page.tsx            # Server wrapper (generateStaticParams only)  [BUILT]
+        └── ListDetailClient.tsx  # "use client" — all hooks and UI  [BUILT, bugs fixed]
 ```
+
+**Primary creation path (implemented):** File Explorer → **+ Add ▾ → List** → `CreateItemModal` with mode picker (Addresses / Custom Keys / EFS Files), Rules section, Create List button. On success, navigates to `/lists/[uid]`.
+
+**Detail page fixes (implemented):**
+- EAS address now read from contract via `getEAS()` — no longer hardcoded to Sepolia mainnet
+- `setTimeout` replaced with `useWaitForTransactionReceipt` for mutation refetch
+- `entryUID` used as React key instead of array index
 
 `page.tsx` for the server wrapper is already split (done in this session). `page.tsx` for the index page stays a client component (no dynamic route, no `generateStaticParams` needed).
 
@@ -82,7 +95,7 @@ const TARGET_TYPE_LABELS = { 0: "ANY", 1: "ADDR", 2: "SCHEMA" }
 
 ---
 
-## Page 1: `/lists` — Lists Index
+## Page 1: `/lists` — Lists Index *(dev tools / nice-to-have — not primary UX)*
 
 ### Layout
 
@@ -230,11 +243,22 @@ These are all in `docs/FUTURE_WORK.md` under "Lists UI — production client fea
 
 ## Verification checklist
 
+**File Explorer create path (primary UX):**
+- [x] File Explorer → + Add ▾ → List → CreateItemModal opens with mode picker (Addresses / Custom Keys / EFS Files)
+- [x] CreateItemModal: Create List → tx confirms → navigates to `/lists/[uid]`
+- [x] Detail page loads at that UID without 500 error
+
+**Detail page mutations:**
+- [x] Add Entry → tx confirms → length updates (useWaitForTransactionReceipt, not setTimeout)
+- [x] Entries table renders with `entryUID` as React key (no console index-key warning)
+- [ ] Remove works; length updates after remove
+- [ ] Detail page: add a second wallet's address manually in "Custom" tab → shows their entries (or empty)
+- [ ] appendOnly list: Remove button absent, banner shown
+
+**`/lists` index page (dev tools / nice-to-have):**
 - [ ] Create ADDR list → tx confirms → UID surfaced with copy button → View List navigates correctly
 - [ ] Create SCHEMA list → targetSchema required validation fires on empty → create succeeds with valid UID
-- [ ] Detail page: "You" tab shows your entries; Remove works; length updates after remove
-- [ ] Detail page: add a second wallet's address manually in "Custom" tab → shows their entries (or empty)
-- [ ] Entries table uses `e.entryUID` as React key (no console warning)
-- [ ] appendOnly list: Remove button absent, banner shown
-- [ ] No hardcoded Sepolia EAS address in source
+
+**Code quality:**
+- [x] No hardcoded Sepolia EAS address in source
 - [ ] `yarn next:check-types` passes
