@@ -108,7 +108,7 @@ export const FileActionsBar = ({
         <div tabIndex={0} role="button" className="btn btn-sm btn-primary">
           + Add ▾
         </div>
-        <ul tabIndex={0} className="dropdown-content menu menu-sm bg-base-100/100 rounded-box z-50 w-40 p-1 shadow-lg border border-base-300">
+        <ul tabIndex={0} className="dropdown-content menu menu-sm bg-base-100/90 rounded-box z-50 w-40 p-1 shadow-lg border border-primary">
           <li>
             <button onClick={() => {
               if (!currentAnchorUID) { notification.info("Open a folder first to add files or subfolders."); return; }
