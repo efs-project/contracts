@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { ListPreviewPane } from "./ListPreviewPane";
 import { MirrorsPanel } from "./MirrorsPanel";
 import { PropertiesModal } from "./PropertiesModal";
 import { TagModal } from "./TagModal";
@@ -1777,42 +1778,13 @@ export const FileBrowser = ({
 
       {/* List Preview Side Pane */}
       {selectedList && !selectedFile && (
-        <div className="preview-pane absolute inset-0 z-10 max-lg:bg-base-200 lg:static lg:w-[400px] lg:flex-shrink-0 border-l border-base-300 flex flex-col overflow-hidden">
-          <div className="flex items-center justify-between px-4 py-3 border-b border-base-300 shrink-0">
-            <div className="flex items-center gap-2 min-w-0">
-              <QueueListIcon className="w-5 h-5 text-purple-500 flex-shrink-0" />
-              <h3 className="font-bold text-sm truncate">{selectedList.name}</h3>
-            </div>
-            <button className="btn btn-ghost btn-sm btn-circle" onClick={closePreview} title="Close">
-              <XMarkIcon className="w-5 h-5" />
-            </button>
-          </div>
-          <div className="flex-1 overflow-auto p-4 flex flex-col gap-4">
-            <div className="text-xs font-mono opacity-40 break-all">{selectedList.uid}</div>
-            <div className="grid grid-cols-2 gap-2 text-sm">
-              <span className="opacity-60">Attester</span>
-              <span className="font-mono text-xs break-all">{selectedList.attester}</span>
-              <span className="opacity-60">Schema</span>
-              <span className="badge badge-sm badge-outline">LIST</span>
-            </div>
-            <div className="flex gap-2 mt-2">
-              <Link
-                href={`/lists/${selectedList.uid}`}
-                className="btn btn-sm btn-primary flex-1"
-                target="_blank"
-              >
-                Open List Manager ↗
-              </Link>
-              <Link
-                href={`/easexplorer?uid=${selectedList.uid}`}
-                className="btn btn-sm btn-ghost flex-1"
-                target="_blank"
-              >
-                EAS Explorer
-              </Link>
-            </div>
-          </div>
-        </div>
+        <ListPreviewPane
+          uid={selectedList.uid}
+          name={selectedList.name}
+          attester={selectedList.attester}
+          onClose={closePreview}
+          connectedAddress={connectedAddress}
+        />
       )}
 
       {/* Fullscreen overlay — portaled to body to escape stacking contexts */}
