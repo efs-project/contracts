@@ -7,44 +7,27 @@ import { useReadContract, useWaitForTransactionReceipt, useWriteContract } from 
 import { useDeployedContractInfo } from "~~/hooks/scaffold-eth";
 import { notification } from "~~/utils/scaffold-eth";
 
-// ── ABIs (minimal) ────────────────────────────────────────────────────────────
+// ── ABIs ──────────────────────────────────────────────────────────────────────
 
 const LIST_READER_ABI = [
   {
     inputs: [{ name: "listUID", type: "bytes32" }],
     name: "getMode",
-    outputs: [{
-      name: "m", type: "tuple",
-      components: [
-        { name: "exists", type: "bool" },
-        { name: "curator", type: "address" },
-        { name: "allowsDuplicates", type: "bool" },
-        { name: "appendOnly", type: "bool" },
-        { name: "targetType", type: "uint8" },
-        { name: "targetSchema", type: "bytes32" },
-        { name: "maxEntries", type: "uint32" },
-      ],
-    }],
-    stateMutability: "view", type: "function",
-  },
-  {
-    inputs: [{ name: "listUID", type: "bytes32" }, { name: "attester", type: "address" }],
-    name: "length",
-    outputs: [{ name: "", type: "uint256" }],
+    outputs: [{ name: "m", type: "tuple", components: [
+      { name: "exists", type: "bool" }, { name: "curator", type: "address" },
+      { name: "allowsDuplicates", type: "bool" }, { name: "appendOnly", type: "bool" },
+      { name: "targetType", type: "uint8" }, { name: "targetSchema", type: "bytes32" },
+      { name: "maxEntries", type: "uint32" },
+    ]}],
     stateMutability: "view", type: "function",
   },
   {
     inputs: [{ name: "listUID", type: "bytes32" }, { name: "attester", type: "address" }, { name: "start", type: "uint256" }, { name: "len", type: "uint256" }],
     name: "entries",
-    outputs: [{
-      name: "", type: "tuple[]",
-      components: [
-        { name: "entryUID", type: "bytes32" },
-        { name: "targetType", type: "uint8" },
-        { name: "identityKey", type: "bytes32" },
-        { name: "weight", type: "int256" },
-      ],
-    }],
+    outputs: [{ name: "", type: "tuple[]", components: [
+      { name: "entryUID", type: "bytes32" }, { name: "targetType", type: "uint8" },
+      { name: "identityKey", type: "bytes32" }, { name: "weight", type: "int256" },
+    ]}],
     stateMutability: "view", type: "function",
   },
   {
@@ -57,56 +40,75 @@ const LIST_READER_ABI = [
 
 const EAS_ABI = [
   {
-    inputs: [{ components: [{ name: "schema", type: "bytes32" }, { components: [{ name: "recipient", type: "address" }, { name: "expirationTime", type: "uint64" }, { name: "revocable", type: "bool" }, { name: "refUID", type: "bytes32" }, { name: "data", type: "bytes" }, { name: "value", type: "uint256" }], name: "data", type: "tuple" }], name: "attest", type: "tuple" }],
+    inputs: [{ components: [{ name: "schema", type: "bytes32" }, { components: [
+      { name: "recipient", type: "address" }, { name: "expirationTime", type: "uint64" },
+      { name: "revocable", type: "bool" }, { name: "refUID", type: "bytes32" },
+      { name: "data", type: "bytes" }, { name: "value", type: "uint256" },
+    ], name: "data", type: "tuple" }], name: "attest", type: "tuple" }],
     name: "attest", outputs: [{ name: "", type: "bytes32" }], stateMutability: "payable", type: "function",
   },
   {
-    inputs: [{ components: [{ name: "schema", type: "bytes32" }, { components: [{ name: "uid", type: "bytes32" }, { name: "value", type: "uint256" }], name: "data", type: "tuple" }], name: "revocationRequest", type: "tuple" }],
+    inputs: [{ components: [{ name: "schema", type: "bytes32" }, { components: [
+      { name: "uid", type: "bytes32" }, { name: "value", type: "uint256" },
+    ], name: "data", type: "tuple" }], name: "revocationRequest", type: "tuple" }],
     name: "revoke", outputs: [], stateMutability: "payable", type: "function",
   },
 ] as const;
 
-// ── Types ──────────────────────────────────────────────────────────────────────
+// ── Persistent storage helpers ────────────────────────────────────────────────
+//
+// Labels (text → bytes32 key mapping) and per-list drag order are stored in
+// localStorage so they survive component unmounts and page reloads.
 
-interface Entry {
-  entryUID: string;
-  identityKey: string;
-  weight: bigint;
+const LS_LABELS_KEY = "efs:list-labels";
+const orderKey = (listUID: string) => `efs:list-order:${listUID}`;
+
+function readLabels(): Record<string, string> {
+  try { return JSON.parse(localStorage.getItem(LS_LABELS_KEY) ?? "{}"); } catch { return {}; }
+}
+function writeLabel(identityKey: string, label: string) {
+  try {
+    const map = readLabels();
+    map[identityKey] = label;
+    localStorage.setItem(LS_LABELS_KEY, JSON.stringify(map));
+  } catch {}
+}
+function lookupLabel(identityKey: string): string | undefined {
+  try { return readLabels()[identityKey]; } catch { return undefined; }
 }
 
-interface ListPreviewPaneProps {
-  uid: string;
-  name: string;
-  attester: string;
-  onClose: () => void;
-  connectedAddress?: `0x${string}`;
+function readOrder(listUID: string): string[] {
+  try { return JSON.parse(localStorage.getItem(orderKey(listUID)) ?? "[]"); } catch { return []; }
+}
+function writeOrder(listUID: string, entryUIDs: string[]) {
+  try { localStorage.setItem(orderKey(listUID), JSON.stringify(entryUIDs)); } catch {}
 }
 
-// ── Helpers ────────────────────────────────────────────────────────────────────
+// ── Types ─────────────────────────────────────────────────────────────────────
 
-/** Short display for an address or bytes32 */
-const shortHex = (h: string) => `${h.slice(0, 6)}…${h.slice(-4)}`;
+interface Entry { entryUID: string; identityKey: string; weight: bigint; }
+interface Props {
+  uid: string; name: string; attester: string;
+  onClose: () => void; connectedAddress?: `0x${string}`;
+}
 
-/**
- * For ANY-type lists we hash the text label → bytes32 so it fits the schema.
- * The mapping text↔hash is kept in memory; items added in earlier sessions
- * fall back to the short hex form.
- */
-const labelToKey = (text: string): `0x${string}` => keccak256(toHex(text));
-
-// ── Drag handle SVG ────────────────────────────────────────────────────────────
+// ── Sub-components ────────────────────────────────────────────────────────────
 
 const DragHandle = () => (
-  <svg className="w-4 h-4 text-base-content/25 flex-shrink-0 cursor-grab active:cursor-grabbing" viewBox="0 0 16 16" fill="currentColor">
+  <svg
+    className="w-4 h-4 text-base-content/25 flex-shrink-0 cursor-grab active:cursor-grabbing"
+    viewBox="0 0 16 16" fill="currentColor"
+    aria-label="Drag to reorder (saved on this device)"
+  >
     <circle cx="5" cy="4" r="1.5" /><circle cx="11" cy="4" r="1.5" />
     <circle cx="5" cy="8" r="1.5" /><circle cx="11" cy="8" r="1.5" />
     <circle cx="5" cy="12" r="1.5" /><circle cx="11" cy="12" r="1.5" />
   </svg>
 );
 
-// ── Component ──────────────────────────────────────────────────────────────────
+// ── Component ─────────────────────────────────────────────────────────────────
 
-export const ListPreviewPane = ({ uid, name, attester: _attester, onClose, connectedAddress }: ListPreviewPaneProps) => {
+export const ListPreviewPane = ({ uid, name, attester: _attester, onClose, connectedAddress }: Props) => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: listReaderInfo } = useDeployedContractInfo({ contractName: "ListReader" as any });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -132,39 +134,59 @@ export const ListPreviewPane = ({ uid, name, attester: _attester, onClose, conne
     query: { enabled: !!listReaderAddress },
   });
 
-  // Pending tx
   const { writeContractAsync, isPending } = useWriteContract();
-  const [pendingTxHash, setPendingTxHash] = useState<`0x${string}` | undefined>(undefined);
+  const [pendingTxHash, setPendingTxHash] = useState<`0x${string}` | undefined>();
   const { data: txReceipt } = useWaitForTransactionReceipt({ hash: pendingTxHash });
   useEffect(() => {
     if (txReceipt) { refetchEntries(); setPendingTxHash(undefined); }
   }, [txReceipt, refetchEntries]);
 
   const isBusy = isPending || !!pendingTxHash;
-  const targetType = mode ? Number(mode.targetType) : 0;
-  const isAddrList = targetType === 1;
+  const isAddrList = mode ? Number(mode.targetType) === 1 : false;
+  const canEdit = !!connectedAddress && !mode?.appendOnly;
 
-  // Map: identityKey → human label (for ANY-type lists)
-  const labelMapRef = useRef<Map<string, string>>(new Map());
+  // ── Display order ─────────────────────────────────────────────────────────
+  // Merge chain data with the locally-saved drag order.
+  // Chain is authoritative for which entries exist; localStorage just records
+  // the preferred display sequence.
 
-  // Ordered entries for display — initialized from contract data, mutated by drag
   const [displayEntries, setDisplayEntries] = useState<Entry[]>([]);
 
-  // Sync when chain data arrives, sorted by weight
   useEffect(() => {
     if (!rawEntries) return;
-    const sorted = [...(rawEntries as unknown as Entry[])].sort((a, b) => {
-      const wa = typeof a.weight === "bigint" ? a.weight : BigInt(String(a.weight));
-      const wb = typeof b.weight === "bigint" ? b.weight : BigInt(String(b.weight));
-      return wa < wb ? -1 : wa > wb ? 1 : 0;
-    });
-    setDisplayEntries(sorted);
-  }, [rawEntries]);
+    const all = rawEntries as unknown as Entry[];
+    const saved = readOrder(uid);
 
-  // Reset order when list changes
+    if (saved.length === 0) {
+      // No saved order: sort by weight (ascending)
+      const sorted = [...all].sort((a, b) => {
+        const wa = BigInt(String(a.weight));
+        const wb = BigInt(String(b.weight));
+        return wa < wb ? -1 : wa > wb ? 1 : 0;
+      });
+      setDisplayEntries(sorted);
+    } else {
+      // Respect saved order; append any new entries (not yet in saved list) at the end
+      const byUID = new Map(all.map(e => [e.entryUID, e]));
+      const ordered: Entry[] = [];
+      for (const eUID of saved) {
+        const e = byUID.get(eUID);
+        if (e) { ordered.push(e); byUID.delete(eUID); }
+      }
+      // New entries not in saved order go at the end (sorted by weight)
+      const remaining = [...byUID.values()].sort((a, b) => {
+        const wa = BigInt(String(a.weight));
+        const wb = BigInt(String(b.weight));
+        return wa < wb ? -1 : wa > wb ? 1 : 0;
+      });
+      setDisplayEntries([...ordered, ...remaining]);
+    }
+  }, [rawEntries, uid]);
+
+  // Clear display when switching to a different list
   useEffect(() => { setDisplayEntries([]); }, [uid]);
 
-  // ── Drag-and-drop ────────────────────────────────────────────────────────────
+  // ── Drag and drop ─────────────────────────────────────────────────────────
 
   const dragSrcIndex = useRef<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
@@ -181,27 +203,25 @@ export const ListPreviewPane = ({ uid, name, attester: _attester, onClose, conne
       const next = [...prev];
       const [moved] = next.splice(src, 1);
       next.splice(destIndex, 0, moved);
+      writeOrder(uid, next.map(en => en.entryUID)); // persist
       return next;
     });
     dragSrcIndex.current = null;
   };
   const onDragEnd = () => { setDragOverIndex(null); dragSrcIndex.current = null; };
 
-  // ── Display label for an entry ───────────────────────────────────────────────
+  // ── Label resolution ──────────────────────────────────────────────────────
 
   const getLabel = (entry: Entry): string => {
     if (isAddrList) {
-      // ADDR list: identityKey encodes address
-      try {
-        const addr = `0x${entry.identityKey.slice(-40)}`;
-        return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
-      } catch { return shortHex(entry.identityKey); }
+      const addr = `0x${entry.identityKey.slice(-40)}`;
+      return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
     }
-    // ANY/SCHEMA list: look up in label map, fall back to short hex
-    return labelMapRef.current.get(entry.identityKey) ?? shortHex(entry.identityKey);
+    // ANY/SCHEMA: look up the text label saved when the item was added
+    return lookupLabel(entry.identityKey) ?? `${entry.identityKey.slice(0, 8)}…`;
   };
 
-  // ── Add entry ────────────────────────────────────────────────────────────────
+  // ── Add entry ─────────────────────────────────────────────────────────────
 
   const [inputValue, setInputValue] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -209,7 +229,6 @@ export const ListPreviewPane = ({ uid, name, attester: _attester, onClose, conne
   const handleAdd = async (e?: React.FormEvent) => {
     e?.preventDefault();
     if (!listEntrySchemaUID || !easAddress || !inputValue.trim()) return;
-
     const text = inputValue.trim();
     let recipient: `0x${string}` = zeroAddress;
     let target: `0x${string}` = zeroHash as `0x${string}`;
@@ -221,9 +240,9 @@ export const ListPreviewPane = ({ uid, name, attester: _attester, onClose, conne
       }
       recipient = text as `0x${string}`;
     } else {
-      // ANY/SCHEMA: hash the text to a deterministic bytes32 key
-      const key = labelToKey(text);
-      labelMapRef.current.set(key, text);
+      // Hash the text to a deterministic bytes32 key; save the reverse mapping
+      const key = keccak256(toHex(text));
+      writeLabel(key, text);       // ← persisted to localStorage
       target = key;
     }
 
@@ -244,23 +263,28 @@ export const ListPreviewPane = ({ uid, name, attester: _attester, onClose, conne
     }
   };
 
-  const handleRemove = async (entryUID: `0x${string}`) => {
+  // ── Remove entry ──────────────────────────────────────────────────────────
+
+  const handleRemove = async (entry: Entry) => {
     if (!listEntrySchemaUID || !easAddress) return;
     try {
       const tx = await writeContractAsync({
         address: easAddress, abi: EAS_ABI, functionName: "revoke",
-        args: [{ schema: listEntrySchemaUID, data: { uid: entryUID, value: 0n } }],
+        args: [{ schema: listEntrySchemaUID, data: { uid: entry.entryUID as `0x${string}`, value: 0n } }],
       });
       setPendingTxHash(tx);
+      // Optimistically drop from local order
+      setDisplayEntries(prev => {
+        const next = prev.filter(e => e.entryUID !== entry.entryUID);
+        writeOrder(uid, next.map(e => e.entryUID));
+        return next;
+      });
     } catch (err: any) {
       notification.error(err?.shortMessage ?? err?.message ?? "Failed to remove item");
     }
   };
 
-  // ── Render ────────────────────────────────────────────────────────────────────
-
-  const canEdit = !!connectedAddress && !mode?.appendOnly;
-  const placeholder = isAddrList ? "Add address (0x…)" : "Add item…";
+  // ── Render ────────────────────────────────────────────────────────────────
 
   return (
     <div className="preview-pane absolute inset-0 z-10 max-lg:bg-base-200 lg:static lg:w-[360px] lg:flex-shrink-0 border-l border-base-300 flex flex-col overflow-hidden">
@@ -268,10 +292,10 @@ export const ListPreviewPane = ({ uid, name, attester: _attester, onClose, conne
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-base-300 shrink-0">
         <div className="flex items-center gap-2 min-w-0">
-          <QueueListIcon className="w-4.5 h-4.5 text-purple-500 flex-shrink-0" />
+          <QueueListIcon className="w-4 h-4 text-purple-500 flex-shrink-0" />
           <h3 className="font-semibold text-sm truncate">{name}</h3>
           {displayEntries.length > 0 && (
-            <span className="badge badge-sm badge-ghost opacity-60">{displayEntries.length}</span>
+            <span className="badge badge-sm badge-ghost opacity-50">{displayEntries.length}</span>
           )}
         </div>
         <button className="btn btn-ghost btn-xs btn-circle" onClick={onClose}>
@@ -279,17 +303,16 @@ export const ListPreviewPane = ({ uid, name, attester: _attester, onClose, conne
         </button>
       </div>
 
-      {/* Append-only notice */}
       {mode?.appendOnly && (
-        <div className="px-4 py-2 text-xs text-base-content/50 border-b border-base-300 shrink-0 flex items-center gap-1.5">
-          <span>🔒</span> Read-only — entries cannot be removed
+        <div className="px-4 py-1.5 text-xs text-base-content/40 border-b border-base-300 shrink-0">
+          🔒 Append-only
         </div>
       )}
 
       {/* Item list */}
       <div className="flex-1 overflow-y-auto">
         {displayEntries.length === 0 && mode?.exists && (
-          <div className="flex flex-col items-center justify-center h-32 gap-2 text-base-content/30">
+          <div className="flex flex-col items-center justify-center h-32 gap-2 text-base-content/25">
             <QueueListIcon className="w-8 h-8" />
             <span className="text-sm">No items yet</span>
           </div>
@@ -305,29 +328,26 @@ export const ListPreviewPane = ({ uid, name, attester: _attester, onClose, conne
               onDragLeave={onDragLeave}
               onDrop={e => onDrop(e, i)}
               onDragEnd={onDragEnd}
-              className={`flex items-center gap-2 px-3 py-2.5 group hover:bg-base-200 transition-colors
-                ${dragOverIndex === i ? "border-t-2 border-primary" : "border-t border-transparent"}`}
+              className={[
+                "flex items-center gap-2 px-3 py-2.5 group hover:bg-base-200 transition-colors select-none",
+                dragOverIndex === i ? "border-t-2 border-primary" : "border-t border-transparent",
+              ].join(" ")}
             >
-              {/* Drag handle — only shown when editable */}
               {canEdit ? (
-                <span className="opacity-0 group-hover:opacity-100 transition-opacity">
+                <span className="opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
                   <DragHandle />
                 </span>
-              ) : (
-                <span className="w-4 flex-shrink-0" />
-              )}
+              ) : <span className="w-4 flex-shrink-0" />}
 
-              {/* Label */}
-              <span className="flex-1 text-sm leading-snug break-all select-none">
+              <span className="flex-1 text-sm leading-snug break-all">
                 {getLabel(entry)}
               </span>
 
-              {/* Remove button */}
               {canEdit && (
                 <button
-                  className="opacity-0 group-hover:opacity-100 transition-opacity btn btn-ghost btn-xs btn-circle text-base-content/40 hover:text-error hover:bg-error/10"
+                  className="opacity-0 group-hover:opacity-100 transition-opacity btn btn-ghost btn-xs btn-circle text-base-content/40 hover:text-error"
                   disabled={isBusy}
-                  onClick={() => handleRemove(entry.entryUID as `0x${string}`)}
+                  onClick={() => handleRemove(entry)}
                   title="Remove"
                 >
                   <XMarkIcon className="w-3.5 h-3.5" />
@@ -348,7 +368,7 @@ export const ListPreviewPane = ({ uid, name, attester: _attester, onClose, conne
             ref={inputRef}
             type="text"
             className="input input-sm flex-1 bg-base-200 border-transparent focus:border-base-300 focus:bg-base-100"
-            placeholder={placeholder}
+            placeholder={isAddrList ? "Add address (0x…)" : "Add item…"}
             value={inputValue}
             onChange={e => setInputValue(e.target.value)}
             disabled={isBusy}
