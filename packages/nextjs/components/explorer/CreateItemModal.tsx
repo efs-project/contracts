@@ -196,6 +196,7 @@ export const CreateItemModal = ({
   const [existingAnchorWarning, setExistingAnchorWarning] = useState(false);
 
   // List-specific state (ADR-0044)
+  const [listName, setListName] = useState("");
   const [listTargetType, setListTargetType] = useState<0 | 1 | 2>(0); // default ANY
   const [listAllowsDuplicates, setListAllowsDuplicates] = useState(false);
   const [listAppendOnly, setListAppendOnly] = useState(false);
@@ -230,6 +231,7 @@ export const CreateItemModal = ({
     setInternalType(creationType);
     if (creationType) {
       setNewName("");
+      setListName("");
       setFileToUpload(null);
       setPasteUri("");
       setPasteContentType("");
@@ -403,6 +405,10 @@ export const CreateItemModal = ({
       notification.error("LIST_SCHEMA_UID not available. Is ListReader deployed?");
       return;
     }
+    if (!listName.trim()) {
+      notification.error("Enter a name for the list.");
+      return;
+    }
     if (listTargetType === 2 && !listTargetSchema.startsWith("0x")) {
       notification.error("EFS Files mode requires a target schema UID (0x…)");
       return;
@@ -462,9 +468,9 @@ export const CreateItemModal = ({
       handleClose();
       if (listUID) {
         onListCreated?.(listUID);
-        router.push(`/lists/${listUID}`);
+        notification.success(`List "${listName.trim()}" created — UID: ${listUID.slice(0, 10)}…`);
       } else {
-        notification.success("List created! Find its UID in the EAS Explorer.");
+        notification.success(`List "${listName.trim()}" created.`);
       }
     } catch (e) {
       const msg = extractErrorMessage(e);
@@ -1176,8 +1182,19 @@ export const CreateItemModal = ({
         {internalType === "List" && (
           <div className="py-3 flex flex-col gap-3">
             <p className="text-xs text-base-content/50">
-              Creates a permanent LIST attestation (non-revocable). You add entries after creation.
+              Creates a permanent list (non-revocable). You add entries after creation.
             </p>
+            <div className="form-control w-full">
+              <label className="label pb-1"><span className="label-text font-medium">Name</span></label>
+              <input
+                type="text"
+                className="input input-bordered w-full"
+                placeholder="e.g. allowlist, team members, curated files…"
+                value={listName}
+                onChange={e => setListName(e.target.value)}
+                autoFocus
+              />
+            </div>
             <div className="form-control w-full">
               <label className="label pb-1"><span className="label-text font-medium">What are you collecting?</span></label>
               <div className="flex gap-2 flex-wrap">
@@ -1491,7 +1508,7 @@ export const CreateItemModal = ({
               (internalType !== "List" && (!newName || !!nameValidationError)) ||
               (internalType === "File" && !fileToUpload) ||
               (internalType === "PasteLink" && !pasteUri) ||
-              (internalType === "List" && !listSchemaUID) ||
+              (internalType === "List" && (!listSchemaUID || !listName.trim())) ||
               (internalType === "List" && listTargetType === 2 && !listTargetSchema.startsWith("0x"))
             }
           >
