@@ -196,7 +196,7 @@ export const CreateItemModal = ({
   const [existingAnchorWarning, setExistingAnchorWarning] = useState(false);
 
   // List-specific state (ADR-0044)
-  const [listTargetType, setListTargetType] = useState<0 | 1 | 2>(1); // default ADDR
+  const [listTargetType, setListTargetType] = useState<0 | 1 | 2>(0); // default ANY
   const [listAllowsDuplicates, setListAllowsDuplicates] = useState(false);
   const [listAppendOnly, setListAppendOnly] = useState(false);
   const [listTargetSchema, setListTargetSchema] = useState("");
@@ -1182,21 +1182,25 @@ export const CreateItemModal = ({
               <label className="label pb-1"><span className="label-text font-medium">What are you collecting?</span></label>
               <div className="flex gap-2 flex-wrap">
                 {([
-                  [1, "📋 Addresses", "Allowlists, social graphs"],
-                  [0, "🔑 Custom Keys", "Arbitrary bytes32 identifiers"],
-                  [2, "📂 EFS Files", "Curated attestation UIDs"],
-                ] as const).map(([val, label, hint]) => (
+                  [0, "Anything"],
+                  [1, "Addresses"],
+                  [2, "EFS Files"],
+                ] as const).map(([val, label]) => (
                   <button
                     key={val}
                     type="button"
-                    className={`btn btn-sm flex-1 min-w-fit ${listTargetType === val ? "btn-primary" : "btn-ghost border border-base-300"}`}
+                    className={`btn btn-sm flex-1 ${listTargetType === val ? "btn-primary" : "btn-ghost border border-base-300"}`}
                     onClick={() => setListTargetType(val)}
                   >
-                    <span>{label}</span>
-                    <span className="text-xs opacity-60 hidden sm:inline"> — {hint}</span>
+                    {label}
                   </button>
                 ))}
               </div>
+              <p className="text-xs text-base-content/40 mt-1.5">
+                {listTargetType === 0 && "Any bytes32 key — use for arbitrary identifiers, named keys, or anything else."}
+                {listTargetType === 1 && "Ethereum addresses — use for allowlists, social graphs, or member sets."}
+                {listTargetType === 2 && "EFS file UIDs — use for curated file collections; entries must match the target schema."}
+              </p>
             </div>
             {listTargetType === 2 && (
               <div className="form-control w-full">
