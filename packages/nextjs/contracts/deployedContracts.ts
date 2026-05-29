@@ -7,7 +7,7 @@ import { GenericContractsDeclaration } from "~~/utils/scaffold-eth/contract";
 const deployedContracts = {
   31337: {
     EFSFileView: {
-      address: "0x04fD5Ee60B015B6EfD21a54D1E662D68868683c5",
+      address: "0x847832EeE5396C2eAD3a3Ef76Db4669543DAf14E",
       abi: [
         {
           inputs: [
@@ -24,6 +24,19 @@ const deployedContracts = {
           ],
           stateMutability: "nonpayable",
           type: "constructor",
+        },
+        {
+          inputs: [],
+          name: "LIST_SCHEMA_UID",
+          outputs: [
+            {
+              internalType: "bytes32",
+              name: "",
+              type: "bytes32",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
         },
         {
           inputs: [
@@ -554,6 +567,82 @@ const deployedContracts = {
           type: "function",
         },
         {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "parentUID",
+              type: "bytes32",
+            },
+          ],
+          name: "getListsAtParent",
+          outputs: [
+            {
+              components: [
+                {
+                  internalType: "bytes32",
+                  name: "uid",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "string",
+                  name: "name",
+                  type: "string",
+                },
+                {
+                  internalType: "bytes32",
+                  name: "parentUID",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "bool",
+                  name: "isFolder",
+                  type: "bool",
+                },
+                {
+                  internalType: "bool",
+                  name: "hasData",
+                  type: "bool",
+                },
+                {
+                  internalType: "uint256",
+                  name: "childCount",
+                  type: "uint256",
+                },
+                {
+                  internalType: "uint256",
+                  name: "propertyCount",
+                  type: "uint256",
+                },
+                {
+                  internalType: "uint64",
+                  name: "timestamp",
+                  type: "uint64",
+                },
+                {
+                  internalType: "address",
+                  name: "attester",
+                  type: "address",
+                },
+                {
+                  internalType: "bytes32",
+                  name: "schema",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "bytes32",
+                  name: "contentHash",
+                  type: "bytes32",
+                },
+              ],
+              internalType: "struct EFSFileView.FileSystemItem[]",
+              name: "",
+              type: "tuple[]",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
           inputs: [],
           name: "indexer",
           outputs: [
@@ -566,11 +655,42 @@ const deployedContracts = {
           stateMutability: "view",
           type: "function",
         },
+        {
+          inputs: [],
+          name: "listResolver",
+          outputs: [
+            {
+              internalType: "contract IListResolverForFileView",
+              name: "",
+              type: "address",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "contract IListResolverForFileView",
+              name: "_listResolver",
+              type: "address",
+            },
+            {
+              internalType: "bytes32",
+              name: "_listSchemaUID",
+              type: "bytes32",
+            },
+          ],
+          name: "setListResolver",
+          outputs: [],
+          stateMutability: "nonpayable",
+          type: "function",
+        },
       ],
       inheritedFunctions: {},
     },
     EFSRouter: {
-      address: "0x19C7dAeb1828942DeBf60FB78FF70292300E7800",
+      address: "0x0eD4796Fd5f0E8f87Dc12D048E90B04FC112b214",
       abi: [
         {
           inputs: [
@@ -767,7 +887,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     EFSSortOverlay: {
-      address: "0x806c44f027a6f6ee75aDe3F6DBf1c6DB496FfC67",
+      address: "0x3391B40E0993F5939ed8D9eFe6165303AAe0C307",
       abi: [
         {
           inputs: [
@@ -1746,7 +1866,7 @@ const deployedContracts = {
       },
     },
     EdgeResolver: {
-      address: "0xC64700624b2129C81288e7Bd4d5Ec9DD006eb2D0",
+      address: "0x24E0d675054e870CAeCEbf303795f04f52ea01ac",
       abi: [
         {
           inputs: [
@@ -2865,7 +2985,7 @@ const deployedContracts = {
       },
     },
     Indexer: {
-      address: "0x2a88C3373cD7D7CAc90420515614d5C43777A00c",
+      address: "0x17FFb3B5451420E8DD243c90b76F6989E82b20A1",
       abi: [
         {
           inputs: [
@@ -5008,7 +5128,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     ListEntryResolver: {
-      address: "0x61363ac1c0f7B59c5F81bFd6d03216BF75aFFe7B",
+      address: "0xC78deB12C8D12316445482B0A945f404ea1Cc168",
       abi: [
         {
           inputs: [
@@ -5669,7 +5789,7 @@ const deployedContracts = {
       },
     },
     ListReader: {
-      address: "0x47dc508dAf593D6839f2e4963Ea13A7E449b5138",
+      address: "0x1Dc4D4052e9E30d5e6e27c1ffCE4faAF31c879f0",
       abi: [
         {
           inputs: [
@@ -6073,7 +6193,7 @@ const deployedContracts = {
       },
     },
     ListResolver: {
-      address: "0xFb3B3Dea450Ee849f0FCaA268Ce160D32Ad933cd",
+      address: "0x67BbC7aC4DC12f41E12190F22F86D24E0731b53C",
       abi: [
         {
           inputs: [
@@ -6128,6 +6248,12 @@ const deployedContracts = {
             },
             {
               indexed: false,
+              internalType: "string",
+              name: "name",
+              type: "string",
+            },
+            {
+              indexed: false,
               internalType: "bool",
               name: "allowsDuplicates",
               type: "bool",
@@ -6155,6 +6281,12 @@ const deployedContracts = {
               internalType: "uint32",
               name: "maxEntries",
               type: "uint32",
+            },
+            {
+              indexed: false,
+              internalType: "bytes32",
+              name: "parentUID",
+              type: "bytes32",
             },
           ],
           name: "ListAttested",
@@ -6229,6 +6361,76 @@ const deployedContracts = {
             },
           ],
           stateMutability: "payable",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "getFreeLists",
+          outputs: [
+            {
+              internalType: "bytes32[]",
+              name: "",
+              type: "bytes32[]",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "listUID",
+              type: "bytes32",
+            },
+          ],
+          name: "getListName",
+          outputs: [
+            {
+              internalType: "string",
+              name: "",
+              type: "string",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "parentUID",
+              type: "bytes32",
+            },
+          ],
+          name: "getListsByParent",
+          outputs: [
+            {
+              internalType: "bytes32[]",
+              name: "",
+              type: "bytes32[]",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "parentUID",
+              type: "bytes32",
+            },
+          ],
+          name: "getListsByParentCount",
+          outputs: [
+            {
+              internalType: "uint256",
+              name: "",
+              type: "uint256",
+            },
+          ],
+          stateMutability: "view",
           type: "function",
         },
         {
@@ -6501,7 +6703,7 @@ const deployedContracts = {
       },
     },
     MirrorResolver: {
-      address: "0x9CfBEaB5419279528B3e9A68B7522dFDED882137",
+      address: "0xc3C05009ac3D62745F4766136a7c68D334D0377E",
       abi: [
         {
           inputs: [
@@ -6957,7 +7159,7 @@ const deployedContracts = {
       },
     },
     NameSort: {
-      address: "0xe9e0e645C145E9d99246aB522AFF724F31F95E00",
+      address: "0x74540ad8e8aEB5Ef75f59c7851b5E9e4b2cD0939",
       abi: [
         {
           inputs: [
@@ -7043,7 +7245,7 @@ const deployedContracts = {
       },
     },
     SchemaNameIndex: {
-      address: "0x9B0F3b52Eaa4625459dA9d4f3fd1d35194652c60",
+      address: "0x9BEd9d5C7eEbff05b40f0749706296DEfBFBc50D",
       abi: [
         {
           inputs: [
@@ -7148,7 +7350,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     TimestampSort: {
-      address: "0xdAC7424d00eA6Fc56069f548049884E0b31316FD",
+      address: "0x4EB117DF4910e5a83Ce78aEf41dB204495D29173",
       abi: [
         {
           inputs: [

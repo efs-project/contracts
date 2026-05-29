@@ -691,6 +691,9 @@ export default function ExplorerClient() {
                   setSortRefreshKey(k => k + 1);
                   setDirectoryRefreshKey(k => k + 1);
                 }}
+                onListCreated={() => {
+                  setDirectoryRefreshKey(k => k + 1);
+                }}
               />
             )}
 

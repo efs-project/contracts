@@ -6,7 +6,7 @@ import { Signer, ZeroAddress } from "ethers";
 const ZERO_BYTES32 = "0x" + "0".repeat(64);
 const NO_EXPIRATION = 0n;
 const LIST_SCHEMA =
-  "bool allowsDuplicates, bool appendOnly, uint8 targetType, bytes32 targetSchema, uint32 maxEntries";
+  "string name, bool allowsDuplicates, bool appendOnly, uint8 targetType, bytes32 targetSchema, uint32 maxEntries";
 const LIST_ENTRY_SCHEMA = "bytes32 listUID, bytes32 target, int256 weight";
 
 describe("Lists — Unit Tests", function () {
@@ -22,8 +22,8 @@ describe("Lists — Unit Tests", function () {
   let dummySchemaUID: string; // for minting target attestations in SCHEMA-mode tests
 
   const enc = new ethers.AbiCoder();
-  const encodeList = (ad: boolean, ao: boolean, tt: number, ts: string, me: number) =>
-    enc.encode(["bool", "bool", "uint8", "bytes32", "uint32"], [ad, ao, tt, ts, me]);
+  const encodeList = (ad: boolean, ao: boolean, tt: number, ts: string, me: number, name = "test-list") =>
+    enc.encode(["string", "bool", "bool", "uint8", "bytes32", "uint32"], [name, ad, ao, tt, ts, me]);
   const encodeEntry = (lu: string, t: string, w: bigint) =>
     enc.encode(["bytes32", "bytes32", "int256"], [lu, t, w]);
 
@@ -117,6 +117,8 @@ describe("Lists — Unit Tests", function () {
     targetType: number,
     targetSchema = ZERO_BYTES32,
     maxEntries = 0,
+    refUID = ZERO_BYTES32,
+    name = "test-list",
   ): Promise<string> => {
     const tx = await eas.connect(signer).attest({
       schema: listSchemaUID,
@@ -124,8 +126,8 @@ describe("Lists — Unit Tests", function () {
         recipient: ZeroAddress,
         expirationTime: NO_EXPIRATION,
         revocable: false,
-        refUID: ZERO_BYTES32,
-        data: encodeList(allowsDuplicates, appendOnly, targetType, targetSchema, maxEntries),
+        refUID: refUID,
+        data: encodeList(allowsDuplicates, appendOnly, targetType, targetSchema, maxEntries, name),
         value: 0n,
       },
     });
@@ -257,22 +259,16 @@ describe("Lists — Unit Tests", function () {
       ).to.be.revertedWith("LIST must not expire");
     });
 
-    it("A6: refUID != 0 reverts", async function () {
+    it("A6: refUID != 0 succeeds — list placed under a parent folder anchor", async function () {
       // EAS validates refUID exists before calling resolver — so we need a real attestation.
-      const validUID = await mintTarget("ref-target"); // valid EAS attestation
-      await expect(
-        eas.connect(alice).attest({
-          schema: listSchemaUID,
-          data: {
-            recipient: ZeroAddress,
-            expirationTime: NO_EXPIRATION,
-            revocable: false,
-            refUID: validUID, // valid UID — EAS accepts, resolver rejects
-            data: encodeList(false, false, 1, ZERO_BYTES32, 0),
-            value: 0n,
-          },
-        }),
-      ).to.be.revertedWith("LIST must be free-floating");
+      const validUID = await mintTarget("ref-target"); // valid EAS attestation used as parent anchor
+      // Lists may now carry a parent refUID; the resolver no longer rejects it.
+      const uid = await attestList(alice, false, false, 1, ZERO_BYTES32, 0, validUID, "folder-list");
+      expect(uid).to.not.equal(ZERO_BYTES32);
+      // ListResolver stores the name and parent index
+      expect(await listResolver.getListName(uid)).to.equal("folder-list");
+      const byParent = await listResolver.getListsByParent(validUID);
+      expect(byParent).to.include(uid);
     });
 
     it("A7: recipient != 0 reverts", async function () {
@@ -369,7 +365,7 @@ describe("Lists — Unit Tests", function () {
             expirationTime: NO_EXPIRATION,
             revocable: false,
             refUID: ZERO_BYTES32,
-            data: encodeList(false, false, 1, ZERO_BYTES32, 0),
+            data: encodeList(false, false, 1, ZERO_BYTES32, 0, "my-list"),
             value: 0n,
           },
         }),
@@ -378,11 +374,13 @@ describe("Lists — Unit Tests", function () {
         .withArgs(
           (_: any) => _ !== ZERO_BYTES32, // listUID (any non-zero)
           await alice.getAddress(),
+          "my-list",
           false,
           false,
           1,
           ZERO_BYTES32,
           0,
+          ZERO_BYTES32, // parentUID (free-floating)
         );
     });
   });

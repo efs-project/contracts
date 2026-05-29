@@ -8,7 +8,7 @@ import { TagModal } from "./TagModal";
 import { ethers } from "ethers";
 import { createPortal } from "react-dom";
 import { zeroHash } from "viem";
-import { useAccount, usePublicClient } from "wagmi";
+import { useAccount, usePublicClient, useReadContract } from "wagmi";
 import {
   AdjustmentsHorizontalIcon,
   ArrowsPointingOutIcon,
@@ -17,6 +17,7 @@ import {
   DocumentIcon,
   FolderIcon,
   InformationCircleIcon,
+  QueueListIcon,
   Square2StackIcon,
   TagIcon,
   TrashIcon,
@@ -27,7 +28,7 @@ import { useSortedData } from "~~/hooks/efs/useSortedData";
 import { useDeployedContractInfo, useScaffoldReadContract, useScaffoldWriteContract } from "~~/hooks/scaffold-eth";
 import { useBackgroundOps } from "~~/services/store/backgroundOps";
 import { EDGE_RESOLVER_ABI, getEdgeResolverAddress } from "~~/utils/efs/edgeResolver";
-import { isFile, isTopic } from "~~/utils/efs/efsTypes";
+import { isFile, isList, isTopic } from "~~/utils/efs/efsTypes";
 import { SORT_OVERLAY_ABI } from "~~/utils/efs/sortOverlay";
 import { TRANSPORT_LABELS, detectTransport, resolveGatewayUrl } from "~~/utils/efs/transports";
 import { notification } from "~~/utils/scaffold-eth";
@@ -239,6 +240,68 @@ export const FileBrowser = ({
   const { data: tagSchemaUID } = useScaffoldReadContract({
     contractName: "EdgeResolver",
     functionName: "TAG_SCHEMA_UID",
+  });
+
+  // List support: LIST_SCHEMA_UID from ListReader + list items in the current folder.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: listReaderInfo } = useDeployedContractInfo({ contractName: "ListReader" as any });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const listReaderAddress = (listReaderInfo as any)?.address as `0x${string}` | undefined;
+
+  const LIST_SCHEMA_UID_ABI = [
+    {
+      inputs: [],
+      name: "LIST_SCHEMA_UID",
+      outputs: [{ name: "", type: "bytes32" }],
+      stateMutability: "view",
+      type: "function",
+    },
+  ] as const;
+
+  const { data: listSchemaUID } = useReadContract({
+    address: listReaderAddress,
+    abi: LIST_SCHEMA_UID_ABI,
+    functionName: "LIST_SCHEMA_UID",
+    query: { enabled: !!listReaderAddress },
+  });
+
+  // Selected list (clicked in directory grid) — shown in the preview pane.
+  const [selectedList, setSelectedList] = useState<any | null>(null);
+
+  const GET_LISTS_ABI = [
+    {
+      inputs: [{ internalType: "bytes32", name: "parentUID", type: "bytes32" }],
+      name: "getListsAtParent",
+      outputs: [
+        {
+          name: "",
+          type: "tuple[]",
+          components: [
+            { name: "uid", type: "bytes32" },
+            { name: "name", type: "string" },
+            { name: "parentUID", type: "bytes32" },
+            { name: "isFolder", type: "bool" },
+            { name: "hasData", type: "bool" },
+            { name: "childCount", type: "uint256" },
+            { name: "propertyCount", type: "uint256" },
+            { name: "timestamp", type: "uint64" },
+            { name: "attester", type: "address" },
+            { name: "schema", type: "bytes32" },
+            { name: "contentHash", type: "bytes32" },
+          ],
+        },
+      ],
+      stateMutability: "view",
+      type: "function",
+    },
+  ] as const;
+
+  const { data: rawListItems, refetch: refetchListItems } = useReadContract({
+    address: efsFileViewInfo?.address as `0x${string}` | undefined,
+    abi: GET_LISTS_ABI,
+    functionName: "getListsAtParent",
+    args: currentAnchorUID ? [currentAnchorUID as `0x${string}`] : undefined,
+    query: { enabled: !!efsFileViewInfo?.address && !!currentAnchorUID },
   });
 
   // Revoke blob URLs when fileContent changes to prevent memory leaks
@@ -928,6 +991,7 @@ export const FileBrowser = ({
     } else {
       refetchStandardItems();
     }
+    refetchListItems().catch(e => console.error("List items refetch failed", e));
     // refetch* identities are stable per query; useLensesQuery is the
     // dispatch key and changes rarely. Intentionally scoped to the bump.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1115,6 +1179,7 @@ export const FileBrowser = ({
 
   const closePreview = () => {
     setSelectedFile(null);
+    setSelectedList(null);
     setFileContent(null);
     setFileContentType(null);
     setFetchError(null);
@@ -1413,7 +1478,7 @@ export const FileBrowser = ({
 
   return (
     <div className="relative h-full flex flex-row">
-      <div className={`${selectedFile ? "flex-1 min-w-0" : "w-full"} overflow-y-auto`}>
+      <div className={`${selectedFile || selectedList ? "flex-1 min-w-0" : "w-full"} overflow-y-auto`}>
         {/* Preview sort banner — shown when no on-chain sorted data exists yet */}
         {isPreviewSort && previewSortKeys.size > 0 && (!sortedUIDs || sortedUIDs.length === 0) && (
           <div className="mx-4 mt-2 px-3 py-2 rounded-lg bg-info/10 border border-info/20 flex items-center justify-between text-sm gap-3">
@@ -1522,7 +1587,38 @@ export const FileBrowser = ({
                 </div>
               );
             })}
-          {(sortedItems ?? items)?.length === 0 && (
+
+          {/* List cards — separate query, rendered after folder/file items */}
+          {(rawListItems as any[] | undefined)?.map((listItem: any) => (
+            <div
+              key={listItem.uid}
+              className={`card bg-base-100 shadow-xl group relative hover:bg-base-200 transition-all duration-200 cursor-pointer ${selectedList?.uid === listItem.uid ? "ring-2 ring-primary bg-primary/10" : ""}`}
+              onClick={() => {
+                setSelectedList(listItem);
+                setSelectedFile(null);
+              }}
+            >
+              <div className="absolute top-1.5 right-1.5 flex gap-0.5 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button
+                  className="p-0.5 rounded bg-base-300/80 hover:bg-base-300 transition-colors"
+                  onClick={e => {
+                    e.stopPropagation();
+                    setSelectedDebugItem(listItem);
+                  }}
+                  title="Debug Info"
+                >
+                  <InformationCircleIcon className="w-3.5 h-3.5 text-base-content/50 hover:text-primary" />
+                </button>
+              </div>
+              <div className="card-body items-center text-center p-4 pt-6">
+                <QueueListIcon className="w-10 h-10 text-purple-500" />
+                <h2 className="card-title text-sm break-all text-center leading-tight">{listItem.name || "Unnamed"}</h2>
+                <div className="text-xs text-base-content/40">List</div>
+              </div>
+            </div>
+          ))}
+
+          {(sortedItems ?? items)?.length === 0 && !(rawListItems as any[] | undefined)?.length && (
             <div className="col-span-full text-center text-gray-500">
               {tagFilteredUIDs !== null
                 ? `No items match tag filter: "${tagFilter}"`
@@ -1676,6 +1772,46 @@ export const FileBrowser = ({
 
           {/* Mirrors panel */}
           {!selectedFile.isFolder && <MirrorsPanel fileAnchorUID={selectedFile.uid} lensAddresses={lensAddresses} />}
+        </div>
+      )}
+
+      {/* List Preview Side Pane */}
+      {selectedList && !selectedFile && (
+        <div className="preview-pane absolute inset-0 z-10 max-lg:bg-base-200 lg:static lg:w-[400px] lg:flex-shrink-0 border-l border-base-300 flex flex-col overflow-hidden">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-base-300 shrink-0">
+            <div className="flex items-center gap-2 min-w-0">
+              <QueueListIcon className="w-5 h-5 text-purple-500 flex-shrink-0" />
+              <h3 className="font-bold text-sm truncate">{selectedList.name}</h3>
+            </div>
+            <button className="btn btn-ghost btn-sm btn-circle" onClick={closePreview} title="Close">
+              <XMarkIcon className="w-5 h-5" />
+            </button>
+          </div>
+          <div className="flex-1 overflow-auto p-4 flex flex-col gap-4">
+            <div className="text-xs font-mono opacity-40 break-all">{selectedList.uid}</div>
+            <div className="grid grid-cols-2 gap-2 text-sm">
+              <span className="opacity-60">Attester</span>
+              <span className="font-mono text-xs break-all">{selectedList.attester}</span>
+              <span className="opacity-60">Schema</span>
+              <span className="badge badge-sm badge-outline">LIST</span>
+            </div>
+            <div className="flex gap-2 mt-2">
+              <Link
+                href={`/lists/${selectedList.uid}`}
+                className="btn btn-sm btn-primary flex-1"
+                target="_blank"
+              >
+                Open List Manager ↗
+              </Link>
+              <Link
+                href={`/easexplorer?uid=${selectedList.uid}`}
+                className="btn btn-sm btn-ghost flex-1"
+                target="_blank"
+              >
+                EAS Explorer
+              </Link>
+            </div>
+          </div>
         </div>
       )}
 

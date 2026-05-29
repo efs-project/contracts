@@ -39,8 +39,10 @@ contract ListReader is IListReader {
         if (L.uid == bytes32(0) || L.schema != LIST_SCHEMA_UID) {
             return m; // exists=false (zero struct)
         }
-        (m.allowsDuplicates, m.appendOnly, m.targetType, m.targetSchema, m.maxEntries) =
-            abi.decode(L.data, (bool, bool, uint8, bytes32, uint32));
+        // LIST schema: "string name, bool allowsDuplicates, bool appendOnly, uint8 targetType,
+        //               bytes32 targetSchema, uint32 maxEntries"
+        (, m.allowsDuplicates, m.appendOnly, m.targetType, m.targetSchema, m.maxEntries) =
+            abi.decode(L.data, (string, bool, bool, uint8, bytes32, uint32));
         m.exists = true;
         m.curator = L.attester;
     }
@@ -59,7 +61,7 @@ contract ListReader is IListReader {
         Attestation memory L = eas.getAttestation(listUID);
         uint8 targetType = 0;
         if (L.uid != bytes32(0) && L.schema == LIST_SCHEMA_UID) {
-            (,, targetType,,) = abi.decode(L.data, (bool, bool, uint8, bytes32, uint32));
+            (,,, targetType,,) = abi.decode(L.data, (string, bool, bool, uint8, bytes32, uint32));
         }
 
         ListEntryResolver.EntryRecord[] memory raw = resolver.getEntries(listUID, attester, start, len);
@@ -158,8 +160,8 @@ contract ListReader is IListReader {
     function _getListMode(bytes32 listUID) internal view returns (bool, bool, uint8) {
         Attestation memory L = eas.getAttestation(listUID);
         require(L.uid != bytes32(0) && L.schema == LIST_SCHEMA_UID, "not a list");
-        (bool allowsDups, bool appendOnly, uint8 targetType,,) =
-            abi.decode(L.data, (bool, bool, uint8, bytes32, uint32));
+        (, bool allowsDups, bool appendOnly, uint8 targetType,,) =
+            abi.decode(L.data, (string, bool, bool, uint8, bytes32, uint32));
         return (allowsDups, appendOnly, targetType);
     }
 }

@@ -39,6 +39,7 @@ export type FileActionsBarProps = {
 
   onFolderCreated?: (uid: string, name: string) => void;
   onFileCreated?: (enabledSortUIDs: string[]) => void;
+  onListCreated?: (uid: string) => void;
 };
 
 /**
@@ -69,6 +70,7 @@ export const FileActionsBar = ({
   onToggleFilterDrawer,
   onFolderCreated,
   onFileCreated,
+  onListCreated,
 }: FileActionsBarProps) => {
   const [creationType, setCreationType] = useState<CreationType | null>(null);
 
@@ -103,7 +105,7 @@ export const FileActionsBar = ({
         )}
       </div>
 
-      {/* ADD dropdown — Folder/File require an anchor context; List does not */}
+      {/* ADD dropdown — Folder/File/List require an anchor context */}
       <div className="dropdown dropdown-end flex-shrink-0">
         <div tabIndex={0} role="button" className="btn btn-sm btn-primary">
           + Add ▾
@@ -126,7 +128,10 @@ export const FileActionsBar = ({
             </button>
           </li>
           <li>
-            <button onClick={() => setCreationType("List")}>
+            <button onClick={() => {
+              if (!currentAnchorUID) { notification.info("Open a folder first to add a list."); return; }
+              setCreationType("List");
+            }}>
               <QueueListIcon className="w-4 h-4" /> List
             </button>
           </li>
@@ -150,6 +155,7 @@ export const FileActionsBar = ({
         lensAddresses={lensAddresses}
         onFolderCreated={onFolderCreated}
         onFileCreated={onFileCreated}
+        onListCreated={onListCreated}
       />
     </div>
   );

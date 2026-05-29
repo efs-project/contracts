@@ -421,16 +421,22 @@ export const CreateItemModal = ({
     setIsSubmitting(true);
     try {
       const schemaBytes = (listTargetType === 2 ? listTargetSchema : zeroHash) as `0x${string}`;
+      // Schema: "string name, bool allowsDuplicates, bool appendOnly, uint8 targetType,
+      //          bytes32 targetSchema, uint32 maxEntries"
       const encoded = encodeAbiParameters(
         [
+          { name: "name", type: "string" },
           { name: "allowsDuplicates", type: "bool" },
           { name: "appendOnly", type: "bool" },
           { name: "targetType", type: "uint8" },
           { name: "targetSchema", type: "bytes32" },
           { name: "maxEntries", type: "uint32" },
         ],
-        [listAllowsDuplicates, listAppendOnly, listTargetType, schemaBytes, maxE],
+        [listName.trim(), listAllowsDuplicates, listAppendOnly, listTargetType, schemaBytes, maxE],
       );
+      // refUID = current folder anchor so the list is indexed as a child of that folder.
+      // Free-floating (zeroHash) when no folder is open.
+      const listRefUID = (currentAnchorUID ?? zeroHash) as `0x${string}`;
       const txHash = await attest({
         functionName: "attest",
         args: [
@@ -440,7 +446,7 @@ export const CreateItemModal = ({
               recipient: zeroAddress,
               expirationTime: 0n,
               revocable: false,
-              refUID: zeroHash,
+              refUID: listRefUID,
               data: encoded,
               value: 0n,
             },
