@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { CreateItemModal, CreationType } from "./CreateItemModal";
 import { SortDropdown } from "./SortDropdown";
-import { FunnelIcon } from "@heroicons/react/24/outline";
+import { FolderPlusIcon, DocumentPlusIcon, FunnelIcon, QueueListIcon } from "@heroicons/react/24/outline";
 import type { ClassifiedContainer } from "~~/utils/efs/containers";
 
 export type FileActionsBarProps = {
@@ -110,17 +110,17 @@ export const FileActionsBar = ({
         <ul tabIndex={0} className="dropdown-content menu menu-sm bg-base-100 rounded-box z-[1] w-40 p-1 shadow border border-base-300">
           <li>
             <button onClick={() => setCreationType("Folder")} disabled={!currentAnchorUID}>
-              📁 Folder
+              <FolderPlusIcon className="w-4 h-4" /> Folder
             </button>
           </li>
           <li>
             <button onClick={() => setCreationType("File")} disabled={!currentAnchorUID}>
-              📄 File
+              <DocumentPlusIcon className="w-4 h-4" /> File
             </button>
           </li>
           <li>
             <button onClick={() => setCreationType("List")}>
-              📋 List
+              <QueueListIcon className="w-4 h-4" /> List
             </button>
           </li>
         </ul>
