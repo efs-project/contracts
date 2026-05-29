@@ -5,6 +5,7 @@ import { CreateItemModal, CreationType } from "./CreateItemModal";
 import { SortDropdown } from "./SortDropdown";
 import { FolderPlusIcon, DocumentPlusIcon, FunnelIcon, QueueListIcon } from "@heroicons/react/24/outline";
 import type { ClassifiedContainer } from "~~/utils/efs/containers";
+import { notification } from "~~/utils/scaffold-eth";
 
 export type FileActionsBarProps = {
   currentAnchorUID: string | null;
@@ -107,14 +108,20 @@ export const FileActionsBar = ({
         <div tabIndex={0} role="button" className="btn btn-sm btn-primary">
           + Add ▾
         </div>
-        <ul tabIndex={0} className="dropdown-content menu menu-sm bg-base-100 rounded-box z-[1] w-40 p-1 shadow border border-base-300">
+        <ul tabIndex={0} className="dropdown-content menu menu-sm bg-base-100/100 rounded-box z-50 w-40 p-1 shadow-lg border border-base-300">
           <li>
-            <button onClick={() => setCreationType("Folder")} disabled={!currentAnchorUID}>
+            <button onClick={() => {
+              if (!currentAnchorUID) { notification.info("Open a folder first to add files or subfolders."); return; }
+              setCreationType("Folder");
+            }}>
               <FolderPlusIcon className="w-4 h-4" /> Folder
             </button>
           </li>
           <li>
-            <button onClick={() => setCreationType("File")} disabled={!currentAnchorUID}>
+            <button onClick={() => {
+              if (!currentAnchorUID) { notification.info("Open a folder first to add files or subfolders."); return; }
+              setCreationType("File");
+            }}>
               <DocumentPlusIcon className="w-4 h-4" /> File
             </button>
           </li>
