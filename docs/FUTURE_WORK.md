@@ -188,6 +188,22 @@ Build and publish a subgraph that aggregates EFS attestations into queryable vie
 
 ---
 
+## Lists UI — production client features (flagged 2026-05-28)
+
+### Lists in the Explorer folder grid
+The `+ Add → List` flow creates a LIST attestation and stays in the Explorer, but lists don't yet appear as items in the folder grid. The grid renders only Anchors (folders) and DATA (files) via `useLensesDirectoryPage` + `isTopic`/`isFile` type checks. Displaying lists requires either (a) extending the grid to query LIST attestations by curator in the current folder context, or (b) defining a placement mechanism (e.g., a PIN from a named Anchor to a LIST UID). Needs a design decision on EFS semantics before implementation.
+
+### Attester lens picker on list detail page
+The `/lists/[listUID]` detail page currently reads entries only for the connected wallet. The design spec calls for an attester tab picker (discovered from `ListEntryAttested` events + a "Custom" address input) so any user can browse any attester's view of a list. [ADR-0044, ADR-0031]
+
+### Post-create UID copy button
+After creating a list the success notification shows a truncated UID. A copy-to-clipboard button on the notification (or a modal success state with the full UID) would make it easy to share or use the UID elsewhere.
+
+### Lists UI — items marked out of scope for v1
+ENS resolution on identity keys, bulk address paste, drag-to-reorder lens stack, SCHEMA-mode browse picker, ANY-mode keccak256 helper, deep-link `?lens=` URL param on detail page. [specs/2026-05-28-lists-ui-design.md]
+
+---
+
 ## Write-flow & future schemas (flagged 2026-05-28, PM + brainstorm swarm)
 
 ### EFSUploadGateway batch-wrapper (write-flow ergonomics)
