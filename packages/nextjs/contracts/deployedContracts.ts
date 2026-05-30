@@ -26,19 +26,6 @@ const deployedContracts = {
           type: "constructor",
         },
         {
-          inputs: [],
-          name: "LIST_SCHEMA_UID",
-          outputs: [
-            {
-              internalType: "bytes32",
-              name: "",
-              type: "bytes32",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
           inputs: [
             {
               internalType: "bytes",
@@ -567,82 +554,6 @@ const deployedContracts = {
           type: "function",
         },
         {
-          inputs: [
-            {
-              internalType: "bytes32",
-              name: "parentUID",
-              type: "bytes32",
-            },
-          ],
-          name: "getListsAtParent",
-          outputs: [
-            {
-              components: [
-                {
-                  internalType: "bytes32",
-                  name: "uid",
-                  type: "bytes32",
-                },
-                {
-                  internalType: "string",
-                  name: "name",
-                  type: "string",
-                },
-                {
-                  internalType: "bytes32",
-                  name: "parentUID",
-                  type: "bytes32",
-                },
-                {
-                  internalType: "bool",
-                  name: "isFolder",
-                  type: "bool",
-                },
-                {
-                  internalType: "bool",
-                  name: "hasData",
-                  type: "bool",
-                },
-                {
-                  internalType: "uint256",
-                  name: "childCount",
-                  type: "uint256",
-                },
-                {
-                  internalType: "uint256",
-                  name: "propertyCount",
-                  type: "uint256",
-                },
-                {
-                  internalType: "uint64",
-                  name: "timestamp",
-                  type: "uint64",
-                },
-                {
-                  internalType: "address",
-                  name: "attester",
-                  type: "address",
-                },
-                {
-                  internalType: "bytes32",
-                  name: "schema",
-                  type: "bytes32",
-                },
-                {
-                  internalType: "bytes32",
-                  name: "contentHash",
-                  type: "bytes32",
-                },
-              ],
-              internalType: "struct EFSFileView.FileSystemItem[]",
-              name: "",
-              type: "tuple[]",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
           inputs: [],
           name: "indexer",
           outputs: [
@@ -653,37 +564,6 @@ const deployedContracts = {
             },
           ],
           stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [],
-          name: "listResolver",
-          outputs: [
-            {
-              internalType: "contract IListResolverForFileView",
-              name: "",
-              type: "address",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              internalType: "contract IListResolverForFileView",
-              name: "_listResolver",
-              type: "address",
-            },
-            {
-              internalType: "bytes32",
-              name: "_listSchemaUID",
-              type: "bytes32",
-            },
-          ],
-          name: "setListResolver",
-          outputs: [],
-          stateMutability: "nonpayable",
           type: "function",
         },
       ],
@@ -6248,12 +6128,6 @@ const deployedContracts = {
             },
             {
               indexed: false,
-              internalType: "string",
-              name: "name",
-              type: "string",
-            },
-            {
-              indexed: false,
               internalType: "bool",
               name: "allowsDuplicates",
               type: "bool",
@@ -6281,12 +6155,6 @@ const deployedContracts = {
               internalType: "uint32",
               name: "maxEntries",
               type: "uint32",
-            },
-            {
-              indexed: false,
-              internalType: "bytes32",
-              name: "parentUID",
-              type: "bytes32",
             },
           ],
           name: "ListAttested",
@@ -6361,76 +6229,6 @@ const deployedContracts = {
             },
           ],
           stateMutability: "payable",
-          type: "function",
-        },
-        {
-          inputs: [],
-          name: "getFreeLists",
-          outputs: [
-            {
-              internalType: "bytes32[]",
-              name: "",
-              type: "bytes32[]",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              internalType: "bytes32",
-              name: "listUID",
-              type: "bytes32",
-            },
-          ],
-          name: "getListName",
-          outputs: [
-            {
-              internalType: "string",
-              name: "",
-              type: "string",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              internalType: "bytes32",
-              name: "parentUID",
-              type: "bytes32",
-            },
-          ],
-          name: "getListsByParent",
-          outputs: [
-            {
-              internalType: "bytes32[]",
-              name: "",
-              type: "bytes32[]",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              internalType: "bytes32",
-              name: "parentUID",
-              type: "bytes32",
-            },
-          ],
-          name: "getListsByParentCount",
-          outputs: [
-            {
-              internalType: "uint256",
-              name: "",
-              type: "uint256",
-            },
-          ],
-          stateMutability: "view",
           type: "function",
         },
         {

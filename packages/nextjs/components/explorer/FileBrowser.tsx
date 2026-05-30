@@ -267,43 +267,19 @@ export const FileBrowser = ({
   });
 
   // Selected list (clicked in directory grid) — shown in the preview pane.
-  const [selectedList, setSelectedList] = useState<any | null>(null);
+  // `uid` is the resolved LIST attestation UID (from the anchor's active PIN);
+  // `anchorUID` is the list-slot anchor (used to revoke the placement PIN on delete).
+  const [selectedList, setSelectedList] = useState<{
+    uid: string;
+    anchorUID: string;
+    name: string;
+    attester: string;
+  } | null>(null);
 
-  const GET_LISTS_ABI = [
-    {
-      inputs: [{ internalType: "bytes32", name: "parentUID", type: "bytes32" }],
-      name: "getListsAtParent",
-      outputs: [
-        {
-          name: "",
-          type: "tuple[]",
-          components: [
-            { name: "uid", type: "bytes32" },
-            { name: "name", type: "string" },
-            { name: "parentUID", type: "bytes32" },
-            { name: "isFolder", type: "bool" },
-            { name: "hasData", type: "bool" },
-            { name: "childCount", type: "uint256" },
-            { name: "propertyCount", type: "uint256" },
-            { name: "timestamp", type: "uint64" },
-            { name: "attester", type: "address" },
-            { name: "schema", type: "bytes32" },
-            { name: "contentHash", type: "bytes32" },
-          ],
-        },
-      ],
-      stateMutability: "view",
-      type: "function",
-    },
-  ] as const;
-
-  const { data: rawListItems, refetch: refetchListItems } = useReadContract({
-    address: efsFileViewInfo?.address as `0x${string}` | undefined,
-    abi: GET_LISTS_ABI,
-    functionName: "getListsAtParent",
-    args: currentAnchorUID ? [currentAnchorUID as `0x${string}`] : undefined,
-    query: { enabled: !!efsFileViewInfo?.address && !!currentAnchorUID },
-  });
+  // Lists are placed like files (ADR-0044 §1): a named ANCHOR with anchorType=LIST_SCHEMA_UID
+  // plus a PIN(definition=anchor, refUID=LIST). They surface as anchor children of the folder
+  // with `item.schema === LIST_SCHEMA_UID` — no dedicated read needed. The PIN target (the LIST
+  // UID) is resolved on click via EdgeResolver.getActivePinTarget.
 
   // Revoke blob URLs when fileContent changes to prevent memory leaks
   useEffect(() => {
@@ -974,6 +950,19 @@ export const FileBrowser = ({
     enabled: useLensesQuery && lensAddresses.length > 0,
   });
 
+  // Lens-scoped LIST anchors. Lists are placed as anchors with anchorType=LIST_SCHEMA_UID,
+  // so the same schema-filtered directory walk surfaces them — just with the LIST schema.
+  // (The standard `getDirectoryPage` path already returns all anchor children, lists included.)
+  const { items: lensListItems, refresh: refetchLensListItems } = useLensesDirectoryPage({
+    parentAnchor: (currentAnchorUID ?? undefined) as `0x${string}` | undefined,
+    dataSchemaUID: listSchemaUID as `0x${string}` | undefined,
+    lensAddresses: lensAddresses as string[],
+    fileViewAddress: efsFileViewInfo?.address as `0x${string}` | undefined,
+    fileViewAbi: efsFileViewInfo?.abi as any,
+    pageSize,
+    enabled: useLensesQuery && lensAddresses.length > 0 && !!listSchemaUID,
+  });
+
   // Parent-driven refetch for out-of-component mutations (create file/folder).
   // Skip the initial render — the queries fire on their own when deps settle.
   // Subsequent bumps route to whichever query is currently live. We snapshot
@@ -992,7 +981,7 @@ export const FileBrowser = ({
     } else {
       refetchStandardItems();
     }
-    refetchListItems().catch(e => console.error("List items refetch failed", e));
+    if (useLensesQuery) refetchLensListItems().catch(e => console.error("List refetch (lenses) failed", e));
     // refetch* identities are stable per query; useLensesQuery is the
     // dispatch key and changes rarely. Intentionally scoped to the bump.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1007,9 +996,14 @@ export const FileBrowser = ({
   // empty result instead of a silently-blank pane. Memoized so downstream
   // effects that depend on `rawItems` identity don't refire every render.
   const rawItems = useMemo(() => {
-    if (useLensesQuery) return lensAddresses.length === 0 ? [] : lensItems;
+    if (useLensesQuery) {
+      if (lensAddresses.length === 0) return [];
+      // Merge file/folder anchors with list anchors (the LIST-schema lens walk).
+      return [...(lensItems ?? []), ...(lensListItems ?? [])];
+    }
+    // Standard `getDirectoryPage` already returns every anchor child, lists included.
     return standardItems;
-  }, [useLensesQuery, lensAddresses.length, lensItems, standardItems]);
+  }, [useLensesQuery, lensAddresses.length, lensItems, lensListItems, standardItems]);
 
   // When a tag filter is active, resolve DATA UIDs for each file item.
   // AGENT-NOTE (ADR-0041): file placement is now PIN (cardinality 1) — there's at
@@ -1345,6 +1339,60 @@ export const FileBrowser = ({
     }
   };
 
+  // Open a list: the grid item is the list-slot ANCHOR. Resolve its active PIN → the LIST UID
+  // (the curator's placement), then show the pane against that LIST.
+  const openList = async (item: any) => {
+    if (!publicClient || !edgeResolverAddress || !listSchemaUID) return;
+    setSelectedFile(null);
+    try {
+      const listUID = (await publicClient.readContract({
+        address: edgeResolverAddress,
+        abi: EDGE_RESOLVER_ABI,
+        functionName: "getActivePinTarget",
+        args: [item.uid as `0x${string}`, item.attester as `0x${string}`, listSchemaUID as `0x${string}`],
+      })) as `0x${string}`;
+      if (!listUID || listUID === zeroHash) {
+        notification.error("This list's placement is missing or revoked.");
+        return;
+      }
+      setSelectedList({ uid: listUID, anchorUID: item.uid, name: item.name, attester: item.attester });
+    } catch (e) {
+      console.error("Failed to resolve list", e);
+      notification.error("Could not open list.");
+    }
+  };
+
+  // Delete a list = revoke its placement PIN (the anchor + LIST stay, exactly like deleting a
+  // file revokes the PIN and leaves the DATA). Disappears from the folder.
+  const deleteList = async (item: any) => {
+    if (!publicClient || !edgeResolverAddress || !connectedAddress || !listSchemaUID || !pinSchemaUID) {
+      notification.error("Not ready — reconnect wallet and try again.");
+      return;
+    }
+    const ops = useBackgroundOps.getState();
+    const opId = ops.start(`Delete list: ${item.name || "list"}`);
+    try {
+      ops.log(opId, "Locating placement PIN...");
+      const slot = (await publicClient.readContract({
+        address: edgeResolverAddress,
+        abi: EDGE_RESOLVER_ABI,
+        functionName: "getActivePinSlot",
+        args: [item.uid as `0x${string}`, connectedAddress as `0x${string}`, listSchemaUID as `0x${string}`],
+      })) as { pinUID: `0x${string}`; targetID: `0x${string}` };
+      if (!slot || slot.pinUID === zeroHash) {
+        throw new Error("You have no active placement on this list — nothing to delete.");
+      }
+      await executeRevokesBySchema([{ schema: pinSchemaUID as `0x${string}`, uids: [slot.pinUID], label: "PIN" }], ops, opId);
+      ops.complete(opId, `Deleted list "${item.name || ""}".`);
+      if (selectedList?.anchorUID === item.uid) closePreview();
+      if (useLensesQuery) await refetchLensListItems();
+      else await refetchStandardItems();
+    } catch (e: any) {
+      ops.fail(opId, e?.shortMessage ?? e?.message ?? "Delete failed");
+      notification.error(e?.shortMessage ?? e?.message ?? "Could not delete list.");
+    }
+  };
+
   const handleDelete = async (item: any, isItemFile: boolean) => {
     if (!publicClient || !edgeResolverAddress || !connectedAddress || !dataSchemaUID || !pinSchemaUID) {
       notification.error("Not ready — reconnect wallet and try again.");
@@ -1500,50 +1548,56 @@ export const FileBrowser = ({
           {(sortedItems ?? items)
             ?.filter(
               (item: any) =>
-                (isTopic(item) || isFile(item, dataSchemaUID)) && item.uid !== tagsRoot && item.uid !== sortsAnchorUID,
+                (isTopic(item) || isFile(item, dataSchemaUID) || isList(item, listSchemaUID)) &&
+                item.uid !== tagsRoot &&
+                item.uid !== sortsAnchorUID,
             )
             .map((item: any) => {
-              // isTopic = Generic Anchor (Schema 0 or undefined legacy)
-              // isFile = Data Anchor (Schema DATA_SCHEMA_UID)
+              // isTopic = generic anchor (folder) · isFile = DATA anchor · isList = LIST anchor (ADR-0044 §1)
               const isItemTopic = isTopic(item);
               const isItemFile = isFile(item, dataSchemaUID);
+              const isItemList = isList(item, listSchemaUID);
+              const isSelected = isItemList ? selectedList?.anchorUID === item.uid : selectedFile?.uid === item.uid;
 
               return (
                 <div
                   key={item.uid}
-                  className={`card bg-base-100 shadow-xl group relative hover:bg-base-200 transition-all duration-200 ${selectedFile?.uid === item.uid ? "ring-2 ring-primary bg-primary/10" : ""}`}
+                  className={`card bg-base-100 shadow-xl group relative hover:bg-base-200 transition-all duration-200 ${isSelected ? "ring-2 ring-primary bg-primary/10" : ""}`}
                   onClick={() => {
-                    if (isItemTopic) {
-                      onNavigate(item.uid, item.name);
-                    } else if (isItemFile) {
+                    if (isItemTopic) onNavigate(item.uid, item.name);
+                    else if (isItemFile) {
                       setSelectedFile(item);
                       fetchFileContent(item);
-                    }
+                    } else if (isItemList) openList(item);
                   }}
                 >
                   {/* Actions — visible on hover */}
                   <div className="absolute top-1.5 right-1.5 flex gap-0.5 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <button
-                      className="p-0.5 rounded bg-base-300/80 hover:bg-base-300 transition-colors"
-                      onClick={e => {
-                        e.stopPropagation();
-                        setTagModalUID(item.uid);
-                        setTagModalIsFile(isItemFile);
-                      }}
-                      title="Tags"
-                    >
-                      <TagIcon className="w-3.5 h-3.5 text-base-content/50 hover:text-accent" />
-                    </button>
-                    <button
-                      className="p-0.5 rounded bg-base-300/80 hover:bg-base-300 transition-colors"
-                      onClick={e => {
-                        e.stopPropagation();
-                        setPropertiesModalUID(item.uid);
-                      }}
-                      title="Properties"
-                    >
-                      <AdjustmentsHorizontalIcon className="w-3.5 h-3.5 text-base-content/50 hover:text-secondary" />
-                    </button>
+                    {!isItemList && (
+                      <>
+                        <button
+                          className="p-0.5 rounded bg-base-300/80 hover:bg-base-300 transition-colors"
+                          onClick={e => {
+                            e.stopPropagation();
+                            setTagModalUID(item.uid);
+                            setTagModalIsFile(isItemFile);
+                          }}
+                          title="Tags"
+                        >
+                          <TagIcon className="w-3.5 h-3.5 text-base-content/50 hover:text-accent" />
+                        </button>
+                        <button
+                          className="p-0.5 rounded bg-base-300/80 hover:bg-base-300 transition-colors"
+                          onClick={e => {
+                            e.stopPropagation();
+                            setPropertiesModalUID(item.uid);
+                          }}
+                          title="Properties"
+                        >
+                          <AdjustmentsHorizontalIcon className="w-3.5 h-3.5 text-base-content/50 hover:text-secondary" />
+                        </button>
+                      </>
+                    )}
                     <button
                       className="p-0.5 rounded bg-base-300/80 hover:bg-base-300 transition-colors"
                       onClick={e => {
@@ -1558,9 +1612,10 @@ export const FileBrowser = ({
                       className="p-0.5 rounded bg-base-300/80 hover:bg-base-300 transition-colors"
                       onClick={e => {
                         e.stopPropagation();
-                        handleDelete(item, isItemFile);
+                        if (isItemList) deleteList(item);
+                        else handleDelete(item, isItemFile);
                       }}
-                      title={isItemFile ? "Delete file" : "Delete folder"}
+                      title={isItemList ? "Delete list" : isItemFile ? "Delete file" : "Delete folder"}
                     >
                       <TrashIcon className="w-3.5 h-3.5 text-base-content/50 hover:text-error" />
                     </button>
@@ -1570,56 +1625,30 @@ export const FileBrowser = ({
                     <div>
                       {isItemTopic ? (
                         <FolderIcon className="w-10 h-10 text-yellow-500" />
+                      ) : isItemList ? (
+                        <QueueListIcon className="w-10 h-10 text-purple-500" />
                       ) : (
                         <DocumentIcon className="w-10 h-10 text-blue-500" />
                       )}
                     </div>
                     <h2 className="card-title text-sm break-all text-center leading-tight">{item.name || "Unnamed"}</h2>
                     <div className="text-xs text-base-content/40">
-                      {isItemTopic
-                        ? useLensesQuery
-                          ? "Folder"
-                          : item.childCount > 0
-                            ? `${item.childCount} items`
-                            : "Empty"
-                        : "File"}
+                      {isItemList
+                        ? "List"
+                        : isItemTopic
+                          ? useLensesQuery
+                            ? "Folder"
+                            : item.childCount > 0
+                              ? `${item.childCount} items`
+                              : "Empty"
+                          : "File"}
                     </div>
                   </div>
                 </div>
               );
             })}
 
-          {/* List cards — separate query, rendered after folder/file items */}
-          {(rawListItems as any[] | undefined)?.map((listItem: any) => (
-            <div
-              key={listItem.uid}
-              className={`card bg-base-100 shadow-xl group relative hover:bg-base-200 transition-all duration-200 cursor-pointer ${selectedList?.uid === listItem.uid ? "ring-2 ring-primary bg-primary/10" : ""}`}
-              onClick={() => {
-                setSelectedList(listItem);
-                setSelectedFile(null);
-              }}
-            >
-              <div className="absolute top-1.5 right-1.5 flex gap-0.5 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
-                <button
-                  className="p-0.5 rounded bg-base-300/80 hover:bg-base-300 transition-colors"
-                  onClick={e => {
-                    e.stopPropagation();
-                    setSelectedDebugItem(listItem);
-                  }}
-                  title="Debug Info"
-                >
-                  <InformationCircleIcon className="w-3.5 h-3.5 text-base-content/50 hover:text-primary" />
-                </button>
-              </div>
-              <div className="card-body items-center text-center p-4 pt-6">
-                <QueueListIcon className="w-10 h-10 text-purple-500" />
-                <h2 className="card-title text-sm break-all text-center leading-tight">{listItem.name || "Unnamed"}</h2>
-                <div className="text-xs text-base-content/40">List</div>
-              </div>
-            </div>
-          ))}
-
-          {(sortedItems ?? items)?.length === 0 && !(rawListItems as any[] | undefined)?.length && (
+          {(sortedItems ?? items)?.length === 0 && (
             <div className="col-span-full text-center text-gray-500">
               {tagFilteredUIDs !== null
                 ? `No items match tag filter: "${tagFilter}"`

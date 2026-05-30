@@ -8,10 +8,8 @@ const EAS_ADDRESS = "0xC2679fBD37d54388Ce493F1DB75320D236e1815e";
 const SCHEMA_REGISTRY_ADDRESS = "0x0a7E2Ff54e76B8E6659aedc9103FB21c038050D0";
 
 // Canonical schema field strings (ADR-0044). These must never change post-mainnet.
-// name added (pre-launch change): enables lists to carry a human-readable label at
-// attestation time without a separate PROPERTY attestation.
 const LIST_DEFINITION =
-  "string name, bool allowsDuplicates, bool appendOnly, uint8 targetType, bytes32 targetSchema, uint32 maxEntries";
+  "bool allowsDuplicates, bool appendOnly, uint8 targetType, bytes32 targetSchema, uint32 maxEntries";
 const LIST_ENTRY_DEFINITION = "bytes32 listUID, bytes32 target, int256 weight";
 
 const deployLists: DeployFunction = async function (hre: HardhatRuntimeEnvironment) {
@@ -155,23 +153,7 @@ const deployLists: DeployFunction = async function (hre: HardhatRuntimeEnvironme
   const listReader = await ethers.getContract<Contract>("ListReader", deployer);
   console.log("ListReader deployed at:", listReader.target);
 
-  // 8. Wire EFSFileView with the ListResolver so directory listings include list items.
-  //    EFSFileView.setListResolver is deployer-only and replaceable on devnet — safe to
-  //    call on every deploy run (idempotent given same args).
-  const fileView = await ethers.getContract<Contract>("EFSFileView", deployer);
-  if (fileView) {
-    try {
-      const wireTx = await fileView.setListResolver(listResolver.target, listSchemaUID);
-      await wireTx.wait();
-      console.log("✓ EFSFileView wired with ListResolver");
-    } catch (e) {
-      console.warn("EFSFileView.setListResolver failed (may not have the method yet — redeploy EFSFileView):", e);
-    }
-  } else {
-    console.warn("EFSFileView not found — skipping setListResolver. Run 02_fileview.ts first.");
-  }
-
-  // 10. Freeze invariant check
+  // 8. Freeze invariant check
   // Read LIST_SCHEMA_UID back from ListEntryResolver's immutable and assert it matches what we
   // registered. If they differ, the nonce prediction was wrong and the LIST schema points at a
   // different resolver than the one that will enforce entries — a silent protocol break.

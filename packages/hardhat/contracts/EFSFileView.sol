@@ -43,13 +43,6 @@ interface IEdgeResolverForFileView {
     function isActivePinEdge(address attester, bytes32 targetID, bytes32 definition) external view returns (bool);
 }
 
-interface IListResolverForFileView {
-    /// @notice Name stored for a list at creation time.
-    function getListName(bytes32 listUID) external view returns (string memory);
-    /// @notice All list UIDs placed under a given parent anchor, in attestation order.
-    function getListsByParent(bytes32 parentUID) external view returns (bytes32[] memory);
-}
-
 interface IEFSIndexer {
     function getChildren(
         bytes32 anchorUID,
@@ -133,30 +126,11 @@ contract EFSFileView {
     IEFSIndexer public immutable indexer;
     IEAS public immutable eas;
     IEdgeResolverForFileView public immutable edgeResolver;
-    address private immutable _deployer;
-
-    // List support — wired after ListResolver is deployed (09_lists.ts → setListResolver).
-    // Both fields start at zero; getListsAtParent is a no-op until setListResolver is called.
-    IListResolverForFileView public listResolver;
-    bytes32 public LIST_SCHEMA_UID;
 
     constructor(IEFSIndexer _indexer, IEdgeResolverForFileView _edgeResolver) {
         indexer = _indexer;
         eas = _indexer.getEAS();
         edgeResolver = _edgeResolver;
-        _deployer = msg.sender;
-    }
-
-    /**
-     * @notice Wire the ListResolver after it is deployed.
-     *         Called once from 09_lists.ts. Deployer-only; replaceable on devnet.
-     * @param _listResolver  Deployed ListResolver address.
-     * @param _listSchemaUID LIST schema UID (deterministic from definition + resolver + revocable).
-     */
-    function setListResolver(IListResolverForFileView _listResolver, bytes32 _listSchemaUID) external {
-        require(msg.sender == _deployer, "EFSFileView: not deployer");
-        listResolver = _listResolver;
-        LIST_SCHEMA_UID = _listSchemaUID;
     }
 
     function getDirectoryPage(
@@ -518,49 +492,6 @@ contract EFSFileView {
         } else {
             page.nextCursor = abi.encode(attesterIdx);
         }
-    }
-
-    /**
-     * @notice Return all LIST attestations placed under `parentUID` as FileSystemItems.
-     *         Returns an empty array when listResolver has not been wired yet.
-     *
-     *         Lists are identified in the returned items by `schema == LIST_SCHEMA_UID`.
-     *         The `name` field is populated from ListResolver's stored name.
-     *         `isFolder`, `hasData`, `childCount`, `propertyCount`, and `contentHash` are
-     *         all zero/false — list entry counts live in ListEntryResolver, not EFSIndexer.
-     *
-     * @param parentUID  Folder anchor UID to query.
-     */
-    function getListsAtParent(bytes32 parentUID) external view returns (FileSystemItem[] memory) {
-        if (address(listResolver) == address(0)) return new FileSystemItem[](0);
-        bytes32[] memory uids = listResolver.getListsByParent(parentUID);
-        return _buildListItems(uids, parentUID);
-    }
-
-    function _buildListItems(
-        bytes32[] memory uids,
-        bytes32 parentAnchor
-    ) internal view returns (FileSystemItem[] memory) {
-        FileSystemItem[] memory result = new FileSystemItem[](uids.length);
-        for (uint256 i = 0; i < uids.length; i++) {
-            bytes32 uid = uids[i];
-            Attestation memory att = eas.getAttestation(uid);
-            string memory listName = listResolver.getListName(uid);
-            result[i] = FileSystemItem({
-                uid: uid,
-                name: listName,
-                parentUID: parentAnchor,
-                isFolder: false,
-                hasData: false,
-                childCount: 0,
-                propertyCount: 0,
-                timestamp: att.time,
-                attester: att.attester,
-                schema: LIST_SCHEMA_UID,
-                contentHash: bytes32(0)
-            });
-        }
-        return result;
     }
 
     /**

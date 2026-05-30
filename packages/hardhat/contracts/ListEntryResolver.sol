@@ -117,10 +117,8 @@ contract ListEntryResolver is SchemaResolver {
         if (!d.exists) {
             Attestation memory L = _eas.getAttestation(listUID);
             if (L.schema != LIST_SCHEMA_UID) revert NotAList();
-            // LIST schema: "string name, bool allowsDuplicates, bool appendOnly, uint8 targetType,
-            //               bytes32 targetSchema, uint32 maxEntries"
-            (, d.allowsDuplicates, d.appendOnly, d.targetType, d.targetSchema, d.maxEntries) =
-                abi.decode(L.data, (string, bool, bool, uint8, bytes32, uint32));
+            (d.allowsDuplicates, d.appendOnly, d.targetType, d.targetSchema, d.maxEntries) =
+                abi.decode(L.data, (bool, bool, uint8, bytes32, uint32));
             d.exists = true;
             _decl[listUID] = d;
         }

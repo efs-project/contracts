@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
 import { ethers } from "ethers";
 import { decodeEventLog, encodeAbiParameters, encodeDeployData, parseAbiItem, toHex, zeroAddress, zeroHash } from "viem";
 import { usePublicClient, useReadContract, useWalletClient } from "wagmi";
@@ -168,7 +167,6 @@ export const CreateItemModal = ({
   onFileCreated,
   onListCreated,
 }: CreateItemModalProps) => {
-  const router = useRouter();
   const { writeContractAsync: attest } = useScaffoldWriteContract({ contractName: "EAS" });
   const { data: indexer } = useDeployedContractInfo({ contractName: "Indexer" });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -399,14 +397,28 @@ export const CreateItemModal = ({
     return { refUID: currentAnchorUID as `0x${string}`, recipient: ethers.ZeroAddress as `0x${string}` };
   };
 
-  // ── List creation handler (ADR-0044) ──────────────────────────────────────
+  // ── List creation (ADR-0044 §1) ────────────────────────────────────────────
+  // A list is placed exactly like a file: a named ANCHOR (anchorType=LIST_SCHEMA_UID)
+  // under the folder, the free-floating LIST holding the config, and a PIN binding the
+  // LIST to the anchor. Deleting the list later = revoking that PIN (the anchor + LIST
+  // are permanent, like a file's anchor + DATA).
   const handleCreateList = async () => {
     if (!listSchemaUID) {
       notification.error("LIST_SCHEMA_UID not available. Is ListReader deployed?");
       return;
     }
-    if (!listName.trim()) {
+    if (!currentAnchorUID) {
+      notification.error("Open a folder first to create a list.");
+      return;
+    }
+    const name = listName.trim();
+    if (!name) {
       notification.error("Enter a name for the list.");
+      return;
+    }
+    const nameError = validateAnchorName(name);
+    if (nameError) {
+      notification.error(nameError);
       return;
     }
     if (listTargetType === 2 && !listTargetSchema.startsWith("0x")) {
@@ -418,68 +430,119 @@ export const CreateItemModal = ({
       notification.error("Max entries must be a non-negative integer");
       return;
     }
+    if (!publicClient) return;
+
     setIsSubmitting(true);
+    const ops = useBackgroundOps.getState();
+    const opId = ops.start(`Create list: ${name}`);
     try {
+      // 1. List-slot ANCHOR (anchorType = LIST_SCHEMA_UID). Reuse if it already exists.
+      let listAnchorUID: `0x${string}` | undefined;
+      if (indexer) {
+        try {
+          const existing = (await publicClient.readContract({
+            address: indexer.address as `0x${string}`,
+            abi: indexer.abi,
+            functionName: "resolveAnchor",
+            args: [currentAnchorUID as `0x${string}`, name, listSchemaUID as `0x${string}`],
+          })) as `0x${string}`;
+          if (existing && existing !== zeroHash) {
+            listAnchorUID = existing;
+            ops.log(opId, "List slot already exists; reusing anchor.");
+          }
+        } catch {
+          /* anchor doesn't exist yet — create below */
+        }
+      }
+      if (!listAnchorUID) {
+        const parent = anchorParent();
+        const anchorData = encodeAbiParameters(
+          [
+            { name: "name", type: "string" },
+            { name: "schemaUID", type: "bytes32" },
+          ],
+          [name, listSchemaUID as `0x${string}`],
+        );
+        const aTx = await attest(
+          {
+            functionName: "attest",
+            args: [
+              {
+                schema: anchorSchemaUID as `0x${string}`,
+                data: {
+                  recipient: parent.recipient,
+                  expirationTime: 0n,
+                  revocable: false,
+                  refUID: parent.refUID,
+                  data: anchorData,
+                  value: 0n,
+                },
+              },
+            ],
+          },
+          { silent: true },
+        );
+        if (!aTx) throw new Error("No tx for list anchor");
+        const aRcpt = await publicClient.waitForTransactionReceipt({ hash: aTx });
+        listAnchorUID = extractUIDFromReceipt(aRcpt);
+        if (!listAnchorUID) throw new Error("Could not extract list anchor UID");
+      }
+
+      // 2. The LIST itself — free-floating config (ADR-0044 5-field schema).
+      ops.log(opId, "Creating list…");
       const schemaBytes = (listTargetType === 2 ? listTargetSchema : zeroHash) as `0x${string}`;
-      // Schema: "string name, bool allowsDuplicates, bool appendOnly, uint8 targetType,
-      //          bytes32 targetSchema, uint32 maxEntries"
-      const encoded = encodeAbiParameters(
+      const listData = encodeAbiParameters(
         [
-          { name: "name", type: "string" },
           { name: "allowsDuplicates", type: "bool" },
           { name: "appendOnly", type: "bool" },
           { name: "targetType", type: "uint8" },
           { name: "targetSchema", type: "bytes32" },
           { name: "maxEntries", type: "uint32" },
         ],
-        [listName.trim(), listAllowsDuplicates, listAppendOnly, listTargetType, schemaBytes, maxE],
+        [listAllowsDuplicates, listAppendOnly, listTargetType, schemaBytes, maxE],
       );
-      // refUID = current folder anchor so the list is indexed as a child of that folder.
-      // Free-floating (zeroHash) when no folder is open.
-      const listRefUID = (currentAnchorUID ?? zeroHash) as `0x${string}`;
-      const txHash = await attest({
-        functionName: "attest",
-        args: [
-          {
-            schema: listSchemaUID as `0x${string}`,
-            data: {
-              recipient: zeroAddress,
-              expirationTime: 0n,
-              revocable: false,
-              refUID: listRefUID,
-              data: encoded,
-              value: 0n,
+      const lTx = await attest(
+        {
+          functionName: "attest",
+          args: [
+            {
+              schema: listSchemaUID as `0x${string}`,
+              data: { recipient: zeroAddress, expirationTime: 0n, revocable: false, refUID: zeroHash, data: listData, value: 0n },
             },
-          },
-        ],
-      });
-      if (!txHash) throw new Error("No transaction hash returned");
-      const receipt = await publicClient!.waitForTransactionReceipt({ hash: txHash });
-      // Decode the Attested event to get the list UID
-      const attestedAbi = parseAbiItem(
-        "event Attested(address indexed recipient, address indexed attester, bytes32 uid, bytes32 indexed schema)",
+          ],
+        },
+        { silent: true },
       );
-      let listUID: string | null = null;
-      for (const log of receipt.logs) {
-        try {
-          const decoded = decodeEventLog({ abi: [attestedAbi], data: log.data, topics: log.topics });
-          if (decoded.args && "uid" in decoded.args) {
-            listUID = decoded.args.uid as string;
-            break;
-          }
-        } catch {
-          // not this log
-        }
-      }
+      if (!lTx) throw new Error("No tx for LIST");
+      const lRcpt = await publicClient.waitForTransactionReceipt({ hash: lTx });
+      const listUID = extractUIDFromReceipt(lRcpt);
+      if (!listUID) throw new Error("Could not extract LIST UID");
+
+      // 3. PIN places the LIST at the anchor (definition=anchor, refUID=LIST). Revocable → deletable.
+      ops.log(opId, "Placing list in folder…");
+      const pinData = encodeAbiParameters([{ name: "definition", type: "bytes32" }], [listAnchorUID]);
+      const pTx = await attest(
+        {
+          functionName: "attest",
+          args: [
+            {
+              schema: pinSchemaUID as `0x${string}`,
+              data: { recipient: zeroAddress, expirationTime: 0n, revocable: true, refUID: listUID, data: pinData, value: 0n },
+            },
+          ],
+        },
+        { silent: true },
+      );
+      if (!pTx) throw new Error("No tx for placement PIN");
+      await publicClient.waitForTransactionReceipt({ hash: pTx });
+
+      ops.complete(opId, `List "${name}" created`);
       handleClose();
-      if (listUID) {
-        onListCreated?.(listUID);
-        notification.success(`List "${listName.trim()}" created — UID: ${listUID.slice(0, 10)}…`);
-      } else {
-        notification.success(`List "${listName.trim()}" created.`);
-      }
+      onListCreated?.(listAnchorUID);
+      notification.success(`List "${name}" created.`);
     } catch (e) {
       const msg = extractErrorMessage(e);
+      ops.fail(opId, msg);
       notification.error(msg);
     } finally {
       setIsSubmitting(false);

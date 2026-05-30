@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { encodeAbiParameters, zeroAddress, zeroHash } from "viem";
+import { decodeAbiParameters, encodeAbiParameters, parseAbiItem, zeroAddress, zeroHash } from "viem";
 import { usePublicClient, useReadContract, useWriteContract } from "wagmi";
 import {
   ArrowTopRightOnSquareIcon,
@@ -231,12 +231,29 @@ const AttestationLabel = ({ uid, easAddress }: { uid: `0x${string}`; easAddress?
     query: { enabled: !!easAddress },
   });
   const revoked = att && toBig(att.revocationTime) > 0n;
+  // References should display by the referenced entity's name. Anchors (files/folders)
+  // encode `(string name, bytes32 schemaUID)` — decode it for a human label; non-anchor
+  // targets (DATA, PROPERTY, …) fail the decode and fall back to the short UID.
+  let anchorName: string | null = null;
+  if (att?.data && att.data !== "0x") {
+    try {
+      const [nm] = decodeAbiParameters([{ type: "string" }, { type: "bytes32" }], att.data);
+      if (typeof nm === "string" && nm.length > 0 && nm.length < 200 && /^[\x20-\x7e]*$/.test(nm)) anchorName = nm;
+    } catch {
+      /* not an anchor — keep the UID */
+    }
+  }
   return (
     <div className="flex flex-col gap-0.5 min-w-0">
-      <span className="font-mono text-xs truncate">{shortHex(uid)}</span>
+      {anchorName ? (
+        <span className="text-sm truncate">{anchorName}</span>
+      ) : (
+        <span className="font-mono text-xs truncate">{shortHex(uid)}</span>
+      )}
       {att && att.attester !== zeroAddress ? (
         <span className="flex items-center gap-1 text-[10px] text-base-content/45">
           <span className="badge badge-ghost badge-xs font-mono">{shortHex(att.schema)}</span>
+          {anchorName && <span className="font-mono opacity-50">{shortHex(uid)}</span>}
           {revoked && <span className="text-error">revoked</span>}
         </span>
       ) : (
@@ -258,12 +275,16 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const easAddress = (easInfo as any)?.address as `0x${string}` | undefined;
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: listEntryResolverInfo } = useDeployedContractInfo({ contractName: "ListEntryResolver" as any });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const listEntryResolverAddress = (listEntryResolverInfo as any)?.address as `0x${string}` | undefined;
+
   const publicClient = usePublicClient();
   const ops = useBackgroundOps();
   const { writeContractAsync } = useWriteContract();
 
   const listUID = uid as `0x${string}`;
-  const lens = connectedAddress ?? zeroAddress;
 
   const { data: mode } = useReadContract({
     address: listReaderAddress,
@@ -272,11 +293,79 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
     args: [listUID],
     query: { enabled: !!listReaderAddress },
   });
+
+  // ── Editions / lenses ───────────────────────────────────────────────────────
+  // A list is per-attester: each contributor ("lens"/"edition") has their own entries.
+  // Viewing defaults to the curator's edition (so you see the list they made); you edit
+  // only your own. Contributors are discovered from ListEntryAttested events on this list.
+  const curator = (mode?.exists ? mode.curator : (listAttester as `0x${string}`)) as `0x${string}`;
+  const [lens, setLens] = useState<`0x${string}` | undefined>(undefined);
+  const effectiveLens = (lens ?? curator ?? connectedAddress ?? zeroAddress) as `0x${string}`;
+  useEffect(() => {
+    setLens(undefined); // reset to default (curator) when the list changes
+  }, [uid]);
+
+  const [contributors, setContributors] = useState<`0x${string}`[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!publicClient || !listEntryResolverAddress) return;
+      const event = parseAbiItem(
+        "event ListEntryAttested(bytes32 indexed listUID, address indexed attester, bytes32 indexed identityKey, bytes32 entryUID, uint8 targetType, int256 weight)",
+      );
+      // eth_getLogs whose range starts before a hardhat fork's base block is forwarded to the
+      // upstream RPC (which rejects it). We don't get the fork block from RPC, so try full
+      // history first (works on a real chain), then progressively recent windows until one
+      // succeeds (stays within the fork's local block range).
+      let latest = 0n;
+      try {
+        latest = await publicClient.getBlockNumber();
+      } catch {
+        /* ignore */
+      }
+      const froms: bigint[] = [0n];
+      for (const w of [2000n, 800n, 300n, 150n, 70n, 30n]) froms.push(latest > w ? latest - w : 0n);
+      for (const fromBlock of froms) {
+        try {
+          const logs = await publicClient.getLogs({ address: listEntryResolverAddress, event, args: { listUID }, fromBlock, toBlock: "latest" });
+          if (cancelled) return;
+          const found = [...new Set(logs.map(l => (l.args.attester as `0x${string}`)?.toLowerCase()))].filter(
+            Boolean,
+          ) as `0x${string}`[];
+          setContributors(found);
+          return;
+        } catch {
+          /* range too wide for this fork — try a narrower one */
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [publicClient, listEntryResolverAddress, listUID]);
+
+  // The lens chips: curator first, then you, then any other contributors — deduped.
+  const lensChips = useMemo(() => {
+    const out: `0x${string}`[] = [];
+    const seen = new Set<string>();
+    const push = (a?: `0x${string}`) => {
+      if (!a || a === zeroAddress) return;
+      const k = a.toLowerCase();
+      if (seen.has(k)) return;
+      seen.add(k);
+      out.push(a);
+    };
+    push(curator);
+    push(connectedAddress);
+    contributors.forEach(c => push(c));
+    return out;
+  }, [curator, connectedAddress, contributors]);
+
   const { data: rawEntries, refetch: refetchEntries } = useReadContract({
     address: listReaderAddress,
     abi: LIST_READER_ABI,
     functionName: "entries",
-    args: [listUID, lens, 0n, 100n],
+    args: [listUID, effectiveLens, 0n, 100n],
     query: { enabled: !!listReaderAddress },
   });
   const { data: entrySchemaUID } = useReadContract({
@@ -288,8 +377,9 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
 
   const targetType = mode ? Number(mode.targetType) : MODE.ANY;
   const meta = MODE_META[targetType] ?? MODE_META[0];
-  const curator = mode?.exists ? mode.curator : (listAttester as `0x${string}`);
-  const canEdit = !!connectedAddress && !mode?.appendOnly;
+  // You can only edit your OWN edition — viewing another lens is read-only.
+  const viewingOwn = !!connectedAddress && effectiveLens.toLowerCase() === connectedAddress.toLowerCase();
+  const canEdit = viewingOwn && !mode?.appendOnly;
 
   // Display order — synced from chain (sorted by weight asc), mutated optimistically.
   const [items, setItems] = useState<Entry[]>([]);
@@ -300,7 +390,8 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
       .sort((a, b) => (a.weight < b.weight ? -1 : a.weight > b.weight ? 1 : a.entryUID < b.entryUID ? -1 : 1));
   }, [rawEntries]);
   useEffect(() => setItems(sortedFromChain), [sortedFromChain]);
-  useEffect(() => setItems([]), [uid]);
+  // Clear immediately when the list or the viewed lens changes (entries refetch on arg change).
+  useEffect(() => setItems([]), [uid, effectiveLens]);
 
   const [busy, setBusy] = useState(false);
 
@@ -617,6 +708,49 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
           )}
         </div>
       </div>
+
+      {/* Editions / lens picker — each contributor has their own edition of the list */}
+      {mode?.exists && lensChips.length > 1 && (
+        <div className="shrink-0 px-3 py-2 border-b border-base-300 flex items-center gap-1.5 overflow-x-auto">
+          <span className="text-[10px] uppercase tracking-wide text-base-content/35 flex-shrink-0 mr-0.5">Edition</span>
+          {lensChips.map(a => {
+            const selected = effectiveLens.toLowerCase() === a.toLowerCase();
+            const isYou = !!connectedAddress && a.toLowerCase() === connectedAddress.toLowerCase();
+            const isCurator = !!curator && a.toLowerCase() === curator.toLowerCase();
+            return (
+              <button
+                key={a}
+                onClick={() => setLens(a)}
+                title={a}
+                className={`flex items-center gap-1 rounded-full px-2 py-0.5 flex-shrink-0 border transition-colors ${
+                  selected
+                    ? "border-purple-500/60 bg-purple-500/10"
+                    : "border-base-300 opacity-60 hover:opacity-100 hover:bg-base-200"
+                }`}
+              >
+                <Address address={a} size="xs" onlyEnsOrAddress disableAddressLink />
+                {isYou ? (
+                  <span className="text-[9px] text-purple-400">you</span>
+                ) : isCurator ? (
+                  <span className="text-[9px] text-base-content/40">curator</span>
+                ) : null}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Read-only banner when viewing someone else's edition */}
+      {mode?.exists && !viewingOwn && (
+        <div className="shrink-0 px-4 py-1.5 text-[11px] text-base-content/45 border-b border-base-300 flex items-center gap-1.5">
+          <span>👁 Viewing another edition (read-only).</span>
+          {connectedAddress && (
+            <button className="text-purple-400 hover:underline" onClick={() => setLens(connectedAddress)}>
+              Switch to yours
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Items */}
       <div className="flex-1 overflow-y-auto">
