@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { encodeAbiParameters, zeroAddress, zeroHash } from "viem";
+import { encodeAbiParameters, getAddress, zeroAddress, zeroHash } from "viem";
 import { usePublicClient, useReadContract, useWriteContract } from "wagmi";
 import {
   ArrowTopRightOnSquareIcon,
@@ -152,29 +152,35 @@ const EAS_ABI = [
 // ── Constants ───────────────────────────────────────────────────────────────
 
 const MODE = { ANY: 0, ADDR: 1, SCHEMA: 2 } as const;
-const RANK_STEP = 1_000_000n;
-const MAX_ITEM_BYTES = 31; // bytes32 string idiom (one byte reserved as a trailing terminator)
+// Rank weights are spaced far apart so midpoint-insertion (reorder) effectively never
+// exhausts the integer gap between two neighbours. int256 holds this with vast headroom.
+const RANK_STEP = 1_000_000_000_000_000n; // 1e15
+const MAX_ITEM_BYTES = 31; // ≤31 UTF-8 bytes so the packed value never fills all 32 bytes of the slot
 
-const MODE_META: Record<number, { noun: string; verb: string; placeholder: string; blurb: string }> = {
-  0: {
-    noun: "items",
-    verb: "Add item",
-    placeholder: "Add an item…",
-    blurb: "A free-text list — groceries, todos, anything.",
-  },
-  1: {
-    noun: "addresses",
-    verb: "Add address",
-    placeholder: "0x… or name.eth",
-    blurb: "A ranked roster of Ethereum addresses.",
-  },
-  2: {
-    noun: "attestations",
-    verb: "Add attestation",
-    placeholder: "Attestation UID (0x…)",
-    blurb: "A curated set of attestations of one schema.",
-  },
-};
+const MODE_META: Record<number, { noun: string; singular: string; verb: string; placeholder: string; blurb: string }> =
+  {
+    0: {
+      noun: "items",
+      singular: "item",
+      verb: "Add item",
+      placeholder: "Add an item…",
+      blurb: "A free-text list — groceries, todos, anything.",
+    },
+    1: {
+      noun: "addresses",
+      singular: "address",
+      verb: "Add address",
+      placeholder: "0x… or name.eth",
+      blurb: "A ranked roster of Ethereum addresses.",
+    },
+    2: {
+      noun: "attestations",
+      singular: "attestation",
+      verb: "Add attestation",
+      placeholder: "Attestation UID (0x…)",
+      blurb: "A curated set of attestations of one schema.",
+    },
+  };
 
 // ── Encoding helpers ──────────────────────────────────────────────────────────
 
@@ -209,7 +215,9 @@ function unpackText(key: string): string | null {
   }
 }
 
-const addrFromKey = (key: string): `0x${string}` => ("0x" + key.slice(-40)) as `0x${string}`;
+// Inverse of the resolver's bytes32(uint256(uint160(recipient))): take the low 20 bytes,
+// then EIP-55 checksum so <Address> never sees a raw-lowercase value.
+const addrFromKey = (key: string): `0x${string}` => getAddress(("0x" + key.slice(-40)) as `0x${string}`);
 const shortHex = (h: string) => `${h.slice(0, 6)}…${h.slice(-4)}`;
 const toBig = (w: unknown) => (typeof w === "bigint" ? w : BigInt(String(w)));
 
@@ -400,8 +408,10 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
   const draftSchemaMatches =
     draftAttExists &&
     (!requiredSchema || requiredSchema === zeroHash || draftAtt.schema.toLowerCase() === requiredSchema.toLowerCase());
-  const schemaAddBlocked =
-    targetType === MODE.SCHEMA && schemaDraftIsUID && draftAtt !== undefined && !draftSchemaMatches;
+  // Block the Add button while the pre-flight is still loading too — otherwise a fast click
+  // submits a tx the resolver will revert (the spinner shows but the button stayed enabled).
+  const draftAttLoading = targetType === MODE.SCHEMA && schemaDraftIsUID && draftAtt === undefined;
+  const schemaAddBlocked = targetType === MODE.SCHEMA && schemaDraftIsUID && (draftAttLoading || !draftSchemaMatches);
 
   const nextWeight = () => (items.length ? items[items.length - 1].weight + RANK_STEP : RANK_STEP);
 
@@ -426,7 +436,7 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
       return notification.error(err?.message ?? "Invalid item");
     }
 
-    const opId = ops.start(`Add ${meta.noun.replace(/s$/, "")} to “${name}”`);
+    const opId = ops.start(`Add ${meta.singular} to “${name}”`);
     setBusy(true);
     try {
       await attestEntry(recipient, target, nextWeight());
@@ -485,6 +495,17 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
     } catch (err: any) {
       return notification.error(err?.message ?? "Invalid item");
     }
+    // DATA-LOSS GUARD: edit is revoke-then-attest (no on-chain update). On a no-duplicates
+    // list, if the new value collides with another existing item the attest reverts with
+    // DuplicateIdentity AFTER the revoke already destroyed the original — losing the item.
+    // Catch the collision in memory before touching the chain.
+    if (
+      !mode?.allowsDuplicates &&
+      items.some(e => e.entryUID !== entry.entryUID && e.identityKey.toLowerCase() === target.toLowerCase())
+    ) {
+      notification.error("That item already exists in the list.");
+      return; // keep editing; nothing revoked
+    }
     const opId = ops.start(`Edit item in “${name}”`);
     setBusy(true);
     cancelEdit();
@@ -528,6 +549,16 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
     else if (right === undefined) newWeight = left + RANK_STEP;
     else newWeight = (left + right) / 2n;
 
+    // Collision guard: integer midpoint of two ADJACENT weights truncates to `left`, which
+    // would give two items the same weight (unstable/ambiguous order). With RANK_STEP = 1e15
+    // this needs ~50 reorders into the exact same gap, but guard it anyway — and crucially do
+    // so BEFORE any revoke, so a no-room case never destroys the moved item.
+    if ((left !== undefined && newWeight <= left) || (right !== undefined && newWeight >= right)) {
+      setItems(sortedFromChain); // undo optimistic move
+      notification.error("No room to drop the item exactly here — move it a different way.");
+      return;
+    }
+
     const opId = ops.start(`Reorder “${name}”`);
     setBusy(true);
     try {
@@ -539,7 +570,12 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
       ops.complete(opId, "Reordered");
       await refetchEntries();
     } catch (err: any) {
-      ops.fail(opId, err?.shortMessage ?? err?.message ?? "Failed to reorder");
+      // The item was revoked but the re-attest failed (e.g. the list hit its cap via a
+      // concurrent add). Be honest that the item may need re-adding rather than hiding it
+      // behind a generic "failed" — the refetch below will show it missing.
+      const msg = err?.shortMessage ?? err?.message ?? "Failed to reorder";
+      ops.fail(opId, `${msg} — the item may have been removed; re-add it if it's missing.`);
+      notification.error("Reorder failed — if the item disappeared, please re-add it.");
       await refetchEntries();
     } finally {
       setBusy(false);
@@ -627,7 +663,7 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
           <div className="flex flex-col items-center justify-center h-40 gap-3 text-base-content/25 px-6 text-center">
             <QueueListIcon className="w-10 h-10" />
             <span className="text-sm">
-              {canEdit ? `Empty — add your first ${meta.noun.replace(/s$/, "")} below` : "No items yet"}
+              {canEdit ? `Empty — add your first ${meta.singular} below` : "No items yet"}
             </span>
           </div>
         )}
