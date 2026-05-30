@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { encodeAbiParameters, getAddress, zeroAddress, zeroHash } from "viem";
+import { encodeAbiParameters, zeroAddress, zeroHash } from "viem";
 import { usePublicClient, useReadContract, useWriteContract } from "wagmi";
 import {
   ArrowTopRightOnSquareIcon,
@@ -14,6 +14,16 @@ import {
 import { Address, AddressInput } from "~~/components/scaffold-eth";
 import { useDeployedContractInfo } from "~~/hooks/scaffold-eth";
 import { useBackgroundOps } from "~~/services/store/backgroundOps";
+import {
+  MAX_ITEM_BYTES,
+  RANK_STEP,
+  addrFromKey,
+  byteLen,
+  computeInsertWeight,
+  packText,
+  shortHex,
+  unpackText,
+} from "~~/utils/efs/listEncoding";
 import { notification } from "~~/utils/scaffold-eth";
 
 // ── ABIs ────────────────────────────────────────────────────────────────────
@@ -152,10 +162,6 @@ const EAS_ABI = [
 // ── Constants ───────────────────────────────────────────────────────────────
 
 const MODE = { ANY: 0, ADDR: 1, SCHEMA: 2 } as const;
-// Rank weights are spaced far apart so midpoint-insertion (reorder) effectively never
-// exhausts the integer gap between two neighbours. int256 holds this with vast headroom.
-const RANK_STEP = 1_000_000_000_000_000n; // 1e15
-const MAX_ITEM_BYTES = 31; // ≤31 UTF-8 bytes so the packed value never fills all 32 bytes of the slot
 
 const MODE_META: Record<number, { noun: string; singular: string; verb: string; placeholder: string; blurb: string }> =
   {
@@ -182,43 +188,8 @@ const MODE_META: Record<number, { noun: string; singular: string; verb: string; 
     },
   };
 
-// ── Encoding helpers ──────────────────────────────────────────────────────────
-
-const byteLen = (s: string) => new TextEncoder().encode(s).length;
-
-/** Pack a short UTF-8 string into a right-padded bytes32 (Solidity string idiom). */
-function packText(text: string): `0x${string}` {
-  const bytes = new TextEncoder().encode(text);
-  if (bytes.length === 0) throw new Error("Item cannot be empty");
-  if (bytes.length > MAX_ITEM_BYTES) throw new Error(`Item too long (max ${MAX_ITEM_BYTES} bytes)`);
-  let hex = "";
-  for (const b of bytes) hex += b.toString(16).padStart(2, "0");
-  return ("0x" + hex.padEnd(64, "0")) as `0x${string}`;
-}
-
-/** Decode a packed bytes32 back to text, or null if it isn't printable text (legacy/opaque key). */
-function unpackText(key: string): string | null {
-  const hex = key.slice(2).replace(/(00)+$/g, "");
-  if (hex.length === 0 || hex.length % 2 !== 0) return null;
-  const bytes = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
-  try {
-    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-    // Reject any control char (C0 minus tab/newline, or DEL) ⇒ legacy keccak/opaque key, not text
-    for (let i = 0; i < text.length; i++) {
-      const c = text.charCodeAt(i);
-      if ((c < 0x20 && c !== 0x09 && c !== 0x0a) || c === 0x7f) return null;
-    }
-    return text;
-  } catch {
-    return null;
-  }
-}
-
-// Inverse of the resolver's bytes32(uint256(uint160(recipient))): take the low 20 bytes,
-// then EIP-55 checksum so <Address> never sees a raw-lowercase value.
-const addrFromKey = (key: string): `0x${string}` => getAddress(("0x" + key.slice(-40)) as `0x${string}`);
-const shortHex = (h: string) => `${h.slice(0, 6)}…${h.slice(-4)}`;
+// Encoding/ordering helpers live in ~~/utils/efs/listEncoding (unit-tested in
+// listEncoding.test.ts). Only this component-local coercion stays here.
 const toBig = (w: unknown) => (typeof w === "bigint" ? w : BigInt(String(w)));
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -542,22 +513,16 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
     reordered.splice(insertAt, 0, moved);
     setItems(reordered); // optimistic
 
-    const left = reordered[insertAt - 1]?.weight;
-    const right = reordered[insertAt + 1]?.weight;
-    let newWeight: bigint;
-    if (left === undefined) newWeight = (right ?? 0n) - RANK_STEP;
-    else if (right === undefined) newWeight = left + RANK_STEP;
-    else newWeight = (left + right) / 2n;
-
-    // Collision guard: integer midpoint of two ADJACENT weights truncates to `left`, which
-    // would give two items the same weight (unstable/ambiguous order). With RANK_STEP = 1e15
-    // this needs ~50 reorders into the exact same gap, but guard it anyway — and crucially do
-    // so BEFORE any revoke, so a no-room case never destroys the moved item.
-    if ((left !== undefined && newWeight <= left) || (right !== undefined && newWeight >= right)) {
+    // computeInsertWeight (unit-tested) returns a midpoint weight, or { collision }
+    // when adjacent weights leave no integer room. The collision check happens BEFORE
+    // any revoke, so a no-room drop can never destroy the moved item.
+    const slot = computeInsertWeight(reordered[insertAt - 1]?.weight, reordered[insertAt + 1]?.weight);
+    if ("collision" in slot) {
       setItems(sortedFromChain); // undo optimistic move
       notification.error("No room to drop the item exactly here — move it a different way.");
       return;
     }
+    const newWeight = slot.weight;
 
     const opId = ops.start(`Reorder “${name}”`);
     setBusy(true);

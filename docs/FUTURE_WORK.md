@@ -190,11 +190,17 @@ Build and publish a subgraph that aggregates EFS attestations into queryable vie
 
 ## Lists UI — production client features (flagged 2026-05-28)
 
-### Lists in the Explorer folder grid
-The `+ Add → List` flow creates a LIST attestation and stays in the Explorer, but lists don't yet appear as items in the folder grid. The grid renders only Anchors (folders) and DATA (files) via `useLensesDirectoryPage` + `isTopic`/`isFile` type checks. Displaying lists requires either (a) extending the grid to query LIST attestations by curator in the current folder context, or (b) defining a placement mechanism (e.g., a PIN from a named Anchor to a LIST UID). Needs a design decision on EFS semantics before implementation.
+### ~~Lists in the Explorer folder grid~~ — DONE (2026-05-30)
+Lists now appear as purple cards in the folder grid and open an in-pane editor. Placement uses `LIST.refUID = parentAnchorUID` (ListResolver indexes `_listsByParent`; `EFSFileView.getListsAtParent` reads them). Create/add/edit/remove/reorder are all on-chain; ANY-mode item text is packed into the entry `target` bytes32 (≤31 bytes). See `ListPreviewPane.tsx`, `utils/efs/listEncoding.ts` (unit-tested), and ADR-0044 + decisions.md.
 
-### Attester lens picker on list detail page
-The `/lists/[listUID]` detail page currently reads entries only for the connected wallet. The design spec calls for an attester tab picker (discovered from `ListEntryAttested` events + a "Custom" address input) so any user can browse any attester's view of a list. [ADR-0044, ADR-0031]
+### Lens defaulting — viewing a list shows ONLY your own entries
+`ListPreviewPane` reads `entries(listUID, lens = connectedAddress)`. So you only ever see entries **you** added; opening a list someone else curated shows it empty. For the "share my top-10" use case the viewer needs to see the *curator's* entries (default lens → `mode.curator`), with an attester/lens picker (discovered from `ListEntryAttested` events + a custom-address input, per ADR-0031 first-wins waterfall) to switch views. This is the main gap blocking *shared/curated* lists; personal lists are unaffected. [ADR-0044 §lenses, ADR-0031, ADR-0039]
+
+### ANY-mode item text limited to 31 bytes
+Item text is packed into the entry `target` bytes32, so items longer than 31 UTF-8 bytes are rejected at the input with a byte counter. Fine for groceries/todos/short labels; limiting for descriptive items. Lifting it needs the ADR-0044 §7 PROPERTY-on-entry pattern (a `name`/label PROPERTY attached to each LIST_ENTRY UID — extra attestations per item) or a LIST_ENTRY schema change. See decisions.md (2026-05-29).
+
+### Reorder/edit are non-atomic revoke-then-attest (residual data-loss window)
+Because there is no on-chain "update", edit and reorder do `revoke(old)` then `attest(new)`. The in-memory dup-guard and pre-revoke collision guard cover the common cases, but a *concurrent* mutation from another tab/wallet that fills the list to `maxEntries` between the two txs can still drop the moved item (the re-attest reverts with `ListFull`). Single-user use is safe (the revoke frees the slot). A real fix needs an atomic multicall path (EAS `multiRevoke`+`multiAttest` in one tx via a gateway) — cross-ref the EFSUploadGateway item below.
 
 ### Post-create UID copy button
 After creating a list the success notification shows a truncated UID. A copy-to-clipboard button on the notification (or a modal success state with the full UID) would make it easy to share or use the UID elsewhere.
