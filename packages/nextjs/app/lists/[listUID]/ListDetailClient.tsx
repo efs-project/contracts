@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import { encodeAbiParameters, zeroAddress, zeroHash } from "viem";
-import { useAccount, useReadContract, useWaitForTransactionReceipt, useWriteContract } from "wagmi";
+import { useAccount, usePublicClient, useReadContract, useWaitForTransactionReceipt, useWriteContract } from "wagmi";
 import { useDeployedContractInfo } from "~~/hooks/scaffold-eth";
 import { notification } from "~~/utils/scaffold-eth";
 
@@ -161,13 +161,37 @@ export default function ListDetailPage() {
     query: { enabled: !!listReaderAddress && !!listUID },
   });
 
-  const { data: entries, refetch: refetchEntries } = useReadContract({
-    address: listReaderAddress,
-    abi: LIST_READER_ABI,
-    functionName: "entries",
-    args: listUID ? [listUID, lensAddress, 0n, 50n] : undefined,
-    query: { enabled: !!listReaderAddress && !!listUID },
-  });
+  // Paginate ALL entries. A single `entries` read is bounded by its `len` arg, and lists may
+  // be uncapped or capped above one page — a fixed [0, 50) window silently hid (and made
+  // unremovable) every entry past the 50th. Loop the reader cursor until a short page, mirroring
+  // ListPreviewPane.refetchEntries, with a safety bound for the debug UI.
+  type EntryRow = { entryUID: `0x${string}`; identityKey: `0x${string}` };
+  const publicClient = usePublicClient();
+  const [entries, setEntries] = useState<readonly EntryRow[] | undefined>(undefined);
+  const refetchEntries = useCallback(async () => {
+    if (!publicClient || !listReaderAddress || !listUID) return;
+    const PAGE = 200n;
+    const SAFETY = 10000; // far beyond any hand-curated list; bounds a runaway read
+    const all: EntryRow[] = [];
+    try {
+      for (let start = 0n; ; start += PAGE) {
+        const page = (await publicClient.readContract({
+          address: listReaderAddress,
+          abi: LIST_READER_ABI,
+          functionName: "entries",
+          args: [listUID, lensAddress, start, PAGE],
+        })) as unknown as EntryRow[];
+        all.push(...page);
+        if (BigInt(page.length) < PAGE || all.length >= SAFETY) break;
+      }
+      setEntries(all);
+    } catch (e) {
+      console.error("[lists] failed to read entries", e);
+    }
+  }, [publicClient, listReaderAddress, listUID, lensAddress]);
+  useEffect(() => {
+    void refetchEntries();
+  }, [refetchEntries]);
 
   const { data: listEntrySchemaUID } = useReadContract({
     address: listReaderAddress,
