@@ -1,45 +1,46 @@
-import { MAX_ITEM_BYTES, RANK_STEP, addrFromKey, byteLen, computeInsertWeight, packText, shortHex, unpackText } from "./listEncoding.ts";
+import {
+  RANK_STEP,
+  addrFromKey,
+  byteLen,
+  computeInsertWeight,
+  memberKeyForText,
+  shortHex,
+  unpackText,
+} from "./listEncoding.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
 // Run with:  yarn workspace @se-2/nextjs test
 //   (root)   yarn node --test packages/nextjs/utils/efs/listEncoding.test.ts
 
-// ── packText / unpackText round-trip ────────────────────────────────────────
+// ── memberKeyForText (ANY-mode opaque key, ADR-0046) ─────────────────────────
 
-test("packText → unpackText round-trips plain ASCII", () => {
-  for (const s of ["Milk", "buy eggs", "pay rent", "a", "x".repeat(MAX_ITEM_BYTES)]) {
-    assert.equal(unpackText(packText(s)), s, `round-trip failed for "${s}"`);
+test("memberKeyForText produces a nonzero, fixed-width bytes32", () => {
+  for (const s of ["a", "Milk", "🎉", "x".repeat(500)]) {
+    const key = memberKeyForText(s);
+    assert.match(key, /^0x[0-9a-f]{64}$/);
+    assert.notEqual(key, "0x" + "0".repeat(64));
   }
 });
 
-test("packText → unpackText round-trips multibyte UTF-8 (emoji, accents, CJK)", () => {
-  for (const s of ["café", "Bread ✓", "naïve", "日本語", "🎉", "a✓b"]) {
-    // only assert for inputs that fit in 31 bytes
-    if (byteLen(s) <= MAX_ITEM_BYTES) {
-      assert.equal(unpackText(packText(s)), s, `round-trip failed for "${s}" (${byteLen(s)} bytes)`);
-    }
-  }
+test("memberKeyForText is deterministic — same text → same key", () => {
+  assert.equal(memberKeyForText("buy eggs"), memberKeyForText("buy eggs"));
+  assert.equal(memberKeyForText("café"), memberKeyForText("café"));
 });
 
-test("packText produces a nonzero bytes32 for any nonempty input (resolver requires target != 0)", () => {
-  for (const s of ["a", "Milk", "🎉"]) {
-    const packed = packText(s);
-    assert.match(packed, /^0x[0-9a-f]{64}$/);
-    assert.notEqual(packed, "0x" + "0".repeat(64));
-  }
+test("memberKeyForText distinguishes different text", () => {
+  assert.notEqual(memberKeyForText("Milk"), memberKeyForText("Eggs"));
 });
 
-test("packText rejects empty string (would pack to bytes32(0), which the resolver rejects)", () => {
-  assert.throws(() => packText(""), /empty/i);
+test("memberKeyForText trims surrounding whitespace before hashing", () => {
+  assert.equal(memberKeyForText("  Milk  "), memberKeyForText("Milk"));
+  assert.equal(memberKeyForText("\tpay rent\n"), memberKeyForText("pay rent"));
 });
 
-test("packText rejects > 31 bytes; accepts exactly 31", () => {
-  assert.doesNotThrow(() => packText("x".repeat(31))); // 31 ASCII bytes
-  assert.throws(() => packText("x".repeat(32)), /too long/i);
-  // multibyte: 8 CJK chars = 24 bytes ok; 11 = 33 bytes rejected
-  assert.doesNotThrow(() => packText("語".repeat(8)));
-  assert.throws(() => packText("語".repeat(11)), /too long/i);
+test("memberKeyForText is not length-capped (arbitrary-length free text)", () => {
+  // Pre-ADR-0046 this would have thrown over 31 bytes; now it just hashes.
+  const long = "a very long grocery item that exceeds thirty-one bytes for sure";
+  assert.match(memberKeyForText(long), /^0x[0-9a-f]{64}$/);
 });
 
 test("byteLen counts UTF-8 bytes, not code points", () => {
@@ -68,9 +69,15 @@ test("unpackText rejects strings containing control characters", () => {
   assert.equal(unpackText(withCtrl), null);
 });
 
-test("unpackText preserves tab/newline (allowed whitespace)", () => {
-  assert.equal(unpackText(packText("a\tb")), "a\tb");
-  assert.equal(unpackText(packText("a\nb")), "a\nb");
+test("unpackText decodes a legacy right-padded bytes32 (pre-ADR-0046 packed text)", () => {
+  // "Milk" = 0x4d696c6b, right-padded to 32 bytes — the old packText format.
+  assert.equal(unpackText("0x4d696c6b" + "0".repeat(56)), "Milk");
+});
+
+test("unpackText preserves tab/newline in legacy packed values (allowed whitespace)", () => {
+  // 'a' 0x09 'b' and 'a' 0x0a 'b', right-padded.
+  assert.equal(unpackText("0x610962" + "0".repeat(58)), "a\tb");
+  assert.equal(unpackText("0x610a62" + "0".repeat(58)), "a\nb");
 });
 
 // ── addrFromKey ──────────────────────────────────────────────────────────────
@@ -149,7 +156,7 @@ test("negative weights (after repeated top-drops) still compute correctly", () =
 
 test("with the real 1e15 step, a fresh midpoint has enormous room (no collision for many reorders)", () => {
   // simulate inserting repeatedly into the same gap; should take ~50 inserts to exhaust
-  let left = 0n;
+  const left = 0n;
   let right = RANK_STEP; // 1e15
   let inserts = 0;
   for (; inserts < 60; inserts++) {

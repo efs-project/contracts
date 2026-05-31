@@ -1,7 +1,15 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { decodeAbiParameters, encodeAbiParameters, zeroAddress, zeroHash } from "viem";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  decodeAbiParameters,
+  decodeEventLog,
+  encodeAbiParameters,
+  getAddress,
+  parseAbiItem,
+  zeroAddress,
+  zeroHash,
+} from "viem";
 import { usePublicClient, useReadContract, useWriteContract } from "wagmi";
 import {
   ArrowTopRightOnSquareIcon,
@@ -14,13 +22,12 @@ import {
 import { Address, AddressInput } from "~~/components/scaffold-eth";
 import { useDeployedContractInfo } from "~~/hooks/scaffold-eth";
 import { useBackgroundOps } from "~~/services/store/backgroundOps";
+import { EDGE_RESOLVER_ABI } from "~~/utils/efs/edgeResolver";
 import {
-  MAX_ITEM_BYTES,
   RANK_STEP,
   addrFromKey,
-  byteLen,
   computeInsertWeight,
-  packText,
+  memberKeyForText,
   shortHex,
   unpackText,
 } from "~~/utils/efs/listEncoding";
@@ -66,7 +73,6 @@ const LIST_READER_ABI = [
           { name: "entryUID", type: "bytes32" },
           { name: "targetType", type: "uint8" },
           { name: "identityKey", type: "bytes32" },
-          { name: "weight", type: "int256" },
         ],
       },
     ],
@@ -173,6 +179,51 @@ const LIST_ENTRY_RESOLVER_ABI = [
   },
 ] as const;
 
+// EFSIndexer fragments used for entry-scoped PROPERTY placement & reads (ADR-0046).
+// Order ("weight") and label ("name") live as PIN-bound PROPERTYs on the stable
+// entry UID, so we need the same schema UIDs and `resolveAnchor` the contentType
+// flow in CreateItemModal uses.
+const INDEXER_PROPERTY_ABI = [
+  {
+    inputs: [],
+    name: "PROPERTY_SCHEMA_UID",
+    outputs: [{ name: "", type: "bytes32" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [],
+    name: "ANCHOR_SCHEMA_UID",
+    outputs: [{ name: "", type: "bytes32" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [],
+    name: "PIN_SCHEMA_UID",
+    outputs: [{ name: "", type: "bytes32" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [
+      { name: "parentUID", type: "bytes32" },
+      { name: "name", type: "string" },
+      { name: "schema", type: "bytes32" },
+    ],
+    name: "resolveAnchor",
+    outputs: [{ name: "", type: "bytes32" }],
+    stateMutability: "view",
+    type: "function",
+  },
+] as const;
+
+// Entry-scoped property key names (ADR-0046 §2–3). Order is "weight" (continuity
+// with ADR-0044 vocabulary, §"Open sub-decisions" default); label is the reserved
+// "name" key (ADR-0034).
+const ORDER_KEY = "weight";
+const NAME_KEY = "name";
+
 // ── Constants ───────────────────────────────────────────────────────────────
 
 const MODE = { ANY: 0, ADDR: 1, SCHEMA: 2 } as const;
@@ -212,7 +263,25 @@ interface Entry {
   entryUID: `0x${string}`;
   targetType: number;
   identityKey: `0x${string}`;
-  weight: bigint;
+  /**
+   * Display order, read from the entry-scoped "weight" PROPERTY (ADR-0046),
+   * lens-scoped to the viewing attester. `null` when the entry has no order
+   * property yet (legacy / mid-write) — those sort last by entryUID tiebreak.
+   */
+  order: bigint | null;
+  /**
+   * Free-text label, read from the entry-scoped "name" PROPERTY (ADR-0046),
+   * lens-scoped. `null` when no label override is set; rendering then falls
+   * back to the entity's own display (address / attestation / legacy text).
+   */
+  label: string | null;
+}
+
+/** The raw membership tuple `ListReader.entries` returns (post-ADR-0046, no weight). */
+interface RawEntry {
+  entryUID: `0x${string}`;
+  targetType: number;
+  identityKey: `0x${string}`;
 }
 interface Props {
   uid: string;
@@ -294,6 +363,33 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const listEntryResolverAddress = (listEntryResolverInfo as any)?.address as `0x${string}` | undefined;
 
+  // Entry-scoped order/label PROPERTYs (ADR-0046) are placed & read through the
+  // EFSIndexer (key-anchor resolution, schema UIDs) and EdgeResolver (active PIN
+  // target lookup) — the same sources CreateItemModal's contentType flow uses.
+  const { data: indexerInfo } = useDeployedContractInfo({ contractName: "Indexer" });
+  const indexerAddress = indexerInfo?.address as `0x${string}` | undefined;
+  const { data: edgeResolverInfo } = useDeployedContractInfo({ contractName: "EdgeResolver" });
+  const edgeResolverAddress = edgeResolverInfo?.address as `0x${string}` | undefined;
+
+  const { data: propertySchemaUID } = useReadContract({
+    address: indexerAddress,
+    abi: INDEXER_PROPERTY_ABI,
+    functionName: "PROPERTY_SCHEMA_UID",
+    query: { enabled: !!indexerAddress },
+  });
+  const { data: anchorSchemaUID } = useReadContract({
+    address: indexerAddress,
+    abi: INDEXER_PROPERTY_ABI,
+    functionName: "ANCHOR_SCHEMA_UID",
+    query: { enabled: !!indexerAddress },
+  });
+  const { data: pinSchemaUID } = useReadContract({
+    address: indexerAddress,
+    abi: INDEXER_PROPERTY_ABI,
+    functionName: "PIN_SCHEMA_UID",
+    query: { enabled: !!indexerAddress },
+  });
+
   const publicClient = usePublicClient();
   const ops = useBackgroundOps();
   const { writeContractAsync } = useWriteContract();
@@ -371,39 +467,140 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
   const viewingOwn = !!connectedAddress && effectiveLens.toLowerCase() === connectedAddress.toLowerCase();
   const canEdit = viewingOwn && !mode?.appendOnly;
 
-  // Display order — synced from chain (sorted by weight asc), mutated optimistically.
+  // ── Entry-scoped order/label PROPERTY reads (ADR-0046, lens-scoped) ──────────
+  // The order ("weight") and label ("name") that ADR-0044 stored inline now live as
+  // PIN-bound PROPERTYs on the stable entry UID, scoped to the viewing attester.
+  // We enrich the bare membership tuples by reading both properties per entry,
+  // scoped to `effectiveLens`, then sort by the parsed order value ascending.
+
+  /** Read one PIN-bound PROPERTY value (string) on a container, scoped to `attester`. */
+  const readEntryProperty = useCallback(
+    async (container: `0x${string}`, keyName: string, attester: `0x${string}`): Promise<string | null> => {
+      if (!publicClient || !indexerAddress || !edgeResolverAddress || !propertySchemaUID || !easAddress) return null;
+      try {
+        const keyAnchorUID = (await publicClient.readContract({
+          address: indexerAddress,
+          abi: INDEXER_PROPERTY_ABI,
+          functionName: "resolveAnchor",
+          args: [container, keyName, propertySchemaUID as `0x${string}`],
+        })) as `0x${string}`;
+        if (!keyAnchorUID || keyAnchorUID === zeroHash) return null;
+
+        const propertyUID = (await publicClient.readContract({
+          address: edgeResolverAddress,
+          abi: EDGE_RESOLVER_ABI,
+          functionName: "getActivePinTarget",
+          args: [keyAnchorUID, getAddress(attester), propertySchemaUID as `0x${string}`],
+        })) as `0x${string}`;
+        if (!propertyUID || propertyUID === zeroHash) return null;
+
+        const att = (await publicClient.readContract({
+          address: easAddress,
+          abi: EAS_ABI,
+          functionName: "getAttestation",
+          args: [propertyUID],
+        })) as { uid: `0x${string}`; revocationTime: bigint; data: `0x${string}` };
+        if (!att || att.uid === zeroHash || toBig(att.revocationTime) !== 0n) return null;
+        if (!att.data || att.data === "0x") return null;
+        const [value] = decodeAbiParameters([{ type: "string" }], att.data) as [string];
+        return value && value.length > 0 ? value : null;
+      } catch {
+        return null;
+      }
+    },
+    [publicClient, indexerAddress, edgeResolverAddress, propertySchemaUID, easAddress],
+  );
+
+  // Display order — synced from chain (sorted by order property asc), mutated optimistically.
   const [items, setItems] = useState<Entry[]>([]);
-  const sortedFromChain = useMemo(() => {
-    if (!rawEntries) return [];
-    return [...(rawEntries as unknown as Entry[])]
-      .map(e => ({ ...e, weight: toBig(e.weight) }))
-      .sort((a, b) => (a.weight < b.weight ? -1 : a.weight > b.weight ? 1 : a.entryUID < b.entryUID ? -1 : 1));
-  }, [rawEntries]);
-  useEffect(() => setItems(sortedFromChain), [sortedFromChain]);
   // Clear immediately when the list or the viewed lens changes (entries refetch on arg change).
   useEffect(() => setItems([]), [uid, effectiveLens]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function enrich() {
+      const raw = (rawEntries as unknown as RawEntry[] | undefined) ?? [];
+      if (raw.length === 0) {
+        if (!cancelled) setItems([]);
+        return;
+      }
+      // Read both properties for every entry in parallel (Promise.all of readContract;
+      // the codebase has no multicall helper here, and readEntryProperty already
+      // sequences the 3 dependent reads per property). Scoped to the viewing lens.
+      const enriched = await Promise.all(
+        raw.map(async e => {
+          const [orderStr, label] = await Promise.all([
+            readEntryProperty(e.entryUID, ORDER_KEY, effectiveLens),
+            readEntryProperty(e.entryUID, NAME_KEY, effectiveLens),
+          ]);
+          let order: bigint | null = null;
+          if (orderStr !== null) {
+            try {
+              order = BigInt(orderStr.trim());
+            } catch {
+              order = null;
+            }
+          }
+          return { ...e, order, label } as Entry;
+        }),
+      );
+      if (cancelled) return;
+      // Sort by order asc; entries with no order property sort last, tie-broken by entryUID.
+      enriched.sort((a, b) => {
+        if (a.order === null && b.order === null) return a.entryUID < b.entryUID ? -1 : 1;
+        if (a.order === null) return 1;
+        if (b.order === null) return -1;
+        if (a.order !== b.order) return a.order < b.order ? -1 : 1;
+        return a.entryUID < b.entryUID ? -1 : 1;
+      });
+      setItems(enriched);
+    }
+    enrich();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rawEntries, effectiveLens, readEntryProperty]);
 
   const [busy, setBusy] = useState(false);
 
   // ── On-chain primitives ─────────────────────────────────────────────────────
 
-  const encodeEntry = (target: `0x${string}`, weight: bigint) =>
+  // ADR-0046: LIST_ENTRY is pure membership identity — 2 fields, no weight.
+  const encodeEntry = (target: `0x${string}`) =>
     encodeAbiParameters(
       [
         { name: "listUID", type: "bytes32" },
         { name: "target", type: "bytes32" },
-        { name: "weight", type: "int256" },
       ],
-      [listUID, target, weight],
+      [listUID, target],
     );
 
-  /** Reconstruct the recipient/target for an entry from its identity + mode. */
-  const entryFields = (e: Pick<Entry, "targetType" | "identityKey">) => {
-    if (e.targetType === MODE.ADDR) return { recipient: addrFromKey(e.identityKey), target: zeroHash as `0x${string}` };
-    return { recipient: zeroAddress, target: e.identityKey };
+  const extractUIDFromReceipt = (receipt: { logs: readonly { data: `0x${string}`; topics: `0x${string}`[] }[] }) => {
+    for (const log of receipt.logs) {
+      try {
+        const event = decodeEventLog({
+          abi: [
+            parseAbiItem(
+              "event Attested(address indexed recipient, address indexed attester, bytes32 uid, bytes32 indexed schemaUID)",
+            ),
+          ],
+          data: log.data,
+          topics: log.topics as [`0x${string}`, ...`0x${string}`[]],
+        });
+        return (event.args as { uid: `0x${string}` }).uid;
+      } catch {
+        // not our event
+      }
+    }
+    return undefined;
   };
 
-  const attestEntry = async (recipient: `0x${string}`, target: `0x${string}`, weight: bigint) => {
+  /**
+   * Attest a membership entry (ADR-0046) and return its UID. The UID is stable —
+   * order/label PROPERTYs hang off it and survive reorder.
+   */
+  const attestEntry = async (recipient: `0x${string}`, target: `0x${string}`): Promise<`0x${string}`> => {
     const hash = await writeContractAsync({
       address: easAddress!,
       abi: EAS_ABI,
@@ -416,14 +613,122 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
             expirationTime: 0n,
             revocable: true,
             refUID: zeroHash,
-            data: encodeEntry(target, weight),
+            data: encodeEntry(target),
             value: 0n,
           },
         },
       ],
     });
-    await publicClient!.waitForTransactionReceipt({ hash });
-    return hash;
+    const receipt = await publicClient!.waitForTransactionReceipt({ hash });
+    const entryUID = extractUIDFromReceipt(receipt);
+    if (!entryUID) throw new Error("Could not extract LIST_ENTRY UID");
+    return entryUID;
+  };
+
+  /**
+   * Place (or re-place) a PIN-bound PROPERTY on `container` (ADR-0046 / ADR-0035
+   * pattern, copied from CreateItemModal's contentType flow): resolve-or-create the
+   * key anchor, attest a free-floating PROPERTY value, then PIN it (cardinality 1 →
+   * re-PIN supersedes in O(1)). Used for the entry's "weight" (order) and "name"
+   * (label) properties on the stable entry UID.
+   */
+  const placeEntryProperty = async (
+    container: `0x${string}`,
+    keyName: string,
+    value: string,
+    opLog?: (msg: string) => void,
+  ) => {
+    if (!indexerAddress || !propertySchemaUID || !anchorSchemaUID || !pinSchemaUID || !easAddress || !publicClient) {
+      throw new Error("Property placement not ready (missing schema UIDs).");
+    }
+    // (a) resolve the key anchor under the container; create it if missing.
+    opLog?.(`Resolving “${keyName}” key anchor…`);
+    let keyAnchorUID = (await publicClient.readContract({
+      address: indexerAddress,
+      abi: INDEXER_PROPERTY_ABI,
+      functionName: "resolveAnchor",
+      args: [container, keyName, propertySchemaUID as `0x${string}`],
+    })) as `0x${string}`;
+    if (!keyAnchorUID || keyAnchorUID === zeroHash) {
+      opLog?.(`Creating “${keyName}” key anchor…`);
+      const encodedKey = encodeAbiParameters(
+        [
+          { name: "name", type: "string" },
+          { name: "schema", type: "bytes32" },
+        ],
+        [keyName, propertySchemaUID as `0x${string}`],
+      );
+      const keyHash = await writeContractAsync({
+        address: easAddress,
+        abi: EAS_ABI,
+        functionName: "attest",
+        args: [
+          {
+            schema: anchorSchemaUID as `0x${string}`,
+            data: {
+              recipient: zeroAddress,
+              expirationTime: 0n,
+              revocable: false,
+              refUID: container,
+              data: encodedKey,
+              value: 0n,
+            },
+          },
+        ],
+      });
+      const keyReceipt = await publicClient.waitForTransactionReceipt({ hash: keyHash });
+      const created = extractUIDFromReceipt(keyReceipt);
+      if (!created) throw new Error(`Could not extract “${keyName}” key anchor UID`);
+      keyAnchorUID = created;
+    }
+
+    // (b) free-floating PROPERTY value.
+    opLog?.(`Writing “${keyName}” value…`);
+    const encodedProperty = encodeAbiParameters([{ name: "value", type: "string" }], [value]);
+    const propHash = await writeContractAsync({
+      address: easAddress,
+      abi: EAS_ABI,
+      functionName: "attest",
+      args: [
+        {
+          schema: propertySchemaUID as `0x${string}`,
+          data: {
+            recipient: zeroAddress,
+            expirationTime: 0n,
+            revocable: false,
+            refUID: zeroHash,
+            data: encodedProperty,
+            value: 0n,
+          },
+        },
+      ],
+    });
+    const propReceipt = await publicClient.waitForTransactionReceipt({ hash: propHash });
+    const propertyUID = extractUIDFromReceipt(propReceipt);
+    if (!propertyUID) throw new Error(`Could not extract “${keyName}” PROPERTY UID`);
+
+    // (c) PIN binding (cardinality 1; re-PIN supersedes the prior value in O(1)).
+    opLog?.(`Binding “${keyName}”…`);
+    const encodedPin = encodeAbiParameters([{ name: "definition", type: "bytes32" }], [keyAnchorUID]);
+    const pinHash = await writeContractAsync({
+      address: easAddress,
+      abi: EAS_ABI,
+      functionName: "attest",
+      args: [
+        {
+          schema: pinSchemaUID as `0x${string}`,
+          data: {
+            recipient: zeroAddress,
+            expirationTime: 0n,
+            revocable: true,
+            refUID: propertyUID,
+            data: encodedPin,
+            value: 0n,
+          },
+        },
+      ],
+    });
+    await publicClient.waitForTransactionReceipt({ hash: pinHash });
   };
 
   const revokeEntry = async (e: Entry) => {
@@ -437,13 +742,24 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
     return hash;
   };
 
-  const ready = !!easAddress && !!entrySchemaUID && !!publicClient;
+  // `ready` covers the entry write. Property placement additionally needs the
+  // indexer + schema UIDs (checked inside placeEntryProperty); a failure there is
+  // surfaced to the op log and notification rather than silently skipped.
+  const ready =
+    !!easAddress &&
+    !!entrySchemaUID &&
+    !!publicClient &&
+    !!indexerAddress &&
+    !!edgeResolverAddress &&
+    !!propertySchemaUID &&
+    !!anchorSchemaUID &&
+    !!pinSchemaUID;
 
   // ── Add ───────────────────────────────────────────────────────────────────
 
   const [draft, setDraft] = useState("");
-  const draftBytes = targetType === MODE.ANY ? byteLen(draft) : 0;
-  const draftTooLong = targetType === MODE.ANY && draftBytes > MAX_ITEM_BYTES;
+  // ADR-0046: ANY free-text labels are no longer length-capped — the human text
+  // lives in a `name` PROPERTY, not packed into bytes32. No byte-count UI needed.
 
   // SCHEMA mode: validate the pasted attestation UID against the list's required schema
   // BEFORE the user pays gas. Saves a guaranteed-to-revert transaction.
@@ -465,13 +781,21 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
   const draftAttLoading = targetType === MODE.SCHEMA && schemaDraftIsUID && draftAtt === undefined;
   const schemaAddBlocked = targetType === MODE.SCHEMA && schemaDraftIsUID && (draftAttLoading || !draftSchemaMatches);
 
-  const nextWeight = () => (items.length ? items[items.length - 1].weight + RANK_STEP : RANK_STEP);
+  // Next order rank = last item's order + step (the old nextWeight() logic, now
+  // sourced from the order PROPERTY). Items with no order yet are ignored.
+  const nextOrder = () => {
+    const lastWithOrder = [...items].reverse().find(e => e.order !== null);
+    return lastWithOrder?.order != null ? lastWithOrder.order + RANK_STEP : RANK_STEP;
+  };
 
   const handleAdd = async (e?: React.FormEvent) => {
     e?.preventDefault();
     if (!ready || !draft.trim() || busy) return;
     let recipient = zeroAddress as `0x${string}`;
     let target = zeroHash as `0x${string}`;
+    // For ANY free-text items the typed text becomes BOTH the opaque member key
+    // (keccak, for dedup) and the `name` label PROPERTY (the human-readable value).
+    const freeText = targetType === MODE.ANY ? draft.trim() : "";
     try {
       if (targetType === MODE.ADDR) {
         const v = draft.trim();
@@ -482,7 +806,7 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
         if (!v.startsWith("0x") || v.length !== 66) return notification.error("Enter an attestation UID (0x + 64 hex)");
         target = v as `0x${string}`;
       } else {
-        target = packText(draft.trim());
+        target = memberKeyForText(freeText);
       }
     } catch (err: any) {
       return notification.error(err?.message ?? "Invalid item");
@@ -491,7 +815,15 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
     const opId = ops.start(`Add ${meta.singular} to “${name}”`);
     setBusy(true);
     try {
-      await attestEntry(recipient, target, nextWeight());
+      ops.log(opId, "Attesting membership…");
+      const entryUID = await attestEntry(recipient, target);
+      // Order PROPERTY on the (stable) entry UID.
+      await placeEntryProperty(entryUID, ORDER_KEY, nextOrder().toString(), msg => ops.log(opId, msg));
+      // Label PROPERTY: always for ANY free-text items (= the text). For ADDR/SCHEMA
+      // reference items, only when the user typed an override (handled via edit later).
+      if (targetType === MODE.ANY && freeText) {
+        await placeEntryProperty(entryUID, NAME_KEY, freeText, msg => ops.log(opId, msg));
+      }
       ops.complete(opId, "Added");
       setDraft("");
       await refetchEntries();
@@ -523,7 +855,13 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
     }
   };
 
-  // ── Edit (ANY text — revoke + re-attest, same rank) ──────────────────────────
+  // ── Edit (ANY text — change the `name` label PROPERTY; entry UID is stable) ───
+  // ADR-0046: the label lives in a per-entry `name` PROPERTY on the stable entry
+  // UID. Editing re-attests + re-PINs that PROPERTY (cardinality 1 → O(1) supersede)
+  // WITHOUT touching the entry, so the membership and order survive. The keccak
+  // member key (identityKey) stays fixed — it's an opaque fingerprint of the
+  // original text, not the display value — so the no-duplicates revoke/re-attest
+  // data-loss footgun is gone entirely.
 
   const [editingUID, setEditingUID] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
@@ -536,34 +874,22 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
     setEditValue("");
   };
 
+  /** Current display label for an entry: name PROPERTY, else legacy unpacked text. */
+  const entryLabel = (e: Entry): string => e.label ?? unpackText(e.identityKey) ?? "";
+
   const handleEditSave = async (entry: Entry) => {
     if (!ready || busy) return;
     const next = editValue.trim();
-    const current = unpackText(entry.identityKey) ?? "";
+    const current = entryLabel(entry);
     if (!next || next === current) return cancelEdit();
-    let target: `0x${string}`;
-    try {
-      target = packText(next);
-    } catch (err: any) {
-      return notification.error(err?.message ?? "Invalid item");
-    }
-    // DATA-LOSS GUARD: edit is revoke-then-attest (no on-chain update). On a no-duplicates
-    // list, if the new value collides with another existing item the attest reverts with
-    // DuplicateIdentity AFTER the revoke already destroyed the original — losing the item.
-    // Catch the collision in memory before touching the chain.
-    if (
-      !mode?.allowsDuplicates &&
-      items.some(e => e.entryUID !== entry.entryUID && e.identityKey.toLowerCase() === target.toLowerCase())
-    ) {
-      notification.error("That item already exists in the list.");
-      return; // keep editing; nothing revoked
-    }
+
     const opId = ops.start(`Edit item in “${name}”`);
     setBusy(true);
     cancelEdit();
+    // optimistic label update
+    setItems(prev => prev.map(e => (e.entryUID === entry.entryUID ? { ...e, label: next } : e)));
     try {
-      await revokeEntry(entry);
-      await attestEntry(zeroAddress, target, entry.weight); // keep rank
+      await placeEntryProperty(entry.entryUID, NAME_KEY, next, msg => ops.log(opId, msg));
       ops.complete(opId, "Saved");
       await refetchEntries();
     } catch (err: any) {
@@ -574,7 +900,7 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
     }
   };
 
-  // ── Reorder (drag → revoke + re-attest moved item with midpoint weight) ──────
+  // ── Reorder (drag → re-PIN the moved entry's order PROPERTY; entry UID stable) ─
 
   const dragSrc = useRef<number | null>(null);
   const [dragOver, setDragOver] = useState<number | null>(null);
@@ -592,36 +918,34 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
     const reordered = [...items];
     const [moved] = reordered.splice(src, 1);
     reordered.splice(insertAt, 0, moved);
-    setItems(reordered); // optimistic
 
-    // computeInsertWeight (unit-tested) returns a midpoint weight, or { collision }
-    // when adjacent weights leave no integer room. The collision check happens BEFORE
-    // any revoke, so a no-room drop can never destroy the moved item.
-    const slot = computeInsertWeight(reordered[insertAt - 1]?.weight, reordered[insertAt + 1]?.weight);
+    // computeInsertWeight (unit-tested) returns a midpoint rank, or { collision }
+    // when adjacent ranks leave no integer room. The collision check happens BEFORE
+    // any write, so a no-room drop is purely a no-op (the entry is never touched).
+    const slot = computeInsertWeight(
+      reordered[insertAt - 1]?.order ?? undefined,
+      reordered[insertAt + 1]?.order ?? undefined,
+    );
     if ("collision" in slot) {
-      setItems(sortedFromChain); // undo optimistic move
       notification.error("No room to drop the item exactly here — move it a different way.");
-      return;
+      return; // keep current order; nothing optimistic applied
     }
-    const newWeight = slot.weight;
+    const newOrder = slot.weight;
+    // optimistic: apply the new order + reordered view
+    setItems(reordered.map(e => (e.entryUID === moved.entryUID ? { ...e, order: newOrder } : e)));
 
     const opId = ops.start(`Reorder “${name}”`);
     setBusy(true);
     try {
-      ops.log(opId, "Clearing old position…");
-      await revokeEntry(moved);
-      ops.log(opId, "Writing new position…");
-      const { recipient, target } = entryFields(moved);
-      await attestEntry(recipient, target, newWeight);
+      // Re-PIN the order PROPERTY on the (stable) entry UID — supersedes in O(1).
+      // The entry itself, its label, and its membership are untouched.
+      await placeEntryProperty(moved.entryUID, ORDER_KEY, newOrder.toString(), msg => ops.log(opId, msg));
       ops.complete(opId, "Reordered");
       await refetchEntries();
     } catch (err: any) {
-      // The item was revoked but the re-attest failed (e.g. the list hit its cap via a
-      // concurrent add). Be honest that the item may need re-adding rather than hiding it
-      // behind a generic "failed" — the refetch below will show it missing.
       const msg = err?.shortMessage ?? err?.message ?? "Failed to reorder";
-      ops.fail(opId, `${msg} — the item may have been removed; re-add it if it's missing.`);
-      notification.error("Reorder failed — if the item disappeared, please re-add it.");
+      ops.fail(opId, msg);
+      notification.error("Reorder failed — the item's position was not changed.");
       await refetchEntries();
     } finally {
       setBusy(false);
@@ -631,20 +955,30 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
   // ── Render helpers ────────────────────────────────────────────────────────
 
   const renderContent = (e: Entry) => {
+    // Reference rows (ADDR/SCHEMA): a `name` label override (if set) wins over the
+    // entity's own display; otherwise show the address / attestation summary.
     if (e.targetType === MODE.ADDR) {
-      return <Address address={addrFromKey(e.identityKey)} size="sm" onlyEnsOrAddress />;
+      return e.label ? (
+        <span className="text-sm leading-snug break-words">{e.label}</span>
+      ) : (
+        <Address address={addrFromKey(e.identityKey)} size="sm" onlyEnsOrAddress />
+      );
     }
     if (e.targetType === MODE.SCHEMA) {
-      return <AttestationLabel uid={e.identityKey} easAddress={easAddress} />;
+      return e.label ? (
+        <span className="text-sm leading-snug break-words">{e.label}</span>
+      ) : (
+        <AttestationLabel uid={e.identityKey} easAddress={easAddress} />
+      );
     }
-    const text = unpackText(e.identityKey);
+    // ANY free-text: label PROPERTY (ADR-0046), else legacy unpacked text, else short-hex.
+    const text = e.label ?? unpackText(e.identityKey);
     if (editingUID === e.entryUID) {
       return (
         <input
           autoFocus
           className="input input-xs w-full bg-base-100 border-primary/40"
           value={editValue}
-          maxLength={64}
           onChange={ev => setEditValue(ev.target.value)}
           onKeyDown={ev => {
             if (ev.key === "Enter") handleEditSave(e);
@@ -805,11 +1139,11 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
                 {/* Row actions */}
                 {canEdit && editingUID !== e.entryUID && (
                   <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
-                    {e.targetType === MODE.ANY && unpackText(e.identityKey) !== null && (
+                    {e.targetType === MODE.ANY && (
                       <button
                         className="btn btn-ghost btn-xs btn-square text-base-content/40 hover:text-primary"
                         disabled={busy}
-                        onClick={() => startEdit(e, unpackText(e.identityKey) ?? "")}
+                        onClick={() => startEdit(e, entryLabel(e))}
                         title="Edit"
                       >
                         <PencilSquareIcon className="w-3.5 h-3.5" />
@@ -873,34 +1207,22 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
             <div className="flex items-center gap-2">
               <div className="relative flex-1">
                 <input
-                  className={`input input-sm w-full bg-base-200 border-transparent focus:bg-base-100 ${draftTooLong ? "border-error focus:border-error" : "focus:border-base-300"} ${targetType === MODE.SCHEMA ? "font-mono text-xs" : ""}`}
+                  className={`input input-sm w-full bg-base-200 border-transparent focus:bg-base-100 focus:border-base-300 ${targetType === MODE.SCHEMA ? "font-mono text-xs" : ""}`}
                   placeholder={meta.placeholder}
                   value={draft}
                   onChange={ev => setDraft(ev.target.value)}
                   disabled={busy}
                   autoComplete="off"
                 />
-                {targetType === MODE.ANY && draft.length > 0 && (
-                  <span
-                    className={`absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] tabular-nums ${draftTooLong ? "text-error" : "text-base-content/35"}`}
-                  >
-                    {draftBytes}/{MAX_ITEM_BYTES}
-                  </span>
-                )}
               </div>
               <button
                 type="submit"
                 className="btn btn-sm btn-primary btn-square flex-shrink-0"
-                disabled={busy || !draft.trim() || draftTooLong || schemaAddBlocked}
+                disabled={busy || !draft.trim() || schemaAddBlocked}
               >
                 {busy ? <span className="loading loading-spinner loading-xs" /> : <PlusIcon className="w-4 h-4" />}
               </button>
             </div>
-          )}
-          {targetType === MODE.ANY && draftTooLong && (
-            <p className="text-[10px] text-error mt-1.5">
-              Too long for on-chain storage. Keep it under {MAX_ITEM_BYTES} bytes.
-            </p>
           )}
           {targetType === MODE.SCHEMA && schemaDraftIsUID && (
             <p className="text-[10px] mt-1.5 flex items-center gap-1">
