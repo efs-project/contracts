@@ -1390,18 +1390,37 @@ export const FileBrowser = ({
         args: [item.uid as `0x${string}`, attester, listSchemaUID as `0x${string}`],
       }) as Promise<`0x${string}`>;
     try {
-      // Prefer the connected user's own placement (their edition at this slot); fall back to
-      // the anchor creator's (the curator's) — mirrors the effectiveLens model in the pane and
-      // the connected-wallet lookup deleteList already uses.
-      let listUID = connectedAddress
-        ? await resolvePin(connectedAddress as `0x${string}`)
-        : (zeroHash as `0x${string}`);
-      if (!listUID || listUID === zeroHash) listUID = await resolvePin(item.attester as `0x${string}`);
+      // Resolve the placement through the SAME lens priority that made this card visible:
+      // the connected user's own edition first (if any), then the active `lensAddresses` in
+      // order — any of which may be the lens whose placement qualified this anchor (e.g. Bob
+      // reusing Alice's list anchor in a ?lenses=bob view) — then the anchor creator as a
+      // final fallback. Probing only connected+creator would open the wrong LIST or report
+      // it missing when a requested lens is what surfaced the card.
+      const candidates: `0x${string}`[] = [];
+      const pushAttester = (a?: string) => {
+        if (!a) return;
+        const lc = a.toLowerCase();
+        if (!candidates.some(c => c.toLowerCase() === lc)) candidates.push(a as `0x${string}`);
+      };
+      if (connectedAddress) pushAttester(connectedAddress);
+      lensAddresses.forEach(pushAttester);
+      pushAttester(item.attester);
+
+      let listUID: `0x${string}` = zeroHash;
+      let resolvedAttester: `0x${string}` = item.attester;
+      for (const cand of candidates) {
+        const uid = await resolvePin(cand);
+        if (uid && uid !== zeroHash) {
+          listUID = uid;
+          resolvedAttester = cand;
+          break;
+        }
+      }
       if (!listUID || listUID === zeroHash) {
         notification.error("This list's placement is missing or revoked.");
         return;
       }
-      setSelectedList({ uid: listUID, anchorUID: item.uid, name: item.name, attester: item.attester });
+      setSelectedList({ uid: listUID, anchorUID: item.uid, name: item.name, attester: resolvedAttester });
     } catch (e) {
       console.error("Failed to resolve list", e);
       notification.error("Could not open list.");
