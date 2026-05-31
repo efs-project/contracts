@@ -217,6 +217,22 @@ Two non-blocking polish items from the round-3 review of the order/label-as-PROP
 ### Lists UI — items marked out of scope for v1
 ENS resolution on identity keys, bulk address paste, drag-to-reorder lens stack, SCHEMA-mode browse picker, ANY-mode keccak256 helper, deep-link `?lens=` URL param on detail page. [specs/2026-05-28-lists-ui-design.md]
 
+### Lens-scoped list sorting — investigated, deferred (2026-05-31)
+We looked at making list ordering an on-chain, lens-scoped concern via `EFSSortOverlay` (a new `sourceType 2` reading `ListEntryResolver` + a `WeightSort` comparator + per-lens `SORT_INFO`s). A 3-agent review (feasibility / lens-semantics / adversarial) said **don't build it as designed**, for reasons worth preserving:
+
+- **It breaks the lens waterfall.** A viewer has an *ordered* lens list and membership resolves first-wins (ADR-0044). Pinning a single content-lens in the `SORT_INFO` would make *sorting change which entries you see*, not just their order — a correctness break. Encoding the content-lens in `targetSchema` is also Etched-field overloading.
+- **The requirement is already met client-side.** "Bob sorts Alice's list in his lens" decomposes into *membership = the viewer's lens waterfall* (unchanged) and *order = the sort-lens's `weight` PROPERTY* (ADR-0046), read per stable entry UID. Bob writes his own `weight` PROPERTYs on Alice's entry UIDs and sorts in his lens — no contract change.
+- **On-chain comparator cost.** `WeightSort.getSortKey` reads a PROPERTY (3–5 SLOADs + 2 calls) *per item, inside `processItems`* — 5–10× heavier than `NameSort`/`TimestampSort` and a real OOG risk on large lists. It also resurrects on-chain decimal→int parsing that ADR-0046 §Alt#4 deliberately rejected.
+- **No consumer.** Nothing in the repo reads a list's *order* on-chain today; ordering is a "NICE" (ADR-0046). And changing `EFSSortOverlay` orphans `SORT_INFO_SCHEMA_UID` (the overlay address is baked in) — an Etched, kernel-wired change.
+
+**Decision:** keep ADR-0046's client-side, lens-scoped `weight`-PROPERTY sort. **Two follow-ups when warranted:**
+1. *Cross-lens client wiring* (small, no contract change): let a viewing lens read membership via the waterfall but order via its own lens's weights, so "Bob re-orders Alice's list in his lens" works in the UI. The current client sorts each lens's own edition single-lens.
+2. *On-chain ordering, only if a real on-chain consumer appears*: prefer a **single per-(list, lens) ordered-vector PROPERTY** (ADR-0046 §Alt#5) over the overlay — cheaper, one-fetch read, **and crucially no schema change** (it's just a PROPERTY value), unlike the overlay path.
+
+**Schema-freeze note:** neither viable path changes any schema. Only the rejected overlay path would (it re-registers `SORT_INFO`). So lens-scoped sorting does **not** block the schema freeze.
+
+*(Pre-existing, unrelated: `specs/06` §2 documents a 2-field `SORT_INFO` but the deployed schema is 3-field — `+ uint8 sourceType` per `deploy/04_sortoverlay.ts`. Worth a fix-in-passing during the freeze pass.)*
+
 ---
 
 ## Write-flow & future schemas (flagged 2026-05-28, PM + brainstorm swarm)
