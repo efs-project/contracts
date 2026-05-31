@@ -109,18 +109,29 @@ jobs:
       - name: Deploy against pinned Sepolia fork; assert deployedContracts.ts committed
         run: |
           set -e
+          # Pre-compile in the foreground so the (slow, cold-cache) solc downloads
+          # happen HERE, not inside `yarn fork` — otherwise the fork blows past the
+          # readiness poll and `yarn deploy` hits ECONNREFUSED on a cold runner.
+          yarn compile
           yarn fork &
           FORK_PID=$!
           # Poll RPC until ready (hardhat fork startup includes Alchemy fetches).
-          for i in $(seq 1 60); do
+          ready=0
+          for i in $(seq 1 120); do
             if curl -s -X POST -H "Content-Type: application/json" \
                 --data '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}' \
                 http://127.0.0.1:8545 | grep -q '"result"'; then
               echo "Hardhat fork ready after ${i}s"
+              ready=1
               break
             fi
             sleep 1
           done
+          if [ "$ready" != "1" ]; then
+            echo "::error::Hardhat fork never became ready on :8545 within 120s (Alchemy/compile slow)."
+            kill $FORK_PID 2>/dev/null || true
+            exit 1
+          fi
           LOCALHOST_RPC_URL=http://127.0.0.1:8545 yarn deploy
           kill $FORK_PID 2>/dev/null || true
           # `deployedContracts.ts` is committed (see AGENTS.md invariant). If this
