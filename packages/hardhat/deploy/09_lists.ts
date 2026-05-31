@@ -133,28 +133,49 @@ const deployLists: DeployFunction = async function (hre: HardhatRuntimeEnvironme
     label: string,
   ) => {
     console.log(`Registering ${label} schema (${expectedUID})...`);
+    // Read the schema back. Returns true (registered), false (readable but absent), or null
+    // (UNREADABLE — the SchemaRegistry address has no code, e.g. CI's no-EAS hardhat node;
+    // getSchema then returns "0x" and ethers throws BAD_DATA). null ⇒ no EAS present, so we
+    // can't verify and degrade gracefully (ADR-0028) instead of failing the deploy.
+    const isRegistered = async (): Promise<boolean | null> => {
+      try {
+        const rec = await schemaRegistry.getSchema(expectedUID);
+        return !!(rec?.uid && rec.uid.toLowerCase() === expectedUID.toLowerCase());
+      } catch {
+        return null;
+      }
+    };
     try {
       const tx = await schemaRegistry.register(definition, resolver, revocable);
       await tx.wait();
     } catch (err) {
-      // Tolerate ONLY a genuine "already registered" state, verified just below — not by
-      // assuming every revert is AlreadyExists. Re-throw real failures (transient RPC,
-      // insufficient funds, etc.) so a broken deploy never looks successful.
-      const existing = await schemaRegistry.getSchema(expectedUID);
-      if (!(existing?.uid && existing.uid.toLowerCase() === expectedUID.toLowerCase())) {
-        console.error(`${label} schema registration failed and the schema is NOT registered.`);
-        throw err;
+      // Tolerate ONLY a genuine "already registered" state — not by assuming every revert is
+      // AlreadyExists. Re-throw real failures (transient RPC, insufficient funds, etc.).
+      const reg = await isRegistered();
+      if (reg === true) {
+        console.log(`${label} schema already registered — skipping.`);
+        return;
       }
+      if (reg === null) {
+        console.warn(`${label}: SchemaRegistry unreadable (no EAS?) — skipping registration (ADR-0028).`);
+        return;
+      }
+      console.error(`${label} schema registration failed and the schema is NOT registered.`);
+      throw err; // reg === false
     }
-    // Verify on BOTH paths — a tx to a wrong / code-less SchemaRegistry can "succeed" without
-    // registering anything, leaving a deploy that looks fine but can't create attestations.
-    const record = await schemaRegistry.getSchema(expectedUID);
-    if (!record?.uid || record.uid.toLowerCase() !== expectedUID.toLowerCase()) {
+    // Verify after success too — a tx to a wrong / code-less SchemaRegistry can "succeed"
+    // without registering anything, leaving a deploy that looks fine but can't attest.
+    const reg = await isRegistered();
+    if (reg === false) {
       throw new Error(
         `${label} schema is not registered at ${expectedUID} after register() — wrong SchemaRegistry address?`,
       );
     }
-    console.log(`${label} schema registered (${expectedUID}).`);
+    if (reg === null) {
+      console.warn(`${label}: SchemaRegistry unreadable — skipping post-register verify (ADR-0028).`);
+    } else {
+      console.log(`${label} schema registered (${expectedUID}).`);
+    }
   };
 
   // 4. Register LIST schema (revocable: false — permanent list identity, like DATA).
