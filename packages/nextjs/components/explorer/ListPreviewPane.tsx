@@ -311,7 +311,7 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
   // ── Editions / lenses ───────────────────────────────────────────────────────
   // A list is per-attester: each contributor ("lens"/"edition") has their own entries.
   // Viewing defaults to the curator's edition (so you see the list they made); you edit
-  // only your own. Contributors are discovered from ListEntryAttested events on this list.
+  // only your own. Contributors are discovered from the on-chain attester index (see below).
   const curator = (mode?.exists ? mode.curator : (listAttester as `0x${string}`)) as `0x${string}`;
   const [lens, setLens] = useState<`0x${string}` | undefined>(undefined);
   const effectiveLens = (lens ?? curator ?? connectedAddress ?? zeroAddress) as `0x${string}`;

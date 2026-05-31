@@ -309,6 +309,18 @@ async function main() {
   assert("4-a Bob's lens: Carol=1", (await listReader.countOf(openListUID, bobAddr, identityKeyCarol)) === 1n);
   assert("4-a Bob's lens: Bob=0", (await listReader.countOf(openListUID, bobAddr, identityKeyBob)) === 0n);
 
+  // 4-a': On-chain attester index (consensus state — what the UI's edition picker and any
+  // smart contract reads, NOT event logs). Alice and Bob have each attested an entry, so the
+  // index must enumerate exactly [alice, bob], deduped, and report count 2.
+  const attCount = await listEntryResolver.getListAttesterCount(openListUID);
+  const attPage = await listEntryResolver.getListAttesters(openListUID, 0n, 100n);
+  const attSet = new Set(attPage.map((a: string) => a.toLowerCase()));
+  assert("4-a' getListAttesterCount == 2", attCount === 2n);
+  assert("4-a' getListAttesters page length == 2", attPage.length === 2);
+  assert("4-a' index contains Alice", attSet.has(aliceAddr.toLowerCase()));
+  assert("4-a' index contains Bob", attSet.has(bobAddr.toLowerCase()));
+  assert("4-a' index deduped (no Carol — she attested nothing)", !attSet.has(carolAddr.toLowerCase()));
+
   // 4-b: Same member in two lenses (open curation) — Alice also adds Carol
   console.log("  4-b: Same member in two lenses");
   const aliceAddsCarolTx = await eas.connect(alice).attest({
@@ -341,6 +353,9 @@ async function main() {
   assert("4-d Alice's lens: Carol removed", (await listReader.countOf(openListUID, aliceAddr, identityKeyCarol)) === 0n);
   assert("4-d Bob's lens: Carol still present", (await listReader.countOf(openListUID, bobAddr, identityKeyCarol)) === 1n);
   assert("4-d Alice now has 1 entry", (await listReader.length(openListUID, aliceAddr)) === 1n);
+  // Attester index is append-only consensus state: revoking an entry never removes an
+  // attester (Alice still appears even though one of her entries is gone).
+  assert("4-d getListAttesterCount still == 2 after revoke", (await listEntryResolver.getListAttesterCount(openListUID)) === 2n);
 
   // 4-e: Typed accessor with wrong lens reverts
   console.log("  4-e: Wrong-lens revert on typed accessor");
