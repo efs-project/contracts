@@ -117,9 +117,14 @@ EFS files are modified by issuing new attestations.
 
 ---
 
-## List Workflows
+## List & Sort Workflows
 
-EFS lists use the kernel/overlay architecture: the kernel (EFSIndexer) tracks items in insertion order; the sort overlay (EFSSortOverlay) maintains shared sorted linked lists on top (keyed by `(sortInfoUID, parentAnchor)` — lens filtering is applied at read time). There is no separate list contract. See [Lists and Collections](./06-Lists-and-Collections.md) for the full design.
+"List" in EFS spans two **distinct** mechanisms — don't conflate them:
+
+- **Curated lists** — the `LIST` (declaration) + `LIST_ENTRY` (membership) EAS schemas, each with their own resolver (`ListResolver`, `ListEntryResolver`; read via the stateless `ListReader`), per ADR-0044 / ADR-0046. Explicit, per-attester membership with write-time shape enforcement (typed / no-duplicates / append-only / capped). Entry order and free-text label are PIN-bound (cardinality-1) PROPERTYs on each stable `LIST_ENTRY` UID — **not** schema fields, and **not** the sort overlay. Workflows 22–24 below; authoritative model in [Lists and Collections](./06-Lists-and-Collections.md) and [Data Models and Schemas](./02-Data-Models-and-Schemas.md).
+- **Sorted directories** — ordering the children of an ordinary directory Anchor via `SORT_INFO` + the shared `EFSSortOverlay` (a kernel overlay keyed by `(sortInfoUID, parentAnchor)`; lens filtering applied at read time). No dedicated list contract is involved here. Workflows 16–21 below; authoritative API in [Sort Overlay Architecture](./07-Sort-Overlay-Architecture.md).
+
+The two compose — a curator can keep a `LIST` *and* expose a sort over a directory — but they are separate primitives with separate contracts.
 
 ### 16. Create a New Sort and Add Items
 
@@ -207,3 +212,23 @@ The overlay validates each position with `ISortFunc.isLessThan` on-chain and rev
 - **Step 1**: When creating the SORT_INFO, set `targetSchema = DATA_SCHEMA_UID`.
 - **Enforcement**: `ISortFunc.getSortKey` returns empty bytes for items whose schema doesn't match `targetSchema`. The overlay skips them automatically (empty key = ineligible), so they never appear in the sorted list.
 - **Result**: Only Anchors with `anchorSchema == DATA_SCHEMA_UID` appear in the sorted view. Sort naming Anchors and other meta-anchors are automatically excluded.
+
+### 22. Create a Curated List (LIST) and Add Entries (LIST_ENTRY)
+
+- **Action**: A curator creates an explicit, shape-enforced collection (ADR-0044, ADR-0046).
+- **Step 1 — Declare the list**: Attest a `LIST` (non-revocable) fixing the shape: `allowsDuplicates`, `appendOnly`, `targetType` (ANY=0 / ADDR=1 / SCHEMA=2), `targetSchema` (the required schema UID when `targetType=SCHEMA`, else `bytes32(0)`), `maxEntries` (uint32 cap; 0 = uncapped). `ListResolver` validates the shape at write time. The LIST UID is the permanent collection identity (like DATA).
+- **Step 2 — (optional) Name the list**: Bind a `name` PROPERTY onto the LIST UID via PIN for a human label (ADR-0034 convention).
+- **Step 3 — Add an entry**: Attest a `LIST_ENTRY(listUID, target)` (revocable). The member is encoded per the LIST's `targetType` — ANY: opaque nonzero key in `target`; ADDR: address in the EAS `recipient` field with `target = bytes32(0)`; SCHEMA: the member attestation UID in `target` (must exist, schema must match). `ListEntryResolver` enforces type / no-duplicates / append-only / cap against the **caller's own lens** and records it in the per-attester `EntryRecord[]`. The entry UID is stable membership identity.
+- **Step 4 — (optional) Set order / label**: Bind PIN PROPERTYs onto the **entry UID** — order under the `weight` key anchor, free text under `name` / `description`. Cardinality-1, so re-attesting supersedes in O(1) without touching membership.
+- **Result**: `ListReader.entries(listUID, attester, start, len)` pages the curator's entries; `ListReader.length` / `countOf` / `getMode` expose count and shape. Reads are lens-scoped — each attester sees only their own entries.
+
+### 23. Reorder or Relabel a List Entry
+
+- **Reorder**: Re-attest the order PROPERTY (the `weight`-key PIN) on the entry UID with a new value. Membership and the entry UID are untouched — ADR-0046 deliberately moved order *off* the entry so reordering never orphans it (the footgun the original weight-field design carried).
+- **Relabel**: Re-attest the `name` / `description` PROPERTY PIN on the entry UID. Same O(1) supersession.
+
+### 24. Remove a List Entry
+
+- **Action**: Drop a member from a curated list.
+- **Revoke**: `eas.revoke(LIST_ENTRY_SCHEMA_UID, entryUID)`. `ListEntryResolver.onRevoke` removes it from the attester's `EntryRecord[]` via swap-and-pop. **Blocked** (`ListIsAppendOnly`) when the LIST was declared `appendOnly`.
+- **Order/label PROPERTYs** on the revoked entry UID become inert (the entry is gone); no separate cleanup is required.
