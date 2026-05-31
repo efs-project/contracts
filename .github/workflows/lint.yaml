@@ -86,6 +86,10 @@ jobs:
     env:
       MAINNET_FORKING_ENABLED: "true"
       FORK_BLOCK: "10691000"
+      # The default Alchemy demo key is rate-limited and returns 429 in CI, so the fork
+      # never starts. Point at a public archive RPC (drpc) that serves the pinned block.
+      # If this proves flaky, replace with an Alchemy/Infura key via repo secrets.
+      SEPOLIA_FORK_RPC_URL: "https://sepolia.drpc.org"
     steps:
       - uses: actions/checkout@master
 

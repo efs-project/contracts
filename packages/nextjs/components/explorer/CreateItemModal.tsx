@@ -437,8 +437,12 @@ export const CreateItemModal = ({
       notification.error(nameError);
       return;
     }
-    if (listTargetType === 2 && !listTargetSchema.startsWith("0x")) {
-      notification.error("EFS Files mode requires a target schema UID (0x…)");
+    // SCHEMA mode: require a full 32-byte UID BEFORE attesting the (non-revocable)
+    // list-slot anchor. A loose `0x…` check let `0x1` through, which then reverted at
+    // the LIST attest — but only after the anchor was already created, leaving a
+    // permanent unplaced list card that can't be opened. Validate up front.
+    if (listTargetType === 2 && !/^0x[0-9a-fA-F]{64}$/.test(listTargetSchema.trim())) {
+      notification.error("EFS Files mode requires a 32-byte schema UID (0x + 64 hex).");
       return;
     }
     const maxE = parseInt(listMaxEntries, 10);
