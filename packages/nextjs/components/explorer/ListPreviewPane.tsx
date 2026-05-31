@@ -462,8 +462,16 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
   // nextOrder() derive duplicate ranks off a truncated tail. Loop the reader cursor until a
   // short page, with a safety cap for the debug UI.
   const [rawEntries, setRawEntries] = useState<RawEntry[] | undefined>(undefined);
+  // Generation guard: each refetch invocation claims the next generation; only the latest may
+  // commit. Clearing rawEntries on lens change cancels the stale ENRICH, but not an already
+  // in-flight refetchEntries() for the OLD lens — if a Bob→Alice switch lands while Bob's
+  // `entries(listUID, Bob, …)` read is pending, that read would otherwise resolve afterward and
+  // setRawEntries(Bob's UIDs) under the Alice lens, re-opening the cross-lens write hazard. The
+  // gen check below discards any fetch that a newer one has superseded.
+  const fetchGenRef = useRef(0);
   const refetchEntries = useCallback(async () => {
     if (!publicClient || !listReaderAddress) return;
+    const myGen = ++fetchGenRef.current;
     const PAGE = 200n;
     const SAFETY = 10000; // far beyond any hand-curated list; bounds a runaway read
     const all: RawEntry[] = [];
@@ -478,6 +486,7 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
         all.push(...page);
         if (BigInt(page.length) < PAGE || all.length >= SAFETY) break;
       }
+      if (myGen !== fetchGenRef.current) return; // a newer refetch (e.g. lens switch) superseded us
       setRawEntries(all);
     } catch (e) {
       console.error("[lists] failed to read entries", e);

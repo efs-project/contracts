@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import { encodeAbiParameters, zeroAddress, zeroHash } from "viem";
 import { useAccount, usePublicClient, useReadContract, useWaitForTransactionReceipt, useWriteContract } from "wagmi";
@@ -168,8 +168,12 @@ export default function ListDetailPage() {
   type EntryRow = { entryUID: `0x${string}`; identityKey: `0x${string}` };
   const publicClient = usePublicClient();
   const [entries, setEntries] = useState<readonly EntryRow[] | undefined>(undefined);
+  // Generation guard (mirrors ListPreviewPane): if `lensAddress` changes (wallet account switch)
+  // while a paginated read is in flight, the stale read must not setEntries() under the new lens.
+  const fetchGenRef = useRef(0);
   const refetchEntries = useCallback(async () => {
     if (!publicClient || !listReaderAddress || !listUID) return;
+    const myGen = ++fetchGenRef.current;
     const PAGE = 200n;
     const SAFETY = 10000; // far beyond any hand-curated list; bounds a runaway read
     const all: EntryRow[] = [];
@@ -184,6 +188,7 @@ export default function ListDetailPage() {
         all.push(...page);
         if (BigInt(page.length) < PAGE || all.length >= SAFETY) break;
       }
+      if (myGen !== fetchGenRef.current) return; // superseded by a newer refetch (e.g. account switch)
       setEntries(all);
     } catch (e) {
       console.error("[lists] failed to read entries", e);
