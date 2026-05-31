@@ -141,6 +141,16 @@ When uncertain about a permanent storage/encoding choice, pick the direction who
 
 Across this arc, the human's highest-value moves were not doing design work — they were the frame-puncturing questions: *"you make this sound good, but is logic actually enforced on-chain?"*, *"is this a problem for files and folders too?"*, *"explain it simply with examples."* Each broke the agents out of a confident-but-wrong frame. For AI-driven design, structure the process so the human is repeatedly invited to challenge the frame, and treat their "dumb-sounding" questions as the most valuable input — they're usually pointing at the unexamined assumption.
 
+### Prose edits to load-bearing ADRs must re-verify converged reviewer findings — symmetric on both sides of the edit
+
+After a PR-review prose edit relaxed an ADR-0044 §8 CREATE2 prescription that three external reviewers (Gemini, Claude 4.7, Codex ×2) had independently converged on, a downstream agent reconciled the Tier-3 `FUTURE_WORK.md` note to the new wording — propagating the over-relaxation rather than catching it. Both sides of the prose-edit pipeline missed the same test.
+
+**Lesson (two-sided):**
+- *The agent making the prose edit* — when editing an ADR clause that touches a finding multiple reviewers converged on, explicitly re-verify the finding still stands under the new wording. The instinct to "describe what shipped" can erase the mainnet/live-network case that the original finding was about.
+- *The agent reconciling downstream artifacts to that edit* — apply the same re-verification test rather than treating the edit as authoritative. Governance does outrank Tier-3 notes, but only when governance got it right. A Tier-3 note that contradicts a freshly-edited ADR is data, not noise: it may be the finding the edit erased.
+
+Surfaced in PR #20 round-2 fidelity review (2026-05-31), self-caught after the over-relaxation propagated. Cost: one extra reconciliation commit + a thread re-correction on a previously-resolved Codex review.
+
 ### Durable artifacts are the AI's memory; the conversation is not
 
 This design survived at least one context compaction — the conversation was summarized and partially lost, but work resumed cleanly because the **design doc + notes file + ADR** held the state. For any long AI design process, the durable artifacts ARE the memory. Invest in them continuously (every round, not just at the end), keep a notes file that records *why* rejected paths were rejected, and never let the live conversation be the only place a decision exists.
