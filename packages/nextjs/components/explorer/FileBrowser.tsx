@@ -1300,6 +1300,15 @@ export const FileBrowser = ({
     ) {
       throw new Error("Not ready — reconnect wallet and try again.");
     }
+    // Lists supported (ListReader deployed) but LIST_SCHEMA_UID hasn't loaded yet: scanning now
+    // would walk LIST anchors as plain subfolders and silently omit the user's LIST placement
+    // PINs from the cascade — so revoking only the folder visibility TAG would leave those PINs
+    // active, and re-showing the folder later would resurrect the lists (contradicting the
+    // cascade's contract). Fail the scan rather than under-collect. Gated on listReaderAddress so
+    // deployments without Lists (no ListReader → listSchemaUID never resolves) are unaffected.
+    if (listReaderAddress && !listSchemaUID) {
+      throw new Error("List schema still loading — try the delete again in a moment.");
+    }
     const me = connectedAddress as `0x${string}`;
     const dataSchema = dataSchemaUID as `0x${string}`;
     const propertySchema = (propertySchemaUID as `0x${string}` | undefined) ?? zeroHash;
