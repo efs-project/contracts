@@ -119,27 +119,39 @@ const deployLists: DeployFunction = async function (hre: HardhatRuntimeEnvironme
     );
   }
 
-  // 4. Register LIST schema (nonce+1)
-  // revocable: false — LIST is a permanent list identity (like DATA for content).
-  console.log(`Registering LIST schema (${listSchemaUID})...`);
-  try {
-    const tx = await schemaRegistry.register(LIST_DEFINITION, futureListResolverAddress, false);
-    await tx.wait();
-    console.log("Registered LIST schema");
-  } catch {
-    console.log("LIST schema already exists. Skipping.");
-  }
+  // Register a schema, tolerating ONLY a genuine "already registered" state — verified by
+  // reading the schema back, not by assuming every revert means AlreadyExists. Any other
+  // failure (transient RPC, wrong registry address, insufficient funds, or a nonce-consuming
+  // revert that would also invalidate the precomputed resolver address) is re-thrown, so a
+  // broken deploy never silently looks successful (Codex review). EAS `AlreadyExists` reverts
+  // before sending a tx, so re-runs stay idempotent (no nonce consumed).
+  const registerSchema = async (
+    definition: string,
+    resolver: string,
+    revocable: boolean,
+    expectedUID: string,
+    label: string,
+  ) => {
+    console.log(`Registering ${label} schema (${expectedUID})...`);
+    try {
+      const tx = await schemaRegistry.register(definition, resolver, revocable);
+      await tx.wait();
+      console.log(`Registered ${label} schema`);
+    } catch (err) {
+      const existing = await schemaRegistry.getSchema(expectedUID);
+      if (existing?.uid && existing.uid.toLowerCase() === expectedUID.toLowerCase()) {
+        console.log(`${label} schema already registered — skipping.`);
+      } else {
+        console.error(`${label} schema registration failed and the schema is NOT registered.`);
+        throw err;
+      }
+    }
+  };
 
-  // 5. Register LIST_ENTRY schema (nonce+2)
-  // revocable: true — entries are removable (unless list.appendOnly).
-  console.log(`Registering LIST_ENTRY schema (${listEntrySchemaUID})...`);
-  try {
-    const tx = await schemaRegistry.register(LIST_ENTRY_DEFINITION, futureListEntryResolverAddress, true);
-    await tx.wait();
-    console.log("Registered LIST_ENTRY schema");
-  } catch {
-    console.log("LIST_ENTRY schema already exists. Skipping.");
-  }
+  // 4. Register LIST schema (revocable: false — permanent list identity, like DATA).
+  await registerSchema(LIST_DEFINITION, futureListResolverAddress, false, listSchemaUID, "LIST");
+  // 5. Register LIST_ENTRY schema (revocable: true — entries removable unless list.appendOnly).
+  await registerSchema(LIST_ENTRY_DEFINITION, futureListEntryResolverAddress, true, listEntrySchemaUID, "LIST_ENTRY");
 
   // 6. Deploy ListEntryResolver (nonce+3)
   // Stateful: EntryRecord[] wide storage, entryCount, swap-and-pop index.
