@@ -882,32 +882,45 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
     try {
       ops.log(opId, "Attesting membership…");
       createdEntryUID = await attestEntry(recipient, target);
-      // Order PROPERTY on the (stable) entry UID.
-      await placeEntryProperty(createdEntryUID, ORDER_KEY, nextOrder().toString(), msg => ops.log(opId, msg));
-      // Label PROPERTY: always for ANY free-text items (= the text). For ADDR/SCHEMA
-      // reference items, only when the user typed an override (handled via edit later).
+      // Label PROPERTY FIRST for ANY free-text: it's the only on-chain copy of the typed
+      // text, and append-only entries can't be rolled back — so land the label before the
+      // (less critical, recoverable-via-drag) order. For ADDR/SCHEMA the reference is the
+      // entity itself; labels are an optional override added via edit later.
       if (targetType === MODE.ANY && freeText) {
         await placeEntryProperty(createdEntryUID, NAME_KEY, freeText, msg => ops.log(opId, msg));
       }
+      // Order PROPERTY on the (stable) entry UID.
+      await placeEntryProperty(createdEntryUID, ORDER_KEY, nextOrder().toString(), msg => ops.log(opId, msg));
       ops.complete(opId, "Added");
       setDraft("");
       await refetchEntries();
     } catch (err: any) {
       const msg = err?.shortMessage ?? err?.message ?? "Failed to add";
-      // F2: if the entry landed but its order/label didn't, an ANY item's typed text
-      // (recoverable only from the label PROPERTY) would be orphaned as an unreadable
-      // keccak hash. Best-effort revoke the half-written entry so nothing unrecoverable
-      // is left behind. (If the failure WAS the entry attest, createdEntryUID is unset.)
-      if (createdEntryUID) {
+      if (createdEntryUID && mode?.appendOnly) {
+        // Append-only lists reject entry revokes, so we CANNOT roll back the membership tx
+        // (calling revokeEntry here would itself revert). The entry is permanent but
+        // completable: order/label are PROPERTYs on the stable entry UID, so the user
+        // finishes it via the row's ✎ (label, written label-first above) + drag (order).
+        notification.error(
+          "Entry added, but its label/order didn't finish saving. This list is append-only " +
+            "(entries can't be removed) — use the ✎ on the row to set its label and drag to reorder.",
+        );
+      } else if (createdEntryUID) {
+        // F2 (non-append-only): the entry landed but a follow-up PROPERTY write failed. An
+        // ANY item's typed text is recoverable only from the label PROPERTY, so best-effort
+        // revoke the half-written entry rather than orphan an unreadable keccak row.
         ops.log(opId, "Rolling back incomplete entry…");
         try {
           await revokeEntry({ entryUID: createdEntryUID } as Entry);
         } catch (rbErr) {
           console.error("[lists] failed to roll back orphaned entry", createdEntryUID, rbErr);
         }
+        notification.error(/DuplicateIdentity/.test(msg) ? "That item is already in the list" : msg);
+      } else {
+        // The membership attest itself failed — nothing landed.
+        notification.error(/DuplicateIdentity/.test(msg) ? "That item is already in the list" : msg);
       }
       ops.fail(opId, msg);
-      notification.error(/DuplicateIdentity/.test(msg) ? "That item is already in the list" : msg);
       await refetchEntries();
     } finally {
       setBusy(false);
