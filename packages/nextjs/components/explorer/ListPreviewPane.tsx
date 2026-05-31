@@ -412,10 +412,16 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
   // Viewing defaults to the curator's edition (so you see the list they made); you edit
   // only your own. Contributors are discovered from the on-chain attester index (see below).
   const curator = (mode?.exists ? mode.curator : (listAttester as `0x${string}`)) as `0x${string}`;
+  // Default the VIEWING lens to the attester that surfaced/opened this card — `listAttester`
+  // is the lens whose placement `openList` resolved through the ?lenses= waterfall. Without
+  // this, a card opened from ?lenses=bob would default to `mode.curator` (Alice) and show her
+  // often-empty edition instead of Bob's, which is what made the card visible. Falls back to
+  // the curator when no specific lens opened it.
+  const defaultLens = ((listAttester as `0x${string}`) || curator) as `0x${string}`;
   const [lens, setLens] = useState<`0x${string}` | undefined>(undefined);
-  const effectiveLens = (lens ?? curator ?? connectedAddress ?? zeroAddress) as `0x${string}`;
+  const effectiveLens = (lens ?? defaultLens ?? connectedAddress ?? zeroAddress) as `0x${string}`;
   useEffect(() => {
-    setLens(undefined); // reset to default (curator) when the list changes
+    setLens(undefined); // reset to the default lens when the list changes
   }, [uid]);
 
   // Contributors come from the on-chain attester index (consensus state, not event logs —
@@ -444,11 +450,12 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
       seen.add(k);
       out.push(a);
     };
+    push(defaultLens); // the lens that opened this card — the default edition
     push(curator);
     push(connectedAddress);
     contributors.forEach(c => push(c));
     return out;
-  }, [curator, connectedAddress, contributors]);
+  }, [defaultLens, curator, connectedAddress, contributors]);
 
   // Read ALL entries for this lens, paginated. A list can be uncapped (maxEntries == 0) or
   // capped above one page, so a single 100-entry read would hide later entries and make

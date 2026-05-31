@@ -276,6 +276,13 @@ export const FileBrowser = ({
     attester: string;
   } | null>(null);
 
+  // List anchors whose placement the user just revoked. The standard (non-lens)
+  // `getDirectoryPage` returns anchor children regardless of an active LIST PIN, so a
+  // deleted list would otherwise linger as a dead card (openList reports it missing).
+  // Suppress them locally until the user navigates away. (The lens path already filters
+  // by active placement, so this only matters for the standard view.)
+  const [deletedListAnchors, setDeletedListAnchors] = useState<Set<string>>(new Set());
+
   // Lists are placed like files (ADR-0044 §1): a named ANCHOR with anchorType=LIST_SCHEMA_UID
   // plus a PIN(definition=anchor, refUID=LIST). They surface as anchor children of the folder
   // with `item.schema === LIST_SCHEMA_UID` — no dedicated read needed. The PIN target (the LIST
@@ -292,6 +299,7 @@ export const FileBrowser = ({
 
   useEffect(() => {
     setPageSize(50n);
+    setDeletedListAnchors(new Set()); // clear delete-suppression when navigating folders
   }, [currentAnchorUID]);
 
   // Load EdgeResolver address and "tags" anchor UID once.
@@ -1453,6 +1461,9 @@ export const FileBrowser = ({
         opId,
       );
       ops.complete(opId, `Deleted list "${item.name || ""}".`);
+      // Suppress the now-unplaced anchor locally — the standard getDirectoryPage still
+      // returns it (the anchor is permanent), which would leave a dead card.
+      setDeletedListAnchors(prev => new Set(prev).add((item.uid as string).toLowerCase()));
       if (selectedList?.anchorUID === item.uid) closePreview();
       if (useLensesQuery) await refetchLensListItems();
       else await refetchStandardItems();
@@ -1619,7 +1630,8 @@ export const FileBrowser = ({
               (item: any) =>
                 (isTopic(item) || isFile(item, dataSchemaUID) || isList(item, listSchemaUID)) &&
                 item.uid !== tagsRoot &&
-                item.uid !== sortsAnchorUID,
+                item.uid !== sortsAnchorUID &&
+                !deletedListAnchors.has((item.uid as string)?.toLowerCase()),
             )
             .map((item: any) => {
               // isTopic = generic anchor (folder) · isFile = DATA anchor · isList = LIST anchor (ADR-0044 §1)
