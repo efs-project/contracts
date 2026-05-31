@@ -579,7 +579,16 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
     itemsRef.current = items;
   }, [items]);
   // Clear immediately when the list or the viewed lens changes (entries refetch on arg change).
-  useEffect(() => setItems([]), [uid, effectiveLens]);
+  // Also drop the prior lens's membership: the enrich effect below keys on `effectiveLens` and
+  // would otherwise re-render the OLD `rawEntries` (still present until the async refetch lands)
+  // under the NEW lens — briefly showing e.g. Bob's entry UIDs as Alice's editable edition, so
+  // an edit/reorder in that window writes Alice-scoped PROPERTYs onto Bob's entry UIDs. Clearing
+  // rawEntries here forces an empty enrich and cancels any in-flight stale enrich (the `cancelled`
+  // guard) until `refetchEntries()` reloads for the new lens.
+  useEffect(() => {
+    setItems([]);
+    setRawEntries(undefined);
+  }, [uid, effectiveLens]);
 
   useEffect(() => {
     let cancelled = false;

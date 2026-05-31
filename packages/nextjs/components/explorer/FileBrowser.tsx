@@ -1631,7 +1631,12 @@ export const FileBrowser = ({
                 (isTopic(item) || isFile(item, dataSchemaUID) || isList(item, listSchemaUID)) &&
                 item.uid !== tagsRoot &&
                 item.uid !== sortsAnchorUID &&
-                !deletedListAnchors.has((item.uid as string)?.toLowerCase()),
+                // Local delete-suppression applies ONLY to the standard unscoped view, where the
+                // permanent list anchor reappears via getDirectoryPage after you revoke your PIN.
+                // In a ?lenses= view the lens query is authoritative — if it still returns the card,
+                // another requested lens actively places the same anchor, so suppressing it would
+                // wrongly hide that lens's list until navigation. deleteList() only revokes YOUR PIN.
+                (useLensesQuery || !deletedListAnchors.has((item.uid as string)?.toLowerCase())),
             )
             .map((item: any) => {
               // isTopic = generic anchor (folder) · isFile = DATA anchor · isList = LIST anchor (ADR-0044 §1)
