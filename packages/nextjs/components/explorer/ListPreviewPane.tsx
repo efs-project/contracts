@@ -223,6 +223,9 @@ const INDEXER_PROPERTY_ABI = [
 // "name" key (ADR-0034).
 const ORDER_KEY = "weight";
 const NAME_KEY = "name";
+// Editable list description (ADR-0046 pattern): a PIN-bound PROPERTY on the stable
+// list UID, lens-scoped. Falls back to MODE_META[targetType].blurb when unset.
+const DESC_KEY = "description";
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
@@ -514,6 +517,25 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
     },
     [publicClient, indexerAddress, edgeResolverAddress, propertySchemaUID, easAddress],
   );
+
+  // ── List description (ADR-0046 pattern, lens-scoped) ─────────────────────────
+  // The list's own "description" PROPERTY on the stable list UID, scoped to the
+  // viewing lens. `null` falls back to MODE_META[targetType].blurb at render.
+  const [listDescription, setListDescription] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    if (!listReaderAddress) return;
+    readEntryProperty(listUID, DESC_KEY, effectiveLens)
+      .then(v => {
+        if (!cancelled) setListDescription(v);
+      })
+      .catch(() => {
+        if (!cancelled) setListDescription(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [listUID, effectiveLens, readEntryProperty, listReaderAddress]);
 
   // Display order — synced from chain (sorted by order property asc), mutated optimistically.
   const [items, setItems] = useState<Entry[]>([]);
@@ -813,9 +835,13 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
     if (!ready || !draft.trim() || busy) return;
     let recipient = zeroAddress as `0x${string}`;
     let target = zeroHash as `0x${string}`;
-    // For ANY free-text items the typed text becomes BOTH the opaque member key
-    // (keccak, for dedup) and the `name` label PROPERTY (the human-readable value).
-    const freeText = targetType === MODE.ANY ? draft.trim() : "";
+    // For ANY GENUINE free-text items the typed text becomes BOTH the opaque member
+    // key (keccak, for dedup) and the `name` label PROPERTY (the human-readable
+    // value). ANY mode also accepts a bare address or a 32-byte UID (attestation /
+    // schema) — those are encoded as `target` directly with NO name property, so they
+    // render as an address / attestation reference. `freeText` is set only for the
+    // genuine-text case so the name PROPERTY is placed only then.
+    let freeText = "";
     try {
       if (targetType === MODE.ADDR) {
         const v = draft.trim();
@@ -826,7 +852,19 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
         if (!v.startsWith("0x") || v.length !== 66) return notification.error("Enter an attestation UID (0x + 64 hex)");
         target = v as `0x${string}`;
       } else {
-        target = memberKeyForText(freeText);
+        // ANY (heterogeneous): auto-detect the input kind.
+        const v = draft.trim();
+        if (/^0x[0-9a-fA-F]{40}$/.test(v)) {
+          // Bare address → bytes32(uint160(addr)) (left-padded; addrFromKey reverses it).
+          target = ("0x" + v.slice(2).toLowerCase().padStart(64, "0")) as `0x${string}`;
+        } else if (/^0x[0-9a-fA-F]{64}$/.test(v)) {
+          // A 0x + 64-hex UID (attestation or schema) → use it directly.
+          target = v as `0x${string}`;
+        } else {
+          // Genuine free text → keccak member key + a `name` label PROPERTY.
+          freeText = v;
+          target = memberKeyForText(freeText);
+        }
       }
     } catch (err: any) {
       return notification.error(err?.message ?? "Invalid item");
@@ -938,6 +976,41 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
     }
   };
 
+  // ── Edit list description (owner-only; PIN-bound "description" PROPERTY) ──────
+  // ADR-0046 pattern: the description lives in a per-list `description` PROPERTY on
+  // the stable list UID, scoped to the viewing lens. Editing re-attests + re-PINs
+  // that PROPERTY (cardinality 1 → O(1) supersede). Only the owner (viewingOwn) can
+  // edit their own edition's description.
+
+  const [editingDesc, setEditingDesc] = useState(false);
+  const [descDraft, setDescDraft] = useState("");
+  const startEditDesc = () => {
+    setDescDraft(listDescription ?? "");
+    setEditingDesc(true);
+  };
+  const cancelEditDesc = () => {
+    setEditingDesc(false);
+    setDescDraft("");
+  };
+
+  const handleSaveDescription = async (text: string) => {
+    const next = text.trim();
+    if (busy) return;
+    setEditingDesc(false);
+    const opId = ops.start(`Edit description of “${name}”`);
+    setBusy(true);
+    setListDescription(next || null); // optimistic
+    try {
+      await placeEntryProperty(listUID, DESC_KEY, next, msg => ops.log(opId, msg));
+      ops.complete(opId, "Saved");
+    } catch (err: any) {
+      ops.fail(opId, err?.shortMessage ?? err?.message ?? "Failed");
+      setListDescription(await readEntryProperty(listUID, DESC_KEY, effectiveLens).catch(() => null));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   // ── Reorder (drag → re-PIN the moved entry's order PROPERTY; entry UID stable) ─
 
   const dragSrc = useRef<number | null>(null);
@@ -1011,8 +1084,8 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
         <AttestationLabel uid={e.identityKey} easAddress={easAddress} />
       );
     }
-    // ANY free-text: label PROPERTY (ADR-0046), else legacy unpacked text, else short-hex.
-    const text = e.label ?? unpackText(e.identityKey);
+    // ANY (heterogeneous): an explicit `name` label always wins, then we auto-detect
+    // the identityKey shape — left-padded address, full 32-byte UID, else opaque key.
     if (editingUID === e.entryUID) {
       return (
         <input
@@ -1028,9 +1101,21 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
         />
       );
     }
-    return text !== null ? (
-      <span className="text-sm leading-snug break-words">{text}</span>
-    ) : (
+    // 1. Explicit label (free text or override) → show it.
+    const text = e.label ?? unpackText(e.identityKey);
+    if (text !== null) {
+      return <span className="text-sm leading-snug break-words">{text}</span>;
+    }
+    // 2. Address-shaped key (high 12 bytes zero, low 20 bytes nonzero) → Address.
+    if (/^0x0{24}[0-9a-f]{40}$/i.test(e.identityKey) && e.identityKey !== zeroHash) {
+      return <Address address={addrFromKey(e.identityKey)} size="sm" onlyEnsOrAddress disableAddressLink />;
+    }
+    // 3. Any other full 32-byte value → treat as a UID (attestation / schema).
+    if (e.identityKey !== zeroHash) {
+      return <AttestationLabel uid={e.identityKey} easAddress={easAddress} />;
+    }
+    // 4. Fallback → opaque key.
+    return (
       <span className="font-mono text-xs text-base-content/50" title="Opaque key (not text)">
         {shortHex(e.identityKey)}
       </span>
@@ -1039,11 +1124,61 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
 
   // ── Render ────────────────────────────────────────────────────────────────
 
+  // Add bar — rendered at the TOP of the list (above the items scroll area).
+  const addBar = canEdit && mode?.exists && (
+    <form onSubmit={handleAdd} className="shrink-0 border-b border-base-300 p-3 bg-base-100/60">
+      {targetType === MODE.ADDR ? (
+        <div className="flex items-center gap-2">
+          <div className="flex-1 min-w-0">
+            <AddressInput value={draft} onChange={setDraft} placeholder={meta.placeholder} disabled={busy} />
+          </div>
+          <button type="submit" className="btn btn-sm btn-primary btn-square flex-shrink-0" disabled={busy || !draft.trim()}>
+            {busy ? <span className="loading loading-spinner loading-xs" /> : <PlusIcon className="w-4 h-4" />}
+          </button>
+        </div>
+      ) : (
+        <div className="flex items-center gap-2">
+          <div className="relative flex-1">
+            <input
+              className={`input input-sm w-full bg-base-200 border-transparent focus:bg-base-100 focus:border-base-300 ${targetType === MODE.SCHEMA ? "font-mono text-xs" : ""}`}
+              placeholder={meta.placeholder}
+              value={draft}
+              onChange={ev => setDraft(ev.target.value)}
+              disabled={busy}
+              autoComplete="off"
+            />
+          </div>
+          <button
+            type="submit"
+            className="btn btn-sm btn-primary btn-square flex-shrink-0"
+            disabled={busy || !draft.trim() || schemaAddBlocked}
+          >
+            {busy ? <span className="loading loading-spinner loading-xs" /> : <PlusIcon className="w-4 h-4" />}
+          </button>
+        </div>
+      )}
+      {targetType === MODE.SCHEMA && schemaDraftIsUID && (
+        <p className="text-[10px] mt-1.5 flex items-center gap-1">
+          {draftAtt === undefined ? (
+            <span className="text-base-content/40">Checking attestation…</span>
+          ) : !draftAttExists ? (
+            <span className="text-error">No attestation with that UID on this chain.</span>
+          ) : !draftSchemaMatches ? (
+            <span className="text-error">
+              Wrong schema — this list only accepts {shortHex(requiredSchema ?? zeroHash)}.
+            </span>
+          ) : (
+            <span className="text-success flex items-center gap-1">
+              <CheckIcon className="w-3 h-3" /> Matches the list schema.
+            </span>
+          )}
+        </p>
+      )}
+    </form>
+  );
+
   return (
     <div className="preview-pane absolute inset-0 z-10 max-lg:bg-base-200 lg:static lg:w-[380px] lg:flex-shrink-0 flex flex-col overflow-hidden border-l border-base-300 bg-gradient-to-b from-base-100 to-base-200/40">
-      {/* Purple spine */}
-      <div className="absolute left-0 top-0 bottom-0 w-[3px] bg-gradient-to-b from-purple-500/80 via-purple-500/30 to-transparent pointer-events-none" />
-
       {/* Header */}
       <div className="shrink-0 px-4 pt-4 pb-3 border-b border-base-300">
         <div className="flex items-start justify-between gap-2">
@@ -1051,9 +1186,38 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
             <div className="mt-0.5 w-8 h-8 rounded-lg bg-purple-500/15 flex items-center justify-center flex-shrink-0">
               <QueueListIcon className="w-4.5 h-4.5 text-purple-400" />
             </div>
-            <div className="min-w-0">
+            <div className="min-w-0 group/desc">
               <h3 className="font-semibold text-base leading-tight truncate tracking-tight">{name}</h3>
-              <p className="text-[11px] text-base-content/45 leading-tight mt-0.5">{meta.blurb}</p>
+              {/* Description: the list's own "description" PROPERTY (lens-scoped),
+                  falling back to the mode blurb. Owners can edit their own edition's. */}
+              {editingDesc ? (
+                <input
+                  autoFocus
+                  className="input input-xs w-full mt-0.5 bg-base-100 border-primary/40"
+                  value={descDraft}
+                  placeholder={meta.blurb}
+                  onChange={ev => setDescDraft(ev.target.value)}
+                  onKeyDown={ev => {
+                    if (ev.key === "Enter") handleSaveDescription(descDraft);
+                    if (ev.key === "Escape") cancelEditDesc();
+                  }}
+                  onBlur={() => handleSaveDescription(descDraft)}
+                />
+              ) : (
+                <p className="text-[11px] text-base-content/45 leading-tight mt-0.5 flex items-center gap-1">
+                  <span className="truncate">{listDescription ?? meta.blurb}</span>
+                  {viewingOwn && (
+                    <button
+                      className="opacity-0 group-hover/desc:opacity-100 transition-opacity text-base-content/40 hover:text-primary flex-shrink-0"
+                      disabled={busy}
+                      onClick={startEditDesc}
+                      title="Edit description"
+                    >
+                      <PencilSquareIcon className="w-3 h-3" />
+                    </button>
+                  )}
+                </p>
+              )}
             </div>
           </div>
           <button className="btn btn-ghost btn-xs btn-circle -mr-1 -mt-1" onClick={onClose}>
@@ -1116,6 +1280,9 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
         </div>
       )}
 
+      {/* Add bar — at the top of the list, above the items scroll area */}
+      {addBar}
+
       {/* Items */}
       <div className="flex-1 overflow-y-auto">
         {mode && !mode.exists && (
@@ -1126,7 +1293,7 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
           <div className="flex flex-col items-center justify-center h-40 gap-3 text-base-content/25 px-6 text-center">
             <QueueListIcon className="w-10 h-10" />
             <span className="text-sm">
-              {canEdit ? `Empty — add your first ${meta.singular} below` : "No items yet"}
+              {canEdit ? `Empty — add your first ${meta.singular} above` : "No items yet"}
             </span>
           </div>
         )}
@@ -1226,63 +1393,6 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
           })}
         </ul>
       </div>
-
-      {/* Add bar */}
-      {canEdit && mode?.exists && (
-        <form onSubmit={handleAdd} className="shrink-0 border-t border-base-300 p-3 bg-base-100/60">
-          {targetType === MODE.ADDR ? (
-            <div className="flex items-center gap-2">
-              <div className="flex-1 min-w-0">
-                <AddressInput value={draft} onChange={setDraft} placeholder={meta.placeholder} disabled={busy} />
-              </div>
-              <button
-                type="submit"
-                className="btn btn-sm btn-primary btn-square flex-shrink-0"
-                disabled={busy || !draft.trim()}
-              >
-                {busy ? <span className="loading loading-spinner loading-xs" /> : <PlusIcon className="w-4 h-4" />}
-              </button>
-            </div>
-          ) : (
-            <div className="flex items-center gap-2">
-              <div className="relative flex-1">
-                <input
-                  className={`input input-sm w-full bg-base-200 border-transparent focus:bg-base-100 focus:border-base-300 ${targetType === MODE.SCHEMA ? "font-mono text-xs" : ""}`}
-                  placeholder={meta.placeholder}
-                  value={draft}
-                  onChange={ev => setDraft(ev.target.value)}
-                  disabled={busy}
-                  autoComplete="off"
-                />
-              </div>
-              <button
-                type="submit"
-                className="btn btn-sm btn-primary btn-square flex-shrink-0"
-                disabled={busy || !draft.trim() || schemaAddBlocked}
-              >
-                {busy ? <span className="loading loading-spinner loading-xs" /> : <PlusIcon className="w-4 h-4" />}
-              </button>
-            </div>
-          )}
-          {targetType === MODE.SCHEMA && schemaDraftIsUID && (
-            <p className="text-[10px] mt-1.5 flex items-center gap-1">
-              {draftAtt === undefined ? (
-                <span className="text-base-content/40">Checking attestation…</span>
-              ) : !draftAttExists ? (
-                <span className="text-error">No attestation with that UID on this chain.</span>
-              ) : !draftSchemaMatches ? (
-                <span className="text-error">
-                  Wrong schema — this list only accepts {shortHex(requiredSchema ?? zeroHash)}.
-                </span>
-              ) : (
-                <span className="text-success flex items-center gap-1">
-                  <CheckIcon className="w-3 h-3" /> Matches the list schema.
-                </span>
-              )}
-            </p>
-          )}
-        </form>
-      )}
 
       {!connectedAddress && (
         <div className="shrink-0 border-t border-base-300 px-4 py-3 text-xs text-base-content/40">
