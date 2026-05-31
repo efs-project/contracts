@@ -190,21 +190,21 @@ Build and publish a subgraph that aggregates EFS attestations into queryable vie
 
 ## Lists UI — production client features (flagged 2026-05-28)
 
-### ~~Lists in the Explorer folder grid~~ — DONE (2026-05-30)
-Lists now appear as purple cards in the folder grid and open an in-pane editor. Placement uses `LIST.refUID = parentAnchorUID` (ListResolver indexes `_listsByParent`; `EFSFileView.getListsAtParent` reads them). Create/add/edit/remove/reorder are all on-chain; ANY-mode item text is packed into the entry `target` bytes32 (≤31 bytes). See `ListPreviewPane.tsx`, `utils/efs/listEncoding.ts` (unit-tested), and ADR-0044 + decisions.md.
+### ~~Lists in the Explorer folder grid~~ — DONE (2026-05-30; revised 2026-05-31)
+Lists appear as purple cards in the folder grid and open an in-pane editor. Placement is exactly like a file — `ANCHOR(anchorType=LIST_SCHEMA_UID) + LIST(free-floating) + PIN(definition=anchor, refUID=LIST)` (ADR-0044 correction). Per ADR-0046, a LIST_ENTRY is pure membership identity; order + free-text label are PIN-bound PROPERTYs on the stable entry UID (free text is arbitrary length now). ANY-mode `target` is `keccak(text)`. See `ListPreviewPane.tsx`, `utils/efs/listEncoding.ts` (unit-tested), ADR-0044 + ADR-0046 + decisions.md.
 
 ### Lens defaulting — viewing a list shows ONLY your own entries
 `ListPreviewPane` reads `entries(listUID, lens = connectedAddress)`. So you only ever see entries **you** added; opening a list someone else curated shows it empty. For the "share my top-10" use case the viewer needs to see the *curator's* entries (default lens → `mode.curator`), with an attester/lens picker (discovered from `ListEntryAttested` events + a custom-address input, per ADR-0031 first-wins waterfall) to switch views. This is the main gap blocking *shared/curated* lists; personal lists are unaffected. [ADR-0044 §lenses, ADR-0031, ADR-0039]
 
-### ANY-mode item text limited to 31 bytes
-Item text is packed into the entry `target` bytes32, so items longer than 31 UTF-8 bytes are rejected at the input with a byte counter. Fine for groceries/todos/short labels; limiting for descriptive items. Lifting it needs the ADR-0044 §7 PROPERTY-on-entry pattern (a `name`/label PROPERTY attached to each LIST_ENTRY UID — extra attestations per item) or a LIST_ENTRY schema change. See decisions.md (2026-05-29).
+### ~~ANY-mode item text limited to 31 bytes~~ — DONE (2026-05-31, ADR-0046)
+Resolved. Free-text labels are now an arbitrary-length `name` PROPERTY on the entry UID (the ANY-mode `target` is `keccak(text)`); the byte cap is gone. See ADR-0046.
 
 ### Lists edition picker — minor UX warts (devtools, flagged in round-2 review)
 - **Stale edition chips:** `getListAttesters` is append-only (ADR-0009), so an attester who added then revoked all their entries stays in the index and shows as an empty, clickable edition chip. The contract NatSpec says filter by `getLength(listUID, attester) > 0` for *active* lenses; the pane doesn't (would add N reads). Acceptable for the debug UI; filter before production exposure.
 - **List-card load flash:** list anchors are classified via `isList(item, listSchemaUID)`, so until `LIST_SCHEMA_UID` resolves they're briefly filtered out of the grid (a one-frame pop). Not gated on the loading guard because that would delay folders/files for a list-only concern.
 
-### Reorder/edit are non-atomic revoke-then-attest (residual data-loss window)
-Because there is no on-chain "update", edit and reorder do `revoke(old)` then `attest(new)`. The in-memory dup-guard and pre-revoke collision guard cover the common cases, but a *concurrent* mutation from another tab/wallet that fills the list to `maxEntries` between the two txs can still drop the moved item (the re-attest reverts with `ListFull`). Single-user use is safe (the revoke frees the slot). A real fix needs an atomic multicall path (EAS `multiRevoke`+`multiAttest` in one tx via a gateway) — cross-ref the EFSUploadGateway item below.
+### ~~Reorder/edit are non-atomic revoke-then-attest (residual data-loss window)~~ — DONE (2026-05-31, ADR-0046)
+Resolved for reorder and edit. They no longer touch the entry at all — reorder re-PINs the `"weight"` order PROPERTY and edit re-PINs the `"name"` label PROPERTY (cardinality-1 supersede, O(1)), so the entry UID is never revoked and there is no `ListFull` re-attest window. (Removal still revokes the entry, which is correct — it is a deletion.) See ADR-0046.
 
 ### Post-create UID copy button
 After creating a list the success notification shows a truncated UID. A copy-to-clipboard button on the notification (or a modal success state with the full UID) would make it easy to share or use the UID elsewhere.
