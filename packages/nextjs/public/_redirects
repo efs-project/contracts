@@ -12,10 +12,11 @@
 # /explorer/memes/cat.jpg stay visually intact while the app renders.
 #
 # The explorer is the only true dynamic tree. Blockexplorer's `[address]` and
-# `[txHash]` dynamic segments are exported with a single dummy value via
-# `generateStaticParams` — the shell reads the real address/hash from
-# `useParams()` at runtime, so we point any deeper URL at that dummy page's
-# index.html and the client redraws.
+# `[txHash]` segments, and the lists `[listUID]` segment, are each exported
+# with a single dummy value via `generateStaticParams` — the shell reads the
+# real address/hash/UID from `usePathname()`/`useParams()` at runtime, so we
+# point any deeper URL at that dummy page's index.html and the client redraws.
+# (lists uses a 64-hex bytes32 dummy UID, not the 40-hex address dummy.)
 #
 # Everything else falls through to the root index.html as a last resort.
 
@@ -23,4 +24,5 @@
 /blockexplorer/address/*   /blockexplorer/address/0x0000000000000000000000000000000000000000/index.html                 200
 /blockexplorer/transaction/* /blockexplorer/transaction/0x0000000000000000000000000000000000000000/index.html           200
 /debug/*                   /debug/index.html                                                                            200
+/lists/*                   /lists/0x0000000000000000000000000000000000000000000000000000000000000000/index.html        200
 /*                         /index.html                                                                                  200
