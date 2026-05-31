@@ -450,13 +450,35 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
     return out;
   }, [curator, connectedAddress, contributors]);
 
-  const { data: rawEntries, refetch: refetchEntries } = useReadContract({
-    address: listReaderAddress,
-    abi: LIST_READER_ABI,
-    functionName: "entries",
-    args: [listUID, effectiveLens, 0n, 100n],
-    query: { enabled: !!listReaderAddress },
-  });
+  // Read ALL entries for this lens, paginated. A list can be uncapped (maxEntries == 0) or
+  // capped above one page, so a single 100-entry read would hide later entries and make
+  // nextOrder() derive duplicate ranks off a truncated tail. Loop the reader cursor until a
+  // short page, with a safety cap for the debug UI.
+  const [rawEntries, setRawEntries] = useState<RawEntry[] | undefined>(undefined);
+  const refetchEntries = useCallback(async () => {
+    if (!publicClient || !listReaderAddress) return;
+    const PAGE = 200n;
+    const SAFETY = 10000; // far beyond any hand-curated list; bounds a runaway read
+    const all: RawEntry[] = [];
+    try {
+      for (let start = 0n; ; start += PAGE) {
+        const page = (await publicClient.readContract({
+          address: listReaderAddress,
+          abi: LIST_READER_ABI,
+          functionName: "entries",
+          args: [listUID, effectiveLens, start, PAGE],
+        })) as unknown as RawEntry[];
+        all.push(...page);
+        if (BigInt(page.length) < PAGE || all.length >= SAFETY) break;
+      }
+      setRawEntries(all);
+    } catch (e) {
+      console.error("[lists] failed to read entries", e);
+    }
+  }, [publicClient, listReaderAddress, listUID, effectiveLens]);
+  useEffect(() => {
+    void refetchEntries();
+  }, [refetchEntries]);
   const { data: entrySchemaUID } = useReadContract({
     address: listReaderAddress,
     abi: LIST_READER_ABI,

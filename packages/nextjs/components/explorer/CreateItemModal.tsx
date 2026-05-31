@@ -450,6 +450,19 @@ export const CreateItemModal = ({
       notification.error("Max entries must be a non-negative integer");
       return;
     }
+    // Validate the resolver invariants BEFORE creating the non-revocable list-slot anchor,
+    // so a bad config can't leave a permanent unplaced list card (the LIST attest would
+    // otherwise revert only after the anchor is on-chain).
+    if (maxE > 4294967295) {
+      // uint32 max — larger values fail ABI encoding of the LIST data.
+      notification.error("Max entries must be at most 4,294,967,295 (uint32).");
+      return;
+    }
+    if (listAppendOnly && listAllowsDuplicates && maxE === 0) {
+      // ListResolver rejects the only unbounded-growth combination (ADR-0044 §3).
+      notification.error("An append-only list that allows duplicates needs a Max entries cap (> 0).");
+      return;
+    }
     if (!publicClient) return;
 
     setIsSubmitting(true);
