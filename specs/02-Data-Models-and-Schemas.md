@@ -211,7 +211,7 @@ See [Lists and Collections](./06-Lists-and-Collections.md) for the full architec
 ## Schema 8: LIST
 
 **Purpose**: Declares a curated collection. Permanent identity — non-revocable like DATA.
-**Field string**: `"bool allowsDuplicates, bool appendOnly, uint8 targetType, bytes32 targetSchema, uint32 maxEntries"`
+**Field string**: `"bool allowsDuplicates, bool appendOnly, uint8 targetType, bytes32 targetSchema, uint256 maxEntries"`
 **Resolver**: `ListResolver` (validates shape; stateless)
 **Revocable**: `false`
 
@@ -220,7 +220,7 @@ See [Lists and Collections](./06-Lists-and-Collections.md) for the full architec
 - `appendOnly` (bool) — if true, entries may not be revoked (enforced at write time by `ListEntryResolver`)
 - `targetType` (uint8) — `0` = ANY (opaque bytes32 key), `1` = ADDR (address in recipient), `2` = SCHEMA (attestation UID with schema check)
 - `targetSchema` (bytes32) — required for SCHEMA mode (specifies which EAS schema the target attestation must belong to); must be `bytes32(0)` for ANY/ADDR modes
-- `maxEntries` (uint32) — per-attester cap; `0` = unlimited. Must be nonzero when `appendOnly && allowsDuplicates` to bound storage
+- `maxEntries` (uint256) — per-attester cap; `0` = unlimited. Must be nonzero when `appendOnly && allowsDuplicates` to bound storage. Widened from `uint32` (ADR-0047) so planet-scale lists (continental/global populations > 2³²) can declare a real cap; free under ABI 32-byte-word padding
 
 **Identity key by mode**:
 - ANY: `target` field (must be nonzero)

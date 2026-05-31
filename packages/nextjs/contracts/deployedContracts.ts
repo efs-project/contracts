@@ -5901,9 +5901,9 @@ const deployedContracts = {
                   type: "bytes32",
                 },
                 {
-                  internalType: "uint32",
+                  internalType: "uint256",
                   name: "maxEntries",
-                  type: "uint32",
+                  type: "uint256",
                 },
               ],
               internalType: "struct IListReader.ListMode",
@@ -6189,9 +6189,9 @@ const deployedContracts = {
             },
             {
               indexed: false,
-              internalType: "uint32",
+              internalType: "uint256",
               name: "maxEntries",
-              type: "uint32",
+              type: "uint256",
             },
           ],
           name: "ListAttested",

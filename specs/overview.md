@@ -67,7 +67,7 @@ someone else's DATA.
 | **TAG** | yes | Cardinality-N edge. Accumulates entries per slot. Folder visibility (ADR-0038), descriptive labels (`#nsfw`, …), schema-alias discovery. Each entry carries an `int256 weight` for sort/score metadata. ADR-0041. Active = unrevoked (kernel). For the explorer label-filter only, *effective* = active with `weight >= 0` (ADR-0042). |
 | PROPERTY | no | Free-floating string value, placed on a container via PIN under a PROPERTY-typed "key" anchor (ADR-0035 → ADR-0041). Symmetric with DATA. Reserved key anchor names: `contentType` (ADR-0005), `name` (ADR-0034). |
 | SORT_INFO | yes | Declares a sort scheme for a folder (sort function + target schema). |
-| **LIST** | no | Curated collection declaration. Permanent identity (like DATA). Fields: `bool allowsDuplicates, bool appendOnly, uint8 targetType, bytes32 targetSchema, uint32 maxEntries`. Three modes: ANY (0), ADDR (1), SCHEMA (2). Enforced by ListResolver. ADR-0044. |
+| **LIST** | no | Curated collection declaration. Permanent identity (like DATA). Fields: `bool allowsDuplicates, bool appendOnly, uint8 targetType, bytes32 targetSchema, uint256 maxEntries`. Three modes: ANY (0), ADDR (1), SCHEMA (2). Enforced by ListResolver. ADR-0044, ADR-0047. |
 | **LIST_ENTRY** | yes | Member entry in a LIST — pure membership identity. Fields: `bytes32 listUID, bytes32 target` (ADR-0046; order + free-text label are PIN-bound PROPERTYs on the stable entry UID, not fields). Per-attester lens storage with wide EntryRecord[] for O(N) on-chain iteration. Enforced by ListEntryResolver. ADR-0044, ADR-0046. |
 
 Full field definitions and resolver wiring: `02-Data-Models-and-Schemas.md`.

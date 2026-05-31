@@ -105,10 +105,10 @@ export default function ListsPage() {
       notification.error("SCHEMA mode requires a valid targetSchema UID (0x...)");
       return;
     }
-    let maxE: number;
+    let maxE: bigint;
     try {
-      maxE = parseInt(maxEntries, 10);
-      if (isNaN(maxE) || maxE < 0) throw new Error();
+      maxE = BigInt(maxEntries.trim() || "0");
+      if (maxE < 0n) throw new Error();
     } catch {
       notification.error("maxEntries must be a non-negative integer");
       return;
@@ -122,7 +122,7 @@ export default function ListsPage() {
         { name: "appendOnly", type: "bool" },
         { name: "targetType", type: "uint8" },
         { name: "targetSchema", type: "bytes32" },
-        { name: "maxEntries", type: "uint32" },
+        { name: "maxEntries", type: "uint256" },
       ],
       [allowsDuplicates, appendOnly, targetType, schemaBytes, maxE],
     );

@@ -6,7 +6,7 @@ import { Signer, ZeroAddress } from "ethers";
 
 const ZERO_BYTES32 = "0x" + "0".repeat(64);
 const NO_EXPIRATION = 0n;
-const LIST_SCHEMA = "bool allowsDuplicates, bool appendOnly, uint8 targetType, bytes32 targetSchema, uint32 maxEntries";
+const LIST_SCHEMA = "bool allowsDuplicates, bool appendOnly, uint8 targetType, bytes32 targetSchema, uint256 maxEntries";
 const LIST_ENTRY_SCHEMA = "bytes32 listUID, bytes32 target"; // ADR-0046
 
 describe("Lists — Conformance (worked example lifecycle)", function () {
@@ -27,10 +27,10 @@ describe("Lists — Conformance (worked example lifecycle)", function () {
     appendOnly: boolean,
     targetType: number,
     targetSchema: string,
-    maxEntries: number,
+    maxEntries: bigint | number,
   ) =>
     enc.encode(
-      ["bool", "bool", "uint8", "bytes32", "uint32"],
+      ["bool", "bool", "uint8", "bytes32", "uint256"],
       [allowsDuplicates, appendOnly, targetType, targetSchema, maxEntries],
     );
 

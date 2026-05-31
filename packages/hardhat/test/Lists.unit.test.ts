@@ -5,7 +5,7 @@ import { Signer, ZeroAddress } from "ethers";
 
 const ZERO_BYTES32 = "0x" + "0".repeat(64);
 const NO_EXPIRATION = 0n;
-const LIST_SCHEMA = "bool allowsDuplicates, bool appendOnly, uint8 targetType, bytes32 targetSchema, uint32 maxEntries";
+const LIST_SCHEMA = "bool allowsDuplicates, bool appendOnly, uint8 targetType, bytes32 targetSchema, uint256 maxEntries";
 const LIST_ENTRY_SCHEMA = "bytes32 listUID, bytes32 target"; // ADR-0046: order/label are PROPERTYs, not fields
 
 describe("Lists — Unit Tests", function () {
@@ -21,8 +21,8 @@ describe("Lists — Unit Tests", function () {
   let dummySchemaUID: string; // for minting target attestations in SCHEMA-mode tests
 
   const enc = new ethers.AbiCoder();
-  const encodeList = (ad: boolean, ao: boolean, tt: number, ts: string, me: number) =>
-    enc.encode(["bool", "bool", "uint8", "bytes32", "uint32"], [ad, ao, tt, ts, me]);
+  const encodeList = (ad: boolean, ao: boolean, tt: number, ts: string, me: bigint | number) =>
+    enc.encode(["bool", "bool", "uint8", "bytes32", "uint256"], [ad, ao, tt, ts, me]);
   const encodeEntry = (lu: string, t: string) => enc.encode(["bytes32", "bytes32"], [lu, t]);
 
   const getUID = (receipt: any): string => {

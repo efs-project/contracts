@@ -9,7 +9,7 @@ interface IListReader {
         bool appendOnly;
         uint8 targetType; // 0=ANY, 1=ADDR, 2=SCHEMA
         bytes32 targetSchema; // nonzero iff targetType==SCHEMA
-        uint32 maxEntries;
+        uint256 maxEntries;
     }
 
     struct Entry {

@@ -445,20 +445,22 @@ export const CreateItemModal = ({
       notification.error("EFS Files mode requires a 32-byte schema UID (0x + 64 hex).");
       return;
     }
-    const maxE = parseInt(listMaxEntries, 10);
-    if (isNaN(maxE) || maxE < 0) {
+    let maxE: bigint;
+    try {
+      maxE = BigInt(listMaxEntries.trim() || "0");
+    } catch {
+      notification.error("Max entries must be a non-negative integer");
+      return;
+    }
+    if (maxE < 0n) {
       notification.error("Max entries must be a non-negative integer");
       return;
     }
     // Validate the resolver invariants BEFORE creating the non-revocable list-slot anchor,
     // so a bad config can't leave a permanent unplaced list card (the LIST attest would
-    // otherwise revert only after the anchor is on-chain).
-    if (maxE > 4294967295) {
-      // uint32 max — larger values fail ABI encoding of the LIST data.
-      notification.error("Max entries must be at most 4,294,967,295 (uint32).");
-      return;
-    }
-    if (listAppendOnly && listAllowsDuplicates && maxE === 0) {
+    // otherwise revert only after the anchor is on-chain). maxEntries is uint256 — no practical
+    // ceiling, so a planet-scale cap (e.g. a continent's population, which exceeds 2^32) is allowed.
+    if (listAppendOnly && listAllowsDuplicates && maxE === 0n) {
       // ListResolver rejects the only unbounded-growth combination (ADR-0044 §3).
       notification.error("An append-only list that allows duplicates needs a Max entries cap (> 0).");
       return;
@@ -540,7 +542,7 @@ export const CreateItemModal = ({
           { name: "appendOnly", type: "bool" },
           { name: "targetType", type: "uint8" },
           { name: "targetSchema", type: "bytes32" },
-          { name: "maxEntries", type: "uint32" },
+          { name: "maxEntries", type: "uint256" },
         ],
         [listAllowsDuplicates, listAppendOnly, listTargetType, schemaBytes, maxE],
       );

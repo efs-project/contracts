@@ -9,7 +9,7 @@ import { IEAS, Attestation } from "@ethereum-attestation-service/eas-contracts/c
  * @dev Resolver for the EFS LIST schema (ADR-0044). Validates field shape at attest time.
  *      Maintains no state — all enforcement state lives in ListEntryResolver.
  *
- *      LIST schema: "bool allowsDuplicates, bool appendOnly, uint8 targetType, bytes32 targetSchema, uint32 maxEntries"
+ *      LIST schema: "bool allowsDuplicates, bool appendOnly, uint8 targetType, bytes32 targetSchema, uint256 maxEntries"
  *      revocable: false (LIST is permanent — identity of a list, like DATA)
  */
 contract ListResolver is SchemaResolver {
@@ -22,7 +22,7 @@ contract ListResolver is SchemaResolver {
         bool appendOnly,
         uint8 indexed targetType,
         bytes32 targetSchema,
-        uint32 maxEntries
+        uint256 maxEntries
     );
 
     constructor(IEAS eas) SchemaResolver(eas) {}
@@ -34,8 +34,8 @@ contract ListResolver is SchemaResolver {
         require(a.refUID == bytes32(0), "LIST must be free-floating");
         require(a.recipient == address(0), "LIST must not be directed");
 
-        (bool allowsDuplicates, bool appendOnly, uint8 targetType, bytes32 targetSchema, uint32 maxEntries) =
-            abi.decode(a.data, (bool, bool, uint8, bytes32, uint32));
+        (bool allowsDuplicates, bool appendOnly, uint8 targetType, bytes32 targetSchema, uint256 maxEntries) =
+            abi.decode(a.data, (bool, bool, uint8, bytes32, uint256));
 
         require(targetType <= 2, "invalid targetType");
 

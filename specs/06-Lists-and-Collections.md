@@ -268,7 +268,7 @@ The sort-overlay approach requires every item to have an Anchor under a parent A
 
 **LIST** (`revocable: false`) — the list's permanent identity, like DATA:
 ```
-bool allowsDuplicates, bool appendOnly, uint8 targetType, bytes32 targetSchema, uint32 maxEntries
+bool allowsDuplicates, bool appendOnly, uint8 targetType, bytes32 targetSchema, uint256 maxEntries
 ```
 
 **LIST_ENTRY** (`revocable: true`) — one member record, pure membership identity (ADR-0046):

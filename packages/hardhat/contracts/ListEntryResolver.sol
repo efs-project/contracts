@@ -82,7 +82,7 @@ contract ListEntryResolver is SchemaResolver {
         bool appendOnly;
         uint8 targetType;
         bytes32 targetSchema;
-        uint32 maxEntries;
+        uint256 maxEntries;
     }
 
     // LIST is non-revocable → cache is valid forever after first touch
@@ -144,7 +144,7 @@ contract ListEntryResolver is SchemaResolver {
             Attestation memory L = _eas.getAttestation(listUID);
             if (L.schema != LIST_SCHEMA_UID) revert NotAList();
             (d.allowsDuplicates, d.appendOnly, d.targetType, d.targetSchema, d.maxEntries) =
-                abi.decode(L.data, (bool, bool, uint8, bytes32, uint32));
+                abi.decode(L.data, (bool, bool, uint8, bytes32, uint256));
             d.exists = true;
             _decl[listUID] = d;
         }

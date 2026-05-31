@@ -75,7 +75,7 @@ const LIST_READER_ABI = [
           { name: "appendOnly", type: "bool" },
           { name: "targetType", type: "uint8" },
           { name: "targetSchema", type: "bytes32" },
-          { name: "maxEntries", type: "uint32" },
+          { name: "maxEntries", type: "uint256" },
         ],
       },
     ],
@@ -340,7 +340,7 @@ export default function ListDetailPage() {
                 <div className="opacity-60">Append Only</div>
                 <div>{mode.appendOnly ? "✓" : "✗"}</div>
                 <div className="opacity-60">Max Entries</div>
-                <div>{mode.maxEntries === 0 ? "unlimited" : mode.maxEntries.toString()}</div>
+                <div>{mode.maxEntries ? mode.maxEntries.toString() : "unlimited"}</div>
                 {mode.targetSchema !== zeroHash && (
                   <>
                     <div className="opacity-60">Target Schema</div>

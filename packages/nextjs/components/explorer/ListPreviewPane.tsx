@@ -50,7 +50,7 @@ const LIST_READER_ABI = [
           { name: "appendOnly", type: "bool" },
           { name: "targetType", type: "uint8" },
           { name: "targetSchema", type: "bytes32" },
-          { name: "maxEntries", type: "uint32" },
+          { name: "maxEntries", type: "uint256" },
         ],
       },
     ],
@@ -1298,7 +1298,7 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
         <div className="flex items-center gap-2 mt-2.5 text-[11px] text-base-content/40">
           <span className="font-medium text-base-content/60">{items.length}</span>
           <span>{meta.noun}</span>
-          {mode?.maxEntries ? <span>· cap {mode.maxEntries}</span> : null}
+          {mode?.maxEntries ? <span>· cap {mode.maxEntries.toString()}</span> : null}
           {mode?.appendOnly ? <span className="text-amber-500/80">· 🔒 append-only</span> : null}
           {curator && (
             <span className="ml-auto flex items-center gap-1">
