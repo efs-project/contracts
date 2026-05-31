@@ -199,6 +199,10 @@ Lists now appear as purple cards in the folder grid and open an in-pane editor. 
 ### ANY-mode item text limited to 31 bytes
 Item text is packed into the entry `target` bytes32, so items longer than 31 UTF-8 bytes are rejected at the input with a byte counter. Fine for groceries/todos/short labels; limiting for descriptive items. Lifting it needs the ADR-0044 §7 PROPERTY-on-entry pattern (a `name`/label PROPERTY attached to each LIST_ENTRY UID — extra attestations per item) or a LIST_ENTRY schema change. See decisions.md (2026-05-29).
 
+### Lists edition picker — minor UX warts (devtools, flagged in round-2 review)
+- **Stale edition chips:** `getListAttesters` is append-only (ADR-0009), so an attester who added then revoked all their entries stays in the index and shows as an empty, clickable edition chip. The contract NatSpec says filter by `getLength(listUID, attester) > 0` for *active* lenses; the pane doesn't (would add N reads). Acceptable for the debug UI; filter before production exposure.
+- **List-card load flash:** list anchors are classified via `isList(item, listSchemaUID)`, so until `LIST_SCHEMA_UID` resolves they're briefly filtered out of the grid (a one-frame pop). Not gated on the loading guard because that would delay folders/files for a list-only concern.
+
 ### Reorder/edit are non-atomic revoke-then-attest (residual data-loss window)
 Because there is no on-chain "update", edit and reorder do `revoke(old)` then `attest(new)`. The in-memory dup-guard and pre-revoke collision guard cover the common cases, but a *concurrent* mutation from another tab/wallet that fills the list to `maxEntries` between the two txs can still drop the moved item (the re-attest reverts with `ListFull`). Single-user use is safe (the revoke frees the slot). A real fix needs an atomic multicall path (EAS `multiRevoke`+`multiAttest` in one tx via a gateway) — cross-ref the EFSUploadGateway item below.
 

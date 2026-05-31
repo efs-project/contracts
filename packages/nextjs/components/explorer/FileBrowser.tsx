@@ -1344,13 +1344,19 @@ export const FileBrowser = ({
   const openList = async (item: any) => {
     if (!publicClient || !edgeResolverAddress || !listSchemaUID) return;
     setSelectedFile(null);
-    try {
-      const listUID = (await publicClient.readContract({
+    const resolvePin = (attester: `0x${string}`) =>
+      publicClient.readContract({
         address: edgeResolverAddress,
         abi: EDGE_RESOLVER_ABI,
         functionName: "getActivePinTarget",
-        args: [item.uid as `0x${string}`, item.attester as `0x${string}`, listSchemaUID as `0x${string}`],
-      })) as `0x${string}`;
+        args: [item.uid as `0x${string}`, attester, listSchemaUID as `0x${string}`],
+      }) as Promise<`0x${string}`>;
+    try {
+      // Prefer the connected user's own placement (their edition at this slot); fall back to
+      // the anchor creator's (the curator's) — mirrors the effectiveLens model in the pane and
+      // the connected-wallet lookup deleteList already uses.
+      let listUID = connectedAddress ? await resolvePin(connectedAddress as `0x${string}`) : (zeroHash as `0x${string}`);
+      if (!listUID || listUID === zeroHash) listUID = await resolvePin(item.attester as `0x${string}`);
       if (!listUID || listUID === zeroHash) {
         notification.error("This list's placement is missing or revoked.");
         return;

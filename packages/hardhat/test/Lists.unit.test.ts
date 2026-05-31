@@ -658,6 +658,34 @@ describe("Lists — Unit Tests", function () {
       expect(await listEntryResolver.getMemberCount(listUID, identityKey, await bob.getAddress())).to.equal(1n);
     });
 
+    it("B21b: on-chain attester (lens) index enumerates contributors", async function () {
+      const listUID = await attestList(alice, true, false, 1); // allowsDuplicates so both can add same addr
+      const aliceAddr = await alice.getAddress();
+      const bobAddr = await bob.getAddress();
+
+      // No contributors yet
+      expect(await listEntryResolver.getListAttesterCount(listUID)).to.equal(0n);
+      expect(await listEntryResolver.getListAttesters(listUID, 0n, 100n)).to.deep.equal([]);
+
+      // Alice contributes → she's the first lens
+      await attestAddrEntry(alice, listUID, bobAddr);
+      expect(await listEntryResolver.getListAttesters(listUID, 0n, 100n)).to.deep.equal([aliceAddr]);
+
+      // Alice's second entry does NOT duplicate her in the index
+      await attestAddrEntry(alice, listUID, aliceAddr);
+      expect(await listEntryResolver.getListAttesterCount(listUID)).to.equal(1n);
+
+      // Bob contributes → second lens, appended
+      const bobEntry = await attestAddrEntry(bob, listUID, bobAddr);
+      expect(await listEntryResolver.getListAttesters(listUID, 0n, 100n)).to.deep.equal([aliceAddr, bobAddr]);
+
+      // Append-only: revoking Bob's only entry does NOT remove him from the index
+      // (readers filter by getLength > 0 for "active" lenses).
+      await revokeEntry(bob, bobEntry);
+      expect(await listEntryResolver.getLength(listUID, bobAddr)).to.equal(0n);
+      expect(await listEntryResolver.getListAttesters(listUID, 0n, 100n)).to.deep.equal([aliceAddr, bobAddr]);
+    });
+
     it("B22: cross-list isolation", async function () {
       const list1 = await attestList(alice, false, false, 1);
       const list2 = await attestList(alice, false, false, 1);

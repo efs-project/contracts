@@ -144,8 +144,8 @@ export type CreateItemModalProps = {
   onFolderCreated?: (uid: string, name: string) => void;
   /** Called after a file is uploaded. Passes the sort UIDs the user wants auto-processed. */
   onFileCreated?: (enabledSortUIDs: string[]) => void;
-  /** Called after a list is created. Receives the new list UID. */
-  onListCreated?: (uid: string) => void;
+  /** Called after a list is created. Receives the list-slot ANCHOR UID (not the LIST UID). */
+  onListCreated?: (anchorUID: string) => void;
 };
 
 export const CreateItemModal = ({

@@ -5377,6 +5377,54 @@ const deployedContracts = {
               name: "listUID",
               type: "bytes32",
             },
+          ],
+          name: "getListAttesterCount",
+          outputs: [
+            {
+              internalType: "uint256",
+              name: "",
+              type: "uint256",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "listUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "uint256",
+              name: "start",
+              type: "uint256",
+            },
+            {
+              internalType: "uint256",
+              name: "len",
+              type: "uint256",
+            },
+          ],
+          name: "getListAttesters",
+          outputs: [
+            {
+              internalType: "address[]",
+              name: "",
+              type: "address[]",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "listUID",
+              type: "bytes32",
+            },
             {
               internalType: "bytes32",
               name: "identityKey",

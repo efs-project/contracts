@@ -93,6 +93,14 @@ contract ListEntryResolver is SchemaResolver {
     // Swap-and-pop index: entryUID → (position in _entries[list][attester]) + 1
     mapping(bytes32 entryUID => uint256) private _entryPosPlusOne;
 
+    // ── Storage: per-list attester (lens/edition) index ──────────────────────────
+    // The set of attesters who have ever contributed an entry to a list — the list's
+    // "editions"/lenses. On-chain and append-only (ADR-0009): consensus state that smart
+    // contracts and clients enumerate WITHOUT relying on event logs. Membership is never
+    // removed on revoke; "active" lenses are those whose getLength(listUID, attester) > 0.
+    mapping(bytes32 listUID => address[]) private _listAttesters;
+    mapping(bytes32 listUID => mapping(address attester => bool)) private _isListAttester;
+
     // ── Constructor ─────────────────────────────────────────────────────────────
     constructor(IEAS eas, bytes32 listSchemaUID) SchemaResolver(eas) {
         require(listSchemaUID != bytes32(0), "listSchemaUID is zero");
@@ -160,6 +168,12 @@ contract ListEntryResolver is SchemaResolver {
         _entryPosPlusOne[a.uid] = _entries[listUID][a.attester].length;
         _entryCount[listUID][identityKey][a.attester] += 1;
 
+        // Record this attester as a lens/edition of the list (once, append-only).
+        if (!_isListAttester[listUID][a.attester]) {
+            _isListAttester[listUID][a.attester] = true;
+            _listAttesters[listUID].push(a.attester);
+        }
+
         emit ListEntryAttested(listUID, a.attester, identityKey, a.uid, d.targetType, weight);
         return true;
     }
@@ -219,5 +233,27 @@ contract ListEntryResolver is SchemaResolver {
 
     function getMemberCount(bytes32 listUID, bytes32 identityKey, address attester) external view returns (uint256) {
         return _entryCount[listUID][identityKey][attester];
+    }
+
+    /// @notice On-chain, paginated enumeration of a list's lenses/editions: every attester who
+    ///         has ever contributed an entry. Append-only — to get only ACTIVE lenses, filter by
+    ///         `getLength(listUID, attester) > 0`. Smart-contract and client consumers use this
+    ///         instead of event logs (which are not consensus state).
+    /// @dev    Paginated (like `getEntries`) so an open-curation list with many distinct attesters
+    ///         stays enumerable on-chain — an unbounded `address[]` return is O(N^2) on memory
+    ///         expansion and can OOG / time out an `eth_call`. The signature is locked here before
+    ///         the mainnet schema freeze (ADR-0044 §8): changing it later mints a new LIST_ENTRY UID.
+    function getListAttesters(bytes32 listUID, uint256 start, uint256 len) external view returns (address[] memory) {
+        address[] storage arr = _listAttesters[listUID];
+        uint256 total = arr.length;
+        if (total == 0 || start >= total) return new address[](0);
+        if (start + len > total) len = total - start;
+        address[] memory res = new address[](len);
+        for (uint256 i = 0; i < len; i++) res[i] = arr[start + i];
+        return res;
+    }
+
+    function getListAttesterCount(bytes32 listUID) external view returns (uint256) {
+        return _listAttesters[listUID].length;
     }
 }

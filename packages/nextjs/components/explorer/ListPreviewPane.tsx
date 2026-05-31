@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { decodeAbiParameters, encodeAbiParameters, parseAbiItem, zeroAddress, zeroHash } from "viem";
+import { decodeAbiParameters, encodeAbiParameters, zeroAddress, zeroHash } from "viem";
 import { usePublicClient, useReadContract, useWriteContract } from "wagmi";
 import {
   ArrowTopRightOnSquareIcon,
@@ -159,6 +159,20 @@ const EAS_ABI = [
   },
 ] as const;
 
+const LIST_ENTRY_RESOLVER_ABI = [
+  {
+    inputs: [
+      { name: "listUID", type: "bytes32" },
+      { name: "start", type: "uint256" },
+      { name: "len", type: "uint256" },
+    ],
+    name: "getListAttesters",
+    outputs: [{ name: "", type: "address[]" }],
+    stateMutability: "view",
+    type: "function",
+  },
+] as const;
+
 // ── Constants ───────────────────────────────────────────────────────────────
 
 const MODE = { ANY: 0, ADDR: 1, SCHEMA: 2 } as const;
@@ -305,44 +319,20 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
     setLens(undefined); // reset to default (curator) when the list changes
   }, [uid]);
 
-  const [contributors, setContributors] = useState<`0x${string}`[]>([]);
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      if (!publicClient || !listEntryResolverAddress) return;
-      const event = parseAbiItem(
-        "event ListEntryAttested(bytes32 indexed listUID, address indexed attester, bytes32 indexed identityKey, bytes32 entryUID, uint8 targetType, int256 weight)",
-      );
-      // eth_getLogs whose range starts before a hardhat fork's base block is forwarded to the
-      // upstream RPC (which rejects it). We don't get the fork block from RPC, so try full
-      // history first (works on a real chain), then progressively recent windows until one
-      // succeeds (stays within the fork's local block range).
-      let latest = 0n;
-      try {
-        latest = await publicClient.getBlockNumber();
-      } catch {
-        /* ignore */
-      }
-      const froms: bigint[] = [0n];
-      for (const w of [2000n, 800n, 300n, 150n, 70n, 30n]) froms.push(latest > w ? latest - w : 0n);
-      for (const fromBlock of froms) {
-        try {
-          const logs = await publicClient.getLogs({ address: listEntryResolverAddress, event, args: { listUID }, fromBlock, toBlock: "latest" });
-          if (cancelled) return;
-          const found = [...new Set(logs.map(l => (l.args.attester as `0x${string}`)?.toLowerCase()))].filter(
-            Boolean,
-          ) as `0x${string}`[];
-          setContributors(found);
-          return;
-        } catch {
-          /* range too wide for this fork — try a narrower one */
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [publicClient, listEntryResolverAddress, listUID]);
+  // Contributors come from the on-chain attester index (consensus state, not event logs —
+  // so smart contracts read it the same way). Append-only; we keep all of them as edition chips.
+  // First 100 contributors is ample for the edition picker; paginate further if ever needed.
+  const { data: rawAttesters } = useReadContract({
+    address: listEntryResolverAddress,
+    abi: LIST_ENTRY_RESOLVER_ABI,
+    functionName: "getListAttesters",
+    args: [listUID, 0n, 100n],
+    query: { enabled: !!listEntryResolverAddress },
+  });
+  const contributors = useMemo(
+    () => ((rawAttesters as readonly `0x${string}`[] | undefined) ?? []).map(a => a.toLowerCase() as `0x${string}`),
+    [rawAttesters],
+  );
 
   // The lens chips: curator first, then you, then any other contributors — deduped.
   const lensChips = useMemo(() => {
