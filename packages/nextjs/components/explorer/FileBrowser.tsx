@@ -1425,7 +1425,11 @@ export const FileBrowser = ({
         }
       }
       if (!listUID || listUID === zeroHash) {
-        notification.error("This list's placement is missing or revoked.");
+        notification.error(
+          "This list has no active placement here — it was deleted, or its creation was " +
+            "interrupted before the placement landed. To restore it, create a list with the " +
+            "same name in this folder; the existing slot is reused.",
+        );
         return;
       }
       setSelectedList({ uid: listUID, anchorUID: item.uid, name: item.name, attester: resolvedAttester });

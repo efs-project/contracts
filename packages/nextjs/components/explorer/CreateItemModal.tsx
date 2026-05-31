@@ -470,6 +470,13 @@ export const CreateItemModal = ({
     const opId = ops.start(`Create list: ${name}`);
     try {
       // 1. List-slot ANCHOR (anchorType = LIST_SCHEMA_UID). Reuse if it already exists.
+      // This resolveAnchor reuse is also the RECOVERY path. List creation is 3 sequential txs
+      // (anchor → LIST → PIN) and the anchor is permanent (ADR-0002): if the LIST or placement
+      // PIN is rejected/fails after the anchor lands, that anchor persists as a dead slot. But
+      // re-running create with the SAME name in this folder reuses this anchor and finishes the
+      // placement — so the dead state is fully recoverable, and openList() points the user here.
+      // (Atomic single-signature creation awaits the EFSUploadGateway batch-wrapper — see
+      // docs/FUTURE_WORK.md § "EFSUploadGateway batch-wrapper".)
       let listAnchorUID: `0x${string}` | undefined;
       if (indexer) {
         try {
