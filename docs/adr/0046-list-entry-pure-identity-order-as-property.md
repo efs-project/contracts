@@ -1,6 +1,6 @@
 # ADR-0046: LIST_ENTRY as pure membership identity — order and label as properties
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-05-31
 **Permanence-tier:** Etched (changes the LIST_ENTRY EAS schema field string and `ListEntryResolver` storage layout — new schema UID; devnet-free, mainnet-frozen)
 **Related:** ADR-0044 (LIST + LIST_ENTRY schemas — this revises its §4/§6/§7 and the `int256 weight` field), ADR-0041 (PIN/TAG cardinality; PROPERTY-via-PIN supersession), ADR-0035 (PROPERTY free-floating value placed via PIN), ADR-0034 (`name` PROPERTY convention), ADR-0009 (append-only kernel — why the sort overlay can't source list entries), ADR-0037 (pinned fork / deterministic deploy + schema-UID pin check)
@@ -78,14 +78,22 @@ This ADR supersedes **only** the following parts of ADR-0044: the `int256 weight
 4. **Numeric order PROPERTY with on-chain numeric sort.** No signed string→int parser exists in the contracts, and PROPERTY values are human-readable strings; an on-chain comparator would need new parsing infra. Moot once sorting is client-side (§4).
 5. **Single per-list ordering vector** (one PROPERTY on the LIST UID, per attester, holding the serialized ordered list of entry `identityKey`s). Cheaper on the hot paths: reorder and bulk-order are O(1) *writes* regardless of list length (~2 attestations flat vs ~2 per moved entry), adds can defer the vector rewrite, and reading order is one property fetch instead of N. **Rejected as the default** for three reasons: (a) it reintroduces a special-case ordering object, breaking the "LIST_ENTRY is pure identity; every mutable per-entry datum is a property *on the entry*" symmetry that motivates this ADR; (b) the vector is bounded by PROPERTY string size (~128 entry keys at an 8 KB ceiling), capping ordered lists, whereas per-entry order is unbounded; (c) it assumes total order and composes poorly with sparse/partial ordering. The cost gap is also narrower than it appears: a single drag-reorder is 2 attestations either way, because the fractional-rank scheme (`computeInsertWeight`) re-weights only the moved entry. **Noted as the optimization to revisit if gas on write-heavy or very large lists becomes the binding constraint** — at which point the order vector can be added as an alternative ordering source without disturbing the per-entry label/metadata story.
 
-## Open sub-decisions (resolve before flipping to Accepted)
+## Resolved sub-decisions
 
-- **Order-property key-anchor name:** `"weight"` (continuity with ADR-0044 vocabulary) vs `"order"` / `"rank"` (more legible). *Default: `"weight"`.*
-- **Scope:** fold the arbitrary-length `name`-label change (§3) into the same PR as the weight removal (§1–2). *Default: yes — same root move, same schema cut.*
+- **Order-property key-anchor name:** `"weight"` (continuity with ADR-0044 vocabulary). The client constant is a one-line change if ever revisited.
+- **Scope:** the arbitrary-length `name`-label change (§3) shipped in the same PR as the weight removal (§1–2) — same root move, same schema cut.
 
-## Note on status
+## Recorded addresses (devnet, pinned Sepolia fork per ADR-0037)
 
-**Proposed** pending the human's acceptance and the recorded CREATE2 `ListEntryResolver` address + frozen LIST_ENTRY schema UID. On acceptance: flip to **Accepted**, record the addresses/UID, add the forward-pointer to ADR-0044's status line, and implement the surface mapped in the PR:
+- **ListEntryResolver:** `0x61363ac1c0f7B59c5F81bFd6d03216BF75aFFe7B` (nonce-deterministic on the pinned fork; unchanged from pre-ADR — only the schema *string* changed)
+- **LIST_ENTRY schema UID (new):** `0xc303f11e9184c190b69cffab475c59c68a2075d53c417f287cd044886935a86e`
+- **LIST schema UID (unchanged):** `0x8f052e9b349c6d9617707b85f4bce742e8df5fa271d27e0faa7db66ca2de54e7`
+
+Validated on the deployed stack: contract suite (Lists unit+conformance 56/56, simulate-lists 42/42), client typecheck + listEncoding unit 23/23, and a deployed-stack round-trip of the property mechanism (10/10: 80-byte label round-trips, lens isolation, reorder/edit keep the entry UID and survive the label/order). `deployedContracts.ts` regenerated against the pinned fork.
+
+## Implementation surface (delivered)
+
+The PR touched:
 
 - **Schema string** — `09_lists.ts` `LIST_ENTRY_DEFINITION` → `"bytes32 listUID, bytes32 target"`.
 - **`ListEntryResolver.sol`** — `EntryRecord{entryUID, identityKey}` (drop weight); `onAttest`/`onRevoke` decode `(bytes32 listUID, bytes32 target)` (was 3-tuple); drop `weight` from the `EntryRecord` push and the `ListEntryAttested` event.

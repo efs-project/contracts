@@ -269,10 +269,11 @@ The sort-overlay approach requires every item to have an Anchor under a parent A
 bool allowsDuplicates, bool appendOnly, uint8 targetType, bytes32 targetSchema, uint32 maxEntries
 ```
 
-**LIST_ENTRY** (`revocable: true`) — one member record:
+**LIST_ENTRY** (`revocable: true`) — one member record, pure membership identity (ADR-0046):
 ```
-bytes32 listUID, bytes32 target, int256 weight
+bytes32 listUID, bytes32 target
 ```
+Order and free-text labels are not fields — they are PIN-bound (cardinality-1) PROPERTYs placed on the **entry UID** (`"weight"` = decimal-string rank, `"name"` = arbitrary-length label). Reordering re-PINs the order PROPERTY in O(1) without churning the entry UID, so labels survive; sorting is client-side over the per-entry order PROPERTY (lens-scoped). See ADR-0046.
 
 ### Three modes (targetType)
 
@@ -307,9 +308,9 @@ Multiple attesters can contribute to the same list (open curation). The list cur
 
 `ListEntryResolver` stores entries as:
 ```solidity
-struct EntryRecord { bytes32 entryUID; bytes32 identityKey; int256 weight; }
+struct EntryRecord { bytes32 entryUID; bytes32 identityKey; }
 ```
-This "wide" layout mirrors ADR-0041's `TagEntry[]` — the identity key and weight are stored inline so on-chain consumers (and `ListReader`) can iterate the full list without a per-entry `eas.getAttestation()` call. Gas cost per `entries()` page is `O(N × SLOAD)` against the resolver's storage, not `O(N × external_call)`.
+This "wide" layout mirrors ADR-0041's `TagEntry[]` — the identity key is stored inline so on-chain consumers (and `ListReader`) can iterate the full membership list without a per-entry `eas.getAttestation()` call. Gas cost per `entries()` page is `O(N × SLOAD)` against the resolver's storage, not `O(N × external_call)`. (Per ADR-0046 the entry no longer carries an inline `weight`; ordering is a per-entry `"weight"` PROPERTY read client-side at sort time.)
 
 ### Example: ADDR allowlist
 

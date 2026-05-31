@@ -239,22 +239,23 @@ See [Lists and Collections](./06-Lists-and-Collections.md) for the full architec
 
 ## Schema 9: LIST_ENTRY
 
-**Purpose**: One entry in a curated LIST. Revocable (unless the list is `appendOnly`).
-**Field string**: `"bytes32 listUID, bytes32 target, int256 weight"`
+**Purpose**: One entry in a curated LIST — pure membership identity (ADR-0046). Revocable (unless the list is `appendOnly`).
+**Field string**: `"bytes32 listUID, bytes32 target"`
 **Resolver**: `ListEntryResolver` (write-time enforcement + wide EntryRecord[] storage)
 **Revocable**: `true`
 
 **Fields**:
 - `listUID` (bytes32) — UID of the LIST attestation this entry belongs to (must be nonzero)
 - `target` (bytes32) — encoding depends on list's `targetType` (see LIST schema above)
-- `weight` (int256) — opaque sort/score/ranking metadata; no kernel-level meaning
 
-**Storage**: `ListEntryResolver` maintains per-`(listUID, attester)` `EntryRecord[]` arrays with inline `identityKey + weight` (wide storage, ADR-0041 pattern). Swap-and-pop gives O(1) removal. A separate `_entryCount[listUID][identityKey][attester]` counter enables O(1) duplicate detection and the `countOf` membership test.
+**Order and labels** (ADR-0046): a LIST_ENTRY carries no inline ordering or metadata. Ordering and free-text labels are PIN-bound (cardinality-1) PROPERTYs placed on the **entry UID** (`"weight"` = decimal-string rank, `"name"` = arbitrary-length label), via the standard `Anchor<PROPERTY> + PIN + PROPERTY` pattern. Because the mutable value lives in a PROPERTY rather than the entry, reordering re-PINs the order PROPERTY in O(1) **without churning the entry UID**, so attached labels survive. Sorting is client-side, reading the per-entry order PROPERTY (lens-scoped). This makes LIST_ENTRY symmetric with DATA (pure identity; `contentType`/`name` hang off it as PROPERTYs).
+
+**Storage**: `ListEntryResolver` maintains per-`(listUID, attester)` `EntryRecord[]` arrays with inline `identityKey` (wide storage, ADR-0041 pattern). Swap-and-pop gives O(1) removal. A separate `_entryCount[listUID][identityKey][attester]` counter enables O(1) duplicate detection and the `countOf` membership test.
 
 **LIST declaration caching**: `ListEntryResolver` caches the decoded LIST declaration after first touch (stored in `_decl[listUID]`). LIST attestations are non-revocable, so the cache is permanently valid — no re-fetching needed.
 
 **Constraints enforced by `ListEntryResolver`**:
-- Payload exactly 96 bytes (3 × 32); `revocable` must be true; `expirationTime` must be 0; `refUID` must be zero
+- Payload exactly 64 bytes (2 × 32); `revocable` must be true; `expirationTime` must be 0; `refUID` must be zero
 - `listUID` must reference a real LIST attestation (schema check)
 - Per-mode encoding checks (see LIST identity key table above)
 - SCHEMA mode: target attestation must exist and must have `schema == list.targetSchema`
