@@ -953,7 +953,12 @@ export const FileBrowser = ({
   // Lens-scoped LIST anchors. Lists are placed as anchors with anchorType=LIST_SCHEMA_UID,
   // so the same schema-filtered directory walk surfaces them — just with the LIST schema.
   // (The standard `getDirectoryPage` path already returns all anchor children, lists included.)
-  const { items: lensListItems, refresh: refetchLensListItems } = useLensesDirectoryPage({
+  const {
+    items: lensListItems,
+    hasMore: hasMoreLensList,
+    loadMore: loadMoreLensList,
+    refresh: refetchLensListItems,
+  } = useLensesDirectoryPage({
     parentAnchor: (currentAnchorUID ?? undefined) as `0x${string}` | undefined,
     dataSchemaUID: listSchemaUID as `0x${string}` | undefined,
     lensAddresses: lensAddresses as string[],
@@ -999,7 +1004,17 @@ export const FileBrowser = ({
     if (useLensesQuery) {
       if (lensAddresses.length === 0) return [];
       // Merge file/folder anchors with list anchors (the LIST-schema lens walk).
-      return [...(lensItems ?? []), ...(lensListItems ?? [])];
+      // `getDirectoryPageBySchemaAndAddressList` returns qualifying generic folders in
+      // phase 0 of BOTH walks, so every visible subfolder is in lensItems AND
+      // lensListItems — dedupe by UID to avoid duplicate cards / duplicate React keys.
+      const merged = [...(lensItems ?? []), ...(lensListItems ?? [])];
+      const seen = new Set<string>();
+      return merged.filter(it => {
+        const uid = (it.uid as string | undefined)?.toLowerCase();
+        if (!uid || seen.has(uid)) return false;
+        seen.add(uid);
+        return true;
+      });
     }
     // Standard `getDirectoryPage` already returns every anchor child, lists included.
     return standardItems;
@@ -1697,7 +1712,7 @@ export const FileBrowser = ({
             standard mode keys on the kernel page heuristic + sort overlay. */}
         {(() => {
           const showLoadMore = useLensesQuery
-            ? hasMoreLenses
+            ? hasMoreLenses || hasMoreLensList
             : items && items.length > 0 && items.length >= Number(pageSize);
           if (!showLoadMore) return null;
           return (
@@ -1707,8 +1722,11 @@ export const FileBrowser = ({
                 onClick={() => {
                   if (useLensesQuery) {
                     // Iterate the opaque cursor via the hook; `pageSize` is the
-                    // per-fetch target, not a cumulative cap.
-                    loadMoreLenses();
+                    // per-fetch target, not a cumulative cap. Advance BOTH the
+                    // file/folder walk and the list-anchor walk — either may have
+                    // more pages (a folder can have more lists than files, or vice versa).
+                    if (hasMoreLenses) loadMoreLenses();
+                    if (hasMoreLensList) loadMoreLensList();
                   } else {
                     setPageSize(prev => prev + 50n);
                     if (hasSortMore) loadMoreSorted();
