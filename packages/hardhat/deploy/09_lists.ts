@@ -10,7 +10,9 @@ const SCHEMA_REGISTRY_ADDRESS = "0x0a7E2Ff54e76B8E6659aedc9103FB21c038050D0";
 // Canonical schema field strings (ADR-0044). These must never change post-mainnet.
 const LIST_DEFINITION =
   "bool allowsDuplicates, bool appendOnly, uint8 targetType, bytes32 targetSchema, uint32 maxEntries";
-const LIST_ENTRY_DEFINITION = "bytes32 listUID, bytes32 target, int256 weight";
+// ADR-0046: LIST_ENTRY is pure membership identity. Order + label are PROPERTYs
+// on the (stable) entry UID, not schema fields — so reorder doesn't churn the UID.
+const LIST_ENTRY_DEFINITION = "bytes32 listUID, bytes32 target";
 
 const deployLists: DeployFunction = async function (hre: HardhatRuntimeEnvironment) {
   const { deployer } = await hre.getNamedAccounts();

@@ -68,8 +68,7 @@ contract ListReader is IListReader {
             res[i] = Entry({
                 entryUID: raw[i].entryUID,
                 targetType: targetType,
-                identityKey: raw[i].identityKey,
-                weight: raw[i].weight
+                identityKey: raw[i].identityKey
             });
         }
         return res;
@@ -104,7 +103,7 @@ contract ListReader is IListReader {
         (, , uint8 mode) = _getListMode(listUID);
         require(mode == 2, "not SCHEMA-typed list");
         Attestation memory e = _validateEntry(listUID, lens, entryUID);
-        (, bytes32 target,) = abi.decode(e.data, (bytes32, bytes32, int256));
+        (, bytes32 target) = abi.decode(e.data, (bytes32, bytes32));
         return target;
     }
 
@@ -116,7 +115,7 @@ contract ListReader is IListReader {
         (, , uint8 mode) = _getListMode(listUID);
         require(mode == 0, "not ANY-typed list");
         Attestation memory e = _validateEntry(listUID, lens, entryUID);
-        (, bytes32 target,) = abi.decode(e.data, (bytes32, bytes32, int256));
+        (, bytes32 target) = abi.decode(e.data, (bytes32, bytes32));
         return target;
     }
 
@@ -150,7 +149,7 @@ contract ListReader is IListReader {
         require(e.schema == LIST_ENTRY_SCHEMA_UID, "not a list entry");
         require(e.attester == lens, "wrong lens");
         require(e.revocationTime == 0, "entry revoked");
-        (bytes32 entryListUID,,) = abi.decode(e.data, (bytes32, bytes32, int256));
+        (bytes32 entryListUID,) = abi.decode(e.data, (bytes32, bytes32));
         require(entryListUID == listUID, "entry not in this list");
     }
 

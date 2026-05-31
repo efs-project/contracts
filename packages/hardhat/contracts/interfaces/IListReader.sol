@@ -16,7 +16,7 @@ interface IListReader {
         bytes32 entryUID;
         uint8 targetType; // denormalized from LIST.targetType
         bytes32 identityKey; // recipient(ADDR), UID(SCHEMA), member-key(ANY)
-        int256 weight;
+        // ADR-0046: order/label are PROPERTYs on the entry UID, not schema fields.
     }
 
     /// Decode LIST attestation directly from EAS. Schema-checked BEFORE data decode.

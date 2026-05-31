@@ -7,7 +7,7 @@ const ZERO_BYTES32 = "0x" + "0".repeat(64);
 const NO_EXPIRATION = 0n;
 const LIST_SCHEMA =
   "bool allowsDuplicates, bool appendOnly, uint8 targetType, bytes32 targetSchema, uint32 maxEntries";
-const LIST_ENTRY_SCHEMA = "bytes32 listUID, bytes32 target, int256 weight";
+const LIST_ENTRY_SCHEMA = "bytes32 listUID, bytes32 target"; // ADR-0046: order/label are PROPERTYs, not fields
 
 describe("Lists — Unit Tests", function () {
   let listResolver: ListResolver;
@@ -24,8 +24,7 @@ describe("Lists — Unit Tests", function () {
   const enc = new ethers.AbiCoder();
   const encodeList = (ad: boolean, ao: boolean, tt: number, ts: string, me: number) =>
     enc.encode(["bool", "bool", "uint8", "bytes32", "uint32"], [ad, ao, tt, ts, me]);
-  const encodeEntry = (lu: string, t: string, w: bigint) =>
-    enc.encode(["bytes32", "bytes32", "int256"], [lu, t, w]);
+  const encodeEntry = (lu: string, t: string) => enc.encode(["bytes32", "bytes32"], [lu, t]);
 
   const getUID = (receipt: any): string => {
     for (const log of receipt.logs) {
@@ -132,7 +131,7 @@ describe("Lists — Unit Tests", function () {
     return getUID(await tx.wait());
   };
 
-  const attestAddrEntry = async (signer: Signer, listUID: string, addr: string, weight = 0n): Promise<string> => {
+  const attestAddrEntry = async (signer: Signer, listUID: string, addr: string): Promise<string> => {
     const tx = await eas.connect(signer).attest({
       schema: listEntrySchemaUID,
       data: {
@@ -140,19 +139,14 @@ describe("Lists — Unit Tests", function () {
         expirationTime: NO_EXPIRATION,
         revocable: true,
         refUID: ZERO_BYTES32,
-        data: encodeEntry(listUID, ZERO_BYTES32, weight),
+        data: encodeEntry(listUID, ZERO_BYTES32),
         value: 0n,
       },
     });
     return getUID(await tx.wait());
   };
 
-  const attestAnyEntry = async (
-    signer: Signer,
-    listUID: string,
-    memberKey: string,
-    weight = 0n,
-  ): Promise<string> => {
+  const attestAnyEntry = async (signer: Signer, listUID: string, memberKey: string): Promise<string> => {
     const tx = await eas.connect(signer).attest({
       schema: listEntrySchemaUID,
       data: {
@@ -160,7 +154,7 @@ describe("Lists — Unit Tests", function () {
         expirationTime: NO_EXPIRATION,
         revocable: true,
         refUID: ZERO_BYTES32,
-        data: encodeEntry(listUID, memberKey, weight),
+        data: encodeEntry(listUID, memberKey),
         value: 0n,
       },
     });
@@ -182,12 +176,7 @@ describe("Lists — Unit Tests", function () {
     return getUID(await tx.wait());
   };
 
-  const attestSchemaEntry = async (
-    signer: Signer,
-    listUID: string,
-    targetUID: string,
-    weight = 0n,
-  ): Promise<string> => {
+  const attestSchemaEntry = async (signer: Signer, listUID: string, targetUID: string): Promise<string> => {
     const tx = await eas.connect(signer).attest({
       schema: listEntrySchemaUID,
       data: {
@@ -195,7 +184,7 @@ describe("Lists — Unit Tests", function () {
         expirationTime: NO_EXPIRATION,
         revocable: true,
         refUID: ZERO_BYTES32,
-        data: encodeEntry(listUID, targetUID, weight),
+        data: encodeEntry(listUID, targetUID),
         value: 0n,
       },
     });
@@ -415,7 +404,7 @@ describe("Lists — Unit Tests", function () {
             expirationTime: NO_EXPIRATION,
             revocable: true,
             refUID: ZERO_BYTES32,
-            data: encodeEntry(listUID, badTarget, 0n), // nonzero target in ADDR mode
+            data: encodeEntry(listUID, badTarget), // nonzero target in ADDR mode
             value: 0n,
           },
         }),
@@ -473,7 +462,7 @@ describe("Lists — Unit Tests", function () {
             expirationTime: NO_EXPIRATION,
             revocable: true,
             refUID: ZERO_BYTES32,
-            data: encodeEntry(listUID, targetUID, 0n),
+            data: encodeEntry(listUID, targetUID),
             value: 0n,
           },
         }),
@@ -506,7 +495,7 @@ describe("Lists — Unit Tests", function () {
             expirationTime: NO_EXPIRATION,
             revocable: true,
             refUID: ZERO_BYTES32,
-            data: encodeEntry(listUID, key, 0n),
+            data: encodeEntry(listUID, key),
             value: 0n,
           },
         }),
@@ -603,11 +592,10 @@ describe("Lists — Unit Tests", function () {
     it("B18: getEntries returns correct EntryRecord page", async function () {
       const listUID = await attestList(alice, false, false, 1);
       const bobAddr = await bob.getAddress();
-      const uid = await attestAddrEntry(alice, listUID, bobAddr, 42n);
+      const uid = await attestAddrEntry(alice, listUID, bobAddr);
       const records = await listEntryResolver.getEntries(listUID, await alice.getAddress(), 0n, 10n);
       expect(records.length).to.equal(1);
       expect(records[0].entryUID).to.equal(uid);
-      expect(records[0].weight).to.equal(42n);
     });
 
     it("B19: ListEntryAttested event emitted", async function () {
@@ -621,7 +609,7 @@ describe("Lists — Unit Tests", function () {
           expirationTime: NO_EXPIRATION,
           revocable: true,
           refUID: ZERO_BYTES32,
-          data: encodeEntry(listUID, ZERO_BYTES32, 0n),
+          data: encodeEntry(listUID, ZERO_BYTES32),
           value: 0n,
         },
       });
@@ -707,7 +695,7 @@ describe("Lists — Unit Tests", function () {
             expirationTime: NO_EXPIRATION,
             revocable: true,
             refUID: ZERO_BYTES32,
-            data: encodeEntry(dummyUID, ZERO_BYTES32, 0n), // dummyUID is not a LIST
+            data: encodeEntry(dummyUID, ZERO_BYTES32), // dummyUID is not a LIST
             value: 0n,
           },
         }),
@@ -724,7 +712,7 @@ describe("Lists — Unit Tests", function () {
             expirationTime: NO_EXPIRATION,
             revocable: false, // WRONG — entries must be revocable
             refUID: ZERO_BYTES32,
-            data: encodeEntry(listUID, ZERO_BYTES32, 0n),
+            data: encodeEntry(listUID, ZERO_BYTES32),
             value: 0n,
           },
         }),
@@ -741,7 +729,7 @@ describe("Lists — Unit Tests", function () {
             expirationTime: 9999999999n,
             revocable: true,
             refUID: ZERO_BYTES32,
-            data: encodeEntry(listUID, ZERO_BYTES32, 0n),
+            data: encodeEntry(listUID, ZERO_BYTES32),
             value: 0n,
           },
         }),
@@ -759,7 +747,7 @@ describe("Lists — Unit Tests", function () {
             expirationTime: NO_EXPIRATION,
             revocable: true,
             refUID: listUID, // valid UID — EAS accepts, resolver rejects
-            data: encodeEntry(listUID, ZERO_BYTES32, 0n),
+            data: encodeEntry(listUID, ZERO_BYTES32),
             value: 0n,
           },
         }),
@@ -813,24 +801,24 @@ describe("Lists — Unit Tests", function () {
     it("C6: entries() returns Entry[] with denormalized targetType", async function () {
       const listUID = await attestList(alice, false, false, 1); // ADDR
       const bobAddr = await bob.getAddress();
-      await attestAddrEntry(alice, listUID, bobAddr, 7n);
+      await attestAddrEntry(alice, listUID, bobAddr);
       const es = await listReader.entries(listUID, await alice.getAddress(), 0n, 10n);
       expect(es.length).to.equal(1);
       expect(es[0].targetType).to.equal(1); // denormalized from LIST
-      expect(es[0].weight).to.equal(7n);
     });
 
     it("C7: entries() pagination", async function () {
       const listUID = await attestList(alice, true, false, 1); // duplicates allowed
       const signers = await ethers.getSigners();
-      await attestAddrEntry(alice, listUID, await signers[2].getAddress(), 1n);
-      await attestAddrEntry(alice, listUID, await signers[3].getAddress(), 2n);
-      await attestAddrEntry(alice, listUID, await signers[4].getAddress(), 3n);
+      await attestAddrEntry(alice, listUID, await signers[2].getAddress());
+      const uid2 = await attestAddrEntry(alice, listUID, await signers[3].getAddress());
+      const uid3 = await attestAddrEntry(alice, listUID, await signers[4].getAddress());
       const aliceAddr = await alice.getAddress();
       const page = await listReader.entries(listUID, aliceAddr, 1n, 2n);
       expect(page.length).to.equal(2);
-      expect(page[0].weight).to.equal(2n);
-      expect(page[1].weight).to.equal(3n);
+      // Pagination returns entries in insertion order; start=1 skips the first.
+      expect(page[0].entryUID).to.equal(uid2);
+      expect(page[1].entryUID).to.equal(uid3);
     });
 
     it("C8: countOf() correct after add/remove", async function () {

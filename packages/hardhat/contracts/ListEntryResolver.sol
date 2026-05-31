@@ -8,12 +8,17 @@ import { IEAS, Attestation } from "@ethereum-attestation-service/eas-contracts/c
  * @title ListEntryResolver
  * @dev Resolver for the EFS LIST_ENTRY schema (ADR-0044). Write-time enforcement engine.
  *
- *      LIST_ENTRY schema: "bytes32 listUID, bytes32 target, int256 weight"
+ *      LIST_ENTRY schema: "bytes32 listUID, bytes32 target" (ADR-0046)
  *      revocable: true (rejected by resolver when LIST.appendOnly == true)
  *
- *      Storage is "wide" — EntryRecord[] stores identityKey+weight inline so on-chain
- *      consumers iterate without per-entry eas.getAttestation(). Mirrors ADR-0041's
- *      TagEntry[] widening for the same block-gas-limit reason.
+ *      A LIST_ENTRY is pure membership identity. Ordering and free-text labels are
+ *      PROPERTYs placed on the (stable) entry UID via the standard PIN pattern (ADR-0046),
+ *      not schema fields — so reorder supersedes the order PROPERTY in O(1) without
+ *      churning the entry UID, and attached metadata survives.
+ *
+ *      Storage is "wide" — EntryRecord[] stores identityKey inline so on-chain
+ *      consumers iterate membership without per-entry eas.getAttestation(). Mirrors
+ *      ADR-0041's TagEntry[] widening for the same block-gas-limit reason.
  *
  *      Per-mode encoding (enforced at write time):
  *        ADDR (1): recipient = address (incl. 0); target must be bytes32(0)
@@ -45,8 +50,7 @@ contract ListEntryResolver is SchemaResolver {
         address indexed attester,
         bytes32 indexed identityKey,
         bytes32 entryUID,
-        uint8 targetType,
-        int256 weight
+        uint8 targetType
     );
 
     event ListEntryRevoked(
@@ -58,7 +62,7 @@ contract ListEntryResolver is SchemaResolver {
     );
 
     // ── Constants ───────────────────────────────────────────────────────────────
-    uint256 private constant EXPECTED_ENTRY_DATA_LEN = 96; // 3 × 32
+    uint256 private constant EXPECTED_ENTRY_DATA_LEN = 64; // 2 × 32 (ADR-0046: weight removed)
     bytes32 public immutable LIST_SCHEMA_UID;
 
     // ── Storage: LIST declaration cache ─────────────────────────────────────────
@@ -82,7 +86,6 @@ contract ListEntryResolver is SchemaResolver {
     struct EntryRecord {
         bytes32 entryUID;
         bytes32 identityKey;
-        int256 weight;
     }
 
     mapping(bytes32 listUID => mapping(address attester => EntryRecord[])) private _entries;
@@ -117,7 +120,7 @@ contract ListEntryResolver is SchemaResolver {
         if (a.expirationTime != 0) revert HasExpiration();
         if (a.refUID != bytes32(0)) revert UsesRefUID();
 
-        (bytes32 listUID, bytes32 target, int256 weight) = abi.decode(a.data, (bytes32, bytes32, int256));
+        (bytes32 listUID, bytes32 target) = abi.decode(a.data, (bytes32, bytes32));
         if (listUID == bytes32(0)) revert MissingListUID();
 
         // Hydrate + cache LIST declaration (LIST is immutable; cache valid forever)
@@ -164,7 +167,7 @@ contract ListEntryResolver is SchemaResolver {
         }
 
         // Append wide record + index
-        _entries[listUID][a.attester].push(EntryRecord({ entryUID: a.uid, identityKey: identityKey, weight: weight }));
+        _entries[listUID][a.attester].push(EntryRecord({ entryUID: a.uid, identityKey: identityKey }));
         _entryPosPlusOne[a.uid] = _entries[listUID][a.attester].length;
         _entryCount[listUID][identityKey][a.attester] += 1;
 
@@ -174,7 +177,7 @@ contract ListEntryResolver is SchemaResolver {
             _listAttesters[listUID].push(a.attester);
         }
 
-        emit ListEntryAttested(listUID, a.attester, identityKey, a.uid, d.targetType, weight);
+        emit ListEntryAttested(listUID, a.attester, identityKey, a.uid, d.targetType);
         return true;
     }
 
@@ -185,7 +188,7 @@ contract ListEntryResolver is SchemaResolver {
         uint256 pp1 = _entryPosPlusOne[a.uid];
         if (pp1 == 0) return true;
 
-        (bytes32 listUID,,) = abi.decode(a.data, (bytes32, bytes32, int256));
+        (bytes32 listUID,) = abi.decode(a.data, (bytes32, bytes32));
 
         CachedListDecl memory d = _decl[listUID];
         if (!d.exists) revert UnknownList(); // should never fire — onAttest ran first

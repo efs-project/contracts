@@ -8,7 +8,7 @@ const ZERO_BYTES32 = "0x" + "0".repeat(64);
 const NO_EXPIRATION = 0n;
 const LIST_SCHEMA =
   "bool allowsDuplicates, bool appendOnly, uint8 targetType, bytes32 targetSchema, uint32 maxEntries";
-const LIST_ENTRY_SCHEMA = "bytes32 listUID, bytes32 target, int256 weight";
+const LIST_ENTRY_SCHEMA = "bytes32 listUID, bytes32 target"; // ADR-0046
 
 describe("Lists — Conformance (worked example lifecycle)", function () {
   let eas: EAS;
@@ -35,8 +35,7 @@ describe("Lists — Conformance (worked example lifecycle)", function () {
       [allowsDuplicates, appendOnly, targetType, targetSchema, maxEntries],
     );
 
-  const encodeEntry = (listUID: string, target: string, weight: bigint) =>
-    enc.encode(["bytes32", "bytes32", "int256"], [listUID, target, weight]);
+  const encodeEntry = (listUID: string, target: string) => enc.encode(["bytes32", "bytes32"], [listUID, target]);
 
   const getUID = (receipt: any): string => {
     const iface = eas.interface;
@@ -120,7 +119,7 @@ describe("Lists — Conformance (worked example lifecycle)", function () {
         expirationTime: NO_EXPIRATION,
         revocable: true,
         refUID: ZERO_BYTES32,
-        data: encodeEntry(listUID, ZERO_BYTES32, 0n),
+        data: encodeEntry(listUID, ZERO_BYTES32),
         value: 0n,
       },
     });
@@ -140,7 +139,7 @@ describe("Lists — Conformance (worked example lifecycle)", function () {
           expirationTime: NO_EXPIRATION,
           revocable: true,
           refUID: ZERO_BYTES32,
-          data: encodeEntry(listUID, ZERO_BYTES32, 0n),
+          data: encodeEntry(listUID, ZERO_BYTES32),
           value: 0n,
         },
       }),
@@ -159,7 +158,7 @@ describe("Lists — Conformance (worked example lifecycle)", function () {
         expirationTime: NO_EXPIRATION,
         revocable: true,
         refUID: ZERO_BYTES32,
-        data: encodeEntry(listUID, ZERO_BYTES32, 0n),
+        data: encodeEntry(listUID, ZERO_BYTES32),
         value: 0n,
       },
     });
@@ -203,7 +202,7 @@ describe("Lists — Conformance (worked example lifecycle)", function () {
         expirationTime: NO_EXPIRATION,
         revocable: true,
         refUID: ZERO_BYTES32,
-        data: encodeEntry(listUID, ZERO_BYTES32, 0n),
+        data: encodeEntry(listUID, ZERO_BYTES32),
         value: 0n,
       },
     });

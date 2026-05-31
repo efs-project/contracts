@@ -62,8 +62,7 @@ async function main() {
 
   const encodeList = (ad: boolean, ao: boolean, tt: number, ts: string, me: number) =>
     enc.encode(["bool", "bool", "uint8", "bytes32", "uint32"], [ad, ao, tt, ts, me]);
-  const encodeEntry = (lu: string, t: string, w: bigint) =>
-    enc.encode(["bytes32", "bytes32", "int256"], [lu, t, w]);
+  const encodeEntry = (lu: string, t: string) => enc.encode(["bytes32", "bytes32"], [lu, t]);
 
   const getUID = (receipt: any): string => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -110,7 +109,7 @@ async function main() {
       expirationTime: 0n,
       revocable: true,
       refUID: ethers.ZeroHash,
-      data: encodeEntry(allowlistUID, ethers.ZeroHash, 0n),
+      data: encodeEntry(allowlistUID, ethers.ZeroHash),
       value: 0n,
     },
   });
@@ -139,7 +138,7 @@ async function main() {
       expirationTime: 0n,
       revocable: true,
       refUID: ethers.ZeroHash,
-      data: encodeEntry(allowlistUID, ethers.ZeroHash, 0n),
+      data: encodeEntry(allowlistUID, ethers.ZeroHash),
       value: 0n,
     },
   });
@@ -189,7 +188,7 @@ async function main() {
       expirationTime: 0n,
       revocable: true,
       refUID: ethers.ZeroHash,
-      data: encodeEntry(filmListUID, filmUID, 900n), // weight = 900 = rank
+      data: encodeEntry(filmListUID, filmUID),
       value: 0n,
     },
   });
@@ -203,7 +202,7 @@ async function main() {
 
   const filmEntries = await listReader.entries(filmListUID, aliceAddr, 0n, 10n);
   assert("entries() has 1 film", filmEntries.length === 1);
-  assert("film entry weight=900", filmEntries[0].weight === 900n);
+  assert("film entry decodes to film UID", filmEntries[0].identityKey === filmUID);
 
   // ── Section 3: ANY-typed shopping list ────────────────────────────────────
 
@@ -232,7 +231,7 @@ async function main() {
       expirationTime: 0n,
       revocable: true,
       refUID: ethers.ZeroHash,
-      data: encodeEntry(shopListUID, milkKey, 1n),
+      data: encodeEntry(shopListUID, milkKey),
       value: 0n,
     },
   });
@@ -243,7 +242,7 @@ async function main() {
       expirationTime: 0n,
       revocable: true,
       refUID: ethers.ZeroHash,
-      data: encodeEntry(shopListUID, eggKey, 2n),
+      data: encodeEntry(shopListUID, eggKey),
       value: 0n,
     },
   });
@@ -288,7 +287,7 @@ async function main() {
       expirationTime: 0n,
       revocable: true,
       refUID: ethers.ZeroHash,
-      data: encodeEntry(openListUID, ethers.ZeroHash, 0n),
+      data: encodeEntry(openListUID, ethers.ZeroHash),
       value: 0n,
     },
   });
@@ -300,7 +299,7 @@ async function main() {
       expirationTime: 0n,
       revocable: true,
       refUID: ethers.ZeroHash,
-      data: encodeEntry(openListUID, ethers.ZeroHash, 0n),
+      data: encodeEntry(openListUID, ethers.ZeroHash),
       value: 0n,
     },
   });
@@ -330,7 +329,7 @@ async function main() {
       expirationTime: 0n,
       revocable: true,
       refUID: ethers.ZeroHash,
-      data: encodeEntry(openListUID, ethers.ZeroHash, 0n),
+      data: encodeEntry(openListUID, ethers.ZeroHash),
       value: 0n,
     },
   });
@@ -385,21 +384,21 @@ async function main() {
   // Alice fills both her slots
   await eas.connect(alice).attest({
     schema: listEntrySchemaUID,
-    data: { recipient: deployerAddr, expirationTime: 0n, revocable: true, refUID: ethers.ZeroHash, data: encodeEntry(cappedListUID, ethers.ZeroHash, 0n), value: 0n },
+    data: { recipient: deployerAddr, expirationTime: 0n, revocable: true, refUID: ethers.ZeroHash, data: encodeEntry(cappedListUID, ethers.ZeroHash), value: 0n },
   });
   await eas.connect(alice).attest({
     schema: listEntrySchemaUID,
-    data: { recipient: carolAddr, expirationTime: 0n, revocable: true, refUID: ethers.ZeroHash, data: encodeEntry(cappedListUID, ethers.ZeroHash, 0n), value: 0n },
+    data: { recipient: carolAddr, expirationTime: 0n, revocable: true, refUID: ethers.ZeroHash, data: encodeEntry(cappedListUID, ethers.ZeroHash), value: 0n },
   });
   assert("4-f Alice fills 2 slots", (await listReader.length(cappedListUID, aliceAddr)) === 2n);
   // Bob can independently fill his own 2 slots (cap is not shared)
   await eas.connect(bob).attest({
     schema: listEntrySchemaUID,
-    data: { recipient: deployerAddr, expirationTime: 0n, revocable: true, refUID: ethers.ZeroHash, data: encodeEntry(cappedListUID, ethers.ZeroHash, 0n), value: 0n },
+    data: { recipient: deployerAddr, expirationTime: 0n, revocable: true, refUID: ethers.ZeroHash, data: encodeEntry(cappedListUID, ethers.ZeroHash), value: 0n },
   });
   await eas.connect(bob).attest({
     schema: listEntrySchemaUID,
-    data: { recipient: carolAddr, expirationTime: 0n, revocable: true, refUID: ethers.ZeroHash, data: encodeEntry(cappedListUID, ethers.ZeroHash, 0n), value: 0n },
+    data: { recipient: carolAddr, expirationTime: 0n, revocable: true, refUID: ethers.ZeroHash, data: encodeEntry(cappedListUID, ethers.ZeroHash), value: 0n },
   });
   assert("4-f Bob fills 2 slots (independent cap)", (await listReader.length(cappedListUID, bobAddr)) === 2n);
   // Alice cannot add a 3rd
@@ -407,7 +406,7 @@ async function main() {
   try {
     await eas.connect(alice).attest({
       schema: listEntrySchemaUID,
-      data: { recipient: bobAddr, expirationTime: 0n, revocable: true, refUID: ethers.ZeroHash, data: encodeEntry(cappedListUID, ethers.ZeroHash, 0n), value: 0n },
+      data: { recipient: bobAddr, expirationTime: 0n, revocable: true, refUID: ethers.ZeroHash, data: encodeEntry(cappedListUID, ethers.ZeroHash), value: 0n },
     });
   } catch {
     aliceCapped = true;
@@ -423,7 +422,7 @@ async function main() {
       expirationTime: 0n,
       revocable: true,
       refUID: ethers.ZeroHash,
-      data: encodeEntry(openListUID, ethers.ZeroHash, 0n),
+      data: encodeEntry(openListUID, ethers.ZeroHash),
       value: 0n,
     },
   });
@@ -440,7 +439,7 @@ async function main() {
       expirationTime: 0n,
       revocable: true,
       refUID: ethers.ZeroHash,
-      data: encodeEntry(openListUID, ethers.ZeroHash, 0n),
+      data: encodeEntry(openListUID, ethers.ZeroHash),
       value: 0n,
     },
   });
