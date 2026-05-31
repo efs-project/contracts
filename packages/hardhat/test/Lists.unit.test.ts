@@ -5,8 +5,7 @@ import { Signer, ZeroAddress } from "ethers";
 
 const ZERO_BYTES32 = "0x" + "0".repeat(64);
 const NO_EXPIRATION = 0n;
-const LIST_SCHEMA =
-  "bool allowsDuplicates, bool appendOnly, uint8 targetType, bytes32 targetSchema, uint32 maxEntries";
+const LIST_SCHEMA = "bool allowsDuplicates, bool appendOnly, uint8 targetType, bytes32 targetSchema, uint32 maxEntries";
 const LIST_ENTRY_SCHEMA = "bytes32 listUID, bytes32 target"; // ADR-0046: order/label are PROPERTYs, not fields
 
 describe("Lists — Unit Tests", function () {
@@ -877,9 +876,7 @@ describe("Lists — Unit Tests", function () {
       const listUID = await attestList(alice, false, false, 1);
       const uid = await attestAddrEntry(alice, listUID, await bob.getAddress());
       // Bob is not the attester of this entry; alice is
-      await expect(listReader.targetAsAddress(listUID, await bob.getAddress(), uid)).to.be.revertedWith(
-        "wrong lens",
-      );
+      await expect(listReader.targetAsAddress(listUID, await bob.getAddress(), uid)).to.be.revertedWith("wrong lens");
     });
   });
 });

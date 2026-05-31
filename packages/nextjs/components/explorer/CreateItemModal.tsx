@@ -2,7 +2,15 @@
 
 import { useEffect, useRef, useState } from "react";
 import { ethers } from "ethers";
-import { decodeEventLog, encodeAbiParameters, encodeDeployData, parseAbiItem, toHex, zeroAddress, zeroHash } from "viem";
+import {
+  decodeEventLog,
+  encodeAbiParameters,
+  encodeDeployData,
+  parseAbiItem,
+  toHex,
+  zeroAddress,
+  zeroHash,
+} from "viem";
 import { usePublicClient, useReadContract, useWalletClient } from "wagmi";
 import { Cog6ToothIcon, StopIcon } from "@heroicons/react/24/outline";
 import { useSortDiscovery } from "~~/hooks/efs/useSortDiscovery";
@@ -175,7 +183,15 @@ export const CreateItemModal = ({
   const listReaderAddress = (listReaderInfo as any)?.address as `0x${string}` | undefined;
   const { data: listSchemaUID } = useReadContract({
     address: listReaderAddress,
-    abi: [{ inputs: [], name: "LIST_SCHEMA_UID", outputs: [{ name: "", type: "bytes32" }], stateMutability: "view", type: "function" }] as const,
+    abi: [
+      {
+        inputs: [],
+        name: "LIST_SCHEMA_UID",
+        outputs: [{ name: "", type: "bytes32" }],
+        stateMutability: "view",
+        type: "function",
+      },
+    ] as const,
     functionName: "LIST_SCHEMA_UID",
     query: { enabled: !!listReaderAddress },
   });
@@ -507,7 +523,14 @@ export const CreateItemModal = ({
           args: [
             {
               schema: listSchemaUID as `0x${string}`,
-              data: { recipient: zeroAddress, expirationTime: 0n, revocable: false, refUID: zeroHash, data: listData, value: 0n },
+              data: {
+                recipient: zeroAddress,
+                expirationTime: 0n,
+                revocable: false,
+                refUID: zeroHash,
+                data: listData,
+                value: 0n,
+              },
             },
           ],
         },
@@ -527,7 +550,14 @@ export const CreateItemModal = ({
           args: [
             {
               schema: pinSchemaUID as `0x${string}`,
-              data: { recipient: zeroAddress, expirationTime: 0n, revocable: true, refUID: listUID, data: pinData, value: 0n },
+              data: {
+                recipient: zeroAddress,
+                expirationTime: 0n,
+                revocable: true,
+                refUID: listUID,
+                data: pinData,
+                value: 0n,
+              },
             },
           ],
         },
@@ -1254,7 +1284,9 @@ export const CreateItemModal = ({
               Creates a permanent list (non-revocable). You add entries after creation.
             </p>
             <div className="form-control w-full">
-              <label className="label pb-1"><span className="label-text font-medium">Name</span></label>
+              <label className="label pb-1">
+                <span className="label-text font-medium">Name</span>
+              </label>
               <input
                 type="text"
                 className="input input-bordered w-full"
@@ -1265,13 +1297,17 @@ export const CreateItemModal = ({
               />
             </div>
             <div className="form-control w-full">
-              <label className="label pb-1"><span className="label-text font-medium">What are you collecting?</span></label>
+              <label className="label pb-1">
+                <span className="label-text font-medium">What are you collecting?</span>
+              </label>
               <div className="flex gap-2 flex-wrap">
-                {([
-                  [0, "Anything"],
-                  [1, "Addresses"],
-                  [2, "EFS Files"],
-                ] as const).map(([val, label]) => (
+                {(
+                  [
+                    [0, "Anything"],
+                    [1, "Addresses"],
+                    [2, "EFS Files"],
+                  ] as const
+                ).map(([val, label]) => (
                   <button
                     key={val}
                     type="button"
@@ -1283,14 +1319,18 @@ export const CreateItemModal = ({
                 ))}
               </div>
               <p className="text-xs text-base-content/40 mt-1.5">
-                {listTargetType === 0 && "Any bytes32 key — use for arbitrary identifiers, named keys, or anything else."}
+                {listTargetType === 0 &&
+                  "Any bytes32 key — use for arbitrary identifiers, named keys, or anything else."}
                 {listTargetType === 1 && "Ethereum addresses — use for allowlists, social graphs, or member sets."}
-                {listTargetType === 2 && "EFS file UIDs — use for curated file collections; entries must match the target schema."}
+                {listTargetType === 2 &&
+                  "EFS file UIDs — use for curated file collections; entries must match the target schema."}
               </p>
             </div>
             {listTargetType === 2 && (
               <div className="form-control w-full">
-                <label className="label pb-1"><span className="label-text">Target Schema UID</span></label>
+                <label className="label pb-1">
+                  <span className="label-text">Target Schema UID</span>
+                </label>
                 <input
                   type="text"
                   className="input input-bordered input-sm font-mono"
@@ -1311,11 +1351,21 @@ export const CreateItemModal = ({
               {showListRules && (
                 <div className="mt-2 pl-3 border-l-2 border-base-300 flex flex-col gap-2">
                   <label className="flex items-center gap-2 cursor-pointer text-sm">
-                    <input type="checkbox" className="checkbox checkbox-sm" checked={listAllowsDuplicates} onChange={e => setListAllowsDuplicates(e.target.checked)} />
+                    <input
+                      type="checkbox"
+                      className="checkbox checkbox-sm"
+                      checked={listAllowsDuplicates}
+                      onChange={e => setListAllowsDuplicates(e.target.checked)}
+                    />
                     Allow duplicates
                   </label>
                   <label className="flex items-center gap-2 cursor-pointer text-sm">
-                    <input type="checkbox" className="checkbox checkbox-sm" checked={listAppendOnly} onChange={e => setListAppendOnly(e.target.checked)} />
+                    <input
+                      type="checkbox"
+                      className="checkbox checkbox-sm"
+                      checked={listAppendOnly}
+                      onChange={e => setListAppendOnly(e.target.checked)}
+                    />
                     Append-only <span className="text-xs text-base-content/40">(entries permanent once added)</span>
                   </label>
                   <div className="flex items-center gap-2 text-sm">

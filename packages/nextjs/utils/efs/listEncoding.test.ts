@@ -35,7 +35,6 @@ test("memberKeyForText is not length-capped (arbitrary-length free text)", () =>
   assert.match(memberKeyForText(long), /^0x[0-9a-f]{64}$/);
 });
 
-
 // ── unpackText rejection of non-text (legacy / opaque keys) ──────────────────
 
 test("unpackText returns null for an opaque keccak-style key (high/control bytes)", () => {

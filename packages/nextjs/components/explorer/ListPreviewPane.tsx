@@ -1135,7 +1135,11 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
           <div className="flex-1 min-w-0">
             <AddressInput value={draft} onChange={setDraft} placeholder={meta.placeholder} disabled={busy} />
           </div>
-          <button type="submit" className="btn btn-sm btn-primary btn-square flex-shrink-0" disabled={busy || !draft.trim()}>
+          <button
+            type="submit"
+            className="btn btn-sm btn-primary btn-square flex-shrink-0"
+            disabled={busy || !draft.trim()}
+          >
             {busy ? <span className="loading loading-spinner loading-xs" /> : <PlusIcon className="w-4 h-4" />}
           </button>
         </div>

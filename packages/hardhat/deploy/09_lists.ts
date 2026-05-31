@@ -16,7 +16,7 @@ const LIST_ENTRY_DEFINITION = "bytes32 listUID, bytes32 target";
 
 const deployLists: DeployFunction = async function (hre: HardhatRuntimeEnvironment) {
   const { deployer } = await hre.getNamedAccounts();
-  const { deploy } = hre.deployments;
+  const { deploy, getOrNull } = hre.deployments;
   const ethers = hre.ethers;
 
   console.log("Deploying EFS Lists contracts with account:", deployer);
@@ -46,13 +46,22 @@ const deployLists: DeployFunction = async function (hre: HardhatRuntimeEnvironme
   //   nonce+3: Deploy ListEntryResolver
   //   nonce+4: Deploy ListReader
   //
-  // Re-runs are idempotent: hardhat-deploy skips already-deployed contracts (no nonce
-  // consumed), and schema registration try/catches AlreadyExists (no nonce consumed).
+  // Re-runs are idempotent: schema registration try/catches AlreadyExists (no nonce
+  // consumed). BUT nonce prediction is only valid on a FRESH deploy — on a re-run the
+  // resolvers already exist (hardhat-deploy skips them, consuming no nonce), so the
+  // deployer's current nonce no longer maps to ListResolver's create-address and the
+  // assertions below would throw (the schemas are already registered at the original
+  // addresses anyway). So prefer the already-deployed address when present, and only
+  // nonce-predict the addresses that don't exist yet.
+  const existingListResolver = await getOrNull("ListResolver");
+  const existingListEntryResolver = await getOrNull("ListEntryResolver");
   const currentNonce = await ethers.provider.getTransactionCount(deployer);
   console.log("Current Nonce:", currentNonce);
 
-  const futureListResolverAddress = ethers.getCreateAddress({ from: deployer, nonce: currentNonce });
-  const futureListEntryResolverAddress = ethers.getCreateAddress({ from: deployer, nonce: currentNonce + 3 });
+  const futureListResolverAddress =
+    existingListResolver?.address ?? ethers.getCreateAddress({ from: deployer, nonce: currentNonce });
+  const futureListEntryResolverAddress =
+    existingListEntryResolver?.address ?? ethers.getCreateAddress({ from: deployer, nonce: currentNonce + 3 });
   console.log("Predicted ListResolver Address:      ", futureListResolverAddress);
   console.log("Predicted ListEntryResolver Address: ", futureListEntryResolverAddress);
 

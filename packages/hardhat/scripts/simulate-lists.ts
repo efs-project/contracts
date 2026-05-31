@@ -334,8 +334,14 @@ async function main() {
     },
   });
   const aliceAddsCarolUID = getUID(await aliceAddsCarolTx.wait());
-  assert("4-b Alice's lens: Carol=1 (now added)", (await listReader.countOf(openListUID, aliceAddr, identityKeyCarol)) === 1n);
-  assert("4-b Bob's lens: Carol still=1 (independent)", (await listReader.countOf(openListUID, bobAddr, identityKeyCarol)) === 1n);
+  assert(
+    "4-b Alice's lens: Carol=1 (now added)",
+    (await listReader.countOf(openListUID, aliceAddr, identityKeyCarol)) === 1n,
+  );
+  assert(
+    "4-b Bob's lens: Carol still=1 (independent)",
+    (await listReader.countOf(openListUID, bobAddr, identityKeyCarol)) === 1n,
+  );
 
   // 4-c: entries() and length() are scoped per lens
   console.log("  4-c: entries()/length() per lens");
@@ -349,12 +355,21 @@ async function main() {
   // 4-d: Revoke in one lens, other lens unaffected
   console.log("  4-d: Revoke in one lens, other unaffected");
   await eas.connect(alice).revoke({ schema: listEntrySchemaUID, data: { uid: aliceAddsCarolUID, value: 0n } });
-  assert("4-d Alice's lens: Carol removed", (await listReader.countOf(openListUID, aliceAddr, identityKeyCarol)) === 0n);
-  assert("4-d Bob's lens: Carol still present", (await listReader.countOf(openListUID, bobAddr, identityKeyCarol)) === 1n);
+  assert(
+    "4-d Alice's lens: Carol removed",
+    (await listReader.countOf(openListUID, aliceAddr, identityKeyCarol)) === 0n,
+  );
+  assert(
+    "4-d Bob's lens: Carol still present",
+    (await listReader.countOf(openListUID, bobAddr, identityKeyCarol)) === 1n,
+  );
   assert("4-d Alice now has 1 entry", (await listReader.length(openListUID, aliceAddr)) === 1n);
   // Attester index is append-only consensus state: revoking an entry never removes an
   // attester (Alice still appears even though one of her entries is gone).
-  assert("4-d getListAttesterCount still == 2 after revoke", (await listEntryResolver.getListAttesterCount(openListUID)) === 2n);
+  assert(
+    "4-d getListAttesterCount still == 2 after revoke",
+    (await listEntryResolver.getListAttesterCount(openListUID)) === 2n,
+  );
 
   // 4-e: Typed accessor with wrong lens reverts
   console.log("  4-e: Wrong-lens revert on typed accessor");
@@ -384,21 +399,49 @@ async function main() {
   // Alice fills both her slots
   await eas.connect(alice).attest({
     schema: listEntrySchemaUID,
-    data: { recipient: deployerAddr, expirationTime: 0n, revocable: true, refUID: ethers.ZeroHash, data: encodeEntry(cappedListUID, ethers.ZeroHash), value: 0n },
+    data: {
+      recipient: deployerAddr,
+      expirationTime: 0n,
+      revocable: true,
+      refUID: ethers.ZeroHash,
+      data: encodeEntry(cappedListUID, ethers.ZeroHash),
+      value: 0n,
+    },
   });
   await eas.connect(alice).attest({
     schema: listEntrySchemaUID,
-    data: { recipient: carolAddr, expirationTime: 0n, revocable: true, refUID: ethers.ZeroHash, data: encodeEntry(cappedListUID, ethers.ZeroHash), value: 0n },
+    data: {
+      recipient: carolAddr,
+      expirationTime: 0n,
+      revocable: true,
+      refUID: ethers.ZeroHash,
+      data: encodeEntry(cappedListUID, ethers.ZeroHash),
+      value: 0n,
+    },
   });
   assert("4-f Alice fills 2 slots", (await listReader.length(cappedListUID, aliceAddr)) === 2n);
   // Bob can independently fill his own 2 slots (cap is not shared)
   await eas.connect(bob).attest({
     schema: listEntrySchemaUID,
-    data: { recipient: deployerAddr, expirationTime: 0n, revocable: true, refUID: ethers.ZeroHash, data: encodeEntry(cappedListUID, ethers.ZeroHash), value: 0n },
+    data: {
+      recipient: deployerAddr,
+      expirationTime: 0n,
+      revocable: true,
+      refUID: ethers.ZeroHash,
+      data: encodeEntry(cappedListUID, ethers.ZeroHash),
+      value: 0n,
+    },
   });
   await eas.connect(bob).attest({
     schema: listEntrySchemaUID,
-    data: { recipient: carolAddr, expirationTime: 0n, revocable: true, refUID: ethers.ZeroHash, data: encodeEntry(cappedListUID, ethers.ZeroHash), value: 0n },
+    data: {
+      recipient: carolAddr,
+      expirationTime: 0n,
+      revocable: true,
+      refUID: ethers.ZeroHash,
+      data: encodeEntry(cappedListUID, ethers.ZeroHash),
+      value: 0n,
+    },
   });
   assert("4-f Bob fills 2 slots (independent cap)", (await listReader.length(cappedListUID, bobAddr)) === 2n);
   // Alice cannot add a 3rd
@@ -406,7 +449,14 @@ async function main() {
   try {
     await eas.connect(alice).attest({
       schema: listEntrySchemaUID,
-      data: { recipient: bobAddr, expirationTime: 0n, revocable: true, refUID: ethers.ZeroHash, data: encodeEntry(cappedListUID, ethers.ZeroHash), value: 0n },
+      data: {
+        recipient: bobAddr,
+        expirationTime: 0n,
+        revocable: true,
+        refUID: ethers.ZeroHash,
+        data: encodeEntry(cappedListUID, ethers.ZeroHash),
+        value: 0n,
+      },
     });
   } catch {
     aliceCapped = true;
@@ -427,7 +477,10 @@ async function main() {
     },
   });
   assert("4-g Carol (non-curator) has her own lens", (await listReader.length(openListUID, carolAddr)) === 1n);
-  assert("4-g Carol's countOf is independent", (await listReader.countOf(openListUID, carolAddr, identityKeyDeployer)) === 1n);
+  assert(
+    "4-g Carol's countOf is independent",
+    (await listReader.countOf(openListUID, carolAddr, identityKeyDeployer)) === 1n,
+  );
 
   // 4-h: allowsDuplicates=false is per-lens — Bob can add an identity Alice already added
   console.log("  4-h: dup-rejection is per-lens, not global");
@@ -443,7 +496,10 @@ async function main() {
       value: 0n,
     },
   });
-  assert("4-h Bob can add himself (dup-check is per-lens, not global)", (await listReader.countOf(openListUID, bobAddr, identityKeyBob)) === 1n);
+  assert(
+    "4-h Bob can add himself (dup-check is per-lens, not global)",
+    (await listReader.countOf(openListUID, bobAddr, identityKeyBob)) === 1n,
+  );
   assert("4-h Alice's Bob entry unaffected", (await listReader.countOf(openListUID, aliceAddr, identityKeyBob)) === 1n);
 
   // ── Summary ────────────────────────────────────────────────────────────────

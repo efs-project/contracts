@@ -68,13 +68,6 @@ export default function ListsPage() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const listReaderAddress = (listReaderInfo as any)?.address as `0x${string}` | undefined;
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: indexerInfo } = useDeployedContractInfo("Indexer" as any);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const easAddress = (indexerInfo as any)?.address
-    ? undefined
-    : undefined; // We get EAS from Indexer separately
-
   // Read schema UIDs from ListReader
   const { data: listSchemaUID } = useReadContract({
     address: listReaderAddress,
@@ -173,9 +166,7 @@ export default function ListsPage() {
         <div>ListReader: {listReaderAddress ?? "not deployed"}</div>
         <div>LIST_SCHEMA_UID: {listSchemaUID ?? "—"}</div>
         <div>LIST_ENTRY_SCHEMA_UID: {listEntrySchemaUID ?? "—"}</div>
-        {!listReaderAddress && (
-          <div className="text-warning mt-1">Run `yarn deploy` to deploy Lists contracts.</div>
-        )}
+        {!listReaderAddress && <div className="text-warning mt-1">Run `yarn deploy` to deploy Lists contracts.</div>}
       </div>
 
       <div className="flex flex-wrap gap-6 justify-center w-full max-w-5xl">

@@ -7,7 +7,6 @@ import { useAccount, useReadContract, useWaitForTransactionReceipt, useWriteCont
 import { useDeployedContractInfo } from "~~/hooks/scaffold-eth";
 import { notification } from "~~/utils/scaffold-eth";
 
-
 const EAS_ABI = [
   {
     inputs: [
@@ -37,10 +36,23 @@ const EAS_ABI = [
     type: "function",
   },
   {
-    inputs: [{ name: "revocationRequest", type: "tuple", components: [
-      { name: "schema", type: "bytes32" },
-      { name: "data", type: "tuple", components: [{ name: "uid", type: "bytes32" }, { name: "value", type: "uint256" }] },
-    ]}],
+    inputs: [
+      {
+        name: "revocationRequest",
+        type: "tuple",
+        components: [
+          { name: "schema", type: "bytes32" },
+          {
+            name: "data",
+            type: "tuple",
+            components: [
+              { name: "uid", type: "bytes32" },
+              { name: "value", type: "uint256" },
+            ],
+          },
+        ],
+      },
+    ],
     name: "revoke",
     outputs: [],
     stateMutability: "payable",
@@ -96,7 +108,6 @@ const LIST_READER_ABI = [
           { name: "entryUID", type: "bytes32" },
           { name: "targetType", type: "uint8" },
           { name: "identityKey", type: "bytes32" },
-          { name: "weight", type: "int256" },
         ],
       },
     ],
@@ -181,7 +192,6 @@ export default function ListDetailPage() {
   // ADD ENTRY form
   const [entryTarget, setEntryTarget] = useState("");
   const [entryRecipient, setEntryRecipient] = useState("");
-  const [entryWeight, setEntryWeight] = useState("0");
 
   const targetType = mode ? Number(mode.targetType) : 0;
 
@@ -193,13 +203,6 @@ export default function ListDetailPage() {
 
     let recipient: `0x${string}` = zeroAddress;
     let target: `0x${string}` = zeroHash as `0x${string}`;
-    let weight: bigint;
-    try {
-      weight = BigInt(entryWeight);
-    } catch {
-      notification.error("Weight must be a valid integer");
-      return;
-    }
 
     if (targetType === 1 /* ADDR */) {
       if (!entryRecipient.startsWith("0x")) {
@@ -215,13 +218,15 @@ export default function ListDetailPage() {
       target = entryTarget as `0x${string}`;
     }
 
+    // ADR-0046: LIST_ENTRY is pure identity (listUID, target) — no weight field.
+    // Order/labels are PROPERTYs on the entry UID (managed in the explorer's
+    // ListPreviewPane); this low-level page just adds/removes membership.
     const data = encodeAbiParameters(
       [
         { name: "listUID", type: "bytes32" },
         { name: "target", type: "bytes32" },
-        { name: "weight", type: "int256" },
       ],
-      [listUID, target, weight],
+      [listUID, target],
     );
 
     try {
@@ -247,7 +252,6 @@ export default function ListDetailPage() {
       setPendingTxHash(tx);
       setEntryTarget("");
       setEntryRecipient("");
-      setEntryWeight("0");
     } catch (e) {
       console.error(e);
       notification.error("Failed to add entry. Check console.");
@@ -287,9 +291,7 @@ export default function ListDetailPage() {
     <div className="flex flex-col items-center py-8 gap-6 px-4">
       <h1 className="text-3xl font-bold">List Detail</h1>
 
-      <div className="text-xs font-mono opacity-50 break-all text-center max-w-xl">
-        {listUID}
-      </div>
+      <div className="text-xs font-mono opacity-50 break-all text-center max-w-xl">{listUID}</div>
 
       {/* MODE INFO */}
       {mode && (
@@ -342,7 +344,6 @@ export default function ListDetailPage() {
                   <tr>
                     <th>Entry UID</th>
                     <th>Identity Key</th>
-                    <th>Weight</th>
                     {!mode?.appendOnly && <th></th>}
                   </tr>
                 </thead>
@@ -355,7 +356,6 @@ export default function ListDetailPage() {
                       <td className="font-mono text-xs">
                         {e.identityKey.slice(0, 8)}…{e.identityKey.slice(-6)}
                       </td>
-                      <td>{e.weight.toString()}</td>
                       {!mode?.appendOnly && (
                         <td>
                           <button
@@ -420,25 +420,13 @@ export default function ListDetailPage() {
               </div>
             )}
 
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text">Weight (int256)</span>
-              </label>
-              <input
-                type="number"
-                className="input input-bordered"
-                value={entryWeight}
-                onChange={e => setEntryWeight(e.target.value)}
-              />
-            </div>
-
             <div className="card-actions justify-end mt-2">
               <button
                 className="btn btn-primary"
                 disabled={isPending || !!pendingTxHash || !connectedAddress}
                 onClick={handleAddEntry}
               >
-                {(isPending || !!pendingTxHash) ? <span className="loading loading-spinner" /> : "Add Entry"}
+                {isPending || !!pendingTxHash ? <span className="loading loading-spinner" /> : "Add Entry"}
               </button>
             </div>
           </div>

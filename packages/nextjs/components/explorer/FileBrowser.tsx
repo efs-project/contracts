@@ -1355,7 +1355,9 @@ export const FileBrowser = ({
       // Prefer the connected user's own placement (their edition at this slot); fall back to
       // the anchor creator's (the curator's) — mirrors the effectiveLens model in the pane and
       // the connected-wallet lookup deleteList already uses.
-      let listUID = connectedAddress ? await resolvePin(connectedAddress as `0x${string}`) : (zeroHash as `0x${string}`);
+      let listUID = connectedAddress
+        ? await resolvePin(connectedAddress as `0x${string}`)
+        : (zeroHash as `0x${string}`);
       if (!listUID || listUID === zeroHash) listUID = await resolvePin(item.attester as `0x${string}`);
       if (!listUID || listUID === zeroHash) {
         notification.error("This list's placement is missing or revoked.");
@@ -1388,7 +1390,11 @@ export const FileBrowser = ({
       if (!slot || slot.pinUID === zeroHash) {
         throw new Error("You have no active placement on this list — nothing to delete.");
       }
-      await executeRevokesBySchema([{ schema: pinSchemaUID as `0x${string}`, uids: [slot.pinUID], label: "PIN" }], ops, opId);
+      await executeRevokesBySchema(
+        [{ schema: pinSchemaUID as `0x${string}`, uids: [slot.pinUID], label: "PIN" }],
+        ops,
+        opId,
+      );
       ops.complete(opId, `Deleted list "${item.name || ""}".`);
       if (selectedList?.anchorUID === item.uid) closePreview();
       if (useLensesQuery) await refetchLensListItems();
