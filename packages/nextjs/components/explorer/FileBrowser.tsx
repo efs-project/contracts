@@ -1222,6 +1222,23 @@ export const FileBrowser = ({
     return [];
   };
 
+  // A LIST is placed like a file — `Anchor(anchorType=LIST_SCHEMA_UID) ← PIN ← LIST`
+  // (ADR-0044 §1) — so a folder cascade must revoke the user's list placement PIN too,
+  // or the list resurrects when the folder/anchor is re-shown. PIN cardinality 1: at most
+  // one active PIN per (attester, listAnchorUID, LIST_SCHEMA). Same PIN schema as files,
+  // so the UID joins the file pins in `pinUIDs`.
+  const collectUserListPlacementPin = async (listAnchorUID: `0x${string}`): Promise<`0x${string}`[]> => {
+    if (!publicClient || !edgeResolverAddress || !connectedAddress || !listSchemaUID) return [];
+    const slot = (await publicClient.readContract({
+      address: edgeResolverAddress,
+      abi: EDGE_RESOLVER_ABI,
+      functionName: "getActivePinSlot",
+      args: [listAnchorUID, connectedAddress as `0x${string}`, listSchemaUID as `0x${string}`],
+    })) as { pinUID: `0x${string}`; targetID: `0x${string}` };
+    if (slot.pinUID && slot.pinUID !== zeroHash) return [slot.pinUID];
+    return [];
+  };
+
   // Recursively walks the subtree rooted at `rootFolderUID`, paginating getDirectoryPage (500/page).
   // Returns every PIN/TAG UID the connected user would need to revoke to remove their visibility:
   //   - PINs: file placements the user authored at any depth (cardinality 1, schema=PIN)
@@ -1296,6 +1313,12 @@ export const FileBrowser = ({
             fileCount += 1;
             const childPins = await collectUserFilePlacementPins(childUID);
             pinUIDs.push(...childPins);
+          } else if (listSchemaUID && schema === (listSchemaUID as string).toLowerCase()) {
+            // List anchor — placed like a file (not a folder). Collect the user's list
+            // placement PIN and do NOT recurse (a list anchor has no folder children).
+            fileCount += 1;
+            const listPins = await collectUserListPlacementPin(childUID);
+            pinUIDs.push(...listPins);
           } else {
             // Subfolder — queue for recursion.
             queue.push(childUID);
