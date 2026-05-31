@@ -1068,6 +1068,24 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
   // ── Render helpers ────────────────────────────────────────────────────────
 
   const renderContent = (e: Entry) => {
+    // Editing the label works for ANY row (text OR a referenced address/attestation):
+    // the `name` PROPERTY is an override that takes precedence over the entity display.
+    if (editingUID === e.entryUID) {
+      return (
+        <input
+          autoFocus
+          className="input input-xs w-full bg-base-100 border-primary/40"
+          placeholder="Label (overrides the reference)…"
+          value={editValue}
+          onChange={ev => setEditValue(ev.target.value)}
+          onKeyDown={ev => {
+            if (ev.key === "Enter") handleEditSave(e);
+            if (ev.key === "Escape") cancelEdit();
+          }}
+          onBlur={() => handleEditSave(e)}
+        />
+      );
+    }
     // Reference rows (ADDR/SCHEMA): a `name` label override (if set) wins over the
     // entity's own display; otherwise show the address / attestation summary.
     if (e.targetType === MODE.ADDR) {
@@ -1086,21 +1104,6 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
     }
     // ANY (heterogeneous): an explicit `name` label always wins, then we auto-detect
     // the identityKey shape — left-padded address, full 32-byte UID, else opaque key.
-    if (editingUID === e.entryUID) {
-      return (
-        <input
-          autoFocus
-          className="input input-xs w-full bg-base-100 border-primary/40"
-          value={editValue}
-          onChange={ev => setEditValue(ev.target.value)}
-          onKeyDown={ev => {
-            if (ev.key === "Enter") handleEditSave(e);
-            if (ev.key === "Escape") cancelEdit();
-          }}
-          onBlur={() => handleEditSave(e)}
-        />
-      );
-    }
     // 1. Explicit label (free text or override) → show it.
     const text = e.label ?? unpackText(e.identityKey);
     if (text !== null) {
@@ -1346,16 +1349,14 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
                 {/* Row actions */}
                 {canEdit && editingUID !== e.entryUID && (
                   <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
-                    {e.targetType === MODE.ANY && (
-                      <button
-                        className="btn btn-ghost btn-xs btn-square text-base-content/40 hover:text-primary"
-                        disabled={busy}
-                        onClick={() => startEdit(e, entryLabel(e))}
-                        title="Edit"
-                      >
-                        <PencilSquareIcon className="w-3.5 h-3.5" />
-                      </button>
-                    )}
+                    <button
+                      className="btn btn-ghost btn-xs btn-square text-base-content/40 hover:text-primary"
+                      disabled={busy}
+                      onClick={() => startEdit(e, entryLabel(e))}
+                      title={e.targetType === MODE.ANY ? "Edit / label" : "Label"}
+                    >
+                      <PencilSquareIcon className="w-3.5 h-3.5" />
+                    </button>
                     {e.targetType === MODE.SCHEMA && (
                       <a
                         className="btn btn-ghost btn-xs btn-square text-base-content/40 hover:text-primary"
