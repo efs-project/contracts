@@ -523,7 +523,10 @@ export const CreateItemModal = ({
 
       // 2. The LIST itself — free-floating config (ADR-0044 5-field schema).
       ops.log(opId, "Creating list…");
-      const schemaBytes = (listTargetType === 2 ? listTargetSchema : zeroHash) as `0x${string}`;
+      // Trim to match the validated value above — otherwise surrounding whitespace passes
+      // the `.trim()` check but reaches encodeAbiParameters as an invalid bytes32 (reverting
+      // only after the non-revocable anchor is already created).
+      const schemaBytes = (listTargetType === 2 ? listTargetSchema.trim() : zeroHash) as `0x${string}`;
       const listData = encodeAbiParameters(
         [
           { name: "allowsDuplicates", type: "bool" },
