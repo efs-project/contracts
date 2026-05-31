@@ -468,7 +468,11 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
   const meta = MODE_META[targetType] ?? MODE_META[0];
   // You can only edit your OWN edition — viewing another lens is read-only.
   const viewingOwn = !!connectedAddress && effectiveLens.toLowerCase() === connectedAddress.toLowerCase();
-  const canEdit = viewingOwn && !mode?.appendOnly;
+  // append-only blocks ONLY entry revocation (removal). Adding entries and changing
+  // order/label PROPERTYs (which re-PIN, never revoke the entry) are still allowed —
+  // so an append-only list (incl. an empty one) can still be populated and reordered.
+  const canEdit = viewingOwn; // add / reorder / edit-label
+  const canRemove = viewingOwn && !mode?.appendOnly; // entry revocation only
 
   // ── Entry-scoped order/label PROPERTY reads (ADR-0046, lens-scoped) ──────────
   // The order ("weight") and label ("name") that ADR-0044 stored inline now live as
@@ -1372,14 +1376,17 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
                         <ArrowTopRightOnSquareIcon className="w-3.5 h-3.5" />
                       </a>
                     )}
-                    <button
-                      className="btn btn-ghost btn-xs btn-square text-base-content/40 hover:text-error"
-                      disabled={busy}
-                      onClick={() => handleRemove(e)}
-                      title="Remove"
-                    >
-                      <XMarkIcon className="w-4 h-4" />
-                    </button>
+                    {/* Removal is the only thing append-only blocks. */}
+                    {canRemove && (
+                      <button
+                        className="btn btn-ghost btn-xs btn-square text-base-content/40 hover:text-error"
+                        disabled={busy}
+                        onClick={() => handleRemove(e)}
+                        title="Remove"
+                      >
+                        <XMarkIcon className="w-4 h-4" />
+                      </button>
+                    )}
                   </div>
                 )}
 

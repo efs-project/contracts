@@ -65,6 +65,24 @@ const deployLists: DeployFunction = async function (hre: HardhatRuntimeEnvironme
   console.log("Predicted ListResolver Address:      ", futureListResolverAddress);
   console.log("Predicted ListEntryResolver Address: ", futureListEntryResolverAddress);
 
+  // Safe-abort on a *partial* prior deploy. The `+3` nonce offset for ListEntryResolver
+  // is only valid on a fully-fresh run (ListResolver + the two schema registrations
+  // consume nonces 0..2 before it). If a prior deploy persisted ListResolver but crashed
+  // before ListEntryResolver, hardhat-deploy now skips ListResolver (no nonce consumed),
+  // so the offset is wrong — predicting a bad address and risking a *stray* LIST_ENTRY
+  // schema registered against the wrong resolver. We can't safely recover the original
+  // prediction from a fresh nonce, so fail loudly instead of corrupting. (Fresh deploy:
+  // neither exists → no abort. Full re-run: both exist → addresses from getOrNull → no
+  // abort.) The pinned-fork path always redeploys fresh, so this only guards a crashed
+  // mid-deploy on a persistent network.
+  if (existingListResolver && !existingListEntryResolver) {
+    throw new Error(
+      "Partial Lists deploy detected: ListResolver exists but ListEntryResolver does not. " +
+        "The nonce prediction can't safely resume this state. Wipe the Lists deployments " +
+        "(rm packages/hardhat/deployments/<network>/List*.json) and redeploy from clean.",
+    );
+  }
+
   // Schema UIDs are deterministic: keccak256(definition, resolverAddress, revocable).
   // These are Etched once registered on mainnet — changing either string or address orphans all
   // existing LIST/LIST_ENTRY attestations.
