@@ -44,6 +44,7 @@ export default function ExplorerClient() {
   // parallel escape hatch for create. Without it, users had to hard-refresh to
   // see a newly-created file/folder appear.
   const [directoryRefreshKey, setDirectoryRefreshKey] = useState(0);
+  const [recreatedListAnchor, setRecreatedListAnchor] = useState<string | undefined>(undefined);
   const [reverseOrder, setReverseOrder] = useState(false);
   const [autoProcessKey, setAutoProcessKey] = useState(0);
   const [autoProcessSortUIDs, setAutoProcessSortUIDs] = useState<string[]>([]);
@@ -691,7 +692,10 @@ export default function ExplorerClient() {
                   setSortRefreshKey(k => k + 1);
                   setDirectoryRefreshKey(k => k + 1);
                 }}
-                onListCreated={() => {
+                onListCreated={(uid: string) => {
+                  // Surface the (possibly reused) slot anchor so FileBrowser can lift any
+                  // delete-suppression on it — recreating a deleted list reuses its anchor.
+                  setRecreatedListAnchor(uid);
                   setDirectoryRefreshKey(k => k + 1);
                 }}
               />
@@ -723,6 +727,7 @@ export default function ExplorerClient() {
                     sortOverlayAddress={sortOverlayAddress}
                     sortRefreshKey={sortRefreshKey}
                     directoryRefreshKey={directoryRefreshKey}
+                    recreatedListAnchor={recreatedListAnchor}
                     reverseOrder={reverseOrder}
                     onNavigate={(uid, name) => navigateToPath([...currentPath, { uid, name }])}
                   />

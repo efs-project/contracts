@@ -138,6 +138,7 @@ export const FileBrowser = ({
   sortOverlayAddress,
   sortRefreshKey = 0,
   directoryRefreshKey = 0,
+  recreatedListAnchor,
   reverseOrder = false,
 }: {
   currentAnchorUID: string | null;
@@ -177,6 +178,9 @@ export const FileBrowser = ({
    * on their own when deps settle.
    */
   directoryRefreshKey?: number;
+  /** Slot anchor of a just-created list. Recreating a deleted list reuses its permanent
+   *  anchor, so this lifts any stale delete-suppression on it (see effect below). */
+  recreatedListAnchor?: string;
   reverseOrder?: boolean;
 }) => {
   const [selectedDebugItem, setSelectedDebugItem] = useState<any | null>(null);
@@ -301,6 +305,22 @@ export const FileBrowser = ({
     setPageSize(50n);
     setDeletedListAnchors(new Set()); // clear delete-suppression when navigating folders
   }, [currentAnchorUID]);
+
+  // Recreating a deleted list reuses the SAME permanent anchor (CreateItemModal's
+  // resolveAnchor reuse — the documented recovery path). Without this, the recreated
+  // list's now-active placement would stay hidden by the delete-suppression set until
+  // the user navigated away. Lift suppression on that specific anchor when a create lands
+  // (keyed on directoryRefreshKey so it re-fires even if the same slot is recreated twice).
+  useEffect(() => {
+    if (!recreatedListAnchor) return;
+    const lc = recreatedListAnchor.toLowerCase();
+    setDeletedListAnchors(prev => {
+      if (!prev.has(lc)) return prev;
+      const next = new Set(prev);
+      next.delete(lc);
+      return next;
+    });
+  }, [directoryRefreshKey, recreatedListAnchor]);
 
   // Load EdgeResolver address and "tags" anchor UID once.
   // "tags" is a normal anchor under the file system root — discovered the same way
