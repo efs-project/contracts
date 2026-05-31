@@ -1,5 +1,7 @@
 # EFS Custom Lists — Notes
 
+> **Frozen historical record (Lists landed in PR #20).** Round-by-round rationale, parked ideas, and rejected reframes for the EFS Lists design. The decision lives in **ADR-0044 + ADR-0046**; current behavior in `specs/06`. Preserved for reasoning history only — not maintained.
+
 Working scratchpad for thoughts that don't need to live in the canonical [`custom-lists.md`](./custom-lists.md). Less rigorous, more exploratory. Append-friendly across iterations and agents.
 
 ---
