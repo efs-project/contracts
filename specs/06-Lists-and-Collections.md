@@ -341,8 +341,8 @@ await eas.attest({
     revocable: true,
     refUID: ZeroHash,
     data: encodeAbiParameters(
-      [{ type: "bytes32" }, { type: "bytes32" }, { type: "int256" }],
-      [listUID, ZeroHash, 0n],     // target = ZeroHash for ADDR mode
+      [{ type: "bytes32" }, { type: "bytes32" }],
+      [listUID, ZeroHash],         // target = ZeroHash for ADDR mode (ADR-0046: no weight field)
     ),
     value: 0n,
   },

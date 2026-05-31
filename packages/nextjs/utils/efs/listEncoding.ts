@@ -19,9 +19,6 @@ import { getAddress, keccak256, toBytes } from "viem";
  */
 export const RANK_STEP = 1_000_000_000_000_000n; // 1e15
 
-/** UTF-8 byte length of a string. */
-export const byteLen = (s: string): number => new TextEncoder().encode(s).length;
-
 /**
  * Derive the ANY-mode `target` member key for a free-text item (ADR-0046).
  *

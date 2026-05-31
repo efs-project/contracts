@@ -209,6 +209,11 @@ Resolved for reorder and edit. They no longer touch the entry at all — reorder
 ### Post-create UID copy button
 After creating a list the success notification shows a truncated UID. A copy-to-clipboard button on the notification (or a modal success state with the full UID) would make it easy to share or use the UID elsewhere.
 
+### Lists — surface read-failures and unordered entries in the UI (from ADR-0046 review)
+Two non-blocking polish items from the round-3 review of the order/label-as-PROPERTY work:
+- **Read-failure affordance (F1):** `readEntryProperty` now propagates RPC errors and the enrich effect retains last-known order/label + `console.error`s on a transient failure (so a blip no longer silently reorders/blanks). The remaining polish is a *user-visible* non-blocking indicator ("couldn't refresh N items") rather than console-only.
+- **Unordered-entry grouping (F4):** entries with no `"weight"` order PROPERTY (legacy, or a half-written add) sort last by `entryUID`. Three semantically different populations (legacy / read-failed / mid-write) collapse into one bucket. Render them in a visually distinct "unordered" group with a tooltip instead of silently appending to the ranked list.
+
 ### Lists UI — items marked out of scope for v1
 ENS resolution on identity keys, bulk address paste, drag-to-reorder lens stack, SCHEMA-mode browse picker, ANY-mode keccak256 helper, deep-link `?lens=` URL param on detail page. [specs/2026-05-28-lists-ui-design.md]
 

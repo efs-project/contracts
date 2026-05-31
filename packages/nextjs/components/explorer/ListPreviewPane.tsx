@@ -474,36 +474,40 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
   // scoped to `effectiveLens`, then sort by the parsed order value ascending.
 
   /** Read one PIN-bound PROPERTY value (string) on a container, scoped to `attester`. */
+  // Returns the property value, or null when it is genuinely ABSENT (no key anchor,
+  // no active PIN, revoked, or malformed value). RPC/network errors are NOT swallowed
+  // — they propagate so the caller can tell "read failed" from "no value set" (ADR-0046
+  // F1: a transient blip must never masquerade as missing data and silently reorder).
   const readEntryProperty = useCallback(
     async (container: `0x${string}`, keyName: string, attester: `0x${string}`): Promise<string | null> => {
       if (!publicClient || !indexerAddress || !edgeResolverAddress || !propertySchemaUID || !easAddress) return null;
+      const keyAnchorUID = (await publicClient.readContract({
+        address: indexerAddress,
+        abi: INDEXER_PROPERTY_ABI,
+        functionName: "resolveAnchor",
+        args: [container, keyName, propertySchemaUID as `0x${string}`],
+      })) as `0x${string}`;
+      if (!keyAnchorUID || keyAnchorUID === zeroHash) return null;
+
+      const propertyUID = (await publicClient.readContract({
+        address: edgeResolverAddress,
+        abi: EDGE_RESOLVER_ABI,
+        functionName: "getActivePinTarget",
+        args: [keyAnchorUID, getAddress(attester), propertySchemaUID as `0x${string}`],
+      })) as `0x${string}`;
+      if (!propertyUID || propertyUID === zeroHash) return null;
+
+      const att = (await publicClient.readContract({
+        address: easAddress,
+        abi: EAS_ABI,
+        functionName: "getAttestation",
+        args: [propertyUID],
+      })) as { uid: `0x${string}`; revocationTime: bigint; data: `0x${string}` };
+      if (!att || att.uid === zeroHash || toBig(att.revocationTime) !== 0n) return null;
+      if (!att.data || att.data === "0x") return null;
       try {
-        const keyAnchorUID = (await publicClient.readContract({
-          address: indexerAddress,
-          abi: INDEXER_PROPERTY_ABI,
-          functionName: "resolveAnchor",
-          args: [container, keyName, propertySchemaUID as `0x${string}`],
-        })) as `0x${string}`;
-        if (!keyAnchorUID || keyAnchorUID === zeroHash) return null;
-
-        const propertyUID = (await publicClient.readContract({
-          address: edgeResolverAddress,
-          abi: EDGE_RESOLVER_ABI,
-          functionName: "getActivePinTarget",
-          args: [keyAnchorUID, getAddress(attester), propertySchemaUID as `0x${string}`],
-        })) as `0x${string}`;
-        if (!propertyUID || propertyUID === zeroHash) return null;
-
-        const att = (await publicClient.readContract({
-          address: easAddress,
-          abi: EAS_ABI,
-          functionName: "getAttestation",
-          args: [propertyUID],
-        })) as { uid: `0x${string}`; revocationTime: bigint; data: `0x${string}` };
-        if (!att || att.uid === zeroHash || toBig(att.revocationTime) !== 0n) return null;
-        if (!att.data || att.data === "0x") return null;
         const [value] = decodeAbiParameters([{ type: "string" }], att.data) as [string];
-        return value && value.length > 0 ? value : null;
+        return value && value.length > 0 ? value : null; // malformed/empty value = absent
       } catch {
         return null;
       }
@@ -513,6 +517,12 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
 
   // Display order — synced from chain (sorted by order property asc), mutated optimistically.
   const [items, setItems] = useState<Entry[]>([]);
+  // Latest items, readable inside the enrich effect without making it a dependency —
+  // used to retain last-known order/label when a read transiently fails (F1).
+  const itemsRef = useRef<Entry[]>([]);
+  useEffect(() => {
+    itemsRef.current = items;
+  }, [items]);
   // Clear immediately when the list or the viewed lens changes (entries refetch on arg change).
   useEffect(() => setItems([]), [uid, effectiveLens]);
 
@@ -524,24 +534,34 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
         if (!cancelled) setItems([]);
         return;
       }
+      const prevByUID = new Map(itemsRef.current.map(it => [it.entryUID, it]));
       // Read both properties for every entry in parallel (Promise.all of readContract;
       // the codebase has no multicall helper here, and readEntryProperty already
       // sequences the 3 dependent reads per property). Scoped to the viewing lens.
       const enriched = await Promise.all(
         raw.map(async e => {
-          const [orderStr, label] = await Promise.all([
-            readEntryProperty(e.entryUID, ORDER_KEY, effectiveLens),
-            readEntryProperty(e.entryUID, NAME_KEY, effectiveLens),
-          ]);
-          let order: bigint | null = null;
-          if (orderStr !== null) {
-            try {
-              order = BigInt(orderStr.trim());
-            } catch {
-              order = null;
+          try {
+            const [orderStr, label] = await Promise.all([
+              readEntryProperty(e.entryUID, ORDER_KEY, effectiveLens),
+              readEntryProperty(e.entryUID, NAME_KEY, effectiveLens),
+            ]);
+            let order: bigint | null = null;
+            if (orderStr !== null) {
+              try {
+                order = BigInt(orderStr.trim());
+              } catch {
+                order = null;
+              }
             }
+            return { ...e, order, label } as Entry;
+          } catch (err) {
+            // F1: a transient RPC failure must NOT look like "no order/label" — that would
+            // silently drop the entry to the bottom and blank its label. Retain the
+            // last-known values for this entry and log loudly instead of swallowing.
+            const prev = prevByUID.get(e.entryUID);
+            console.error(`[lists] order/label read failed for ${e.entryUID}; keeping last-known`, err);
+            return { ...e, order: prev?.order ?? null, label: prev?.label ?? null } as Entry;
           }
-          return { ...e, order, label } as Entry;
         }),
       );
       if (cancelled) return;
@@ -814,23 +834,39 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
 
     const opId = ops.start(`Add ${meta.singular} to “${name}”`);
     setBusy(true);
+    // Track the membership UID separately: add is multi-tx (entry → order → label),
+    // and if a later tx fails the entry has already landed (F2).
+    let createdEntryUID: `0x${string}` | undefined;
     try {
       ops.log(opId, "Attesting membership…");
-      const entryUID = await attestEntry(recipient, target);
+      createdEntryUID = await attestEntry(recipient, target);
       // Order PROPERTY on the (stable) entry UID.
-      await placeEntryProperty(entryUID, ORDER_KEY, nextOrder().toString(), msg => ops.log(opId, msg));
+      await placeEntryProperty(createdEntryUID, ORDER_KEY, nextOrder().toString(), msg => ops.log(opId, msg));
       // Label PROPERTY: always for ANY free-text items (= the text). For ADDR/SCHEMA
       // reference items, only when the user typed an override (handled via edit later).
       if (targetType === MODE.ANY && freeText) {
-        await placeEntryProperty(entryUID, NAME_KEY, freeText, msg => ops.log(opId, msg));
+        await placeEntryProperty(createdEntryUID, NAME_KEY, freeText, msg => ops.log(opId, msg));
       }
       ops.complete(opId, "Added");
       setDraft("");
       await refetchEntries();
     } catch (err: any) {
       const msg = err?.shortMessage ?? err?.message ?? "Failed to add";
+      // F2: if the entry landed but its order/label didn't, an ANY item's typed text
+      // (recoverable only from the label PROPERTY) would be orphaned as an unreadable
+      // keccak hash. Best-effort revoke the half-written entry so nothing unrecoverable
+      // is left behind. (If the failure WAS the entry attest, createdEntryUID is unset.)
+      if (createdEntryUID) {
+        ops.log(opId, "Rolling back incomplete entry…");
+        try {
+          await revokeEntry({ entryUID: createdEntryUID } as Entry);
+        } catch (rbErr) {
+          console.error("[lists] failed to roll back orphaned entry", createdEntryUID, rbErr);
+        }
+      }
       ops.fail(opId, msg);
       notification.error(/DuplicateIdentity/.test(msg) ? "That item is already in the list" : msg);
+      await refetchEntries();
     } finally {
       setBusy(false);
     }
@@ -886,6 +922,7 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
     const opId = ops.start(`Edit item in “${name}”`);
     setBusy(true);
     cancelEdit();
+    const snapshot = items; // F3: deterministic rollback target
     // optimistic label update
     setItems(prev => prev.map(e => (e.entryUID === entry.entryUID ? { ...e, label: next } : e)));
     try {
@@ -894,6 +931,7 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
       await refetchEntries();
     } catch (err: any) {
       ops.fail(opId, err?.shortMessage ?? err?.message ?? "Failed to edit");
+      setItems(snapshot); // restore known-good state first, independent of the refetch read
       await refetchEntries();
     } finally {
       setBusy(false);
@@ -931,6 +969,7 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
       return; // keep current order; nothing optimistic applied
     }
     const newOrder = slot.weight;
+    const snapshot = items; // F3: pre-reorder state, deterministic rollback target
     // optimistic: apply the new order + reordered view
     setItems(reordered.map(e => (e.entryUID === moved.entryUID ? { ...e, order: newOrder } : e)));
 
@@ -946,6 +985,7 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
       const msg = err?.shortMessage ?? err?.message ?? "Failed to reorder";
       ops.fail(opId, msg);
       notification.error("Reorder failed — the item's position was not changed.");
+      setItems(snapshot); // restore the true prior order first, independent of the refetch read
       await refetchEntries();
     } finally {
       setBusy(false);

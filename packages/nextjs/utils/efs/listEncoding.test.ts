@@ -1,12 +1,4 @@
-import {
-  RANK_STEP,
-  addrFromKey,
-  byteLen,
-  computeInsertWeight,
-  memberKeyForText,
-  shortHex,
-  unpackText,
-} from "./listEncoding.ts";
+import { RANK_STEP, addrFromKey, computeInsertWeight, memberKeyForText, shortHex, unpackText } from "./listEncoding.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
@@ -43,12 +35,6 @@ test("memberKeyForText is not length-capped (arbitrary-length free text)", () =>
   assert.match(memberKeyForText(long), /^0x[0-9a-f]{64}$/);
 });
 
-test("byteLen counts UTF-8 bytes, not code points", () => {
-  assert.equal(byteLen("abc"), 3);
-  assert.equal(byteLen("café"), 5); // é is 2 bytes
-  assert.equal(byteLen("✓"), 3);
-  assert.equal(byteLen("🎉"), 4);
-});
 
 // ── unpackText rejection of non-text (legacy / opaque keys) ──────────────────
 
