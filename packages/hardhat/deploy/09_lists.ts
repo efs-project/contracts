@@ -136,16 +136,25 @@ const deployLists: DeployFunction = async function (hre: HardhatRuntimeEnvironme
     try {
       const tx = await schemaRegistry.register(definition, resolver, revocable);
       await tx.wait();
-      console.log(`Registered ${label} schema`);
     } catch (err) {
+      // Tolerate ONLY a genuine "already registered" state, verified just below — not by
+      // assuming every revert is AlreadyExists. Re-throw real failures (transient RPC,
+      // insufficient funds, etc.) so a broken deploy never looks successful.
       const existing = await schemaRegistry.getSchema(expectedUID);
-      if (existing?.uid && existing.uid.toLowerCase() === expectedUID.toLowerCase()) {
-        console.log(`${label} schema already registered — skipping.`);
-      } else {
+      if (!(existing?.uid && existing.uid.toLowerCase() === expectedUID.toLowerCase())) {
         console.error(`${label} schema registration failed and the schema is NOT registered.`);
         throw err;
       }
     }
+    // Verify on BOTH paths — a tx to a wrong / code-less SchemaRegistry can "succeed" without
+    // registering anything, leaving a deploy that looks fine but can't create attestations.
+    const record = await schemaRegistry.getSchema(expectedUID);
+    if (!record?.uid || record.uid.toLowerCase() !== expectedUID.toLowerCase()) {
+      throw new Error(
+        `${label} schema is not registered at ${expectedUID} after register() — wrong SchemaRegistry address?`,
+      );
+    }
+    console.log(`${label} schema registered (${expectedUID}).`);
   };
 
   // 4. Register LIST schema (revocable: false — permanent list identity, like DATA).

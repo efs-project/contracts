@@ -752,6 +752,30 @@ describe("Lists — Unit Tests", function () {
         }),
       ).to.be.revertedWithCustomError(listEntryResolver, "UsesRefUID");
     });
+
+    it("B27: a foreign schema pointing at this resolver is rejected (WrongSchema)", async function () {
+      // EAS lets anyone register a new schema with this resolver as the target. Register one
+      // with a DIFFERENT field string (→ different UID, same resolver, revocable) and attest
+      // under it — the resolver must reject it (WrongSchema) instead of mutating membership.
+      const evilDef = "bytes32 a, bytes32 b";
+      const resolverAddr = await listEntryResolver.getAddress();
+      await (await registry.register(evilDef, resolverAddr, true)).wait();
+      const evilUID = ethers.solidityPackedKeccak256(["string", "address", "bool"], [evilDef, resolverAddr, true]);
+      const listUID = await attestList(alice, true, false, 0); // ANY, dups, uncapped
+      await expect(
+        eas.connect(alice).attest({
+          schema: evilUID,
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: NO_EXPIRATION,
+            revocable: true,
+            refUID: ZERO_BYTES32,
+            data: encodeEntry(listUID, ethers.zeroPadValue("0x01", 32)),
+            value: 0n,
+          },
+        }),
+      ).to.be.revertedWithCustomError(listEntryResolver, "WrongSchema");
+    });
   });
 
   // ── Group C: ListReader ────────────────────────────────────────────────────

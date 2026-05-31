@@ -233,6 +233,13 @@ We looked at making list ordering an on-chain, lens-scoped concern via `EFSSortO
 
 *(Pre-existing, unrelated: `specs/06` §2 documents a 2-field `SORT_INFO` but the deployed schema is 3-field — `+ uint8 sourceType` per `deploy/04_sortoverlay.ts`. Worth a fix-in-passing during the freeze pass.)*
 
+### Lists — deferred review nits (perf + API consistency)
+Non-blocking items from the multi-reviewer pass (Gemini / Claude-4.7), parked for after launch:
+- **RPC fanout (client, debug UI):** `ListPreviewPane` enrich reads order+label per entry as ~6 sequential reads × N entries, and the folder-delete cascade reads per child. Fine for hand-curated lists; batch via multicall if a large-list path ever matters.
+- **`ListReader` lacks the attester-index passthrough:** `getListAttesters`/`getListAttesterCount` live on `ListEntryResolver`; the documented consumer ABI (`ListReader`, redeployable) should mirror them for external consumers. Small, no schema impact.
+- **`ListReader` redundant EAS read:** `entries()` calls `eas.getAttestation(listUID)` once per page to denormalize `targetType`; could cache/skip. Minor gas on a view.
+- **Validation order:** `ListEntryResolver` checks `DuplicateIdentity` before the cap — both revert, so the order is cosmetic; intentional (dedup is the cheaper/more-specific signal).
+
 ### Lists deploy — CREATE2 before mainnet freeze (from Gemini review)
 `deploy/09_lists.ts` predicts the `ListResolver` / `ListEntryResolver` addresses from the deployer **nonce** (CREATE), which is deterministic on the pinned fork (ADR-0037) but **ADR-0044 §8 mandates CREATE2** so the schema UIDs (which hash the resolver addresses) survive nonce drift across live networks. Before the mainnet freeze, move these to a CREATE2 deterministic-salt deploy (this also dissolves the partial-deploy nonce fragility that the current safe-abort guards against). The `_listAttesters` on-chain attester index (`getListAttesters`/`getListAttesterCount`, added this PR) is load-bearing storage baked into `LIST_ENTRY_SCHEMA_UID` — it's recorded in `docs/decisions.md` (2026-05-30); fold it into the schema-freeze documentation pass.
 

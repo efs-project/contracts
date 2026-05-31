@@ -1,5 +1,7 @@
 # EFS Lists — Design
 
+> **⚠️ Pre-ADR-0046 — partly superseded.** This design doc describes the LIST_ENTRY schema as it was *first* implemented (ADR-0044), with an inline `int256 weight` field and a 31-byte-packed free-text `target`. **ADR-0046 (Accepted) removed the `weight` field** — `LIST_ENTRY` is now `bytes32 listUID, bytes32 target` (pure membership identity), and order + free-text labels are PIN-bound PROPERTYs on the stable entry UID (free text is `keccak(text)` + an arbitrary-length `name` PROPERTY). Wherever this doc says `weight`, `EntryRecord{…, weight}`, "reorder via weight-rewrite", or "31-byte packed text", read ADR-0046 instead. The authoritative current model is **ADR-0044 + ADR-0046** and `specs/06`. A full rewrite of this doc is a schema-freeze-pass task.
+
 **Status:** Draft (round 18d — schema field strings GO from all three confirmation reviewers; ListReader typed-accessor ABI hardened with curator+schema+active checks per Codex; emit arg order fixed; state-growth overclaim corrected. Schema is freeze-ready; reader contract is Durable/redeployable.)
 **Date:** 2026-05-28
 **Permanence-tier:** Etched-adjacent (introduces two new EAS schemas; the data model is permanent post-mainnet freeze)

@@ -1,12 +1,14 @@
 # Lists and Collections
 
-EFS lists are a special case of directories. The same kernel/overlay architecture that powers file browsing handles curated collections, social graphs, and ranked orderings. There is no separate "list" contract — **everything is kernel data + sort overlay**.
+EFS lists are a **purpose-built primitive**: the `LIST` (declaration) + `LIST_ENTRY` (membership) EAS schemas, enforced by `ListResolver` / `ListEntryResolver`, with a stateless `ListReader` consumer ABI (ADR-0044, ADR-0046). They give **write-time shape enforcement** (typed / no-duplicates / append-only / capped) and per-attester lenses that the directory/anchor model cannot — see the §"LIST + LIST_ENTRY schemas" sections below for the authoritative model.
 
 For the full schema definitions see [Data Models and Schemas](./02-Data-Models-and-Schemas.md) and for indexing details see [Onchain Indexing Strategy](./03-Onchain-Indexing-Strategy.md).
 
 ---
 
-## 1. Core Concept: Everything Is A Directory
+> **⚠️ Superseded sketch (ADR-0044).** Section 1 below describes the *original* "a list is just a directory of positional anchors + a sort overlay" idea. ADR-0044 **rejected** that approach (it can't enforce typing/no-dupes/append-only at write time, and per-attester anchors collide with ADR-0025 name uniqueness) in favour of the dedicated `LIST`/`LIST_ENTRY` schemas documented later in this file. Section 1 is retained for historical context only and is **not** the implemented model; it will be removed/rewritten in the schema-freeze docs pass.
+
+## 1. Core Concept: Everything Is A Directory <sub>(superseded — see banner above)</sub>
 
 A curated list is just a directory whose children are **positional Anchors**:
 

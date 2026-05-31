@@ -28,6 +28,7 @@ import { IEAS, Attestation } from "@ethereum-attestation-service/eas-contracts/c
 contract ListEntryResolver is SchemaResolver {
     // ── Errors ──────────────────────────────────────────────────────────────────
     error BadPayload();
+    error WrongSchema();
     error NotRevocable();
     error HasExpiration();
     error UsesRefUID();
@@ -63,7 +64,16 @@ contract ListEntryResolver is SchemaResolver {
 
     // ── Constants ───────────────────────────────────────────────────────────────
     uint256 private constant EXPECTED_ENTRY_DATA_LEN = 64; // 2 × 32 (ADR-0046: weight removed)
+    // The LIST_ENTRY field string — MUST match deploy/09_lists.ts exactly (it's hashed into
+    // the schema UID at registration). Used to self-derive this resolver's own LIST_ENTRY
+    // schema UID so onAttest/onRevoke can reject attestations from any OTHER schema that an
+    // attacker registers pointing at this resolver (which would otherwise bypass write-time
+    // enforcement and pollute membership state). See `_listEntrySchemaUID`.
+    string private constant LIST_ENTRY_DEFINITION = "bytes32 listUID, bytes32 target";
     bytes32 public immutable LIST_SCHEMA_UID;
+    // EAS UID = keccak256(abi.encodePacked(schemaString, resolver, revocable)); the resolver
+    // address (this) and revocable (true) are fixed, so we can recompute our own schema UID.
+    bytes32 private immutable _listEntrySchemaUID;
 
     // ── Storage: LIST declaration cache ─────────────────────────────────────────
     struct CachedListDecl {
@@ -108,11 +118,16 @@ contract ListEntryResolver is SchemaResolver {
     constructor(IEAS eas, bytes32 listSchemaUID) SchemaResolver(eas) {
         require(listSchemaUID != bytes32(0), "listSchemaUID is zero");
         LIST_SCHEMA_UID = listSchemaUID;
+        _listEntrySchemaUID = keccak256(abi.encodePacked(LIST_ENTRY_DEFINITION, address(this), true));
     }
 
     // ── Resolver hooks ──────────────────────────────────────────────────────────
 
     function onAttest(Attestation calldata a, uint256) internal override returns (bool) {
+        // Only LIST_ENTRY attestations may mutate membership state. EAS lets anyone register
+        // a new schema pointing at this resolver; without this guard such a schema's attests
+        // would be processed as entries, bypassing the write-time type/dup/cap enforcement.
+        if (a.schema != _listEntrySchemaUID) revert WrongSchema();
         if (a.data.length != EXPECTED_ENTRY_DATA_LEN) revert BadPayload();
 
         // Lifecycle invariants (ADR-0044)
@@ -182,6 +197,7 @@ contract ListEntryResolver is SchemaResolver {
     }
 
     function onRevoke(Attestation calldata a, uint256) internal override returns (bool) {
+        if (a.schema != _listEntrySchemaUID) revert WrongSchema();
         if (a.data.length != EXPECTED_ENTRY_DATA_LEN) revert BadPayload();
 
         // Idempotency check FIRST — stale revoke (entryUID not indexed) → silent no-op
@@ -191,7 +207,11 @@ contract ListEntryResolver is SchemaResolver {
         (bytes32 listUID,) = abi.decode(a.data, (bytes32, bytes32));
 
         CachedListDecl memory d = _decl[listUID];
-        if (!d.exists) revert UnknownList(); // should never fire — onAttest ran first
+        // Unreachable in normal EAS flow: the `pp1 == 0` guard above already returned for any
+        // entry this resolver never indexed (so onAttest, which populates `_decl[listUID]`,
+        // must have run for any entry that reaches here). Kept as a defensive invariant rather
+        // than an expected path.
+        if (!d.exists) revert UnknownList();
 
         // Append-only: reject revocation entirely
         if (d.appendOnly) revert ListIsAppendOnly();
