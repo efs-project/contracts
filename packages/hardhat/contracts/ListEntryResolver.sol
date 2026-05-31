@@ -228,7 +228,10 @@ contract ListEntryResolver is SchemaResolver {
         EntryRecord[] storage arr = _entries[listUID][attester];
         uint256 total = arr.length;
         if (total == 0 || start >= total) return new EntryRecord[](0);
-        if (start + len > total) len = total - start;
+        // `len > total - start` (not `start + len > total`): the early `start >= total`
+        // return above makes `total - start` underflow-safe, and avoids the `start + len`
+        // overflow that would revert a `len = type(uint256).max` "read all" request.
+        if (len > total - start) len = total - start;
         EntryRecord[] memory res = new EntryRecord[](len);
         for (uint256 i = 0; i < len; i++) res[i] = arr[start + i];
         return res;
@@ -250,7 +253,10 @@ contract ListEntryResolver is SchemaResolver {
         address[] storage arr = _listAttesters[listUID];
         uint256 total = arr.length;
         if (total == 0 || start >= total) return new address[](0);
-        if (start + len > total) len = total - start;
+        // `len > total - start` (not `start + len > total`): the early `start >= total`
+        // return above makes `total - start` underflow-safe, and avoids the `start + len`
+        // overflow that would revert a `len = type(uint256).max` "read all" request.
+        if (len > total - start) len = total - start;
         address[] memory res = new address[](len);
         for (uint256 i = 0; i < len; i++) res[i] = arr[start + i];
         return res;

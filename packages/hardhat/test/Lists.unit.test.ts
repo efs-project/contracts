@@ -818,6 +818,13 @@ describe("Lists — Unit Tests", function () {
       // Pagination returns entries in insertion order; start=1 skips the first.
       expect(page[0].entryUID).to.equal(uid2);
       expect(page[1].entryUID).to.equal(uid3);
+
+      // A huge `len` (e.g. a "read all from start" request) must CLAMP, not revert on
+      // `start + len` overflow (getEntries / getListAttesters use `len > total - start`).
+      const all = await listEntryResolver.getEntries(listUID, aliceAddr, 1n, ethers.MaxUint256);
+      expect(all.length).to.equal(2); // 3 entries, start=1 → clamped to 2
+      const att = await listEntryResolver.getListAttesters(listUID, 0n, ethers.MaxUint256);
+      expect(att.length).to.equal(1); // alice is the sole attester; no overflow revert
     });
 
     it("C8: countOf() correct after add/remove", async function () {
