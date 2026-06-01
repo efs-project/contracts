@@ -2,9 +2,11 @@
 
 > **Human gate (ADR-0048).** James signs off on this table **before** any schema is registered on Sepolia. Once registered with data, each row's shape is permanent: changing a field string, type, `revocable`, or the resolver address orphans that schema's data.
 >
-> `UID = keccak256(abi.encodePacked(fieldString, resolverAddress, revocable))`. The resolver address below is the **proxy** (never the implementation). Addresses are filled after the CREATE2 proxies are deployed (ADR-0048 deploy step 2); UIDs are computed off-chain in step 3.
+> `UID = keccak256(abi.encodePacked(fieldString, resolverAddress, revocable))`. The resolver address is the **proxy** (never the implementation). Addresses + UIDs are filled after the atomic CREATE3 deploy+init (ADR-0048 step 2) and the verify gate (step 3); this table is signed at step 4, before register-last (step 5).
 
-## The 8 schemas to freeze
+## The 8 schemas to freeze — all validated solid-as-is
+
+A first-principles + adversarial durability review (28 candidate cracks, all refuted) and a write-time-practicality pass found **zero reasons to change any field string, type, or revocable flag.**
 
 | # | Schema | Field string (exact) | revocable | Resolver (proxy) | Schema UID |
 |---|---|---|---|---|---|
@@ -17,21 +19,37 @@
 | 7 | LIST | `bool allowsDuplicates, bool appendOnly, uint8 targetType, bytes32 targetSchema, uint256 maxEntries` | `false` | ListResolver proxy `0x…TBD` | `0x…TBD` |
 | 8 | LIST_ENTRY | `bytes32 listUID, bytes32 target` | `true` | ListEntryResolver proxy `0x…TBD` | `0x…TBD` |
 
+**DATA note (ADR-0049):** field string is unchanged; the design change is *interpretation*, not shape. `contentHash == bytes32(0)` is a first-class value = "file identity with no inline byte-hash" (lets you pin a 10 GB IPFS file with zero download). The durable hash/integrity story lives in self-describing multihash/CID PROPERTYs, not in this field. So DATA freezes as-is.
+
 ## Explicitly NOT frozen now (addable later, no orphaning)
 
-- **SORT_INFO** — deferred with its `EFSSortOverlay` resolver.
+- **SORT_INFO** + its EFSSortOverlay resolver — deferred.
 - **BLOB** — dropped (redundant with DATA+MIRROR; unvalidated).
-- **NAMING** — dropped (schema-name tooling; `SchemaNameIndex` not deployed).
-- **EVENT/TRANSITION** — not yet designed; the one real schema gap, additive (separate proposal).
+- **NAMING** — dropped (schema-name tooling; SchemaNameIndex not deployed).
+- **EVENT/TRANSITION** — the one real schema gap (provenance edges); additive, separate proposal.
 
-## Pre-registration verification (all must pass before registering)
+## Pre-registration verification (all must pass before register-last)
 
-- [ ] Each resolver address above is a **proxy**, not an implementation.
-- [ ] Each proxy's `initialize(...)` is locked (second call reverts).
-- [ ] `ListEntryResolver` self-derived UID (`keccak256(LIST_ENTRY_DEFINITION, address(this), true)`) equals row 8's UID.
-- [ ] Field strings byte-for-byte match the registered schemas.
-- [ ] Upgrade admin = James's controlled key (not burned/renounced/throwaway).
+- [ ] Each resolver address is a **proxy** (CREATE3), not an implementation; realized addr == predicted addr.
+- [ ] Each proxy's `initialize()` is locked (2nd call reverts) and the implementation's direct `initialize()` reverts (`_disableInitializers`).
+- [ ] On-chain self-derived UID (`ListEntryResolver._listEntrySchemaUID` etc.) == `keccak256(goldenFieldString, proxyAddr, revocable)` == the UID being registered (all three equal).
+- [ ] Golden-vector test: contract field-string constants byte-identical to the deploy script (no UID drift).
+- [ ] `getSchema(uid).resolver == proxy`; no conflicting prior registration of the same tuple.
+- [ ] `wireContracts()` / `setTransportsAnchor()` / `setSortsAnchor()` set and locked.
+- [ ] Upgrade admin = James's controlled key (Ownable2Step; not burned/renounced yet).
+
+## Pre-BURN checklist (the irreversible end-state gate — separate from registration)
+
+- [ ] Refactor verified in source: no schema-UID/partner-ref `immutable` on any proxied resolver (all in ERC-7201 storage set by `initialize()`); only `_eas` remains impl-immutable, asserted == canonical EAS for the chain.
+- [ ] Full invariant/property suite green against deployed bytecode at the real proxy addresses: every onAttest rejection branch, onRevoke, swap-and-pop removal from middle, PIN cardinality supersession, append-only invariants (ADR-0009).
+- [ ] Real vN-1→vN upgrade exercised on a fork **with state present**; all pre-existing indices read back byte-identical (no silent storage corruption frozen in).
+- [ ] ≥14-day soak on Sepolia with the real client; zero reverts on valid input; rejection branches observed firing; `deployedContracts.ts` pin held (ADR-0037).
+- [ ] Mainnet-fork dry run; addresses + UIDs match this table.
+- [ ] FREEZE_LEDGER committed (salts, factory, predicted/realized addrs, impl bytecode keccak, proxy + ProxyAdmin addrs, field strings, UID inputs, EAS/registry + chainId, register/init txs).
+- [ ] Human sign-off on the FREEZE_LEDGER ("no pending field changes").
+- [ ] BURN (`ProxyAdmin.renounceOwnership()`) is the LAST action; then post-burn verify (`owner()==0`, ex-owner `upgradeAndCall` reverts, attestations still succeed); record burn tx + block.
 
 ## Sign-off
 
 - [ ] **James** — frozen-UID table approved for Sepolia registration. Date: ________
+- [ ] **James** — FREEZE_LEDGER approved for burn-to-immutable. Date: ________

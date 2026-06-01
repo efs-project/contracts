@@ -1,124 +1,79 @@
-# ADR-0048: Sepolia freeze set + proxy-ready resolvers
+# ADR-0048: Sepolia freeze set + proxy-ready resolvers (burn to immutable)
 
-**Status:** Proposed
+**Status:** Proposed (r2 — hardened after multi-agent security review)
 **Date:** 2026-05-31
 **Deciders:** James (freeze sign-off is human-gated)
-**Permanence-tier:** Etched (defines which schema UIDs become permanent on Sepolia)
-**Related:** ADR-0030 (mainnet permanence), ADR-0032 (EAS as foundation), ADR-0037 (pinned Sepolia fork), ADR-0041 (PIN/TAG split), ADR-0044/0046/0047 (Lists), ADR-0027 (deploy-before-register)
+**Permanence-tier:** Etched
+**Supersedes:** ADR-0030's "no proxies on mainnet" clause (see §Mainnet reconciliation). ADR-0030 otherwise stands.
+**Related:** ADR-0049 (file content identity), ADR-0032 (EAS as foundation), ADR-0037 (pinned fork), ADR-0041 (PIN/TAG), ADR-0044/0046/0047 (Lists)
 
 ## Context
 
-The hackathon seeds **real datasets on Sepolia**. That data is the network-effect seed and must last. EAS physics make two facts non-negotiable:
+The hackathon seeds **real datasets on Sepolia** that must last. EAS physics: schema UID = `keccak256(abi.encodePacked(fieldString, resolverAddress, revocable))`; attestations are immutable; **changing** a registered schema orphans its data; **adding** orphans nothing; the resolver **address** and `revocable` are baked into the UID forever.
 
-1. A schema's UID is `keccak256(abi.encodePacked(fieldString, resolverAddress, revocable))`. The resolver **address** and the `revocable` flag are part of the UID, not just the field string.
-2. Attestations are immutable and a schema cannot be edited. **Changing a registered schema's shape orphans its data.** Adding a *new* schema never orphans anything.
-
-Two consequences drive this ADR:
-
-- **The freeze decision is asymmetric.** Since adding schemas later is free, the only irreversible risk is registering a schema whose shape (fields, types, `revocable`) or whose resolver address we later regret. The safe move is to freeze only the schemas we are confident in and to lock the resolver addresses *before* registration.
-- **Upgradeability and the freeze are coupled.** "Resolver logic upgradeable behind a stable address" requires registering the **proxy** address as the resolver. But every live resolver today bakes its EFS state (schema UIDs, partner refs) as `immutable` set in the **constructor**, and `ListEntryResolver` derives its own schema UID from `address(this)` *in the constructor*. Under a proxy, a constructor runs in the **implementation's** context, so `address(this)` is the implementation address — the registered UID (computed against the proxy) would never match what the resolver checks. Proxy-readiness is therefore a prerequisite to a safe freeze, not a follow-up.
-
-### Current-state inventory (origin/main @ `b1ac4e0`)
-
-The deploy scripts register **11** schemas; the canonical surface (`specs/overview.md`, `specs/02`) is **9**. The two extras:
-
-- **BLOB** (`string mimeType, uint8 storageType, bytes location`, revocable) — resolver is `ZeroAddress` (no validation), `BlobResolver.sol` is dead, and it overlaps DATA (identity) + MIRROR (retrieval). Absent from all 15 use cases and the freeze brainstorm.
-- **NAMING** (`bytes32 schemaId, string name`, revocable) — resolver `ZeroAddress`; backs `SchemaNameIndex` (human-readable schema names). Tooling, not a kernel primitive.
-
-Live resolvers: `EFSIndexer` (Anchor/Property/Data + kernel), `EdgeResolver` (Pin/Tag), `MirrorResolver` (Mirror), `EFSSortOverlay` (SortInfo), `ListResolver` (List, stateless validation), `ListEntryResolver` (ListEntry). Stateless views (not in any UID, freely redeployable): `EFSFileView`, `ListReader`, `EFSRouter`, `SchemaNameIndex`. Dead/legacy: `TopicResolver`, `FileResolver`, `PropertyResolver`, `BlobResolver`, `Indexer.sol`. Sepolia is a **clean slate** — nothing registered, zero data at risk.
+Two consequences: freeze only schemas we're sure of (the irreversible surface), and — because we want to fix resolver bugs without changing the address in the UID — put resolvers behind **upgradeable proxies**, register the **proxy** address, then **burn** the upgrade key to make them permanently immutable before mainnet.
 
 ## Decision
 
-### 1. Sepolia freeze set — **8 schemas**
+### 1. Sepolia freeze set — 8 schemas, all validated solid-as-is
 
-Freeze: **ANCHOR, PROPERTY, DATA, PIN, TAG, MIRROR, LIST, LIST_ENTRY**.
+**ANCHOR, PROPERTY, DATA, PIN, TAG, MIRROR, LIST, LIST_ENTRY.** A first-principles + adversarial review (28 candidate cracks across the 8 schemas, each refuted by a majority of independent reviewers; plus a write-time-practicality pass) found **zero surviving reasons to change any field string, type, or revocable flag.** DATA stays `bytes32 contentHash, uint64 size` (see ADR-0049 — hash-as-data realized without a field change). **Drop BLOB + NAMING** (redundant / tooling); **defer SORT_INFO** + EFSSortOverlay (additive later, orphans nothing). `revocable`: false for ANCHOR/PROPERTY/DATA/LIST (permanent identity; revoke never erases bytes anyway, so non-revocable is GDPR-neutral and trust-correct), true for PIN/TAG/MIRROR/LIST_ENTRY (retractable).
 
-- **Drop BLOB and NAMING** from the freeze. BLOB is redundant and unvalidated; NAMING is tooling. Both can be registered later if a real need appears (additive, no orphaning). Remove their registration from `01_indexer.ts`; do not deploy `SchemaNameIndex` for the freeze.
-- **Defer SORT_INFO** (and its `EFSSortOverlay` resolver). Sort overlays are additive — registering SORT_INFO later does not orphan any of the 8 frozen schemas. Ship the file-system core + Lists first; add SORT_INFO when the hackathon proves it.
+Write-time review found **no schema-field problems** but three **resolver/convention** fixes (not freeze blockers — `string`/`bytes32` fields already flexible):
+- **MIRROR uri scheme allowlist [HIGH]** — `MirrorResolver._isAllowedScheme` rejects ftp/s3/gs/rsync/dat/bittorrent, blocking legitimate already-known mirror locations (same failure shape as the 10 GB bug). Drop/widen the allowlist in resolver logic; scheme safety is a client-render concern. Field `string uri` unchanged.
+- **MIRROR transportDefinition [MED]** — guarantee a low-friction path for attesters to create new `/transports/*` anchors (today only 5 exist, deploy-time). Resolver/deploy logic.
+- **ANCHOR name normalization [MED]** — define a canonical name encoding (percent-encode rejected bytes + Unicode NFC) in spec + `_isValidAnchorName`, or the Schelling-point property breaks across clients ("Q&A: Episode 5"). Convention + resolver.
 
-`revocable` flags (in the UID — decided deliberately, not by SDK default):
+### 2. Proxy-ready resolvers (TransparentUpgradeableProxy + ProxyAdmin)
 
-| Schema | revocable | Rationale |
-|---|---|---|
-| ANCHOR | `false` | Path identity is a permanent Schelling point. |
-| PROPERTY | `false` | Value is permanent; the *binding* moves via PIN. |
-| DATA | `false` | Content identity is permanent (content-addressed). |
-| PIN | `true` | Bindings must be removable (revoke clears the slot). |
-| TAG | `true` | Labels/edges must be removable. |
-| MIRROR | `true` | Retrieval URIs rot and change. |
-| LIST | `false` | List identity is permanent, like DATA. |
-| LIST_ENTRY | `true` | Membership removable (unless the list is `appendOnly`). |
+Refactor the 5 resolvers backing the 8 schemas (EFSIndexer, EdgeResolver, MirrorResolver, ListResolver, ListEntryResolver) — **this refactor does not yet exist in source and is the core build work**:
+- Move **all per-deployment EFS state** (schema UIDs, partner refs, `EFSIndexer.DEPLOYER`, and `ListEntryResolver`'s `address(this)`-derived self-UID) out of constructors into a **guarded `initialize()`** using **ERC-7201 namespaced storage**. Today these are constructor `immutable`s — incompatible with a proxy (`address(this)` in a constructor is the *implementation*, not the proxy, so `ListEntryResolver.sol:121`'s self-UID would never match the registered UID and would brick every list entry).
+- Keep `_eas` as the EAS `SchemaResolver` base's implementation-`immutable` (EAS address is a per-chain constant; survives delegatecall; re-supplied identically on every upgrade — assert this in CI).
+- `_disableInitializers()` in **every** implementation constructor (Parity/Wormhole uninitialized-impl takeover class).
+- **Transparent** proxy (not UUPS): upgrade authority lives in an external `ProxyAdmin`, out of resolver bytecode, which makes the burn a clean `ProxyAdmin.renounceOwnership()`. One ProxyAdmin per resolver so a bad upgrade can't cascade.
 
-Field strings are frozen exactly as in code (see the frozen-UID table doc). No field-string changes are proposed for Sepolia.
+### 3. Deploy ordering — register LAST, deploy+init ATOMIC
 
-### 2. Proxy-ready resolvers, then freeze
+The dangerous window is registering before the proxy is live+initialized+verified. Correct order:
+1. Deploy each **implementation** (need not be deterministic).
+2. **Deploy proxy + call `initialize()` in ONE transaction** (CreateX `deployCreate3AndInit`, or ERC1967Proxy with init calldata in its constructor) at a **CREATE3** address (depends only on factory + salt → reproducible, cross-chain-parity-capable). `initialize()` hardcodes/asserts the expected owner so a front-run cannot install a foreign one.
+3. **Verify** (hard CI gate, abort on any mismatch): realized addr == predicted; initializer locked (2nd call reverts); impl `initialize()` reverts directly; on-chain self-derived UID == `keccak256(goldenFieldString, realizedProxyAddr, revocable)` == the UID about to be registered; `wireContracts()`/`setTransportsAnchor()`/`setSortsAnchor()` set and locked; golden-vector field-string test (contract constant byte-identical to deploy script — no UID drift).
+4. **Human freeze-table / FREEZE_LEDGER sign-off** (James).
+5. **Register** schemas in EAS with `resolver = proxy` (last, cheapest, idempotent — `AlreadyExists` reverts harmlessly). Assert `getSchema(uid).resolver == proxy` and no conflicting prior registration.
+6. **Live smoke:** one real attestation through *every* schema (onAttest no revert + expected index written) + one revoke through every revocable schema.
 
-Refactor the **5 resolvers backing the 8 schemas** (`EFSIndexer`, `EdgeResolver`, `MirrorResolver`, `ListResolver`, `ListEntryResolver`) to be deployed behind upgradeable proxies, then register the **proxy** addresses.
+CREATE3 caveats: pin CreateX factory address+bytecode per chain; same deployer EOA for parity; **zkSync-class chains excluded** from address/UID parity (different derivation).
 
-Per-resolver work (effort from the code audit):
+### 4. Burn to immutable (the end state)
 
-| Resolver | Backs | Today | Work |
-|---|---|---|---|
-| EFSIndexer | Anchor/Property/Data | immutable schema UIDs + `DEPLOYER`; `wireContracts()` already a post-deploy setter | move UIDs to initializer storage; gate `initialize` |
-| EdgeResolver | Pin/Tag | immutable PIN/TAG UIDs, indexer, schemaRegistry | move to initializer storage |
-| MirrorResolver | Mirror | immutable `indexer`; `transportsAnchorUID` already mutable | move `indexer` to initializer storage |
-| ListResolver | List | stateless (only EAS) | trivial: proxy + empty/guarded init |
-| ListEntryResolver | ListEntry | **`address(this)`-derived UID in constructor** | **must** move UID derivation to initializer (now `address(this)` = proxy) |
+Upgradeability is **temporary dev scaffolding** — a safety net for fixing bugs found during the hackathon without orphaning seed data. The end state is **permanently immutable, resolver-gated, trusted** resolvers. Burning = `ProxyAdmin.renounceOwnership()` per proxy: the address (and UID) stay stable forever, only upgrades become impossible; normal delegatecall to the frozen impl still works.
 
-Pattern:
+**Burn is the single most irreversible action in the project** (a post-burn bug is unfixable forever). It is gated on a full pre-burn checklist (see `docs/SEPOLIA_FREEZE_TABLE.md`), the essence of which is: refactor verified in source; immutables purged from the proxy path; self-UID matches the proxy; initializer locked; `_disableInitializers` confirmed; **full invariant suite green against the deployed bytecode at the real proxy addresses** (every rejection branch, revoke, swap-and-pop, cardinality supersession, append-only invariants — not just the happy path); a real vN-1→vN upgrade exercised on a fork *with state* (proves no silent storage corruption is being frozen in); **≥14-day soak** on Sepolia with the real client and zero reverts on valid input; mainnet-fork dry run; human sign-off; then burn as the LAST action; then post-burn verify (`ProxyAdmin.owner() == 0`, ex-owner `upgradeAndCall` reverts, attestations still succeed).
 
-- EAS's `SchemaResolver` base keeps `_eas` as constructor-set `immutable`. This survives proxying: EAS calls the proxy, which `delegatecall`s the impl; `msg.sender` is preserved so `onlyEAS` passes, and the EAS address is a per-chain constant (re-supplied to each impl version at impl-deploy). We accept impl-immutable `_eas`; we move only EFS state (schema UIDs, partner refs, the `address(this)` derivation) into a guarded `initialize(...)`.
-- Use `Initializable`; `initialize` carries the `initializer` modifier and **reverts on second call**. An unguarded initializer behind a proxy is a hijack vector — verifying the initializer is locked is a hard pre-deploy gate.
-- Proxy admin / upgrade authority: **a single admin key James controls** (Sepolia). Not burned, not renounced, not a throwaway hardcoded as permanent. Mainnet custody (multisig/timelock) is decided separately and does not block Sepolia.
-- Stateless views (`EFSFileView`, `ListReader`, `EFSRouter`) stay non-proxied — their addresses are in no UID; fix by redeploy.
+### 5. Mainnet reconciliation (supersedes ADR-0030's no-proxy clause)
 
-### 3. Deploy ordering (breaks the circular UID↔address dependency)
+ADR-0030 said "mainnet contracts are permanent, no proxies." This ADR refines that: **proxies are permitted iff the upgrade key is provably burned before the first mainnet attestation.** That delivers ADR-0030's credible-neutrality (immutable, no admin) *and* cross-chain UID parity (same CREATE3 proxy address on Sepolia and mainnet) *and* a dev-iteration window. Mainnet burn-authority hygiene: upgrade authority = multisig during soak; burn = a separate deliberate multisig tx after a timelock. (Sepolia: single key, documented as a testnet-only deviation.)
 
-Schema UID needs the resolver (proxy) address; the resolver needs its schema UIDs at `initialize`. Order:
+### 6. Permanence — the FREEZE_LEDGER
 
-1. Deploy each resolver **implementation**.
-2. Deploy each **proxy** with a deterministic address — **CREATE2 with a fixed salt + deployer + proxy init code**. Proxy addresses are now known and stable.
-3. Compute the 8 schema UIDs **off-chain** from `(fieldString, proxyAddress, revocable)`.
-4. **Produce the frozen-UID table → James signs off → only then register** the 8 schemas in EAS with `resolver = proxyAddress`.
-5. Call each proxy's guarded `initialize(...)` with EAS + the computed schema UIDs + partner refs. For `ListEntryResolver`, `address(this)` now equals the proxy, so its self-derived UID matches the registered one.
-6. **Verify** each initializer is locked (second call reverts) and each registered resolver address equals the proxy (never the impl) — abort the deploy if either check fails.
-7. Round-trip: create an anchor/file/list and read it back through the views.
+Commit a permanent, append-only `FREEZE_LEDGER` (markdown + JSON) so a cold reader 100 years out can recompute every UID and verify the burn from repo artifacts alone: per resolver — CreateX salt + factory address, predicted + realized proxy address, implementation address + bytecode keccak256, proxy + ProxyAdmin address, exact field string, UID-derivation inputs (fieldString / proxyAddr / revocable), EAS + SchemaRegistry addresses + chainId, and the registration / initialize / burn tx hashes (+ `owner==0` confirmation block).
 
-Using CREATE2 also makes Sepolia→mainnet UID parity *possible* later (identical init code + salt + deployer ⇒ identical proxy address ⇒ identical UID). Not a goal now, but it costs nothing to preserve and avoids foreclosing it.
+## Single admin key (Sepolia)
 
-## Options Considered
-
-### Freeze scope
-
-| Option | Pro | Con |
-|---|---|---|
-| All 11 (as code stands) | no deploy-script edits | freezes BLOB/NAMING cruft permanently |
-| **8 (chosen)** | smallest confident irreversible surface; SortInfo/BLOB/NAMING all addable later for free | defer SORT_INFO until proven |
-| 6 (file-system core only) | even smaller | Lists is settled at HEAD and wanted for the hackathon — no reason to defer it |
-
-### Upgradeability
-
-| Option | Pro | Con |
-|---|---|---|
-| **Proxy-first, then freeze (chosen)** | logic stays fixable behind stable UIDs; data never orphaned | resolver refactor on the critical path (~days) |
-| Ship direct-impl now | fastest | registered addresses (and UIDs) permanent & non-upgradeable; a resolver bug forces re-registration = orphaning. Violates the upgradeability requirement. |
+A single key James controls owns the ProxyAdmins during the Sepolia upgradeable window. Acceptable for a testnet hackathon, documented as a deviation. Use `Ownable2Step` so EOA→multisig is a safe single transfer with no redeploy. Not burned/renounced until the pre-burn checklist passes.
 
 ## Consequences
 
-- **Easier:** resolver logic (bug fixes, indices, new capabilities) iterates forever behind stable addresses without touching any schema UID or orphaning data. Adding SORT_INFO / EVENT / BLOB later is a pure addition.
-- **Harder:** the deploy pipeline gains real ceremony (CREATE2 proxies, off-chain UID precompute, human freeze gate, initializer-lock verification). The 5 resolvers need an initializer refactor and tests proving `initialize` reverts on re-entry and that UIDs match against the proxy.
-- **Revisit:** mainnet key custody; whether SORT_INFO/EVENT/BLOB ever join the set; whether to fork EAS's `SchemaResolver` into a fully-initializable variant (storing `_eas` in storage) if impl-immutable `_eas` proves limiting.
-
-## Out of scope (separate proposals)
-
-- **EVENT/TRANSITION schema** — the one genuine schema-shape crack in the use-case suite (museum provenance #11, supply-chain handoff #13 need a typed directional edge with `eventTime/prevState/nextState/payload`; today a 3–5 attestation dance). Additive, so it does not block the freeze. Draft separately for mainnet.
-- **Typed / array / multilingual PROPERTY values** (audit G02/G06/G08) — all solvable in the SDK with `string value` unchanged; not freeze blockers.
+- **Easier:** resolver logic iterates freely behind stable UIDs during dev; the burn yields trusted, immutable, resolver-gated data with the address/UID and all seed data intact; mainnet inherits the same addresses/UIDs via CREATE3.
+- **Harder:** the build adds a real refactor (constructors→initializers, ERC-7201), CREATE3 + CreateX tooling and OZ upgradeable deps, a full invariant suite, a soak, and a disciplined burn runbook. None optional.
+- **Revisit:** mainnet multisig/timelock specifics; an upgradeable cross-address dedup index before burn.
 
 ## Action items
 
-1. [ ] Remove BLOB, NAMING registration (and SchemaNameIndex deploy) from the deploy scripts; defer SORT_INFO/EFSSortOverlay.
-2. [ ] Refactor the 5 resolvers to guarded `initialize`; move EFS state out of constructors; fix `ListEntryResolver` `address(this)` derivation.
-3. [ ] Rewrite deploy as: impl → CREATE2 proxy → off-chain UID precompute → (freeze gate) → register → initialize → verify.
-4. [ ] Tests: `initialize` reverts on second call; registered resolver == proxy; `ListEntry` self-UID == registered UID; full round-trip.
-5. [ ] Generate the frozen-UID table for James's sign-off **before** any registration.
-6. [ ] Deploy to Sepolia; prove the end-to-end round-trip.
+1. [ ] Refactor 5 resolvers: immutables→ERC-7201 storage in guarded `initialize()`; `_disableInitializers()` in impls; move `ListEntryResolver` self-UID derivation into `initialize()`.
+2. [ ] Single-source each schema field string (contract constant generated from / golden-vector-tested against the deploy script).
+3. [ ] Rewrite deploy: impl → atomic CREATE3 proxy+init → verify gate → freeze sign-off → register-last → live smoke.
+4. [ ] Full invariant/property test suite + storage-layout CI gate (`validateUpgrade`); fork-based vN-1→vN upgrade-with-state test.
+5. [ ] Resolver/convention fixes: widen MIRROR uri schemes; permissionless `/transports/*` creation; canonical ANCHOR name encoding.
+6. [ ] Write the burn runbook + FREEZE_LEDGER; set ADR-0030 status to "Superseded in part by ADR-0048."
+7. [ ] Deploy to Sepolia, prove the round-trip, fill the freeze table for James's sign-off **before** registration.
