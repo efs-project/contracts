@@ -489,8 +489,18 @@ export const CreateItemModal = ({
             args: [currentAnchorUID as `0x${string}`, name, listSchemaUID as `0x${string}`],
           })) as `0x${string}`;
           if (existing && existing !== zeroHash) {
+            // Parity with file creation: the slot already exists, so submitting places a new list
+            // here and supersedes any current placement (cardinality-1 PIN) — the previous list
+            // stays on-chain, just hidden, exactly like replacing a file. Warn on the first click;
+            // only proceed (reuse the anchor) after the user confirms with a second click.
+            if (!existingAnchorWarning) {
+              setExistingAnchorWarning(true);
+              ops.clear(opId); // nothing written yet — don't leave a phantom running op
+              return;
+            }
             listAnchorUID = existing;
-            ops.log(opId, "List slot already exists; reusing anchor.");
+            setExistingAnchorWarning(false);
+            ops.log(opId, "List slot already exists; reusing anchor (user confirmed).");
           }
         } catch {
           /* anchor doesn't exist yet — create below */
@@ -1321,7 +1331,10 @@ export const CreateItemModal = ({
                 className="input input-bordered w-full"
                 placeholder="e.g. allowlist, team members, curated files…"
                 value={listName}
-                onChange={e => setListName(e.target.value)}
+                onChange={e => {
+                  setListName(e.target.value);
+                  setExistingAnchorWarning(false); // re-confirm against the new name (parity with files)
+                }}
                 autoFocus
               />
             </div>
@@ -1583,8 +1596,18 @@ export const CreateItemModal = ({
 
         {existingAnchorWarning && internalType !== "Folder" && (
           <div className="alert alert-warning mt-2 text-sm py-2">
-            A file named &quot;{newName}&quot; already exists here. Submitting will add a new version to the existing
-            anchor.
+            {internalType === "List" ? (
+              <>
+                A list named &quot;{listName}&quot; already exists at this slot. Submitting places a new list here — any
+                current placement is superseded, and the previous list stays on-chain (hidden, re-placeable), just like
+                replacing a file.
+              </>
+            ) : (
+              <>
+                A file named &quot;{newName}&quot; already exists here. Submitting will add a new version to the
+                existing anchor.
+              </>
+            )}
           </div>
         )}
 
@@ -1649,7 +1672,7 @@ export const CreateItemModal = ({
             </button>
           )}
           <button
-            className={`btn ${existingAnchorWarning && internalType !== "Folder" && internalType !== "List" ? "btn-warning" : "btn-primary"}`}
+            className={`btn ${existingAnchorWarning && internalType !== "Folder" ? "btn-warning" : "btn-primary"}`}
             onClick={internalType === "List" ? handleCreateList : handleSubmit}
             disabled={
               isSubmitting ||
