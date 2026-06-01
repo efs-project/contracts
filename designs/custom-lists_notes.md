@@ -814,7 +814,7 @@ Round-13: LIST attestation is free-floating (no `refUID` anchor binding); entrie
 
 ```
 Round-12:                         Round-13:
-                                  
+
   Anchor<LIST_SCHEMA>             generic Anchor
        │                               │
        ├── LIST(refUID=anchor)         └── PIN(refUID=LIST_UID,

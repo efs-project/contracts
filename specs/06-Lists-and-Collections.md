@@ -285,7 +285,7 @@ Order and free-text labels are not fields — they are PIN-bound (cardinality-1)
 | ADDR | 1 | `bytes32(uint256(uint160(recipient)))` | address allowlists, social graphs |
 | SCHEMA | 2 | `target` (attestation UID) | curated UID collections (film lists, content playlists) |
 
-For ADDR mode, `address(0)` → `bytes32(0)` is a valid identity key.  
+For ADDR mode, `address(0)` → `bytes32(0)` is a valid identity key.
 For SCHEMA mode, `ListEntryResolver` validates that the target attestation exists and its `schema` matches `list.targetSchema`.
 
 ### Lenses

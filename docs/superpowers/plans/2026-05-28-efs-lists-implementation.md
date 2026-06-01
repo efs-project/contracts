@@ -2272,7 +2272,7 @@ The page should:
 
 The detail page should:
 1. Call `listReader.getMode(listUID)` and display list configuration
-2. Paginate `listReader.entries(listUID, curator, 0, 50)` 
+2. Paginate `listReader.entries(listUID, curator, 0, 50)`
 3. Show each entry: identityKey, weight, targetType (decoded via typed accessor if ADDR/SCHEMA)
 4. Form to add new entry (mode-dependent fields)
 5. Revoke button per entry

@@ -1,9 +1,9 @@
 # Lists UI Design
 
-**Date:** 2026-05-28  
-**Status:** Approved for implementation  
-**Branch:** custom-lists  
-**Governing ADR:** ADR-0044 (LIST + LIST_ENTRY schemas)  
+**Date:** 2026-05-28
+**Status:** Approved for implementation
+**Branch:** custom-lists
+**Governing ADR:** ADR-0044 (LIST + LIST_ENTRY schemas)
 
 > **Pivot note (mid-session):** The primary creation path is the **File Explorer**, not the `/lists` index page. End users create lists via **+ Add ▾ → List** in `FileActionsBar.tsx`, which opens `CreateItemModal.tsx`. The `/lists` index page retains its create form as a **dev tools / nice-to-have** surface (useful for script-level testing), but it is not the primary UX and is lower-priority. The detail page at `/lists/[listUID]` remains the canonical post-create destination for both paths.
 
@@ -119,7 +119,7 @@ const TARGET_TYPE_LABELS = { 0: "ANY", 1: "ADDR", 2: "SCHEMA" }
 
 [Post-create success state — replaces button area]
   ✅ List created
-  UID: 0xabc123… [copy] 
+  UID: 0xabc123… [copy]
   [View List →]                                // links to /lists/0xabc123…
 
 [Your Lists section]                           // query Attested events, attester=connected
@@ -130,8 +130,8 @@ const TARGET_TYPE_LABELS = { 0: "ANY", 1: "ADDR", 2: "SCHEMA" }
 ### Create flow details
 
 **Mode selector:** three pill tabs. ADDR selected by default.
-- **Addresses** → targetType = 1. Show: rules toggle only.  
-- **EFS Files** → targetType = 2. Show: "Target Schema UID" input (required) + rules toggle.  
+- **Addresses** → targetType = 1. Show: rules toggle only.
+- **EFS Files** → targetType = 2. Show: "Target Schema UID" input (required) + rules toggle.
 - **Custom Keys** → targetType = 0. Show: rules toggle only.
 
 **Post-create:** use `useWaitForTransactionReceipt` to watch the tx hash returned by `writeContractAsync`. When receipt arrives, decode the `Attested(address,address,bytes32,bytes32)` event to extract the UID. Show the success state; clear the form. The "Your Lists" section should refetch after success.
@@ -188,10 +188,10 @@ const TARGET_TYPE_LABELS = { 0: "ANY", 1: "ADDR", 2: "SCHEMA" }
 
 ### Entry table details
 
-- **Identity Key decoding:**  
-  - ADDR mode: render as `0x` + last 20 bytes of the bytes32, truncated as an address (`0xdead…beef`)  
-  - SCHEMA mode: truncated bytes32 UID  
-  - ANY mode: truncated bytes32  
+- **Identity Key decoding:**
+  - ADDR mode: render as `0x` + last 20 bytes of the bytes32, truncated as an address (`0xdead…beef`)
+  - SCHEMA mode: truncated bytes32 UID
+  - ANY mode: truncated bytes32
 - **Remove button:** visible only on the "You" tab. Calls `eas.revoke()` with the entry's UID. After confirmed, refetches both `length` and `entries` for the current lens.
 - **React key:** use `e.entryUID`, not array index.
 - **Pagination:** 25 entries per page. Pass `start = page * 25, len = 25` to `entries()`. Show Prev/Next, disable at boundaries.
