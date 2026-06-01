@@ -68,7 +68,9 @@ const config: HardhatUserConfig = {
       gas: "auto",
       gasMultiplier: 3,
       forking: {
-        url: `https://eth-sepolia.g.alchemy.com/v2/${providerApiKey}`,
+        // `||` (not `??`): `.env.example` ships `SEPOLIA_FORK_RPC_URL=` (empty string),
+        // which `??` would keep — starting the fork with an empty URL. Treat blank as unset.
+        url: process.env.SEPOLIA_FORK_RPC_URL || `https://eth-sepolia.g.alchemy.com/v2/${providerApiKey}`,
         // Pinned Sepolia block — makes deployed contract addresses, EAS schema UIDs,
         // and the resulting `deployedContracts.ts` byte-identical across environments
         // (local hardhat fork, CI, the devnet VPS, the Vite client). See ADR-0037.

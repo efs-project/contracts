@@ -1,12 +1,14 @@
 # Lists and Collections
 
-EFS lists are a special case of directories. The same kernel/overlay architecture that powers file browsing handles curated collections, social graphs, and ranked orderings. There is no separate "list" contract — **everything is kernel data + sort overlay**.
+EFS lists are a **purpose-built primitive**: the `LIST` (declaration) + `LIST_ENTRY` (membership) EAS schemas, enforced by `ListResolver` / `ListEntryResolver`, with a stateless `ListReader` consumer ABI (ADR-0044, ADR-0046). They give **write-time shape enforcement** (typed / no-duplicates / append-only / capped) and per-attester lenses that the directory/anchor model cannot — see the §"LIST + LIST_ENTRY schemas" sections below for the authoritative model.
 
 For the full schema definitions see [Data Models and Schemas](./02-Data-Models-and-Schemas.md) and for indexing details see [Onchain Indexing Strategy](./03-Onchain-Indexing-Strategy.md).
 
 ---
 
-## 1. Core Concept: Everything Is A Directory
+> **⚠️ Superseded sketch (ADR-0044).** Section 1 below describes the *original* "a list is just a directory of positional anchors + a sort overlay" idea. ADR-0044 **rejected** that approach (it can't enforce typing/no-dupes/append-only at write time, and per-attester anchors collide with ADR-0025 name uniqueness) in favour of the dedicated `LIST`/`LIST_ENTRY` schemas documented later in this file. Section 1 is retained for historical context only and is **not** the implemented model; it will be removed/rewritten in the schema-freeze docs pass.
+
+## 1. Core Concept: Everything Is A Directory <sub>(superseded — see banner above)</sub>
 
 A curated list is just a directory whose children are **positional Anchors**:
 
@@ -241,3 +243,118 @@ async function computeHints(newItems, alreadySorted, sortFunc, sortInfoUID) {
 | getSortStaleness | 2 × SLOAD + 1 external call |
 
 On L2 (Base, Arbitrum), costs are negligible.
+
+---
+
+## 8. Lists Primitive (ADR-0044)
+
+The sort-overlay approach above composes EFS's existing kernel (Anchors + PIN/TAG) and is appropriate for any collection that needs to be browsed via `web3://` paths and sorted. For **curated collections that do not need path integration** — allowlists, social graphs, ranked film lists, any "set of things" — EFS provides a dedicated **Lists primitive** (ADR-0044).
+
+The Lists primitive is **orthogonal to the kernel**: it does not involve EFSIndexer, EdgeResolver, or Anchors. It is entirely self-contained within two new schemas and three contracts.
+
+### Why a separate primitive?
+
+The sort-overlay approach requires every item to have an Anchor under a parent Anchor. This is fine for file collections, but for things like "a set of addresses I trust" or "a ranked list of DATA UIDs", the anchor-per-entry overhead is unnecessary. The Lists primitive directly attests membership with no path machinery.
+
+### Contracts
+
+| Contract | Role |
+|---|---|
+| `ListResolver` | EAS resolver for LIST schema. Validates shape; no state. |
+| `ListEntryResolver` | EAS resolver for LIST_ENTRY schema. Wide EntryRecord[] storage, O(1) swap-and-pop removal, per-attester lens isolation. |
+| `ListReader` | Stateless view contract. `getMode`, `length`, `entries`, `countOf`, typed accessors. Redeployable — its address is not baked into any schema UID. |
+
+### Schemas
+
+**LIST** (`revocable: false`) — the list's permanent identity, like DATA:
+```
+bool allowsDuplicates, bool appendOnly, uint8 targetType, bytes32 targetSchema, uint256 maxEntries
+```
+
+**LIST_ENTRY** (`revocable: true`) — one member record, pure membership identity (ADR-0046):
+```
+bytes32 listUID, bytes32 target
+```
+Order and free-text labels are not fields — they are PIN-bound (cardinality-1) PROPERTYs placed on the **entry UID** (`"weight"` = decimal-string rank, `"name"` = arbitrary-length label). Reordering re-PINs the order PROPERTY in O(1) without churning the entry UID, so labels survive; sorting is client-side over the per-entry order PROPERTY (lens-scoped). See ADR-0046.
+
+### Three modes (targetType)
+
+| Mode | Value | Identity key | Use case |
+|---|---|---|---|
+| ANY | 0 | opaque nonzero `bytes32` | intrinsic items (shopping list items, opaque keys) |
+| ADDR | 1 | `bytes32(uint256(uint160(recipient)))` | address allowlists, social graphs |
+| SCHEMA | 2 | `target` (attestation UID) | curated UID collections (film lists, content playlists) |
+
+For ADDR mode, `address(0)` → `bytes32(0)` is a valid identity key.
+For SCHEMA mode, `ListEntryResolver` validates that the target attestation exists and its `schema` matches `list.targetSchema`.
+
+### Lenses
+
+LIST_ENTRY entries are keyed per attester. Each attester has their own `EntryRecord[]` array and count maps — a complete, independent lens. `ListReader` views are always parameterized by `attester` (the lens address):
+
+```solidity
+listReader.length(listUID, alice)         // alice's lens: how many entries?
+listReader.entries(listUID, alice, 0, 50) // alice's lens: first 50 entries
+listReader.countOf(listUID, alice, key)   // alice's lens: is this key present?
+```
+
+Multiple attesters can contribute to the same list (open curation). The list curator (alice) created the LIST attestation; any address can attest entries — they become visible in their own lens. Alice's lens only shows what Alice added; Bob's lens only shows what Bob added.
+
+### Flags
+
+- **allowsDuplicates**: if false, `ListEntryResolver` rejects a second entry with the same identity key per attester. Default false.
+- **appendOnly**: if true, `ListEntryResolver` rejects revocations. Suitable for permanent audit logs. Requires `maxEntries != 0` when combined with `allowsDuplicates` to bound storage.
+- **maxEntries**: per-attester cap. `0` = unlimited.
+
+### Wide storage (EntryRecord[])
+
+`ListEntryResolver` stores entries as:
+```solidity
+struct EntryRecord { bytes32 entryUID; bytes32 identityKey; }
+```
+This "wide" layout mirrors ADR-0041's `TagEntry[]` — the identity key is stored inline so on-chain consumers (and `ListReader`) can iterate the full membership list without a per-entry `eas.getAttestation()` call. Gas cost per `entries()` page is `O(N × SLOAD)` against the resolver's storage, not `O(N × external_call)`. (Per ADR-0046 the entry no longer carries an inline `weight`; ordering is a per-entry `"weight"` PROPERTY read client-side at sort time.)
+
+### Example: ADDR allowlist
+
+```typescript
+// 1. Create the list
+const listTx = await eas.attest({
+  schema: listSchemaUID,
+  data: {
+    recipient: ZeroAddress,
+    expirationTime: 0n,
+    revocable: false,
+    refUID: ZeroHash,
+    data: encodeAbiParameters(
+      [{ type: "bool" }, { type: "bool" }, { type: "uint8" }, { type: "bytes32" }, { type: "uint32" }],
+      [false, false, 1, ZeroHash, 0],  // allowsDuplicates=false, appendOnly=false, ADDR mode
+    ),
+    value: 0n,
+  },
+});
+const listUID = getUID(await listTx.wait());
+
+// 2. Add an address
+await eas.attest({
+  schema: listEntrySchemaUID,
+  data: {
+    recipient: bobAddress,         // the address being listed
+    expirationTime: 0n,
+    revocable: true,
+    refUID: ZeroHash,
+    data: encodeAbiParameters(
+      [{ type: "bytes32" }, { type: "bytes32" }],
+      [listUID, ZeroHash],         // target = ZeroHash for ADDR mode (ADR-0046: no weight field)
+    ),
+    value: 0n,
+  },
+});
+
+// 3. Read via ListReader
+const isBobListed = await listReader.countOf(listUID, alice, identityKeyForAddress(bobAddress));
+// → 1n (listed) or 0n (not listed)
+```
+
+### Full spec
+
+See [ADR-0044](../docs/adr/0044-list-and-list-entry-schemas.md) for the complete design rationale, the `IListReader` interface, and the security properties (SF1–SF4).

@@ -82,6 +82,9 @@ Currently you must know attester addresses to query. An `attestersInFolder(uid, 
 
 ## UX & Frontend (internal devtools)
 
+### Standard (unscoped) folder view shows dead LIST/file anchors after delete + navigation
+Deleting a list or file revokes the user's placement PIN, but the standard non-lens listing comes from `getDirectoryPage`, which returns the permanent anchor regardless of whether any placement PIN is active. The `deletedListAnchors` session-local suppression hides the dead card only until a refresh / folder navigation clears it; the card then returns and `openList()` can only report the placement missing. **Systemic to the standard raw-anchor view** (dead *file* anchors behave identically) — not list-specific. Proper fix: filter the standard list/file path by an active placement PIN at render time (an RPC-per-anchor fanout — fold into "Dev-UI: batch / cache PIN resolution" above), or persist suppression (localStorage) until an active placement is re-observed. Ephemeral debug UI; **deferred per maintainer de-scoping of debug-UI polish (2026-05-31)** — future agents can pick this up. Flagged repeatedly by Codex on PR #20.
+
 ### Runtime-switchable NetworkChip (auto-probe local + dropdown switcher)
 The current `NetworkChip` in the header is **read-only**: it displays the active chain + RPC URL inferred from `NEXT_PUBLIC_HARDHAT_RPC_URL` at build time and a copy button, but doesn't let the user switch. A future enhancement: (a) on first visit, probe `http://127.0.0.1:8545` with a short-timeout `eth_chainId` call — if reachable, prefer local; otherwise use the build-time devnet URL. (b) Dropdown with "Local / Devnet / Custom URL…" that saves preference to localStorage and reloads. Requires bootstrapping wagmi config from localStorage before `scaffold.config.ts` evaluates, so this is a refactor rather than a tack-on. Alpha ships without it because the build-time env var covers the two primary deploy targets (local + devnet) unambiguously.
 
@@ -185,3 +188,80 @@ Document how third parties can run their own EFS-aware web3:// gateway. Lower th
 
 ### Subgraph / The Graph integration
 Build and publish a subgraph that aggregates EFS attestations into queryable views. Off-chain indexing closes the gap on rich queries the on-chain kernel doesn't support.
+
+---
+
+## Lists UI — production client features (flagged 2026-05-28)
+
+### ~~Lists in the Explorer folder grid~~ — DONE (2026-05-30; revised 2026-05-31)
+Lists appear as purple cards in the folder grid and open an in-pane editor. Placement is exactly like a file — `ANCHOR(anchorType=LIST_SCHEMA_UID) + LIST(free-floating) + PIN(definition=anchor, refUID=LIST)` (ADR-0044 correction). Per ADR-0046, a LIST_ENTRY is pure membership identity; order + free-text label are PIN-bound PROPERTYs on the stable entry UID (free text is arbitrary length now). ANY-mode `target` is `keccak(text)`. See `ListPreviewPane.tsx`, `utils/efs/listEncoding.ts` (unit-tested), ADR-0044 + ADR-0046 + decisions.md.
+
+### Lens defaulting — viewing a list shows ONLY your own entries
+`ListPreviewPane` reads `entries(listUID, lens = connectedAddress)`. So you only ever see entries **you** added; opening a list someone else curated shows it empty. For the "share my top-10" use case the viewer needs to see the *curator's* entries (default lens → `mode.curator`), with an attester/lens picker (discovered from `ListEntryAttested` events + a custom-address input, per ADR-0031 first-wins waterfall) to switch views. This is the main gap blocking *shared/curated* lists; personal lists are unaffected. [ADR-0044 §lenses, ADR-0031, ADR-0039]
+
+### ~~ANY-mode item text limited to 31 bytes~~ — DONE (2026-05-31, ADR-0046)
+Resolved. Free-text labels are now an arbitrary-length `name` PROPERTY on the entry UID (the ANY-mode `target` is `keccak(text)`); the byte cap is gone. See ADR-0046.
+
+### Lists edition picker — minor UX warts (devtools, flagged in round-2 review)
+- **Stale edition chips:** `getListAttesters` is append-only (ADR-0009), so an attester who added then revoked all their entries stays in the index and shows as an empty, clickable edition chip. The contract NatSpec says filter by `getLength(listUID, attester) > 0` for *active* lenses; the pane doesn't (would add N reads). Acceptable for the debug UI; filter before production exposure.
+- **List-card load flash:** list anchors are classified via `isList(item, listSchemaUID)`, so until `LIST_SCHEMA_UID` resolves they're briefly filtered out of the grid (a one-frame pop). Not gated on the loading guard because that would delay folders/files for a list-only concern.
+
+### ~~Reorder/edit are non-atomic revoke-then-attest (residual data-loss window)~~ — DONE (2026-05-31, ADR-0046)
+Resolved for reorder and edit. They no longer touch the entry at all — reorder re-PINs the `"weight"` order PROPERTY and edit re-PINs the `"name"` label PROPERTY (cardinality-1 supersede, O(1)), so the entry UID is never revoked and there is no `ListFull` re-attest window. (Removal still revokes the entry, which is correct — it is a deletion.) See ADR-0046.
+
+### Post-create UID copy button
+After creating a list the success notification shows a truncated UID. A copy-to-clipboard button on the notification (or a modal success state with the full UID) would make it easy to share or use the UID elsewhere.
+
+### Lists — surface read-failures and unordered entries in the UI (from ADR-0046 review)
+Two non-blocking polish items from the round-3 review of the order/label-as-PROPERTY work:
+- **Read-failure affordance (F1):** `readEntryProperty` now propagates RPC errors and the enrich effect retains last-known order/label + `console.error`s on a transient failure (so a blip no longer silently reorders/blanks). The remaining polish is a *user-visible* non-blocking indicator ("couldn't refresh N items") rather than console-only.
+- **Unordered-entry grouping (F4):** entries with no `"weight"` order PROPERTY (legacy, or a half-written add) sort last by `entryUID`. Three semantically different populations (legacy / read-failed / mid-write) collapse into one bucket. Render them in a visually distinct "unordered" group with a tooltip instead of silently appending to the ranked list.
+
+### Lists UI — items marked out of scope for v1
+ENS resolution on identity keys, bulk address paste, drag-to-reorder lens stack, SCHEMA-mode browse picker, ANY-mode keccak256 helper, deep-link `?lens=` URL param on detail page. [specs/2026-05-28-lists-ui-design.md]
+
+### Lens-scoped list sorting — investigated, deferred (2026-05-31)
+We looked at making list ordering an on-chain, lens-scoped concern via `EFSSortOverlay` (a new `sourceType 2` reading `ListEntryResolver` + a `WeightSort` comparator + per-lens `SORT_INFO`s). A 3-agent review (feasibility / lens-semantics / adversarial) said **don't build it as designed**, for reasons worth preserving:
+
+- **It breaks the lens waterfall.** A viewer has an *ordered* lens list and membership resolves first-wins (ADR-0044). Pinning a single content-lens in the `SORT_INFO` would make *sorting change which entries you see*, not just their order — a correctness break. Encoding the content-lens in `targetSchema` is also Etched-field overloading.
+- **The requirement is already met client-side.** "Bob sorts Alice's list in his lens" decomposes into *membership = the viewer's lens waterfall* (unchanged) and *order = the sort-lens's `weight` PROPERTY* (ADR-0046), read per stable entry UID. Bob writes his own `weight` PROPERTYs on Alice's entry UIDs and sorts in his lens — no contract change.
+- **On-chain comparator cost.** `WeightSort.getSortKey` reads a PROPERTY (3–5 SLOADs + 2 calls) *per item, inside `processItems`* — 5–10× heavier than `NameSort`/`TimestampSort` and a real OOG risk on large lists. It also resurrects on-chain decimal→int parsing that ADR-0046 §Alt#4 deliberately rejected.
+- **No consumer.** Nothing in the repo reads a list's *order* on-chain today; ordering is a "NICE" (ADR-0046). And changing `EFSSortOverlay` orphans `SORT_INFO_SCHEMA_UID` (the overlay address is baked in) — an Etched, kernel-wired change.
+
+**Decision:** keep ADR-0046's client-side, lens-scoped `weight`-PROPERTY sort. **Two follow-ups when warranted:**
+1. *Cross-lens client wiring* (small, no contract change): let a viewing lens read membership via the waterfall but order via its own lens's weights, so "Bob re-orders Alice's list in his lens" works in the UI. The current client sorts each lens's own edition single-lens.
+2. *On-chain ordering, only if a real on-chain consumer appears*: prefer a **single per-(list, lens) ordered-vector PROPERTY** (ADR-0046 §Alt#5) over the overlay — cheaper, one-fetch read, **and crucially no schema change** (it's just a PROPERTY value), unlike the overlay path.
+
+**Schema-freeze note:** neither viable path changes any schema. Only the rejected overlay path would (it re-registers `SORT_INFO`). So lens-scoped sorting does **not** block the schema freeze.
+
+*(Pre-existing, unrelated: `specs/06` §2 documents a 2-field `SORT_INFO` but the deployed schema is 3-field — `+ uint8 sourceType` per `deploy/04_sortoverlay.ts`. Worth a fix-in-passing during the freeze pass.)*
+
+### Lists — deferred review nits (perf + API consistency)
+Non-blocking items from the multi-reviewer pass (Gemini / Claude-4.7), parked for after launch:
+- **RPC fanout (client, debug UI):** `ListPreviewPane` enrich reads order+label per entry as ~6 sequential reads × N entries, and the folder-delete cascade reads per child. Fine for hand-curated lists; batch via multicall if a large-list path ever matters.
+- **`ListReader` lacks the attester-index passthrough:** `getListAttesters`/`getListAttesterCount` live on `ListEntryResolver`; the documented consumer ABI (`ListReader`, redeployable) should mirror them for external consumers. Small, no schema impact.
+- **`ListReader` redundant EAS read:** `entries()` calls `eas.getAttestation(listUID)` once per page to denormalize `targetType`; could cache/skip. Minor gas on a view.
+- **Validation order:** `ListEntryResolver` checks `DuplicateIdentity` before the cap — both revert, so the order is cosmetic; intentional (dedup is the cheaper/more-specific signal).
+
+### Lists deploy — CREATE2 before mainnet freeze (from Gemini / Claude 4.7 / Codex ×2 PR #20 review)
+`deploy/09_lists.ts` predicts the `ListResolver` / `ListEntryResolver` addresses from the deployer **nonce** (CREATE), deterministic on the pinned fork (ADR-0037). ADR-0044 §8 prescribed CREATE2 so the schema UIDs (which hash the resolver addresses) survive nonce drift across live networks. **ADR-0046 §"Supersession scope" scopes the "functionally equivalent" framing to the devnet pinned-fork regime only — on mainnet (no pin), any nonce-consuming tx on the deployer's account before deploy shifts every schema UID.** Before the mainnet freeze, move these to a CREATE2 deterministic-salt deploy (this also dissolves the partial-deploy nonce fragility that the current safe-abort guards against).
+
+**Why this is correctly deferred to the freeze, not done now.** CREATE2 ties the resolver address to the **initcode** (`keccak(0xff ++ factory ++ salt ++ keccak(initcode))`), whereas nonce-CREATE is bytecode-independent. During active devnet iteration the resolver bytecode keeps changing (this PR alone added `WrongSchema` to `ListEntryResolver`), so a CREATE2 address would move on *every* bytecode edit → the schema UID would churn → entries orphan on each iteration. Nonce-CREATE on a fresh pinned fork keeps the address stable across bytecode changes, which is what you want while iterating. CREATE2's cross-environment determinism only pays off once the bytecode is **frozen** (mainnet), so adopting it *at* the freeze — when the salt becomes a permanent, Etched input to the address derivation and warrants a deliberate choice — is the right sequencing, not a delay.
+
+**Implementation notes for the freeze task.**
+- CREATE2's cross-network determinism assumes the canonical CREATE2 factory is present at the same address on the target chain (e.g. Arachnid's `0x4e59…956C`); verify availability before committing.
+- The **salt becomes a permanent Etched input** to the address derivation — it's a deliberate pick at the freeze, not an incidental default.
+- The `_listAttesters` on-chain attester index (`getListAttesters` / `getListAttesterCount`, added this PR) is load-bearing storage baked into `LIST_ENTRY_SCHEMA_UID` (recorded in `docs/decisions.md`, 2026-05-30) — fold it into the schema-freeze documentation pass.
+
+### Lists deploy — `ListEntryResolver` address mis-prediction on a persistent node (arg-change)
+`deploy/09_lists.ts` predicts `futureListEntryResolverAddress` as `existingListEntryResolver?.address ?? getCreateAddress(nonce+3)`. On a **persistent** node (long-lived anvil with a prior deployment) where the LIST constructor args change — e.g. the `uint32`→`uint256` `maxEntries` widening changed `LIST_SCHEMA_UID`, which *is* a `ListEntryResolver` constructor arg — the script keeps the **old** artifact address, but `redeployIfArgsChanged()` (~L190) then deletes that artifact and `deploy()` redeploys at the current (higher) nonce, so the deployed address ≠ the address baked into `listEntrySchemaUID`. The address assertion **aborts loud** (never registers a wrong/silent schema UID), but the deploy is wedged until the artifact is cleared. **Cannot fire on the pinned wipe-and-redeploy fork** (CI / devnet): `getOrNull` returns null on a fresh chain, so it nonce-predicts correctly — proven by `deploy-pin-check` passing on the `uint256` commit (`eb57f42`). Fix: detect the arg-change before choosing the predicted address and predict/register against the address `deploy()` will actually land at, or skip `redeployIfArgsChanged` for `ListEntryResolver`. Folds into the CREATE2 migration above (which rewrites this prediction/registration logic). Surfaced by the PR #20 adversarial deploy review + Codex (3331191025).
+
+---
+
+## Write-flow & future schemas (flagged 2026-05-28, PM + brainstorm swarm)
+
+### EFSUploadGateway batch-wrapper (write-flow ergonomics)
+A single EFS write today detonates into ~8 wallet prompts (chunk SSTORE2 + DATA + MIRROR + contentType triple + ANCHOR + PIN + ancestor visibility TAGs). **Lists add to this** — a single list placement is LIST + LIST_ENTRY + PIN + per-entry PROPERTY attestations. The leading fix is an `EFSUploadGateway` batch-wrapper contract that composes the multi-attestation flow behind one signature (EAS `multiAttest` + the gateway orchestrating chunk deploys). Keep in the back pocket; **do not scope-creep into Lists v1.** This is a system-wide write-ergonomics concern, orthogonal to the Lists data model. Cross-ref ADR-0041 (PIN/TAG), ADR-0044 (LIST/LIST_ENTRY), `specs/04-Core-Workflows.md` §Upload.
+
+### EVENT / TRANSITION schema for state-transition edges
+The brainstorm swarm flagged a future need for a schema expressing **state-transition edges** — provenance, ownership handoff, synonymy-with-citation, "X superseded by Y," etc. This is a *directed transition* primitive, distinct from PIN/TAG (membership/placement edges) and from LIST/LIST_ENTRY (collection membership). **Explicitly NOT Lists' job** — noted here so it doesn't get shoehorned into the LIST primitive. If pursued, it gets its own ADR following the purpose-built-schema pattern (ADR-0041/0044 shape), not a generic mechanism (cf. ADR-0045's deferral).

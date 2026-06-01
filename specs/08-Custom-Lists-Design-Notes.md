@@ -1,5 +1,7 @@
 # EFS Custom Lists — Design Notes
 
+> **⚠️ Historical design notes (pre-ADR-0044 / ADR-0046).** This document explores the *original* "a curated list is a directory of per-attester positional anchors + a sort overlay" idea. ADR-0044 **rejected** that approach in favour of the dedicated `LIST` + `LIST_ENTRY` EAS schemas, and ADR-0046 finalized `LIST_ENTRY` as pure membership identity (`bytes32 listUID, bytes32 target`) with order/label stored as PIN-bound PROPERTYs on the stable entry UID — **not** as positional anchors or an inline weight/order field. The **authoritative, implemented model is in [`06-Lists-and-Collections.md`](./06-Lists-and-Collections.md)** (§"LIST + LIST_ENTRY schemas") and [`02-Data-Models-and-Schemas.md`](./02-Data-Models-and-Schemas.md). This file is retained only for its sorts-vs-curation reasoning and the design history; it will be removed/rewritten in the schema-freeze docs pass. Do not implement against it.
+
 ## Sorts vs Curated Lists
 
 EFS has two distinct ordering mechanisms:

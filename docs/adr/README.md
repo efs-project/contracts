@@ -111,6 +111,12 @@ What else we looked at and why it lost.
 - [ADR-0041 — PIN/TAG schema split for cardinality, with weighted edges](./0041-pin-tag-schema-split-for-cardinality.md)
 - [ADR-0043 — Rename "editions" to "lenses"](./0043-rename-editions-to-lenses.md)
 
+### Lists & Collections
+- [ADR-0044 — LIST + LIST_ENTRY schemas for curated, shape-enforced collections](./0044-list-and-list-entry-schemas.md) *(LIST_ENTRY shape partly revised by ADR-0046; LIST `maxEntries` widened by ADR-0047)*
+- [ADR-0046 — LIST_ENTRY as pure membership identity; order + label as PROPERTYs](./0046-list-entry-pure-identity-order-as-property.md)
+- [ADR-0047 — Widen `LIST.maxEntries` from `uint32` to `uint256`](./0047-widen-list-maxentries-to-uint256.md)
+- [ADR-0045 — EFS Edge Constraint Callbacks](./0045-efs-edge-constraint-callbacks.md) *(Deferred — wrong abstraction per round-17 external review; superseded in spirit by ADR-0044's purpose-built schema approach. Renumbered from 0043 to avoid colliding with main's editions→lenses rename.)*
+
 ### View APIs
 - [ADR-0036 — Opaque-cursor pagination for multi-source views](./0036-opaque-cursor-pagination.md)
 

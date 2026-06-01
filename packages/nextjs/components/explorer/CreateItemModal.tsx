@@ -2,8 +2,16 @@
 
 import { useEffect, useRef, useState } from "react";
 import { ethers } from "ethers";
-import { decodeEventLog, encodeDeployData, parseAbiItem, toHex } from "viem";
-import { usePublicClient, useWalletClient } from "wagmi";
+import {
+  decodeEventLog,
+  encodeAbiParameters,
+  encodeDeployData,
+  parseAbiItem,
+  toHex,
+  zeroAddress,
+  zeroHash,
+} from "viem";
+import { usePublicClient, useReadContract, useWalletClient } from "wagmi";
 import { Cog6ToothIcon, StopIcon } from "@heroicons/react/24/outline";
 import { useSortDiscovery } from "~~/hooks/efs/useSortDiscovery";
 import { useDeployedContractInfo, useScaffoldWriteContract } from "~~/hooks/scaffold-eth";
@@ -15,7 +23,7 @@ import { SORT_OVERLAY_ABI } from "~~/utils/efs/sortOverlay";
 import { TRANSPORT_LABELS, computeContentHash, detectTransport, resolveGatewayUrl } from "~~/utils/efs/transports";
 import { notification } from "~~/utils/scaffold-eth";
 
-export type CreationType = "Folder" | "File" | "PasteLink";
+export type CreationType = "Folder" | "File" | "PasteLink" | "List";
 
 const MOCK_CHUNKED_FILE_ABI = [
   {
@@ -144,6 +152,8 @@ export type CreateItemModalProps = {
   onFolderCreated?: (uid: string, name: string) => void;
   /** Called after a file is uploaded. Passes the sort UIDs the user wants auto-processed. */
   onFileCreated?: (enabledSortUIDs: string[]) => void;
+  /** Called after a list is created. Receives the list-slot ANCHOR UID (not the LIST UID). */
+  onListCreated?: (anchorUID: string) => void;
 };
 
 export const CreateItemModal = ({
@@ -163,9 +173,28 @@ export const CreateItemModal = ({
   lensAddresses,
   onFolderCreated,
   onFileCreated,
+  onListCreated,
 }: CreateItemModalProps) => {
   const { writeContractAsync: attest } = useScaffoldWriteContract({ contractName: "EAS" });
   const { data: indexer } = useDeployedContractInfo({ contractName: "Indexer" });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: listReaderInfo } = useDeployedContractInfo({ contractName: "ListReader" as any });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const listReaderAddress = (listReaderInfo as any)?.address as `0x${string}` | undefined;
+  const { data: listSchemaUID } = useReadContract({
+    address: listReaderAddress,
+    abi: [
+      {
+        inputs: [],
+        name: "LIST_SCHEMA_UID",
+        outputs: [{ name: "", type: "bytes32" }],
+        stateMutability: "view",
+        type: "function",
+      },
+    ] as const,
+    functionName: "LIST_SCHEMA_UID",
+    query: { enabled: !!listReaderAddress },
+  });
   const { targetNetwork } = useTargetNetwork();
 
   const [internalType, setInternalType] = useState<CreationType | null>(creationType);
@@ -179,6 +208,15 @@ export const CreateItemModal = ({
   const [showPasteDetails, setShowPasteDetails] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [existingAnchorWarning, setExistingAnchorWarning] = useState(false);
+
+  // List-specific state (ADR-0044)
+  const [listName, setListName] = useState("");
+  const [listTargetType, setListTargetType] = useState<0 | 1 | 2>(0); // default ANY
+  const [listAllowsDuplicates, setListAllowsDuplicates] = useState(false);
+  const [listAppendOnly, setListAppendOnly] = useState(false);
+  const [listTargetSchema, setListTargetSchema] = useState("");
+  const [listMaxEntries, setListMaxEntries] = useState("0");
+  const [showListRules, setShowListRules] = useState(false);
 
   // Only surface the inline error once the user has typed something; empty-name
   // is already covered by the disabled submit button.
@@ -207,6 +245,7 @@ export const CreateItemModal = ({
     setInternalType(creationType);
     if (creationType) {
       setNewName("");
+      setListName("");
       setFileToUpload(null);
       setPasteUri("");
       setPasteContentType("");
@@ -372,6 +411,211 @@ export const CreateItemModal = ({
       return { refUID: ethers.ZeroHash as `0x${string}`, recipient: container.address };
     }
     return { refUID: currentAnchorUID as `0x${string}`, recipient: ethers.ZeroAddress as `0x${string}` };
+  };
+
+  // ── List creation (ADR-0044 §1) ────────────────────────────────────────────
+  // A list is placed exactly like a file: a named ANCHOR (anchorType=LIST_SCHEMA_UID)
+  // under the folder, the free-floating LIST holding the config, and a PIN binding the
+  // LIST to the anchor. Deleting the list later = revoking that PIN (the anchor + LIST
+  // are permanent, like a file's anchor + DATA).
+  const handleCreateList = async () => {
+    if (!listSchemaUID) {
+      notification.error("LIST_SCHEMA_UID not available. Is ListReader deployed?");
+      return;
+    }
+    if (!currentAnchorUID) {
+      notification.error("Open a folder first to create a list.");
+      return;
+    }
+    const name = listName.trim();
+    if (!name) {
+      notification.error("Enter a name for the list.");
+      return;
+    }
+    const nameError = validateAnchorName(name);
+    if (nameError) {
+      notification.error(nameError);
+      return;
+    }
+    // SCHEMA mode: require a full 32-byte UID BEFORE attesting the (non-revocable)
+    // list-slot anchor. A loose `0x…` check let `0x1` through, which then reverted at
+    // the LIST attest — but only after the anchor was already created, leaving a
+    // permanent unplaced list card that can't be opened. Validate up front.
+    if (listTargetType === 2 && !/^0x[0-9a-fA-F]{64}$/.test(listTargetSchema.trim())) {
+      notification.error("EFS Files mode requires a 32-byte schema UID (0x + 64 hex).");
+      return;
+    }
+    let maxE: bigint;
+    try {
+      maxE = BigInt(listMaxEntries.trim() || "0");
+    } catch {
+      notification.error("Max entries must be a non-negative integer");
+      return;
+    }
+    if (maxE < 0n) {
+      notification.error("Max entries must be a non-negative integer");
+      return;
+    }
+    // Validate the resolver invariants BEFORE creating the non-revocable list-slot anchor,
+    // so a bad config can't leave a permanent unplaced list card (the LIST attest would
+    // otherwise revert only after the anchor is on-chain). maxEntries is uint256 — no practical
+    // ceiling, so a planet-scale cap (e.g. a continent's population, which exceeds 2^32) is allowed.
+    if (listAppendOnly && listAllowsDuplicates && maxE === 0n) {
+      // ListResolver rejects the only unbounded-growth combination (ADR-0044 §3).
+      notification.error("An append-only list that allows duplicates needs a Max entries cap (> 0).");
+      return;
+    }
+    if (!publicClient) return;
+
+    setIsSubmitting(true);
+    const ops = useBackgroundOps.getState();
+    const opId = ops.start(`Create list: ${name}`);
+    try {
+      // 1. List-slot ANCHOR (anchorType = LIST_SCHEMA_UID). Reuse if it already exists.
+      // This resolveAnchor reuse is also the RECOVERY path. List creation is 3 sequential txs
+      // (anchor → LIST → PIN) and the anchor is permanent (ADR-0002): if the LIST or placement
+      // PIN is rejected/fails after the anchor lands, that anchor persists as a dead slot. But
+      // re-running create with the SAME name in this folder reuses this anchor and finishes the
+      // placement — so the dead state is fully recoverable, and openList() points the user here.
+      // (Atomic single-signature creation awaits the EFSUploadGateway batch-wrapper — see
+      // docs/FUTURE_WORK.md § "EFSUploadGateway batch-wrapper".)
+      let listAnchorUID: `0x${string}` | undefined;
+      if (indexer) {
+        try {
+          const existing = (await publicClient.readContract({
+            address: indexer.address as `0x${string}`,
+            abi: indexer.abi,
+            functionName: "resolveAnchor",
+            args: [currentAnchorUID as `0x${string}`, name, listSchemaUID as `0x${string}`],
+          })) as `0x${string}`;
+          if (existing && existing !== zeroHash) {
+            // Parity with file creation: the slot already exists, so submitting places a new list
+            // here and supersedes any current placement (cardinality-1 PIN) — the previous list
+            // stays on-chain, just hidden, exactly like replacing a file. Warn on the first click;
+            // only proceed (reuse the anchor) after the user confirms with a second click.
+            if (!existingAnchorWarning) {
+              setExistingAnchorWarning(true);
+              ops.clear(opId); // nothing written yet — don't leave a phantom running op
+              return;
+            }
+            listAnchorUID = existing;
+            setExistingAnchorWarning(false);
+            ops.log(opId, "List slot already exists; reusing anchor (user confirmed).");
+          }
+        } catch {
+          /* anchor doesn't exist yet — create below */
+        }
+      }
+      if (!listAnchorUID) {
+        const parent = anchorParent();
+        const anchorData = encodeAbiParameters(
+          [
+            { name: "name", type: "string" },
+            { name: "schemaUID", type: "bytes32" },
+          ],
+          [name, listSchemaUID as `0x${string}`],
+        );
+        const aTx = await attest(
+          {
+            functionName: "attest",
+            args: [
+              {
+                schema: anchorSchemaUID as `0x${string}`,
+                data: {
+                  recipient: parent.recipient,
+                  expirationTime: 0n,
+                  revocable: false,
+                  refUID: parent.refUID,
+                  data: anchorData,
+                  value: 0n,
+                },
+              },
+            ],
+          },
+          { silent: true },
+        );
+        if (!aTx) throw new Error("No tx for list anchor");
+        const aRcpt = await publicClient.waitForTransactionReceipt({ hash: aTx });
+        listAnchorUID = extractUIDFromReceipt(aRcpt);
+        if (!listAnchorUID) throw new Error("Could not extract list anchor UID");
+      }
+
+      // 2. The LIST itself — free-floating config (ADR-0044 5-field schema).
+      ops.log(opId, "Creating list…");
+      // Trim to match the validated value above — otherwise surrounding whitespace passes
+      // the `.trim()` check but reaches encodeAbiParameters as an invalid bytes32 (reverting
+      // only after the non-revocable anchor is already created).
+      const schemaBytes = (listTargetType === 2 ? listTargetSchema.trim() : zeroHash) as `0x${string}`;
+      const listData = encodeAbiParameters(
+        [
+          { name: "allowsDuplicates", type: "bool" },
+          { name: "appendOnly", type: "bool" },
+          { name: "targetType", type: "uint8" },
+          { name: "targetSchema", type: "bytes32" },
+          { name: "maxEntries", type: "uint256" },
+        ],
+        [listAllowsDuplicates, listAppendOnly, listTargetType, schemaBytes, maxE],
+      );
+      const lTx = await attest(
+        {
+          functionName: "attest",
+          args: [
+            {
+              schema: listSchemaUID as `0x${string}`,
+              data: {
+                recipient: zeroAddress,
+                expirationTime: 0n,
+                revocable: false,
+                refUID: zeroHash,
+                data: listData,
+                value: 0n,
+              },
+            },
+          ],
+        },
+        { silent: true },
+      );
+      if (!lTx) throw new Error("No tx for LIST");
+      const lRcpt = await publicClient.waitForTransactionReceipt({ hash: lTx });
+      const listUID = extractUIDFromReceipt(lRcpt);
+      if (!listUID) throw new Error("Could not extract LIST UID");
+
+      // 3. PIN places the LIST at the anchor (definition=anchor, refUID=LIST). Revocable → deletable.
+      ops.log(opId, "Placing list in folder…");
+      const pinData = encodeAbiParameters([{ name: "definition", type: "bytes32" }], [listAnchorUID]);
+      const pTx = await attest(
+        {
+          functionName: "attest",
+          args: [
+            {
+              schema: pinSchemaUID as `0x${string}`,
+              data: {
+                recipient: zeroAddress,
+                expirationTime: 0n,
+                revocable: true,
+                refUID: listUID,
+                data: pinData,
+                value: 0n,
+              },
+            },
+          ],
+        },
+        { silent: true },
+      );
+      if (!pTx) throw new Error("No tx for placement PIN");
+      await publicClient.waitForTransactionReceipt({ hash: pTx });
+
+      ops.complete(opId, `List "${name}" created`);
+      handleClose();
+      onListCreated?.(listAnchorUID);
+      notification.success(`List "${name}" created.`);
+    } catch (e) {
+      const msg = extractErrorMessage(e);
+      ops.fail(opId, msg);
+      notification.error(msg);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleSubmit = async () => {
@@ -1053,8 +1297,10 @@ export const CreateItemModal = ({
   return (
     <dialog id="create_modal" className="modal" ref={modalRef}>
       <div className="modal-box">
-        <h3 className="font-bold text-lg">{internalType === "Folder" ? "Create New Folder" : "Add File"}</h3>
-        {internalType !== "Folder" && internalType !== null && (
+        <h3 className="font-bold text-lg">
+          {internalType === "Folder" ? "Create New Folder" : internalType === "List" ? "Create List" : "Add File"}
+        </h3>
+        {internalType !== "Folder" && internalType !== "List" && internalType !== null && (
           <div className="tabs tabs-bordered mt-2">
             <button
               className={`tab ${internalType === "File" ? "tab-active" : ""}`}
@@ -1070,7 +1316,118 @@ export const CreateItemModal = ({
             </button>
           </div>
         )}
-        <div className="py-4 form-control w-full">
+        {/* List creation form — shown instead of the name/file inputs */}
+        {internalType === "List" && (
+          <div className="py-3 flex flex-col gap-3">
+            <p className="text-xs text-base-content/50">
+              Creates a permanent list (non-revocable). You add entries after creation.
+            </p>
+            <div className="form-control w-full">
+              <label className="label pb-1">
+                <span className="label-text font-medium">Name</span>
+              </label>
+              <input
+                type="text"
+                className="input input-bordered w-full"
+                placeholder="e.g. allowlist, team members, curated files…"
+                value={listName}
+                onChange={e => {
+                  setListName(e.target.value);
+                  setExistingAnchorWarning(false); // re-confirm against the new name (parity with files)
+                }}
+                autoFocus
+              />
+            </div>
+            <div className="form-control w-full">
+              <label className="label pb-1">
+                <span className="label-text font-medium">What are you collecting?</span>
+              </label>
+              <div className="flex gap-2 flex-wrap">
+                {(
+                  [
+                    [0, "Anything"],
+                    [1, "Addresses"],
+                    [2, "EFS Files"],
+                  ] as const
+                ).map(([val, label]) => (
+                  <button
+                    key={val}
+                    type="button"
+                    className={`btn btn-sm flex-1 ${listTargetType === val ? "btn-primary" : "btn-ghost border border-base-300"}`}
+                    onClick={() => setListTargetType(val)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs text-base-content/40 mt-1.5">
+                {listTargetType === 0 &&
+                  "Any bytes32 key — use for arbitrary identifiers, named keys, or anything else."}
+                {listTargetType === 1 && "Ethereum addresses — use for allowlists, social graphs, or member sets."}
+                {listTargetType === 2 &&
+                  "EFS file UIDs — use for curated file collections; entries must match the target schema."}
+              </p>
+            </div>
+            {listTargetType === 2 && (
+              <div className="form-control w-full">
+                <label className="label pb-1">
+                  <span className="label-text">Target Schema UID</span>
+                </label>
+                <input
+                  type="text"
+                  className="input input-bordered input-sm font-mono"
+                  placeholder="0x…"
+                  value={listTargetSchema}
+                  onChange={e => setListTargetSchema(e.target.value)}
+                />
+              </div>
+            )}
+            <div>
+              <button
+                type="button"
+                className="text-sm text-base-content/50 hover:text-base-content flex items-center gap-1 transition-colors"
+                onClick={() => setShowListRules(v => !v)}
+              >
+                {showListRules ? "▾" : "▸"} Rules
+              </button>
+              {showListRules && (
+                <div className="mt-2 pl-3 border-l-2 border-base-300 flex flex-col gap-2">
+                  <label className="flex items-center gap-2 cursor-pointer text-sm">
+                    <input
+                      type="checkbox"
+                      className="checkbox checkbox-sm"
+                      checked={listAllowsDuplicates}
+                      onChange={e => setListAllowsDuplicates(e.target.checked)}
+                    />
+                    Allow duplicates
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer text-sm">
+                    <input
+                      type="checkbox"
+                      className="checkbox checkbox-sm"
+                      checked={listAppendOnly}
+                      onChange={e => setListAppendOnly(e.target.checked)}
+                    />
+                    Append-only <span className="text-xs text-base-content/40">(entries permanent once added)</span>
+                  </label>
+                  <div className="flex items-center gap-2 text-sm">
+                    <span>Max entries</span>
+                    <input
+                      type="number"
+                      className="input input-bordered input-xs w-24"
+                      value={listMaxEntries}
+                      min={0}
+                      onChange={e => setListMaxEntries(e.target.value)}
+                    />
+                    <span className="text-xs text-base-content/40">0 = unlimited</span>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        <div className={`py-4 form-control w-full ${internalType === "List" ? "hidden" : ""}`}>
           <label className="label">
             <span className="label-text">Name</span>
           </label>
@@ -1239,13 +1596,23 @@ export const CreateItemModal = ({
 
         {existingAnchorWarning && internalType !== "Folder" && (
           <div className="alert alert-warning mt-2 text-sm py-2">
-            A file named &quot;{newName}&quot; already exists here. Submitting will add a new version to the existing
-            anchor.
+            {internalType === "List" ? (
+              <>
+                A list named &quot;{listName}&quot; already exists at this slot. Submitting places a new list here — any
+                current placement is superseded, and the previous list stays on-chain (hidden, re-placeable), just like
+                replacing a file.
+              </>
+            ) : (
+              <>
+                A file named &quot;{newName}&quot; already exists here. Submitting will add a new version to the
+                existing anchor.
+              </>
+            )}
           </div>
         )}
 
         <div className="modal-action items-center">
-          {internalType !== "Folder" && availableSorts.length > 0 ? (
+          {internalType !== "Folder" && internalType !== "List" && availableSorts.length > 0 ? (
             <div className="flex-1">
               <button
                 type="button"
@@ -1306,21 +1673,24 @@ export const CreateItemModal = ({
           )}
           <button
             className={`btn ${existingAnchorWarning && internalType !== "Folder" ? "btn-warning" : "btn-primary"}`}
-            onClick={handleSubmit}
+            onClick={internalType === "List" ? handleCreateList : handleSubmit}
             disabled={
-              !newName ||
-              !!nameValidationError ||
               isSubmitting ||
+              (internalType !== "List" && (!newName || !!nameValidationError)) ||
               (internalType === "File" && !fileToUpload) ||
-              (internalType === "PasteLink" && !pasteUri)
+              (internalType === "PasteLink" && !pasteUri) ||
+              (internalType === "List" && (!listSchemaUID || !listName.trim())) ||
+              (internalType === "List" && listTargetType === 2 && !listTargetSchema.startsWith("0x"))
             }
           >
             {isSubmitting && <span className="loading loading-spinner loading-xs" />}
             {isSubmitting
               ? "Creating..."
-              : existingAnchorWarning && internalType !== "Folder"
+              : existingAnchorWarning && internalType !== "Folder" && internalType !== "List"
                 ? "Update Existing"
-                : "Create"}
+                : internalType === "List"
+                  ? "Create List"
+                  : "Create"}
           </button>
         </div>
       </div>

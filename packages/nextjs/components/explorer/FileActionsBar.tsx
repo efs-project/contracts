@@ -3,8 +3,9 @@
 import { useState } from "react";
 import { CreateItemModal, CreationType } from "./CreateItemModal";
 import { SortDropdown } from "./SortDropdown";
-import { FunnelIcon } from "@heroicons/react/24/outline";
+import { DocumentPlusIcon, FolderPlusIcon, FunnelIcon, QueueListIcon } from "@heroicons/react/24/outline";
 import type { ClassifiedContainer } from "~~/utils/efs/containers";
+import { notification } from "~~/utils/scaffold-eth";
 
 export type FileActionsBarProps = {
   currentAnchorUID: string | null;
@@ -38,6 +39,7 @@ export type FileActionsBarProps = {
 
   onFolderCreated?: (uid: string, name: string) => void;
   onFileCreated?: (enabledSortUIDs: string[]) => void;
+  onListCreated?: (uid: string) => void;
 };
 
 /**
@@ -68,6 +70,7 @@ export const FileActionsBar = ({
   onToggleFilterDrawer,
   onFolderCreated,
   onFileCreated,
+  onListCreated,
 }: FileActionsBarProps) => {
   const [creationType, setCreationType] = useState<CreationType | null>(null);
 
@@ -102,13 +105,55 @@ export const FileActionsBar = ({
         )}
       </div>
 
-      <div className="flex gap-2 items-center flex-shrink-0">
-        <button className="btn btn-sm btn-ghost" onClick={() => setCreationType("Folder")} disabled={!currentAnchorUID}>
-          New Folder
-        </button>
-        <button className="btn btn-sm btn-primary" onClick={() => setCreationType("File")} disabled={!currentAnchorUID}>
-          Add File
-        </button>
+      {/* ADD dropdown — Folder/File/List require an anchor context */}
+      <div className="dropdown dropdown-end flex-shrink-0">
+        <div tabIndex={0} role="button" className="btn btn-sm btn-primary">
+          + Add ▾
+        </div>
+        <ul
+          tabIndex={0}
+          className="dropdown-content menu menu-sm bg-base-100/90 rounded-box z-50 w-40 p-1 shadow-lg border border-primary"
+        >
+          <li>
+            <button
+              onClick={() => {
+                if (!currentAnchorUID) {
+                  notification.info("Open a folder first to add files or subfolders.");
+                  return;
+                }
+                setCreationType("Folder");
+              }}
+            >
+              <FolderPlusIcon className="w-4 h-4" /> Folder
+            </button>
+          </li>
+          <li>
+            <button
+              onClick={() => {
+                if (!currentAnchorUID) {
+                  notification.info("Open a folder first to add files or subfolders.");
+                  return;
+                }
+                setCreationType("File");
+              }}
+            >
+              <DocumentPlusIcon className="w-4 h-4" /> File
+            </button>
+          </li>
+          <li>
+            <button
+              onClick={() => {
+                if (!currentAnchorUID) {
+                  notification.info("Open a folder first to add a list.");
+                  return;
+                }
+                setCreationType("List");
+              }}
+            >
+              <QueueListIcon className="w-4 h-4" /> List
+            </button>
+          </li>
+        </ul>
       </div>
 
       <CreateItemModal
@@ -128,6 +173,7 @@ export const FileActionsBar = ({
         lensAddresses={lensAddresses}
         onFolderCreated={onFolderCreated}
         onFileCreated={onFileCreated}
+        onListCreated={onListCreated}
       />
     </div>
   );

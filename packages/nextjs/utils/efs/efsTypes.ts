@@ -20,3 +20,8 @@ export const isTopic = (item: { schema?: string }): boolean => {
 export const isFile = (item: { schema?: string }, dataSchemaUID: string): boolean => {
   return item.schema === dataSchemaUID;
 };
+
+export const isList = (item: { schema?: string }, listSchemaUID: string | undefined): boolean => {
+  if (!listSchemaUID || !item.schema) return false;
+  return item.schema.toLowerCase() === listSchemaUID.toLowerCase();
+};

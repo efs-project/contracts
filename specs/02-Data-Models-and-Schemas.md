@@ -1,6 +1,6 @@
 # Data Models and Schemas
 
-EFS uses seven core EAS schemas arranged in three conceptual layers, adhering to the principles outlined in [System Architecture](./01-System-Architecture.md). These schemas interact through `refUID` links and edge attestations (PIN / TAG) to create a hierarchical, permissionless filesystem state natively on Ethereum. For details on how these are tracked, refer to the [Onchain Indexing Strategy](./03-Onchain-Indexing-Strategy.md).
+EFS uses nine core EAS schemas arranged in three conceptual layers, adhering to the principles outlined in [System Architecture](./01-System-Architecture.md). These schemas interact through `refUID` links and edge attestations (PIN / TAG) to create a hierarchical, permissionless filesystem state natively on Ethereum. For details on how these are tracked, refer to the [Onchain Indexing Strategy](./03-Onchain-Indexing-Strategy.md).
 
 **Three-layer architecture:**
 - **Paths** (Anchors) — Schelling points for names and locations
@@ -205,6 +205,67 @@ If you write a PIN where a TAG is correct, the slot can only hold one value (sub
 The `getSortStaleness(sortInfoUID, parentAnchor)` function reports how many kernel items are unprocessed. Any attester may call `processItems` to advance the shared sorted list.
 
 See [Lists and Collections](./06-Lists-and-Collections.md) for the full architecture.
+
+---
+
+## Schema 8: LIST
+
+**Purpose**: Declares a curated collection. Permanent identity — non-revocable like DATA.
+**Field string**: `"bool allowsDuplicates, bool appendOnly, uint8 targetType, bytes32 targetSchema, uint256 maxEntries"`
+**Resolver**: `ListResolver` (validates shape; stateless)
+**Revocable**: `false`
+
+**Fields**:
+- `allowsDuplicates` (bool) — if false, each identity key may appear at most once per attester's lens
+- `appendOnly` (bool) — if true, entries may not be revoked (enforced at write time by `ListEntryResolver`)
+- `targetType` (uint8) — `0` = ANY (opaque bytes32 key), `1` = ADDR (address in recipient), `2` = SCHEMA (attestation UID with schema check)
+- `targetSchema` (bytes32) — required for SCHEMA mode (specifies which EAS schema the target attestation must belong to); must be `bytes32(0)` for ANY/ADDR modes
+- `maxEntries` (uint256) — per-attester cap; `0` = unlimited. Must be nonzero when `appendOnly && allowsDuplicates` to bound storage. Widened from `uint32` (ADR-0047) so planet-scale lists (continental/global populations > 2³²) can declare a real cap; free under ABI 32-byte-word padding
+
+**Identity key by mode**:
+- ANY: `target` field (must be nonzero)
+- ADDR: `bytes32(uint256(uint160(recipient)))` — `address(0)` maps to `bytes32(0)`, which is valid
+- SCHEMA: `target` field (the attestation UID; existence + schema checked at write time)
+
+**Constraints enforced by `ListResolver`**:
+- Payload must be exactly 160 bytes (5 × 32)
+- `revocable` must be false; `expirationTime` must be 0; `refUID` must be zero; `recipient` must be zero
+- `targetType <= 2`; SCHEMA mode requires nonzero `targetSchema`; non-SCHEMA modes require zero `targetSchema`
+- `appendOnly && allowsDuplicates` requires `maxEntries != 0`
+
+**Note**: A LIST attestation's UID is the permanent list identity — pass it as `listUID` in LIST_ENTRY attestations and in `ListReader` calls.
+
+---
+
+## Schema 9: LIST_ENTRY
+
+**Purpose**: One entry in a curated LIST — pure membership identity (ADR-0046). Revocable (unless the list is `appendOnly`).
+**Field string**: `"bytes32 listUID, bytes32 target"`
+**Resolver**: `ListEntryResolver` (write-time enforcement + wide EntryRecord[] storage)
+**Revocable**: `true`
+
+**Fields**:
+- `listUID` (bytes32) — UID of the LIST attestation this entry belongs to (must be nonzero)
+- `target` (bytes32) — encoding depends on list's `targetType` (see LIST schema above)
+
+**Order and labels** (ADR-0046): a LIST_ENTRY carries no inline ordering or metadata. Ordering and free-text labels are PIN-bound (cardinality-1) PROPERTYs placed on the **entry UID** (`"weight"` = decimal-string rank, `"name"` = arbitrary-length label), via the standard `Anchor<PROPERTY> + PIN + PROPERTY` pattern. Because the mutable value lives in a PROPERTY rather than the entry, reordering re-PINs the order PROPERTY in O(1) **without churning the entry UID**, so attached labels survive. Sorting is client-side, reading the per-entry order PROPERTY (lens-scoped). This makes LIST_ENTRY symmetric with DATA (pure identity; `contentType`/`name` hang off it as PROPERTYs).
+
+**Storage**: `ListEntryResolver` maintains per-`(listUID, attester)` `EntryRecord[]` arrays with inline `identityKey` (wide storage, ADR-0041 pattern). Swap-and-pop gives O(1) removal. A separate `_entryCount[listUID][identityKey][attester]` counter enables O(1) duplicate detection and the `countOf` membership test.
+
+**LIST declaration caching**: `ListEntryResolver` caches the decoded LIST declaration after first touch (stored in `_decl[listUID]`). LIST attestations are non-revocable, so the cache is permanently valid — no re-fetching needed.
+
+**Constraints enforced by `ListEntryResolver`**:
+- Payload exactly 64 bytes (2 × 32); `revocable` must be true; `expirationTime` must be 0; `refUID` must be zero
+- `listUID` must reference a real LIST attestation (schema check)
+- Per-mode encoding checks (see LIST identity key table above)
+- SCHEMA mode: target attestation must exist and must have `schema == list.targetSchema`
+- No-duplicates: rejected if `_entryCount != 0` and `!allowsDuplicates`
+- Cap: rejected if `_entries[list][attester].length >= maxEntries` and `maxEntries != 0`
+- Revocation blocked if `list.appendOnly`; silent no-op if entry is already removed (`_entryPosPlusOne == 0`)
+
+**ListReader** (view contract, stateless, redeployable): `getMode(listUID)`, `length(listUID, attester)`, `entries(listUID, attester, start, len)`, `countOf(listUID, attester, identityKey)`, plus typed accessors `targetAsAddress`, `targetAsUID`, `targetAsMemberKey` and pure helpers `identityKeyForAddress`, `identityKeyForUID`, `identityKeyForMemberKey`.
+
+See [ADR-0044](../docs/adr/0044-list-and-list-entry-schemas.md) and [Lists and Collections](./06-Lists-and-Collections.md) for full design rationale.
 
 ## Schema Hierarchy
 To represent a standard filesystem interaction where a file has a name within a folder:
