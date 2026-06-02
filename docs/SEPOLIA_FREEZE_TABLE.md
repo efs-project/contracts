@@ -4,22 +4,25 @@
 >
 > `UID = keccak256(abi.encodePacked(fieldString, resolverAddress, revocable))`. The resolver address is the **proxy** (never the implementation). Addresses + UIDs are filled after the atomic CREATE3 deploy+init (ADR-0048 step 2) and the verify gate (step 3); this table is signed at step 4, before register-last (step 5).
 
-## The 8 schemas to freeze — all validated solid-as-is
+## The 9 schemas to freeze
 
-A first-principles + adversarial durability review (28 candidate cracks, all refuted) and a write-time-practicality pass found **zero reasons to change any field string, type, or revocable flag.**
+A first-principles + adversarial durability review (28 candidate cracks, all refuted) and a write-time-practicality pass validated 8 schemas; DATA is reshaped to pure identity (ADR-0049) and REDIRECT is added as a first-class primitive (ADR-0050).
 
 | # | Schema | Field string (exact) | revocable | Resolver (proxy) | Schema UID |
 |---|---|---|---|---|---|
 | 1 | ANCHOR | `string name, bytes32 schemaUID` | `false` | EFSIndexer proxy `0x…TBD` | `0x…TBD` |
 | 2 | PROPERTY | `string value` | `false` | EFSIndexer proxy `0x…TBD` | `0x…TBD` |
-| 3 | DATA | `bytes32 contentHash, uint64 size` | `false` | EFSIndexer proxy `0x…TBD` | `0x…TBD` |
+| 3 | DATA | `` (empty — pure identity) | `false` | EFSIndexer proxy `0x…TBD` | `0x…TBD` |
 | 4 | PIN | `bytes32 definition` | `true` | EdgeResolver proxy `0x…TBD` | `0x…TBD` |
 | 5 | TAG | `bytes32 definition, int256 weight` | `true` | EdgeResolver proxy `0x…TBD` | `0x…TBD` |
 | 6 | MIRROR | `bytes32 transportDefinition, string uri` | `true` | MirrorResolver proxy `0x…TBD` | `0x…TBD` |
 | 7 | LIST | `bool allowsDuplicates, bool appendOnly, uint8 targetType, bytes32 targetSchema, uint256 maxEntries` | `false` | ListResolver proxy `0x…TBD` | `0x…TBD` |
 | 8 | LIST_ENTRY | `bytes32 listUID, bytes32 target` | `true` | ListEntryResolver proxy `0x…TBD` | `0x…TBD` |
+| 9 | REDIRECT | `bytes32 target, uint8 kind` | `true` | AliasResolver proxy `0x…TBD` | `0x…TBD` |
 
-**DATA note (ADR-0049):** field string is unchanged; the design change is *interpretation*, not shape. `contentHash == bytes32(0)` is a first-class value = "file identity with no inline byte-hash" (lets you pin a 10 GB IPFS file with zero download). The durable hash/integrity story lives in self-describing multihash/CID PROPERTYs, not in this field. So DATA freezes as-is.
+**DATA (ADR-0049):** empty schema = pure identity. `contentHash` + `size` move to trust-scoped reserved-key PROPERTYs (lets you pin a 10 GB IPFS file with zero download; multiple lens-scoped hash claims). This is a real Tier-1 reshape (new DATA UID, removes `dataByContentKey`) — safe now because nothing is frozen on Sepolia yet.
+
+**REDIRECT (ADR-0050):** canonical/`sameAs`/`supersededBy`/`symlink` redirect. `refUID` = source; `target` = destination. Only `uint8 kind` is frozen — the kind *taxonomy* is upgradeable resolver logic + convention. Write-time guards in `AliasResolver`; multi-hop cycle/chain resolution is a Durable read-time spec (cycle → lowest-UID-in-SCC), pinned with conformance vectors before durable seeding. Hardlinks remain native (one DATA, many PINs).
 
 ## Explicitly NOT frozen now (addable later, no orphaning)
 

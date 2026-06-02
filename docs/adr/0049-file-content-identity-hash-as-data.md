@@ -1,74 +1,51 @@
-# ADR-0049: File content identity — hash is data, not identity
+# ADR-0049: DATA is pure identity — hash and size are data, not identity
 
-**Status:** Proposed
+**Status:** Proposed (r2 — DATA reshaped to empty after design review)
 **Date:** 2026-05-31
 **Deciders:** James (schema freeze is human-gated)
 **Permanence-tier:** Etched (defines the frozen DATA shape)
-**Related:** ADR-0048 (proxy-ready resolvers + freeze set), ADR-0032 (EAS as foundation), specs/02 §3 (DATA), §2 (PROPERTY), §3a (MIRROR)
+**Supersedes the framing of:** ADR-0002/0004/0005 (DATA `contentHash`/`size` fields + `dataByContentKey` global canonical)
+**Related:** ADR-0048 (freeze set + proxy/burn), ADR-0050 (redirect/canonical/symlink), specs/02 §3
 
 ## Context
 
-A file's **identity** in EFS is the DATA attestation's EAS UID. MIRRORs (`refUID = DATA`), folder placements (PIN `refUID = DATA`), and metadata (PROPERTY `refUID = DATA`) all reference that **UID** — never the content hash. So the identity/placement/retrieval layer is independent of how (or whether) we hash the bytes.
+A file's **identity** in EFS is the DATA attestation's EAS UID. MIRRORs, folder placements (PIN), and metadata (PROPERTY) all reference that **UID** — never the content hash. Two uploads of the same bytes get two different DATA UIDs: EFS is **not** content-addressed at the identity layer; content-addressing is a secondary index.
 
-DATA today is `bytes32 contentHash, uint64 size` where `contentHash = keccak256` of the file bytes. That field does two jobs: **dedup** (`EFSIndexer.dataByContentKey[contentHash]` = first DATA per hash) and **integrity** (a downloader can re-hash and compare).
-
-**The problem (write-time impossibility).** Forcing `contentHash = keccak256-of-bytes` makes it impossible to create a file identity for large remote content-addressed files without downloading them: pinning a 10 GB file already on IPFS would require the browser to download all 10 GB just to compute keccak256. This breaks central use cases (firmware mirrors, podcast archives, CAD libraries — indexing the existing content-addressed web). Meanwhile that content **already has an address** (its IPFS CID, a sha2-256 multihash) the pinner knows for free.
-
-**Two facts that decide the design:**
-1. `contentHash` is **client-supplied and unverifiable on-chain** (the bytes aren't on-chain). So keccak256's only real advantage — being the cheap EVM-native hash — *does not apply to this field*. It is just stored bytes the client computes off-chain.
-2. EAS physics: **changing** the frozen DATA field orphans all DATA; **adding** schemas/PROPERTYs later orphans nothing; **resolver logic is upgradeable** (then burned to immutable), but the **fields it can read are frozen** at registration.
+A content hash is **client-supplied and unverifiable on-chain** (the bytes are never on-chain), so any hash in DATA is an unverifiable *claim* — and "never trust the client" means a claim must not be welded into identity as if the chain had authenticated it. Worse, requiring `contentHash = keccak256(bytes)` makes it **impossible** to create a file identity for large remote content (pinning a 10 GB IPFS file would require downloading all 10 GB to hash it). And baking a `0` into a permanent field when the hash is unknown is dead weight frozen forever.
 
 ## Decision
 
-**Keep `DATA = "bytes32 contentHash, uint64 size"`, revocable `false`, and freeze it AS-IS. No field change. No migration. No orphaning.** The owner's steer — "the hash is *data* attached to the file, not baked into identity" — is realized **without touching the frozen schema**, by reinterpretation + additive layers:
+**DATA becomes an empty schema (`""`), revocable `false` — pure identity.** A DATA attestation asserts "a file identity exists"; everything *about* the file hangs off its UID in the trust-scoped layers.
 
-1. **`contentHash == bytes32(0)` is a first-class, valid value** meaning "this file identity carries no inline byte-hash." A DATA minted with `contentHash = 0` is fully placeable, retrievable, listable — never a degraded/error state. This is the normal path for pinning remote content. (`size` may be `0` = unknown, or the cumulative size IPFS/Arweave report without a download.)
-2. **The durable, agile, trustworthy hash lives in self-describing PROPERTYs** bound to the DATA UID via the existing key-anchor + cardinality-1 PIN pattern (exactly like `contentType`/`name`). Reserved keys, values are **multibase-encoded multihash / CID strings**, lens-scoped per attester:
-   - `hash:keccak256`, `hash:sha2-256`, future `hash:blake3`, … — flat-bytes integrity, self-describing algorithm.
-   - `cid` — an IPFS/IPLD CID, explicitly a **DAG locator**, not a flat-bytes digest.
-   This gives algorithm agility, multiple coexisting claims per file, and trust-scoping — all in the additive/upgradeable layer, none of it frozen into identity.
-3. **`dataByContentKey[contentHash]` stays an advisory, native-keccak-only fast-path index — it never gates placement or retrieval.** A new multibase-multihash **advisory** dedup index lives in upgradeable-then-frozen resolver logic on the **PIN/EdgeResolver hook** (NOT `PropertyResolver` — that hook is standalone/`pure` and cannot read the parent DATA at attest time). Advisory forever: a hash front-runner can capture a pointer but can never block an honest uploader.
+- **`contentHash` and `size` move out of DATA** into reserved-key PROPERTYs (`contentHash`, `size`), bound to the DATA UID via the existing key-anchor + cardinality-1 PIN pattern, **lens-scoped per attester** — a reader believes the hash/size from an attester they trust, and multiple coexisting claims (keccak, sha2-256, CID) are allowed. Hash values are self-describing (multibase multihash / CID), per the conventions spec.
+- **This is a real Tier-1 schema change**, not a reinterpretation: emptying DATA mints a new DATA schema UID and removes the old on-chain `dataByContentKey` global-canonical index. It is safe to do **now** only because nothing is frozen on Sepolia yet (the localhost data is throwaway). It must land as this coordinated ADR, before redirect work (ADR-0050) depends on the settled shape.
+- **Verified feasible:** EAS `SchemaRegistry` does no field-string validation (empty schema registers), and `_getUID` mixes time+bump so identical content still yields distinct DATA UIDs.
 
 ### Create flows
+- **Native upload:** mint empty `DATA`; attach `contentHash` (keccak256) + `size` PROPERTYs you computed locally. (Optionally a `sha2-256`/`cid` claim for IPFS-world dedup.)
+- **Pin a 10 GB IPFS file (no bytes held):** mint empty `DATA`; add `MIRROR(ipfs://CID)`; attach a `cid` PROPERTY (and the sha2-256 digest already inside the CID) — **zero download.**
 
-- **Native upload (you hold the bytes):** mint `DATA(contentHash = keccak256(bytes), size)`. Optionally also attach a `hash:sha2-256` PROPERTY for IPFS-world dedup. Unchanged from today.
-- **Pin a 10 GB IPFS file (you don't hold the bytes):** mint `DATA(contentHash = 0, size = <cumulative size from CID, no download>)`; add a `MIRROR(ipfs://CID)`; attach a `cid` PROPERTY (the CID, locator-grade). **Zero bytes downloaded.** Anyone else pinning the same CID attaches the same `cid`/`hash:sha2-256` claim, so the advisory index can group them.
+### Dedup
+- **Prevention** (don't create the duplicate) is client-side: before upload, query the property index for a trusted `contentHash` claim and offer "reuse existing DATA?" (then hardlink — a new PIN to the existing DATA — instead of a new DATA). Inherently best-effort; the chain can't verify a hash.
+- **Resolution** (a duplicate redirects to canonical) is the REDIRECT primitive — see ADR-0050.
+
+### Reverse lookup ("find the DATA for hash 0x…")
+A general **on-chain property index** — `(scope, key, value) → attestations`, i.e. "name lookup, but for property values." This is resolver *logic* (lives in the PIN/`EdgeResolver` hook that sees a property bound to its DATA), so it is upgradeable across the dev window and frozen at burn — it does **not** block the schema freeze and is tracked as its own design (the index need not be perfect at genesis). An off-chain indexer is the always-available fallback. Cost: taxes the property-binding upload path; "per hierarchy level" scoping is a design parameter (the owner wants scoped lookup, e.g. "any DATA under /papers/ whose `contentHash` = 0x…").
 
 ### Frozen vs not
-
 | Layer | Status |
 |---|---|
-| DATA field string `bytes32 contentHash, uint64 size`, revocable=false | **Frozen** (unchanged) |
-| `contentHash == 0` = "no inline hash" semantics | Convention (documented invariant) |
-| Hash/CID PROPERTY reserved keys + multihash encoding | Convention + reference test vectors |
-| Advisory dedup index (keccak fast-path + multihash) | Upgradeable resolver logic → frozen at burn |
-
-## Why not the alternatives
-
-The panel stress-tested four models. All three judges converged on **this** outcome regardless of which they named "winner":
-- **In-field `bytes32 + uint8 hashAlg`** — disqualified: a fixed 32-byte slot forecloses non-256-bit and future algorithms (sha2-512, blake3-512, post-quantum), so the dominant remote corpus falls back to `0` anyway. Freezes agility out.
-- **In-field full multihash `bytes contentId`** — its self-describing format is right, but putting it *in identity* freezes a variable-length field and gas cost forever, when it belongs in the additive PROPERTY layer.
-- **Keep field, make `contentHash` optional** — this is the chosen shape; the judges' synthesis is "this field shape + the hash-as-PROPERTY architecture," i.e. M4's zero-migration field with M1's integrity story.
-
-## Residual risks (conventions to settle before launch — none require a schema change)
-
-1. **Cross-address dedup is unsolved on-chain** (same bytes via keccak vs IPFS CID vs Arweave txid land in different keys). **Accepted:** on-chain dedup degrades *discovery* only, never correctness. Convergence is a client/lens concern (group by matching claims / MIRROR.uri).
-2. **Integrity = unenforced convention.** The resolver can't validate a client-supplied digest. Freeze a **canonical preimage spec** ("raw flat file bytes, no DAG/transport framing") + multibase/multicodec encoding + **reference test vectors**, or 100 years of client drift breaks bit-identical verification. This is the dominant long-horizon integrity risk.
-3. **Right-to-be-forgotten hole.** A hash PROPERTY is non-revocable and permissionless: anyone can attest a permanent fingerprint of sensitive content (medical #10, oral history #6) against a DATA UID without consent, unremovable. No clean on-chain defense. Default native-upload SDK to `contentHash=0` for sensitive contexts; consider a salted/HMAC commitment convention for commitment-without-fingerprint.
-4. **CID ≠ flat-bytes integrity.** An IPFS CID is a UnixFS-DAG digest, not a hash of the flat bytes. Use distinct reserved keys (`cid` = locator, `hash:*` = flat-bytes) so a verifier never false-alarms re-hashing flat bytes against a DAG digest.
-5. **Authenticity ≠ integrity (#7 firmware).** A hash proves bytes-equal-X, not signed-by-vendor. Detached signatures are a separate convention PROPERTY (declared algorithm/key-encoding), not in scope of this ADR.
-6. **Advisory pointer front-run.** `dataByContentKey` first-writer-wins is harmless only while strictly advisory; no client may ever gate placement/retrieval on it.
+| DATA field string `""`, revocable=false | **Frozen** (this ADR) |
+| `contentHash` / `size` / `cid` reserved-key PROPERTYs + canonical-preimage + multihash encoding | Convention + reference test vectors (Durable) |
+| Property index (find-by-value), dedup-prevention, display merge | Upgradeable resolver logic + client; frozen at burn |
 
 ## Consequences
-
-- **Easier:** pinning the existing content-addressed web becomes a zero-download operation; hash agility, multiple hashes, and trust-scoped integrity all become possible and evolvable; the frozen surface shrinks to the minimum; **DATA can be frozen now, exactly as it stands.**
-- **Harder:** integrity/dedup correctness now rests on documented client conventions + reference vectors rather than on-chain enforcement; clients must implement the multihash/CID convention and lens-scoped hash resolution.
-- **Revisit:** a salted-commitment convention for sensitive content; a signature-PROPERTY convention for authenticity; whether to add an upgradeable resolver index over normalized MIRROR.uri for cross-address grouping before the burn.
+- **Easier:** zero-download remote pins; hash agility + multiple trust-scoped hashes; minimal honest identity; the freeze no longer launders an unverifiable claim as identity.
+- **Harder:** every file now needs ≥1 property attestation to carry its hash/size (more attestations per file); integrity/dedup correctness rests on documented conventions + the property index rather than an intrinsic field; the `dataByContentKey` first-writer canonical is gone (replaced by lens-scoped claims + REDIRECT).
+- **Revisit:** the on-chain property-index design; a signature-PROPERTY convention for authenticity (#7 firmware); the canonical-preimage spec + vectors.
 
 ## Action items
-
-1. [ ] Freeze DATA as-is; record the `contentHash == 0` first-class semantics in specs/02 §3.
-2. [ ] Spec the reserved hash/CID PROPERTY keys, the canonical preimage definition, and multibase/multicodec encoding, with reference test vectors.
-3. [ ] Implement the advisory multihash dedup index on the PIN/EdgeResolver hook (upgradeable logic; advisory-only; validated before burn).
-4. [ ] SDK: default sensitive-context uploads to `contentHash = 0`; helpers to extract sha2-256 from a CID and attach hash/CID PROPERTYs without downloading.
-5. [ ] Document the cross-address-dedup, right-to-be-forgotten, and CID-vs-flatbytes caveats in specs/02.
+1. [ ] Register DATA as `""`, revocable=false; update specs/02 §3 and `overview.md` (the "nine schemas" table + upload flow steps 2/8 that reference `contentHash`/`dataByContentKey`).
+2. [ ] Spec reserved-key PROPERTYs (`contentHash`, `size`, `cid`), canonical preimage, multihash/multibase encoding + reference vectors.
+3. [ ] SDK: native-upload helper attaches hash/size PROPERTYs; remote-pin helper extracts sha2-256 from a CID with no download.
+4. [ ] Design the on-chain property index (separate ADR; resolver logic, frozen at burn).
