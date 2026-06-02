@@ -14,11 +14,12 @@ The design panel split between a PROPERTY convention and a first-class schema. *
 
 ## Decision
 
-**Freeze a 9th schema, REDIRECT** = `"bytes32 target, uint8 kind"`, **revocable `true`**, resolver = `AliasResolver` (behind a proxy per ADR-0048).
+**Freeze a 9th schema, REDIRECT** = `"bytes32 target, uint16 kind"`, **revocable `true`**, resolver = `AliasResolver` (behind a proxy per ADR-0048).
 
 - `refUID` = the **source** (the duplicate DATA for `sameAs`/`supersededBy`; the source path Anchor for `symlink`).
 - `target` = the destination DATA or Anchor UID.
-- `kind` = a redirect class. **Only `uint8 kind` is frozen; the taxonomy is resolver logic + client convention (upgradeable/versioned), not part of the UID** — so it can evolve, with 250+ spare values. Initial taxonomy: `0=sameAs` (strong, followed), `1=supersededBy` (version replacement, followed), `2=symlink` (path→target, followed one hop), `3=relatedVersion` (weak — discovery hint, **never** auto-followed; the SKOS guard against RDF's "sameAs explosion").
+- `kind` = a redirect class. **Only `uint16 kind` is frozen; the taxonomy is resolver logic + client convention (upgradeable/versioned), not part of the UID** — so it can evolve. Initial taxonomy: `0=sameAs` (strong, followed), `1=supersededBy` (version replacement, followed), `2=symlink` (path→target, followed one hop), `3=relatedVersion` (weak — discovery hint, **never** auto-followed; the SKOS guard against RDF's "sameAs explosion").
+  - **Width = `uint16`, deliberately.** `kind` is a discriminator (an open-ended *relationship vocabulary*), not a counter — so ADR-0047's sizing rule says "narrow." But widening is **free**: `uint8` and `uint16` both pad to one 32-byte ABI word, so the payload and gas are identical; only the frozen field string differs. Since the field is irreversible and the safe choice costs nothing, `uint16` (65,536 kinds) removes any conceivable ceiling while still reading honestly as a bounded discriminator (vs `uint256`, which would misrepresent it as a counter). Contrast `LIST.targetType` (`uint8`): that is a *closed* set of three resolver-backed decode modes, not an open vocabulary — narrow is correct there.
 
 **AliasResolver write-time guards** (correct before burn): `target != 0`; `target != refUID` (no trivial self-loop); per-`kind` type checks (sameAs/supersededBy require source+target both DATA; symlink requires source Anchor, target Anchor-or-DATA; reject targets of the wrong attestation kind). Optional advisory on-chain reverse fan-in (`_aliasesByTarget`) addable as upgradeable logic; default to the off-chain indexer for "what points at me?".
 
@@ -41,7 +42,7 @@ The resolver enforces **write-time** correctness (direct self-loops, typing). **
 - **Risks (logged):** *confused-deputy* — a trusted-but-careless/compromised lens member's redirect reroutes file identity (larger blast radius than a normal PIN), and the "reuse this existing file?" prompt lends UI authority to an unverifiable hash; mitigation is the client rule **"never silently teleport — show the asserter + one-click ignore,"** unenforceable on-chain, inherent to web-of-trust. *Indexer eclipse-by-omission* — treat the off-chain indexer as an untrusted cache. *Pre-convention tail* — duplicates minted before the resolution spec lands carry no redirect; settle the spec before durable seeding.
 
 ## Action items
-1. [ ] Freeze REDIRECT `"bytes32 target, uint8 kind"`, revocable=true; build `AliasResolver` (proxy) with write-time guards.
+1. [ ] Freeze REDIRECT `"bytes32 target, uint16 kind"`, revocable=true; build `AliasResolver` (proxy) with write-time guards.
 2. [ ] Pin the read-time resolution spec + conformance vectors (depth, cycle=lowest-UID-in-SCC, kind-following, lens precedence) before durable seeding.
 3. [ ] Client UX invariant: never silently teleport; show redirect provenance + one-click ignore.
 4. [ ] (Later, upgradeable) advisory on-chain reverse fan-in if a contract consumer needs it; else off-chain indexer.

@@ -18,11 +18,11 @@ A first-principles + adversarial durability review (28 candidate cracks, all ref
 | 6 | MIRROR | `bytes32 transportDefinition, string uri` | `true` | MirrorResolver proxy `0x…TBD` | `0x…TBD` |
 | 7 | LIST | `bool allowsDuplicates, bool appendOnly, uint8 targetType, bytes32 targetSchema, uint256 maxEntries` | `false` | ListResolver proxy `0x…TBD` | `0x…TBD` |
 | 8 | LIST_ENTRY | `bytes32 listUID, bytes32 target` | `true` | ListEntryResolver proxy `0x…TBD` | `0x…TBD` |
-| 9 | REDIRECT | `bytes32 target, uint8 kind` | `true` | AliasResolver proxy `0x…TBD` | `0x…TBD` |
+| 9 | REDIRECT | `bytes32 target, uint16 kind` | `true` | AliasResolver proxy `0x…TBD` | `0x…TBD` |
 
 **DATA (ADR-0049):** empty schema = pure identity. `contentHash` + `size` move to trust-scoped reserved-key PROPERTYs (lets you pin a 10 GB IPFS file with zero download; multiple lens-scoped hash claims). This is a real Tier-1 reshape (new DATA UID, removes `dataByContentKey`) — safe now because nothing is frozen on Sepolia yet.
 
-**REDIRECT (ADR-0050):** canonical/`sameAs`/`supersededBy`/`symlink` redirect. `refUID` = source; `target` = destination. Only `uint8 kind` is frozen — the kind *taxonomy* is upgradeable resolver logic + convention. Write-time guards in `AliasResolver`; multi-hop cycle/chain resolution is a Durable read-time spec (cycle → lowest-UID-in-SCC), pinned with conformance vectors before durable seeding. Hardlinks remain native (one DATA, many PINs).
+**REDIRECT (ADR-0050):** canonical/`sameAs`/`supersededBy`/`symlink` redirect. `refUID` = source; `target` = destination. Only `uint16 kind` is frozen — the kind *taxonomy* is upgradeable resolver logic + convention. (`uint16` not `uint8`: widening is free under ABI padding, and `kind` is an open relationship vocabulary, so the irreversible field takes zero-cost headroom; see ADR-0050.) Write-time guards in `AliasResolver`; multi-hop cycle/chain resolution is a Durable read-time spec (cycle → lowest-UID-in-SCC), pinned with conformance vectors before durable seeding. Hardlinks remain native (one DATA, many PINs).
 
 ## Explicitly NOT frozen now (addable later, no orphaning)
 
