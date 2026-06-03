@@ -1,211 +1,148 @@
-# EFS Schema-Freeze Build — Implementation Plan
+# EFS Schema-Freeze Build — Implementation Plan (r2)
 
-> **For agentic workers:** REQUIRED SUB-SKILL: use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this task-by-task. Steps use checkbox (`- [ ]`) syntax. **Permanence tier: Etched** (schema UIDs + resolver addresses) — write the ADR/spec before the code, run the 50-year test, prefer invariant tests.
+> **For agentic workers:** REQUIRED SUB-SKILL: use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans`. Steps use checkbox (`- [ ]`) syntax. **Permanence tier: Etched** — ADR/spec before code, 50-year test, invariant tests.
+>
+> **r2 (2026-06-02):** folds in the 7-lens critique (`2026-06-02-schema-freeze-plan-critique.md`, 66 verified findings). Key changes: **single PR with staged commits** (James's call — conscious waiver of the WIP-limit for a greenfield freeze, since the on-chain registration is one atomic end-ceremony regardless and the changes concentrate in the same files); on-chain ListEntry self-UID verification; explicit empty-DATA decode/event/deploy fixes; DATA-ripple ownership + cross-repo flag; CREATE3 spike-first; storage-layout + upgrade-with-state tests scheduled; `getEAS` guard; SORT_INFO wiring reconciliation; rollback procedure.
 
-**Goal:** Ship the frozen 9-schema EFS set to Sepolia behind upgradeable (later burnable) proxy resolvers, proven by an end-to-end round-trip and a human-signed frozen-UID table.
+**Goal:** Ship the frozen 9-schema EFS set to Sepolia behind upgradeable (later burnable) CREATE3 proxy resolvers, proven by an end-to-end round-trip and a human-signed frozen-UID table.
 
-**Architecture:** Refactor the 5 existing resolvers (+ 1 new `AliasResolver`) onto a shared `EFSUpgradeableResolver` base (EAS `SchemaResolver` + OZ `Initializable`, ERC-7201 storage, `_disableInitializers()` in impl). Deploy each behind a CREATE3-deterministic Transparent proxy, **initialize atomically**, **verify**, then **register schemas last** with `resolver = proxy`. DATA becomes an empty (pure-identity) schema; REDIRECT (`bytes32 target, uint16 kind`) is added. Logic stays upgradeable through dev; the upgrade key is burned before mainnet.
+**Architecture:** Refactor the 5 existing resolvers (+ new `AliasResolver`) onto a shared `EFSUpgradeableResolver` base (EAS `SchemaResolver` immutable `_eas` + OZ `Initializable` + `_disableInitializers()` in impl + ERC-7201 storage). Deploy each behind a CREATE3-deterministic Transparent proxy, **initialize atomically**, **verify on-chain**, **register schemas last**. DATA → empty (pure-identity); REDIRECT (`bytes32 target, uint16 kind`) added. Single PR; logic upgradeable through dev; key burned before mainnet.
 
-**Tech stack:** Solidity 0.8.26 (optimizer 200, viaIR), Hardhat + hardhat-deploy, EAS `eas-contracts`, OpenZeppelin `@openzeppelin/contracts` ~5.0.2 + **new:** `@openzeppelin/contracts-upgradeable` + `@openzeppelin/hardhat-upgrades`, **CreateX** factory (`0xba5Ed099633D3B313e4D5F7bdc1305d3c28ba5Ed`) for CREATE3.
+**Tech stack:** Solidity 0.8.26 (optimizer 200, viaIR), Hardhat + hardhat-deploy, EAS `eas-contracts`, OZ `@openzeppelin/contracts` ~5.0.2 + **new:** `@openzeppelin/contracts-upgradeable`, `@openzeppelin/hardhat-upgrades`; **CreateX** factory for CREATE3.
 
-**Governing decisions:** ADR-0048 (freeze set + proxy/burn), ADR-0049 (empty DATA), ADR-0050 (REDIRECT), `docs/SEPOLIA_FREEZE_TABLE.md`.
+**Governing:** ADR-0048 (freeze+proxy/burn), ADR-0049 (empty DATA), ADR-0050 (REDIRECT), `docs/SEPOLIA_FREEZE_TABLE.md`, critique synthesis.
+
+**Delivery:** ONE PR (`schema-freeze`), commits ordered DATA-reshape → proxy-refactor → REDIRECT, each phase's tests green before the next. On-chain registration is a single end-ceremony (Phase 7).
 
 ---
 
-## Frozen set (target — 9 schemas)
+## Frozen set (9) — target
 
-| # | Schema | Field string (exact, frozen) | revocable | Resolver |
+| # | Schema | Field string (frozen) | revocable | Resolver |
 |---|---|---|---|---|
-| 1 | ANCHOR | `string name, bytes32 schemaUID` | false | EFSIndexer |
-| 2 | PROPERTY | `string value` | false | EFSIndexer |
-| 3 | DATA | `` (empty) | false | EFSIndexer |
-| 4 | PIN | `bytes32 definition` | true | EdgeResolver |
-| 5 | TAG | `bytes32 definition, int256 weight` | true | EdgeResolver |
-| 6 | MIRROR | `bytes32 transportDefinition, string uri` | true | MirrorResolver |
-| 7 | LIST | `bool allowsDuplicates, bool appendOnly, uint8 targetType, bytes32 targetSchema, uint256 maxEntries` | false | ListResolver |
-| 8 | LIST_ENTRY | `bytes32 listUID, bytes32 target` | true | ListEntryResolver |
-| 9 | REDIRECT | `bytes32 target, uint16 kind` | true | AliasResolver |
+| 1 ANCHOR | `string name, bytes32 schemaUID` | false | EFSIndexer |
+| 2 PROPERTY | `string value` | false | EFSIndexer |
+| 3 DATA | `` (empty) | false | EFSIndexer |
+| 4 PIN | `bytes32 definition` | true | EdgeResolver |
+| 5 TAG | `bytes32 definition, int256 weight` | true | EdgeResolver |
+| 6 MIRROR | `bytes32 transportDefinition, string uri` | true | MirrorResolver |
+| 7 LIST | `bool allowsDuplicates, bool appendOnly, uint8 targetType, bytes32 targetSchema, uint256 maxEntries` | false | ListResolver |
+| 8 LIST_ENTRY | `bytes32 listUID, bytes32 target` | true | ListEntryResolver |
+| 9 REDIRECT | `bytes32 target, uint16 kind` | true | AliasResolver |
 
-**Dropped:** BLOB, NAMING (remove from `01_indexer.ts`; don't deploy `SchemaNameIndex`). **Deferred:** SORT_INFO + `EFSSortOverlay` (keep the contracts, skip registration/wiring for the freeze).
+**Drop:** BLOB, NAMING (remove from `01_indexer.ts`; don't deploy `SchemaNameIndex`). **Defer:** SORT_INFO + `EFSSortOverlay` — and **also remove `_sortInfoSchemaUID` from `EFSIndexer.wireContracts` / `04_sortoverlay` registration** so no half-wired SORT_INFO slot is left (critique theme 7).
 
 ---
 
-## Prerequisites (Tier-2 — new dependencies; flag in `docs/QUESTIONS.md`)
+## Phase 0 — prerequisites & spikes (do FIRST)
 
-- [ ] **Task 0.1 — add upgradeable deps.** `cd packages/hardhat && yarn add -D @openzeppelin/contracts-upgradeable@^5.0.2 @openzeppelin/hardhat-upgrades`. Register the plugin in `hardhat.config.ts` (`import "@openzeppelin/hardhat-upgrades"`). Add an entry to `docs/QUESTIONS.md` recording the new deps (Tier-2). Commit: `chore(hardhat): add OZ upgradeable + hardhat-upgrades (Tier-2 deps for proxy resolvers)`.
-- [ ] **Task 0.2 — vendor a CreateX interface.** CreateX is a pre-deployed factory; we only need its interface + the canonical address. Create `packages/hardhat/contracts/external/ICreateX.sol` with the `deployCreate3` and `deployCreate3AndInit` signatures (copy from CreateX docs). Record the factory address + per-chain availability check in `docs/decisions.md`. Note: **zkSync-class chains are excluded** from CREATE3 address parity (different derivation).
+- [ ] **0.1 deps (Tier-2, log in QUESTIONS.md):** `yarn add -D @openzeppelin/contracts-upgradeable@^5.0.2 @openzeppelin/hardhat-upgrades`; `import "@openzeppelin/hardhat-upgrades"` in `hardhat.config.ts`. Confirm `upgrades` namespace + `validateUpgrade` available. Commit.
+- [ ] **0.2 CreateX spike (BLOCKING — critique theme 5):** Verify the CreateX factory is deployed on **Sepolia** at its canonical address (`0xba5Ed099633D3B313e4D5F7bdc1305d3c28ba5Ed`) and on the pinned fork; fetch the **exact** `deployCreate3` / `deployCreate3AndInit` signatures from CreateX source/ABI and confirm `deployCreate3AndInit` lets us pass the proxy constructor calldata for atomic deploy+init. Record a per-chain availability matrix in `docs/decisions.md`. **If CreateX is absent on a target chain, STOP and escalate** (fallback: deploy our own CreateX or use plain CREATE2 with frozen init-code). Decide TS-only (ethers calls CreateX) vs a Solidity helper; vendor `contracts/external/ICreateX.sol` only if Solidity-side calls are needed.
+- [ ] **0.3 salt scheme:** define per-resolver salts as committed constants in `deploy/lib/create3.ts` (e.g. permissioned salt = `deployer ++ entropy`); document they are one-time-chosen and frozen.
 
 ---
 
 ## File structure
-
-**New:**
-- `packages/hardhat/contracts/base/EFSUpgradeableResolver.sol` — shared initializable resolver base.
-- `packages/hardhat/contracts/AliasResolver.sol` — REDIRECT resolver.
-- `packages/hardhat/contracts/external/ICreateX.sol` — CreateX interface.
-- `packages/hardhat/deploy/lib/schemas.ts` — single source of truth for every schema field string + revocable flag.
-- `packages/hardhat/deploy/lib/create3.ts` — CREATE3 deploy+init+verify helper.
-- `packages/hardhat/test/Upgradeability.test.ts` — init-lock, storage-layout, self-UID-matches-proxy, upgrade-with-state.
-- `packages/hardhat/test/GoldenVectors.test.ts` — field-string ↔ on-chain UID parity.
-- `packages/hardhat/test/AliasResolver.test.ts` — REDIRECT guards.
-- `packages/hardhat/test/Freeze.e2e.test.ts` — full deploy → round-trip.
-
-**Modified:** the 5 resolvers (`EFSIndexer.sol`, `EdgeResolver.sol`, `MirrorResolver.sol`, `ListResolver.sol`, `ListEntryResolver.sol`); deploy scripts `01`–`09`; `hardhat.config.ts`; `specs/02-Data-Models-and-Schemas.md` + `specs/overview.md`.
+**New:** `contracts/base/EFSUpgradeableResolver.sol`, `contracts/AliasResolver.sol`, `contracts/external/ICreateX.sol` (if needed), `deploy/lib/schemas.ts`, `deploy/lib/create3.ts`, `deploy/lib/verify.ts`, `test/{Upgradeability,UpgradeWithState,GoldenVectors,AliasResolver,Freeze.e2e}.test.ts`, `test/helpers/deployProxy.ts`.
+**Modified:** the 5 resolvers; deploy `01/04/05/09` + new `0X_redirect`; `hardhat.config.ts`; `specs/02`, `specs/overview.md`; events in `EFSIndexer.sol`.
 
 ---
 
-## Phase 1 — `EFSUpgradeableResolver` base
+## COMMIT GROUP A — DATA reshape (lands + tests green first)
 
-**Files:** Create `packages/hardhat/contracts/base/EFSUpgradeableResolver.sol`; Test `test/Upgradeability.test.ts`.
+### Phase A1 — DATA → empty, with the three fixes the critique caught
+**Files:** `contracts/EFSIndexer.sol`; `deploy/01_indexer.ts`; `specs/02`, `specs/overview.md`; Test `test/EFSIndexer.test.ts`.
 
-The base keeps `_eas` as an EAS-`SchemaResolver` constructor immutable (EAS address is a per-chain constant; immutables live in impl bytecode and resolve correctly under delegatecall — verified). It adds OZ `Initializable` and disables the implementation's initializer.
+- [ ] **A1.1 specs first** (Etched): `specs/02` §3 + `overview.md` table → DATA empty; `contentHash`/`size`/`cid`/`hash:*` are reserved-key PROPERTYs. Supersede ADR-0002/0004/0005 framing (note in those ADRs' status lines per the supersession discipline).
+- [ ] **A1.2 failing test:** attest under an empty DATA schema (`data.length == 0`) → expect ACCEPTED + indexed. Run → FAIL.
+- [ ] **A1.3 fix `onAttest` DATA branch (critique theme 3 — the decode reverts!):** in `EFSIndexer.onAttest`, **delete the `abi.decode(attestation.data, (bytes32, uint64))`** (it reverts on zero-length data) and the `dataByContentKey` write. New DATA branch: validate `refUID == 0` + `revocable == false`, index the bare DATA UID. Keep the `dataByContentKey` mapping declared (storage-order preserved; now unused / advisory). Re-run A1.2 → PASS.
+- [ ] **A1.4 event migration (critique theme — downstream break):** `DataCreated(bytes32 indexed dataUID, address indexed attester, bytes32 contentHash)` loses its field. Change to `DataCreated(bytes32 indexed dataUID, address indexed attester)`; update all emit sites; grep subgraph/indexer configs and note the ABI change in the PR + `docs/decisions.md` (downstream indexers bind to this).
+- [ ] **A1.5 deploy-string fix (critique theme 3):** `deploy/01_indexer.ts` — change DATA registration from `"bytes32 contentHash, uint64 size"` to `""`; drop BLOB + NAMING registrations + `SchemaNameIndex` deploy; remove `blobSchemaUID` from the EFSIndexer constructor/init args. Run the indexer suite → PASS. Commit.
 
-- [ ] **Step 1.1 — write the base.**
+### Phase A2 — DATA-ripple consumers (critique theme 4 — was unowned)
+**Files:** `contracts/EFSRouter.sol`, `contracts/EFSFileView.sol`, `deploy/08_seed_demo_tree.ts`, `packages/nextjs/**`, `docs/QUESTIONS.md`.
+- [ ] **A2.1 grep + map:** `grep -rn "contentHash\|dataByContentKey" contracts/ packages/nextjs/ deploy/` — quote output in the PR (Etched discipline). For each: fix to read the `contentHash` PROPERTY (or off-chain index) instead of the removed field, or `// AGENT-NOTE` + task if out-of-scope.
+- [ ] **A2.2 upload-flow doc:** update `overview.md` "upload flow" step 2 — native upload now attaches `contentHash`/`size` PROPERTYs; remote pin attaches `cid`. 
+- [ ] **A2.3 production-client cross-repo (Tier-2):** add a `docs/QUESTIONS.md` entry — the separate `efs-project/client` repo reads `contentHash`/`size` from DATA; it must update to read the PROPERTYs. Flag for James (cross-repo; can't fix here). Commit.
+
+---
+
+## COMMIT GROUP B — proxy refactor
+
+### Phase B1 — `EFSUpgradeableResolver` base + storage-layout gate
+**Files:** Create `contracts/base/EFSUpgradeableResolver.sol`; `test/Upgradeability.test.ts`, `test/helpers/deployProxy.ts`.
+- [ ] **B1.1 base contract:**
 ```solidity
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
-
 import { SchemaResolver } from "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol";
 import { IEAS } from "@ethereum-attestation-service/eas-contracts/contracts/IEAS.sol";
 import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 
-/// @notice Base for EFS resolvers deployed behind upgradeable proxies.
-/// `_eas` stays an implementation-immutable (EAS is a per-chain constant);
-/// all EFS-specific state moves into per-resolver ERC-7201 storage set in initialize().
+/// @dev `_eas` stays an EAS-base constructor immutable: EAS is a per-chain constant, immutables live in
+/// impl bytecode and resolve under delegatecall, and EAS calls resolvers via CALL (not delegatecall) so
+/// onlyEAS holds. EVERY impl upgrade MUST re-supply the same EAS (asserted by the verify gate, B-gate).
 abstract contract EFSUpgradeableResolver is SchemaResolver, Initializable {
-    /// @param eas the canonical EAS for this chain. MUST be identical across every implementation upgrade.
-    constructor(IEAS eas) SchemaResolver(eas) {
-        _disableInitializers(); // implementation can never be initialized directly (Parity/Wormhole class)
-    }
+    constructor(IEAS eas) SchemaResolver(eas) { _disableInitializers(); }
 }
 ```
-- [ ] **Step 1.2 — failing test: implementation initializer is locked.** In `test/Upgradeability.test.ts`, deploy a trivial concrete subclass directly (not behind a proxy) and assert calling its `initialize()` reverts `InvalidInitialization()`. Run: `cd packages/hardhat && npx hardhat test test/Upgradeability.test.ts --network hardhat`. Expected: FAIL (subclass not yet written).
-- [ ] **Step 1.3 — minimal concrete subclass + make it pass.** Write a `test/mocks/MockResolver.sol` extending `EFSUpgradeableResolver` with an `initialize()` and trivial onAttest. Re-run: PASS.
-- [ ] **Step 1.4 — commit.** `git add … && git commit -m "feat(contracts): EFSUpgradeableResolver base (Initializable + impl initializer locked)"` (trailers: `Permanence-tier: Etched`, `Refs: ADR-0048`).
+- [ ] **B1.2 failing test — impl initializer locked:** deploy a mock subclass directly; assert `initialize()` reverts `InvalidInitialization()`; assert `getEAS()` returns the EAS passed. FAIL → write mock → PASS.
+- [ ] **B1.3 wire `validateUpgrade` CI gate (critique theme 6):** in `test/Upgradeability.test.ts`, add a helper using OZ `upgrades.validateUpgrade(...)` (or `forge inspect storage-layout` snapshot diff). Add it to CI as a blocking job on any resolver change. Commit.
+
+### Phase B2 — refactor each resolver (pattern: immutables → ERC-7201 storage set in `initialize`; `_eas` stays in base constructor; mappings keep order; `DEPLOYER`/`_deployer` → `OwnableUpgradeable`)
+- [ ] **B2.1 EFSIndexer (template — shown in r1):** ERC-7201 `IndexerConfig{anchorSchemaUID, propertySchemaUID, dataSchemaUID}` (BLOB dropped) + `__Ownable_init(owner)`; constructor → `constructor(IEAS eas) EFSUpgradeableResolver(eas) {}`; `initialize(anchor, property, data, owner)`; keep public getters with old names for ABI; `wireContracts`/`setSortsAnchor` → `onlyOwner`, **drop the SORT_INFO param** (theme 7); preserve the one-shot `require(... == 0)` guards. Run `test/EFSIndexer*.test.ts` behind a proxy → PASS. Commit.
+- [ ] **B2.2 EdgeResolver:** `EdgeConfig{pinSchemaUID, tagSchemaUID, indexer, schemaRegistry}` + owner; keep the pin≠0/tag≠0/pin≠tag invariants inside `initialize`; mappings keep order. **Add failing test: PIN supersession behind a proxy** (theme 6) — attest PIN→A, PIN→B same slot, assert prior revoked + active==B in O(1). Run `test/EdgeResolver*.test.ts` → PASS. Commit.
+- [ ] **B2.3 MirrorResolver:** `MirrorConfig{indexer}` + owner; `transportsAnchorUID` stays; `setTransportsAnchor` → `onlyOwner` (one-shot). **Also fold theme: widen `_isAllowedScheme`** (add ftp/s3/gs/bittorrent/dat — scheme safety is a client-render concern; supersede ADR-0023, update `specs/02` §Mirror). Failing test (`s3://` mirror accepted) → PASS. Run `test/EFSTransports.test.ts` → PASS. Commit.
+- [ ] **B2.4 ListResolver:** trivial — `constructor(IEAS eas) EFSUpgradeableResolver(eas) {}` + empty `initialize() external initializer {}`. Run LIST cases → PASS. Commit.
+- [ ] **B2.5 ListEntryResolver (CRITICAL — critique themes 2):** drop both immutables; `ListEntryConfig{listSchemaUID, listEntrySchemaUID}` ERC-7201; `initialize(listSchemaUID, owner)` computes `$.listEntrySchemaUID = keccak256(abi.encodePacked(LIST_ENTRY_DEFINITION, address(this), true))` — now `address(this)` is the proxy. **Add `function listEntrySchemaUID() external view returns (bytes32)`** (the on-chain getter the verify gate reads). **Failing test:** behind a CREATE3 proxy at `P`, after `initialize`, assert the getter `== keccak256(abi.encodePacked(LIST_ENTRY_DEFINITION, P, true))` and `!= impl-derived`. Add a false-green guard (flip `==`→`!=`, confirm it fails). Run `test/Lists.*.test.ts` → PASS. Commit.
+
+### Phase B3 — anchor-name canonical encoding (theme 9 — must precede freeze)
+- [ ] **B3.1** define canonical encoding in `specs/02` §1 (NFC + percent-encode the reserved byte set); enforce/normalize in `EFSIndexer._isValidAnchorName`; supersede ADR-0025. Failing test (`"Q&A: Episode 5"` round-trips deterministically) → PASS. Commit.
+
+### Phase B4 — upgrade-with-state corruption test (theme 6 — was only in pre-burn checklist)
+- [ ] **B4.1** `test/UpgradeWithState.test.ts`: deploy each resolver proxy v0, seed state (anchors, PINs, list entries), snapshot key index reads, deploy a v1 impl (trivial change), `upgradeAndCall`, assert every snapshotted read is byte-identical and `getEAS()` unchanged. Run → PASS. Commit. **This is the 50-year silent-corruption guard.**
 
 ---
 
-## Phase 2 — refactor the 5 resolvers to initializer + ERC-7201
+## COMMIT GROUP C — REDIRECT
+### Phase C1 — REDIRECT schema + `AliasResolver`
+**Files:** Create `contracts/AliasResolver.sol`; `test/AliasResolver.test.ts`.
+- [ ] **C1.1 failing tests (all guards):** sameAs(DATA,DATA)→ok; target==0→revert; target==refUID→revert; symlink(non-Anchor source)→revert; unknown kind(99)→recorded, `followable()`==false; revoke→ok. FAIL.
+- [ ] **C1.2 implement** extending `EFSUpgradeableResolver`, schema `"bytes32 target, uint16 kind"`; `initialize(redirectSchemaUID, owner)`; `onAttest` decodes `(bytes32 target, uint16 kind)`, reads source from `refUID`, enforces per-kind typing (0/1 require source+target DATA; 2 requires source Anchor; ≥3 recorded not auto-followed); optional advisory `_aliasesByTarget` reverse index in ERC-7201 storage. PASS. Commit.
 
-**Pattern (apply to each):** (a) change inheritance to `EFSUpgradeableResolver`; (b) move every EFS-specific `immutable`/constructor-set value and `DEPLOYER`/`_deployer` into an ERC-7201 namespaced storage struct set in `initialize(...)`; (c) keep `_eas` in the base constructor; (d) constructor becomes `constructor(IEAS eas) EFSUpgradeableResolver(eas) {}`; (e) replace `msg.sender == DEPLOYER` guards with OZ `OwnableUpgradeable` (owner set in `initialize`). **Never reorder/retype/remove an existing storage slot** — the live mappings keep their layout; only the immutables migrate into the namespaced struct.
-
-### EFSIndexer (template — show fully)
-
-**Files:** Modify `contracts/EFSIndexer.sol`; Test `test/Upgradeability.test.ts`, existing `test/EFSIndexer*.test.ts`.
-
-- [ ] **Step 2.1 — ERC-7201 storage struct.** Add the namespaced struct holding what were immutables (`ANCHOR_SCHEMA_UID`, `PROPERTY_SCHEMA_UID`, `DATA_SCHEMA_UID` — BLOB dropped) plus `owner`. The existing `rootAnchorUID`, the wired schema-UID storage vars (`PIN/TAG/SORT_INFO/MIRROR_SCHEMA_UID`), partner addresses, `sortsAnchorUID`, and all mappings (`dataByContentKey`, `_children`, …) keep their current declaration order untouched.
-```solidity
-/// @custom:storage-location erc7201:efs.indexer.config
-struct IndexerConfig { bytes32 anchorSchemaUID; bytes32 propertySchemaUID; bytes32 dataSchemaUID; }
-// keccak256(abi.encode(uint256(keccak256("efs.indexer.config")) - 1)) & ~bytes32(uint256(0xff))
-bytes32 private constant _CONFIG_SLOT = 0x...; // generate with the ERC-7201 formula
-function _config() private pure returns (IndexerConfig storage $) { assembly { $.slot := _CONFIG_SLOT } }
-```
-- [ ] **Step 2.2 — initialize().** Replace the constructor body:
-```solidity
-constructor(IEAS eas) EFSUpgradeableResolver(eas) {}
-
-function initialize(bytes32 anchorSchemaUID, bytes32 propertySchemaUID, bytes32 dataSchemaUID, address owner_)
-    external initializer
-{
-    require(owner_ != address(0), "owner zero");
-    IndexerConfig storage $ = _config();
-    $.anchorSchemaUID = anchorSchemaUID;
-    $.propertySchemaUID = propertySchemaUID;
-    $.dataSchemaUID = dataSchemaUID;
-    __Ownable_init(owner_); // OwnableUpgradeable; replaces DEPLOYER
-}
-```
-Replace reads of `ANCHOR_SCHEMA_UID` etc. with `_config().anchorSchemaUID` (add `public` getters preserving the old names for ABI/back-compat). Replace `require(msg.sender == DEPLOYER)` in `wireContracts`/`setSortsAnchor` with `onlyOwner`. Keep the one-shot `require(edgeResolver == address(0))` / `require(sortsAnchorUID == bytes32(0))` guards (they read proxy storage — survive upgrades correctly).
-- [ ] **Step 2.3 — DATA reshape touchpoints (see Phase 3) are applied here too.**
-- [ ] **Step 2.4 — run existing EFSIndexer tests against the proxy.** Adapt the test harness to deploy EFSIndexer behind a proxy (helper in `test/helpers/deployProxy.ts`) and call `initialize`. Run all `test/EFSIndexer*.test.ts`: Expected PASS (behaviour unchanged).
-- [ ] **Step 2.5 — commit.**
-
-### EdgeResolver
-- [ ] **Step 2.6** — move `PIN_SCHEMA_UID`, `TAG_SCHEMA_UID`, `indexer`, `schemaRegistry` immutables → `EdgeConfig` ERC-7201 struct set in `initialize(eas?, pin, tag, indexer, registry, owner)`; keep the constructor `require` invariants (pin≠0, tag≠0, pin≠tag) inside `initialize`. Mappings (`_activeBySlot`, `_activeByAAS`, …) keep order. Run `test/EdgeResolver*.test.ts`: PASS. Commit.
-
-### MirrorResolver
-- [ ] **Step 2.7** — move `indexer`, `_deployer` immutables → `MirrorConfig` struct in `initialize`; `transportsAnchorUID` storage var stays; `setTransportsAnchor` guard → `onlyOwner` (one-shot guard kept). Run `test/EFSTransports.test.ts`: PASS. Commit.
-
-### ListResolver (stateless)
-- [ ] **Step 2.8** — trivial: `constructor(IEAS eas) EFSUpgradeableResolver(eas) {}` + empty `initialize() external initializer {}` (only `_disableInitializers` matters). Run `test/Lists.unit.test.ts` (LIST cases): PASS. Commit.
-
-### ListEntryResolver (the critical one)
-- [ ] **Step 2.9 — failing test: self-UID matches the PROXY.** In `test/Upgradeability.test.ts`, deploy ListEntryResolver behind a CREATE3 proxy at address `P`, init it, then assert its public `listEntrySchemaUID()` getter equals `keccak256(abi.encodePacked("bytes32 listUID, bytes32 target", P, true))`. Run: FAIL (still constructor-derived → equals the impl address).
-- [ ] **Step 2.10 — move the derivation into initialize().** Drop the two `immutable`s (`LIST_SCHEMA_UID`, `_listEntrySchemaUID`); put both in a `ListEntryConfig` ERC-7201 struct; in `initialize(bytes32 listSchemaUID, address owner_)` compute `$.listEntrySchemaUID = keccak256(abi.encodePacked(LIST_ENTRY_DEFINITION, address(this), true))` — now `address(this)` is the proxy. Keep `LIST_ENTRY_DEFINITION` as the contract constant (single-sourced in Phase 6). Re-run Step 2.9: PASS. Run `test/Lists.*.test.ts`: PASS. Commit.
+> Read-time multi-hop resolution is NOT here — it's the spec + (deferred) router/client follower (Phase 7.2 / D2 below).
 
 ---
 
-## Phase 3 — DATA reshape (empty schema; hash/size as properties)
-
-**Files:** Modify `contracts/EFSIndexer.sol`; `specs/02-Data-Models-and-Schemas.md`, `specs/overview.md`; Test `test/EFSIndexer.test.ts`.
-
-- [ ] **Step 3.1 — write ADR-0049 r2 is already done; update specs.** Change `specs/02` §3 + `overview.md` "nine schemas" table: DATA = empty; `contentHash`/`size` are reserved-key PROPERTYs; document `cid`/`hash:*` reserved keys + the canonical-preimage convention (stub now, full vectors in Phase 7).
-- [ ] **Step 3.2 — failing test: empty DATA indexes.** Test that an attestation under the (empty) DATA schema is accepted by `onAttest` and indexed, with `data.length == 0`. Run: FAIL.
-- [ ] **Step 3.3 — update onAttest DATA branch.** In `EFSIndexer.onAttest`, the DATA branch no longer decodes `(bytes32 contentHash, uint64 size)`; it indexes the bare DATA UID. Remove the `dataByContentKey` write from the DATA path. Keep `dataByContentKey` mapping declared (advisory; now written — if at all — by the Phase-7 property-index hook, not the DATA path) to preserve storage order. Re-run 3.2: PASS.
-- [ ] **Step 3.4 — grep for orphaned decoders.** `grep -rn "contentHash\|dataByContentKey" contracts/ packages/nextjs/` — fix or AGENT-NOTE every consumer (router upload flow doc, FileView). Show the grep output in the commit body (Etched discipline).
-- [ ] **Step 3.5 — run full indexer + router suite.** PASS. Commit.
-
----
-
-## Phase 4 — REDIRECT schema + `AliasResolver`
-
-**Files:** Create `contracts/AliasResolver.sol`; Test `test/AliasResolver.test.ts`.
-
-- [ ] **Step 4.1 — failing tests (write all guards first).** In `test/AliasResolver.test.ts`: (a) `sameAs` with source+target both DATA → accepted; (b) `target == 0` → revert; (c) `target == refUID` (self-loop) → revert; (d) `symlink` (kind=2) with non-Anchor source → revert; (e) unknown `kind` (e.g. 99) → recorded but `followable()` view returns false; (f) revoke a redirect → onRevoke succeeds. Run: FAIL.
-- [ ] **Step 4.2 — implement AliasResolver** extending `EFSUpgradeableResolver`, schema `"bytes32 target, uint16 kind"`. `initialize` stores the EAS-registered REDIRECT schema UID + `owner`. `onAttest` decodes `(bytes32 target, uint16 kind)`, reads `refUID` (the source) from the attestation, enforces guards per `kind` (0=sameAs/1=supersededBy require source+target DATA; 2=symlink requires source Anchor; ≥3 recorded, not auto-followed). Optional advisory `_aliasesByTarget` reverse index in ERC-7201 storage. Re-run 4.1: PASS.
-- [ ] **Step 4.3 — commit** (`Permanence-tier: Etched`, `Refs: ADR-0050`).
-
-> **Note:** read-time multi-hop cycle/chain resolution is NOT in the resolver — it's the client/router resolution spec (Phase 7 doc + conformance vectors). The resolver only does write-time guards.
+## Phase D — deploy pipeline (CREATE3, register-LAST) + the verify gate
+**Files:** `deploy/lib/{schemas,create3,verify}.ts`; rewrite `deploy/01/04/05/09` + new `0X_redirect`; `test/GoldenVectors.test.ts`.
+- [ ] **D1 single-source schema strings:** `deploy/lib/schemas.ts` exports each field string + revocable; `ListEntryResolver.LIST_ENTRY_DEFINITION` is the canonical Solidity copy; golden-vector test asserts byte-equality. BLOB/NAMING/SORT_INFO removed from the registered set.
+- [ ] **D2 CREATE3 helper:** `deployProxyCreate3(implFactory, salt, initCalldata, owner)` → deploy impl → CreateX `deployCreate3AndInit` deploys `TransparentUpgradeableProxy(impl, owner, initCalldata)` at the salt-derived address **and inits in one tx** → assert `realized == predicted` (abort on mismatch). Salts from 0.3.
+- [ ] **D3 verify gate** `deploy/lib/verify.ts` (run after each proxy, before any register): (1) realized==predicted; (2) `initialize` reverts on 2nd call; (3) impl `initialize()` reverts directly; (4) **read on-chain self-UID getters** (ListEntry `listEntrySchemaUID()`, others) and assert `== keccak256(fieldString, proxyAddr, revocable)` (critique theme 2 — read, don't recompute); (5) **`proxy.getEAS() == EXPECTED_EAS_FOR_CHAIN`** (theme 8); (6) `wireContracts`/`setTransportsAnchor` set; (7) `validateUpgrade` storage-layout clean.
+- [ ] **D4 golden-vector test** `test/GoldenVectors.test.ts`: after deploy+init, for each schema **read the deployed value on-chain** and assert it equals the local `solidityPackedKeccak256(["string","address","bool"],[field, proxyAddr, revocable])` AND the EAS-registered UID. Assert Solidity `LIST_ENTRY_DEFINITION` == `schemas.ts`. 
+- [ ] **D5 register-LAST + wire + live smoke:** only after all proxies pass D3 → register all 9 with `resolver = proxy`, assert `getSchema(uid).resolver == proxy` + no conflicting prior registration → wire partners → push one real attestation through **every** schema (onAttest no revert + expected index written) + one revoke per revocable schema (exercise a rejection branch too).
+- [ ] **D6 rollback procedure (theme 10):** document in `deploy/README.md` — if any verify check fails, **halt before register-last**, capture the failing resolver/check, and on a clean network wipe+redeploy from the salt (no real data pre-freeze). Never register against an unverified proxy.
+- [ ] **D7** run full suite on the pinned fork; `git diff --exit-code packages/nextjs/contracts/deployedContracts.ts` (ADR-0037 pin holds). Commit.
 
 ---
 
-## Phase 5 — resolver-logic fixes (write-time-practicality findings)
-
-- [ ] **Step 5.1 — MIRROR URI allowlist.** In `MirrorResolver`, replace `_isAllowedScheme`'s hard reject with either removal or a widened set (add `ftp`, `s3`, `gs`, `bittorrent`/infohash, `dat`). Decision: widen, since scheme safety is a client-render concern (ADR-0023 supersede note). Failing test first (an `s3://` mirror is accepted), then implement, then PASS. Update ADR-0023 (supersede) + `specs/02` §Mirror. Commit.
-- [ ] **Step 5.2 — ANCHOR name canonical encoding.** Define the canonical encoding in `specs/02` §1 (NFC + percent-encode the reserved byte set) and enforce/normalize in `EFSIndexer._isValidAnchorName`. Failing test (`"Q&A: Episode 5"` round-trips deterministically), implement, PASS. Update ADR-0025 (supersede). Commit.
-
----
-
-## Phase 6 — deploy pipeline rewrite (CREATE3 proxies, register-last)
-
-**Files:** Create `deploy/lib/schemas.ts`, `deploy/lib/create3.ts`; rewrite `deploy/01_indexer.ts`, `04_sortoverlay.ts` (skip-register), `05_mirrors.ts`, `09_lists.ts`, + new `deploy/0X_redirect.ts`; Test `test/GoldenVectors.test.ts`.
-
-- [ ] **Step 6.1 — single-source schema strings.** `deploy/lib/schemas.ts` exports each field string + revocable. Make `ListEntryResolver.sol`'s `LIST_ENTRY_DEFINITION` the canonical Solidity copy and assert byte-equality in the golden-vector test (Step 6.2). Remove BLOB/NAMING from the set.
-- [ ] **Step 6.2 — golden-vector test.** `test/GoldenVectors.test.ts`: for each schema, assert `solidityPackedKeccak256(["string","address","bool"],[fieldString, proxyAddr, revocable])` equals (a) the contract's self-derived UID where applicable (ListEntry), and (b) the UID registered in EAS after deploy. Also assert the Solidity `LIST_ENTRY_DEFINITION` constant == `schemas.ts` LIST_ENTRY string. Run: FAIL (deploy not rewritten). 
-- [ ] **Step 6.3 — CREATE3 deploy helper.** `deploy/lib/create3.ts`: `deployProxyCreate3(implFactory, salt, initCalldata, owner)` → deploys impl (non-deterministic), then via CreateX `deployCreate3AndInit` deploys a `TransparentUpgradeableProxy(impl, owner, initCalldata)` at the salt-derived address **and initializes in one tx**; asserts `realizedAddr == predictedAddr`; returns the proxy address. Pin salts as committed constants.
-- [ ] **Step 6.4 — rewrite deploy ordering** to: (1) deploy all impls; (2) for each resolver, compute predicted proxy addr from (CreateX, salt) → compute schema UID off-chain → `deployProxyCreate3` (deploy+init atomic); (3) **verify gate** (`deploy/lib/verify.ts`): realized==predicted, `initialize` reverts on 2nd call, impl `initialize` reverts, ListEntry self-UID==computed UID, `wireContracts`/`setTransportsAnchor` set; (4) **register schemas last** with `resolver = proxy`, assert `schemaRegistry.getSchema(uid).resolver == proxy` and no prior conflicting registration; (5) wire partners; (6) **live smoke**: one attestation through every schema (onAttest no revert) + one revoke through each revocable schema. SORT_INFO/BLOB/NAMING registration removed.
-- [ ] **Step 6.5 — run golden-vector + full suite on the pinned fork.** `yarn deploy` then `git diff --exit-code packages/nextjs/contracts/deployedContracts.ts` (ADR-0037 pin). Re-run 6.2: PASS. Commit.
+## Phase E — conventions, Sepolia freeze, round-trip
+- [ ] **E1** `specs/09-content-identity-conventions.md`: canonical preimage + multibase/multicodec for `contentHash`/`cid`/`hash:*` + reference vectors (Durable; before durable seeding).
+- [ ] **E2** `specs/10-redirect-resolution.md`: lens precedence, `D_MAX`, cycle→lowest-UID-in-SCC, kinds-followed, tiebreak + conformance vectors. **Decision noted:** redirect *following* (router/client implementation, theme 10) is **deferred to post-freeze** — writing REDIRECT attestations is sufficient to freeze the schema; following is upgradeable logic. (If James wants following at launch, add Phase D-follow.)
+- [ ] **E3 deploy to Sepolia; fill FREEZE_LEDGER:** run Phase D against Sepolia; fill `docs/SEPOLIA_FREEZE_TABLE.md` with realized proxy addresses, computed UIDs, impl+proxy bytecode keccak, salts, factory, EAS+registry+chainId. **STOP — human gate: James signs the table.** (Tier-1; no seed-data registration until signed.)
+- [ ] **E4 round-trip proof** `test/Freeze.e2e.test.ts` + live: anchor → empty DATA → `contentHash` PROPERTY → PIN (place) → MIRROR → read back via FileView/Router; LIST + LIST_ENTRY read back; REDIRECT(sameAs) created + resolved client-side. Commit the evidence.
 
 ---
 
-## Phase 7 — conventions, Sepolia freeze, round-trip
+## Out of scope (later): burn-to-immutable (own runbook + 14-day soak); on-chain property index (find-by-hash); redirect-following implementation; general typed-edge/EVENT; signature-PROPERTY.
 
-- [ ] **Step 7.1 — content-hash preimage spec + reference vectors.** Write `specs/09-content-identity-conventions.md`: canonical preimage ("raw flat file bytes, no DAG framing"), multibase/multicodec encoding for `contentHash`/`cid`/`hash:*`, with reference test vectors. (Durable.)
-- [ ] **Step 7.2 — redirect resolution spec + conformance vectors.** Write `specs/10-redirect-resolution.md`: lens precedence, depth cap `D_MAX`, cycle → lowest-UID-in-SCC, which kinds auto-follow, tiebreak. Add conformance vectors. (Durable; must precede durable seeding.)
-- [ ] **Step 7.3 — deploy to Sepolia; fill the freeze table.** Run the Phase-6 pipeline against Sepolia; fill `docs/SEPOLIA_FREEZE_TABLE.md` with realized proxy addresses + computed UIDs + bytecode hashes (the FREEZE_LEDGER). **STOP — human gate: James signs the table.** (Tier-1; do not register seed-data schemas until signed.)
-- [ ] **Step 7.4 — round-trip proof.** `test/Freeze.e2e.test.ts` + a live script: create an anchor → DATA → contentHash PROPERTY → PIN (place at path) → MIRROR → read it back through `EFSFileView`/`EFSRouter`. Create a LIST + LIST_ENTRY, read back. Create a REDIRECT (sameAs) between two DATA, resolve it client-side. Commit the evidence.
+## Verification gates (block the next phase)
+1. Group A: empty-DATA attests+indexes; no `abi.decode` revert; ripple consumers fixed or noted.
+2. Group B: existing suites green behind proxies; impl initializer locked; **ListEntry self-UID (read on-chain) == proxy-derived**; PIN supersession; upgrade-with-state byte-identical; `validateUpgrade` clean.
+3. Phase D: golden-vector reads on-chain == registered UID; `getEAS` == expected; deployedContracts pin holds; live smoke through all 9.
+4. Phase E: **human-signed freeze table before registration**; round-trip green.
 
----
-
-## Out of scope (separate, later)
-- **Burn-to-immutable** — its own runbook + ≥14-day soak + full invariant suite + mainnet-fork dry run, then `ProxyAdmin.renounceOwnership()`. Pre-burn checklist already in `docs/SEPOLIA_FREEZE_TABLE.md`.
-- **On-chain property index** (find-by-hash) — resolver logic, upgradeable, frozen at burn; its own ADR.
-- **General typed-edge / EVENT primitive**, signature-PROPERTY for authenticity (#7) — additive, future ADRs.
-
----
-
-## Verification gates (must pass before the next phase)
-1. Phase 1–2: every existing test passes with resolvers behind proxies; impl `initialize` reverts; init-lock holds.
-2. Phase 2.9–2.10: ListEntry self-UID == proxy-derived UID (the single most dangerous bug).
-3. Phase 6: golden-vector parity (string↔UID); `deployedContracts.ts` pin holds; live smoke through all 9 schemas.
-4. Phase 7: human-signed freeze table BEFORE registration; round-trip green.
-5. CI: storage-layout `validateUpgrade` gate on every resolver change; `deploy-pin-check`.
-
-## Self-review notes (for human + AI reviewers — attack these)
-- **EAS base + Initializable interaction:** is keeping `_eas` a constructor-immutable while everything else is initializer-set actually safe across an upgrade? (Each new impl must re-supply the same EAS; the verify gate asserts `proxy.getEAS() == EXPECTED`.) Confirm no OZ-v5 `Initializable` storage collides with EAS base (base has no storage — confirmed).
-- **CreateX availability** on Sepolia (and intended mainnet) at the canonical address; behavior if absent. zkSync-class chains excluded from parity.
-- **DATA reshape ripple:** every `contentHash`/`dataByContentKey` consumer in contracts + nextjs + the production client (separate repo — can't grep here; flag for James). Does removing the inline hash break the upload flow doc (`overview.md` step 2)?
-- **Storage-layout discipline:** ERC-7201 structs are append-only; the *existing* mappings must not move. Is moving immutables → a namespaced struct truly non-colliding with the pre-existing sequential storage? (ERC-7201 namespaced slots are derived away from slot 0, so yes — but `validateUpgrade` must confirm on the first proxied deploy.)
-- **REDIRECT kind taxonomy** is logic, not frozen — but is `uint16` + the initial {0,1,2,3} the right starting set? (See ADR-0050 Alternatives considered.)
-- **Scope:** is Phase 3 (DATA reshape) safe to land in the same PR train as the proxy refactor, or should it be its own Etched PR (WIP-limit = one Etched PR per subsystem)? Recommend: DATA reshape lands first/separately, then proxy refactor, then REDIRECT.
+## Open items for James (not blocking dev start)
+- E2 decision: is redirect-*following* in-scope at launch, or deferred (plan default = deferred)?
+- A2.3: production-client repo update (cross-repo) — schedule separately.
+- 0.2: if CreateX is absent on a target chain, escalate (fallback choice).
