@@ -1,11 +1,18 @@
 import { HardhatRuntimeEnvironment } from "hardhat/types";
 import { DeployFunction } from "hardhat-deploy/types";
 import { Contract } from "ethers";
+import { legacySuperseded } from "./lib/superseded";
 
 // EAS Addresses (Sepolia) — same as 01_indexer.ts
 const EAS_ADDRESS = "0xC2679fBD37d54388Ce493F1DB75320D236e1815e";
 
 const deployMirrors: DeployFunction = async function (hre: HardhatRuntimeEnvironment) {
+  // AGENT-NOTE (Phase D): MirrorResolver deploy + MIRROR register + wireContracts + /transports/* are
+  // now done by deploy/00_efs_core.ts (orchestrated CREATE3, register-last). Also: this script's
+  // `new MirrorResolver(EAS, indexer)` constructor args no longer match the refactored 1-arg
+  // `(IEAS eas)` constructor. Neutralized; D2 rebinds downstream consumers.
+  if (await legacySuperseded(hre, "05_mirrors")) return;
+
   const { deployer } = await hre.getNamedAccounts();
   const { deploy } = hre.deployments;
   const ethers = hre.ethers;

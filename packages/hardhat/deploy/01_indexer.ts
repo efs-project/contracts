@@ -1,12 +1,18 @@
 import { HardhatRuntimeEnvironment } from "hardhat/types";
 import { DeployFunction } from "hardhat-deploy/types";
 import { Contract } from "ethers";
+import { legacySuperseded } from "./lib/superseded";
 
 // EAS Addresses (Sepolia) - Assuming forking or consistent addresses
 const EAS_ADDRESS = "0xC2679fBD37d54388Ce493F1DB75320D236e1815e";
 const SCHEMA_REGISTRY_ADDRESS = "0x0a7E2Ff54e76B8E6659aedc9103FB21c038050D0";
 
 const deployEFSIndexer: DeployFunction = async function (hre: HardhatRuntimeEnvironment) {
+  // AGENT-NOTE (Phase D): this nonce-prediction + TestERC1967Proxy + inline-register path is
+  // superseded by deploy/00_efs_core.ts (orchestrated CREATE3 deploy, register-last; ADR-0048).
+  // Neutralized to keep the orchestrated core the single source. D2 removes/rebinds it.
+  if (await legacySuperseded(hre, "01_indexer")) return;
+
   const { deployer } = await hre.getNamedAccounts();
   const { deploy } = hre.deployments;
   const ethers = hre.ethers;
