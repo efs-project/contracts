@@ -26,7 +26,11 @@ contract EFSIndexer is SchemaResolver {
     );
 
     /// @notice Emitted when a standalone DATA attestation is created (file identity).
-    event DataCreated(bytes32 indexed dataUID, address indexed attester, bytes32 contentHash);
+    /// @dev    ADR-0049: DATA is now an empty (pure-identity) schema. The `contentHash`
+    ///         parameter was removed — content hash lives as a lens-scoped PROPERTY on the
+    ///         DATA UID, not as a DATA field. Downstream indexers binding to this event must
+    ///         re-bind to the new 2-arg signature.
+    event DataCreated(bytes32 indexed dataUID, address indexed attester);
 
     /// @notice Emitted when a MIRROR attestation is attached to a DATA (retrieval method).
     event MirrorCreated(bytes32 indexed dataUID, bytes32 indexed mirrorUID, address indexed attester);
@@ -34,7 +38,7 @@ contract EFSIndexer is SchemaResolver {
     /// @notice Emitted when a PROPERTY attestation is attached to an Anchor.
     event PropertyCreated(bytes32 indexed propertyUID, address indexed attester);
 
-    /// @notice Emitted when any EFS-native attestation (ANCHOR, DATA, PROPERTY, BLOB) is revoked.
+    /// @notice Emitted when any EFS-native attestation (ANCHOR, DATA, PROPERTY) is revoked.
     event AttestationRevoked(bytes32 indexed uid, address indexed attester);
 
     /// @notice Emitted when an external attestation is indexed via the public index() API.
@@ -50,7 +54,6 @@ contract EFSIndexer is SchemaResolver {
     bytes32 public immutable ANCHOR_SCHEMA_UID;
     bytes32 public immutable PROPERTY_SCHEMA_UID;
     bytes32 public immutable DATA_SCHEMA_UID;
-    bytes32 public immutable BLOB_SCHEMA_UID;
 
     // Partner contract references — set once via wireContracts() after full deployment
     // These are bytes32 storage (not immutable) because partner contracts deploy after EFSIndexer.
@@ -76,7 +79,11 @@ contract EFSIndexer is SchemaResolver {
     // Maximum anchor nesting depth — prevents gas griefing in propagateContains
     uint256 public constant MAX_ANCHOR_DEPTH = 32;
 
-    // Content-addressed deduplication: keccak256(contentHash) => first DATA UID
+    // Content-addressed deduplication: keccak256(contentHash) => first DATA UID.
+    // ADR-0049: DATA is now empty (pure identity) and carries no contentHash, so this is
+    // no longer written. The slot is RETAINED (declared, never removed) to preserve storage
+    // layout/order; it is unused/advisory. Dedup is now client-side prevention + REDIRECT
+    // resolution (ADR-0050). EFSFileView.getCanonicalData still reads it (returns bytes32(0)).
     mapping(bytes32 => bytes32) public dataByContentKey;
 
     // Revocation tracking (set in onRevoke, never cleared)
@@ -163,13 +170,11 @@ contract EFSIndexer is SchemaResolver {
         IEAS eas,
         bytes32 anchorSchemaUID,
         bytes32 propertySchemaUID,
-        bytes32 dataSchemaUID,
-        bytes32 blobSchemaUID
+        bytes32 dataSchemaUID
     ) SchemaResolver(eas) {
         ANCHOR_SCHEMA_UID = anchorSchemaUID;
         PROPERTY_SCHEMA_UID = propertySchemaUID;
         DATA_SCHEMA_UID = dataSchemaUID;
-        BLOB_SCHEMA_UID = blobSchemaUID;
         DEPLOYER = msg.sender;
     }
 
@@ -363,18 +368,15 @@ contract EFSIndexer is SchemaResolver {
             emit AnchorCreated(parentUID, attestation.uid, attestation.attester, anchorSchema);
             return true;
         } else if (schema == DATA_SCHEMA_UID) {
-            // DATA is standalone file identity: refUID must be 0x0, non-revocable
+            // DATA is pure file identity (ADR-0049): empty schema, standalone, non-revocable.
+            // The attestation carries no fields (zero-length payload) — its UID *is* the
+            // file's identity. contentHash/size now live as lens-scoped reserved-key
+            // PROPERTYs bound to this UID, not as DATA fields, so there is nothing to decode.
             if (attestation.refUID != EMPTY_UID) return false;
             if (attestation.revocable) return false;
 
-            (bytes32 contentHash, ) = abi.decode(attestation.data, (bytes32, uint64));
-
-            // Content-addressed deduplication: first DATA per contentHash is canonical
-            if (contentHash != bytes32(0) && dataByContentKey[contentHash] == bytes32(0)) {
-                dataByContentKey[contentHash] = attestation.uid;
-            }
-
-            emit DataCreated(attestation.uid, attestation.attester, contentHash);
+            // The bare DATA UID is already tracked by _indexGlobal above (step 1).
+            emit DataCreated(attestation.uid, attestation.attester);
             return true;
         } else if (schema == PROPERTY_SCHEMA_UID) {
             // PROPERTY is a standalone value (ADR-0035): refUID must be 0x0, non-revocable.
@@ -1016,7 +1018,7 @@ contract EFSIndexer is SchemaResolver {
      *   - getReferencingSchemas(refUID)
      *
      * Reverts if the UID does not exist in EAS (uid == bytes32(0) on the returned attestation).
-     * Silently skips EFS-native schemas (ANCHOR, DATA, PROPERTY, BLOB) — those are indexed
+     * Silently skips EFS-native schemas (ANCHOR, DATA, PROPERTY) — those are indexed
      * atomically in onAttest and must not be double-indexed.
      *
      * @param uid The attestation UID to index.
@@ -1033,8 +1035,7 @@ contract EFSIndexer is SchemaResolver {
         if (
             schema == ANCHOR_SCHEMA_UID ||
             schema == DATA_SCHEMA_UID ||
-            schema == PROPERTY_SCHEMA_UID ||
-            schema == BLOB_SCHEMA_UID
+            schema == PROPERTY_SCHEMA_UID
         ) {
             return false;
         }
@@ -1078,8 +1079,7 @@ contract EFSIndexer is SchemaResolver {
             if (
                 schema == ANCHOR_SCHEMA_UID ||
                 schema == DATA_SCHEMA_UID ||
-                schema == PROPERTY_SCHEMA_UID ||
-                schema == BLOB_SCHEMA_UID
+                schema == PROPERTY_SCHEMA_UID
             ) {
                 continue;
             }

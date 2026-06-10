@@ -133,6 +133,9 @@ async function main() {
     return getUID(tx);
   };
 
+  // AGENT-NOTE: A2 ripple — DATA reshape (ADR-0049). DATA is now empty; encoding
+  // (contentHash, size) reverts. Mint empty DATA and attach contentHash/size as reserved-key
+  // PROPERTYs. Tracked for the A2 follow-up.
   /** Create a standalone DATA attestation (contentHash + size, non-revocable, standalone) */
   const createData = async (signer: any, content: string): Promise<{ uid: string; contentHash: string }> => {
     const contentBytes = ethers.toUtf8Bytes(content);

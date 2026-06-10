@@ -58,8 +58,8 @@ describe("EFSIndexer", function () {
     const rc2 = await tx2.wait();
     propertySchemaUID = rc2!.logs[0].topics[1];
 
-    // DATA: bytes32 contentHash, uint64 size (standalone, non-revocable)
-    const tx3 = await registry.register("bytes32 contentHash, uint64 size", futureIndexerAddr, false);
+    // DATA: empty schema — pure identity (ADR-0049). No fields; payload is zero-length.
+    const tx3 = await registry.register("", futureIndexerAddr, false);
     const rc3 = await tx3.wait();
     dataSchemaUID = rc3!.logs[0].topics[1];
 
@@ -95,7 +95,6 @@ describe("EFSIndexer", function () {
       anchorSchemaUID,
       propertySchemaUID,
       dataSchemaUID,
-      blobSchemaUID,
     );
     await indexer.waitForDeployment();
 
@@ -274,8 +273,7 @@ describe("EFSIndexer", function () {
 
   describe("Enforcement (Relationships)", function () {
     it("Should accept standalone DATA with refUID=0x0 and non-revocable", async function () {
-      const schemaEncoder = new ethers.AbiCoder();
-      const contentHash = ethers.keccak256(ethers.toUtf8Bytes("test"));
+      // DATA is an empty schema (ADR-0049) — zero-length payload.
       const tx = await eas.attest({
         schema: dataSchemaUID,
         data: {
@@ -283,13 +281,35 @@ describe("EFSIndexer", function () {
           expirationTime: NO_EXPIRATION,
           revocable: false,
           refUID: ZERO_BYTES32,
-          data: schemaEncoder.encode(["bytes32", "uint64"], [contentHash, 4n]),
+          data: "0x",
           value: 0n,
         },
       });
       const receipt = await tx.wait();
       const uid = getUIDFromReceipt(receipt);
       expect(uid).to.not.equal(ZERO_BYTES32);
+    });
+
+    it("Should accept and index empty (zero-length) DATA — pure identity (ADR-0049)", async function () {
+      // DATA is now an empty schema. A DATA attestation carries no fields; its payload is
+      // zero-length. The indexer must accept it (no abi.decode) and track its UID.
+      const tx = await eas.attest({
+        schema: dataSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: NO_EXPIRATION,
+          revocable: false,
+          refUID: ZERO_BYTES32,
+          data: "0x", // zero-length payload
+          value: 0n,
+        },
+      });
+      const uid = getUIDFromReceipt(await tx.wait());
+      expect(uid).to.not.equal(ZERO_BYTES32);
+
+      // Indexed in the global schema index (resolves / is tracked).
+      const atts = await indexer.getAttestationsBySchema(dataSchemaUID, 0, 10, false);
+      expect(atts).to.include(uid);
     });
 
     it("Should reject DATA with non-zero refUID", async function () {
@@ -309,7 +329,6 @@ describe("EFSIndexer", function () {
       });
       const rootUID = getUIDFromReceipt(await rootTx.wait());
 
-      const contentHash = ethers.keccak256(ethers.toUtf8Bytes("test"));
       await expect(
         eas.attest({
           schema: dataSchemaUID,
@@ -318,7 +337,7 @@ describe("EFSIndexer", function () {
             expirationTime: NO_EXPIRATION,
             revocable: false,
             refUID: rootUID, // Must be 0x0 for standalone DATA
-            data: schemaEncoder.encode(["bytes32", "uint64"], [contentHash, 4n]),
+            data: "0x",
             value: 0n,
           },
         }),
@@ -582,8 +601,7 @@ describe("EFSIndexer", function () {
       const rcFile = await txFile.wait();
       _fileUID = getUIDFromReceipt(rcFile);
 
-      // 4. Create standalone DATA (new model: refUID=0x0, non-revocable)
-      const contentHash = ethers.keccak256(ethers.toUtf8Bytes("my_video.mp4"));
+      // 4. Create standalone DATA (empty schema, ADR-0049: refUID=0x0, non-revocable)
       const dataTx = await eas.attest({
         schema: dataSchemaUID,
         data: {
@@ -591,7 +609,7 @@ describe("EFSIndexer", function () {
           expirationTime: NO_EXPIRATION,
           revocable: false,
           refUID: ZERO_BYTES32,
-          data: schemaEncoder.encode(["bytes32", "uint64"], [contentHash, 1024n]),
+          data: "0x",
           value: 0n,
         },
       });
@@ -740,8 +758,7 @@ describe("EFSIndexer", function () {
       });
       _child2UID = getUIDFromReceipt(await txChild2.wait());
 
-      // Create standalone DATA (new model)
-      const contentHash = ethers.keccak256(ethers.toUtf8Bytes("file1-content"));
+      // Create standalone DATA (empty schema, ADR-0049)
       const txData = await eas.connect(user1).attest({
         schema: dataSchemaUID,
         data: {
@@ -749,7 +766,7 @@ describe("EFSIndexer", function () {
           expirationTime: 0n,
           revocable: false,
           refUID: ZERO_BYTES32,
-          data: schemaEncoder.encode(["bytes32", "uint64"], [contentHash, 100n]),
+          data: "0x",
           value: 0n,
         },
       });
@@ -1178,8 +1195,7 @@ describe("EFSIndexer", function () {
       const receiptBlob = await txBlob.wait();
       const _blobUID = getUIDFromReceipt(receiptBlob);
 
-      // 3. Create standalone DATA (new model)
-      const contentHash = ethers.keccak256(ethers.toUtf8Bytes("intro.mp4-content"));
+      // 3. Create standalone DATA (empty schema, ADR-0049)
       const txData = await eas.attest({
         schema: dataSchemaUID,
         data: {
@@ -1187,7 +1203,7 @@ describe("EFSIndexer", function () {
           expirationTime: NO_EXPIRATION,
           revocable: false,
           refUID: ZERO_BYTES32,
-          data: schemaEncoder.encode(["bytes32", "uint64"], [contentHash, 1024n]),
+          data: "0x",
           value: 0n,
         },
       });
@@ -1198,8 +1214,10 @@ describe("EFSIndexer", function () {
       const resolvedAnchor = await indexer.resolveAnchor(parentUID, "intro.mp4", dataSchemaUID);
       expect(resolvedAnchor).to.equal(anchorUID);
 
-      // 5. Verify DATA is indexed and dedup works
-      expect(await indexer.dataByContentKey(contentHash)).to.equal(dataUID);
+      // 5. Verify DATA is indexed (ADR-0049: dataByContentKey is no longer written;
+      //    the bare DATA UID is tracked in the global schema index).
+      const indexedData = await indexer.getAttestationsBySchema(dataSchemaUID, 0, 50, false);
+      expect(indexedData).to.include(dataUID);
     });
   });
 
@@ -1551,8 +1569,8 @@ describe("EFSIndexer", function () {
 
     it("emits DataCreated when standalone DATA is created", async function () {
       const ownerAddr = await owner.getAddress();
-      const contentHash = ethers.keccak256(ethers.toUtf8Bytes("event-test-content"));
 
+      // DATA is an empty schema (ADR-0049); DataCreated dropped the contentHash arg.
       const dataTx = await eas.connect(owner).attest({
         schema: dataSchemaUID,
         data: {
@@ -1560,13 +1578,13 @@ describe("EFSIndexer", function () {
           expirationTime: NO_EXPIRATION,
           revocable: false,
           refUID: ZERO_BYTES32,
-          data: enc.encode(["bytes32", "uint64"], [contentHash, 42]),
+          data: "0x",
           value: 0n,
         },
       });
       const dataUID = getUIDFromReceipt(await dataTx.wait());
 
-      await expect(dataTx).to.emit(indexer, "DataCreated").withArgs(dataUID, ownerAddr, contentHash);
+      await expect(dataTx).to.emit(indexer, "DataCreated").withArgs(dataUID, ownerAddr);
     });
   });
 

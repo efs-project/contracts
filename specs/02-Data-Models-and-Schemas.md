@@ -44,7 +44,7 @@ A use case picks PIN or TAG based on the nature of its predicate. Smart-contract
 ### Example — contentType on a DATA
 
 ```
-DATA(contentHash = …, size = 42)                            // free-floating content identity
+DATA()                                                      // free-floating content identity (empty, ADR-0049)
   ↑ refUID
 Anchor<PROPERTY>(name = "contentType", schemaUID = PROPERTY) // key anchor under the DATA
   ↑ definition
@@ -77,19 +77,23 @@ Other common (non-reserved) key anchors: `"previousVersion"` (value is a DATA UI
 Revoke the PIN with `eas.revoke(pinUID)`. The PROPERTY value itself is non-revocable (permanent), but the binding is gone — the key anchor's slot becomes empty for that attester until a new PIN is attested. Replacing the value is just a new PIN at the same slot pointing at a new PROPERTY; the old PIN is superseded automatically (no extra revoke needed).
 
 ## 3. Data Schema
-**Purpose**: Standalone file identity — content-addressed, non-revocable, location-independent.
+**Purpose**: Standalone file identity — pure, empty, non-revocable, location-independent.
+**Field string**: `""` (empty — no fields)
 **Structure**:
 `refUID = 0x0 (standalone — no parent reference)`
-- `contentHash` (bytes32) — keccak256 of the canonical file bytes
-- `size` (uint64) — byte count
+- *(no fields)* — a DATA attestation's payload is zero-length.
 
 **Revocable**: `false` — DATA is permanent. Once a file identity exists, it cannot be removed.
 
-**Details**: DATA attestations are standalone (refUID = 0x0). They represent file identity, not file location. A DATA is placed at a path via a PIN attestation (see Pin Schema below). The same DATA can be pinned into multiple paths by different attesters without duplication.
+**Details**: DATA is **pure identity** (ADR-0049). A DATA attestation asserts only "a file identity exists"; its EAS UID *is* the file's identity. DATA carries no fields — the on-wire payload is empty (zero-length). MIRRORs, folder placements (PIN), and metadata (PROPERTY) all reference the DATA **UID**, never a content hash. EFS is **not** content-addressed at the identity layer: two uploads of the same bytes get two distinct DATA UIDs.
 
-Content-addressed deduplication: `EFSIndexer.dataByContentKey[contentHash]` stores the first DATA UID per content hash as the canonical entry. Subsequent DATAs with the same hash still get created (different UIDs) but the canonical lookup returns the first.
+DATA attestations are standalone (refUID = 0x0) and non-revocable. They represent file identity, not file location. A DATA is placed at a path via a PIN attestation (see Pin Schema below). The same DATA can be pinned into multiple paths by different attesters without duplication.
 
-Metadata (content type, description, version history) is stored as PROPERTY attestations referencing the DATA UID. Retrieval URIs are stored as MIRROR attestations referencing the DATA UID.
+**`contentHash` and `size` are reserved-key PROPERTYs** (ADR-0049), not DATA fields. A content hash is client-supplied and unverifiable on-chain, so it is an attester *claim*, not authenticated identity. Each is bound to the DATA UID via the standard key-anchor + cardinality-1 PIN pattern (see §2), **lens-scoped per attester** — a reader trusts the hash/size from an attester they trust, and multiple coexisting claims (keccak, sha2-256, CID) may coexist. Reserved key anchor names: `contentHash`, `size` (and optionally `cid`). Hash values are self-describing (multibase multihash / CID) per the conventions spec.
+
+Content-addressed *dedup* is therefore no longer an intrinsic on-chain index. Prevention is best-effort client-side (query the property index for a trusted `contentHash` claim before upload, then hardlink via a new PIN instead of a new DATA); resolution of an existing duplicate to a canonical DATA is the REDIRECT primitive (ADR-0050). The legacy `EFSIndexer.dataByContentKey` mapping is retained as a declared (storage-order-preserving) but unused/advisory slot — it is no longer written.
+
+Other metadata (content type, description, version history) is likewise stored as PROPERTY attestations bound to the DATA UID. Retrieval URIs are stored as MIRROR attestations referencing the DATA UID.
 
 ## 3a. Mirror Schema
 **Purpose**: Retrieval method for a DATA attestation — maps a transport type to a URI.
@@ -271,8 +275,8 @@ See [ADR-0044](../docs/adr/0044-list-and-list-entry-schemas.md) and [Lists and C
 To represent a standard filesystem interaction where a file has a name within a folder:
 1. **Parent Folder** (e.g., Anchor "memes") →
 2. **File Anchor** (name: "vitalik.jpg", `refUID` points to Parent Folder) →
-3. **DATA** (standalone, `refUID = 0x0`, holds `contentHash` and `size`) — placed at the file Anchor via a **PIN** (cardinality 1 per ADR-0041).
-4. **contentType key anchor + PROPERTY + PIN** (ADR-0035 + ADR-0041): `Anchor<PROPERTY>(refUID=DATA UID, name="contentType")` + `PROPERTY(value="image/jpeg")` + `PIN(definition=that anchor, refUID=that property)`.
+3. **DATA** (standalone, `refUID = 0x0`, empty payload — pure identity per ADR-0049) — placed at the file Anchor via a **PIN** (cardinality 1 per ADR-0041).
+4. **contentType / contentHash / size key anchors + PROPERTY + PIN** (ADR-0035 + ADR-0041 + ADR-0049): e.g. `Anchor<PROPERTY>(refUID=DATA UID, name="contentType")` + `PROPERTY(value="image/jpeg")` + `PIN(definition=that anchor, refUID=that property)`. `contentHash` and `size` are reserved-key PROPERTYs bound the same way (ADR-0049), lens-scoped per attester.
 5. **MIRROR** (`refUID` = DATA UID, `transportDefinition = /transports/onchain`, `uri = web3://0xABC`) — retrieval method.
 6. **Folder-visibility TAGs** (ADR-0038) — for every generic ancestor folder on the path from the file's parent up to root exclusive, if the uploader has no active `TAG(definition=DATA_SCHEMA_UID, refUID=ancestor)` yet, emit one. Cardinality N (an attester contains many such folders).
 

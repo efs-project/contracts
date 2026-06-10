@@ -462,7 +462,10 @@ contract EFSFileView {
             string memory name = "";
 
             if (att.schema == dataSchemaUID) {
-                // DATA attestation: decode contentHash
+                // AGENT-NOTE: A2 ripple — DATA reshape (ADR-0049). DATA is now an empty schema
+                // (zero-length payload); this abi.decode reverts on real empty DATA. contentHash
+                // is now a lens-scoped PROPERTY on the DATA UID, not a DATA field. Read it from
+                // the property index instead of decoding here. Tracked for the A2 follow-up.
                 (contentHash, ) = abi.decode(att.data, (bytes32, uint64));
             } else {
                 // Anchor: decode name
@@ -540,6 +543,10 @@ contract EFSFileView {
 
     /**
      * @notice Look up the canonical DATA UID for a content hash.
+     * @dev AGENT-NOTE: A2 ripple — DATA reshape (ADR-0049). dataByContentKey is no longer
+     *      written by EFSIndexer (DATA is empty/pure-identity; contentHash is a lens-scoped
+     *      PROPERTY). This now always returns bytes32(0). Canonical/dedup resolution moves to
+     *      the REDIRECT primitive (ADR-0050) + the property index. Tracked for the A2 follow-up.
      */
     function getCanonicalData(bytes32 contentHash) external view returns (bytes32) {
         return indexer.dataByContentKey(contentHash);

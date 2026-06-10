@@ -46,29 +46,24 @@ const deployEFSIndexer: DeployFunction = async function (hre: HardhatRuntimeEnvi
   const schemas = [
     { name: "ANCHOR", definition: "string name, bytes32 schemaUID", revocable: false },
     { name: "PROPERTY", definition: "string value", revocable: false },
-    { name: "DATA", definition: "bytes32 contentHash, uint64 size", revocable: false },
-    {
-      name: "BLOB",
-      definition: "string mimeType, uint8 storageType, bytes location",
-      revocable: true,
-      noResolver: true,
-    },
+    // DATA is an empty schema — pure file identity (ADR-0049). No fields; contentHash/size
+    // now live as lens-scoped reserved-key PROPERTYs bound to the DATA UID.
+    { name: "DATA", definition: "", revocable: false },
     { name: "PIN", definition: "bytes32 definition", revocable: true, useEdgeResolver: true },
     { name: "TAG", definition: "bytes32 definition, int256 weight", revocable: true, useEdgeResolver: true },
-    { name: "NAMING", definition: "bytes32 schemaId, string name", revocable: true, noResolver: true },
   ];
 
   // 3. Calculate Future Addresses
   // Deployment order:
   //   nonce+0: Deploy EdgeResolver
-  //   nonce+1 through nonce+7: Register 7 schemas (ANCHOR, PROPERTY, DATA, BLOB, PIN, TAG, NAMING)
-  //   nonce+8: Deploy EFSIndexer
+  //   nonce+1 through nonce+5: Register 5 schemas (ANCHOR, PROPERTY, DATA, PIN, TAG)
+  //   nonce+6: Deploy EFSIndexer
 
   const currentNonce = await ethers.provider.getTransactionCount(deployer);
   console.log("Current Nonce:", currentNonce);
 
   const futureEdgeResolverAddress = ethers.getCreateAddress({ from: deployer, nonce: currentNonce });
-  const futureIndexerAddress = ethers.getCreateAddress({ from: deployer, nonce: currentNonce + 8 });
+  const futureIndexerAddress = ethers.getCreateAddress({ from: deployer, nonce: currentNonce + 6 });
   console.log("Predicted EdgeResolver Address:", futureEdgeResolverAddress);
   console.log("Predicted EFSIndexer Address:", futureIndexerAddress);
 
@@ -140,7 +135,7 @@ const deployEFSIndexer: DeployFunction = async function (hre: HardhatRuntimeEnvi
   await deploy("Indexer", {
     contract: "EFSIndexer",
     from: deployer,
-    args: [EAS_ADDRESS, schemaUIDs["ANCHOR"], schemaUIDs["PROPERTY"], schemaUIDs["DATA"], schemaUIDs["BLOB"]],
+    args: [EAS_ADDRESS, schemaUIDs["ANCHOR"], schemaUIDs["PROPERTY"], schemaUIDs["DATA"]],
     log: true,
     autoMine: true,
   });
@@ -157,65 +152,7 @@ const deployEFSIndexer: DeployFunction = async function (hre: HardhatRuntimeEnvi
     );
   }
 
-  // 7. Deploy SchemaNameIndex
-  const namingSchemaUID = schemaUIDs["NAMING"];
-  await deploy("SchemaNameIndex", {
-    contract: "SchemaNameIndex",
-    from: deployer,
-    args: [EAS_ADDRESS, namingSchemaUID],
-    log: true,
-    autoMine: true,
-  });
-  const schemaNameIndex = await hre.ethers.getContract<Contract>("SchemaNameIndex", deployer);
-  console.log("SchemaNameIndex deployed at:", schemaNameIndex.target);
-
-  // 8. Attest Names for Schemas and Index them
-  console.log("Attesting and Indexing Schema Names...");
-  for (const schema of schemas) {
-    const name = `EFS ${schema.name.charAt(0).toUpperCase() + schema.name.slice(1).toLowerCase()} Schema`;
-    const targetSchemaUID = schemaUIDs[schema.name];
-
-    try {
-      const encodedData = ethers.AbiCoder.defaultAbiCoder().encode(["bytes32", "string"], [targetSchemaUID, name]);
-
-      const tx = await eas.attest({
-        schema: namingSchemaUID,
-        data: {
-          recipient: ethers.ZeroAddress,
-          expirationTime: 0n,
-          revocable: true,
-          refUID: ethers.ZeroHash,
-          data: encodedData,
-          value: 0n,
-        },
-      });
-      const receipt = await tx.wait();
-
-      const log = receipt?.logs.find((l: any) => {
-        try {
-          return eas.interface.parseLog(l)?.name === "Attested";
-        } catch {
-          return false;
-        }
-      });
-
-      if (log) {
-        const parsedLog = eas.interface.parseLog(log);
-        const attestationUID = parsedLog?.args.uid;
-        console.log(`Attested Name for ${schema.name}: ${attestationUID}`);
-
-        const indexTx = await schemaNameIndex.indexAttestation(attestationUID);
-        await indexTx.wait();
-        console.log(`Indexed Name for ${schema.name}`);
-      } else {
-        console.log(`Failed to find Attested event for ${schema.name}`);
-      }
-    } catch (e) {
-      console.error(`Failed to name ${schema.name}:`, e);
-    }
-  }
-
-  // 9. Create Root Anchor and "tags" Anchor
+  // 7. Create Root Anchor and "tags" Anchor
   //    Tag definitions (e.g. "favorites") are normal anchors under "tags", which is
   //    itself a normal anchor under root. One tree, uniform anchors throughout.
   const anchorSchemaUID = schemaUIDs["ANCHOR"];

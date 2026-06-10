@@ -1004,6 +1004,10 @@ export const CreateItemModal = ({
       }
 
       ops.log(opId, "Creating DATA attestation...");
+      // AGENT-NOTE: A2 ripple — DATA reshape (ADR-0049). DATA is now an empty schema; this
+      // encode(["bytes32","uint64"], …) and the dataByContentKey read above are stale. Upload
+      // must mint empty DATA ("0x") and attach contentHash/size as reserved-key PROPERTYs.
+      // Tracked for the A2 follow-up (SDK/nextjs upload-flow refactor).
       const encodedData = ethers.AbiCoder.defaultAbiCoder().encode(["bytes32", "uint64"], [contentHash, fileSize]);
       const dataTxHash = await attest(
         {

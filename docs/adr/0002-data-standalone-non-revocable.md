@@ -1,6 +1,6 @@
 # ADR-0002: DATA is standalone and non-revocable
 
-**Status:** Accepted
+**Status:** Accepted (superseded in part by ADR-0049 — DATA `contentHash`/`size` fields move out to reserved-key PROPERTYs; standalone + non-revocable still hold)
 **Date:** 2026-04-16 (formalized retroactively)
 **Related:** ADR-0001, ADR-0003
 

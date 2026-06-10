@@ -1,6 +1,6 @@
 # ADR-0005: ContentType moved from DATA to PROPERTY
 
-**Status:** Superseded by ADR-0035
+**Status:** Superseded by ADR-0035 (superseded in part by ADR-0049 — same move now applies to `contentHash`/`size` as reserved-key PROPERTYs)
 **Date:** 2026-04-16 (formalized retroactively)
 **Related:** ADR-0001, ADR-0014, ADR-0035 (unified free-floating PROPERTY model)
 

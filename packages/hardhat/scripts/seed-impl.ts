@@ -157,6 +157,10 @@ export async function seedDemoTree() {
     return uid;
   };
 
+  // AGENT-NOTE: A2 ripple — DATA reshape (ADR-0049). DATA is now an empty schema; encoding
+  // (contentHash, size) into the payload reverts against the reshaped resolver/registration.
+  // The seed must mint empty DATA ("0x") and attach contentHash/size as reserved-key PROPERTYs.
+  // Tracked for the A2 follow-up.
   /** Create a standalone DATA attestation (ADR-0002: refUID=0x0, non-revocable, (contentHash, size)). */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const makeData = async (signer: any, content: string): Promise<string> => {

@@ -126,6 +126,9 @@ async function main() {
     return getUID(tx);
   };
 
+  // AGENT-NOTE: A2 ripple — DATA reshape (ADR-0049). DATA is now empty; encoding
+  // (contentHash, size) reverts and dataByContentKey is no longer written. Mint empty DATA
+  // and attach contentHash/size as reserved-key PROPERTYs. Tracked for the A2 follow-up.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const createData = async (signer: any, content: string) => {
     const contentBytes = ethers.toUtf8Bytes(content);
