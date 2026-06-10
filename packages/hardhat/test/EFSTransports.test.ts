@@ -85,26 +85,28 @@ describe("EFS Transports & Data Model", function () {
     eas = await EASFactory.deploy(await registry.getAddress());
     await eas.waitForDeployment();
 
-    // Nonce prediction (both EFSIndexer and MirrorResolver are now proxy-ified, ADR-0048):
-    //   nonce+0:  EdgeResolver
-    //   nonce+1:  MirrorResolver implementation
-    //   nonce+2:  MirrorResolver proxy (the resolver baked into the MIRROR schema UID)
-    //   nonce+3:  ANCHOR schema
-    //   nonce+4:  PROPERTY schema
-    //   nonce+5:  DATA schema (empty — ADR-0049)
-    //   nonce+6:  PIN schema
-    //   nonce+7:  TAG schema
-    //   nonce+8:  MIRROR schema
-    //   nonce+9:  EFSIndexer implementation
-    //   nonce+10: EFSIndexer proxy (the resolver baked into the EFS schema UIDs)
-    //   nonce+11: EFSFileView
+    // Nonce prediction (EdgeResolver, MirrorResolver, and EFSIndexer are all proxy-ified, ADR-0048):
+    //   nonce+0:  EdgeResolver implementation
+    //   nonce+1:  EdgeResolver proxy (the resolver baked into the PIN/TAG schema UIDs)
+    //   nonce+2:  MirrorResolver implementation
+    //   nonce+3:  MirrorResolver proxy (the resolver baked into the MIRROR schema UID)
+    //   nonce+4:  ANCHOR schema
+    //   nonce+5:  PROPERTY schema
+    //   nonce+6:  DATA schema (empty — ADR-0049)
+    //   nonce+7:  PIN schema
+    //   nonce+8:  TAG schema
+    //   nonce+9:  MIRROR schema
+    //   nonce+10: EFSIndexer implementation
+    //   nonce+11: EFSIndexer proxy (the resolver baked into the EFS schema UIDs)
+    //   nonce+12: EFSFileView
     const currentNonce = await ethers.provider.getTransactionCount(ownerAddr);
 
-    const futureEdgeResolverAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce });
-    // MirrorResolver PROXY is the resolver (ADR-0048): impl = +1, proxy = +2.
-    const futureMirrorResolverAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce + 2 });
-    // EFSIndexer PROXY is the resolver (ADR-0048): impl = +9, proxy = +10. See deployIndexerProxy().
-    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce + 10 });
+    // EdgeResolver PROXY is the resolver (ADR-0048): impl = +0, proxy = +1. See deployResolverProxy().
+    const futureEdgeResolverAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce + 1 });
+    // MirrorResolver PROXY is the resolver (ADR-0048): impl = +2, proxy = +3.
+    const futureMirrorResolverAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce + 3 });
+    // EFSIndexer PROXY is the resolver (ADR-0048): impl = +10, proxy = +11. See deployIndexerProxy().
+    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce + 11 });
 
     // Pre-compute schema UIDs
     anchorSchemaUID = ethers.solidityPackedKeccak256(
@@ -130,15 +132,15 @@ describe("EFS Transports & Data Model", function () {
       ["bytes32 transportDefinition, string uri", futureMirrorResolverAddr, true],
     );
 
-    // Deploy EdgeResolver (PIN + TAG combined under one resolver)
-    const EdgeResolverFactory = await ethers.getContractFactory("EdgeResolver");
-    edgeResolver = await EdgeResolverFactory.deploy(
-      await eas.getAddress(),
-      pinSchemaUID,
-      tagSchemaUID,
-      futureIndexerAddr,
-      await registry.getAddress(),
+    // Deploy EdgeResolver behind a proxy (ADR-0048): impl + proxy; initialize() sets the PIN/TAG
+    // schema UIDs + partner refs. The proxy address is baked into the PIN/TAG schema UIDs.
+    edgeResolver = await deployResolverProxy<EdgeResolver>(
+      "EdgeResolver",
+      [await eas.getAddress()],
+      [pinSchemaUID, tagSchemaUID, futureIndexerAddr, await registry.getAddress()],
+      owner,
     );
+    expect(await edgeResolver.getAddress()).to.equal(futureEdgeResolverAddr);
 
     // Deploy MirrorResolver behind a proxy (ADR-0048). initialize() wires the (predicted) indexer
     // proxy address + owner; the proxy address is what's baked into the MIRROR schema UID.

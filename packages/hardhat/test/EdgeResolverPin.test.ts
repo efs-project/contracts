@@ -3,6 +3,7 @@ import { ethers } from "hardhat";
 import { EdgeResolver, EFSIndexer, EAS, SchemaRegistry } from "../typechain-types";
 import { Signer, ZeroAddress } from "ethers";
 import { deployIndexerProxy } from "./helpers/deployIndexerProxy";
+import { deployResolverProxy } from "./helpers/deployResolverProxy";
 
 const ZERO_BYTES32 = "0x0000000000000000000000000000000000000000000000000000000000000000";
 const NO_EXPIRATION = 0n;
@@ -54,18 +55,21 @@ describe("EdgeResolver — PIN", function () {
     eas = await EASFactory.deploy(await registry.getAddress());
     await eas.waitForDeployment();
 
-    // Pre-compute addresses. Deployment order:
-    //   resolverNonce+0: EdgeResolver
-    //   resolverNonce+1: PIN schema registration
-    //   resolverNonce+2: TAG schema registration
-    //   resolverNonce+3: DUMMY schema registration
-    //   resolverNonce+4: EFSIndexer implementation
-    //   resolverNonce+5: EFSIndexer proxy (the resolver — placeholder schema UIDs; only index() is exercised)
+    // Pre-compute addresses. Deployment order (both EdgeResolver and EFSIndexer are now proxied
+    // per ADR-0048 — the PROXY address is what the schema UIDs reference and what gets wired):
+    //   resolverNonce+0: EdgeResolver implementation
+    //   resolverNonce+1: EdgeResolver proxy (the resolver — baked into PIN/TAG schema UIDs)
+    //   resolverNonce+2: PIN schema registration
+    //   resolverNonce+3: TAG schema registration
+    //   resolverNonce+4: DUMMY schema registration
+    //   resolverNonce+5: EFSIndexer implementation
+    //   resolverNonce+6: EFSIndexer proxy (placeholder schema UIDs; only index() is exercised)
     const ownerAddr = await owner.getAddress();
     const resolverNonce = await ethers.provider.getTransactionCount(ownerAddr);
-    const futureEdgeResolverAddress = ethers.getCreateAddress({ from: ownerAddr, nonce: resolverNonce });
-    // PROXY is the resolver (ADR-0048): impl = +4, proxy = +5. See deployIndexerProxy().
-    const futureIndexerAddress = ethers.getCreateAddress({ from: ownerAddr, nonce: resolverNonce + 5 });
+    // PROXY is the resolver (ADR-0048): Edge impl = +0, Edge proxy = +1. See deployResolverProxy().
+    const futureEdgeResolverAddress = ethers.getCreateAddress({ from: ownerAddr, nonce: resolverNonce + 1 });
+    // PROXY is the resolver (ADR-0048): Indexer impl = +5, proxy = +6. See deployIndexerProxy().
+    const futureIndexerAddress = ethers.getCreateAddress({ from: ownerAddr, nonce: resolverNonce + 6 });
     const precomputedPinSchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
       ["bytes32 definition", futureEdgeResolverAddress, true],
@@ -75,15 +79,14 @@ describe("EdgeResolver — PIN", function () {
       ["bytes32 definition, int256 weight", futureEdgeResolverAddress, true],
     );
 
-    const EdgeResolverFactory = await ethers.getContractFactory("EdgeResolver");
-    edgeResolver = await EdgeResolverFactory.deploy(
-      await eas.getAddress(),
-      precomputedPinSchemaUID,
-      precomputedTagSchemaUID,
-      futureIndexerAddress,
-      await registry.getAddress(),
+    // EdgeResolver behind an ERC1967 proxy (ADR-0048): impl + proxy, config set via initialize().
+    edgeResolver = await deployResolverProxy<EdgeResolver>(
+      "EdgeResolver",
+      [await eas.getAddress()],
+      [precomputedPinSchemaUID, precomputedTagSchemaUID, futureIndexerAddress, await registry.getAddress()],
+      owner,
     );
-    await edgeResolver.waitForDeployment();
+    expect(await edgeResolver.getAddress()).to.equal(futureEdgeResolverAddress);
 
     // PIN schema: registered with EdgeResolver
     const pinSchemaTx = await registry.register("bytes32 definition", await edgeResolver.getAddress(), true);
@@ -212,6 +215,79 @@ describe("EdgeResolver — PIN", function () {
     const tx = await eas.connect(signer).revoke({ schema: pinSchemaUID, data: { uid, value: 0n } });
     await tx.wait();
   };
+
+  // ─── Proxy / initialize (ADR-0048) ───────────────────────────────────────────
+
+  describe("Proxy / initialize (ADR-0048)", function () {
+    it("Should reject a second initialize() on the proxy (initialize-once)", async function () {
+      // The proxy was already initialized in setup via deployResolverProxy. A second call must
+      // revert with OZ Initializable's InvalidInitialization — config is write-once.
+      await expect(
+        edgeResolver.initialize(pinSchemaUID, tagSchemaUID, await indexer.getAddress(), await registry.getAddress()),
+      ).to.be.revertedWithCustomError(edgeResolver, "InvalidInitialization");
+    });
+
+    it("Should lock the implementation's initializer (constructor ran _disableInitializers)", async function () {
+      // The bare implementation (not the proxy) can never be initialized — the base constructor
+      // runs _disableInitializers(). Deploy a fresh impl and confirm initialize() reverts.
+      const Factory = await ethers.getContractFactory("EdgeResolver");
+      const impl = await Factory.deploy(await eas.getAddress());
+      await impl.waitForDeployment();
+      await expect(
+        impl.initialize(pinSchemaUID, tagSchemaUID, await indexer.getAddress(), await registry.getAddress()),
+      ).to.be.revertedWithCustomError(impl, "InvalidInitialization");
+    });
+
+    it("Should expose the constructor EAS via getEAS() through the proxy", async function () {
+      // _eas stays a base constructor immutable (per-chain constant); it resolves correctly under
+      // the proxy's delegatecall because immutables live in the impl bytecode.
+      expect(await edgeResolver.getEAS()).to.equal(await eas.getAddress());
+    });
+
+    it("Should read the four former immutables from namespaced config through the proxy", async function () {
+      // The four constructor immutables migrated into ERC-7201 efs.edge.config, set in initialize().
+      // The public getter NAMES are preserved for ABI compatibility — assert they read the config.
+      expect(await edgeResolver.PIN_SCHEMA_UID()).to.equal(pinSchemaUID);
+      expect(await edgeResolver.TAG_SCHEMA_UID()).to.equal(tagSchemaUID);
+      expect(await edgeResolver.indexer()).to.equal(await indexer.getAddress());
+      expect(await edgeResolver.schemaRegistry()).to.equal(await registry.getAddress());
+    });
+
+    // The three cardinality-split invariants were constructor `require`s when EdgeResolver was
+    // deployed directly; they moved INTO initialize(). Deploying a proxy with bad args delegatecalls
+    // initialize() in the proxy constructor, so the require fires and the proxy deploy reverts.
+    const deployProxyWithInit = async (pin: string, tag: string) => {
+      const Factory = await ethers.getContractFactory("EdgeResolver");
+      const impl = await Factory.deploy(await eas.getAddress());
+      await impl.waitForDeployment();
+      const initData = impl.interface.encodeFunctionData("initialize", [
+        pin,
+        tag,
+        await indexer.getAddress(),
+        await registry.getAddress(),
+      ]);
+      const ProxyFactory = await ethers.getContractFactory("TestERC1967Proxy");
+      return ProxyFactory.deploy(await impl.getAddress(), initData);
+    };
+
+    it("Should revert initialize() when pinSchemaUID is zero", async function () {
+      await expect(deployProxyWithInit(ZERO_BYTES32, tagSchemaUID)).to.be.revertedWith(
+        "EdgeResolver: pinSchemaUID is zero",
+      );
+    });
+
+    it("Should revert initialize() when tagSchemaUID is zero", async function () {
+      await expect(deployProxyWithInit(pinSchemaUID, ZERO_BYTES32)).to.be.revertedWith(
+        "EdgeResolver: tagSchemaUID is zero",
+      );
+    });
+
+    it("Should revert initialize() when PIN and TAG schema UIDs are equal", async function () {
+      await expect(deployProxyWithInit(pinSchemaUID, pinSchemaUID)).to.be.revertedWith(
+        "EdgeResolver: PIN and TAG schemas must differ",
+      );
+    });
+  });
 
   // ─── Basic attesting ───────────────────────────────────────────────────────
 

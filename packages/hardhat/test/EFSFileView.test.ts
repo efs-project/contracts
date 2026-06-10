@@ -3,6 +3,7 @@ import { ethers } from "hardhat";
 import { EFSIndexer, EFSFileView, EdgeResolver, EAS, SchemaRegistry } from "../typechain-types";
 import { Signer, ZeroAddress } from "ethers";
 import { deployIndexerProxy } from "./helpers/deployIndexerProxy";
+import { deployResolverProxy } from "./helpers/deployResolverProxy";
 
 const ZERO_BYTES32 = "0x0000000000000000000000000000000000000000000000000000000000000000";
 const NO_EXPIRATION = 0n;
@@ -60,14 +61,16 @@ describe("EFSFileView", function () {
     const ownerAddr = await owner.getAddress();
     const nonce = await ethers.provider.getTransactionCount(ownerAddr);
 
-    // Deploy order:
-    //   nonce+0: EdgeResolver
-    //   nonce+1..5: Anchor, Property, Data, PIN, TAG schema registrations (5 total)
-    //   nonce+6: Indexer implementation
-    //   nonce+7: Indexer proxy (the resolver)
-    const futureEdgeResolverAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: nonce });
-    // PROXY is the resolver (ADR-0048): impl = nonce+6, proxy = nonce+7. See deployIndexerProxy().
-    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: nonce + 7 });
+    // Deploy order (both EdgeResolver and EFSIndexer are proxied per ADR-0048):
+    //   nonce+0: EdgeResolver implementation
+    //   nonce+1: EdgeResolver proxy (the resolver baked into the PIN/TAG schema UIDs)
+    //   nonce+2..6: Anchor, Property, Data, PIN, TAG schema registrations (5 total)
+    //   nonce+7: Indexer implementation
+    //   nonce+8: Indexer proxy (the resolver)
+    // EdgeResolver PROXY is the resolver (ADR-0048): impl = nonce+0, proxy = nonce+1.
+    const futureEdgeResolverAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: nonce + 1 });
+    // PROXY is the resolver (ADR-0048): impl = nonce+7, proxy = nonce+8. See deployIndexerProxy().
+    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: nonce + 8 });
     const precomputedPinSchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
       ["bytes32 definition", futureEdgeResolverAddr, true],
@@ -77,16 +80,15 @@ describe("EFSFileView", function () {
       ["bytes32 definition, int256 weight", futureEdgeResolverAddr, true],
     );
 
-    // Deploy EdgeResolver first
-    const EdgeResolverFactory = await ethers.getContractFactory("EdgeResolver");
-    edgeResolver = await EdgeResolverFactory.deploy(
-      await eas.getAddress(),
-      precomputedPinSchemaUID,
-      precomputedTagSchemaUID,
-      futureIndexerAddr,
-      await registry.getAddress(),
+    // Deploy EdgeResolver first, behind a proxy (ADR-0048): impl + proxy; initialize() sets the
+    // PIN/TAG schema UIDs + partner refs. The proxy address is baked into the PIN/TAG schema UIDs.
+    edgeResolver = await deployResolverProxy<EdgeResolver>(
+      "EdgeResolver",
+      [await eas.getAddress()],
+      [precomputedPinSchemaUID, precomputedTagSchemaUID, futureIndexerAddr, await registry.getAddress()],
+      owner,
     );
-    await edgeResolver.waitForDeployment();
+    expect(await edgeResolver.getAddress()).to.equal(futureEdgeResolverAddr);
 
     // Register Schemas (aligned with canonical EFSIndexer and EFSRouter schemas)
     const tx1 = await registry.register("string name, bytes32 schemaUID", futureIndexerAddr, false);

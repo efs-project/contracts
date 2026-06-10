@@ -3,6 +3,7 @@ import { ethers } from "hardhat";
 import { EdgeResolver, EFSIndexer, EAS, SchemaRegistry } from "../typechain-types";
 import { Signer, ZeroAddress } from "ethers";
 import { deployIndexerProxy } from "./helpers/deployIndexerProxy";
+import { deployResolverProxy } from "./helpers/deployResolverProxy";
 
 const ZERO_BYTES32 = "0x0000000000000000000000000000000000000000000000000000000000000000";
 const NO_EXPIRATION = 0n;
@@ -64,20 +65,22 @@ describe("EdgeResolver — contains-flag bookkeeping (address-target safety)", f
     eas = await EASFactory.deploy(await registry.getAddress());
     await eas.waitForDeployment();
 
-    // Deployment plan:
-    //   nonce+0: EdgeResolver
-    //   nonce+1: ANCHOR schema
-    //   nonce+2: PROPERTY schema (placeholder, not used here)
-    //   nonce+3: DATA schema (placeholder)
-    //   nonce+4: PIN schema
-    //   nonce+5: TAG schema
-    //   nonce+6: EFSIndexer implementation
-    //   nonce+7: EFSIndexer proxy (the resolver)
+    // Deployment plan (both EdgeResolver and EFSIndexer are proxied per ADR-0048):
+    //   nonce+0: EdgeResolver implementation
+    //   nonce+1: EdgeResolver proxy (the resolver — baked into PIN/TAG schema UIDs)
+    //   nonce+2: ANCHOR schema
+    //   nonce+3: PROPERTY schema (placeholder, not used here)
+    //   nonce+4: DATA schema (placeholder)
+    //   nonce+5: PIN schema
+    //   nonce+6: TAG schema
+    //   nonce+7: EFSIndexer implementation
+    //   nonce+8: EFSIndexer proxy (the resolver)
     const ownerAddr = await owner.getAddress();
     const resolverNonce = await ethers.provider.getTransactionCount(ownerAddr);
-    const futureEdgeResolverAddress = ethers.getCreateAddress({ from: ownerAddr, nonce: resolverNonce });
-    // PROXY is the resolver (ADR-0048): impl = +6, proxy = +7. See deployIndexerProxy().
-    const futureIndexerAddress = ethers.getCreateAddress({ from: ownerAddr, nonce: resolverNonce + 7 });
+    // PROXY is the resolver (ADR-0048): Edge impl = +0, Edge proxy = +1. See deployResolverProxy().
+    const futureEdgeResolverAddress = ethers.getCreateAddress({ from: ownerAddr, nonce: resolverNonce + 1 });
+    // PROXY is the resolver (ADR-0048): Indexer impl = +7, proxy = +8. See deployIndexerProxy().
+    const futureIndexerAddress = ethers.getCreateAddress({ from: ownerAddr, nonce: resolverNonce + 8 });
     const precomputedPinSchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
       ["bytes32 definition", futureEdgeResolverAddress, true],
@@ -87,15 +90,14 @@ describe("EdgeResolver — contains-flag bookkeeping (address-target safety)", f
       ["bytes32 definition, int256 weight", futureEdgeResolverAddress, true],
     );
 
-    const EdgeResolverFactory = await ethers.getContractFactory("EdgeResolver");
-    edgeResolver = await EdgeResolverFactory.deploy(
-      await eas.getAddress(),
-      precomputedPinSchemaUID,
-      precomputedTagSchemaUID,
-      futureIndexerAddress,
-      await registry.getAddress(),
+    // EdgeResolver behind an ERC1967 proxy (ADR-0048): impl + proxy, config set via initialize().
+    edgeResolver = await deployResolverProxy<EdgeResolver>(
+      "EdgeResolver",
+      [await eas.getAddress()],
+      [precomputedPinSchemaUID, precomputedTagSchemaUID, futureIndexerAddress, await registry.getAddress()],
+      owner,
     );
-    await edgeResolver.waitForDeployment();
+    expect(await edgeResolver.getAddress()).to.equal(futureEdgeResolverAddress);
 
     // ANCHOR: registered with the (future) indexer so anchor attestations route through it
     // and `_containsAttestations[anchor][creator]` actually gets set on create.
