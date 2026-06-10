@@ -3,11 +3,12 @@ import { ethers } from "hardhat";
 import { MockUpgradeableResolver } from "../typechain-types";
 
 // NOTE: this suite deploys the proxy by hand via OpenZeppelin's ERC1967Proxy rather
-// than the hardhat-upgrades plugin. The `@openzeppelin/hardhat-upgrades` version
-// pinned in this workspace (4.x) targets Hardhat 3 and cannot load under this repo's
-// Hardhat 2 toolchain (it imports `hardhat/types/config` ESM that doesn't resolve).
-// The manual ERC1967Proxy path is the spec-sanctioned alternative and has no plugin
-// dependency, so it's the clean choice here. See report / decisions.md.
+// than the hardhat-upgrades plugin. `@openzeppelin/hardhat-upgrades` is pinned to the
+// Hardhat-2 line (3.9.1) and IS wired into hardhat.config — but its `validateUpgrade`
+// fights our deliberate pattern (a `SchemaResolver(eas)` immutable constructor arg +
+// `_disableInitializers()`), so we deploy proxies manually and gate storage-layout via
+// a committed snapshot instead (see test/helpers/storageLayout.ts). Manual ERC1967Proxy
+// has no plugin dependency and is the clean choice here. See decisions.md.
 
 // A stand-in EAS address. The base resolver only stores it as an immutable and
 // exposes it via getEAS(); no EAS calls are made in these tests, so any non-zero
