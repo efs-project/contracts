@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
-import { SchemaResolver } from "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol";
 import { IEAS, Attestation } from "@ethereum-attestation-service/eas-contracts/contracts/IEAS.sol";
+import { EFSUpgradeableResolver } from "./base/EFSUpgradeableResolver.sol";
 
 /**
  * @title ListEntryResolver
@@ -24,8 +24,29 @@ import { IEAS, Attestation } from "@ethereum-attestation-service/eas-contracts/c
  *        ADDR (1): recipient = address (incl. 0); target must be bytes32(0)
  *        SCHEMA (2): target = attestation UID (must exist, schema must match); recipient = 0
  *        ANY (0):  target = opaque nonzero bytes32 member key; recipient = 0
+ *
+ *      Upgradeable (ADR-0048): runs behind an ERC1967 proxy whose ADDRESS is the EAS resolver
+ *      baked into the LIST_ENTRY schema UID. The two former constructor immutables
+ *      (LIST_SCHEMA_UID, _listEntrySchemaUID) moved into ERC-7201 namespaced storage
+ *      (`efs.listentry.config`) set once via initialize() — immutables live in the impl's
+ *      bytecode and would read the impl's construction-time values, not the proxy's, under
+ *      delegatecall.
+ *
+ *      CRITICAL self-UID fix: the LIST_ENTRY schema UID self-derivation
+ *      (keccak256(LIST_ENTRY_DEFINITION, address(this), true)) MUST run in initialize(), where
+ *      the proxy's delegatecall makes address(this) == the PROXY. In the old constructor it ran
+ *      in the IMPLEMENTATION's context (address(this) == impl), so the stored UID would diverge
+ *      from the proxy-registered EAS schema UID and onAttest/onRevoke would reject EVERY entry
+ *      with WrongSchema. See initialize() and listEntrySchemaUID().
+ *
+ *      The consensus-critical EntryRecord index state (slots 0–5: _decl, _entries, _entryCount,
+ *      _entryPosPlusOne, _listAttesters, _isListAttester) is append-only (ADR-0009) and is NOT
+ *      migrated — those mappings keep their exact sequential slots. The namespaced config slot
+ *      lives high (away from slot 0), so it cannot collide. ListEntryResolver has no
+ *      deployer/owner-gated functions, so it does NOT inherit OwnableUpgradeable — config is set
+ *      exactly once in initialize() and never mutated after.
  */
-contract ListEntryResolver is SchemaResolver {
+contract ListEntryResolver is EFSUpgradeableResolver {
     // ── Errors ──────────────────────────────────────────────────────────────────
     error BadPayload();
     error WrongSchema();
@@ -68,12 +89,54 @@ contract ListEntryResolver is SchemaResolver {
     // the schema UID at registration). Used to self-derive this resolver's own LIST_ENTRY
     // schema UID so onAttest/onRevoke can reject attestations from any OTHER schema that an
     // attacker registers pointing at this resolver (which would otherwise bypass write-time
-    // enforcement and pollute membership state). See `_listEntrySchemaUID`.
+    // enforcement and pollute membership state). See the namespaced config + listEntrySchemaUID().
     string private constant LIST_ENTRY_DEFINITION = "bytes32 listUID, bytes32 target";
-    bytes32 public immutable LIST_SCHEMA_UID;
-    // EAS UID = keccak256(abi.encodePacked(schemaString, resolver, revocable)); the resolver
-    // address (this) and revocable (true) are fixed, so we can recompute our own schema UID.
-    bytes32 private immutable _listEntrySchemaUID;
+
+    // ============================================================================================
+    // ERC-7201 NAMESPACED CONFIG (per-deployment, set in initialize())
+    // ============================================================================================
+    // LIST_SCHEMA_UID and the self-derived LIST_ENTRY schema UID were constructor immutables when
+    // ListEntryResolver was deployed directly. Under the upgradeable-proxy pattern (ADR-0048) the
+    // implementation runs via the proxy's delegatecall, so immutables (which live in the impl's
+    // bytecode) would read the impl's construction-time values, not the proxy's. They therefore
+    // move into ERC-7201 namespaced storage written once in initialize(). The namespaced slot sits
+    // far from slot 0, so it cannot collide with the consensus-critical sequential mapping layout
+    // below (slots 0–5, ADR-0009).
+
+    /// @custom:storage-location erc7201:efs.listentry.config
+    struct ListEntryConfig {
+        bytes32 listSchemaUID;
+        bytes32 listEntrySchemaUID;
+    }
+
+    // keccak256(abi.encode(uint256(keccak256("efs.listentry.config")) - 1)) & ~bytes32(uint256(0xff))
+    bytes32 private constant LISTENTRY_CONFIG_SLOT = 0xc8fe6f31aa81c74d03ea5598de5ffa4582f1edd708ad9c21f6b1fb3027cf0a00;
+
+    function _cfg() private pure returns (ListEntryConfig storage $) {
+        assembly {
+            $.slot := LISTENTRY_CONFIG_SLOT
+        }
+    }
+
+    // Public getters preserved/added for ABI/consumer compatibility — they read the ERC-7201
+    // config struct instead of construction-time immutables.
+
+    /// @notice The LIST schema UID this resolver validates entry → list linkage against.
+    /// @dev Preserved by NAME (the deploy freeze-gate reads it). Now reads namespaced storage.
+    function LIST_SCHEMA_UID() public view returns (bytes32) {
+        return _cfg().listSchemaUID;
+    }
+
+    /// @notice This resolver's own LIST_ENTRY schema UID, self-derived in initialize() against the
+    ///         PROXY address (keccak256(LIST_ENTRY_DEFINITION, address(this), true)).
+    /// @dev Read on-chain by the deploy verify-gate and the golden-vector test to assert it equals
+    ///      the proxy-registered EAS schema UID. EAS UID =
+    ///      keccak256(abi.encodePacked(schemaString, resolver, revocable)); resolver (the proxy)
+    ///      and revocable (true) are fixed, so the value is deterministic once the proxy address is
+    ///      known. onAttest/onRevoke use this to reject foreign schemas pointed at this resolver.
+    function listEntrySchemaUID() external view returns (bytes32) {
+        return _cfg().listEntrySchemaUID;
+    }
 
     // ── Storage: LIST declaration cache ─────────────────────────────────────────
     struct CachedListDecl {
@@ -101,7 +164,8 @@ contract ListEntryResolver is SchemaResolver {
     mapping(bytes32 listUID => mapping(address attester => EntryRecord[])) private _entries;
 
     // O(1) membership + no-dupes counter
-    mapping(bytes32 listUID => mapping(bytes32 identityKey => mapping(address attester => uint256))) private _entryCount;
+    mapping(bytes32 listUID => mapping(bytes32 identityKey => mapping(address attester => uint256)))
+        private _entryCount;
 
     // Swap-and-pop index: entryUID → (position in _entries[list][attester]) + 1
     mapping(bytes32 entryUID => uint256) private _entryPosPlusOne;
@@ -114,11 +178,30 @@ contract ListEntryResolver is SchemaResolver {
     mapping(bytes32 listUID => address[]) private _listAttesters;
     mapping(bytes32 listUID => mapping(address attester => bool)) private _isListAttester;
 
-    // ── Constructor ─────────────────────────────────────────────────────────────
-    constructor(IEAS eas, bytes32 listSchemaUID) SchemaResolver(eas) {
+    // ── Constructor / initializer ─────────────────────────────────────────────────
+    /// @param eas The canonical EAS for the target chain. Stays a constructor immutable on the
+    ///            base (EAS is a per-chain constant; see EFSUpgradeableResolver NatSpec). The base
+    ///            constructor also runs `_disableInitializers()` so the implementation itself can
+    ///            never be initialized — only a proxy can.
+    constructor(IEAS eas) EFSUpgradeableResolver(eas) {}
+
+    /// @notice One-time per-deployment initialization, run behind the proxy.
+    /// @dev Guarded by `initializer` — callable exactly once per proxy. Sets the LIST schema UID
+    ///      and self-derives this resolver's own LIST_ENTRY schema UID.
+    ///
+    ///      The self-UID derivation MUST live here, NOT in the constructor: under the proxy's
+    ///      delegatecall `address(this)` is the PROXY, which is the resolver address baked into the
+    ///      LIST_ENTRY schema UID at EAS registration. Deriving it in the constructor would use the
+    ///      IMPLEMENTATION address, producing a UID that diverges from the registered one — and
+    ///      onAttest/onRevoke (which compare `a.schema` against the stored UID) would then reject
+    ///      EVERY genuine LIST_ENTRY with WrongSchema. (ADR-0048.)
+    /// @param listSchemaUID The LIST schema UID entries are validated against.
+    function initialize(bytes32 listSchemaUID) external initializer {
         require(listSchemaUID != bytes32(0), "listSchemaUID is zero");
-        LIST_SCHEMA_UID = listSchemaUID;
-        _listEntrySchemaUID = keccak256(abi.encodePacked(LIST_ENTRY_DEFINITION, address(this), true));
+        ListEntryConfig storage $ = _cfg();
+        $.listSchemaUID = listSchemaUID;
+        // address(this) == proxy here (delegatecall) — matches the EAS-registered resolver.
+        $.listEntrySchemaUID = keccak256(abi.encodePacked(LIST_ENTRY_DEFINITION, address(this), true));
     }
 
     // ── Resolver hooks ──────────────────────────────────────────────────────────
@@ -127,7 +210,8 @@ contract ListEntryResolver is SchemaResolver {
         // Only LIST_ENTRY attestations may mutate membership state. EAS lets anyone register
         // a new schema pointing at this resolver; without this guard such a schema's attests
         // would be processed as entries, bypassing the write-time type/dup/cap enforcement.
-        if (a.schema != _listEntrySchemaUID) revert WrongSchema();
+        ListEntryConfig storage $ = _cfg();
+        if (a.schema != $.listEntrySchemaUID) revert WrongSchema();
         if (a.data.length != EXPECTED_ENTRY_DATA_LEN) revert BadPayload();
 
         // Lifecycle invariants (ADR-0044)
@@ -142,9 +226,11 @@ contract ListEntryResolver is SchemaResolver {
         CachedListDecl memory d = _decl[listUID];
         if (!d.exists) {
             Attestation memory L = _eas.getAttestation(listUID);
-            if (L.schema != LIST_SCHEMA_UID) revert NotAList();
-            (d.allowsDuplicates, d.appendOnly, d.targetType, d.targetSchema, d.maxEntries) =
-                abi.decode(L.data, (bool, bool, uint8, bytes32, uint256));
+            if (L.schema != $.listSchemaUID) revert NotAList();
+            (d.allowsDuplicates, d.appendOnly, d.targetType, d.targetSchema, d.maxEntries) = abi.decode(
+                L.data,
+                (bool, bool, uint8, bytes32, uint256)
+            );
             d.exists = true;
             _decl[listUID] = d;
         }
@@ -197,14 +283,14 @@ contract ListEntryResolver is SchemaResolver {
     }
 
     function onRevoke(Attestation calldata a, uint256) internal override returns (bool) {
-        if (a.schema != _listEntrySchemaUID) revert WrongSchema();
+        if (a.schema != _cfg().listEntrySchemaUID) revert WrongSchema();
         if (a.data.length != EXPECTED_ENTRY_DATA_LEN) revert BadPayload();
 
         // Idempotency check FIRST — stale revoke (entryUID not indexed) → silent no-op
         uint256 pp1 = _entryPosPlusOne[a.uid];
         if (pp1 == 0) return true;
 
-        (bytes32 listUID,) = abi.decode(a.data, (bytes32, bytes32));
+        (bytes32 listUID, ) = abi.decode(a.data, (bytes32, bytes32));
 
         CachedListDecl memory d = _decl[listUID];
         // Unreachable in normal EAS flow: the `pp1 == 0` guard above already returned for any
