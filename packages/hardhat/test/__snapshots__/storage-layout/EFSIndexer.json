@@ -1,0 +1,194 @@
+[
+  {
+    "slot": "0",
+    "offset": 0,
+    "label": "rootAnchorUID",
+    "type": "bytes32"
+  },
+  {
+    "slot": "1",
+    "offset": 0,
+    "label": "PIN_SCHEMA_UID",
+    "type": "bytes32"
+  },
+  {
+    "slot": "2",
+    "offset": 0,
+    "label": "TAG_SCHEMA_UID",
+    "type": "bytes32"
+  },
+  {
+    "slot": "3",
+    "offset": 0,
+    "label": "SORT_INFO_SCHEMA_UID",
+    "type": "bytes32"
+  },
+  {
+    "slot": "4",
+    "offset": 0,
+    "label": "MIRROR_SCHEMA_UID",
+    "type": "bytes32"
+  },
+  {
+    "slot": "5",
+    "offset": 0,
+    "label": "edgeResolver",
+    "type": "address"
+  },
+  {
+    "slot": "6",
+    "offset": 0,
+    "label": "sortOverlay",
+    "type": "address"
+  },
+  {
+    "slot": "7",
+    "offset": 0,
+    "label": "mirrorResolver",
+    "type": "address"
+  },
+  {
+    "slot": "8",
+    "offset": 0,
+    "label": "schemaRegistry",
+    "type": "address"
+  },
+  {
+    "slot": "9",
+    "offset": 0,
+    "label": "sortsAnchorUID",
+    "type": "bytes32"
+  },
+  {
+    "slot": "10",
+    "offset": 0,
+    "label": "dataByContentKey",
+    "type": "mapping(bytes32 => bytes32)"
+  },
+  {
+    "slot": "11",
+    "offset": 0,
+    "label": "_isRevoked",
+    "type": "mapping(bytes32 => bool)"
+  },
+  {
+    "slot": "12",
+    "offset": 0,
+    "label": "_indexed",
+    "type": "mapping(bytes32 => bool)"
+  },
+  {
+    "slot": "13",
+    "offset": 0,
+    "label": "_nameToAnchor",
+    "type": "mapping(bytes32 => mapping(string => mapping(bytes32 => bytes32)))"
+  },
+  {
+    "slot": "14",
+    "offset": 0,
+    "label": "_children",
+    "type": "mapping(bytes32 => bytes32[])"
+  },
+  {
+    "slot": "15",
+    "offset": 0,
+    "label": "_childrenBySchema",
+    "type": "mapping(bytes32 => mapping(bytes32 => bytes32[]))"
+  },
+  {
+    "slot": "16",
+    "offset": 0,
+    "label": "_parents",
+    "type": "mapping(bytes32 => bytes32)"
+  },
+  {
+    "slot": "17",
+    "offset": 0,
+    "label": "_childrenByAttester",
+    "type": "mapping(bytes32 => mapping(address => bytes32[]))"
+  },
+  {
+    "slot": "18",
+    "offset": 0,
+    "label": "_childInChildrenByAttester",
+    "type": "mapping(bytes32 => mapping(address => mapping(bytes32 => bool)))"
+  },
+  {
+    "slot": "19",
+    "offset": 0,
+    "label": "_schemaAttestations",
+    "type": "mapping(bytes32 => bytes32[])"
+  },
+  {
+    "slot": "20",
+    "offset": 0,
+    "label": "_sentAttestations",
+    "type": "mapping(address => mapping(bytes32 => bytes32[]))"
+  },
+  {
+    "slot": "21",
+    "offset": 0,
+    "label": "_schemaAttesterAttestations",
+    "type": "mapping(bytes32 => mapping(address => bytes32[]))"
+  },
+  {
+    "slot": "22",
+    "offset": 0,
+    "label": "_receivedAttestations",
+    "type": "mapping(address => mapping(bytes32 => bytes32[]))"
+  },
+  {
+    "slot": "23",
+    "offset": 0,
+    "label": "_referencingAttestations",
+    "type": "mapping(bytes32 => mapping(bytes32 => bytes32[]))"
+  },
+  {
+    "slot": "24",
+    "offset": 0,
+    "label": "_referencingSchemas",
+    "type": "mapping(bytes32 => bytes32[])"
+  },
+  {
+    "slot": "25",
+    "offset": 0,
+    "label": "_hasReferencingSchema",
+    "type": "mapping(bytes32 => mapping(bytes32 => bool))"
+  },
+  {
+    "slot": "26",
+    "offset": 0,
+    "label": "_allReferencing",
+    "type": "mapping(bytes32 => bytes32[])"
+  },
+  {
+    "slot": "27",
+    "offset": 0,
+    "label": "_referencingByAttester",
+    "type": "mapping(bytes32 => mapping(address => bytes32[]))"
+  },
+  {
+    "slot": "28",
+    "offset": 0,
+    "label": "_referencingBySchemaAndAttester",
+    "type": "mapping(bytes32 => mapping(bytes32 => mapping(address => bytes32[])))"
+  },
+  {
+    "slot": "29",
+    "offset": 0,
+    "label": "_containsAttestations",
+    "type": "mapping(bytes32 => mapping(address => bool))"
+  },
+  {
+    "slot": "30",
+    "offset": 0,
+    "label": "_containsSchemaAttestations",
+    "type": "mapping(bytes32 => mapping(address => mapping(bytes32 => bool)))"
+  },
+  {
+    "slot": "31",
+    "offset": 0,
+    "label": "_anchorSchemaOf",
+    "type": "mapping(bytes32 => bytes32)"
+  }
+]

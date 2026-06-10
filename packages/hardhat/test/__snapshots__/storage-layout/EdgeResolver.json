@@ -1,0 +1,74 @@
+[
+  {
+    "slot": "0",
+    "offset": 0,
+    "label": "_activeEdge",
+    "type": "mapping(bytes32 => bytes32)"
+  },
+  {
+    "slot": "1",
+    "offset": 0,
+    "label": "_activeCount",
+    "type": "mapping(bytes32 => uint256)"
+  },
+  {
+    "slot": "2",
+    "offset": 0,
+    "label": "_edgeDefinitions",
+    "type": "mapping(bytes32 => bytes32[])"
+  },
+  {
+    "slot": "3",
+    "offset": 0,
+    "label": "_hasEdgeDef",
+    "type": "mapping(bytes32 => mapping(bytes32 => bool))"
+  },
+  {
+    "slot": "4",
+    "offset": 0,
+    "label": "_targetsByDef",
+    "type": "mapping(bytes32 => bytes32[])"
+  },
+  {
+    "slot": "5",
+    "offset": 0,
+    "label": "_hasTargetForDef",
+    "type": "mapping(bytes32 => mapping(bytes32 => bool))"
+  },
+  {
+    "slot": "6",
+    "offset": 0,
+    "label": "_childrenWithEdge",
+    "type": "mapping(bytes32 => mapping(bytes32 => bytes32[]))"
+  },
+  {
+    "slot": "7",
+    "offset": 0,
+    "label": "_isChildWithEdge",
+    "type": "mapping(bytes32 => mapping(bytes32 => mapping(bytes32 => bool)))"
+  },
+  {
+    "slot": "8",
+    "offset": 0,
+    "label": "_activeTotalByDefAndAttester",
+    "type": "mapping(bytes32 => mapping(address => uint256))"
+  },
+  {
+    "slot": "9",
+    "offset": 0,
+    "label": "_activeBySlot",
+    "type": "mapping(bytes32 => mapping(address => mapping(bytes32 => struct EdgeResolver.SlotEntry)))"
+  },
+  {
+    "slot": "10",
+    "offset": 0,
+    "label": "_activeByAAS",
+    "type": "mapping(bytes32 => mapping(address => mapping(bytes32 => struct EdgeResolver.TagEntry[])))"
+  },
+  {
+    "slot": "11",
+    "offset": 0,
+    "label": "_activeByAASIndex",
+    "type": "mapping(bytes32 => mapping(address => mapping(bytes32 => mapping(bytes32 => uint256))))"
+  }
+]
