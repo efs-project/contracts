@@ -56,7 +56,9 @@ someone else's DATA.
 > name for this concept. ADR-0043 (2026-05-05) renamed it to "lenses" across
 > the entire codebase, including ADRs 0013, 0014, 0026, 0031, and 0039.*
 
-## Nine EAS schemas
+## Nine frozen EAS schemas
+
+The Sepolia freeze set is **nine** schemas: ANCHOR, DATA, MIRROR, PIN, TAG, PROPERTY, LIST, LIST_ENTRY, REDIRECT. SORT_INFO is **deferred** — not in the freeze set (see its row below); it remains a working overlay design (`07-Sort-Overlay-Architecture.md`) but is not registered as a frozen schema in this set.
 
 | Schema | Revocable | Purpose |
 |---|---|---|
@@ -66,9 +68,10 @@ someone else's DATA.
 | **PIN** | yes | Cardinality-1 edge. Places one thing per `(attester, definition, targetSchema)` slot. File placement, PROPERTY value binding (`contentType`, `name`, …). Re-attesting supersedes in O(1). ADR-0041. |
 | **TAG** | yes | Cardinality-N edge. Accumulates entries per slot. Folder visibility (ADR-0038), descriptive labels (`#nsfw`, …), schema-alias discovery. Each entry carries an `int256 weight` for sort/score metadata. ADR-0041. Active = unrevoked (kernel). For the explorer label-filter only, *effective* = active with `weight >= 0` (ADR-0042). |
 | PROPERTY | no | Free-floating string value, placed on a container via PIN under a PROPERTY-typed "key" anchor (ADR-0035 → ADR-0041). Symmetric with DATA. Reserved key anchor names: `contentType` (ADR-0005), `name` (ADR-0034). |
-| SORT_INFO | yes | Declares a sort scheme for a folder (sort function + target schema). |
+| SORT_INFO | yes | **Deferred — NOT in the Sepolia freeze set.** Declares a sort scheme for a folder (sort function + target schema). Working overlay design (`07-Sort-Overlay-Architecture.md`); not frozen in this set. |
 | **LIST** | no | Curated collection declaration. Permanent identity (like DATA). Fields: `bool allowsDuplicates, bool appendOnly, uint8 targetType, bytes32 targetSchema, uint256 maxEntries`. Three modes: ANY (0), ADDR (1), SCHEMA (2). Enforced by ListResolver. ADR-0044, ADR-0047. |
 | **LIST_ENTRY** | yes | Member entry in a LIST — pure membership identity. Fields: `bytes32 listUID, bytes32 target` (ADR-0046; order + free-text label are PIN-bound PROPERTYs on the stable entry UID, not fields). Per-attester lens storage with wide EntryRecord[] for O(N) on-chain iteration. Enforced by ListEntryResolver. ADR-0044, ADR-0046. |
+| **REDIRECT** | yes | Trust-scoped "this points at that" — canonical/dedup (`sameAs`), version supersession (`supersededBy`), path symlinks. Fields: `bytes32 target, uint16 kind` (FROZEN). `refUID` = source. Kinds `0=sameAs / 1=supersededBy / 2=symlink / 3+=reserved` (taxonomy is resolver+client logic, not in the UID). Write-time guards only (no self-loop, per-kind typing) by AliasResolver; read-time multi-hop resolution is client/spec. ADR-0050. |
 
 Full field definitions and resolver wiring: `02-Data-Models-and-Schemas.md`.
 
@@ -87,6 +90,7 @@ Full field definitions and resolver wiring: `02-Data-Models-and-Schemas.md`.
 | ListResolver | LIST schema hook. Validates shape; no state. | No | No — baked into LIST_SCHEMA_UID at registration |
 | ListEntryResolver | LIST_ENTRY schema hook. Wide EntryRecord[] storage, swap-and-pop removal, per-attester lens. | Yes | No — baked into LIST_ENTRY_SCHEMA_UID at registration |
 | ListReader | Stateless view over ListEntryResolver + EAS. getMode, length, entries, countOf, typed accessors. | No | Yes — address not baked into any schema UID |
+| AliasResolver | REDIRECT schema hook (ADR-0050). Write-time guards only: no self-loop, per-kind typing (sameAs/supersededBy → DATA↔DATA; symlink → Anchor source). No read-time resolution. | No | No — baked into REDIRECT_SCHEMA_UID at registration |
 
 "Not redeployable" means the contract's address is baked into one or more schema UIDs at registration. Replacing it breaks every attestation under those schemas.
 

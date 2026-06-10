@@ -1,6 +1,6 @@
 # Data Models and Schemas
 
-EFS uses nine core EAS schemas arranged in three conceptual layers, adhering to the principles outlined in [System Architecture](./01-System-Architecture.md). These schemas interact through `refUID` links and edge attestations (PIN / TAG) to create a hierarchical, permissionless filesystem state natively on Ethereum. For details on how these are tracked, refer to the [Onchain Indexing Strategy](./03-Onchain-Indexing-Strategy.md).
+EFS arranges its EAS schemas in three conceptual layers, adhering to the principles outlined in [System Architecture](./01-System-Architecture.md). The **Sepolia freeze set is nine schemas** — ANCHOR, DATA, MIRROR, PIN, TAG, PROPERTY, LIST, LIST_ENTRY, REDIRECT (SORT_INFO is documented below but **deferred / not in the freeze set**). These schemas interact through `refUID` links and edge attestations (PIN / TAG) to create a hierarchical, permissionless filesystem state natively on Ethereum. For details on how these are tracked, refer to the [Onchain Indexing Strategy](./03-Onchain-Indexing-Strategy.md).
 
 **Three-layer architecture:**
 - **Paths** (Anchors) — Schelling points for names and locations
@@ -225,6 +225,9 @@ This distinction applies only to the descriptive-label filter path. Folder visib
 If you write a PIN where a TAG is correct, the slot can only hold one value (subsequent writes supersede instead of accumulating). If you write a TAG where a PIN is correct, on-chain consumers can't read "the value" without ambiguity (which entry is canonical?). The schema choice is the API selector — pick deliberately.
 
 ## 5. Sort Info Schema
+
+> **Deferred — NOT in the Sepolia freeze set.** SORT_INFO remains a working overlay design (see `07-Sort-Overlay-Architecture.md`); it is documented here but is not registered as a frozen schema in the nine-schema freeze set.
+
 **Purpose**: Declares a named sort overlay attached to a directory or list.
 **Structure**:
 `refUID = Naming Anchor UID — the Anchor is a child of the directory being sorted (anchorSchema = SORT_INFO_SCHEMA)`
@@ -299,6 +302,43 @@ See [Lists and Collections](./06-Lists-and-Collections.md) for the full architec
 **ListReader** (view contract, stateless, redeployable): `getMode(listUID)`, `length(listUID, attester)`, `entries(listUID, attester, start, len)`, `countOf(listUID, attester, identityKey)`, plus typed accessors `targetAsAddress`, `targetAsUID`, `targetAsMemberKey` and pure helpers `identityKeyForAddress`, `identityKeyForUID`, `identityKeyForMemberKey`.
 
 See [ADR-0044](../docs/adr/0044-list-and-list-entry-schemas.md) and [Lists and Collections](./06-Lists-and-Collections.md) for full design rationale.
+
+## Schema 10: REDIRECT
+
+**Purpose**: The trust-scoped "this points at that" primitive (ADR-0050): canonical/dedup-resolution for duplicate DATA, version supersession, and path symlinks. Because DATA is pure identity (ADR-0049), identical bytes mint distinct DATA UIDs; REDIRECT is how an attester asserts "B is the same as / redirects to A."
+**Field string** (FROZEN): `"bytes32 target, uint16 kind"`
+**Resolver**: `AliasResolver` (write-time guards only)
+**Revocable**: `true` (a redirect can be retracted)
+
+**Fields**:
+- `target` (bytes32) — destination DATA or Anchor UID (must be nonzero, must not equal the source).
+- `kind` (uint16) — redirect-class discriminator. `uint16` (not `uint8`) per ADR-0050: `kind` is an open-ended relationship *vocabulary*, not a counter, and widening is free (both pad to one ABI word). **Only the field string is frozen; the kind taxonomy is resolver logic + client convention (versioned/upgradeable), NOT part of the UID.**
+
+`refUID` = the **source**: the duplicate DATA for `sameAs`/`supersededBy`; the source path Anchor for `symlink`.
+
+**Kinds taxonomy** (initial — evolvable, not in the UID):
+- `0 = sameAs` — strong dedup. Source + target both DATA. Followed at read time.
+- `1 = supersededBy` — version replacement. Source + target both DATA. Followed at read time.
+- `2 = symlink` — path → target. Source ANCHOR; target ANCHOR or DATA. Followed one hop.
+- `3+ = reserved` — recorded but **not type-checked** by the resolver (e.g. `relatedVersion`: a weak discovery hint that is **never** auto-followed). Follow rules for these are decided by the read-time resolution spec, not the resolver.
+
+**Write-time guards enforced by `AliasResolver`** (correctness before any mainnet burn):
+- `a.schema == redirectSchemaUID` (self-derived in `initialize()` against the proxy address; rejects foreign schemas pointed at the resolver) else `WrongSchema`.
+- payload exactly 64 bytes else `BadPayload`.
+- `target != 0` else `ZeroTarget`.
+- `target != source` (no trivial self-loop) else `SelfLoop`.
+- Per-kind typing (source/target schemas read via `eas.getAttestation(uid).schema`):
+  - `sameAs` (0) / `supersededBy` (1): both source and target must be DATA (`SourceNotData` / `TargetNotData`).
+  - `symlink` (2): source must be an ANCHOR (`SourceNotAnchor`); target must be ANCHOR or DATA (`TargetNotAnchorOrData`).
+  - `kind >= 3`: no typing (reserved); only the `target != 0` / `target != source` guards apply.
+
+**Read-time resolution is client/spec, not the resolver.** The resolver enforces only **write-time** correctness (direct self-loops, typing). **Multi-hop cycle handling** (resolve to the lowest UID in the strongly-connected component — start-independent), **chain following**, **depth caps** (`D_MAX`), **lens precedence** (ADR-0031), and **kind-following rules** all live in the client/router + a later Durable resolution spec (ADR-0050 §"Write-time guards vs read-time resolution"). The resolver cannot afford to walk the graph on each write.
+
+**Reverse fan-in** ("what points at me?") is intentionally not indexed on-chain by `AliasResolver` — it is the off-chain indexer's job (a future on-chain advisory index is addable as upgradeable logic; ADR-0050 §4).
+
+**Symlink / hardlink mapping**: a *hardlink* (one DATA PINned at many path Anchors) is native and untouched — no follow, no cycle. A *symlink* is `REDIRECT kind=2`. *Canonical/dedup* is `REDIRECT kind=0` (`sameAs`).
+
+See [ADR-0050](../docs/adr/0050-redirect-canonical-symlink-schema.md) for full design rationale.
 
 ## Schema Hierarchy
 To represent a standard filesystem interaction where a file has a name within a folder:
