@@ -11,10 +11,13 @@ import { config } from "hardhat";
 async function main() {
   const networkIndex = process.argv.indexOf("--network");
   const networkName = networkIndex !== -1 ? process.argv[networkIndex + 1] : config.defaultNetwork;
+  // The hardhat task to run (e.g. "deploy" or "deploy:efs"). Set by the package.json script so the
+  // same encrypted-key decryption flow works for the EFS core ceremony as for a plain deploy.
+  const hardhatTask = process.env.HARDHAT_DEPLOY_TASK ?? "deploy";
 
   if (networkName === "localhost" || networkName === "hardhat") {
     // Deploy command on the localhost network
-    const hardhat = spawn("hardhat", ["deploy", ...process.argv.slice(2)], {
+    const hardhat = spawn("hardhat", [hardhatTask, ...process.argv.slice(2)], {
       stdio: "inherit",
       env: process.env,
       shell: process.platform === "win32",
@@ -39,7 +42,7 @@ async function main() {
     const wallet = await Wallet.fromEncryptedJson(encryptedKey, pass);
     process.env.__RUNTIME_DEPLOYER_PRIVATE_KEY = wallet.privateKey;
 
-    const hardhat = spawn("hardhat", ["deploy", ...process.argv.slice(2)], {
+    const hardhat = spawn("hardhat", [hardhatTask, ...process.argv.slice(2)], {
       stdio: "inherit",
       env: process.env,
       shell: process.platform === "win32",

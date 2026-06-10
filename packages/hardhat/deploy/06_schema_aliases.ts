@@ -1,6 +1,7 @@
 import { HardhatRuntimeEnvironment } from "hardhat/types";
 import { DeployFunction } from "hardhat-deploy/types";
 import { Contract } from "ethers";
+import { legacySuperseded } from "./lib/superseded";
 
 // EAS Addresses (Sepolia) — match 01_indexer.ts
 const EAS_ADDRESS = "0xC2679fBD37d54388Ce493F1DB75320D236e1815e";
@@ -36,6 +37,15 @@ const EAS_ADDRESS = "0xC2679fBD37d54388Ce493F1DB75320D236e1815e";
  * tag. The sidebar is seeded from deployer-attested TAGs at launch.
  */
 const deploySchemaAliases: DeployFunction = async function (hre: HardhatRuntimeEnvironment) {
+  // AGENT-NOTE (Phase D, I-3): this seeds schema-alias anchors via ANCHOR attestations and reads
+  // indexer.SORT_INFO_SCHEMA_UID() (a deferred schema). On the Sepolia freeze path it is not invoked
+  // (`yarn deploy:efs` runs the EFSCore tag only). Under `until-freeze-gate` no schema is registered,
+  // so its attestations would revert (InvalidSchema), not silently no-op. Neutralize wherever CreateX
+  // is present, matching 01/04/05/09 — it becomes a local/devnet-only seeding concern. The orchestrated
+  // core (00) already creates root/tags/transports anchors; alias-anchor seeding is additive and
+  // re-runnable on the proxies later. Local/devnet (no CreateX) still seeds as before.
+  if (await legacySuperseded(hre, "06_schema_aliases")) return;
+
   const { deployer } = await hre.getNamedAccounts();
   const ethers = hre.ethers;
 

@@ -250,6 +250,39 @@ export async function registerAndTransfer(
 ): Promise<void> {
   const { proxies, schemaUIDs } = result;
 
+  // ── I-4 guard: re-assert the on-chain self-UID getters against the about-to-be-registered UIDs,
+  //    immediately before the irreversible register. `until-freeze-gate` and `after-freeze-gate` run
+  //    as SEPARATE processes (separate schemas.ts reads), so a drift between runs could otherwise
+  //    register a permanent schema whose UID doesn't match what the deployed ListEntry/Alias proxies
+  //    self-derived. The verify gate does this in the until-gate run; this re-does it on the path that
+  //    actually registers (after-freeze-gate re-binds proxies and skips the verify gate). Abort loudly
+  //    on mismatch — no schema is registered against a drifted proxy. (docs/DEPLOYMENT.md §3 step 3.)
+  l("EFS deploy: re-asserting self-UID getters on the deployed proxies before register...");
+  const listEntryProxy = (await ethers.getContractAt(
+    "ListEntryResolver",
+    proxies.ListEntryResolver,
+    deployer,
+  )) as unknown as Contract;
+  const onchainListEntryUID: string = await listEntryProxy.listEntrySchemaUID();
+  if (onchainListEntryUID.toLowerCase() !== schemaUIDs.LIST_ENTRY.toLowerCase()) {
+    throw new Error(
+      `REGISTER ABORT: ListEntryResolver.listEntrySchemaUID() ${onchainListEntryUID} != to-be-registered ` +
+        `LIST_ENTRY UID ${schemaUIDs.LIST_ENTRY} — proxy/schema drift between freeze-gate runs.`,
+    );
+  }
+  const aliasProxy = (await ethers.getContractAt(
+    "AliasResolver",
+    proxies.AliasResolver,
+    deployer,
+  )) as unknown as Contract;
+  const onchainRedirectUID: string = await aliasProxy.redirectSchemaUID();
+  if (onchainRedirectUID.toLowerCase() !== schemaUIDs.REDIRECT.toLowerCase()) {
+    throw new Error(
+      `REGISTER ABORT: AliasResolver.redirectSchemaUID() ${onchainRedirectUID} != to-be-registered ` +
+        `REDIRECT UID ${schemaUIDs.REDIRECT} — proxy/schema drift between freeze-gate runs.`,
+    );
+  }
+
   // ── Step 6: register LAST ─────────────────────────────────────────────────────────────────
   l("EFS deploy: registering 9 schemas LAST...");
   for (const s of SCHEMAS) {
@@ -327,11 +360,38 @@ export async function registerAndTransfer(
   l("  ownership transferred; deployer holds no proxy-admin or resolver ownership.");
 }
 
-/// EFS_SAFE_ADDRESS env, else a second signer (fork rehearsal: no human, no real Safe).
+/// Resolve the ownership-transfer target (the EFS.eth Safe). Single-step transfer is irreversible
+/// (Ownable/OwnableUpgradeable + OZ v5 ProxyAdmin — no Ownable2Step accept), so an unset/invalid Safe
+/// on a real network would hand the permanent upgrade authority to an arbitrary address (I-5a). HARD-
+/// FAIL everywhere except the in-process `hardhat` fork, where a distinct second signer stands in as
+/// the test Safe for the rehearsal (there is no real Safe and no human on the fork).
 async function resolveSafe(deployer: Signer): Promise<string> {
   const env = process.env.EFS_SAFE_ADDRESS;
-  if (env && ethers.isAddress(env)) return ethers.getAddress(env);
-  // Fork rehearsal: no real Safe — use a distinct second signer as the test Safe.
+  const networkName = (await ethers.provider.getNetwork()).name;
+  // hardhat fork detection: the in-process network is always named "hardhat" (chainId 31337). The
+  // SE-2 provider reports "unknown" for a forked chain on some versions, so also accept the explicit
+  // hardhat network name from the runtime config.
+  const isHardhat = networkName === "hardhat" || networkName === "unknown";
+
+  // A well-formed, non-zero checksummed address is required on any non-hardhat network.
+  const valid = !!env && ethers.isAddress(env) && env !== ZeroAddress;
+  if (valid) {
+    const checksummed = ethers.getAddress(env as string);
+    if (checksummed === ZeroAddress) {
+      throw new Error("EFS_SAFE_ADDRESS resolves to the zero address — refusing to transfer ownership.");
+    }
+    return checksummed;
+  }
+
+  if (!isHardhat) {
+    throw new Error(
+      `EFS_SAFE_ADDRESS is unset/zero/invalid (got ${env ?? "<unset>"}) on network "${networkName}". ` +
+        `The single-step ownership transfer is IRREVERSIBLE — set EFS_SAFE_ADDRESS to the checksummed ` +
+        `EFS.eth Safe address before the --after-freeze-gate run. Refusing to transfer to an arbitrary address.`,
+    );
+  }
+
+  // Fork rehearsal ONLY (hardhat): no real Safe — use a distinct second signer as the test Safe.
   const deployerAddr = await deployer.getAddress();
   const signers = await ethers.getSigners();
   for (const s of signers) {

@@ -86,7 +86,7 @@ yarn deploy:efs --network sepolia --until-freeze-gate
 # 4. register + transfer-to-Safe + smoke (after signing)
 yarn deploy:efs --network sepolia --after-freeze-gate
 ```
-(Exact script name/flags finalized when the Phase-D deploy script is written — this PR's follow-on.)
+`deploy:efs` is a real hardhat task (`packages/hardhat/tasks/deployEfs.ts`, run via the `deploy:efs` package script with the encrypted-key flow). It runs **only** the EFS core ceremony (the `EFSCore` tag → `deploy/00_efs_core.ts`), never the downstream/legacy scripts. The flags map to the run mode: `--until-freeze-gate` / `--after-freeze-gate` / (omit both) full. The fork rehearsal `yarn deploy:efs --network hardhat` exercises the full ceremony end-to-end (deploy + verify + wire + register + transfer + per-schema smoke) against the pinned Sepolia fork. `EFS_SAFE_ADDRESS` must be set to the real checksummed Safe before `--after-freeze-gate` on Sepolia (the task hard-fails otherwise — the transfer is single-step and irreversible; see I-5a).
 
 **Upgrading a resolver later (from the Safe):** in Safe{Wallet}, propose a tx to `ProxyAdmin.upgradeAndCall(proxy, newImpl, 0x)`; sign; execute. Or script it with `@safe-global/protocol-kit`.
 
@@ -97,7 +97,7 @@ yarn deploy:efs --network sepolia --after-freeze-gate
 ## 5. Status / what's built vs TODO
 - ✅ **Schema + contract layer** (this PR): 9 schemas finalized; all 6 resolvers upgradeable behind the `EFSUpgradeableResolver` base; storage-layout verified + upgrade-with-state guard; suite 429/0; independently reviewed.
 - ✅ **CreateX confirmed live on Sepolia**; ✅ key-custody decided (deploy-EOA → EFS.eth-Safe owner).
-- ⏳ **Phase-D deploy script** (`deploy/lib/{schemas,create3,verify}.ts` + a `deploy:efs` task) — implements steps 1–4, 6–8 above + rebinds the current deploy scripts (02–09) to the proxies. *Next build effort; testable on the pinned fork without real keys.*
+- ✅ **Phase-D deploy script** (`deploy/lib/{schemas,create3,verify,orchestrate,superseded}.ts` + the `deploy:efs` task) — implements steps 1–4, 6–8 above; fork-rehearsable on the pinned fork without real keys. The Sepolia surface is the **EFS core only** (the `EFSCore` tag): the downstream/legacy scripts (01–06, 09) are neutralized wherever CreateX is present and are now a **local/devnet-only** concern — they are *not* part of the Sepolia deploy (the stateless views EFSRouter/EFSFileView/ListReader are redeployed separately post-freeze, outside this ceremony).
 - ⏳ **Resolution-spec + reference vectors** for REDIRECT-following and the content-hash preimage (Durable; must land before durable seed data — ADR-0050/0049 action items).
 - 🔒 **Sepolia deploy + freeze** (steps 5–8 on real Sepolia): needs the funded deployer EOA + EFS.eth Safe address + **James's FREEZE_LEDGER signature.**
 

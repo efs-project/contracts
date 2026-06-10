@@ -77,7 +77,12 @@ function getInheritedFunctions(sources: Record<string, any>, contractName: strin
 
 function getContractDataFromDeployments() {
   if (!fs.existsSync(DEPLOYMENTS_DIR)) {
-    throw Error("At least one other deployment script should exist to generate an actual contract.");
+    // The in-memory `hardhat` network persists no deployments dir, so `deploy:efs --network hardhat`
+    // (the fork rehearsal) reaches here with nothing on disk. That's not an error — the rehearsal is
+    // throwaway and writes no deployedContracts.ts. Return empty so the run exits 0. Networks that DO
+    // persist deployments (localhost, sepolia, …) still produce the file as before.
+    console.log("[generateTsAbis] no deployments dir — skipping deployedContracts.ts (in-memory run).");
+    return {} as Record<string, any>;
   }
   const output = {} as Record<string, any>;
   for (const chainName of getDirectories(DEPLOYMENTS_DIR)) {
@@ -102,6 +107,10 @@ function getContractDataFromDeployments() {
 const generateTsAbis: DeployFunction = async function () {
   const TARGET_DIR = "../nextjs/contracts/";
   const allContractsData = getContractDataFromDeployments();
+
+  // No persisted deployments (e.g. `deploy:efs --network hardhat` fork rehearsal): do NOT write — that
+  // would clobber the committed deployedContracts.ts with `{}`. Leave the pinned file untouched.
+  if (Object.keys(allContractsData).length === 0) return;
 
   const fileContent = Object.entries(allContractsData).reduce((content, [chainId, chainConfig]) => {
     return `${content}${parseInt(chainId).toFixed(0)}:${JSON.stringify(chainConfig, null, 2)},`;

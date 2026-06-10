@@ -39,7 +39,8 @@ A first-principles + adversarial durability review (28 candidate cracks, all ref
 - [ ] Golden-vector test: contract field-string constants byte-identical to the deploy script (no UID drift).
 - [ ] `getSchema(uid).resolver == proxy`; no conflicting prior registration of the same tuple.
 - [ ] `wireContracts()` / `setTransportsAnchor()` / `setSortsAnchor()` set and locked.
-- [ ] Upgrade admin = James's controlled key (Ownable2Step; not burned/renounced yet).
+- [ ] Upgrade admin = the EFS.eth Safe, set via single-step `Ownable` / `OwnableUpgradeable` `transferOwnership` (the resolvers use `OwnableUpgradeable`; the OZ v5 `ProxyAdmin` is single-step `Ownable` — there is no `Ownable2Step` accept step). The deploy asserts each `owner() == Safe` and that the deployer holds nothing; not burned/renounced yet.
+  - ⚠️ The single-step transfer is **irreversible**: there is no pending-owner / accept handshake, so a wrong or unset target permanently misassigns the upgrade authority. The `EFS_SAFE_ADDRESS` MUST be verified as the correct checksummed Safe before the `--after-freeze-gate` run. The deploy enforces this — `resolveSafe` hard-fails on any non-`hardhat` network when `EFS_SAFE_ADDRESS` is unset/zero/invalid (I-5a).
 
 ## Pre-BURN checklist (the irreversible end-state gate — separate from registration)
 

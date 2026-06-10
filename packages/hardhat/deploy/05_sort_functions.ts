@@ -1,10 +1,17 @@
 import { HardhatRuntimeEnvironment } from "hardhat/types";
 import { DeployFunction } from "hardhat-deploy/types";
 import { Contract } from "ethers";
+import { legacySuperseded } from "./lib/superseded";
 
 const EAS_ADDRESS = "0xC2679fBD37d54388Ce493F1DB75320D236e1815e";
 
 const deploySortFunctions: DeployFunction = async function (hre: HardhatRuntimeEnvironment) {
+  // AGENT-NOTE (Phase D, I-3): SORT_INFO + EFSSortOverlay are DEFERRED (not in the 9-schema freeze
+  // set; 04_sortoverlay is neutralized). This script binds getContract("EFSSortOverlay") + attests
+  // SORT_INFO, so it cannot run on the Sepolia freeze path. Neutralize wherever CreateX is present,
+  // matching 04. Re-added additively when SORT_INFO lands. Local/devnet (no CreateX) still inert too.
+  if (await legacySuperseded(hre, "05_sort_functions")) return;
+
   const { deployer } = await hre.getNamedAccounts();
   const { deploy } = hre.deployments;
   const ethers = hre.ethers;
