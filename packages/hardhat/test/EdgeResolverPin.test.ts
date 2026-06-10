@@ -2,6 +2,7 @@ import { expect } from "chai";
 import { ethers } from "hardhat";
 import { EdgeResolver, EFSIndexer, EAS, SchemaRegistry } from "../typechain-types";
 import { Signer, ZeroAddress } from "ethers";
+import { deployIndexerProxy } from "./helpers/deployIndexerProxy";
 
 const ZERO_BYTES32 = "0x0000000000000000000000000000000000000000000000000000000000000000";
 const NO_EXPIRATION = 0n;
@@ -58,11 +59,13 @@ describe("EdgeResolver — PIN", function () {
     //   resolverNonce+1: PIN schema registration
     //   resolverNonce+2: TAG schema registration
     //   resolverNonce+3: DUMMY schema registration
-    //   resolverNonce+4: EFSIndexer (placeholder schema UIDs — only index() is exercised)
+    //   resolverNonce+4: EFSIndexer implementation
+    //   resolverNonce+5: EFSIndexer proxy (the resolver — placeholder schema UIDs; only index() is exercised)
     const ownerAddr = await owner.getAddress();
     const resolverNonce = await ethers.provider.getTransactionCount(ownerAddr);
     const futureEdgeResolverAddress = ethers.getCreateAddress({ from: ownerAddr, nonce: resolverNonce });
-    const futureIndexerAddress = ethers.getCreateAddress({ from: ownerAddr, nonce: resolverNonce + 4 });
+    // PROXY is the resolver (ADR-0048): impl = +4, proxy = +5. See deployIndexerProxy().
+    const futureIndexerAddress = ethers.getCreateAddress({ from: ownerAddr, nonce: resolverNonce + 5 });
     const precomputedPinSchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
       ["bytes32 definition", futureEdgeResolverAddress, true],
@@ -98,15 +101,14 @@ describe("EdgeResolver — PIN", function () {
     const dummySchemaTx = await registry.register("string label", ZeroAddress, false);
     dummySchemaUID = (await dummySchemaTx.wait())!.logs[0].topics[1];
 
-    // EFSIndexer: placeholder schema UIDs (only index() is called by EdgeResolver)
-    const IndexerFactory = await ethers.getContractFactory("EFSIndexer");
-    indexer = await IndexerFactory.deploy(
+    // EFSIndexer behind a proxy (ADR-0048): placeholder schema UIDs (only index() is exercised)
+    indexer = await deployIndexerProxy(
       await eas.getAddress(),
       ZERO_BYTES32, // anchorSchemaUID (placeholder)
       ZERO_BYTES32, // propertySchemaUID (placeholder)
       ZERO_BYTES32, // dataSchemaUID (placeholder)
+      owner,
     );
-    await indexer.waitForDeployment();
     expect(await indexer.getAddress()).to.equal(futureIndexerAddress);
 
     // Wire EdgeResolver into the indexer so propagateContains calls are authorized.

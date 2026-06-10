@@ -19,6 +19,7 @@ import { expect } from "chai";
 import { ethers } from "hardhat";
 import { EFSIndexer, EdgeResolver, MirrorResolver, EFSFileView, EAS, SchemaRegistry } from "../typechain-types";
 import { Signer, ZeroAddress, ZeroHash } from "ethers";
+import { deployIndexerProxy } from "./helpers/deployIndexerProxy";
 
 const ZERO_BYTES32 = ZeroHash;
 const NO_EXPIRATION = 0n;
@@ -337,11 +338,13 @@ describe("EFS Data Model — E2E Integration", function () {
     //   nonce+0: EdgeResolver deploy
     //   nonce+1: MirrorResolver deploy
     //   nonce+2..7: 6 schema registrations (anchor, property, data, PIN, TAG, mirror)
-    //   nonce+8: EFSIndexer deploy
+    //   nonce+8: EFSIndexer implementation deploy
+    //   nonce+9: EFSIndexer proxy deploy (the resolver baked into the schema UIDs)
     const currentNonce = await ethers.provider.getTransactionCount(ownerAddr);
     const futureEdgeResolverAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce });
     const futureMirrorResolverAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce + 1 });
-    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce + 8 });
+    // PROXY is the resolver (ADR-0048): impl = +8, proxy = +9. See deployIndexerProxy().
+    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce + 9 });
 
     // Pre-compute schema UIDs
     anchorSchemaUID = ethers.solidityPackedKeccak256(
@@ -390,9 +393,14 @@ describe("EFS Data Model — E2E Integration", function () {
       await registry.register("bytes32 transportDefinition, string uri", await mirrorResolver.getAddress(), true)
     ).wait();
 
-    // Deploy Indexer
-    const IndexerFactory = await ethers.getContractFactory("EFSIndexer");
-    indexer = await IndexerFactory.deploy(await eas.getAddress(), anchorSchemaUID, propertySchemaUID, dataSchemaUID);
+    // Deploy Indexer behind a proxy (ADR-0048)
+    indexer = await deployIndexerProxy(
+      await eas.getAddress(),
+      anchorSchemaUID,
+      propertySchemaUID,
+      dataSchemaUID,
+      owner,
+    );
     expect(await indexer.getAddress()).to.equal(futureIndexerAddr);
 
     // Deploy FileView

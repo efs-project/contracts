@@ -2,6 +2,7 @@ import { expect } from "chai";
 import { ethers } from "hardhat";
 import { EFSIndexer, EdgeResolver, MirrorResolver, EFSFileView, EAS, SchemaRegistry } from "../typechain-types";
 import { Signer, ZeroAddress, ZeroHash } from "ethers";
+import { deployIndexerProxy } from "./helpers/deployIndexerProxy";
 
 const ZERO_BYTES32 = ZeroHash;
 const NO_EXPIRATION = 0n;
@@ -92,13 +93,15 @@ describe("EFS Transports & Data Model", function () {
     //   nonce+5: PIN schema
     //   nonce+6: TAG schema
     //   nonce+7: MIRROR schema
-    //   nonce+8: EFSIndexer
-    //   nonce+9: EFSFileView
+    //   nonce+8: EFSIndexer implementation
+    //   nonce+9: EFSIndexer proxy (the resolver baked into the schema UIDs)
+    //   nonce+10: EFSFileView
     const currentNonce = await ethers.provider.getTransactionCount(ownerAddr);
 
     const futureEdgeResolverAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce });
     const futureMirrorResolverAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce + 1 });
-    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce + 8 });
+    // PROXY is the resolver (ADR-0048): impl = +8, proxy = +9. See deployIndexerProxy().
+    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce + 9 });
 
     // Pre-compute schema UIDs
     anchorSchemaUID = ethers.solidityPackedKeccak256(
@@ -148,9 +151,14 @@ describe("EFS Transports & Data Model", function () {
       await registry.register("bytes32 transportDefinition, string uri", await mirrorResolver.getAddress(), true)
     ).wait();
 
-    // Deploy EFSIndexer
-    const IndexerFactory = await ethers.getContractFactory("EFSIndexer");
-    indexer = await IndexerFactory.deploy(await eas.getAddress(), anchorSchemaUID, propertySchemaUID, dataSchemaUID);
+    // Deploy EFSIndexer behind a proxy (ADR-0048)
+    indexer = await deployIndexerProxy(
+      await eas.getAddress(),
+      anchorSchemaUID,
+      propertySchemaUID,
+      dataSchemaUID,
+      owner,
+    );
     expect(await indexer.getAddress()).to.equal(futureIndexerAddr);
 
     // Deploy EFSFileView

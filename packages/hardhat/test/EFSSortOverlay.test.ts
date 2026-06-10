@@ -2,6 +2,7 @@ import { expect } from "chai";
 import { ethers } from "hardhat";
 import { EFSIndexer, EFSSortOverlay, NameSort, TimestampSort, EAS, SchemaRegistry } from "../typechain-types";
 import { Signer, ZeroAddress } from "ethers";
+import { deployIndexerProxy } from "./helpers/deployIndexerProxy";
 
 const NO_EXPIRATION = 0n;
 const ZERO_BYTES32 = "0x0000000000000000000000000000000000000000000000000000000000000000";
@@ -43,16 +44,18 @@ describe("EFSSortOverlay", function () {
     //   +0: Register ANCHOR schema
     //   +1: Register PROPERTY schema
     //   +2: Register DATA schema (empty — ADR-0049)
-    //   +3: Deploy EFSIndexer
-    //   +4: Deploy NameSort
-    //   +5: Deploy TimestampSort
-    //   +6: Register SORT_INFO schema (with futureOverlayAddr as resolver)
-    //   +7: Deploy EFSSortOverlay
+    //   +3: Deploy EFSIndexer implementation
+    //   +4: Deploy EFSIndexer proxy (the resolver)
+    //   +5: Deploy NameSort
+    //   +6: Deploy TimestampSort
+    //   +7: Register SORT_INFO schema (with futureOverlayAddr as resolver)
+    //   +8: Deploy EFSSortOverlay
     const ownerAddr = await owner.getAddress();
     const baseNonce = await ethers.provider.getTransactionCount(ownerAddr);
 
-    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: baseNonce + 3 });
-    const futureOverlayAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: baseNonce + 7 });
+    // PROXY is the resolver (ADR-0048): impl = +3, proxy = +4; everything after shifts +1.
+    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: baseNonce + 4 });
+    const futureOverlayAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: baseNonce + 8 });
 
     // 3. Register EFS schemas with futureIndexerAddr as resolver
     const tx1 = await registry.register("string name, bytes32 schemaUID", futureIndexerAddr, false);
@@ -65,10 +68,14 @@ describe("EFSSortOverlay", function () {
     const tx3 = await registry.register("", futureIndexerAddr, false);
     dataSchemaUID = (await tx3.wait())!.logs[0].topics[1];
 
-    // 4. Deploy EFSIndexer
-    const IndexerFactory = await ethers.getContractFactory("EFSIndexer");
-    indexer = await IndexerFactory.deploy(await eas.getAddress(), anchorSchemaUID, propertySchemaUID, dataSchemaUID);
-    await indexer.waitForDeployment();
+    // 4. Deploy EFSIndexer behind a proxy (ADR-0048)
+    indexer = await deployIndexerProxy(
+      await eas.getAddress(),
+      anchorSchemaUID,
+      propertySchemaUID,
+      dataSchemaUID,
+      owner,
+    );
     expect(await indexer.getAddress()).to.equal(futureIndexerAddr);
 
     // 5. Deploy sort implementations

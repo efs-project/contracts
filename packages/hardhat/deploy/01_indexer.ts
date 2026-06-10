@@ -54,16 +54,25 @@ const deployEFSIndexer: DeployFunction = async function (hre: HardhatRuntimeEnvi
   ];
 
   // 3. Calculate Future Addresses
+  // AGENT-NOTE: Phase D — deploy EFSIndexer behind a CREATE3 proxy + register-last + atomic-init.
+  // This transitional path deploys the EFSIndexer implementation, then a plain ERC1967 proxy
+  // (TestERC1967Proxy) at the resolver-predicted nonce slot, and calls initialize() through it.
+  // The schema UIDs are computed against the PROXY address (the proxy is the EAS resolver under
+  // the upgradeable pattern, ADR-0048). Phase D will replace this CREATE-nonce prediction with a
+  // CREATE3-derived address so the resolver address is independent of deploy ordering.
+  //
   // Deployment order:
   //   nonce+0: Deploy EdgeResolver
   //   nonce+1 through nonce+5: Register 5 schemas (ANCHOR, PROPERTY, DATA, PIN, TAG)
-  //   nonce+6: Deploy EFSIndexer
+  //   nonce+6: Deploy EFSIndexer implementation
+  //   nonce+7: Deploy ERC1967 proxy (the resolver address baked into the schema UIDs)
 
   const currentNonce = await ethers.provider.getTransactionCount(deployer);
   console.log("Current Nonce:", currentNonce);
 
   const futureEdgeResolverAddress = ethers.getCreateAddress({ from: deployer, nonce: currentNonce });
-  const futureIndexerAddress = ethers.getCreateAddress({ from: deployer, nonce: currentNonce + 6 });
+  // The PROXY is the resolver — its address (nonce+7) is what schemas must reference.
+  const futureIndexerAddress = ethers.getCreateAddress({ from: deployer, nonce: currentNonce + 7 });
   console.log("Predicted EdgeResolver Address:", futureEdgeResolverAddress);
   console.log("Predicted EFSIndexer Address:", futureIndexerAddress);
 
@@ -129,17 +138,43 @@ const deployEFSIndexer: DeployFunction = async function (hre: HardhatRuntimeEnvi
     }
   }
 
-  // 6. Deploy EFSIndexer
-  await deploy("Indexer", {
+  // 6. Deploy EFSIndexer implementation (nonce+6). Constructor takes only the EAS now;
+  //    per-deployment config (schema UIDs + owner) is set via initialize() behind the proxy.
+  await deploy("IndexerImpl", {
     contract: "EFSIndexer",
     from: deployer,
-    args: [EAS_ADDRESS, schemaUIDs["ANCHOR"], schemaUIDs["PROPERTY"], schemaUIDs["DATA"]],
+    args: [EAS_ADDRESS],
+    log: true,
+    autoMine: true,
+  });
+  const indexerImpl = await hre.ethers.getContract<Contract>("IndexerImpl", deployer);
+  console.log("EFSIndexer implementation deployed at:", indexerImpl.target);
+
+  // 6b. Deploy the ERC1967 proxy (nonce+7 — the resolver address baked into the schema UIDs),
+  //     initializing it atomically with the schema UIDs and the deployer as owner.
+  //     AGENT-NOTE: Phase D replaces TestERC1967Proxy with a production CREATE3 proxy.
+  const initData = indexerImpl.interface.encodeFunctionData("initialize", [
+    schemaUIDs["ANCHOR"],
+    schemaUIDs["PROPERTY"],
+    schemaUIDs["DATA"],
+    deployer,
+  ]);
+  await deploy("Indexer", {
+    contract: "TestERC1967Proxy",
+    from: deployer,
+    args: [indexerImpl.target, initData],
     log: true,
     autoMine: true,
   });
 
-  const indexer = await hre.ethers.getContract<Contract>("Indexer", deployer);
-  console.log("EFSIndexer deployed at:", indexer.target);
+  // Bind the EFSIndexer ABI to the proxy address so downstream calls go through the proxy.
+  const proxy = await hre.ethers.getContract<Contract>("Indexer", deployer);
+  const indexer = await hre.ethers.getContractAt(
+    "EFSIndexer",
+    proxy.target as string,
+    await ethers.getSigner(deployer),
+  );
+  console.log("EFSIndexer (proxy) deployed at:", indexer.target);
 
   if (indexer.target !== futureIndexerAddress) {
     throw new Error(

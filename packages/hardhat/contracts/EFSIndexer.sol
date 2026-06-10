@@ -2,10 +2,11 @@
 pragma solidity 0.8.26;
 
 import { IEAS, Attestation } from "@ethereum-attestation-service/eas-contracts/contracts/IEAS.sol";
-import { SchemaResolver } from "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol";
 import { EMPTY_UID } from "@ethereum-attestation-service/eas-contracts/contracts/Common.sol";
+import { OwnableUpgradeable } from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import { EFSUpgradeableResolver } from "./base/EFSUpgradeableResolver.sol";
 
-contract EFSIndexer is SchemaResolver {
+contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
     error DuplicateFileName();
     error InvalidOffset();
     error MissingParent();
@@ -47,13 +48,48 @@ contract EFSIndexer is SchemaResolver {
     /// @notice Emitted when a revocation is synced for an externally-indexed attestation.
     event RevocationIndexed(bytes32 indexed uid);
 
+    // ============================================================================================
+    // ERC-7201 NAMESPACED CONFIG (per-deployment, set in initialize())
+    // ============================================================================================
+    // The schema UIDs and deployer were constructor immutables when EFSIndexer was deployed
+    // directly. Under the upgradeable-proxy pattern (ADR-0048) the implementation runs via the
+    // proxy's delegatecall, so immutables (which live in the impl's bytecode) would read the
+    // impl's construction-time values, not the proxy's. Per-deployment config therefore moves into
+    // ERC-7201 namespaced storage written once in initialize(). The namespaced slot sits far from
+    // slot 0, so it cannot collide with the existing sequential mapping layout below.
+
+    /// @custom:storage-location erc7201:efs.indexer.config
+    struct IndexerConfig {
+        bytes32 anchorSchemaUID;
+        bytes32 propertySchemaUID;
+        bytes32 dataSchemaUID;
+    }
+
+    // keccak256(abi.encode(uint256(keccak256("efs.indexer.config")) - 1)) & ~bytes32(uint256(0xff))
+    bytes32 private constant INDEXER_CONFIG_SLOT = 0x8236c748e6a502fa91232b6ce96a08db6ef6eb51d97817035831708b310c8900;
+
+    function _cfg() private pure returns (IndexerConfig storage $) {
+        assembly {
+            $.slot := INDEXER_CONFIG_SLOT
+        }
+    }
+
+    // Schema-UID public getters preserved by NAME for ABI/consumer compatibility — they now read
+    // the ERC-7201 config struct instead of construction-time immutables.
+    function ANCHOR_SCHEMA_UID() public view returns (bytes32) {
+        return _cfg().anchorSchemaUID;
+    }
+
+    function PROPERTY_SCHEMA_UID() public view returns (bytes32) {
+        return _cfg().propertySchemaUID;
+    }
+
+    function DATA_SCHEMA_UID() public view returns (bytes32) {
+        return _cfg().dataSchemaUID;
+    }
+
     // State Variables
     bytes32 public rootAnchorUID;
-
-    // Immutable Schema UIDs (set at construction, resolver = EFSIndexer)
-    bytes32 public immutable ANCHOR_SCHEMA_UID;
-    bytes32 public immutable PROPERTY_SCHEMA_UID;
-    bytes32 public immutable DATA_SCHEMA_UID;
 
     // Partner contract references — set once via wireContracts() after full deployment
     // These are bytes32 storage (not immutable) because partner contracts deploy after EFSIndexer.
@@ -73,8 +109,15 @@ contract EFSIndexer is SchemaResolver {
     // Well-known /sorts/ anchor — set once via setSortsAnchor() after deployment
     bytes32 public sortsAnchorUID;
 
-    // Deployer — authorized to call wireContracts()
-    address public immutable DEPLOYER;
+    // Authorization for wireContracts()/setSortsAnchor() is now `onlyOwner` (OwnableUpgradeable),
+    // set in initialize(). The former `address public immutable DEPLOYER` is removed — immutables
+    // don't work under the proxy delegatecall. Its role (the system-provided-defaults attester and
+    // wiring authority) is subsumed by the owner. The `DEPLOYER()` getter is preserved by NAME for
+    // ABI/consumer compatibility (EFSRouter default-lens fallback; the nextjs explorer) and now
+    // simply returns `owner()`.
+    function DEPLOYER() external view returns (address) {
+        return owner();
+    }
 
     // Maximum anchor nesting depth — prevents gas griefing in propagateContains
     uint256 public constant MAX_ANCHOR_DEPTH = 32;
@@ -166,16 +209,33 @@ contract EFSIndexer is SchemaResolver {
     // Stored at creation so parent-type checks are O(1) without re-decoding EAS attestation data.
     mapping(bytes32 => bytes32) private _anchorSchemaOf;
 
-    constructor(
-        IEAS eas,
+    /// @param eas The canonical EAS for the target chain. Stays a constructor immutable on the
+    ///            base (EAS is a per-chain constant; see EFSUpgradeableResolver NatSpec). The base
+    ///            constructor also runs `_disableInitializers()` so the implementation itself can
+    ///            never be initialized — only a proxy can.
+    constructor(IEAS eas) EFSUpgradeableResolver(eas) {}
+
+    /// @notice One-time per-deployment initialization, run behind the proxy.
+    /// @dev Guarded by `initializer` — callable exactly once per proxy. Sets the EFS schema UIDs
+    ///      (baked into the schema UIDs that name this proxy as resolver) and the owner authorized
+    ///      to wire partner contracts. The schema UIDs migrate here from former constructor
+    ///      immutables (ADR-0048).
+    /// @param anchorSchemaUID   ANCHOR schema UID resolved by this indexer.
+    /// @param propertySchemaUID PROPERTY schema UID resolved by this indexer.
+    /// @param dataSchemaUID     DATA schema UID resolved by this indexer.
+    /// @param owner_            Address authorized to call wireContracts()/setSortsAnchor().
+    function initialize(
         bytes32 anchorSchemaUID,
         bytes32 propertySchemaUID,
-        bytes32 dataSchemaUID
-    ) SchemaResolver(eas) {
-        ANCHOR_SCHEMA_UID = anchorSchemaUID;
-        PROPERTY_SCHEMA_UID = propertySchemaUID;
-        DATA_SCHEMA_UID = dataSchemaUID;
-        DEPLOYER = msg.sender;
+        bytes32 dataSchemaUID,
+        address owner_
+    ) external initializer {
+        require(owner_ != address(0), "EFSIndexer: owner is zero");
+        __Ownable_init(owner_);
+        IndexerConfig storage $ = _cfg();
+        $.anchorSchemaUID = anchorSchemaUID;
+        $.propertySchemaUID = propertySchemaUID;
+        $.dataSchemaUID = dataSchemaUID;
     }
 
     /**
@@ -183,7 +243,9 @@ contract EFSIndexer is SchemaResolver {
      *         Call once from the deploy script after EdgeResolver and EFSSortOverlay are deployed.
      *         After calling, PIN_SCHEMA_UID, TAG_SCHEMA_UID, SORT_INFO_SCHEMA_UID, edgeResolver,
      *         sortOverlay, and schemaRegistry are all queryable from a single entry point.
-     * @dev Can only be called by DEPLOYER and only once (edgeResolver address guards re-entry).
+     * @dev Can only be called by the owner and only once (edgeResolver address guards re-entry).
+     *      The one-shot `edgeResolver == address(0)` guard reads proxy storage and survives
+     *      implementation upgrades.
      */
     function wireContracts(
         address _edgeResolver,
@@ -194,8 +256,7 @@ contract EFSIndexer is SchemaResolver {
         address _mirrorResolver,
         bytes32 _mirrorSchemaUID,
         address _schemaRegistry
-    ) external {
-        require(msg.sender == DEPLOYER, "EFSIndexer: not deployer");
+    ) external onlyOwner {
         require(edgeResolver == address(0), "EFSIndexer: already wired");
         edgeResolver = _edgeResolver;
         PIN_SCHEMA_UID = _pinSchemaUID;
@@ -210,10 +271,10 @@ contract EFSIndexer is SchemaResolver {
     /**
      * @notice Set the well-known /sorts/ anchor UID.
      *         Called once from the deploy script after the sorts anchor is created.
-     * @dev Can only be called by DEPLOYER and only once.
+     * @dev Can only be called by the owner and only once. The one-shot
+     *      `sortsAnchorUID == bytes32(0)` guard reads proxy storage and survives upgrades.
      */
-    function setSortsAnchor(bytes32 _sortsAnchorUID) external {
-        require(msg.sender == DEPLOYER, "EFSIndexer: not deployer");
+    function setSortsAnchor(bytes32 _sortsAnchorUID) external onlyOwner {
         require(sortsAnchorUID == bytes32(0), "EFSIndexer: sorts anchor already set");
         sortsAnchorUID = _sortsAnchorUID;
     }
@@ -288,7 +349,8 @@ contract EFSIndexer is SchemaResolver {
 
         // 2. EFS CORE LOGIC (ANCHORS)
         bytes32 schema = attestation.schema;
-        if (schema == ANCHOR_SCHEMA_UID) {
+        IndexerConfig storage $ = _cfg();
+        if (schema == $.anchorSchemaUID) {
             // Anchors are permanent structural nodes — revocable anchors are rejected.
             if (attestation.revocable) return false;
 
@@ -367,7 +429,7 @@ contract EFSIndexer is SchemaResolver {
 
             emit AnchorCreated(parentUID, attestation.uid, attestation.attester, anchorSchema);
             return true;
-        } else if (schema == DATA_SCHEMA_UID) {
+        } else if (schema == $.dataSchemaUID) {
             // DATA is pure file identity (ADR-0049): empty schema, standalone, non-revocable.
             // The attestation carries no fields (zero-length payload) — its UID *is* the
             // file's identity. contentHash/size now live as lens-scoped reserved-key
@@ -378,7 +440,7 @@ contract EFSIndexer is SchemaResolver {
             // The bare DATA UID is already tracked by _indexGlobal above (step 1).
             emit DataCreated(attestation.uid, attestation.attester);
             return true;
-        } else if (schema == PROPERTY_SCHEMA_UID) {
+        } else if (schema == $.propertySchemaUID) {
             // PROPERTY is a standalone value (ADR-0035): refUID must be 0x0, non-revocable.
             // Placement lives in a TAG under an Anchor<PROPERTY>(name="<key>"), symmetric
             // with DATA. The TAG's _validateDefinition handles container-kind validation.
@@ -760,9 +822,7 @@ contract EFSIndexer is SchemaResolver {
         return _referencingSchemas[targetUID];
     }
 
-    function getEAS() external view returns (IEAS) {
-        return _eas;
-    }
+    // getEAS() is inherited from EFSUpgradeableResolver (returns the constructor-immutable EAS).
 
     function getAllReferencingCount(bytes32 targetUID) external view returns (uint256) {
         return _allReferencing[targetUID].length;
@@ -1032,11 +1092,8 @@ contract EFSIndexer is SchemaResolver {
 
         // EFS-native schemas are indexed atomically in onAttest — skip them here.
         bytes32 schema = att.schema;
-        if (
-            schema == ANCHOR_SCHEMA_UID ||
-            schema == DATA_SCHEMA_UID ||
-            schema == PROPERTY_SCHEMA_UID
-        ) {
+        IndexerConfig storage $ = _cfg();
+        if (schema == $.anchorSchemaUID || schema == $.dataSchemaUID || schema == $.propertySchemaUID) {
             return false;
         }
 
@@ -1068,6 +1125,7 @@ contract EFSIndexer is SchemaResolver {
      * @return count Number of UIDs newly indexed (excludes already-indexed and skipped).
      */
     function indexBatch(bytes32[] calldata uids) external returns (uint256 count) {
+        IndexerConfig storage $ = _cfg();
         for (uint256 i = 0; i < uids.length; i++) {
             bytes32 uid = uids[i];
             if (_indexed[uid]) continue;
@@ -1076,11 +1134,7 @@ contract EFSIndexer is SchemaResolver {
             if (att.uid == bytes32(0)) revert InvalidAttestation();
 
             bytes32 schema = att.schema;
-            if (
-                schema == ANCHOR_SCHEMA_UID ||
-                schema == DATA_SCHEMA_UID ||
-                schema == PROPERTY_SCHEMA_UID
-            ) {
+            if (schema == $.anchorSchemaUID || schema == $.dataSchemaUID || schema == $.propertySchemaUID) {
                 continue;
             }
 

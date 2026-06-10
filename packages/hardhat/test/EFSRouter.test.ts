@@ -2,6 +2,7 @@ import { expect } from "chai";
 import { ethers } from "hardhat";
 import { setCode } from "@nomicfoundation/hardhat-network-helpers";
 import { Signer, ZeroAddress, ZeroHash } from "ethers";
+import { deployIndexerProxy } from "./helpers/deployIndexerProxy";
 
 const ZERO_BYTES32 = ZeroHash;
 const NO_EXPIRATION = 0n;
@@ -72,11 +73,13 @@ describe("EFSRouter Web3 Capabilities", function () {
     //   currentNonce+0: EdgeResolver
     //   currentNonce+1: MirrorResolver
     //   currentNonce+2..7: 6 schema registrations (anchor, property, data, PIN, TAG, mirror)
-    //   currentNonce+8: EFSIndexer
+    //   currentNonce+8: EFSIndexer implementation
+    //   currentNonce+9: EFSIndexer proxy (the resolver baked into the schema UIDs)
     const currentNonce = await ethers.provider.getTransactionCount(ownerAddr);
     const futureEdgeResolverAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce });
     const futureMirrorResolverAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce + 1 });
-    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce + 8 });
+    // PROXY is the resolver (ADR-0048): impl = +8, proxy = +9. See deployIndexerProxy().
+    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce + 9 });
 
     // Pre-compute schema UIDs
     anchorSchemaUID = ethers.solidityPackedKeccak256(
@@ -126,9 +129,14 @@ describe("EFSRouter Web3 Capabilities", function () {
       await registry.register("bytes32 transportDefinition, string uri", await mirrorResolver.getAddress(), true)
     ).wait();
 
-    // Deploy EFSIndexer
-    const IndexerFactory = await ethers.getContractFactory("EFSIndexer");
-    indexer = await IndexerFactory.deploy(await eas.getAddress(), anchorSchemaUID, propertySchemaUID, dataSchemaUID);
+    // Deploy EFSIndexer behind a proxy (ADR-0048)
+    indexer = await deployIndexerProxy(
+      await eas.getAddress(),
+      anchorSchemaUID,
+      propertySchemaUID,
+      dataSchemaUID,
+      owner,
+    );
     expect(await indexer.getAddress()).to.equal(futureIndexerAddr);
 
     // Wire contracts (EdgeResolver gets both PIN and TAG schema UIDs)

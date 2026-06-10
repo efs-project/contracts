@@ -2,6 +2,7 @@ import { expect } from "chai";
 import { ethers } from "hardhat";
 import { EFSIndexer, EAS, SchemaRegistry } from "../typechain-types";
 import { Signer, ZeroAddress } from "ethers";
+import { deployIndexerProxy } from "./helpers/deployIndexerProxy";
 
 /**
  * Tests for EFSIndexer public index API:
@@ -84,7 +85,8 @@ describe("EFSIndexer — public index() API", function () {
     // Nonce-predict EFSIndexer address
     const ownerAddr = await owner.getAddress();
     const baseNonce = await ethers.provider.getTransactionCount(ownerAddr);
-    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: baseNonce + 3 });
+    // PROXY is the resolver (ADR-0048): impl = baseNonce+3, proxy = baseNonce+4. See deployIndexerProxy().
+    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: baseNonce + 4 });
 
     // Register EFS schemas. DATA is an empty schema — pure identity (ADR-0049).
     const tx1 = await registry.register("string name, bytes32 schemaUID", futureIndexerAddr, false);
@@ -94,10 +96,14 @@ describe("EFSIndexer — public index() API", function () {
     const tx3 = await registry.register("", futureIndexerAddr, false);
     dataSchemaUID = (await tx3.wait())!.logs[0].topics[1];
 
-    // Deploy EFSIndexer
-    const IndexerFactory = await ethers.getContractFactory("EFSIndexer");
-    indexer = await IndexerFactory.deploy(await eas.getAddress(), anchorSchemaUID, propertySchemaUID, dataSchemaUID);
-    await indexer.waitForDeployment();
+    // Deploy EFSIndexer behind a proxy (ADR-0048)
+    indexer = await deployIndexerProxy(
+      await eas.getAddress(),
+      anchorSchemaUID,
+      propertySchemaUID,
+      dataSchemaUID,
+      owner,
+    );
     expect(await indexer.getAddress()).to.equal(futureIndexerAddr);
 
     // Register two third-party schemas (no resolver, revocable)

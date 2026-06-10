@@ -2,6 +2,7 @@ import { expect } from "chai";
 import { ethers } from "hardhat";
 import { EFSIndexer, EAS, SchemaRegistry } from "../typechain-types";
 import { Signer, ZeroAddress } from "ethers";
+import { deployIndexerProxy } from "./helpers/deployIndexerProxy";
 
 // Constants
 const NO_EXPIRATION = 0n;
@@ -45,7 +46,10 @@ describe("EFSIndexer", function () {
     const nonce = await ethers.provider.getTransactionCount(ownerAddr);
     // Calculate the future address of the Indexer using the owner's nonce.
     // The Indexer is deployed after SchemaRegistry registration transactions.
-    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: nonce + 7 }); // Adjusted nonce for new schemas
+    // The PROXY is the resolver baked into the schema UIDs (ADR-0048). It is deployed after the
+    // 7 schema registrations AND after the EFSIndexer implementation, so it lands at nonce+8
+    // (impl = nonce+7, proxy = nonce+8). See deployIndexerProxy().
+    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: nonce + 8 });
 
     // Register Schemas with the future resolver address
     // ANCHOR: string name, bytes32 schemaUID
@@ -89,14 +93,13 @@ describe("EFSIndexer", function () {
     // not EFSIndexer. tagSchemaUID is still registered (with futureIndexerAddr as resolver) in tests
     // so that generic referencing tests still exercise the indexer's _allReferencing /
     // _referencingBySchema maps.
-    const IndexerFactory = await ethers.getContractFactory("EFSIndexer");
-    indexer = await IndexerFactory.deploy(
+    indexer = await deployIndexerProxy(
       await eas.getAddress(),
       anchorSchemaUID,
       propertySchemaUID,
       dataSchemaUID,
+      owner,
     );
-    await indexer.waitForDeployment();
 
     expect(await indexer.getAddress()).to.equal(futureIndexerAddr);
   });
@@ -152,6 +155,73 @@ describe("EFSIndexer", function () {
           ethers.ZeroAddress,
         ),
       ).to.be.revertedWith("EFSIndexer: already wired");
+    });
+  });
+
+  describe("Upgradeable proxy (ADR-0048)", function () {
+    it("exposes the constructor EAS via getEAS() through the proxy", async function () {
+      // getEAS() is inherited from EFSUpgradeableResolver and reads the impl's constructor
+      // immutable; it must resolve correctly under the proxy's delegatecall.
+      expect(await indexer.getEAS()).to.equal(await eas.getAddress());
+    });
+
+    it("initializes config + owner once and reverts on a second initialize()", async function () {
+      // The proxy was already initialized in beforeEach. Config getters read ERC-7201 storage.
+      expect(await indexer.ANCHOR_SCHEMA_UID()).to.equal(anchorSchemaUID);
+      expect(await indexer.PROPERTY_SCHEMA_UID()).to.equal(propertySchemaUID);
+      expect(await indexer.DATA_SCHEMA_UID()).to.equal(dataSchemaUID);
+      expect(await indexer.owner()).to.equal(await owner.getAddress());
+      // DEPLOYER() is preserved as an owner()-backed alias for ABI/consumer compatibility.
+      expect(await indexer.DEPLOYER()).to.equal(await owner.getAddress());
+
+      // A second initialize() must revert (OZ Initializable one-shot guard).
+      await expect(
+        indexer.initialize(anchorSchemaUID, propertySchemaUID, dataSchemaUID, await owner.getAddress()),
+      ).to.be.revertedWithCustomError(indexer, "InvalidInitialization");
+    });
+
+    it("indexes an ANCHOR identically through the proxy (attest → resolvePath)", async function () {
+      // The core kernel path must behave identically through the proxy: an ANCHOR attestation
+      // routes through onAttest (delegatecall) and writes the directory index in proxy storage.
+      const data = new ethers.AbiCoder().encode(["string", "bytes32"], ["root", ZERO_BYTES32]);
+      const tx = await eas.attest({
+        schema: anchorSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: NO_EXPIRATION,
+          revocable: false,
+          refUID: ZERO_BYTES32,
+          data,
+          value: 0n,
+        },
+      });
+      const uid = getUIDFromReceipt(await tx.wait());
+
+      // rootAnchorUID + the name→anchor directory index were written to PROXY storage.
+      expect(await indexer.rootAnchorUID()).to.equal(uid);
+      expect(await indexer.resolvePath(ZERO_BYTES32, "root")).to.equal(uid);
+    });
+
+    it("gates wireContracts() and setSortsAnchor() on the owner", async function () {
+      // user1 is not the owner → onlyOwner reverts (OZ OwnableUnauthorizedAccount).
+      await expect(indexer.connect(user1).setSortsAnchor(ZERO_BYTES32)).to.be.revertedWithCustomError(
+        indexer,
+        "OwnableUnauthorizedAccount",
+      );
+      await expect(
+        indexer
+          .connect(user1)
+          .wireContracts(
+            await user1.getAddress(),
+            ZERO_BYTES32,
+            ZERO_BYTES32,
+            ethers.ZeroAddress,
+            ZERO_BYTES32,
+            ethers.ZeroAddress,
+            ZERO_BYTES32,
+            ethers.ZeroAddress,
+          ),
+      ).to.be.revertedWithCustomError(indexer, "OwnableUnauthorizedAccount");
     });
   });
 

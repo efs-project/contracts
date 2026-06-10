@@ -2,6 +2,7 @@ import { expect } from "chai";
 import { ethers } from "hardhat";
 import { EdgeResolver, EFSIndexer, EAS, SchemaRegistry } from "../typechain-types";
 import { Signer, ZeroAddress } from "ethers";
+import { deployIndexerProxy } from "./helpers/deployIndexerProxy";
 
 const ZERO_BYTES32 = "0x0000000000000000000000000000000000000000000000000000000000000000";
 const NO_EXPIRATION = 0n;
@@ -70,11 +71,13 @@ describe("EdgeResolver — contains-flag bookkeeping (address-target safety)", f
     //   nonce+3: DATA schema (placeholder)
     //   nonce+4: PIN schema
     //   nonce+5: TAG schema
-    //   nonce+6: EFSIndexer
+    //   nonce+6: EFSIndexer implementation
+    //   nonce+7: EFSIndexer proxy (the resolver)
     const ownerAddr = await owner.getAddress();
     const resolverNonce = await ethers.provider.getTransactionCount(ownerAddr);
     const futureEdgeResolverAddress = ethers.getCreateAddress({ from: ownerAddr, nonce: resolverNonce });
-    const futureIndexerAddress = ethers.getCreateAddress({ from: ownerAddr, nonce: resolverNonce + 6 });
+    // PROXY is the resolver (ADR-0048): impl = +6, proxy = +7. See deployIndexerProxy().
+    const futureIndexerAddress = ethers.getCreateAddress({ from: ownerAddr, nonce: resolverNonce + 7 });
     const precomputedPinSchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
       ["bytes32 definition", futureEdgeResolverAddress, true],
@@ -120,9 +123,13 @@ describe("EdgeResolver — contains-flag bookkeeping (address-target safety)", f
     tagSchemaUID = (await tagSchemaTx.wait())!.logs[0].topics[1];
     expect(tagSchemaUID).to.equal(precomputedTagSchemaUID);
 
-    const IndexerFactory = await ethers.getContractFactory("EFSIndexer");
-    indexer = await IndexerFactory.deploy(await eas.getAddress(), anchorSchemaUID, propertySchemaUID, dataSchemaUID);
-    await indexer.waitForDeployment();
+    indexer = await deployIndexerProxy(
+      await eas.getAddress(),
+      anchorSchemaUID,
+      propertySchemaUID,
+      dataSchemaUID,
+      owner,
+    );
     expect(await indexer.getAddress()).to.equal(futureIndexerAddress);
 
     await indexer.wireContracts(
