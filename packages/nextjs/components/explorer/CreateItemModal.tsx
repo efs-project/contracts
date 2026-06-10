@@ -987,28 +987,17 @@ export const CreateItemModal = ({
         checkCancelled();
       }
 
-      if (contentHash !== ethers.ZeroHash && indexer && publicClient) {
-        try {
-          const canonical = (await publicClient.readContract({
-            address: indexer.address as `0x${string}`,
-            abi: indexer.abi,
-            functionName: "dataByContentKey",
-            args: [contentHash as `0x${string}`],
-          })) as `0x${string}`;
-          if (canonical && canonical !== ethers.ZeroHash) {
-            ops.log(opId, "Note: DATA for this content already exists. A new one will still be created and tagged.");
-          }
-        } catch {
-          // non-fatal
-        }
-      }
+      // AGENT-NOTE: DATA is an empty schema — pure identity (ADR-0049). The prior best-effort
+      // dedup read (`indexer.dataByContentKey`) was removed: DATA carries no contentHash, that
+      // index is no longer written, and identical bytes now mint distinct DATA UIDs. Client-side
+      // dedup prevention (query the property index for a trusted contentHash claim before upload
+      // and hardlink instead of minting) plus attaching contentHash/size as reserved-key
+      // PROPERTYs is future PROPERTY/SDK upload-flow work. `contentHash`/`fileSize` are still
+      // computed above so the follow-up has the values ready; they are not used yet.
+      void contentHash;
+      void fileSize;
 
-      ops.log(opId, "Creating DATA attestation...");
-      // AGENT-NOTE: A2 ripple — DATA reshape (ADR-0049). DATA is now an empty schema; this
-      // encode(["bytes32","uint64"], …) and the dataByContentKey read above are stale. Upload
-      // must mint empty DATA ("0x") and attach contentHash/size as reserved-key PROPERTYs.
-      // Tracked for the A2 follow-up (SDK/nextjs upload-flow refactor).
-      const encodedData = ethers.AbiCoder.defaultAbiCoder().encode(["bytes32", "uint64"], [contentHash, fileSize]);
+      ops.log(opId, "Creating DATA attestation (empty — pure identity, ADR-0049)...");
       const dataTxHash = await attest(
         {
           functionName: "attest",
@@ -1020,7 +1009,7 @@ export const CreateItemModal = ({
                 expirationTime: 0n,
                 revocable: false,
                 refUID: ethers.ZeroHash as `0x${string}`,
-                data: encodedData as `0x${string}`,
+                data: "0x",
                 value: 0n,
               },
             },

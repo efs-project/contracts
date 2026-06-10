@@ -61,10 +61,10 @@ describe("EFSFileView", function () {
 
     // Deploy order:
     //   nonce+0: EdgeResolver
-    //   nonce+1..5: Anchor, Property, Data, Blob, PIN, TAG schema registrations (5 total)
-    //   nonce+7: Indexer
+    //   nonce+1..5: Anchor, Property, Data, PIN, TAG schema registrations (5 total)
+    //   nonce+6: Indexer
     const futureEdgeResolverAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: nonce });
-    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: nonce + 7 });
+    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: nonce + 6 });
     const precomputedPinSchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
       ["bytes32 definition", futureEdgeResolverAddr, true],
@@ -95,15 +95,10 @@ describe("EFSFileView", function () {
     const rc2 = await tx2.wait();
     propertySchemaUID = rc2!.logs[0].topics[1];
 
-    // Data (non-revocable, content-addressed — matches EFSIndexer DATA_SCHEMA_UID)
-    const tx3 = await registry.register("bytes32 contentHash, uint64 size", futureIndexerAddr, false);
+    // Data (empty schema — pure identity, ADR-0049; matches EFSIndexer DATA_SCHEMA_UID)
+    const tx3 = await registry.register("", futureIndexerAddr, false);
     const rc3 = await tx3.wait();
     dataSchemaUID = rc3!.logs[0].topics[1];
-
-    // Blob (No resolver)
-    const tx4 = await registry.register("string mimeType, uint8 storageType, bytes location", ZeroAddress, true);
-    const rc4 = await tx4.wait();
-    const blobSchemaUID = rc4!.logs[0].topics[1];
 
     // PIN schema
     const tx5 = await registry.register("bytes32 definition", futureEdgeResolverAddr, true);
@@ -117,13 +112,7 @@ describe("EFSFileView", function () {
 
     // Deploy Indexer
     const IndexerFactory = await ethers.getContractFactory("EFSIndexer");
-    indexer = await IndexerFactory.deploy(
-      await eas.getAddress(),
-      anchorSchemaUID,
-      propertySchemaUID,
-      dataSchemaUID,
-      blobSchemaUID,
-    );
+    indexer = await IndexerFactory.deploy(await eas.getAddress(), anchorSchemaUID, propertySchemaUID, dataSchemaUID);
     await indexer.waitForDeployment();
 
     expect(await indexer.getAddress()).to.equal(futureIndexerAddr);
@@ -650,7 +639,7 @@ describe("EFSFileView", function () {
         expirationTime: NO_EXPIRATION,
         revocable: false,
         refUID: ZERO_BYTES32,
-        data: enc.encode(["bytes32", "uint64"], [ethers.keccak256(ethers.toUtf8Bytes("alice payload")), 7n]),
+        data: "0x", // DATA is an empty schema — pure identity (ADR-0049)
         value: 0n,
       },
     });
@@ -664,7 +653,7 @@ describe("EFSFileView", function () {
         expirationTime: NO_EXPIRATION,
         revocable: false,
         refUID: ZERO_BYTES32,
-        data: enc.encode(["bytes32", "uint64"], [ethers.keccak256(ethers.toUtf8Bytes("bob payload")), 11n]),
+        data: "0x", // DATA is an empty schema — pure identity (ADR-0049)
         value: 0n,
       },
     });
@@ -715,7 +704,7 @@ describe("EFSFileView", function () {
         expirationTime: NO_EXPIRATION,
         revocable: false,
         refUID: ZERO_BYTES32,
-        data: enc.encode(["bytes32", "uint64"], [ethers.keccak256(ethers.toUtf8Bytes("bob adversarial")), 42n]),
+        data: "0x", // DATA is an empty schema — pure identity (ADR-0049)
         value: 0n,
       },
     });

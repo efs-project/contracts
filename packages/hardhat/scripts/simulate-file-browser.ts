@@ -118,14 +118,13 @@ async function main() {
     return getUID(tx);
   };
 
-  // AGENT-NOTE: A2 ripple — DATA reshape (ADR-0049). DATA is now empty; encoding
-  // (contentHash, size) reverts and dataByContentKey is no longer written. Mint empty DATA
-  // and attach contentHash/size as reserved-key PROPERTYs. Tracked for the A2 follow-up.
-  /** Create a standalone DATA attestation (contentHash + size, non-revocable, standalone) */
+  // AGENT-NOTE: DATA is an empty schema — pure identity (ADR-0049). It carries no inline fields;
+  // contentHash/size are reserved-key PROPERTYs bound to the DATA UID. `contentHash` below is a
+  // local convenience (the value a client would attach as a PROPERTY) — it is NOT encoded into
+  // the DATA payload. Attaching it as a PROPERTY is future PROPERTY/SDK work.
+  /** Create a standalone DATA attestation (empty per ADR-0049, non-revocable, standalone) */
   const createData = async (signer: any, content: string) => {
-    const contentBytes = ethers.toUtf8Bytes(content);
-    const contentHash = ethers.keccak256(contentBytes);
-    const size = contentBytes.length;
+    const contentHash = ethers.keccak256(ethers.toUtf8Bytes(content));
     const tx = await eas.connect(signer).attest({
       schema: dataSchemaUID,
       data: {
@@ -133,7 +132,7 @@ async function main() {
         expirationTime: 0n,
         revocable: false,
         refUID: ethers.ZeroHash,
-        data: encode.encode(["bytes32", "uint64"], [contentHash, size]),
+        data: "0x",
         value: 0n,
       },
     });
@@ -391,16 +390,14 @@ async function main() {
   assert("MIRROR transport is ipfs", mirrorTransport === ipfsTransportUID);
   assert("MIRROR URI is correct", mirrorUri === "ipfs://owner-best", `got: ${mirrorUri}`);
 
-  // ── Test 6: Content-Addressed Dedup ──
-  console.log("\n[6] Content-Addressed Dedup (dataByContentKey)");
-  const canonicalUID = await indexer.dataByContentKey(ownerBestData.contentHash);
-  assert("dataByContentKey returns first DATA for this hash", canonicalUID === ownerBestData.uid);
-
-  // Create a second DATA with the same content — different UID but same contentHash
-  const dupData = await createData(owner, "owner-best-jpeg-bytes"); // same content
-  const dupCanonical = await indexer.dataByContentKey(dupData.contentHash);
-  assert("Canonical still points to first DATA (dedup)", dupCanonical === ownerBestData.uid);
-  assert("Duplicate DATA has different UID", dupData.uid !== ownerBestData.uid);
+  // ── Test 6: No intrinsic content-addressed dedup (ADR-0049) ──
+  // AGENT-NOTE: DATA is empty (ADR-0049) — no contentHash field, no `dataByContentKey` index.
+  // Identical bytes now mint DISTINCT DATA UIDs; there is no canonical-by-hash resolution on
+  // chain. Dedup prevention is best-effort client-side (query the property index before upload);
+  // dedup resolution is the REDIRECT primitive (ADR-0050). Both are future PROPERTY/SDK work.
+  console.log("\n[6] No intrinsic content dedup (ADR-0049) — identical bytes → distinct DATA UIDs");
+  const dupData = await createData(owner, "owner-best-jpeg-bytes"); // same content as ownerBestData
+  assert("Duplicate content mints a distinct DATA UID (no dedup)", dupData.uid !== ownerBestData.uid);
 
   // ── Test 7: PIN Removal (eas.revoke under ADR-0041) ──
   console.log("\n[7] PIN Removal (eas.revoke)");

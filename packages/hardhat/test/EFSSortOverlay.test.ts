@@ -20,7 +20,6 @@ describe("EFSSortOverlay", function () {
   let anchorSchemaUID: string;
   let dataSchemaUID: string;
   let propertySchemaUID: string;
-  let blobSchemaUID: string;
   let sortInfoSchemaUID: string;
 
   const enc = ethers.AbiCoder.defaultAbiCoder();
@@ -43,18 +42,17 @@ describe("EFSSortOverlay", function () {
     // Deployment order:
     //   +0: Register ANCHOR schema
     //   +1: Register PROPERTY schema
-    //   +2: Register DATA schema
-    //   +3: Register BLOB schema (no resolver)
-    //   +4: Deploy EFSIndexer
-    //   +5: Deploy NameSort
-    //   +6: Deploy TimestampSort
-    //   +7: Register SORT_INFO schema (with futureOverlayAddr as resolver)
-    //   +8: Deploy EFSSortOverlay
+    //   +2: Register DATA schema (empty — ADR-0049)
+    //   +3: Deploy EFSIndexer
+    //   +4: Deploy NameSort
+    //   +5: Deploy TimestampSort
+    //   +6: Register SORT_INFO schema (with futureOverlayAddr as resolver)
+    //   +7: Deploy EFSSortOverlay
     const ownerAddr = await owner.getAddress();
     const baseNonce = await ethers.provider.getTransactionCount(ownerAddr);
 
-    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: baseNonce + 4 });
-    const futureOverlayAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: baseNonce + 8 });
+    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: baseNonce + 3 });
+    const futureOverlayAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: baseNonce + 7 });
 
     // 3. Register EFS schemas with futureIndexerAddr as resolver
     const tx1 = await registry.register("string name, bytes32 schemaUID", futureIndexerAddr, false);
@@ -63,21 +61,13 @@ describe("EFSSortOverlay", function () {
     const tx2 = await registry.register("string value", futureIndexerAddr, false);
     propertySchemaUID = (await tx2.wait())!.logs[0].topics[1];
 
-    const tx3 = await registry.register("bytes32 contentHash, uint64 size", futureIndexerAddr, false);
+    // DATA is an empty schema — pure identity (ADR-0049).
+    const tx3 = await registry.register("", futureIndexerAddr, false);
     dataSchemaUID = (await tx3.wait())!.logs[0].topics[1];
-
-    const tx4 = await registry.register("string mimeType, uint8 storageType, bytes location", ZeroAddress, true);
-    blobSchemaUID = (await tx4.wait())!.logs[0].topics[1];
 
     // 4. Deploy EFSIndexer
     const IndexerFactory = await ethers.getContractFactory("EFSIndexer");
-    indexer = await IndexerFactory.deploy(
-      await eas.getAddress(),
-      anchorSchemaUID,
-      propertySchemaUID,
-      dataSchemaUID,
-      blobSchemaUID,
-    );
+    indexer = await IndexerFactory.deploy(await eas.getAddress(), anchorSchemaUID, propertySchemaUID, dataSchemaUID);
     await indexer.waitForDeployment();
     expect(await indexer.getAddress()).to.equal(futureIndexerAddr);
 

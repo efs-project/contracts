@@ -23,7 +23,6 @@ describe("EFSRouter Web3 Capabilities", function () {
   let pinSchemaUID: string;
   let tagSchemaUID: string;
   let mirrorSchemaUID: string;
-  let blobSchemaUID: string;
 
   let rootUID: string;
   let ideasUID: string;
@@ -72,12 +71,12 @@ describe("EFSRouter Web3 Capabilities", function () {
     // Nonce prediction. Deployment order:
     //   currentNonce+0: EdgeResolver
     //   currentNonce+1: MirrorResolver
-    //   currentNonce+2..8: 7 schema registrations (anchor, property, data, PIN, TAG, mirror, blob)
-    //   currentNonce+9: EFSIndexer
+    //   currentNonce+2..7: 6 schema registrations (anchor, property, data, PIN, TAG, mirror)
+    //   currentNonce+8: EFSIndexer
     const currentNonce = await ethers.provider.getTransactionCount(ownerAddr);
     const futureEdgeResolverAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce });
     const futureMirrorResolverAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce + 1 });
-    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce + 9 });
+    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce + 8 });
 
     // Pre-compute schema UIDs
     anchorSchemaUID = ethers.solidityPackedKeccak256(
@@ -88,10 +87,8 @@ describe("EFSRouter Web3 Capabilities", function () {
       ["string", "address", "bool"],
       ["string value", futureIndexerAddr, false],
     );
-    dataSchemaUID = ethers.solidityPackedKeccak256(
-      ["string", "address", "bool"],
-      ["bytes32 contentHash, uint64 size", futureIndexerAddr, false],
-    );
+    // DATA is an empty schema — pure identity (ADR-0049).
+    dataSchemaUID = ethers.solidityPackedKeccak256(["string", "address", "bool"], ["", futureIndexerAddr, false]);
     pinSchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
       ["bytes32 definition", futureEdgeResolverAddr, true],
@@ -103,10 +100,6 @@ describe("EFSRouter Web3 Capabilities", function () {
     mirrorSchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
       ["bytes32 transportDefinition, string uri", futureMirrorResolverAddr, true],
-    );
-    blobSchemaUID = ethers.solidityPackedKeccak256(
-      ["string", "address", "bool"],
-      ["string mimeType, uint8 storageType, bytes location", ZeroAddress, true],
     );
 
     // Deploy EdgeResolver (handles both PIN and TAG schemas, dispatched by attestation.schema)
@@ -126,23 +119,16 @@ describe("EFSRouter Web3 Capabilities", function () {
     // Register schemas
     await (await registry.register("string name, bytes32 schemaUID", futureIndexerAddr, false)).wait();
     await (await registry.register("string value", futureIndexerAddr, false)).wait();
-    await (await registry.register("bytes32 contentHash, uint64 size", futureIndexerAddr, false)).wait();
+    await (await registry.register("", futureIndexerAddr, false)).wait(); // DATA: empty schema (ADR-0049)
     await (await registry.register("bytes32 definition", await edgeResolver.getAddress(), true)).wait();
     await (await registry.register("bytes32 definition, int256 weight", await edgeResolver.getAddress(), true)).wait();
     await (
       await registry.register("bytes32 transportDefinition, string uri", await mirrorResolver.getAddress(), true)
     ).wait();
-    await (await registry.register("string mimeType, uint8 storageType, bytes location", ZeroAddress, true)).wait();
 
     // Deploy EFSIndexer
     const IndexerFactory = await ethers.getContractFactory("EFSIndexer");
-    indexer = await IndexerFactory.deploy(
-      await eas.getAddress(),
-      anchorSchemaUID,
-      propertySchemaUID,
-      dataSchemaUID,
-      blobSchemaUID,
-    );
+    indexer = await IndexerFactory.deploy(await eas.getAddress(), anchorSchemaUID, propertySchemaUID, dataSchemaUID);
     expect(await indexer.getAddress()).to.equal(futureIndexerAddr);
 
     // Wire contracts (EdgeResolver gets both PIN and TAG schema UIDs)
@@ -285,9 +271,10 @@ describe("EFSRouter Web3 Capabilities", function () {
     );
   }
 
-  async function createData(content: string, signer: Signer = owner): Promise<string> {
-    const contentHash = ethers.keccak256(Buffer.from(content));
-    const size = BigInt(Buffer.from(content).length);
+  // DATA is an empty schema — pure identity (ADR-0049). The `content` arg is retained only
+  // so callers can label what the DATA stands for in MIRRORs/PROPERTYs; the DATA itself
+  // carries no inline payload.
+  async function createData(_content: string, signer: Signer = owner): Promise<string> {
     return getUID(
       await (
         await eas.connect(signer).attest({
@@ -297,7 +284,7 @@ describe("EFSRouter Web3 Capabilities", function () {
             expirationTime: NO_EXPIRATION,
             revocable: false,
             refUID: ZERO_BYTES32,
-            data: enc.encode(["bytes32", "uint64"], [contentHash, size]),
+            data: "0x",
             value: 0n,
           },
         })
@@ -1290,7 +1277,7 @@ describe("EFSRouter Web3 Capabilities", function () {
       expect(ct?.value).to.equal("application/json");
       const json = JSON.parse(Buffer.from(ethers.getBytes(body)).toString());
       expect(json.uid.toLowerCase()).to.equal(dataSchemaUID.toLowerCase());
-      expect(json.schema).to.equal("bytes32 contentHash, uint64 size");
+      expect(json.schema).to.equal(""); // DATA is an empty schema — pure identity (ADR-0049)
       expect(json.revocable).to.equal(false);
     });
 

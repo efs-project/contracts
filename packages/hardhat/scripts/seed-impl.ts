@@ -157,16 +157,14 @@ export async function seedDemoTree() {
     return uid;
   };
 
-  // AGENT-NOTE: A2 ripple — DATA reshape (ADR-0049). DATA is now an empty schema; encoding
-  // (contentHash, size) into the payload reverts against the reshaped resolver/registration.
-  // The seed must mint empty DATA ("0x") and attach contentHash/size as reserved-key PROPERTYs.
-  // Tracked for the A2 follow-up.
-  /** Create a standalone DATA attestation (ADR-0002: refUID=0x0, non-revocable, (contentHash, size)). */
+  // AGENT-NOTE: DATA is an empty schema — pure identity (ADR-0049). It carries no inline fields;
+  // contentHash/size are reserved-key PROPERTYs bound to the DATA UID, not part of the DATA
+  // attestation. Attaching them as PROPERTYs in the seed is future PROPERTY/SDK work — the seed
+  // currently mints empty DATA only.
+  /** Create a standalone DATA attestation (ADR-0002: refUID=0x0, non-revocable; empty per ADR-0049). */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const makeData = async (signer: any, content: string): Promise<string> => {
-    const contentBytes = ethers.toUtf8Bytes(content);
-    const contentHash = ethers.keccak256(contentBytes);
-    const size = contentBytes.length;
+    void content; // retained for call-site readability; DATA carries no inline payload
     const tx = await eas.connect(signer).attest({
       schema: dataSchemaUID,
       data: {
@@ -174,12 +172,12 @@ export async function seedDemoTree() {
         expirationTime: 0n,
         revocable: false,
         refUID: ethers.ZeroHash,
-        data: encode.encode(["bytes32", "uint64"], [contentHash, size]),
+        data: "0x",
         value: 0n,
       },
     });
     const uid = await getUID(tx);
-    console.log(`  Data      ${uid.slice(0, 10)}…  (hash=${contentHash.slice(0, 10)}…, size=${size})`);
+    console.log(`  Data      ${uid.slice(0, 10)}…  (empty — pure identity, ADR-0049)`);
     return uid;
   };
 

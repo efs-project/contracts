@@ -92,13 +92,7 @@ describe("EdgeResolver — TAG", function () {
     dummySchemaUID = (await dummySchemaTx.wait())!.logs[0].topics[1];
 
     const IndexerFactory = await ethers.getContractFactory("EFSIndexer");
-    indexer = await IndexerFactory.deploy(
-      await eas.getAddress(),
-      ZERO_BYTES32,
-      ZERO_BYTES32,
-      ZERO_BYTES32,
-      ZERO_BYTES32,
-    );
+    indexer = await IndexerFactory.deploy(await eas.getAddress(), ZERO_BYTES32, ZERO_BYTES32, ZERO_BYTES32);
     await indexer.waitForDeployment();
     expect(await indexer.getAddress()).to.equal(futureIndexerAddress);
 

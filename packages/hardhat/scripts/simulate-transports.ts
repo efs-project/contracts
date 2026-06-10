@@ -126,14 +126,13 @@ async function main() {
     return getUID(tx);
   };
 
-  // AGENT-NOTE: A2 ripple — DATA reshape (ADR-0049). DATA is now empty; encoding
-  // (contentHash, size) reverts and dataByContentKey is no longer written. Mint empty DATA
-  // and attach contentHash/size as reserved-key PROPERTYs. Tracked for the A2 follow-up.
+  // AGENT-NOTE: DATA is an empty schema — pure identity (ADR-0049). It carries no inline fields;
+  // contentHash/size are reserved-key PROPERTYs bound to the DATA UID. `contentHash` below is a
+  // local convenience (the value a client would attach as a PROPERTY) — it is NOT encoded into
+  // the DATA payload. Attaching it as a PROPERTY is future PROPERTY/SDK work.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const createData = async (signer: any, content: string) => {
-    const contentBytes = ethers.toUtf8Bytes(content);
-    const contentHash = ethers.keccak256(contentBytes);
-    const size = contentBytes.length;
+    const contentHash = ethers.keccak256(ethers.toUtf8Bytes(content));
     const tx = await eas.connect(signer).attest({
       schema: dataSchemaUID,
       data: {
@@ -141,7 +140,7 @@ async function main() {
         expirationTime: 0n,
         revocable: false,
         refUID: ethers.ZeroHash,
-        data: encode.encode(["bytes32", "uint64"], [contentHash, size]),
+        data: "0x",
         value: 0n,
       },
     });
@@ -373,20 +372,21 @@ async function main() {
   assert("user1's mirror URI correct", u1Mirror!.uri === "ar://user1-sunset-backup");
 
   // ======================================================================
-  // TEST 7: Content-Addressed Dedup + Shared Mirrors
+  // TEST 7: No intrinsic content dedup (ADR-0049) + Shared Mirrors
   // ======================================================================
-  console.log("\n[7] Content-Addressed Dedup\n");
+  // AGENT-NOTE: DATA is empty (ADR-0049) — no contentHash field, no `dataByContentKey` index.
+  // Identical bytes mint DISTINCT DATA UIDs; canonical-by-hash resolution is gone on chain.
+  // Dedup prevention is best-effort client-side (property-index query before upload); dedup
+  // resolution is the REDIRECT primitive (ADR-0050). Both are future PROPERTY/SDK work.
+  console.log("\n[7] No intrinsic content dedup (ADR-0049)\n");
 
   // user2 creates a DATA with the same content as sunset.jpg
   const dupData = await createData(user2, "sunset-jpeg-bytes-content");
-  assert("same content produces same contentHash", dupData.contentHash === photo1Data.contentHash);
 
-  // Canonical DATA lookup returns the original
-  const canonical = await indexer.dataByContentKey(photo1Data.contentHash);
-  assert("canonical DATA is owner's (first)", canonical === photo1Data.uid);
-
-  // Both DATA UIDs are distinct attestations
-  assert("duplicate DATA gets its own UID", dupData.uid !== photo1Data.uid);
+  // Identical bytes still produce the same *local* contentHash (a client would attach it as a
+  // PROPERTY), but the DATA UIDs are distinct — there is no on-chain dedup.
+  assert("same content produces same local contentHash", dupData.contentHash === photo1Data.contentHash);
+  assert("duplicate DATA gets its own UID (no dedup)", dupData.uid !== photo1Data.uid);
 
   // user2 can add mirrors to their own DATA
   await createMirror(user2, dupData.uid, ipfsTransportUID, "ipfs://QmSunsetDup");
@@ -430,7 +430,9 @@ async function main() {
   const galleryPage = await fileView.getFilesAtPath(photo1UID, [ownerAddr], dataSchemaUID, "0x", 10);
   const galleryFiles = galleryPage.items;
   assert("getFilesAtPath returns 1 DATA at sunset.jpg anchor", galleryFiles.length === 1, `got ${galleryFiles.length}`);
-  assert("returned item has correct contentHash", galleryFiles[0].contentHash === photo1Data.contentHash);
+  // AGENT-NOTE: DATA is empty (ADR-0049); contentHash is no longer an inline field, so the
+  // listing surfaces bytes32(0). Surfacing the hash PROPERTY is future property-index work.
+  assert("returned item has zero contentHash (empty DATA, ADR-0049)", galleryFiles[0].contentHash === ethers.ZeroHash);
   assert("returned item hasData=true", galleryFiles[0].hasData);
 
   // Multi-attester query: owner + user2 at sunset anchor (owner pinned, user2 didn't)

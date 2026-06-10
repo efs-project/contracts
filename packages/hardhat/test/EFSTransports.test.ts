@@ -35,7 +35,6 @@ describe("EFS Transports & Data Model", function () {
   let pinSchemaUID: string;
   let tagSchemaUID: string;
   let mirrorSchemaUID: string;
-  let blobSchemaUID: string;
 
   let rootUID: string;
   let transportsUID: string;
@@ -53,8 +52,6 @@ describe("EFS Transports & Data Model", function () {
 
   const encodeAnchor = (name: string, schema: string = ZERO_BYTES32) =>
     enc.encode(["string", "bytes32"], [name, schema]);
-
-  const encodeData = (contentHash: string, size: bigint) => enc.encode(["bytes32", "uint64"], [contentHash, size]);
 
   const encodePropertyValue = (value: string) => enc.encode(["string"], [value]);
 
@@ -91,18 +88,17 @@ describe("EFS Transports & Data Model", function () {
     //   nonce+1: MirrorResolver
     //   nonce+2: ANCHOR schema
     //   nonce+3: PROPERTY schema
-    //   nonce+4: DATA schema
+    //   nonce+4: DATA schema (empty — ADR-0049)
     //   nonce+5: PIN schema
     //   nonce+6: TAG schema
     //   nonce+7: MIRROR schema
-    //   nonce+8: BLOB schema
-    //   nonce+9: EFSIndexer
-    //   nonce+10: EFSFileView
+    //   nonce+8: EFSIndexer
+    //   nonce+9: EFSFileView
     const currentNonce = await ethers.provider.getTransactionCount(ownerAddr);
 
     const futureEdgeResolverAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce });
     const futureMirrorResolverAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce + 1 });
-    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce + 9 });
+    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce + 8 });
 
     // Pre-compute schema UIDs
     anchorSchemaUID = ethers.solidityPackedKeccak256(
@@ -113,10 +109,8 @@ describe("EFS Transports & Data Model", function () {
       ["string", "address", "bool"],
       ["string value", futureIndexerAddr, false],
     );
-    dataSchemaUID = ethers.solidityPackedKeccak256(
-      ["string", "address", "bool"],
-      ["bytes32 contentHash, uint64 size", futureIndexerAddr, false],
-    );
+    // DATA is an empty schema — pure identity (ADR-0049).
+    dataSchemaUID = ethers.solidityPackedKeccak256(["string", "address", "bool"], ["", futureIndexerAddr, false]);
     pinSchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
       ["bytes32 definition", futureEdgeResolverAddr, true],
@@ -128,10 +122,6 @@ describe("EFS Transports & Data Model", function () {
     mirrorSchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
       ["bytes32 transportDefinition, string uri", futureMirrorResolverAddr, true],
-    );
-    blobSchemaUID = ethers.solidityPackedKeccak256(
-      ["string", "address", "bool"],
-      ["string mimeType, uint8 storageType, bytes location", ZeroAddress, true],
     );
 
     // Deploy EdgeResolver (PIN + TAG combined under one resolver)
@@ -151,23 +141,16 @@ describe("EFS Transports & Data Model", function () {
     // Register schemas
     await (await registry.register("string name, bytes32 schemaUID", futureIndexerAddr, false)).wait();
     await (await registry.register("string value", futureIndexerAddr, false)).wait();
-    await (await registry.register("bytes32 contentHash, uint64 size", futureIndexerAddr, false)).wait();
+    await (await registry.register("", futureIndexerAddr, false)).wait(); // DATA: empty schema (ADR-0049)
     await (await registry.register("bytes32 definition", await edgeResolver.getAddress(), true)).wait();
     await (await registry.register("bytes32 definition, int256 weight", await edgeResolver.getAddress(), true)).wait();
     await (
       await registry.register("bytes32 transportDefinition, string uri", await mirrorResolver.getAddress(), true)
     ).wait();
-    await (await registry.register("string mimeType, uint8 storageType, bytes location", ZeroAddress, true)).wait();
 
     // Deploy EFSIndexer
     const IndexerFactory = await ethers.getContractFactory("EFSIndexer");
-    indexer = await IndexerFactory.deploy(
-      await eas.getAddress(),
-      anchorSchemaUID,
-      propertySchemaUID,
-      dataSchemaUID,
-      blobSchemaUID,
-    );
+    indexer = await IndexerFactory.deploy(await eas.getAddress(), anchorSchemaUID, propertySchemaUID, dataSchemaUID);
     expect(await indexer.getAddress()).to.equal(futureIndexerAddr);
 
     // Deploy EFSFileView
@@ -249,7 +232,10 @@ describe("EFS Transports & Data Model", function () {
     return getUID(await tx.wait());
   }
 
-  async function createData(contentHash: string, size: bigint, signer: Signer = owner): Promise<string> {
+  // DATA is an empty schema — pure identity (ADR-0049). The `_contentHash`/`_size` params are
+  // ignored (kept so existing call sites read clearly about what the DATA stands for); the DATA
+  // attestation itself carries no inline payload.
+  async function createData(_contentHash: string, _size: bigint, signer: Signer = owner): Promise<string> {
     const tx = await eas.connect(signer).attest({
       schema: dataSchemaUID,
       data: {
@@ -257,7 +243,7 @@ describe("EFS Transports & Data Model", function () {
         expirationTime: NO_EXPIRATION,
         revocable: false,
         refUID: ZERO_BYTES32,
-        data: encodeData(contentHash, size),
+        data: "0x",
         value: 0n,
       },
     });
@@ -367,7 +353,7 @@ describe("EFS Transports & Data Model", function () {
   // ─── DATA Tests ───────────────────────────────────────────────────────────
 
   describe("Standalone DATA", function () {
-    it("should create standalone DATA with contentHash and size", async function () {
+    it("should create standalone DATA — empty, pure identity (ADR-0049)", async function () {
       const contentHash = ethers.keccak256(ethers.toUtf8Bytes("hello world"));
       const dataUID = await createData(contentHash, 11n);
 
@@ -376,25 +362,15 @@ describe("EFS Transports & Data Model", function () {
       expect(att.schema).to.equal(dataSchemaUID);
       expect(att.refUID).to.equal(ZERO_BYTES32); // standalone
       expect(att.revocable).to.equal(false);
+      expect(att.data).to.equal("0x"); // empty schema — no inline fields
     });
 
-    it("should populate dataByContentKey on first DATA", async function () {
-      const contentHash = ethers.keccak256(ethers.toUtf8Bytes("unique content"));
-      const dataUID = await createData(contentHash, 14n);
-      expect(await indexer.dataByContentKey(contentHash)).to.equal(dataUID);
-    });
-
-    it("should not overwrite dataByContentKey for duplicate contentHash", async function () {
-      const contentHash = ethers.keccak256(ethers.toUtf8Bytes("same content"));
-      const first = await createData(contentHash, 12n);
-      const second = await createData(contentHash, 12n);
-
-      expect(first).to.not.equal(second); // different UIDs
-      expect(await indexer.dataByContentKey(contentHash)).to.equal(first); // canonical = first
-    });
+    // AGENT-NOTE: removed "should populate dataByContentKey on first DATA" and "should not
+    // overwrite dataByContentKey for duplicate contentHash" — DATA is empty (ADR-0049), carries
+    // no contentHash, and `dataByContentKey` is no longer written. Content-hash dedup moves to
+    // the property index + REDIRECT primitive (ADR-0050); that's future PROPERTY/SDK work.
 
     it("should reject DATA with refUID (must be standalone)", async function () {
-      const contentHash = ethers.keccak256(ethers.toUtf8Bytes("test"));
       // Create an anchor to use as refUID
       const anchorUID = await createAnchor(rootUID, "test-folder");
 
@@ -407,7 +383,7 @@ describe("EFS Transports & Data Model", function () {
             expirationTime: NO_EXPIRATION,
             revocable: false,
             refUID: anchorUID,
-            data: encodeData(contentHash, 4n),
+            data: "0x", // empty DATA (ADR-0049)
             value: 0n,
           },
         }),
@@ -643,7 +619,9 @@ describe("EFS Transports & Data Model", function () {
 
       expect(items.length).to.equal(1);
       expect(items[0].uid).to.equal(dataUID);
-      expect(items[0].contentHash).to.equal(contentHash);
+      // DATA is empty (ADR-0049); contentHash is no longer an inline DATA field, so the
+      // listing surfaces bytes32(0). Surfacing the hash PROPERTY is future property-index work.
+      expect(items[0].contentHash).to.equal(ZERO_BYTES32);
       expect(items[0].hasData).to.equal(true);
     });
   });
@@ -662,11 +640,13 @@ describe("EFS Transports & Data Model", function () {
   });
 
   describe("EFSFileView.getCanonicalData", function () {
-    it("should return canonical DATA for contentHash", async function () {
+    it("getCanonicalData is a deprecated no-op returning bytes32(0) (ADR-0049)", async function () {
+      // DATA is empty/pure-identity; there is no intrinsic content-hash index. Canonical/dedup
+      // resolution moves to the property index + REDIRECT primitive (ADR-0050) — future work.
       const contentHash = ethers.keccak256(ethers.toUtf8Bytes("canonical test"));
-      const dataUID = await createData(contentHash, 50n);
+      await createData(contentHash, 50n);
 
-      expect(await fileView.getCanonicalData(contentHash)).to.equal(dataUID);
+      expect(await fileView.getCanonicalData(contentHash)).to.equal(ZERO_BYTES32);
     });
   });
 
@@ -698,8 +678,8 @@ describe("EFS Transports & Data Model", function () {
       const mirrors = await indexer.getReferencingAttestations(dataUID, mirrorSchemaUID, 0, 10, false);
       expect(mirrors.length).to.equal(1);
 
-      // Verify: dedup
-      expect(await indexer.dataByContentKey(contentHash)).to.equal(dataUID);
+      // AGENT-NOTE: dropped the dedup assertion (`dataByContentKey`) — DATA is empty (ADR-0049)
+      // and carries no contentHash; dedup is now property-index + REDIRECT work (ADR-0050).
     });
   });
 });

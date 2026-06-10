@@ -58,7 +58,6 @@ async function main() {
   console.log(`LIST_ENTRY_SCHEMA_UID: ${listEntrySchemaUID}\n`);
 
   const enc = new ethers.AbiCoder();
-  const S = Date.now().toString(36); // session suffix for uniqueness
 
   const encodeList = (ad: boolean, ao: boolean, tt: number, ts: string, me: number) =>
     enc.encode(["bool", "bool", "uint8", "bytes32", "uint32"], [ad, ao, tt, ts, me]);
@@ -167,7 +166,8 @@ async function main() {
   });
   const filmListUID = getUID(await filmListTx.wait());
 
-  // Mint a DATA attestation to use as a film
+  // Mint a DATA attestation to use as a film. DATA is an empty schema — pure identity (ADR-0049);
+  // it carries no inline fields, so the payload is zero-length.
   const filmTx = await eas.connect(alice).attest({
     schema: dataSchemaUID,
     data: {
@@ -175,7 +175,7 @@ async function main() {
       expirationTime: 0n,
       revocable: false,
       refUID: ethers.ZeroHash,
-      data: enc.encode(["bytes32", "uint64"], [ethers.keccak256(ethers.toUtf8Bytes(`film-${S}`)), 1000n]),
+      data: "0x",
       value: 0n,
     },
   });

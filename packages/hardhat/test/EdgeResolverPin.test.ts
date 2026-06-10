@@ -105,7 +105,6 @@ describe("EdgeResolver — PIN", function () {
       ZERO_BYTES32, // anchorSchemaUID (placeholder)
       ZERO_BYTES32, // propertySchemaUID (placeholder)
       ZERO_BYTES32, // dataSchemaUID (placeholder)
-      ZERO_BYTES32, // blobSchemaUID (placeholder)
     );
     await indexer.waitForDeployment();
     expect(await indexer.getAddress()).to.equal(futureIndexerAddress);

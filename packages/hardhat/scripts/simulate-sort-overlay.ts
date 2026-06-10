@@ -133,14 +133,13 @@ async function main() {
     return getUID(tx);
   };
 
-  // AGENT-NOTE: A2 ripple — DATA reshape (ADR-0049). DATA is now empty; encoding
-  // (contentHash, size) reverts. Mint empty DATA and attach contentHash/size as reserved-key
-  // PROPERTYs. Tracked for the A2 follow-up.
-  /** Create a standalone DATA attestation (contentHash + size, non-revocable, standalone) */
+  // AGENT-NOTE: DATA is an empty schema — pure identity (ADR-0049). It carries no inline fields;
+  // contentHash/size are reserved-key PROPERTYs bound to the DATA UID. `contentHash` below is a
+  // local convenience (the value a client would attach as a PROPERTY) — it is NOT encoded into
+  // the DATA payload. Attaching it as a PROPERTY is future PROPERTY/SDK work.
+  /** Create a standalone DATA attestation (empty per ADR-0049, non-revocable, standalone) */
   const createData = async (signer: any, content: string): Promise<{ uid: string; contentHash: string }> => {
-    const contentBytes = ethers.toUtf8Bytes(content);
-    const contentHash = ethers.keccak256(contentBytes);
-    const size = contentBytes.length;
+    const contentHash = ethers.keccak256(ethers.toUtf8Bytes(content));
     const tx = await eas.connect(signer).attest({
       schema: dataSchemaUID,
       data: {
@@ -148,7 +147,7 @@ async function main() {
         expirationTime: 0n,
         revocable: false,
         refUID: ethers.ZeroHash,
-        data: encode.encode(["bytes32", "uint64"], [contentHash, size]),
+        data: "0x",
         value: 0n,
       },
     });

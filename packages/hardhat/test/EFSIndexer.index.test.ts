@@ -29,7 +29,6 @@ describe("EFSIndexer — public index() API", function () {
   let anchorSchemaUID: string;
   let dataSchemaUID: string;
   let propertySchemaUID: string;
-  let blobSchemaUID: string;
 
   // Third-party schema (no resolver — simulates external developer)
   let thirdPartySchemaUID: string;
@@ -85,27 +84,19 @@ describe("EFSIndexer — public index() API", function () {
     // Nonce-predict EFSIndexer address
     const ownerAddr = await owner.getAddress();
     const baseNonce = await ethers.provider.getTransactionCount(ownerAddr);
-    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: baseNonce + 4 });
+    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: baseNonce + 3 });
 
-    // Register EFS schemas
+    // Register EFS schemas. DATA is an empty schema — pure identity (ADR-0049).
     const tx1 = await registry.register("string name, bytes32 schemaUID", futureIndexerAddr, false);
     anchorSchemaUID = (await tx1.wait())!.logs[0].topics[1];
     const tx2 = await registry.register("string value", futureIndexerAddr, false);
     propertySchemaUID = (await tx2.wait())!.logs[0].topics[1];
-    const tx3 = await registry.register("bytes32 contentHash, uint64 size", futureIndexerAddr, false);
+    const tx3 = await registry.register("", futureIndexerAddr, false);
     dataSchemaUID = (await tx3.wait())!.logs[0].topics[1];
-    const tx4 = await registry.register("string mimeType, uint8 storageType, bytes location", ZeroAddress, true);
-    blobSchemaUID = (await tx4.wait())!.logs[0].topics[1];
 
     // Deploy EFSIndexer
     const IndexerFactory = await ethers.getContractFactory("EFSIndexer");
-    indexer = await IndexerFactory.deploy(
-      await eas.getAddress(),
-      anchorSchemaUID,
-      propertySchemaUID,
-      dataSchemaUID,
-      blobSchemaUID,
-    );
+    indexer = await IndexerFactory.deploy(await eas.getAddress(), anchorSchemaUID, propertySchemaUID, dataSchemaUID);
     await indexer.waitForDeployment();
     expect(await indexer.getAddress()).to.equal(futureIndexerAddr);
 

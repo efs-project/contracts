@@ -79,7 +79,6 @@ interface IEFSIndexer {
     function PROPERTY_SCHEMA_UID() external view returns (bytes32);
     function MIRROR_SCHEMA_UID() external view returns (bytes32);
     function ANCHOR_SCHEMA_UID() external view returns (bytes32);
-    function dataByContentKey(bytes32 contentHash) external view returns (bytes32);
     function getReferencingAttestations(
         bytes32 targetUID,
         bytes32 schemaUID,
@@ -458,17 +457,11 @@ contract EFSFileView {
         for (uint256 i = 0; i < count; i++) {
             Attestation memory att = eas.getAttestation(buf[i]);
 
-            bytes32 contentHash;
             string memory name = "";
 
-            if (att.schema == dataSchemaUID) {
-                // AGENT-NOTE: A2 ripple — DATA reshape (ADR-0049). DATA is now an empty schema
-                // (zero-length payload); this abi.decode reverts on real empty DATA. contentHash
-                // is now a lens-scoped PROPERTY on the DATA UID, not a DATA field. Read it from
-                // the property index instead of decoding here. Tracked for the A2 follow-up.
-                (contentHash, ) = abi.decode(att.data, (bytes32, uint64));
-            } else {
-                // Anchor: decode name
+            if (att.schema != dataSchemaUID) {
+                // Anchor: decode name. DATA carries no inline fields (ADR-0049), so there is
+                // nothing to decode in the DATA branch.
                 bytes32 anchorType;
                 (name, anchorType) = abi.decode(att.data, (string, bytes32));
             }
@@ -484,7 +477,9 @@ contract EFSFileView {
                 timestamp: att.time,
                 attester: att.attester,
                 schema: att.schema,
-                contentHash: contentHash
+                // AGENT-NOTE: hash/size now live as PROPERTYs (ADR-0049), not DATA fields.
+                // Surfacing them in listings is future on-chain property-index work.
+                contentHash: bytes32(0)
             });
         }
         page.items = items;
@@ -542,14 +537,15 @@ contract EFSFileView {
     }
 
     /**
-     * @notice Look up the canonical DATA UID for a content hash.
-     * @dev AGENT-NOTE: A2 ripple — DATA reshape (ADR-0049). dataByContentKey is no longer
-     *      written by EFSIndexer (DATA is empty/pure-identity; contentHash is a lens-scoped
-     *      PROPERTY). This now always returns bytes32(0). Canonical/dedup resolution moves to
-     *      the REDIRECT primitive (ADR-0050) + the property index. Tracked for the A2 follow-up.
+     * @notice Deprecated content-hash → canonical DATA reverse lookup. Always returns bytes32(0).
+     * @dev AGENT-NOTE: hash/size now live as PROPERTYs (ADR-0049); reverse-lookup is future
+     *      on-chain property-index work. DATA is empty/pure-identity, so there is no longer an
+     *      intrinsic content-hash index; `dataByContentKey` is no longer written. Canonical/dedup
+     *      resolution moves to the REDIRECT primitive (ADR-0050) + the property index. The method
+     *      is retained as a no-op so the view ABI stays stable for callers during the transition.
      */
-    function getCanonicalData(bytes32 contentHash) external view returns (bytes32) {
-        return indexer.dataByContentKey(contentHash);
+    function getCanonicalData(bytes32 /* contentHash */) external pure returns (bytes32) {
+        return bytes32(0);
     }
 
     function decodeName(bytes memory data) external pure returns (string memory) {

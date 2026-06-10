@@ -68,14 +68,13 @@ describe("EdgeResolver — contains-flag bookkeeping (address-target safety)", f
     //   nonce+1: ANCHOR schema
     //   nonce+2: PROPERTY schema (placeholder, not used here)
     //   nonce+3: DATA schema (placeholder)
-    //   nonce+4: BLOB schema (placeholder)
-    //   nonce+5: PIN schema
-    //   nonce+6: TAG schema
-    //   nonce+7: EFSIndexer
+    //   nonce+4: PIN schema
+    //   nonce+5: TAG schema
+    //   nonce+6: EFSIndexer
     const ownerAddr = await owner.getAddress();
     const resolverNonce = await ethers.provider.getTransactionCount(ownerAddr);
     const futureEdgeResolverAddress = ethers.getCreateAddress({ from: ownerAddr, nonce: resolverNonce });
-    const futureIndexerAddress = ethers.getCreateAddress({ from: ownerAddr, nonce: resolverNonce + 7 });
+    const futureIndexerAddress = ethers.getCreateAddress({ from: ownerAddr, nonce: resolverNonce + 6 });
     const precomputedPinSchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
       ["bytes32 definition", futureEdgeResolverAddress, true],
@@ -100,15 +99,13 @@ describe("EdgeResolver — contains-flag bookkeeping (address-target safety)", f
     const anchorTx = await registry.register("string name, bytes32 schemaUID", futureIndexerAddress, false);
     anchorSchemaUID = (await anchorTx.wait())!.logs[0].topics[1];
 
-    // PROPERTY / DATA / BLOB are not exercised here, but EFSIndexer's constructor wants their UIDs.
+    // PROPERTY / DATA are not exercised here, but EFSIndexer's constructor wants their UIDs.
     // Use throwaway registrations rather than ZERO_BYTES32 so the indexer's schema-equality
-    // checks don't accidentally match.
+    // checks don't accidentally match. DATA is an empty schema (ADR-0049).
     const propTx = await registry.register("string value", futureIndexerAddress, false);
     const propertySchemaUID = (await propTx.wait())!.logs[0].topics[1];
-    const dataTx = await registry.register("bytes32 contentHash, uint64 size", futureIndexerAddress, false);
+    const dataTx = await registry.register("", futureIndexerAddress, false);
     const dataSchemaUID = (await dataTx.wait())!.logs[0].topics[1];
-    const blobTx = await registry.register("string mimeType, uint8 storageType, bytes location", ZeroAddress, true);
-    const blobSchemaUID = (await blobTx.wait())!.logs[0].topics[1];
 
     // PIN + TAG: registered with EdgeResolver so attest/revoke routes through it.
     const pinSchemaTx = await registry.register("bytes32 definition", await edgeResolver.getAddress(), true);
@@ -124,13 +121,7 @@ describe("EdgeResolver — contains-flag bookkeeping (address-target safety)", f
     expect(tagSchemaUID).to.equal(precomputedTagSchemaUID);
 
     const IndexerFactory = await ethers.getContractFactory("EFSIndexer");
-    indexer = await IndexerFactory.deploy(
-      await eas.getAddress(),
-      anchorSchemaUID,
-      propertySchemaUID,
-      dataSchemaUID,
-      blobSchemaUID,
-    );
+    indexer = await IndexerFactory.deploy(await eas.getAddress(), anchorSchemaUID, propertySchemaUID, dataSchemaUID);
     await indexer.waitForDeployment();
     expect(await indexer.getAddress()).to.equal(futureIndexerAddress);
 

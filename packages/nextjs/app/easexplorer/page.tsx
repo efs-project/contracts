@@ -156,10 +156,7 @@ function EASExplorerContent() {
     contractName: "Indexer",
     functionName: "DATA_SCHEMA_UID",
   });
-  const { data: blobSchemaUid } = useScaffoldReadContract({
-    contractName: "Indexer",
-    functionName: "BLOB_SCHEMA_UID",
-  });
+  // BLOB schema was dropped (ADR-0049): no BLOB_SCHEMA_UID read here anymore.
   // Edge schemas (PIN + TAG, ADR-0041) live on the EdgeResolver — they were
   // registered with EdgeResolver as their resolver address, not the Indexer.
   const { data: pinSchemaUid } = useScaffoldReadContract({
@@ -350,7 +347,6 @@ function EASExplorerContent() {
     if (schemaUid === anchorSchemaUid) return "Referencing Anchors (Children)";
     if (schemaUid === propertySchemaUid) return "Referencing Properties";
     if (schemaUid === dataSchemaUid) return "Linked Data";
-    if (schemaUid === blobSchemaUid) return "Linked Blobs";
     if (schemaUid === pinSchemaUid) return "Pins";
     if (schemaUid === tagSchemaUid) return "Tags";
 
