@@ -106,6 +106,8 @@ Other metadata (content type, description, version history) is likewise stored a
 
 **Details**: MIRRORs attach retrieval methods to a DATA. The `MirrorResolver` contract validates that `refUID` points to a valid DATA attestation and `transportDefinition` points to a valid Anchor. No singleton enforcement — multiple mirrors per transport type per attester are allowed.
 
+**URI scheme allowlist** (write-time, in `MirrorResolver._isAllowedScheme`): `web3://`, `ipfs://`, `ar://`, `https://`, `ftp://`, `s3://`, `gs://`, `dat://`, `rsync://`, `magnet:`, `bittorrent://`. Scheme safety is a *client-render* concern, not a write-time one — the router never executes a URI — so the allowlist is permissive about transport/storage schemes and rejects only active-content / inline-payload schemes (`javascript:`, `data:`) that enable XSS when a client renders a mirror in an `<a href>`. This widened set supersedes the original ADR-0023 set (`web3/ipfs/ar/https/magnet` only) in part; the XSS-rejection intent of ADR-0023 is preserved.
+
 ### Transport Definition Anchors
 Well-known transport types are created at deploy time under `/transports/`:
 - `/transports/onchain` — `web3://` URIs pointing to SSTORE2 chunk managers

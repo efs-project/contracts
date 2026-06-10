@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
-import { SchemaResolver } from "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol";
 import { IEAS, Attestation } from "@ethereum-attestation-service/eas-contracts/contracts/IEAS.sol";
+import { EFSUpgradeableResolver } from "./base/EFSUpgradeableResolver.sol";
 
 /**
  * @title ListResolver
@@ -11,8 +11,13 @@ import { IEAS, Attestation } from "@ethereum-attestation-service/eas-contracts/c
  *
  *      LIST schema: "bool allowsDuplicates, bool appendOnly, uint8 targetType, bytes32 targetSchema, uint256 maxEntries"
  *      revocable: false (LIST is permanent — identity of a list, like DATA)
+ *
+ *      Upgradeable (ADR-0048): runs behind an ERC1967 proxy whose ADDRESS is the EAS resolver
+ *      baked into the LIST schema UID. Stateless pure validation — no per-deployment config or
+ *      owner, so initialize() is empty; only the impl's _disableInitializers() (in the base
+ *      constructor) is load-bearing, locking the implementation against direct initialization.
  */
-contract ListResolver is SchemaResolver {
+contract ListResolver is EFSUpgradeableResolver {
     uint256 private constant EXPECTED_LIST_DATA_LEN = 160; // 5 × 32
 
     event ListAttested(
@@ -25,7 +30,14 @@ contract ListResolver is SchemaResolver {
         uint256 maxEntries
     );
 
-    constructor(IEAS eas) SchemaResolver(eas) {}
+    constructor(IEAS eas) EFSUpgradeableResolver(eas) {}
+
+    /// @notice One-time per-deployment initialization, run behind the proxy.
+    /// @dev Guarded by `initializer` — callable exactly once per proxy. ListResolver is pure
+    ///      validation with no config or owner, so this is intentionally empty; it exists only
+    ///      to consume the proxy's one-shot initializer slot symmetrically with the other EFS
+    ///      resolvers.
+    function initialize() external initializer {}
 
     function onAttest(Attestation calldata a, uint256) internal override returns (bool) {
         require(a.data.length == EXPECTED_LIST_DATA_LEN, "bad LIST payload");
@@ -34,8 +46,8 @@ contract ListResolver is SchemaResolver {
         require(a.refUID == bytes32(0), "LIST must be free-floating");
         require(a.recipient == address(0), "LIST must not be directed");
 
-        (bool allowsDuplicates, bool appendOnly, uint8 targetType, bytes32 targetSchema, uint256 maxEntries) =
-            abi.decode(a.data, (bool, bool, uint8, bytes32, uint256));
+        (bool allowsDuplicates, bool appendOnly, uint8 targetType, bytes32 targetSchema, uint256 maxEntries) = abi
+            .decode(a.data, (bool, bool, uint8, bytes32, uint256));
 
         require(targetType <= 2, "invalid targetType");
 

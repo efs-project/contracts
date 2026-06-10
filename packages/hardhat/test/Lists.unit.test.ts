@@ -2,6 +2,7 @@ import { expect } from "chai";
 import { ethers } from "hardhat";
 import { ListResolver, ListEntryResolver, ListReader, EAS, SchemaRegistry } from "../typechain-types";
 import { Signer, ZeroAddress } from "ethers";
+import { deployResolverProxy } from "./helpers/deployResolverProxy";
 
 const ZERO_BYTES32 = "0x" + "0".repeat(64);
 const NO_EXPIRATION = 0n;
@@ -50,16 +51,18 @@ describe("Lists — Unit Tests", function () {
     eas = await EASFactory.deploy(await registry.getAddress());
     await eas.waitForDeployment();
 
-    // Deployment order:
-    // nonce+0: ListResolver
-    // nonce+1: LIST schema register
-    // nonce+2: LIST_ENTRY schema register
-    // nonce+3: dummy schema register
-    // nonce+4: ListEntryResolver
-    // nonce+5: ListReader
+    // Deployment order (ListResolver is proxy-ified, ADR-0048):
+    // nonce+0: ListResolver implementation
+    // nonce+1: ListResolver proxy (the resolver baked into the LIST schema UID)
+    // nonce+2: LIST schema register
+    // nonce+3: LIST_ENTRY schema register
+    // nonce+4: dummy schema register
+    // nonce+5: ListEntryResolver
+    // nonce+6: ListReader
     const n = await ethers.provider.getTransactionCount(aliceAddr);
-    const futureListResolverAddr = ethers.getCreateAddress({ from: aliceAddr, nonce: n });
-    const futureListEntryResolverAddr = ethers.getCreateAddress({ from: aliceAddr, nonce: n + 4 });
+    // ListResolver PROXY is the resolver: impl = +0, proxy = +1.
+    const futureListResolverAddr = ethers.getCreateAddress({ from: aliceAddr, nonce: n + 1 });
+    const futureListEntryResolverAddr = ethers.getCreateAddress({ from: aliceAddr, nonce: n + 5 });
 
     listSchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
@@ -70,9 +73,9 @@ describe("Lists — Unit Tests", function () {
       [LIST_ENTRY_SCHEMA, futureListEntryResolverAddr, true],
     );
 
-    const LRF = await ethers.getContractFactory("ListResolver");
-    listResolver = await LRF.deploy(await eas.getAddress());
-    await listResolver.waitForDeployment();
+    // ListResolver behind a proxy (ADR-0048): stateless pure validation, empty initialize().
+    listResolver = await deployResolverProxy<ListResolver>("ListResolver", [await eas.getAddress()], [], alice);
+    expect(await listResolver.getAddress()).to.equal(futureListResolverAddr);
 
     await registry.register(LIST_SCHEMA, await listResolver.getAddress(), false);
     await registry.register(LIST_ENTRY_SCHEMA, futureListEntryResolverAddr, true);
@@ -194,7 +197,19 @@ describe("Lists — Unit Tests", function () {
   const revokeEntry = async (signer: Signer, uid: string) =>
     eas.connect(signer).revoke({ schema: listEntrySchemaUID, data: { uid, value: 0n } });
 
-  // ── Group A: ListResolver ──────────────────────────────────────────────────
+  // ── Group A0: ListResolver upgradeable lifecycle (ADR-0048) ─────────────────
+
+  describe("A0 — ListResolver upgradeable lifecycle", function () {
+    it("rejects re-initialization through the proxy", async function () {
+      await expect(listResolver.initialize()).to.be.revertedWithCustomError(listResolver, "InvalidInitialization");
+    });
+
+    it("exposes the constructor EAS via getEAS() through the proxy", async function () {
+      expect(await listResolver.getEAS()).to.equal(await eas.getAddress());
+    });
+  });
+
+  // ── Group A: ListResolver field validation ─────────────────────────────────
 
   describe("A — ListResolver field validation", function () {
     it("A1: valid ADDR-typed LIST attests", async function () {

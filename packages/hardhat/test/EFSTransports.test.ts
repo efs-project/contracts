@@ -3,6 +3,7 @@ import { ethers } from "hardhat";
 import { EFSIndexer, EdgeResolver, MirrorResolver, EFSFileView, EAS, SchemaRegistry } from "../typechain-types";
 import { Signer, ZeroAddress, ZeroHash } from "ethers";
 import { deployIndexerProxy } from "./helpers/deployIndexerProxy";
+import { deployResolverProxy } from "./helpers/deployResolverProxy";
 
 const ZERO_BYTES32 = ZeroHash;
 const NO_EXPIRATION = 0n;
@@ -84,24 +85,26 @@ describe("EFS Transports & Data Model", function () {
     eas = await EASFactory.deploy(await registry.getAddress());
     await eas.waitForDeployment();
 
-    // Nonce prediction:
-    //   nonce+0: EdgeResolver
-    //   nonce+1: MirrorResolver
-    //   nonce+2: ANCHOR schema
-    //   nonce+3: PROPERTY schema
-    //   nonce+4: DATA schema (empty — ADR-0049)
-    //   nonce+5: PIN schema
-    //   nonce+6: TAG schema
-    //   nonce+7: MIRROR schema
-    //   nonce+8: EFSIndexer implementation
-    //   nonce+9: EFSIndexer proxy (the resolver baked into the schema UIDs)
-    //   nonce+10: EFSFileView
+    // Nonce prediction (both EFSIndexer and MirrorResolver are now proxy-ified, ADR-0048):
+    //   nonce+0:  EdgeResolver
+    //   nonce+1:  MirrorResolver implementation
+    //   nonce+2:  MirrorResolver proxy (the resolver baked into the MIRROR schema UID)
+    //   nonce+3:  ANCHOR schema
+    //   nonce+4:  PROPERTY schema
+    //   nonce+5:  DATA schema (empty — ADR-0049)
+    //   nonce+6:  PIN schema
+    //   nonce+7:  TAG schema
+    //   nonce+8:  MIRROR schema
+    //   nonce+9:  EFSIndexer implementation
+    //   nonce+10: EFSIndexer proxy (the resolver baked into the EFS schema UIDs)
+    //   nonce+11: EFSFileView
     const currentNonce = await ethers.provider.getTransactionCount(ownerAddr);
 
     const futureEdgeResolverAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce });
-    const futureMirrorResolverAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce + 1 });
-    // PROXY is the resolver (ADR-0048): impl = +8, proxy = +9. See deployIndexerProxy().
-    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce + 9 });
+    // MirrorResolver PROXY is the resolver (ADR-0048): impl = +1, proxy = +2.
+    const futureMirrorResolverAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce + 2 });
+    // EFSIndexer PROXY is the resolver (ADR-0048): impl = +9, proxy = +10. See deployIndexerProxy().
+    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce + 10 });
 
     // Pre-compute schema UIDs
     anchorSchemaUID = ethers.solidityPackedKeccak256(
@@ -137,9 +140,15 @@ describe("EFS Transports & Data Model", function () {
       await registry.getAddress(),
     );
 
-    // Deploy MirrorResolver
-    const MirrorResolverFactory = await ethers.getContractFactory("MirrorResolver");
-    mirrorResolver = await MirrorResolverFactory.deploy(await eas.getAddress(), futureIndexerAddr);
+    // Deploy MirrorResolver behind a proxy (ADR-0048). initialize() wires the (predicted) indexer
+    // proxy address + owner; the proxy address is what's baked into the MIRROR schema UID.
+    mirrorResolver = await deployResolverProxy<MirrorResolver>(
+      "MirrorResolver",
+      [await eas.getAddress()],
+      [futureIndexerAddr, ownerAddr],
+      owner,
+    );
+    expect(await mirrorResolver.getAddress()).to.equal(futureMirrorResolverAddr);
 
     // Register schemas
     await (await registry.register("string name, bytes32 schemaUID", futureIndexerAddr, false)).wait();
@@ -484,12 +493,59 @@ describe("EFS Transports & Data Model", function () {
       expect(mirrorUID).to.not.equal(ZERO_BYTES32);
     });
 
+    it("should accept MIRROR with an s3:// URI (widened scheme allowlist, supersedes ADR-0023)", async function () {
+      // ADR-0048 MIRROR change: scheme safety is a client-render concern, not a write-time one
+      // (the router never executes URIs). s3:// (and ftp://, gs://, dat://, bittorrent://) are now
+      // accepted; only active-content schemes (javascript:, data:) remain rejected.
+      const mirrorUID = await createMirror(testDataUID, ipfsTransportUID, "s3://my-bucket/cat.jpg");
+      expect(mirrorUID).to.not.equal(ZERO_BYTES32);
+    });
+
+    it("should accept MIRROR with an ftp:// URI (widened scheme allowlist)", async function () {
+      const mirrorUID = await createMirror(testDataUID, ipfsTransportUID, "ftp://ftp.example.com/cat.jpg");
+      expect(mirrorUID).to.not.equal(ZERO_BYTES32);
+    });
+
+    it("should still reject MIRROR with a javascript: URI (XSS scheme stays blocked)", async function () {
+      await expect(createMirror(testDataUID, ipfsTransportUID, "javascript:alert(1)")).to.be.reverted;
+    });
+
     it("should be discoverable via getReferencingAttestations", async function () {
       await createMirror(testDataUID, ipfsTransportUID, "ipfs://QmHash1");
       await createMirror(testDataUID, arweaveTransportUID, "ar://ArHash1");
 
       const mirrors = await indexer.getReferencingAttestations(testDataUID, mirrorSchemaUID, 0, 10, false);
       expect(mirrors.length).to.equal(2);
+    });
+  });
+
+  // ─── MirrorResolver upgradeable lifecycle (ADR-0048) ──────────────────────
+  describe("MirrorResolver upgradeable lifecycle", function () {
+    it("rejects re-initialization through the proxy", async function () {
+      await expect(
+        mirrorResolver.initialize(await indexer.getAddress(), await owner.getAddress()),
+      ).to.be.revertedWithCustomError(mirrorResolver, "InvalidInitialization");
+    });
+
+    it("exposes the constructor EAS via getEAS() through the proxy", async function () {
+      expect(await mirrorResolver.getEAS()).to.equal(await eas.getAddress());
+    });
+
+    it("reads the indexer ref from ERC-7201 config (set in initialize)", async function () {
+      expect(await mirrorResolver.indexer()).to.equal(await indexer.getAddress());
+    });
+
+    it("gates setTransportsAnchor behind onlyOwner (former msg.sender==_deployer)", async function () {
+      // transportsAnchorUID is already set in beforeEach; a non-owner call must revert on the
+      // ownership check before reaching the one-shot guard.
+      await expect(mirrorResolver.connect(alice).setTransportsAnchor(transportsUID)).to.be.revertedWithCustomError(
+        mirrorResolver,
+        "OwnableUnauthorizedAccount",
+      );
+    });
+
+    it("keeps the one-shot guard: owner cannot re-set transportsAnchorUID", async function () {
+      await expect(mirrorResolver.setTransportsAnchor(transportsUID)).to.be.revertedWith("already set");
     });
   });
 

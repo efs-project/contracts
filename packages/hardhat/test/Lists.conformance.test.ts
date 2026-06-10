@@ -1,8 +1,9 @@
 // packages/hardhat/test/Lists.conformance.test.ts
 import { expect } from "chai";
 import { ethers } from "hardhat";
-import { EAS, SchemaRegistry, ListEntryResolver } from "../typechain-types";
+import { EAS, SchemaRegistry, ListEntryResolver, ListResolver } from "../typechain-types";
 import { Signer, ZeroAddress } from "ethers";
+import { deployResolverProxy } from "./helpers/deployResolverProxy";
 
 const ZERO_BYTES32 = "0x" + "0".repeat(64);
 const NO_EXPIRATION = 0n;
@@ -62,10 +63,12 @@ describe("Lists — Conformance (worked example lifecycle)", function () {
     eas = await EASFactory.deploy(await registry.getAddress());
     await eas.waitForDeployment();
 
-    // nonce+0: ListResolver, nonce+1: LIST reg, nonce+2: LIST_ENTRY reg, nonce+3: ListEntryResolver
+    // ListResolver is proxy-ified (ADR-0048): impl = nonce+0, proxy = nonce+1 (the resolver
+    // baked into the LIST schema UID). Then nonce+2: LIST reg, nonce+3: LIST_ENTRY reg,
+    // nonce+4: ListEntryResolver.
     const n = await ethers.provider.getTransactionCount(aliceAddr);
-    const futureListResolverAddr = ethers.getCreateAddress({ from: aliceAddr, nonce: n });
-    listEntryResolverAddr = ethers.getCreateAddress({ from: aliceAddr, nonce: n + 3 });
+    const futureListResolverAddr = ethers.getCreateAddress({ from: aliceAddr, nonce: n + 1 });
+    listEntryResolverAddr = ethers.getCreateAddress({ from: aliceAddr, nonce: n + 4 });
 
     listSchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
@@ -76,9 +79,8 @@ describe("Lists — Conformance (worked example lifecycle)", function () {
       [LIST_ENTRY_SCHEMA, listEntryResolverAddr, true],
     );
 
-    const LR = await ethers.getContractFactory("ListResolver");
-    const listResolver = await LR.deploy(await eas.getAddress());
-    await listResolver.waitForDeployment();
+    // ListResolver behind a proxy (ADR-0048): stateless pure validation, empty initialize().
+    const listResolver = await deployResolverProxy<ListResolver>("ListResolver", [await eas.getAddress()], [], alice);
     expect(await listResolver.getAddress()).to.equal(futureListResolverAddr);
 
     await registry.register(LIST_SCHEMA, await listResolver.getAddress(), false);
