@@ -105,9 +105,7 @@ const deployEFSIndexer: DeployFunction = async function (hre: HardhatRuntimeEnvi
 
   for (const schema of schemas) {
     let resolver: string;
-    if (schema.noResolver) {
-      resolver = ethers.ZeroAddress;
-    } else if (schema.useEdgeResolver) {
+    if (schema.useEdgeResolver) {
       resolver = futureEdgeResolverAddress;
     } else {
       resolver = futureIndexerAddress;
