@@ -462,6 +462,68 @@ describe("EFSIndexer", function () {
     });
   });
 
+  describe("Canonical anchor-name encoding (NFC + percent-encode)", function () {
+    // The on-chain anchor `name` is the canonical encoding of a human name:
+    // client-side NFC normalization (not verifiable on-chain), then percent-encoding
+    // of the reserved byte set with UPPERCASE hex. The resolver enforces the
+    // byte-level canonical form so there is exactly ONE valid representation per name.
+    const enc = new ethers.AbiCoder();
+
+    const attestRootAnchor = (name: string) =>
+      eas.attest({
+        schema: anchorSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: NO_EXPIRATION,
+          revocable: false,
+          refUID: ZERO_BYTES32,
+          data: enc.encode(["string", "bytes32"], [name, ZERO_BYTES32]),
+          value: 0n,
+        },
+      });
+
+    it('accepts the canonical encoding of "Q&A: Episode 5" and round-trips', async function () {
+      // NFC("Q&A: Episode 5") percent-encoded = Q%26A%3A%20Episode%205
+      const canonical = "Q%26A%3A%20Episode%205";
+      const tx = await attestRootAnchor(canonical);
+      const uid = getUIDFromReceipt(await tx.wait());
+      // Round-trips: the stored anchor name resolves back to the same UID byte-for-byte.
+      expect(await indexer.resolvePath(ZERO_BYTES32, canonical)).to.equal(uid);
+    });
+
+    it("accepts a normal simple name (readme.txt)", async function () {
+      const tx = await attestRootAnchor("readme.txt");
+      const uid = getUIDFromReceipt(await tx.wait());
+      expect(await indexer.resolvePath(ZERO_BYTES32, "readme.txt")).to.equal(uid);
+    });
+
+    it("rejects a bare reserved byte (literal space)", async function () {
+      await expect(attestRootAnchor("Episode 5")).to.be.revertedWithCustomError(indexer, "InvalidAnchorName");
+    });
+
+    it("rejects a bare reserved byte (literal &)", async function () {
+      await expect(attestRootAnchor("Q&A")).to.be.revertedWithCustomError(indexer, "InvalidAnchorName");
+    });
+
+    it("rejects a truncated escape (%2)", async function () {
+      await expect(attestRootAnchor("a%2")).to.be.revertedWithCustomError(indexer, "InvalidAnchorName");
+    });
+
+    it("rejects a malformed escape (%ZZ)", async function () {
+      await expect(attestRootAnchor("a%ZZ")).to.be.revertedWithCustomError(indexer, "InvalidAnchorName");
+    });
+
+    it("rejects a lowercase-hex escape (%2f) as non-canonical", async function () {
+      await expect(attestRootAnchor("a%2fb")).to.be.revertedWithCustomError(indexer, "InvalidAnchorName");
+    });
+
+    it("accepts an uppercase-hex escape (%2F)", async function () {
+      const tx = await attestRootAnchor("a%2Fb");
+      const uid = getUIDFromReceipt(await tx.wait());
+      expect(await indexer.resolvePath(ZERO_BYTES32, "a%2Fb")).to.equal(uid);
+    });
+  });
+
   describe("Path Resolution", function () {
     it("Should resolve root paths", async function () {
       const schemaEncoder = new ethers.AbiCoder();

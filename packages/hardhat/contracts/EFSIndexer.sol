@@ -356,9 +356,10 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
 
             (string memory name, bytes32 anchorSchema) = abi.decode(attestation.data, (string, bytes32));
 
-            // Validate name: must be IRI-segment safe (mirrors TopicResolver validation).
-            // Rejects empty, path-segment delimiters (/), null bytes, URI-special chars,
-            // and reserved path segments (. and ..) to prevent web3:// URI routing breaks.
+            // Validate name: must be the canonical anchor-name encoding (NFC + percent-encode,
+            // uppercase hex) — see _isValidAnchorName. Reserved bytes must be %XX-escaped; NFC
+            // normalization is the client's responsibility (not verifiable on-chain). This keeps
+            // exactly one valid encoding per name (the Schelling-point property).
             if (!_isValidAnchorName(name)) revert InvalidAnchorName();
 
             // Resolve Parent (Use refUID, else recipient cast to bytes32, else generic root if 0)
@@ -856,40 +857,76 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
     // INTERNAL HELPERS
     // ============================================================================================
 
-    /// @notice Unfiltered slice — used by generic explorer functions that don't need revocation filtering.
-    /// @dev IRI-segment name validation ported from TopicResolver, with "."/".." guard added.
-    ///      Rejects: empty, NUL, space, and URI-special bytes that break web3:// routing.
+    /// @notice Validates the *canonical* on-chain encoding of an anchor name.
+    /// @dev Canonical anchor-name encoding (ADR-0048 / decisions.md): the human-facing name is
+    ///      Unicode-NFC-normalized **client-side** (NFC tables are too large to run on-chain — the
+    ///      resolver CANNOT verify normalization and does not try), then the reserved byte set is
+    ///      percent-encoded (`%XX`, UPPERCASE hex). This gives every name exactly ONE valid
+    ///      on-chain representation, preserving the Schelling-point property that independent
+    ///      clients resolve the same human name to the same anchor.
+    ///
+    ///      This function enforces the byte-level half of that contract — it accepts ONLY the
+    ///      canonical form and rejects every non-canonical variant:
+    ///        - empty, and the reserved relative segments "." / "..";
+    ///        - a *bare* reserved byte (must be percent-encoded): the C0 control range 0x00–0x1F,
+    ///          DEL 0x7F, space 0x20, and the URI/path-special set
+    ///          `" # % & / : = ? @ [ \ ] ^ \` { | }` (see RESERVED table below);
+    ///        - a malformed or truncated escape (`%`, `%2`, `%ZZ`);
+    ///        - a lowercase-hex escape (`%2f`) — only UPPERCASE hex (`%2F`) is canonical, so a
+    ///          single byte can't have two valid encodings.
+    ///      All other bytes — including high-bit (>= 0x80) UTF-8 bytes for non-ASCII names — pass
+    ///      through unescaped. `%` is legal ONLY as the lead byte of a well-formed `%XX` escape.
+    ///      Single byte-pass over the name (no allocation).
     function _isValidAnchorName(string memory _name) private pure returns (bool) {
         bytes memory nb = bytes(_name);
-        if (nb.length == 0) return false;
+        uint256 len = nb.length;
+        if (len == 0) return false;
         // Reject "." and ".." — reserved relative path segments
-        if (nb.length == 1 && nb[0] == 0x2E) return false;
-        if (nb.length == 2 && nb[0] == 0x2E && nb[1] == 0x2E) return false;
-        for (uint256 i = 0; i < nb.length; i++) {
+        if (len == 1 && nb[0] == 0x2E) return false;
+        if (len == 2 && nb[0] == 0x2E && nb[1] == 0x2E) return false;
+        for (uint256 i = 0; i < len; i++) {
             bytes1 c = nb[i];
-            if (
-                c == 0x00 || // NUL
-                c == 0x20 || // space
-                c == 0x22 || // "
-                c == 0x23 || // #
-                c == 0x25 || // %
-                c == 0x26 || // &
-                c == 0x2F || // /
-                c == 0x3A || // :
-                c == 0x3D || // =
-                c == 0x3F || // ?
-                c == 0x40 || // @
-                c == 0x5B || // [
-                c == 0x5C || // \
-                c == 0x5D || // ]
-                c == 0x5E || // ^
-                c == 0x60 || // `
-                c == 0x7B || // {
-                c == 0x7C || // |
-                c == 0x7D // }
-            ) return false;
+            if (c == 0x25) {
+                // "%" — must introduce a canonical uppercase %XX escape.
+                if (i + 2 >= len) return false; // truncated (need two more bytes)
+                if (!_isUpperHex(nb[i + 1]) || !_isUpperHex(nb[i + 2])) return false;
+                i += 2; // consume the two hex digits
+            } else if (_isReservedByte(c)) {
+                // Bare reserved byte — must have been percent-encoded client-side.
+                return false;
+            }
         }
         return true;
+    }
+
+    /// @dev Reserved bytes that MUST be percent-encoded in a canonical anchor name.
+    ///      = the C0 control range (0x00–0x1F) + DEL (0x7F) + space (0x20) + the URI/path-special
+    ///      set. `%` (0x25) is handled separately by the escape parser and is NOT listed here.
+    function _isReservedByte(bytes1 c) private pure returns (bool) {
+        if (uint8(c) < 0x20 || c == 0x7F) return true; // C0 controls + DEL
+        return (c == 0x20 || // space
+            c == 0x22 || // "
+            c == 0x23 || // #
+            c == 0x26 || // &
+            c == 0x2F || // /
+            c == 0x3A || // :
+            c == 0x3D || // =
+            c == 0x3F || // ?
+            c == 0x40 || // @
+            c == 0x5B || // [
+            c == 0x5C || // \
+            c == 0x5D || // ]
+            c == 0x5E || // ^
+            c == 0x60 || // `
+            c == 0x7B || // {
+            c == 0x7C || // |
+            c == 0x7D); // }
+    }
+
+    /// @dev True for an UPPERCASE hex digit: 0-9 or A-F. Lowercase a-f is rejected so each byte
+    ///      has exactly one canonical %XX escape.
+    function _isUpperHex(bytes1 c) private pure returns (bool) {
+        return (c >= 0x30 && c <= 0x39) || (c >= 0x41 && c <= 0x46);
     }
 
     function _sliceUIDs(

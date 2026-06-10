@@ -25,6 +25,33 @@ A use case picks PIN or TAG based on the nature of its predicate. Smart-contract
 
 **Details**: An Anchor represents a name (like a folder name or a file name) within a specific context. It references (is a child of) an attestation in its EAS `refUID` field. Other attestations reference these Anchors in their `refUID` fields when they need to be associated with that specific name. Names are considered unique within their direct hierarchy level relative to the parent entity.
 
+### Canonical anchor-name encoding (NFC + percent-encode)
+
+The `name` field carries the **canonical encoding** of a human-facing name, never the raw human string. The encoding is fixed so that independent clients deterministically resolve the same human name to the same anchor UID — the Schelling-point property. A name is encoded in two steps (ADR-0048, supersedes ADR-0025's reject-only rule):
+
+1. **Unicode NFC normalization (client-side).** The human name is normalized to Unicode Normalization Form C. This collapses canonically-equivalent code-point sequences (e.g. precomposed `é` U+00E9 vs `e`+combining-acute U+0065 U+0301) to one form. **NFC is the client's responsibility** — the full NFC tables are far too large to run in Solidity, so the on-chain resolver does **not** and **cannot** verify normalization. Clients MUST normalize before encoding; a non-normalized input produces a different (still byte-valid) anchor that silently misses the intended Schelling point.
+2. **Percent-encoding of the reserved set (client-side, then resolver-validated).** Every byte in the **reserved set** is replaced with `%XX` using **UPPERCASE** hex. All other bytes — including high-bit (≥ `0x80`) UTF-8 bytes for non-ASCII names — are left as-is.
+
+**Reserved set** (must be percent-encoded):
+
+- the C0 control range `0x00`–`0x1F` and DEL `0x7F`;
+- space `0x20`;
+- `%` (`0x25`) — itself, so an escape is unambiguous;
+- the URI/path-special bytes: `"` `#` `&` `/` `:` `=` `?` `@` `[` `\` `]` `^` `` ` `` `{` `|` `}`.
+
+**Unreserved set**: every other byte, used literally (ASCII letters, digits, `.` `-` `_` `~`, sub-delims like `!` `$` `'` `(` `)` `*` `+` `,` `;`, and all `≥ 0x80` UTF-8 bytes).
+
+**Canonicalization rules enforced on-chain** (`EFSIndexer._isValidAnchorName`, single byte-pass, cheap): there is exactly **one** valid representation per name. The resolver **rejects**:
+
+- empty names, and the reserved relative segments `.` and `..`;
+- a **bare reserved byte** (it must be percent-encoded) — e.g. a literal space or `&`;
+- a malformed or truncated escape — `%`, `%2`, `%ZZ`;
+- a **lowercase-hex** escape — `%2f` is rejected; only `%2F` is canonical, so `%2f` and `%2F` can never both exist.
+
+The resolver validates only the byte-level canonical form (percent-encoding + uppercase hex); NFC is trusted from the client per step 1.
+
+**Worked example.** Human name `Q&A: Episode 5` → NFC (no change, already normalized) → percent-encode `&`, `:`, and the two spaces → on-chain `name` = `Q%26A%3A%20Episode%205`. A simple name like `readme.txt` has no reserved bytes and encodes to itself.
+
 ## 2. Property Schema
 **Purpose**: Free-floating value attached to a container via PIN placement under a *key anchor*. Symmetric with DATA (see §3) — both are standalone values placed via an edge attestation, not via `refUID`.
 **Structure**:
