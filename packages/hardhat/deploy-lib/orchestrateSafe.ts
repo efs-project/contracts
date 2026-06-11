@@ -25,7 +25,15 @@ import { ethers } from "hardhat";
 import { ResolverName, SCHEMAS } from "./schemas";
 import { Create3DeployResult, Create3Name } from "./create3";
 import { OrchestrationResult } from "./orchestrate";
-import { buildSetTransportsAnchorCall, buildSafePlan, SafePlan, SCAFFOLDING, TRANSPORTS_INDEX } from "./safePlan";
+import {
+  buildSetTransportsAnchorCall,
+  buildSafePlan,
+  detectDeployPhase,
+  DeployPhase,
+  SafePlan,
+  SCAFFOLDING,
+  TRANSPORTS_INDEX,
+} from "./safePlan";
 import { ProposedBatch, buildProposedBatch, executeBatchAsSafe, getSafe } from "./safe";
 import { runVerifyGate } from "./verify";
 
@@ -60,22 +68,31 @@ export interface SafeOrchestrationResult extends OrchestrationResult {
 ///               networks with a real EFS_SAFE_ADDRESS and no owner keys.
 export type SafeDeployMode = "execute" | "propose";
 
-/// The propose-mode artifact: the precomputed Safe-keyed addresses/UIDs + the proposable MultiSend
-/// batches (Batch 1 = deploy + wire; Batch 2 = register-last + bootstrap + seal). Batch 3
-/// (setTransportsAnchor) is NOT pre-built — its argument is the realized /transports UID, only known
-/// AFTER Batch 2 is executed on-chain (the bootstrap call mints it), so the operator builds it last.
+/// The propose-mode artifact (PR #24 P1: PHASE-AWARE). Each `--via-safe` invocation on a real network
+/// detects the current on-chain deploy phase and emits ONLY the next pending batch — never a duplicate
+/// of an already-landed one. The operator re-runs after each Safe{Wallet} execution, walking the phases:
+///   Phase 0 (no proxies)              → Batch 1 (deploy + wire)
+///   Phase 1 (proxies live, unregistered) → verify gate (read-only; aborts on drift), then Batch 2
+///   Phase 2 (registered + sealed)     → Batch 3 (setTransportsAnchor, fed the realized /transports UID)
+///   Phase 3 (transports wired)        → nothing (clean no-op; empty `batches`)
+/// `batches` holds the single next batch (or is empty at Phase 3). Batch 3's argument is the realized
+/// /transports UID, which only exists once Batch 2 has landed — so it is built (not pre-built) only when
+/// the phase reaches 2, reading the UID back from the index.
 export interface SafeProposeResult {
   mode: "propose";
   safe: string;
   chainId: string;
+  /// The detected deploy phase this invocation acted on (0–3).
+  phase: DeployPhase;
   proxies: Record<ResolverName, string>;
   systemAccount: string;
   schemaUIDs: Record<string, string>;
   plan: SafePlan;
-  /// The proposable batches, in ceremony order. Each carries {to, value, data, operation, nonce,
+  /// The proposable batch(es) for THIS phase, in ceremony order — exactly one next batch (Phase 0/1/2),
+  /// or empty (Phase 3, nothing left to propose). Each carries {to, value, data, operation, nonce,
   /// safeTxHash} for Safe{Wallet} import + the decoded inner legs for operator review.
   batches: ProposedBatch[];
-  /// The human-readable ceremony order + freeze-gate pause (also printed to the console).
+  /// The human-readable ceremony summary for this phase + the re-run reminder (also printed).
   ceremony: string[];
 }
 
@@ -109,7 +126,7 @@ export async function orchestrateViaSafe(
   // batches (the precompute above is already done) + emit the build/propose artifact, then return
   // WITHOUT touching execTransaction. The operator proposes/signs/executes each batch in Safe{Wallet}.
   if (mode === "propose") {
-    return proposeViaSafe(safeContract, safe, plan, opts.proposeArtifactPath, log);
+    return proposeViaSafe(deployer, safeContract, safe, plan, opts.proposeArtifactPath, log);
   }
 
   // ── Batch 1 (pre-gate): CreateX proxy deploys (atomic init, born Safe-owned) + wireContracts ──────
@@ -306,16 +323,51 @@ export async function orchestrateViaSafe(
   return result;
 }
 
-/// FIX A (PR #24): real-network build/propose. The precompute (buildSafePlan) is already done —
-/// impls deployed by the gas-paying EOA, Safe-keyed addresses/UIDs predicted, the register/bootstrap
-/// idempotency omits resolved against on-chain state. Here we BUILD the two proposable MultiSend
-/// SafeTxs (Batch 1 = deploy + wire at the Safe's current nonce; Batch 2 = register-last + bootstrap +
-/// seal at nonce+1) WITHOUT executing them, emit the build/propose artifact (safe-batches.json) + a
-/// console ceremony summary, and return. Batch 3 (setTransportsAnchor) is NOT pre-built: its argument
-/// is the realized /transports UID, only minted when Batch 2 runs on-chain, so the operator builds it
-/// last (read `indexer.resolvePath(root,"transports")`, then propose setTransportsAnchor). No
-/// execTransaction is ever called — the non-owner EOA never reaches safe.ts's signing path.
+/// Build the `deploys` map (resolver name → {proxy, predicted, impl, proxyAdmin, rawSalt}) that
+/// runVerifyGate consumes, from a plan whose proxies are already on-chain. Identical in shape to the
+/// record the execute path assembles inline after Batch 1 lands — extracted so the Phase-1 propose
+/// verify gate runs the SAME gate against the SAME handles. `realized == predicted` is trivially true
+/// (we read the realized proxies); the load-bearing checks (initialize-locked, self-UID getters,
+/// getEAS, golden-vector field strings) all run against the live Safe-keyed proxies.
+async function buildDeploysFromOnchain(deployer: Signer, plan: SafePlan): Promise<Record<string, Create3DeployResult>> {
+  const deploys: Record<string, Create3DeployResult> = {};
+  const allNames: Create3Name[] = [...(Object.keys(plan.proxies) as ResolverName[]), "SystemAccount"];
+  for (const name of allNames) {
+    const proxy = name === "SystemAccount" ? plan.systemAccount : plan.proxies[name as ResolverName];
+    const code = await ethers.provider.getCode(proxy);
+    if (code === "0x") throw new Error(`SAFE-DEPLOY (propose): no code at Safe-keyed predicted ${proxy} for ${name}`);
+    deploys[name] = {
+      resolver: name,
+      impl: plan.impls[name],
+      proxy,
+      predicted: proxy,
+      proxyAdmin: await readProxyAdmin(proxy),
+      rawSalt: plan.rawSalts[name],
+    };
+  }
+  return deploys;
+}
+
+/// FIX A (PR #24) + PR #24 P1 (PHASE-AWARE): real-network build/propose. The precompute (buildSafePlan)
+/// is already done — impls deployed by the gas-paying EOA, Safe-keyed addresses/UIDs predicted, the
+/// register/bootstrap per-leg idempotency omits resolved against on-chain state.
+///
+/// The runbook (DEPLOYMENT.md §4) has the operator RE-RUN `deploy:efs --via-safe` after each Safe{Wallet}
+/// execution — it MUST, because Batch 3's setTransportsAnchor arg is the realized /transports UID, which
+/// only exists after Batch 2 lands. So each invocation detects the current on-chain phase and emits ONLY
+/// the next pending batch (never a duplicate Batch 1 on re-run — the P1 bug this closes). It reuses the
+/// SAME on-chain signals the execute path keys off (detectDeployPhase):
+///   Phase 0 — proxies not deployed     → propose Batch 1 (deploy + wire). The verify gate can't run yet.
+///   Phase 1 — proxies live, unregistered → run the verify gate against the live Safe-keyed proxies
+///             (read-only; THROWS on drift BEFORE proposing any registration — same safety point as the
+///             execute path), then propose Batch 2 (the per-leg register/bootstrap/seal omits applied).
+///   Phase 2 — registered + sealed       → read the realized /transports UID and propose Batch 3.
+///   Phase 3 — transports wired           → nothing to propose (clean no-op; empty batches).
+/// No execTransaction is ever called — the non-owner EOA never reaches safe.ts's signing path. Each
+/// invocation builds its batch at the Safe's CURRENT nonce (the on-chain nonce advances as the operator
+/// executes each prior batch), so the proposed nonce is always correct for the next-to-execute batch.
 async function proposeViaSafe(
+  deployer: Signer,
   safeContract: Contract,
   safe: string,
   plan: SafePlan,
@@ -325,35 +377,90 @@ async function proposeViaSafe(
   const l = (...a: unknown[]) => log && console.log(...a);
   const chainId = (await ethers.provider.getNetwork()).chainId.toString();
 
-  // Build the two batches at sequential nonces (Batch 1 at the Safe's live nonce, Batch 2 at +1 — the
-  // on-chain nonce only advances as the operator executes each prior batch). Batch 2 may be empty on a
-  // resume (all registers omitted + bootstrap/seal omitted); we still emit it for a faithful record.
-  const batches: ProposedBatch[] = [];
-  batches.push(await buildProposedBatch(safeContract, plan.batch1, "Batch 1 (deploy + wire)", 0n));
-  batches.push(
-    await buildProposedBatch(safeContract, plan.batch2, "Batch 2 (register-last + SystemAccount.bootstrap + seal)", 1n),
-  );
+  const phase = await detectDeployPhase(deployer, plan);
+  l("");
+  l(`EFS Safe-native deploy — BUILD/PROPOSE (real network; no owner keys in-process). PHASE ${phase}.`);
 
-  const ceremony = [
-    "EFS Safe-native deploy — BUILD/PROPOSE (real network; no owner keys in-process).",
-    "Propose + sign + execute each batch in Safe{Wallet} / the Safe Tx Service, IN ORDER:",
-    "  1. Batch 1 (deploy + wire) — execute as the Safe.",
-    "  2. VERIFY GATE — re-run `deploy:efs --via-safe` (or runVerifyGate) against the now-live",
-    "     Safe-keyed proxies; it is read-only and aborts on any drift before any register.",
-    "  3. FREEZE GATE (HUMAN) — fill + sign docs/SEPOLIA_FREEZE_TABLE.md with the addresses/UIDs",
-    "     and the Batch-1/2/3 SafeTx hashes. No schema is registered before this signature.",
-    "  4. Batch 2 (register-last + one SystemAccount.bootstrap + seal) — execute as the Safe.",
-    "  5. Batch 3 (setTransportsAnchor) — read the realized /transports UID back from the index",
-    '     (`indexer.resolvePath(root,"transports")`), then propose + execute',
-    "     MirrorResolver.setTransportsAnchor(thatUID). Not pre-built: the UID is only known after",
-    "     Batch 2 runs. No transfer phase — everything is born Safe-owned.",
-  ];
+  // Each phase emits exactly the next pending batch at the Safe's CURRENT nonce (offset 0n — the
+  // on-chain nonce already reflects every prior executed batch, so the next-to-execute batch sits at it).
+  const batches: ProposedBatch[] = [];
+  let ceremony: string[];
+
+  if (phase === 0) {
+    // Phase 0 — no proxies. Propose Batch 1 (deploy + wire). The verify gate cannot run (nothing
+    // deployed); it runs next invocation, at Phase 1, before Batch 2.
+    batches.push(await buildProposedBatch(safeContract, plan.batch1, "Batch 1 (deploy + wire)", 0n));
+    ceremony = [
+      "Phase 0 — proxies not deployed. Proposing Batch 1 (deploy + wire).",
+      "  • Propose + sign + execute Batch 1 in Safe{Wallet} / the Safe Tx Service.",
+      "  • Then RE-RUN `deploy:efs --via-safe` — it will run the VERIFY GATE against the now-live",
+      "    Safe-keyed proxies and (on pass) emit Batch 2.",
+    ];
+  } else if (phase === 1) {
+    // Phase 1 — proxies live, schemas not all registered. Run the SAME verify gate the execute path
+    // runs (against the live Safe-keyed proxies), read-only — it THROWS on drift BEFORE we propose any
+    // permanent register leg. This is the natural gate point: Batch 1 done → VERIFY GATE → [human signs
+    // the freeze table] → Batch 2.
+    l("Safe-native deploy (propose): running verify gate against the on-chain Safe-keyed proxies (pre-register)...");
+    const deploys = await buildDeploysFromOnchain(deployer, plan);
+    await runVerifyGate({ deploys, schemaUIDs: plan.schemaUIDs, deployer });
+
+    const registersIncluded = SCHEMAS.length - plan.batch2RegistersOmitted;
+    batches.push(
+      await buildProposedBatch(
+        safeContract,
+        plan.batch2,
+        `Batch 2 (register×${registersIncluded}${
+          plan.batch2BootstrapOmitted ? "" : " + SystemAccount.bootstrap + seal"
+        })`,
+        0n,
+      ),
+    );
+    ceremony = [
+      "Phase 1 — proxies live, schemas not yet registered. VERIFY GATE PASSED (read-only; aborts on drift).",
+      "  • FREEZE GATE (HUMAN): review + sign docs/SEPOLIA_FREEZE_TABLE.md (the realized addresses/UIDs",
+      "    below + the Batch SafeTx hashes). No schema is registered before this signature.",
+      "  • Propose + sign + execute Batch 2 (register-last + one SystemAccount.bootstrap + seal).",
+      "  • Then RE-RUN `deploy:efs --via-safe` — it will read the realized /transports UID and emit Batch 3.",
+    ];
+  } else if (phase === 2) {
+    // Phase 2 — registered + sealed, transports not wired. The bootstrap (Batch 2) minted the
+    // /transports anchor; read its realized UID from the index and propose Batch 3 (setTransportsAnchor).
+    const indexer = await ethers.getContractAt("EFSIndexer", plan.proxies.EFSIndexer, deployer);
+    const root: string = await indexer.rootAnchorUID();
+    if (root === ethers.ZeroHash) throw new Error("SAFE-DEPLOY (propose): Phase 2 but rootAnchorUID unset");
+    const transportsRealized: string = await indexer.resolvePath(root, "transports");
+    if (transportsRealized === ethers.ZeroHash)
+      throw new Error("SAFE-DEPLOY (propose): Phase 2 but /transports anchor missing");
+    batches.push(
+      await buildProposedBatch(
+        safeContract,
+        [await buildSetTransportsAnchorCall(deployer, plan.proxies.MirrorResolver, transportsRealized)],
+        "Batch 3 (setTransportsAnchor)",
+        0n,
+      ),
+    );
+    ceremony = [
+      `Phase 2 — registered + sealed. Realized /transports UID = ${transportsRealized}.`,
+      "  • Propose + sign + execute Batch 3 (MirrorResolver.setTransportsAnchor) in Safe{Wallet}.",
+      "  • Then RE-RUN `deploy:efs --via-safe` — it will report the system complete (nothing to propose).",
+      "  No transfer phase — everything is born Safe-owned.",
+    ];
+  } else {
+    // Phase 3 — transports wired; the system is complete. Nothing to propose — a clean no-op.
+    ceremony = [
+      "Phase 3 — system complete (proxies deployed + wired, 9 schemas registered, bootstrap sealed,",
+      "  transports anchor wired). Nothing to propose. Deploy complete.",
+    ];
+  }
 
   const artifact = {
     note:
-      "EFS Safe-native deploy — build/propose artifact (FIX A, PR #24). Import each batch into " +
-      "Safe{Wallet}; sign with the real owner keys; execute in order. Batch 3 (setTransportsAnchor) " +
-      "is built by the operator after Batch 2 (its arg is the realized /transports UID).",
+      "EFS Safe-native deploy — PHASE-AWARE build/propose artifact (PR #24 P1). This file holds ONLY " +
+      "the NEXT pending batch for the detected phase. Import it into Safe{Wallet}; sign with the real " +
+      "owner keys; execute it; then RE-RUN `deploy:efs --via-safe` to get the following batch. Phase 3 " +
+      "writes an empty batch list (deploy complete).",
+    phase,
     chainId,
     safe,
     proxies: plan.proxies,
@@ -377,13 +484,15 @@ async function proposeViaSafe(
   for (const b of batches) {
     l(`  ${b.label}: nonce=${b.nonce} safeTxHash=${b.safeTxHash} to=${b.to} (${b.legs.length} legs)`);
   }
+  if (batches.length === 0) l("  (no batch — deploy complete)");
   l("");
-  l("Safe-native deploy (propose): batches BUILT, no execTransaction sent (non-owner EOA, real network).");
+  l(`Safe-native deploy (propose): Phase ${phase} batch BUILT, no execTransaction sent (non-owner EOA).`);
 
   return {
     mode: "propose",
     safe,
     chainId,
+    phase,
     proxies: plan.proxies,
     systemAccount: plan.systemAccount,
     schemaUIDs: plan.schemaUIDs,

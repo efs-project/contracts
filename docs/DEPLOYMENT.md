@@ -122,21 +122,31 @@ yarn deploy:efs --via-safe --network hardhat
 #     MAINNET_FORKING_ENABLED=true npx hardhat test test/DeploySafe.fork.test.ts --network hardhat)
 # 3. on real Sepolia/mainnet: the deployer EOA has NO Safe-owner keys, so the task runs in
 #    BUILD/PROPOSE mode — it does NOT self-execute (a non-owner EOA can't sign the Safe; self-signing
-#    would revert Batch 1). It builds the MultiSend batches + writes deployments/<net>/safe-batches.json
-#    (each batch's {to, value, data, operation}, the Safe nonce + SafeTx hash to sign) + prints the
-#    three-batch ceremony order and the freeze-gate pause, then exits cleanly (no txs sent):
+#    would revert Batch 1). Propose mode is PHASE-AWARE (PR #24 P1): each invocation detects the
+#    current on-chain phase and writes deployments/<net>/safe-batches.json holding ONLY the NEXT
+#    pending batch (its {to, value, data, operation}, the Safe nonce + SafeTx hash to sign) — never a
+#    duplicate of an already-landed batch. So you RE-RUN the task once per batch, executing each in
+#    Safe{Wallet} / the Safe Tx Service before re-running for the next. The cycle:
+#
+#      run `--via-safe`  →  emits Batch 1 (deploy + wire)
+#         → propose + sign + execute Batch 1 in Safe{Wallet}
+#      RE-RUN `--via-safe`  →  Phase 1: runs the VERIFY GATE automatically (read-only; aborts on any
+#                              drift) against the now-live Safe-keyed proxies, BEFORE emitting Batch 2;
+#                              on pass it emits Batch 2 (register-last + one SystemAccount.bootstrap
+#                              + seal)
+#         → FREEZE GATE (human): review the emitted realized addresses/UIDs + freeze table, sign
+#           docs/SEPOLIA_FREEZE_TABLE.md (no schema is registered before this signature), then
+#           propose + sign + execute Batch 2 in Safe{Wallet}
+#      RE-RUN `--via-safe`  →  Phase 2: reads the realized /transports UID back from the index and
+#                              emits Batch 3 (MirrorResolver.setTransportsAnchor)
+#         → propose + sign + execute Batch 3 in Safe{Wallet}
+#      RE-RUN `--via-safe`  →  Phase 3: "deploy complete, nothing to propose" (clean no-op).
+#
+#    Run the command once per arrow above:
 yarn deploy:efs --via-safe --network sepolia
-#    Then, in Safe{Wallet} / the Safe Tx Service, the owners propose + sign + execute each batch IN
-#    ORDER, out of band:
-#      a. Batch 1 (deploy + wire) — execute as the Safe.
-#      b. VERIFY GATE — re-run the task (read-only; aborts on any drift) against the now-live proxies.
-#      c. FREEZE GATE (human) — fill + sign docs/SEPOLIA_FREEZE_TABLE.md (addresses/UIDs + the
-#         Batch-1/2/3 SafeTx hashes). No schema is registered before this signature.
-#      d. Batch 2 (register-last + one SystemAccount.bootstrap + seal) — execute as the Safe.
-#      e. Batch 3 (setTransportsAnchor) — read the realized /transports UID back from the index
-#         (indexer.resolvePath(root,"transports")), then propose + execute
-#         MirrorResolver.setTransportsAnchor(thatUID). Built last because the UID is only known after
-#         Batch 2 runs. No transfer phase (born Safe-owned).
+#    No transfer phase — everything is born Safe-owned. The verify gate runs automatically at Phase 1
+#    (the re-run after Batch 1), before Batch 2 is emitted. Batch 3 is never emitted before Batch 2 has
+#    landed (its arg is the realized /transports UID, minted only when Batch 2's bootstrap runs).
 #    (If you ever load the real owner keys as local signers, set EFS_SAFE_OWNER_KEYS to opt into
 #     in-process self-execution instead — otherwise build/propose is the default on real networks.)
 # 4. deploy the read views (NON-FROZEN; redeployable anytime, in no UID, outside the freeze)

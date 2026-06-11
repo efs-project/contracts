@@ -296,6 +296,52 @@ export async function buildSafePlan(deployer: Signer, safe: string, log = true):
   };
 }
 
+/// The deploy phase of a (Safe-keyed) EFS system, derived from the SAME on-chain signals the execute
+/// path reads (proxy code present; schema registered via SchemaRegistry.getSchema; bootstrapSealed();
+/// MirrorResolver.transportsAnchorUID()). PR #24 P1: the propose path computes this to emit ONLY the
+/// next un-done batch (instead of always re-emitting a fresh Batch 1).
+///   0 — proxies NOT deployed                                → next: Batch 1 (deploy + wire)
+///   1 — proxies live, schemas NOT all registered            → next: verify gate, then Batch 2
+///   2 — registered + sealed, transports NOT wired           → next: Batch 3 (setTransportsAnchor)
+///   3 — transports wired (system complete)                  → next: nothing (clean no-op)
+export type DeployPhase = 0 | 1 | 2 | 3;
+
+/// Detect the current deploy phase of `plan`'s Safe-keyed system from on-chain state. Reuses the exact
+/// detection signals the execute path keys off (orchestrateSafe.ts): EFSIndexer proxy code presence
+/// (all 7 proxies deploy atomically in Batch 1 — indexer code ⇒ Batch 1 landed), every schema's
+/// expected UID registered in the SchemaRegistry, SystemAccount.bootstrapSealed(), and
+/// MirrorResolver.transportsAnchorUID(). Read-only; no state change. Note Phase 1 is "any schema not
+/// yet registered" — Batch 2's per-leg omits (batch2RegistersOmitted / batch2BootstrapOmitted, resolved
+/// in buildSafePlan) handle a partially-landed Batch 2 so re-emitting Batch 2 only proposes the
+/// remaining register/bootstrap/seal legs, never a duplicate of an already-landed leg.
+export async function detectDeployPhase(deployer: Signer, plan: SafePlan): Promise<DeployPhase> {
+  // Phase 0 — proxies not deployed. Key off EFSIndexer (all 7 proxies land atomically in Batch 1).
+  const indexerCode = await ethers.provider.getCode(plan.proxies.EFSIndexer);
+  if (indexerCode === "0x") return 0;
+
+  // Phase 1 — proxies live but not all 9 schemas registered yet. EAS register is not idempotent, so a
+  // single missing registration means Batch 2's register legs (minus the per-leg omits) are still owed.
+  const registry = await ethers.getContractAt(
+    "@ethereum-attestation-service/eas-contracts/contracts/ISchemaRegistry.sol:ISchemaRegistry",
+    SCHEMA_REGISTRY_ADDRESS,
+    deployer,
+  );
+  for (const s of SCHEMAS) {
+    const existing = await registry.getSchema(plan.schemaUIDs[s.name]);
+    if (existing.uid === ZeroHash) return 1;
+  }
+  // All schemas registered — is the bootstrap ceremony sealed yet? (Batch 2's bootstrap + seal legs.)
+  const sa = await ethers.getContractAt("SystemAccount", plan.systemAccount, deployer);
+  if (!(await sa.bootstrapSealed())) return 1;
+
+  // Phase 2 — registered + sealed but transports not wired (Batch 3 / setTransportsAnchor still owed).
+  const mirror = await ethers.getContractAt("MirrorResolver", plan.proxies.MirrorResolver, deployer);
+  if ((await mirror.transportsAnchorUID()) === ZeroHash) return 2;
+
+  // Phase 3 — transports wired; the system is complete.
+  return 3;
+}
+
 /// Encode the single `SystemAccount.bootstrap(indexer, ANCHOR_UID, specs[])` MultiSend leg that authors
 /// the whole scaffolding tree. The BootstrapAnchor[] is SCAFFOLDING mapped to the on-chain struct
 /// (`{ name, parentIndex, anchorSchemaToRegister=ZeroHash }`). Timestamp-robust + idempotent on-chain.

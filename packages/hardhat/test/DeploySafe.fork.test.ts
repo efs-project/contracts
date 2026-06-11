@@ -6,8 +6,8 @@ import { orchestrateViaSafe } from "../deploy-lib/orchestrateSafe";
 import { predictProxyAddress } from "../deploy-lib/create3";
 import { getCreateX } from "../deploy-lib/create3";
 import { RESOLVERS, SCHEMAS } from "../deploy-lib/schemas";
-import { buildSafePlan } from "../deploy-lib/safePlan";
-import { deployTestSafe, SAFE_PROXY_FACTORY_141 } from "../deploy-lib/safe";
+import { buildSafePlan, buildSetTransportsAnchorCall } from "../deploy-lib/safePlan";
+import { deployTestSafe, executeBatchAsSafe, getSafe, SAFE_PROXY_FACTORY_141 } from "../deploy-lib/safe";
 import { runVerifyGate } from "../deploy-lib/verify";
 
 // Fork rehearsal for the SAFE-NATIVE EFS deploy (docs/DEPLOYMENT.md §1/§3, ADR-0048, ADR-0053).
@@ -395,13 +395,15 @@ describe("DeploySafe.fork — Safe-native deploy, born Safe-owned", function () 
   // ── PR #24 P2 (FIX A): real-network BUILD/PROPOSE — must NOT self-execute with a non-owner EOA ────
   // On a real network the gas-paying EOA is not a Safe owner; self-signing + execTransaction would
   // produce invalid signatures and revert Batch 1. The fix routes that case through `mode: "propose"`,
-  // which BUILDS the MultiSend batches + emits the artifact and NEVER calls execTransaction. We prove
-  // it here against a FRESH Safe (a distinct address → distinct Safe-keyed CREATE3 addresses, so no
-  // collision with the happy-path system above) by passing `mode: "propose"` with an EMPTY owners array
-  // (no signatures available — exactly the real-network condition) and asserting: the batches are built
-  // with valid (Safe-derived) SafeTx hashes at sequential nonces; NOTHING was executed (the Safe nonce
-  // is still 0 and the EFSIndexer proxy has no code); and the artifact was written.
-  it("real-network propose mode BUILDS the batches + artifact and does NOT call execTransaction", async function () {
+  // which BUILDS the next MultiSend batch + emits the artifact and NEVER calls execTransaction.
+  //
+  // PR #24 P1 (PHASE-AWARE): propose mode is now phase-aware — each invocation detects the on-chain
+  // phase and emits ONLY the next pending batch, never a duplicate Batch 1 on re-run. We prove it here
+  // against a FRESH Safe (Phase 0): only Batch 1 is built (NOT Batch 1 + Batch 2 as the old always-emit
+  // design did), with a valid Safe-derived SafeTx hash at the Safe's live nonce 0; NOTHING was executed
+  // (the Safe nonce is still 0 and the EFSIndexer proxy has no code); the artifact records phase 0 + the
+  // single batch.
+  it("Phase 0 propose mode BUILDS only Batch 1 + artifact and does NOT call execTransaction", async function () {
     const { readFileSync, existsSync, rmSync } = await import("fs");
     const { tmpdir } = await import("os");
     const { join } = await import("path");
@@ -422,27 +424,24 @@ describe("DeploySafe.fork — Safe-native deploy, born Safe-owned", function () 
       log: false,
     });
 
-    // ── It returned a PROPOSE result, not an executed one ───────────────────────────────────────────
+    // ── It returned a PROPOSE result, not an executed one, at Phase 0 ───────────────────────────────
     expect(res.mode, "propose mode returns a propose result").to.equal("propose");
     if (res.mode !== "propose") throw new Error("unreachable");
+    expect(res.phase, "fresh Safe (no proxies) is Phase 0").to.equal(0);
 
-    // ── Two proposable batches built, at sequential nonces, with valid Safe-derived SafeTx hashes ────
-    expect(res.batches, "Batch 1 + Batch 2 built").to.have.lengthOf(2);
+    // ── EXACTLY ONE proposable batch built (Batch 1 only — NOT a duplicate Batch 1 + Batch 2) ───────
+    expect(res.batches, "Phase 0 emits only Batch 1").to.have.lengthOf(1);
     expect(res.batches[0].label).to.match(/Batch 1/);
-    expect(res.batches[1].label).to.match(/Batch 2/);
     expect(res.batches[0].nonce, "Batch 1 at the Safe's live nonce (0)").to.equal("0");
-    expect(res.batches[1].nonce, "Batch 2 at nonce+1").to.equal("1");
-    for (const b of res.batches) {
-      expect(b.safeTxHash, "SafeTx hash present").to.match(/^0x[0-9a-fA-F]{64}$/);
-      expect(b.operation, "MultiSend is a delegatecall (operation 1)").to.equal(1);
-      expect(b.to.toLowerCase(), "targets MultiSendCallOnly").to.not.equal(ethers.ZeroAddress);
-    }
-    // Batch 1 carries the 7 proxy deploys + wireContracts (8 legs); Batch 2 the 9 registers + bootstrap + seal.
+    expect(res.batches[0].safeTxHash, "SafeTx hash present").to.match(/^0x[0-9a-fA-F]{64}$/);
+    expect(res.batches[0].operation, "MultiSend is a delegatecall (operation 1)").to.equal(1);
+    expect(res.batches[0].to.toLowerCase(), "targets MultiSendCallOnly").to.not.equal(ethers.ZeroAddress);
+    // Batch 1 carries the 7 proxy deploys + wireContracts (8 legs). No register leg is proposed at Phase 0.
     expect(res.batches[0].legs.length, "Batch 1 has 8 legs (7 deploys + wire)").to.equal(8);
     expect(
-      res.batches[1].legs.filter(leg => /^register /.test(leg.label ?? "")).length,
-      "Batch 2 has 9 register legs",
-    ).to.equal(SCHEMAS.length);
+      res.batches[0].legs.filter(leg => /^register /.test(leg.label ?? "")).length,
+      "no register legs proposed at Phase 0 (Batch 2 is not emitted until Phase 1)",
+    ).to.equal(0);
 
     // ── NOTHING was executed: the Safe nonce is still 0, and no Safe-keyed proxy has code ────────────
     expect(await safeContract.nonce(), "Safe nonce unchanged — execTransaction never called").to.equal(0n);
@@ -451,15 +450,115 @@ describe("DeploySafe.fork — Safe-native deploy, born Safe-owned", function () 
       "EFSIndexer proxy NOT deployed (Batch 1 was only proposed, not executed)",
     ).to.equal("0x");
 
-    // ── The build/propose artifact was written with the ceremony + batches ──────────────────────────
+    // ── The build/propose artifact was written with phase 0 + the single batch ──────────────────────
     expect(existsSync(artifactPath), "safe-batches.json artifact written").to.equal(true);
     const parsed = JSON.parse(readFileSync(artifactPath, "utf8"));
     expect(parsed.safe.toLowerCase()).to.equal(safe.toLowerCase());
-    expect(parsed.batches, "artifact records both batches").to.have.lengthOf(2);
-    expect(parsed.ceremony.join("\n"), "ceremony documents the freeze gate").to.match(/FREEZE GATE/i);
-    expect(parsed.ceremony.join("\n"), "ceremony documents Batch 3 setTransportsAnchor").to.match(
-      /setTransportsAnchor/,
-    );
+    expect(parsed.phase, "artifact records phase 0").to.equal(0);
+    expect(parsed.batches, "artifact records the single Batch 1").to.have.lengthOf(1);
+    expect(parsed.ceremony.join("\n"), "ceremony documents the re-run-for-Batch-2 step").to.match(/RE-RUN/i);
     rmSync(artifactPath, { force: true });
+  });
+
+  // ── PR #24 P1 (PHASE-AWARE) — the no-duplicate-Batch-1 regression + the phase walk ─────────────────
+  // The core P1 finding: on a re-run AFTER Batch 1 has landed, the old propose path re-emitted a fresh
+  // Batch 1 (a DUPLICATE deploy/wire) instead of the verify gate + Batch 2. Here we drive propose mode
+  // through the phases against a real Safe, APPLYING each proposed batch via executeBatchAsSafe (the
+  // test owner IS a local signer, so we can execute what propose merely builds), and assert each
+  // invocation emits ONLY the correct next batch:
+  //   Phase 0 → Batch 1; apply it.
+  //   Phase 1 → verify gate runs, then Batch 2 (NOT a duplicate Batch 1); apply it.
+  //   Phase 2 → Batch 3 (setTransportsAnchor); apply it.
+  //   Phase 3 → clean no-op (empty batches).
+  // We snapshot first so this self-contained system doesn't collide with the happy-path one (per-file
+  // CREATE3 isolation). buildSafePlan is rebuilt each re-run, matching how the real operator re-invokes
+  // the task; the proposed Batch N is executed with the real (test) owner key to advance the phase.
+  it("propose mode is phase-aware: re-run after Batch 1 emits Batch 2 (verify gate), not a duplicate Batch 1", async function () {
+    const phaseWalkSnap = await takeSnapshot();
+    try {
+      const [deployer, ownerSigner] = await ethers.getSigners();
+      const safe = await deployTestSafe(deployer, [await ownerSigner.getAddress()], 1);
+      const safeContract = await getSafe(safe, deployer);
+
+      // ── Phase 0: fresh Safe → propose emits Batch 1 only ──────────────────────────────────────────
+      const p0 = await orchestrateViaSafe(deployer, safe, [], { mode: "propose", log: false });
+      if (p0.mode !== "propose") throw new Error("unreachable");
+      expect(p0.phase, "fresh Safe is Phase 0").to.equal(0);
+      expect(p0.batches, "Phase 0 emits only Batch 1").to.have.lengthOf(1);
+      expect(p0.batches[0].label).to.match(/Batch 1/);
+      // The proxies are not deployed yet.
+      expect(await ethers.provider.getCode(p0.proxies.EFSIndexer), "no proxy code at Phase 0").to.equal("0x");
+
+      // Apply Batch 1 on-chain (the operator's Safe{Wallet} execution; here via the test owner key).
+      await executeBatchAsSafe(safeContract, p0.plan.batch1, [ownerSigner], deployer);
+      expect(await ethers.provider.getCode(p0.proxies.EFSIndexer), "proxies deployed after Batch 1").to.not.equal("0x");
+
+      // ── Phase 1: RE-RUN → propose runs the verify gate, then emits Batch 2 (NOT a duplicate Batch 1) ─
+      // Tee console.log to prove the verify gate ran (its GREEN marker) during this propose invocation.
+      const logLines: string[] = [];
+      const origLog = console.log;
+      console.log = (...a: unknown[]) => {
+        logLines.push(a.map(String).join(" "));
+      };
+      let p1: Awaited<ReturnType<typeof orchestrateViaSafe>>;
+      try {
+        p1 = await orchestrateViaSafe(deployer, safe, [], { mode: "propose", log: true });
+      } finally {
+        console.log = origLog;
+      }
+      if (p1.mode !== "propose") throw new Error("unreachable");
+      expect(p1.phase, "proxies live + unregistered → Phase 1").to.equal(1);
+      expect(p1.batches, "Phase 1 emits exactly one batch").to.have.lengthOf(1);
+      // THE REGRESSION ASSERTION: the emitted batch is Batch 2, NOT a duplicate Batch 1.
+      expect(p1.batches[0].label, "Phase 1 emits Batch 2, not a duplicate Batch 1").to.match(/Batch 2/);
+      expect(p1.batches[0].label, "Phase 1 does NOT re-emit Batch 1").to.not.match(/Batch 1/);
+      expect(
+        p1.batches[0].legs.filter(leg => /^register /.test(leg.label ?? "")).length,
+        "Batch 2 carries the 9 register legs",
+      ).to.equal(SCHEMAS.length);
+      expect(
+        p1.batches[0].legs.some(leg => /deployCreate3/.test(leg.label ?? "")),
+        "Batch 2 carries NO deployCreate3 leg (it is not a duplicate Batch 1)",
+      ).to.equal(false);
+      // The verify gate ran during this propose invocation (read-only, before Batch 2 is proposed).
+      expect(
+        logLines.findIndex(line => /\[verify\] GATE GREEN/.test(line)),
+        "verify gate ran at Phase 1 before proposing Batch 2",
+      ).to.be.greaterThan(-1);
+
+      // Apply Batch 2 on-chain to advance to Phase 2.
+      await executeBatchAsSafe(safeContract, p1.plan.batch2, [ownerSigner], deployer);
+
+      // ── Phase 2: RE-RUN → propose emits Batch 3 (setTransportsAnchor) ───────────────────────────────
+      const p2 = await orchestrateViaSafe(deployer, safe, [], { mode: "propose", log: false });
+      if (p2.mode !== "propose") throw new Error("unreachable");
+      expect(p2.phase, "registered + sealed → Phase 2").to.equal(2);
+      expect(p2.batches, "Phase 2 emits exactly one batch").to.have.lengthOf(1);
+      expect(p2.batches[0].label, "Phase 2 emits Batch 3 (setTransportsAnchor)").to.match(/Batch 3/);
+      expect(
+        p2.batches[0].legs.some(leg => /setTransportsAnchor/.test(leg.label ?? "")),
+        "Batch 3 carries the setTransportsAnchor leg",
+      ).to.equal(true);
+
+      // Apply Batch 3 (read the realized /transports UID, set it) to advance to Phase 3.
+      const indexer = await ethers.getContractAt("EFSIndexer", p2.proxies.EFSIndexer, deployer);
+      const root = await indexer.rootAnchorUID();
+      const transportsUID = await indexer.resolvePath(root, "transports");
+      await executeBatchAsSafe(
+        safeContract,
+        [await buildSetTransportsAnchorCall(deployer, p2.proxies.MirrorResolver, transportsUID)],
+        [ownerSigner],
+        deployer,
+      );
+
+      // ── Phase 3: RE-RUN → clean no-op (nothing to propose) ──────────────────────────────────────────
+      const p3 = await orchestrateViaSafe(deployer, safe, [], { mode: "propose", log: false });
+      if (p3.mode !== "propose") throw new Error("unreachable");
+      expect(p3.phase, "transports wired → Phase 3 (complete)").to.equal(3);
+      expect(p3.batches, "Phase 3 emits NO batch (clean no-op)").to.have.lengthOf(0);
+      expect(p3.ceremony.join("\n"), "Phase 3 ceremony reports completion").to.match(/complete/i);
+    } finally {
+      await phaseWalkSnap.restore();
+    }
   });
 });
