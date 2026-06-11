@@ -315,33 +315,7 @@ contract EFSRouter is IDecentralizedApp {
             return (404, bytes("Not Found: No mirror available"), new KeyValue[](0));
         }
 
-        if (
-            _startsWith(uri, "ipfs://") ||
-            _startsWith(uri, "ar://") ||
-            _startsWith(uri, "https://") ||
-            _startsWith(uri, "magnet:")
-        ) {
-            // External URI Delegation (message/external-body)
-            // Single Content-Type with the actual type embedded as a parameter,
-            // avoiding duplicate headers that clients may collapse or mishandle.
-            // Sanitize contentType: strip quotes and control chars to prevent header injection.
-            string memory safeContentType = _sanitizeHeaderValue(contentType);
-            headers = new KeyValue[](1);
-            headers[0] = KeyValue(
-                "Content-Type",
-                string(
-                    abi.encodePacked(
-                        'message/external-body; access-type=URL; URL="',
-                        uri,
-                        '"',
-                        bytes(safeContentType).length > 0
-                            ? string(abi.encodePacked('; content-type="', safeContentType, '"'))
-                            : ""
-                    )
-                )
-            );
-            return (200, bytes(""), headers);
-        } else if (_startsWith(uri, "web3://")) {
+        if (_startsWith(uri, "web3://")) {
             // On-chain fetch via SSTORE2 or similar.
             // In a real deployed version, web3:// contract addresses are queried.
             // For now, if uri is internal or points to contract, pull bytes. (Mocking EXTCODECOPY)
@@ -421,10 +395,31 @@ contract EFSRouter is IDecentralizedApp {
             return (200, rawData, headers);
         }
 
-        // Fallback for raw byte URIs / encoded data
+        // Any other non-empty allowlisted scheme (ipfs://, ar://, https://, magnet:,
+        // ftp://, s3://, gs://, dat://, rsync://, bittorrent://, and any future
+        // MirrorResolver allowlist addition) is served as an external-body redirect.
+        // web3:// is handled above; the only other non-web3 case is an off-chain URI,
+        // so the retrieval is transport-agnostic — we delegate to the client rather
+        // than ever returning the raw URI as the response body.
+        // Single Content-Type with the actual type embedded as a parameter,
+        // avoiding duplicate headers that clients may collapse or mishandle.
+        // Sanitize contentType: strip quotes and control chars to prevent header injection.
+        string memory safeContentType = _sanitizeHeaderValue(contentType);
         headers = new KeyValue[](1);
-        headers[0] = KeyValue("Content-Type", contentType);
-        return (200, bytes(uri), headers);
+        headers[0] = KeyValue(
+            "Content-Type",
+            string(
+                abi.encodePacked(
+                    'message/external-body; access-type=URL; URL="',
+                    uri,
+                    '"',
+                    bytes(safeContentType).length > 0
+                        ? string(abi.encodePacked('; content-type="', safeContentType, '"'))
+                        : ""
+                )
+            )
+        );
+        return (200, bytes(""), headers);
     }
 
     // ---------- HELPER FUNCTIONS ------------

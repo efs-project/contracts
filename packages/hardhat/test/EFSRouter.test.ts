@@ -34,6 +34,8 @@ describe("EFSRouter Web3 Capabilities", function () {
   let arweaveTransportUID: string;
   let httpsTransportUID: string;
   let magnetTransportUID: string;
+  let s3TransportUID: string;
+  let ftpTransportUID: string;
 
   // Per-test active-edge index. Routes file placements / PROPERTY bindings (PIN, cardinality 1)
   // separately from descriptive labels (TAG, cardinality N). The router exercises both reads.
@@ -251,6 +253,8 @@ describe("EFSRouter Web3 Capabilities", function () {
     arweaveTransportUID = await createTransport("arweave");
     httpsTransportUID = await createTransport("https");
     magnetTransportUID = await createTransport("magnet");
+    s3TransportUID = await createTransport("s3");
+    ftpTransportUID = await createTransport("ftp");
 
     // Wire /transports/ ancestry into MirrorResolver
     await mirrorResolver.setTransportsAnchor(transportsUID);
@@ -596,6 +600,40 @@ describe("EFSRouter Web3 Capabilities", function () {
       expect(statusCode).to.equal(200);
       const ctHeader = headers.find((h: any) => h.key === "Content-Type");
       expect(ctHeader?.value).to.include('URL="magnet:?xt=urn:btih:ABCDEF123456"');
+    });
+
+    // Newly-allowlisted schemes (this PR widened MirrorResolver to ftp/s3/gs/dat/
+    // rsync/bittorrent). The router must serve them as external-body redirects too —
+    // not fall through and return the raw URI string as the response body.
+    it("Should return message/external-body for s3:// URIs (newly-allowlisted scheme)", async function () {
+      const fileAnchorUID = await createFileAnchor(ideasUID, "bucket.bin");
+      const dataUID = await createData("s3-content");
+      await addProperty(dataUID, "contentType", "application/octet-stream");
+      await addMirror(dataUID, s3TransportUID, "s3://my-bucket/path/object.bin");
+      await pinAtPath(dataUID, fileAnchorUID);
+
+      const [statusCode, body, headers] = await router.request(["ideas", "bucket.bin"], ownerParams());
+      expect(statusCode).to.equal(200);
+      // Body must be empty (a redirect), NOT the raw URI string.
+      expect(body).to.equal("0x");
+      const ctHeader = headers.find((h: any) => h.key === "Content-Type");
+      expect(ctHeader?.value).to.include("message/external-body");
+      expect(ctHeader?.value).to.include('URL="s3://my-bucket/path/object.bin"');
+    });
+
+    it("Should return message/external-body for ftp:// URIs (newly-allowlisted scheme)", async function () {
+      const fileAnchorUID = await createFileAnchor(ideasUID, "legacy.txt");
+      const dataUID = await createData("ftp-content");
+      await addProperty(dataUID, "contentType", "text/plain");
+      await addMirror(dataUID, ftpTransportUID, "ftp://ftp.example.com/pub/legacy.txt");
+      await pinAtPath(dataUID, fileAnchorUID);
+
+      const [statusCode, body, headers] = await router.request(["ideas", "legacy.txt"], ownerParams());
+      expect(statusCode).to.equal(200);
+      expect(body).to.equal("0x");
+      const ctHeader = headers.find((h: any) => h.key === "Content-Type");
+      expect(ctHeader?.value).to.include("message/external-body");
+      expect(ctHeader?.value).to.include('URL="ftp://ftp.example.com/pub/legacy.txt"');
     });
   });
 
