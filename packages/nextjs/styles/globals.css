@@ -481,13 +481,70 @@ main,
   background-color: oklch(var(--b1));
 }
 
+/* @uiw renders the editor as a transparent <textarea> (.w-md-editor-text-input)
+   overlaid pixel-for-pixel on a syntax-highlighted <pre> (.w-md-editor-text-pre).
+   The two layers MUST share identical font metrics AND lay text out identically,
+   or the typed text drifts off the highlighted text and reads as strikethrough /
+   ghosting that worsens down the document — most visibly on markdown TABLE
+   source lines (`| File | About |`).
+
+   ROOT CAUSE: a global utility class `.table` (DaisyUI/Tailwind, in layout.css)
+   leaks onto Prism's markdown token spans. The highlighter tags a table source
+   line as `class="token table"` with nested `.token.table-data` / `.table-line`
+   spans, and the bare global `.table` selector matches them inside the editor's
+   <pre>. That rule (and its kin) does two damaging things to those spans:
+     1. `display: table` — the span stretches to full width and its glyphs
+        re-flow as table cells, no longer overlaying the textarea text.
+     2. `font-size: 14px` — table cells render one pixel bigger than the editor's
+        13px, so each table-row glyph advances ~0.6px wider than the textarea's,
+        accumulating into visible horizontal ghosting across the line.
+   The non-table lines were always pixel-perfect; only the table-tokenized lines
+   drifted. The font was never the cause.
+
+   Fix: pin identical font metrics (family/size/line-height/letter-spacing/
+   tab-size) on EVERY editor token — including the nested table tokens — and
+   force them back to plain inline layout, so the highlighted text overlays the
+   textarea exactly. */
+.efs-md-editor .w-md-editor-text,
+.efs-md-editor .w-md-editor-text-input,
+.efs-md-editor .w-md-editor-text-pre,
+.efs-md-editor .w-md-editor-text-pre > code,
+.efs-md-editor .w-md-editor-text-pre .token {
+  font-family: "JetBrains Mono", "Share Tech Mono", monospace !important;
+  font-size: 13px !important;
+  line-height: 21px !important;
+  letter-spacing: normal !important;
+  tab-size: 2 !important;
+}
+
+/* Neutralize the leaked `.table` layout (display:table, table-cell flow) on
+   Prism token spans so each token is ordinary inline text. */
+.efs-md-editor .w-md-editor-text-pre .token {
+  display: inline !important;
+  width: auto !important;
+  border-collapse: initial !important;
+  border-spacing: 0 !important;
+}
+
+/* The <code> wrapper must be block (so its block code-line children don't get
+   an inline strut that shoves the highlighted text down ~one line), and each
+   code-line a strict 21px block so the <pre> shares the textarea's line grid. */
+.efs-md-editor .w-md-editor-text-pre > code {
+  display: block !important;
+}
+
+.efs-md-editor .w-md-editor-text-pre .code-line {
+  display: block !important;
+  height: 21px !important;
+  line-height: 21px !important;
+}
+
 .efs-md-editor .w-md-editor-text-input,
 .efs-md-editor .w-md-editor-text,
 .efs-md-editor .w-md-editor-text-pre > code,
 .efs-md-editor .w-md-editor-text-pre .token {
   color: oklch(var(--bc)) !important;
   -webkit-text-fill-color: oklch(var(--bc)) !important;
-  font-family: "JetBrains Mono", "Share Tech Mono", monospace !important;
   caret-color: oklch(var(--p));
 }
 
