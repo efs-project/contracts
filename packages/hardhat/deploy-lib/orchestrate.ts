@@ -326,6 +326,24 @@ export async function registerAndTransfer(
   }
 
   // ── Step 6: register LAST ─────────────────────────────────────────────────────────────────
+  // FIX (PR #24 P1): the EOA path registers each schema in a SEPARATE tx and only creates the
+  // canonical root LATER (SystemAccount.bootstrap). On a public network there is a mempool window
+  // between ANCHOR registration and bootstrap during which `EFSIndexer.rootAnchorUID` is still zero
+  // and the FIRST generic ANCHOR anyone attests is permanently accepted as root (EFSIndexer.sol:385)
+  // — a front-runner can make the canonical root attacker-authored. The Safe-native ceremony closes
+  // this by registering + bootstrapping ATOMICALLY in one MultiSend batch (deploy-lib/safePlan.ts
+  // Batch 2). So the EOA register/bootstrap path is allowed ONLY on the local pinned fork (chainId
+  // 31337, no adversarial mempool); any real network MUST use EFS_DEPLOY_VIA_SAFE=1. (Modes that
+  // stop before registration — `until-freeze-gate` — already returned above and are unaffected.)
+  const chainId = Number((await deployer.provider!.getNetwork()).chainId);
+  if (chainId !== 31337) {
+    throw new Error(
+      `[orchestrate] EOA register/bootstrap is disallowed on chainId ${chainId} (front-run risk on ` +
+        `root establishment before bootstrap — PR #24 P1). Real-network registration must go through ` +
+        `the atomic Safe-native ceremony: set EFS_DEPLOY_VIA_SAFE=1 + EFS_SAFE_ADDRESS=<Safe> ` +
+        `(docs/DEPLOYMENT.md §3). The EOA path may still deploy+wire (--until-freeze-gate) anywhere.`,
+    );
+  }
   l("EFS deploy: registering 9 schemas LAST...");
   for (const s of SCHEMAS) {
     const resolver = proxies[s.resolver];
