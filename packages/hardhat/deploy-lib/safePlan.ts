@@ -89,7 +89,13 @@ export const SCAFFOLDING: AnchorSpec[] = [
 /// Index of the `/transports` anchor in SCAFFOLDING (its realized UID feeds setTransportsAnchor).
 export const TRANSPORTS_INDEX = SCAFFOLDING.findIndex(a => a.name === "transports");
 
-export interface SafePlan {
+/// The impl-FREE half of the plan (PR #24 P2): everything derivable WITHOUT deploying the 7 resolver
+/// impls. CREATE3 proxy addresses are impl-independent (predictProxyAddress/CreateX derive the address
+/// from salt + caller only, never the impl bytecode), so the Safe-keyed proxies, their schema UIDs, and
+/// the raw salts are all computable up front. This is enough to (a) detect the on-chain deploy phase and
+/// (b) build every Batch-2/Batch-3 leg (they target the LIVE proxies, not the impls). The impls + Batch 1
+/// (whose CreateX initcode embeds them) are only needed for a Phase-0 deploy — see `buildSafePlan`.
+export interface PredictedPlan {
   safe: string;
   /// Safe-keyed CREATE3 proxy addresses (7: the 6 resolvers + SystemAccount).
   proxies: Record<ResolverName, string>;
@@ -98,9 +104,15 @@ export interface SafePlan {
   rawSalts: Record<Create3Name, string>;
   /// the 9 schema UIDs keyed against the Safe-keyed proxies.
   schemaUIDs: Record<string, string>;
-  /// resolver impl addresses (deployed by the EOA pre-batch — non-deterministic, in no UID).
+}
+
+export interface SafePlan extends PredictedPlan {
+  /// resolver impl addresses (deployed by the EOA pre-batch — non-deterministic, in no UID). Populated
+  /// ONLY on a Phase-0 deploy (Batch 1 needs them as CreateX initcode); a Phase-1+ resume builds the
+  /// plan WITHOUT deploying impls (PR #24 P2), so this map is empty there.
   impls: Record<Create3Name, string>;
-  /// Batch 1: CreateX proxy deploys (atomic init, born Safe-owned) + wireContracts.
+  /// Batch 1: CreateX proxy deploys (atomic init, born Safe-owned) + wireContracts. Empty on a Phase-1+
+  /// resume (no impls deployed → no initcode to embed); only built for a Phase-0 deploy.
   batch1: SafeCall[];
   /// Batch 2: register the (up to 9) not-yet-registered schemas LAST + author the whole scaffolding
   /// tree via ONE SystemAccount.bootstrap leg (timestamp-robust — no off-chain UID prediction) +
@@ -148,17 +160,15 @@ function initSpecs(
   };
 }
 
-/// Build the full Safe-native deploy plan: predict every Safe-keyed address + UID off-chain, deploy the
-/// resolver impls from the EOA (non-deterministic, in no UID — cheaper than routing impl creation
-/// through the Safe and address-irrelevant), then assemble the two MultiSend batches' call lists.
-///
-/// `deployer` funds the impl deploys and (in the rehearsal) executes the Safe txs; the Safe is the
-/// authority + the CreateX caller + the born owner of everything.
-export async function buildSafePlan(deployer: Signer, safe: string, log = true): Promise<SafePlan> {
+/// Predict the impl-FREE half of the plan (PR #24 P2): the Safe-keyed CREATE3 proxy addresses, their
+/// raw salts, and the 9 schema UIDs — WITHOUT deploying any impl. CREATE3 addresses depend only on
+/// (CreateX caller = Safe, salt), never the impl bytecode, so the whole address/UID graph is computable
+/// up front. This is enough to detect the deploy phase and to build every Batch-2/Batch-3 leg (they
+/// target the live proxies). The caller deploys impls + builds Batch 1 ONLY for a Phase-0 deploy.
+export async function predictPlan(deployer: Signer, safe: string, log = true): Promise<PredictedPlan> {
   const l = (...a: unknown[]) => log && console.log(...a);
   const createx = await getCreateX(deployer);
 
-  // ── Predict the 7 Safe-keyed CREATE3 proxy addresses (depend only on Safe + salt) ────────────────
   l(`Safe-native deploy: predicting Safe-keyed CREATE3 addresses (Safe=${safe})...`);
   const proxies = {} as Record<ResolverName, string>;
   const rawSalts = {} as Record<Create3Name, string>;
@@ -177,7 +187,16 @@ export async function buildSafePlan(deployer: Signer, safe: string, log = true):
   l("Safe-native deploy: computed Safe-keyed schema UIDs:");
   for (const s of SCHEMAS) l(`  ${s.name.padEnd(11)} ${schemaUIDs[s.name]}`);
 
-  // ── Deploy resolver impls from the EOA (in no UID; address-irrelevant) ────────────────────────────
+  return { safe, proxies, systemAccount, rawSalts, schemaUIDs };
+}
+
+/// Deploy the 7 resolver/SystemAccount impls from the EOA (non-deterministic addresses, in no UID —
+/// cheaper than routing impl creation through the Safe and address-irrelevant). PR #24 P2: this is the
+/// ONLY step that deploys impls, and it is called ONLY for a Phase-0 deploy (Batch 1 needs the impls as
+/// CreateX initcode). A Phase-1+ resume NEVER calls this — it spends no gas deploying impls no remaining
+/// batch consumes (the bug this fix closes — a read-only resume on an unfunded gas EOA could fail here).
+export async function deployImpls(deployer: Signer, log = true): Promise<Record<Create3Name, string>> {
+  const l = (...a: unknown[]) => log && console.log(...a);
   l("Safe-native deploy: deploying resolver impls (EOA; non-deterministic, in no UID)...");
   const impls = {} as Record<Create3Name, string>;
   const allNames: Create3Name[] = [...RESOLVERS, "SystemAccount"];
@@ -188,18 +207,30 @@ export async function buildSafePlan(deployer: Signer, safe: string, log = true):
     impls[name] = await impl.getAddress();
     l(`  ${name} impl: ${impls[name]}`);
   }
+  return impls;
+}
 
+/// Build Batch 1 (CreateX proxy deploys, atomic init, born Safe-owned + wireContracts) from a predicted
+/// plan + the freshly-deployed impls. Only used on a Phase-0 deploy — Batch 1's CreateX initcode embeds
+/// the impl addresses, so it cannot be built without `deployImpls` having run.
+async function buildBatch1(
+  deployer: Signer,
+  predicted: PredictedPlan,
+  impls: Record<Create3Name, string>,
+): Promise<SafeCall[]> {
+  const { safe, proxies, schemaUIDs } = predicted;
+  const createx = await getCreateX(deployer);
   const registryAddr = SCHEMA_REGISTRY_ADDRESS;
   const specs = initSpecs(safe, proxies, schemaUIDs, registryAddr);
+  const allNames: Create3Name[] = [...RESOLVERS, "SystemAccount"];
 
-  // ── Batch 1: CreateX proxy deploys (atomic init, born Safe-owned) + wireContracts ────────────────
   const batch1: SafeCall[] = [];
   for (const name of allNames) {
     const implIface = (await ethers.getContractFactory(name, deployer)).interface;
     const initCalldata = implIface.encodeFunctionData(specs[name].fn, specs[name].args);
     // initialOwner of the TransparentUpgradeableProxy (→ its ProxyAdmin owner) = the SAFE: born-owned.
     const proxyInitCode = await buildProxyInitCode(impls[name], safe, initCalldata);
-    const data = CREATEX_IFACE.encodeFunctionData("deployCreate3", [rawSalts[name], proxyInitCode]);
+    const data = CREATEX_IFACE.encodeFunctionData("deployCreate3", [predicted.rawSalts[name], proxyInitCode]);
     batch1.push({ to: await createx.getAddress(), data, label: `deployCreate3 ${name}` });
   }
   // EFSIndexer.wireContracts — pure storage writes, no EAS call → safe pre-gate.
@@ -217,15 +248,29 @@ export async function buildSafePlan(deployer: Signer, safe: string, log = true):
     ]);
     batch1.push({ to: proxies.EFSIndexer, data, label: "EFSIndexer.wireContracts" });
   }
+  return batch1;
+}
 
-  // ── Batch 2: register 9 schemas LAST + author the whole scaffolding tree (ONE bootstrap leg) ─────
-  // EAS SchemaRegistry.register is NOT idempotent — it reverts `AlreadyExists` once a UID is
-  // registered. A *failed* Batch 2 is atomic and lands nothing, but a re-run after a *successful*
-  // register (e.g. a failure between a complete Batch 2 and Batch 3) would re-include the legs and
-  // revert the whole MultiSend on the first one, stranding recovery. So we query the registry at
-  // plan-build time for each schema's expected UID and OMIT any already-registered leg (same shape as
-  // the bootstrap/seal omit below, which guards on getCode/bootstrapSealed). On a first deploy the
-  // proxies/schemas don't exist yet → every leg is included.
+/// Build Batch 2 (register the not-yet-registered schemas LAST + author the scaffolding tree via ONE
+/// SystemAccount.bootstrap leg + SystemAccount.seal()) from a predicted plan. PR #24 P2: this is
+/// IMPL-FREE — every leg targets the live Safe-keyed proxies (the registry, the SystemAccount proxy),
+/// never an impl. So a Phase-1 resume builds it WITHOUT deploying impls. The per-leg idempotency omits
+/// (register-already-done, bootstrap-already-sealed) are resolved against on-chain state here.
+export async function buildBatch2(
+  deployer: Signer,
+  predicted: PredictedPlan,
+  log = true,
+): Promise<{ batch2: SafeCall[]; batch2RegistersOmitted: number; batch2BootstrapOmitted: boolean }> {
+  const l = (...a: unknown[]) => log && console.log(...a);
+  const { proxies, schemaUIDs, systemAccount } = predicted;
+  const registryAddr = SCHEMA_REGISTRY_ADDRESS;
+
+  // ── Register 9 schemas LAST. EAS SchemaRegistry.register is NOT idempotent — it reverts
+  // `AlreadyExists` once a UID is registered. A *failed* Batch 2 is atomic and lands nothing, but a
+  // re-run after a *successful* register (e.g. a failure between a complete Batch 2 and Batch 3) would
+  // re-include the legs and revert the whole MultiSend on the first one, stranding recovery. So we query
+  // the registry for each schema's expected UID and OMIT any already-registered leg. On a first deploy
+  // the proxies/schemas don't exist yet → every leg is included.
   const batch2: SafeCall[] = [];
   const registryIface = new Interface([
     "function register(string schema, address resolver, bool revocable) returns (bytes32)",
@@ -282,12 +327,30 @@ export async function buildSafePlan(deployer: Signer, safe: string, log = true):
     l("Safe-native deploy: SystemAccount already sealed — Batch 2 omits bootstrap + seal (post-seal re-run).");
   }
 
+  return { batch2, batch2RegistersOmitted, batch2BootstrapOmitted };
+}
+
+/// Build the full Safe-native deploy plan for a Phase-0 deploy: predict every Safe-keyed address + UID
+/// off-chain (impl-free), deploy the resolver impls from the EOA, then assemble Batch 1 (needs the
+/// impls as CreateX initcode) + Batch 2 (impl-free).
+///
+/// PR #24 P2: impl deployment is now coupled ONLY to Batch 1. A Phase-1+ propose resume must NOT call
+/// this — it would deploy 7 fresh impls no remaining batch uses (wasted gas, or an outright failure on
+/// an unfunded gas EOA during a supposedly read-only resume). Such resumes use `predictPlan` +
+/// `buildBatch2` directly (see orchestrateSafe.ts → proposeViaSafe). `buildSafePlan` remains the entry
+/// point for the execute path (the fork rehearsal always self-deploys from Phase 0) and for a Phase-0
+/// propose.
+///
+/// `deployer` funds the impl deploys and (in the rehearsal) executes the Safe txs; the Safe is the
+/// authority + the CreateX caller + the born owner of everything.
+export async function buildSafePlan(deployer: Signer, safe: string, log = true): Promise<SafePlan> {
+  const predicted = await predictPlan(deployer, safe, log);
+  const impls = await deployImpls(deployer, log);
+  const batch1 = await buildBatch1(deployer, predicted, impls);
+  const { batch2, batch2RegistersOmitted, batch2BootstrapOmitted } = await buildBatch2(deployer, predicted, log);
+
   return {
-    safe,
-    proxies,
-    systemAccount,
-    rawSalts,
-    schemaUIDs,
+    ...predicted,
     impls,
     batch1,
     batch2,
@@ -314,7 +377,7 @@ export type DeployPhase = 0 | 1 | 2 | 3;
 /// yet registered" — Batch 2's per-leg omits (batch2RegistersOmitted / batch2BootstrapOmitted, resolved
 /// in buildSafePlan) handle a partially-landed Batch 2 so re-emitting Batch 2 only proposes the
 /// remaining register/bootstrap/seal legs, never a duplicate of an already-landed leg.
-export async function detectDeployPhase(deployer: Signer, plan: SafePlan): Promise<DeployPhase> {
+export async function detectDeployPhase(deployer: Signer, plan: PredictedPlan): Promise<DeployPhase> {
   // Phase 0 — proxies not deployed. Key off EFSIndexer (all 7 proxies land atomically in Batch 1).
   const indexerCode = await ethers.provider.getCode(plan.proxies.EFSIndexer);
   if (indexerCode === "0x") return 0;

@@ -38,17 +38,25 @@ export async function runVerifyGate(input: VerifyInput): Promise<void> {
     }
   }
 
-  // (2) initialize() locked: a 2nd call on each proxy reverts, and the IMPL's direct initialize reverts
-  //     (_disableInitializers in the base constructor).
+  // (2) initialize() locked: a 2nd call on each proxy reverts, and (when an impl handle is available) the
+  //     IMPL's direct initialize reverts (_disableInitializers in the base constructor).
+  //     PR #24 P2: a Phase-1 Safe propose resume deploys no impls (no remaining batch consumes them), so
+  //     `d.impl` is empty there — the impl-direct check is skipped. The impl's _disableInitializers lock
+  //     is a static property of the impl bytecode (checked directly on every Phase-0 deploy and by the
+  //     golden-vector test); it cannot regress on a resume where the live proxies are already deployed.
+  //     The proxy 2nd-initialize lock — the gate that actually protects the to-be-registered proxies —
+  //     always runs.
   console.log("  [verify] initialize() locked (2nd proxy call + impl direct call revert)...");
   for (const d of Object.values(deploys)) {
     const proxy = await ethers.getContractAt(d.resolver, d.proxy, deployer);
-    const impl = await ethers.getContractAt(d.resolver, d.impl, deployer);
     // 2nd initialize on the proxy — argument shape varies per resolver; any args revert on `initializer`.
     const reinit = (proxy as any).initialize.fragment;
     const dummyArgs = reinit.inputs.map((i: any) => dummyForType(i.type));
     await expectRevert((proxy as any).initialize(...dummyArgs), `${d.resolver} proxy 2nd initialize`);
-    await expectRevert((impl as any).initialize(...dummyArgs), `${d.resolver} impl direct initialize`);
+    if (d.impl) {
+      const impl = await ethers.getContractAt(d.resolver, d.impl, deployer);
+      await expectRevert((impl as any).initialize(...dummyArgs), `${d.resolver} impl direct initialize`);
+    }
   }
 
   // (3) self-UID getters == computed == to-be-registered (the ListEntry-class bug guard).

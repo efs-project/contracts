@@ -561,4 +561,130 @@ describe("DeploySafe.fork — Safe-native deploy, born Safe-owned", function () 
       await phaseWalkSnap.restore();
     }
   });
+
+  // ── PR #24 P2 (FIX A): a SUPPLIED REAL Safe drives PROPOSE on the fork — never self-executes ───────
+  // The bug: 00_efs_core.ts keyed `mode: "execute"` off "is this a 31337 fork", so the runbook's
+  // real-Safe fork pre-flight (operator exports the real EFS_SAFE_ADDRESS, then rehearses on the fork)
+  // tried to self-sign + execTransaction a Safe the local signer does NOT own → invalid signatures →
+  // revert. The fix makes the deciding axis "do we hold this Safe's owner signatures?", not the network:
+  // a supplied real Safe ⇒ propose REGARDLESS of fork/real (execute is reserved for the auto test-Safe,
+  // or the EFS_SAFE_OWNER_KEYS opt-in). We model the real-Safe fork pre-flight by driving propose with
+  // owners:[] (the non-owner-EOA condition) against a Safe the deployer does not own, and assert it
+  // BUILDS the next batch + never reverts + never touches execTransaction (the Safe nonce stays put).
+  it("FIX A: a supplied real Safe (no local owner keys) PROPOSES on the fork — builds, never self-executes/reverts", async function () {
+    const fixASnap = await takeSnapshot();
+    try {
+      const [deployer, foreignOwner] = await ethers.getSigners();
+      // A Safe owned by `foreignOwner`, NOT by `deployer` — exactly the real-network shape where the
+      // gas-paying EOA is not a Safe owner. On the fork the bug would have self-signed with the deployer
+      // (a non-owner) and reverted Batch 1; the fix routes it through propose instead.
+      const realSafe = await deployTestSafe(deployer, [await foreignOwner.getAddress()], 1);
+      const safeContract = await getSafe(realSafe, deployer);
+      expect(await safeContract.nonce(), "real Safe nonce starts at 0").to.equal(0n);
+
+      // Drive propose with NO owner signatures (owners: []) — the real-Safe condition. Must NOT revert.
+      const res = await orchestrateViaSafe(deployer, realSafe, [], { mode: "propose", log: false });
+      expect(res.mode, "supplied real Safe → propose (not execute), no revert").to.equal("propose");
+      if (res.mode !== "propose") throw new Error("unreachable");
+
+      // It BUILT the next pending batch (Phase 0 → Batch 1) with a valid Safe-derived SafeTx hash …
+      expect(res.phase, "fresh real Safe is Phase 0").to.equal(0);
+      expect(res.batches, "propose builds the next batch").to.have.lengthOf(1);
+      expect(res.batches[0].label, "Phase 0 builds Batch 1").to.match(/Batch 1/);
+      expect(res.batches[0].safeTxHash, "Safe-derived SafeTx hash present").to.match(/^0x[0-9a-fA-F]{64}$/);
+
+      // … and NOTHING was self-executed: the Safe nonce is still 0 (no execTransaction), and no
+      // Safe-keyed proxy has code (Batch 1 was only BUILT, not executed). This is the no-revert proof —
+      // the old execute-on-fork path would have reverted before reaching here.
+      expect(await safeContract.nonce(), "Safe nonce unchanged — execTransaction never called").to.equal(0n);
+      expect(
+        await ethers.provider.getCode(res.proxies.EFSIndexer),
+        "EFSIndexer proxy NOT deployed (Batch 1 only proposed, never self-executed)",
+      ).to.equal("0x");
+    } finally {
+      await fixASnap.restore();
+    }
+  });
+
+  // ── PR #24 P2 (FIX B): a Phase-1+ propose RESUME deploys NO fresh impls ────────────────────────────
+  // The bug: orchestrateViaSafe called buildSafePlan() — which deploys the 7 resolver/SystemAccount
+  // impls to assemble Batch 1's CreateX initcode — BEFORE phase detection. So a Phase-1/2/3 propose
+  // RERUN (Batch 1 already landed) still deployed 7 fresh impls no remaining batch consumes (wasted gas;
+  // an outright failure if the gas EOA is unfunded, during a supposedly read-only resume). The fix runs
+  // phase detection FIRST off the IMPL-FREE predicted plan (CREATE3 proxy addresses are impl-independent
+  // — derived from salt + Safe only), and deploys impls ONLY at Phase 0 where Batch 1 needs them.
+  //
+  // We OBSERVE "no impls deployed" via the deployer's on-chain transaction count (nonce): every impl
+  // deploy is an EOA tx that bumps the deployer nonce. We walk the phases, applying each proposed batch
+  // with the real (test) owner key to advance, and assert the deployer nonce is FLAT across every
+  // Phase-1/2/3 propose invocation (the only EOA-tx bumps are our explicit executeBatchAsSafe applies,
+  // which we exclude by sampling the nonce immediately around the propose call). Phase 0 is allowed to
+  // deploy impls (Batch 1 needs them); Phases 1–3 must deploy none.
+  it("FIX B: Phase-1+ propose resume deploys NO fresh impls (deployer nonce flat across the resume)", async function () {
+    const fixBSnap = await takeSnapshot();
+    try {
+      const [deployer, ownerSigner] = await ethers.getSigners();
+      const safe = await deployTestSafe(deployer, [await ownerSigner.getAddress()], 1);
+      const safeContract = await getSafe(safe, deployer);
+      const deployerAddr = await deployer.getAddress();
+
+      // Phase 0 → Batch 1. (Phase 0 IS allowed to deploy impls — Batch 1's initcode embeds them.)
+      const p0 = await orchestrateViaSafe(deployer, safe, [], { mode: "propose", log: false });
+      if (p0.mode !== "propose") throw new Error("unreachable");
+      expect(p0.phase, "fresh Safe is Phase 0").to.equal(0);
+      await executeBatchAsSafe(safeContract, p0.plan.batch1, [ownerSigner], deployer);
+
+      // ── Phase 1 propose RESUME: sample the deployer nonce immediately before/after the propose call.
+      // If buildSafePlan (impl deploys) were still called pre-phase-detection, this would bump by 7.
+      const nonceBeforeP1 = await ethers.provider.getTransactionCount(deployerAddr);
+      const p1 = await orchestrateViaSafe(deployer, safe, [], { mode: "propose", log: false });
+      const nonceAfterP1 = await ethers.provider.getTransactionCount(deployerAddr);
+      if (p1.mode !== "propose") throw new Error("unreachable");
+      expect(p1.phase, "proxies live + unregistered → Phase 1").to.equal(1);
+      expect(p1.batches[0].label, "Phase 1 emits Batch 2").to.match(/Batch 2/);
+      expect(
+        nonceAfterP1 - nonceBeforeP1,
+        "Phase 1 propose deployed NO impls (deployer nonce flat — buildSafePlan/deployImpls not called)",
+      ).to.equal(0);
+      // Belt-and-suspenders: the result's plan carries NO impl addresses on a resume (impls map empty).
+      expect(
+        Object.keys(p1.plan.impls ?? {}),
+        "Phase 1 resume plan carries no impl addresses (none were deployed)",
+      ).to.have.lengthOf(0);
+      // The verify gate still ran (it operates on the live proxies, impl-free).
+      // Apply Batch 2 to advance.
+      await executeBatchAsSafe(safeContract, p1.plan.batch2, [ownerSigner], deployer);
+
+      // ── Phase 2 propose RESUME: nonce again flat (no impls). ────────────────────────────────────────
+      const nonceBeforeP2 = await ethers.provider.getTransactionCount(deployerAddr);
+      const p2 = await orchestrateViaSafe(deployer, safe, [], { mode: "propose", log: false });
+      const nonceAfterP2 = await ethers.provider.getTransactionCount(deployerAddr);
+      if (p2.mode !== "propose") throw new Error("unreachable");
+      expect(p2.phase, "registered + sealed → Phase 2").to.equal(2);
+      expect(nonceAfterP2 - nonceBeforeP2, "Phase 2 propose deployed NO impls (deployer nonce flat)").to.equal(0);
+      expect(Object.keys(p2.plan.impls ?? {}), "Phase 2 resume plan carries no impl addresses").to.have.lengthOf(0);
+
+      // Advance to Phase 3 by applying Batch 3.
+      const indexer = await ethers.getContractAt("EFSIndexer", p2.proxies.EFSIndexer, deployer);
+      const root = await indexer.rootAnchorUID();
+      const transportsUID = await indexer.resolvePath(root, "transports");
+      await executeBatchAsSafe(
+        safeContract,
+        [await buildSetTransportsAnchorCall(deployer, p2.proxies.MirrorResolver, transportsUID)],
+        [ownerSigner],
+        deployer,
+      );
+
+      // ── Phase 3 propose RESUME (complete system): nonce flat, nothing built. ────────────────────────
+      const nonceBeforeP3 = await ethers.provider.getTransactionCount(deployerAddr);
+      const p3 = await orchestrateViaSafe(deployer, safe, [], { mode: "propose", log: false });
+      const nonceAfterP3 = await ethers.provider.getTransactionCount(deployerAddr);
+      if (p3.mode !== "propose") throw new Error("unreachable");
+      expect(p3.phase, "transports wired → Phase 3 (complete)").to.equal(3);
+      expect(p3.batches, "Phase 3 emits no batch").to.have.lengthOf(0);
+      expect(nonceAfterP3 - nonceBeforeP3, "Phase 3 propose deployed NO impls (deployer nonce flat)").to.equal(0);
+    } finally {
+      await fixBSnap.restore();
+    }
+  });
 });

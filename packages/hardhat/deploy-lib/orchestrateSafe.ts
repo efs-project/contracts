@@ -26,10 +26,13 @@ import { ResolverName, SCHEMAS } from "./schemas";
 import { Create3DeployResult, Create3Name } from "./create3";
 import { OrchestrationResult } from "./orchestrate";
 import {
-  buildSetTransportsAnchorCall,
+  buildBatch2,
   buildSafePlan,
+  buildSetTransportsAnchorCall,
   detectDeployPhase,
   DeployPhase,
+  PredictedPlan,
+  predictPlan,
   SafePlan,
   SCAFFOLDING,
   TRANSPORTS_INDEX,
@@ -115,19 +118,26 @@ export async function orchestrateViaSafe(
   const mode: SafeDeployMode = opts.mode ?? "execute";
   const l = (...a: unknown[]) => log && console.log(...a);
   const deployerAddr = await deployer.getAddress();
-
-  // ── Precompute the whole graph + assemble batches ────────────────────────────────────────────────
-  const plan = await buildSafePlan(deployer, safe, log);
   const safeContract = await getSafe(safe, deployer);
 
   // ── FIX A (PR #24): real-network build/propose — DO NOT self-execute with a non-owner EOA ─────────
   // On a real network the gas-paying deployer is NOT a Safe owner; signing + execTransaction here would
   // fabricate invalid owner signatures and revert Batch 1. Instead build the proposable MultiSend
-  // batches (the precompute above is already done) + emit the build/propose artifact, then return
-  // WITHOUT touching execTransaction. The operator proposes/signs/executes each batch in Safe{Wallet}.
+  // batch(es) + emit the build/propose artifact, then return WITHOUT touching execTransaction. The
+  // operator proposes/signs/executes each batch in Safe{Wallet}.
+  //
+  // PR #24 P2: phase detection runs FIRST inside proposeViaSafe, off the IMPL-FREE predicted plan — so a
+  // Phase-1+ resume never deploys the 7 impls (no remaining batch consumes them; deploying them would
+  // waste gas, or fail outright on an unfunded gas EOA during a supposedly read-only resume). Impls +
+  // Batch 1 are built ONLY at Phase 0, where Batch 1's CreateX initcode actually embeds them.
   if (mode === "propose") {
-    return proposeViaSafe(deployer, safeContract, safe, plan, opts.proposeArtifactPath, log);
+    const predicted = await predictPlan(deployer, safe, log);
+    return proposeViaSafe(deployer, safeContract, safe, predicted, opts.proposeArtifactPath, log);
   }
+
+  // ── Execute path (fork rehearsal): always a Phase-0 self-deploy of the auto-test-Safe. Precompute the
+  //    whole graph + assemble all batches (deploys impls — Batch 1 needs them as CreateX initcode). ──
+  const plan = await buildSafePlan(deployer, safe, log);
 
   // ── Batch 1 (pre-gate): CreateX proxy deploys (atomic init, born Safe-owned) + wireContracts ──────
   // Idempotent on a re-run (analogous to the Batch 2 register/bootstrap omit). Batch 1's legs are NOT
@@ -329,7 +339,18 @@ export async function orchestrateViaSafe(
 /// verify gate runs the SAME gate against the SAME handles. `realized == predicted` is trivially true
 /// (we read the realized proxies); the load-bearing checks (initialize-locked, self-UID getters,
 /// getEAS, golden-vector field strings) all run against the live Safe-keyed proxies.
-async function buildDeploysFromOnchain(deployer: Signer, plan: SafePlan): Promise<Record<string, Create3DeployResult>> {
+///
+/// PR #24 P2: takes the IMPL-FREE PredictedPlan. A Phase-1 propose resume does NOT deploy impls (no
+/// remaining batch consumes them), so there is no impl address to set — `impl` is left empty. The verify
+/// gate's impl-direct-initialize check is then skipped (it requires an impl handle); every other gate
+/// check (proxy 2nd-initialize-locked, self-UID getters, getEAS, golden-vector field strings) runs
+/// against the live Safe-keyed proxies regardless. The impl's `_disableInitializers` lock is a static
+/// property of the impl bytecode (verified directly on a Phase-0 deploy and by the golden-vector test);
+/// it cannot regress on a resume where the proxies are already live and unchanged.
+async function buildDeploysFromOnchain(
+  deployer: Signer,
+  plan: PredictedPlan,
+): Promise<Record<string, Create3DeployResult>> {
   const deploys: Record<string, Create3DeployResult> = {};
   const allNames: Create3Name[] = [...(Object.keys(plan.proxies) as ResolverName[]), "SystemAccount"];
   for (const name of allNames) {
@@ -338,7 +359,7 @@ async function buildDeploysFromOnchain(deployer: Signer, plan: SafePlan): Promis
     if (code === "0x") throw new Error(`SAFE-DEPLOY (propose): no code at Safe-keyed predicted ${proxy} for ${name}`);
     deploys[name] = {
       resolver: name,
-      impl: plan.impls[name],
+      impl: "", // PR #24 P2: a Phase-1 resume deploys no impls — verify gate skips the impl-direct check.
       proxy,
       predicted: proxy,
       proxyAdmin: await readProxyAdmin(proxy),
@@ -348,21 +369,28 @@ async function buildDeploysFromOnchain(deployer: Signer, plan: SafePlan): Promis
   return deploys;
 }
 
-/// FIX A (PR #24) + PR #24 P1 (PHASE-AWARE): real-network build/propose. The precompute (buildSafePlan)
-/// is already done — impls deployed by the gas-paying EOA, Safe-keyed addresses/UIDs predicted, the
-/// register/bootstrap per-leg idempotency omits resolved against on-chain state.
+/// FIX A (PR #24) + PR #24 P1 (PHASE-AWARE) + PR #24 P2 (PHASE-FIRST, no impl deploy on resume):
+/// real-network build/propose. Takes the IMPL-FREE PredictedPlan (Safe-keyed addresses/UIDs predicted
+/// WITHOUT deploying impls — CREATE3 addresses are impl-independent).
+///
+/// PR #24 P2 — phase detection runs FIRST, off the predicted plan, and impls are deployed ONLY at
+/// Phase 0 (where Batch 1's CreateX initcode embeds them). A Phase-1/2/3 resume deploys NOTHING: Batch 2
+/// (register + bootstrap + seal) and Batch 3 (setTransportsAnchor) all target the live Safe-keyed
+/// proxies, so they are built impl-free. This closes the bug where every resume re-deployed 7 fresh
+/// impls no remaining batch consumed (wasted gas, or an outright failure on an unfunded gas EOA during a
+/// supposedly read-only resume).
 ///
 /// The runbook (DEPLOYMENT.md §4) has the operator RE-RUN `deploy:efs --via-safe` after each Safe{Wallet}
 /// execution — it MUST, because Batch 3's setTransportsAnchor arg is the realized /transports UID, which
 /// only exists after Batch 2 lands. So each invocation detects the current on-chain phase and emits ONLY
-/// the next pending batch (never a duplicate Batch 1 on re-run — the P1 bug this closes). It reuses the
-/// SAME on-chain signals the execute path keys off (detectDeployPhase):
-///   Phase 0 — proxies not deployed     → propose Batch 1 (deploy + wire). The verify gate can't run yet.
-///   Phase 1 — proxies live, unregistered → run the verify gate against the live Safe-keyed proxies
-///             (read-only; THROWS on drift BEFORE proposing any registration — same safety point as the
-///             execute path), then propose Batch 2 (the per-leg register/bootstrap/seal omits applied).
-///   Phase 2 — registered + sealed       → read the realized /transports UID and propose Batch 3.
-///   Phase 3 — transports wired           → nothing to propose (clean no-op; empty batches).
+/// the next pending batch (never a duplicate Batch 1 on re-run — the P1 bug). It reuses the SAME on-chain
+/// signals the execute path keys off (detectDeployPhase):
+///   Phase 0 — proxies not deployed     → deploy impls + build Batch 1, propose it. Verify gate can't run yet.
+///   Phase 1 — proxies live, unregistered → NO impl deploy. Run the verify gate against the live Safe-keyed
+///             proxies (read-only; THROWS on drift BEFORE proposing any registration — same safety point
+///             as the execute path), then build (impl-free) + propose Batch 2.
+///   Phase 2 — registered + sealed       → NO impl deploy. Read the realized /transports UID, propose Batch 3.
+///   Phase 3 — transports wired           → NO impl deploy. Nothing to propose (clean no-op; empty batches).
 /// No execTransaction is ever called — the non-owner EOA never reaches safe.ts's signing path. Each
 /// invocation builds its batch at the Safe's CURRENT nonce (the on-chain nonce advances as the operator
 /// executes each prior batch), so the proposed nonce is always correct for the next-to-execute batch.
@@ -370,16 +398,29 @@ async function proposeViaSafe(
   deployer: Signer,
   safeContract: Contract,
   safe: string,
-  plan: SafePlan,
+  predicted: PredictedPlan,
   artifactPath: string | undefined,
   log: boolean,
 ): Promise<SafeProposeResult> {
   const l = (...a: unknown[]) => log && console.log(...a);
   const chainId = (await ethers.provider.getNetwork()).chainId.toString();
 
-  const phase = await detectDeployPhase(deployer, plan);
+  // PR #24 P2: phase FIRST, off the impl-free predicted plan — before any impl deploy decision.
+  const phase = await detectDeployPhase(deployer, predicted);
   l("");
   l(`EFS Safe-native deploy — BUILD/PROPOSE (real network; no owner keys in-process). PHASE ${phase}.`);
+
+  // The plan carried in the result. Phase 0 fills in impls + Batch 1; Phase 1 fills in Batch 2 (impl-free,
+  // impls stay empty); Phases 2/3 carry only the predicted half (no batch deploys impls). batch1/batch2
+  // default empty and the omit fields default to the no-leg state, refined per phase below.
+  let plan: SafePlan = {
+    ...predicted,
+    impls: {} as Record<Create3Name, string>,
+    batch1: [],
+    batch2: [],
+    batch2RegistersOmitted: 0,
+    batch2BootstrapOmitted: false,
+  };
 
   // Each phase emits exactly the next pending batch at the Safe's CURRENT nonce (offset 0n — the
   // on-chain nonce already reflects every prior executed batch, so the next-to-execute batch sits at it).
@@ -387,8 +428,10 @@ async function proposeViaSafe(
   let ceremony: string[];
 
   if (phase === 0) {
-    // Phase 0 — no proxies. Propose Batch 1 (deploy + wire). The verify gate cannot run (nothing
-    // deployed); it runs next invocation, at Phase 1, before Batch 2.
+    // Phase 0 — no proxies. This is the ONLY phase that deploys impls: Batch 1's CreateX initcode embeds
+    // them. The verify gate cannot run yet (nothing deployed); it runs next invocation, at Phase 1,
+    // before Batch 2.
+    plan = await buildSafePlan(deployer, safe, log);
     batches.push(await buildProposedBatch(safeContract, plan.batch1, "Batch 1 (deploy + wire)", 0n));
     ceremony = [
       "Phase 0 — proxies not deployed. Proposing Batch 1 (deploy + wire).",
@@ -397,22 +440,24 @@ async function proposeViaSafe(
       "    Safe-keyed proxies and (on pass) emit Batch 2.",
     ];
   } else if (phase === 1) {
-    // Phase 1 — proxies live, schemas not all registered. Run the SAME verify gate the execute path
-    // runs (against the live Safe-keyed proxies), read-only — it THROWS on drift BEFORE we propose any
-    // permanent register leg. This is the natural gate point: Batch 1 done → VERIFY GATE → [human signs
-    // the freeze table] → Batch 2.
+    // Phase 1 — proxies live, schemas not all registered. NO impl deploy (PR #24 P2): Batch 2 targets the
+    // live proxies. Run the SAME verify gate the execute path runs (against the live Safe-keyed proxies),
+    // read-only — it THROWS on drift BEFORE we propose any permanent register leg. This is the natural
+    // gate point: Batch 1 done → VERIFY GATE → [human signs the freeze table] → Batch 2.
     l("Safe-native deploy (propose): running verify gate against the on-chain Safe-keyed proxies (pre-register)...");
-    const deploys = await buildDeploysFromOnchain(deployer, plan);
-    await runVerifyGate({ deploys, schemaUIDs: plan.schemaUIDs, deployer });
+    const deploys = await buildDeploysFromOnchain(deployer, predicted);
+    await runVerifyGate({ deploys, schemaUIDs: predicted.schemaUIDs, deployer });
 
-    const registersIncluded = SCHEMAS.length - plan.batch2RegistersOmitted;
+    // Build Batch 2 impl-free (register-last + bootstrap + seal, per-leg idempotency omits applied).
+    const { batch2, batch2RegistersOmitted, batch2BootstrapOmitted } = await buildBatch2(deployer, predicted, log);
+    plan = { ...plan, batch2, batch2RegistersOmitted, batch2BootstrapOmitted };
+
+    const registersIncluded = SCHEMAS.length - batch2RegistersOmitted;
     batches.push(
       await buildProposedBatch(
         safeContract,
-        plan.batch2,
-        `Batch 2 (register×${registersIncluded}${
-          plan.batch2BootstrapOmitted ? "" : " + SystemAccount.bootstrap + seal"
-        })`,
+        batch2,
+        `Batch 2 (register×${registersIncluded}${batch2BootstrapOmitted ? "" : " + SystemAccount.bootstrap + seal"})`,
         0n,
       ),
     );
