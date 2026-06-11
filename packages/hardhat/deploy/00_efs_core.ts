@@ -41,16 +41,30 @@ const deployEfsCore: DeployFunction = async function (hre: HardhatRuntimeEnviron
   let result: OrchestrationResult;
   if (viaSafe) {
     const onFork = (await hre.ethers.provider.getCode(SAFE_PROXY_FACTORY_141)) !== "0x";
-    const isHardhat = hre.network.name === "hardhat";
-    // Fork rehearsal: stand up a real 1-of-1 test Safe owned by a co-signer (no real Safe on the fork).
-    // Real network: EFS_SAFE_ADDRESS must be the real EFS.eth Safe; the owner signers are not available
-    // to this process — the batches are proposed/signed via Safe{Wallet}/Safe Tx Service. The fork path
-    // is the in-process rehearsal that proves the batches + born-owned init are correct.
+    const isLocalNetwork = hre.network.name === "hardhat" || hre.network.name === "localhost";
+    const chainId = Number((await hre.ethers.provider.getNetwork()).chainId);
+    // FIX A (PR #24): split fork-rehearsal SELF-EXECUTION from real-network BUILD/PROPOSE.
+    //
+    // Fork rehearsal (chainId 31337 / network hardhat|localhost, the auto-test-Safe path): we deploy a
+    // real 1-of-1 test Safe whose single owner IS a local signer, so the process holds real owner
+    // signatures — `mode: "execute"` signs + execTransactions the batches in-process. UNCHANGED.
+    //
+    // Real network with a real EFS_SAFE_ADDRESS: the gas-paying deployer is just an EOA, NOT a Safe
+    // owner — it has no owner signatures. Self-signing + execTransaction would fabricate invalid
+    // signatures and revert Batch 1 (the bug this fix closes). So default to `mode: "propose"`: build
+    // the MultiSend batches + emit safe-batches.json + a ceremony summary, and DO NOT call
+    // execTransaction. The operator proposes/signs/executes each batch in Safe{Wallet} (DEPLOYMENT.md
+    // §4). We only switch to `execute` on a real network if the operator explicitly signals that real
+    // owner keys are loaded as local signers via EFS_SAFE_OWNER_KEYS (a clean opt-in signal).
     const signers = await hre.ethers.getSigners();
     const owner = signers[1] ?? signers[0];
+    const isForkRehearsal = isLocalNetwork && chainId === 31337;
+    const ownerKeysAvailable = !!process.env.EFS_SAFE_OWNER_KEYS;
     let safe = process.env.EFS_SAFE_ADDRESS;
+    let mode: "execute" | "propose";
+    let owners = [owner];
     if (!safe) {
-      if (!(isHardhat && onFork)) {
+      if (!(isForkRehearsal && onFork)) {
         throw new Error(
           "[efs-core] EFS_DEPLOY_VIA_SAFE=1 requires EFS_SAFE_ADDRESS on a real network. " +
             "On the hardhat fork, a 1-of-1 test Safe is deployed automatically.",
@@ -58,9 +72,45 @@ const deployEfsCore: DeployFunction = async function (hre: HardhatRuntimeEnviron
       }
       safe = await deployTestSafe(signer, [await owner.getAddress()], 1);
       console.log(`[efs-core] Safe-native rehearsal — deployed 1-of-1 test Safe ${safe}`);
+      mode = "execute"; // fork rehearsal: the test-Safe owner is a local signer (real signatures).
+    } else {
+      // Real EFS_SAFE_ADDRESS supplied. Self-execute ONLY on the fork rehearsal, OR on a real network
+      // when the operator explicitly loaded owner keys; otherwise build/propose (the safe default).
+      mode = isForkRehearsal || ownerKeysAvailable ? "execute" : "propose";
+      if (mode === "propose") owners = []; // no owner signatures used in propose mode
     }
-    console.log(`[efs-core] Safe-native CREATE3 deploy — safe=${safe}, deployer=${deployer} (born Safe-owned)`);
-    result = await orchestrateViaSafe(signer, safe, [owner]);
+    console.log(
+      `[efs-core] Safe-native CREATE3 deploy — safe=${safe}, deployer=${deployer}, mode=${mode} (born Safe-owned)`,
+    );
+    const proposeArtifactPath = `${hre.config.paths.root}/deployments/${hre.network.name}/safe-batches.json`;
+    const safeResult = await orchestrateViaSafe(signer, safe, owners, { mode, proposeArtifactPath });
+    if (safeResult.mode === "propose") {
+      // Built + emitted the propose artifact; the operator executes the batches in Safe{Wallet}. Save
+      // the precomputed Safe-keyed proxies as named deployments (their addresses are deterministic and
+      // known pre-execution) so downstream tooling resolves them, then exit cleanly — nothing is
+      // self-executed on a real network. We do NOT run the post-deploy on-chain assertions (no proxy
+      // is deployed yet) nor the per-schema summary.
+      console.log("[efs-core] Safe-native build/propose complete — see safe-batches.json. Exiting (no txs sent).");
+      const proposeSaveAs: Record<string, string> = {
+        Indexer: "EFSIndexer",
+        EdgeResolver: "EdgeResolver",
+        MirrorResolver: "MirrorResolver",
+        ListResolver: "ListResolver",
+        ListEntryResolver: "ListEntryResolver",
+        AliasResolver: "AliasResolver",
+      };
+      for (const [name, resolver] of Object.entries(proposeSaveAs)) {
+        const artifact = await hre.deployments.getArtifact(resolver);
+        await hre.deployments.save(name, {
+          address: (safeResult.proxies as Record<string, string>)[resolver],
+          abi: artifact.abi,
+        });
+      }
+      const saArtifact = await hre.deployments.getArtifact("SystemAccount");
+      await hre.deployments.save("SystemAccount", { address: safeResult.systemAccount, abi: saArtifact.abi });
+      return;
+    }
+    result = safeResult;
   } else {
     const mode = (process.env.EFS_DEPLOY_MODE as RunMode) ?? "full";
     console.log(`[efs-core] orchestrated CREATE3 deploy — mode=${mode}, deployer=${deployer}`);

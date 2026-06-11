@@ -211,6 +211,67 @@ export async function executeBatchAsSafe(
   return { receipt, txHash, nonce };
 }
 
+// ── Build-only (propose) path — NO execTransaction ──────────────────────────────────────────────────
+// On a real network the gas-paying EOA is NOT a Safe owner, so it can produce no valid owner
+// signatures: calling execTransaction with a fabricated `owners` array signs an invalid SafeTx and the
+// batch reverts (FIX A, PR #24). The real ceremony (DEPLOYMENT.md §4) is owner-signed OUT OF BAND in
+// Safe{Wallet} / the Safe Tx Service. This path therefore only BUILDS the MultiSend SafeTx — the exact
+// `{to, value, data, operation}` to propose plus the Safe nonce + the EIP-712 SafeTx hash the owners
+// sign — and never touches the Safe's execTransaction. `nonceOffset` lets the caller lay out a multi-
+// batch ceremony whose later batches consume sequential nonces (Batch 1 = nonce N, Batch 2 = N+1, …),
+// since the on-chain nonce only advances as each prior batch is executed by the operator.
+
+/// One built (but unexecuted) batch — the proposable MultiSend SafeTx for Safe{Wallet}.
+export interface ProposedBatch {
+  /// Human label for the ceremony summary (e.g. "Batch 1 (deploy + wire)").
+  label: string;
+  /// The MultiSend target (delegatecall), value, calldata, and operation to propose.
+  to: string;
+  value: string;
+  data: string;
+  operation: number;
+  /// The Safe nonce this batch must execute at (sequential across the ceremony).
+  nonce: string;
+  /// The EIP-712 SafeTx hash the owners sign (matches the Safe's own getTransactionHash).
+  safeTxHash: string;
+  /// The inner MultiSend legs, decoded for the operator's review (to/value/dataLength + label).
+  legs: { to: string; value: string; dataLength: number; label?: string }[];
+}
+
+/// Build (do NOT execute) the proposable MultiSend SafeTx for a batch of calls. Reads the Safe's
+/// current on-chain nonce and adds `nonceOffset` so a sequence of batches gets sequential nonces. The
+/// returned `to/value/data/operation/nonce/safeTxHash` are exactly what an operator imports into
+/// Safe{Wallet} (or the Safe Tx Service) to propose, then signs with the real owner keys. Never calls
+/// execTransaction — no owner signature is fabricated here.
+export async function buildProposedBatch(
+  safe: Contract,
+  calls: SafeCall[],
+  label: string,
+  nonceOffset = 0n,
+): Promise<ProposedBatch> {
+  const baseNonce: bigint = await safe.nonce();
+  const nonce = baseNonce + nonceOffset;
+  const multiSend = encodeMultiSend(calls);
+  const tx = buildBatchSafeTx(multiSend, nonce);
+  const hash = await safeTxHash(safe, tx); // also asserts local == on-chain getTransactionHash
+  const legs = calls.map(c => ({
+    to: c.to,
+    value: (c.value ?? 0n).toString(),
+    dataLength: getBytes(c.data).length,
+    label: c.label,
+  }));
+  return {
+    label,
+    to: tx.to,
+    value: tx.value.toString(),
+    data: tx.data,
+    operation: tx.operation,
+    nonce: nonce.toString(),
+    safeTxHash: hash,
+    legs,
+  };
+}
+
 // ── Deploy a fresh 1-of-1 test Safe on a fork (rehearsal only) ───────────────────────────────────────
 // Real deploys use the existing EFS.eth Safe; this stands up a throwaway canonical Safe via the
 // canonical SafeProxyFactory + singleton so the fork rehearsal exercises real Safe execution (not a

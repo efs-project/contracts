@@ -120,12 +120,25 @@ echo "EFS_SAFE_ADDRESS=0x...EFS.eth Safe..." >> .env
 yarn deploy:efs --via-safe --network hardhat
 #    (or run the fork rehearsal directly:
 #     MAINNET_FORKING_ENABLED=true npx hardhat test test/DeploySafe.fork.test.ts --network hardhat)
-# 3. on real Sepolia/mainnet: the deployer EOA has NO Safe-owner keys, so the batches are proposed
-#    to the Safe and signed by the owners out-of-band. Build the batches with deploy-lib/safePlan.ts +
-#    deploy-lib/safe.ts (or Safe{Wallet} import): sign Batch 1 (deploy + wire), execute; the verify gate
-#    runs against the Safe-keyed proxies; sign + fill the freeze table; sign Batch 2 (register-last +
-#    one bootstrap + seal), execute; then sign Batch 3 (setTransportsAnchor, fed the realized
-#    /transports UID), execute. No transfer phase (born Safe-owned).
+# 3. on real Sepolia/mainnet: the deployer EOA has NO Safe-owner keys, so the task runs in
+#    BUILD/PROPOSE mode — it does NOT self-execute (a non-owner EOA can't sign the Safe; self-signing
+#    would revert Batch 1). It builds the MultiSend batches + writes deployments/<net>/safe-batches.json
+#    (each batch's {to, value, data, operation}, the Safe nonce + SafeTx hash to sign) + prints the
+#    three-batch ceremony order and the freeze-gate pause, then exits cleanly (no txs sent):
+yarn deploy:efs --via-safe --network sepolia
+#    Then, in Safe{Wallet} / the Safe Tx Service, the owners propose + sign + execute each batch IN
+#    ORDER, out of band:
+#      a. Batch 1 (deploy + wire) — execute as the Safe.
+#      b. VERIFY GATE — re-run the task (read-only; aborts on any drift) against the now-live proxies.
+#      c. FREEZE GATE (human) — fill + sign docs/SEPOLIA_FREEZE_TABLE.md (addresses/UIDs + the
+#         Batch-1/2/3 SafeTx hashes). No schema is registered before this signature.
+#      d. Batch 2 (register-last + one SystemAccount.bootstrap + seal) — execute as the Safe.
+#      e. Batch 3 (setTransportsAnchor) — read the realized /transports UID back from the index
+#         (indexer.resolvePath(root,"transports")), then propose + execute
+#         MirrorResolver.setTransportsAnchor(thatUID). Built last because the UID is only known after
+#         Batch 2 runs. No transfer phase (born Safe-owned).
+#    (If you ever load the real owner keys as local signers, set EFS_SAFE_OWNER_KEYS to opt into
+#     in-process self-execution instead — otherwise build/propose is the default on real networks.)
 # 4. deploy the read views (NON-FROZEN; redeployable anytime, in no UID, outside the freeze)
 yarn deploy:efs-views --network sepolia
 ```

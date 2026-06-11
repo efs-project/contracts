@@ -76,12 +76,16 @@ describe("DeploySafe.fork — Safe-native deploy, born Safe-owned", function () 
     console.log = (...a: unknown[]) => {
       logLines.push(a.map(String).join(" "));
     };
-    let result: Awaited<ReturnType<typeof orchestrateViaSafe>>;
+    let raw: Awaited<ReturnType<typeof orchestrateViaSafe>>;
     try {
-      result = await orchestrateViaSafe(deployer, safe, [ownerSigner], { log: true });
+      raw = await orchestrateViaSafe(deployer, safe, [ownerSigner], { log: true });
     } finally {
       console.log = origLog;
     }
+    // The fork rehearsal self-executes (default mode "execute"): assert + narrow to the execute result.
+    expect(raw.mode, "fork rehearsal uses execute mode (test Safe owner is a local signer)").to.equal("execute");
+    if (raw.mode !== "execute") throw new Error("unreachable");
+    const result = raw;
 
     // ── PR #24 P1 (FIX A): the verify gate ran on the Safe path, and ran BEFORE Batch 2 ─────────────
     // runVerifyGate logs "[verify] GATE GREEN ✓" on success; Batch 2 (the register legs) logs
@@ -336,7 +340,10 @@ describe("DeploySafe.fork — Safe-native deploy, born Safe-owned", function () 
     // Re-drive the FULL Safe orchestration end-to-end against the already-complete system. The fixes
     // make this a no-op rather than a revert: skip Batch 1 (proxies exist + wired), omit Batch 2
     // (registered + sealed), skip Batch 3 (transports already wired).
-    const result = await orchestrateViaSafe(deployer, deployedSafe, [ownerSigner], { log: false });
+    const raw = await orchestrateViaSafe(deployer, deployedSafe, [ownerSigner], { log: false });
+    expect(raw.mode, "re-run uses execute mode (test Safe owner is a local signer)").to.equal("execute");
+    if (raw.mode !== "execute") throw new Error("unreachable");
+    const result = raw;
 
     // ── Batch 1 SKIPPED: the txHash sentinel marks the skip (no real Safe tx was executed) ──────────
     expect(result.safeTxHashes.batch1, "Batch 1 skipped — already deployed").to.match(/skipped/i);
@@ -383,5 +390,76 @@ describe("DeploySafe.fork — Safe-native deploy, born Safe-owned", function () 
     expect(await indexer.resolvePath(await indexer.rootAnchorUID(), "transports"), "/transports present").to.not.equal(
       ethers.ZeroHash,
     );
+  });
+
+  // ── PR #24 P2 (FIX A): real-network BUILD/PROPOSE — must NOT self-execute with a non-owner EOA ────
+  // On a real network the gas-paying EOA is not a Safe owner; self-signing + execTransaction would
+  // produce invalid signatures and revert Batch 1. The fix routes that case through `mode: "propose"`,
+  // which BUILDS the MultiSend batches + emits the artifact and NEVER calls execTransaction. We prove
+  // it here against a FRESH Safe (a distinct address → distinct Safe-keyed CREATE3 addresses, so no
+  // collision with the happy-path system above) by passing `mode: "propose"` with an EMPTY owners array
+  // (no signatures available — exactly the real-network condition) and asserting: the batches are built
+  // with valid (Safe-derived) SafeTx hashes at sequential nonces; NOTHING was executed (the Safe nonce
+  // is still 0 and the EFSIndexer proxy has no code); and the artifact was written.
+  it("real-network propose mode BUILDS the batches + artifact and does NOT call execTransaction", async function () {
+    const { readFileSync, existsSync, rmSync } = await import("fs");
+    const { tmpdir } = await import("os");
+    const { join } = await import("path");
+
+    const [deployer] = await ethers.getSigners();
+    // A fresh test Safe — its address differs from the happy-path Safe, so the Safe-keyed CREATE3
+    // proxy addresses differ and can't collide with the deployed system. We never execute against it.
+    const safe = await deployTestSafe(deployer, [await deployer.getAddress()], 1);
+    const safeContract = await ethers.getContractAt(["function nonce() view returns (uint256)"], safe, deployer);
+    expect(await safeContract.nonce(), "fresh Safe nonce starts at 0").to.equal(0n);
+
+    const artifactPath = join(tmpdir(), `efs-safe-batches-${Date.now()}.json`);
+
+    // Drive propose mode with NO owner signatures (owners: []) — the real-network condition.
+    const res = await orchestrateViaSafe(deployer, safe, [], {
+      mode: "propose",
+      proposeArtifactPath: artifactPath,
+      log: false,
+    });
+
+    // ── It returned a PROPOSE result, not an executed one ───────────────────────────────────────────
+    expect(res.mode, "propose mode returns a propose result").to.equal("propose");
+    if (res.mode !== "propose") throw new Error("unreachable");
+
+    // ── Two proposable batches built, at sequential nonces, with valid Safe-derived SafeTx hashes ────
+    expect(res.batches, "Batch 1 + Batch 2 built").to.have.lengthOf(2);
+    expect(res.batches[0].label).to.match(/Batch 1/);
+    expect(res.batches[1].label).to.match(/Batch 2/);
+    expect(res.batches[0].nonce, "Batch 1 at the Safe's live nonce (0)").to.equal("0");
+    expect(res.batches[1].nonce, "Batch 2 at nonce+1").to.equal("1");
+    for (const b of res.batches) {
+      expect(b.safeTxHash, "SafeTx hash present").to.match(/^0x[0-9a-fA-F]{64}$/);
+      expect(b.operation, "MultiSend is a delegatecall (operation 1)").to.equal(1);
+      expect(b.to.toLowerCase(), "targets MultiSendCallOnly").to.not.equal(ethers.ZeroAddress);
+    }
+    // Batch 1 carries the 7 proxy deploys + wireContracts (8 legs); Batch 2 the 9 registers + bootstrap + seal.
+    expect(res.batches[0].legs.length, "Batch 1 has 8 legs (7 deploys + wire)").to.equal(8);
+    expect(
+      res.batches[1].legs.filter(leg => /^register /.test(leg.label ?? "")).length,
+      "Batch 2 has 9 register legs",
+    ).to.equal(SCHEMAS.length);
+
+    // ── NOTHING was executed: the Safe nonce is still 0, and no Safe-keyed proxy has code ────────────
+    expect(await safeContract.nonce(), "Safe nonce unchanged — execTransaction never called").to.equal(0n);
+    expect(
+      await ethers.provider.getCode(res.proxies.EFSIndexer),
+      "EFSIndexer proxy NOT deployed (Batch 1 was only proposed, not executed)",
+    ).to.equal("0x");
+
+    // ── The build/propose artifact was written with the ceremony + batches ──────────────────────────
+    expect(existsSync(artifactPath), "safe-batches.json artifact written").to.equal(true);
+    const parsed = JSON.parse(readFileSync(artifactPath, "utf8"));
+    expect(parsed.safe.toLowerCase()).to.equal(safe.toLowerCase());
+    expect(parsed.batches, "artifact records both batches").to.have.lengthOf(2);
+    expect(parsed.ceremony.join("\n"), "ceremony documents the freeze gate").to.match(/FREEZE GATE/i);
+    expect(parsed.ceremony.join("\n"), "ceremony documents Batch 3 setTransportsAnchor").to.match(
+      /setTransportsAnchor/,
+    );
+    rmSync(artifactPath, { force: true });
   });
 });
