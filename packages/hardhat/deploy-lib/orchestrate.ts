@@ -349,21 +349,32 @@ export async function registerAndTransfer(
     result.systemAccount,
     deployer,
   )) as unknown as Contract;
-  const specs = BOOTSTRAP_SCAFFOLDING.map(a => ({
-    name: a.name,
-    parentIndex: a.parentIndex,
-    anchorSchemaToRegister: ZeroHash,
-  }));
-  await (await systemAccount.bootstrap(proxies.EFSIndexer, schemaUIDs.ANCHOR, specs)).wait();
-  // ── Seal the bootstrap ceremony (PR #24 P1 fix) ─────────────────────────────────────────────
-  // Permanently lock the owner's one-time bootstrap write authority BEFORE ownership transfers to
-  // the Safe. After this the steady-state relay is module-only — the Safe (a human multisig) can
-  // never emit/revoke arbitrary payloads as the permanent `system` attester (ADR-0053 content-
-  // authority split). Ordering: deploy → wire → register → bootstrap → SEAL → transfer-ownership.
-  // Idempotent on-chain (a second seal is a no-op), so an --after-freeze-gate retry is safe.
+  // ── Bootstrap + seal, sealed-aware (PR #24 P1 fix — post-seal retry safety) ─────────────────
+  // A previous --after-freeze-gate run may have reached seal() and then FAILED before ownership
+  // transfer completed (e.g. resolveSafe() throwing on an invalid EFS_SAFE_ADDRESS, or a partial
+  // transfer). On the retry the scaffolding is already realized AND the ceremony is already sealed,
+  // so calling bootstrap() again would revert `BootstrapSealed` (whenNotSealed) and strand recovery
+  // forever. Branch on the on-chain sealed flag:
+  //   • Not sealed (first run, or pre-seal failure): bootstrap(specs) then seal() — current behavior.
+  //   • Already sealed (post-seal retry): SKIP both. The anchors are already authored; the steps below
+  //     resolve the real UIDs from the index (rootAnchorUID / resolvePath) so transfer can finish.
+  // bootstrap itself is idempotent (reuses existing anchors) but is gated whenNotSealed, so the SKIP
+  // is what makes a post-seal retry safe — the not-sealed branch covers a pre-seal partial.
   if (!(await systemAccount.bootstrapSealed())) {
+    const specs = BOOTSTRAP_SCAFFOLDING.map(a => ({
+      name: a.name,
+      parentIndex: a.parentIndex,
+      anchorSchemaToRegister: ZeroHash,
+    }));
+    await (await systemAccount.bootstrap(proxies.EFSIndexer, schemaUIDs.ANCHOR, specs)).wait();
+    // Permanently lock the owner's one-time bootstrap write authority BEFORE ownership transfers to
+    // the Safe. After this the steady-state relay is module-only — the Safe (a human multisig) can
+    // never emit/revoke arbitrary payloads as the permanent `system` attester (ADR-0053 content-
+    // authority split). Ordering: deploy → wire → register → bootstrap → SEAL → transfer-ownership.
     await (await systemAccount.seal()).wait();
-    l("  SystemAccount.seal() — bootstrap ceremony permanently sealed (relay now module-only)");
+    l("  SystemAccount.bootstrap + seal() — scaffolding authored, ceremony permanently sealed");
+  } else {
+    l("  SystemAccount already sealed — skipping bootstrap + seal (post-seal retry); reusing anchors");
   }
   // Read the realized UIDs back from the index (bootstrap returns them too, but a state-changing call
   // doesn't surface its return value off-chain without a static call — the index read is canonical).

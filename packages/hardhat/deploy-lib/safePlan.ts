@@ -94,7 +94,15 @@ export interface SafePlan {
   /// Batch 2: register 9 schemas LAST + author the whole scaffolding tree via ONE
   /// SystemAccount.bootstrap leg (timestamp-robust — no off-chain UID prediction) +
   /// SystemAccount.seal() as the last leg (PR #24 P1 fix: relay becomes module-only).
+  /// On a post-seal re-run (the SystemAccount proxy already deployed AND already sealed),
+  /// the bootstrap + seal legs are OMITTED (they would revert `BootstrapSealed`) — see
+  /// `batch2BootstrapOmitted`.
   batch2: SafeCall[];
+  /// True when Batch 2 omitted the bootstrap + seal legs because the SystemAccount was already
+  /// deployed and `bootstrapSealed()` was already true (idempotent post-seal re-run). The schema
+  /// register legs are still included (register is idempotent — AlreadyExists is tolerated on-chain
+  /// by the registry, and the orchestrator re-asserts getSchema afterwards).
+  batch2BootstrapOmitted: boolean;
 }
 
 /// Init args per CREATE3 contract — IDENTICAL shape to orchestrate.ts initSpecs, except the owner
@@ -197,22 +205,41 @@ export async function buildSafePlan(deployer: Signer, safe: string, log = true):
     const data = registryIface.encodeFunctionData("register", [s.fieldString, proxies[s.resolver], s.revocable]);
     batch2.push({ to: registryAddr, data, label: `register ${s.name}` });
   }
-  // Scaffolding: a SINGLE SystemAccount.bootstrap leg. The whole anchor tree (root → tags/transports →
-  // 5 transport children) is authored in one call that threads each child's refUID from the parent UID
-  // the prior EAS.attest returned in the same call — so it is timestamp-robust (FIX 1, PR #24): no
-  // off-chain UID prediction, nothing to drift against. The call is idempotent (reuses already-created
-  // anchors via the index), authored THROUGH SystemAccount (attester == SystemAccount); the Safe is
-  // SystemAccount's owner, so the Safe-context MultiSend leg satisfies bootstrap's onlyOwner gate
-  // (bootstrap is owner-gated + whenNotSealed — PR #24 P1 fix — sealed by the seal() leg below).
-  // MirrorResolver.setTransportsAnchor needs the REALIZED /transports UID, only known after Batch 2
-  // executes, so it is a separate post-gate Safe tx the orchestrator issues after reading it back.
-  batch2.push(await buildBootstrapCall(deployer, systemAccount, proxies.EFSIndexer, schemaUIDs.ANCHOR));
-  // Seal the bootstrap ceremony as the LAST Batch-2 leg (PR #24 P1 fix): after bootstrap authors the
-  // scaffolding, `seal()` permanently locks the owner's one-time write authority. The Safe is born the
-  // owner here, so there is no later transfer to gate before — sealing in-batch is the equivalent of
-  // the EOA path's seal-before-transfer. After this leg the steady-state relay is module-only and the
-  // Safe can never emit/revoke arbitrary payloads as the permanent `system` attester (ADR-0053).
-  batch2.push(await buildSealCall(deployer, systemAccount));
+
+  // Sealed-aware Batch 2 (PR #24 P1 fix — post-seal re-run safety). A *failed* Batch 2 is atomic and
+  // lands nothing (no partial seal), but a re-run after a *successful* Batch 2 would rebuild a batch
+  // containing bootstrap + seal and revert `BootstrapSealed` (whenNotSealed) — stranding any recovery
+  // re-drive. So if the SystemAccount proxy is already deployed AND already sealed, OMIT both legs; the
+  // scaffolding is already authored and the orchestrator resolves the /transports UID from the index
+  // for setTransportsAnchor regardless. On a first run the proxy has no code yet (it is deployed in
+  // Batch 1), so the read is guarded — absent code means not-yet-sealed → include the legs.
+  let batch2BootstrapOmitted = false;
+  const saCode = await ethers.provider.getCode(systemAccount);
+  if (saCode !== "0x") {
+    const sa = await ethers.getContractAt("SystemAccount", systemAccount, deployer);
+    if (await sa.bootstrapSealed()) batch2BootstrapOmitted = true;
+  }
+
+  if (!batch2BootstrapOmitted) {
+    // Scaffolding: a SINGLE SystemAccount.bootstrap leg. The whole anchor tree (root → tags/transports →
+    // 5 transport children) is authored in one call that threads each child's refUID from the parent UID
+    // the prior EAS.attest returned in the same call — so it is timestamp-robust (FIX 1, PR #24): no
+    // off-chain UID prediction, nothing to drift against. The call is idempotent (reuses already-created
+    // anchors via the index), authored THROUGH SystemAccount (attester == SystemAccount); the Safe is
+    // SystemAccount's owner, so the Safe-context MultiSend leg satisfies bootstrap's onlyOwner gate
+    // (bootstrap is owner-gated + whenNotSealed — PR #24 P1 fix — sealed by the seal() leg below).
+    // MirrorResolver.setTransportsAnchor needs the REALIZED /transports UID, only known after Batch 2
+    // executes, so it is a separate post-gate Safe tx the orchestrator issues after reading it back.
+    batch2.push(await buildBootstrapCall(deployer, systemAccount, proxies.EFSIndexer, schemaUIDs.ANCHOR));
+    // Seal the bootstrap ceremony as the LAST Batch-2 leg (PR #24 P1 fix): after bootstrap authors the
+    // scaffolding, `seal()` permanently locks the owner's one-time write authority. The Safe is born the
+    // owner here, so there is no later transfer to gate before — sealing in-batch is the equivalent of
+    // the EOA path's seal-before-transfer. After this leg the steady-state relay is module-only and the
+    // Safe can never emit/revoke arbitrary payloads as the permanent `system` attester (ADR-0053).
+    batch2.push(await buildSealCall(deployer, systemAccount));
+  } else {
+    l("Safe-native deploy: SystemAccount already sealed — Batch 2 omits bootstrap + seal (post-seal re-run).");
+  }
 
   return {
     safe,
@@ -223,6 +250,7 @@ export async function buildSafePlan(deployer: Signer, safe: string, log = true):
     impls,
     batch1,
     batch2,
+    batch2BootstrapOmitted,
   };
 }
 

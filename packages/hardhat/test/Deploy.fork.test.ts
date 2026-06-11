@@ -1,5 +1,6 @@
 import { expect } from "chai";
 import { ethers, network } from "hardhat";
+import { takeSnapshot, SnapshotRestorer } from "@nomicfoundation/hardhat-network-helpers";
 import { CREATEX_ADDRESS, EAS_ADDRESS } from "../deploy-lib/addresses";
 import { orchestrate } from "../deploy-lib/orchestrate";
 import { RESOLVERS, SCHEMAS } from "../deploy-lib/schemas";
@@ -16,6 +17,10 @@ describe("Deploy.fork — orchestrated CREATE3 deploy + register-last", function
   this.timeout(180_000);
 
   let forked = false;
+  // Clean-fork snapshot taken before any deploy. The CREATE3 addresses are deterministic, so two `full`
+  // orchestrations in the same fork session would collide on the second deploy (CreateX reverts on a
+  // taken address). The post-seal-retry test restores this snapshot so it deploys into a clean fork.
+  let cleanFork: SnapshotRestorer;
 
   before(async function () {
     const code = await ethers.provider.getCode(CREATEX_ADDRESS);
@@ -24,6 +29,7 @@ describe("Deploy.fork — orchestrated CREATE3 deploy + register-last", function
       console.log("    (skipping Deploy.fork — CreateX not present; run with MAINNET_FORKING_ENABLED=true)");
       this.skip();
     }
+    cleanFork = await takeSnapshot();
   });
 
   it("stands up the whole ceremony: 6 proxies @predicted, verify green, 9 schemas registered, owner==Safe, 9 smokes", async function () {
@@ -156,6 +162,56 @@ describe("Deploy.fork — orchestrated CREATE3 deploy + register-last", function
       ]),
       "bootstrap reverts after seal even for the owner",
     ).to.be.revertedWithCustomError(systemAccount, "BootstrapSealed");
+  });
+
+  // ── PR #24 P1 follow-up: post-seal --after-freeze-gate retry must NOT revert BootstrapSealed ──────
+  // Earlier this session bootstrap was made onlyOwner + whenNotSealed and the deploy calls seal() right
+  // after bootstrap. If an --after-freeze-gate run reaches seal() and then fails BEFORE ownership
+  // transfer completes (e.g. resolveSafe() throwing on a bad EFS_SAFE_ADDRESS, or a partial transfer),
+  // the next retry re-enters registerAndTransfer and — without this fix — would unconditionally call
+  // bootstrap() and revert BootstrapSealed, so recovery could never finish. This test stands the system
+  // up to the sealed state (a `full` run seals + transfers), then RE-INVOKES the --after-freeze-gate
+  // path and asserts it completes cleanly: bootstrap is skipped (already sealed), anchors are reused,
+  // ownership still ends at the Safe.
+  it("post-seal --after-freeze-gate retry completes without reverting (skips bootstrap, reuses anchors)", async function () {
+    // Restore the clean pre-deploy fork: the first test already deployed at these deterministic CREATE3
+    // addresses, so without this restore our own `full` deploy below would collide (CreateX reverts).
+    await cleanFork.restore();
+
+    const [deployer, safeSigner] = await ethers.getSigners();
+    process.env.EFS_SAFE_ADDRESS = await safeSigner.getAddress();
+    const safe = (await safeSigner.getAddress()).toLowerCase();
+
+    // Stand the whole system up to the sealed + transferred state.
+    const first = await orchestrate(deployer, "full", false);
+    const systemAccount = await ethers.getContractAt("SystemAccount", first.systemAccount, deployer);
+    expect(await systemAccount.bootstrapSealed(), "sealed after the full run").to.equal(true);
+    const rootBefore = await (
+      await ethers.getContractAt("EFSIndexer", first.proxies.EFSIndexer, deployer)
+    ).rootAnchorUID();
+
+    // Re-invoke the after-gate path. The proxies + SystemAccount already exist (re-bound, not
+    // redeployed), the schemas are already registered (register tolerates AlreadyExists), the ceremony
+    // is already sealed, and ownership is already the Safe. The fix makes registerAndTransfer SKIP
+    // bootstrap + seal on the sealed branch and resolve anchors from the index instead of re-attesting,
+    // so this must NOT throw (pre-fix it reverted BootstrapSealed).
+    const retry = await orchestrate(deployer, "after-freeze-gate", false);
+
+    // Completed cleanly: bootstrap skipped (still sealed, root unchanged — reused, not re-attested),
+    // ownership still the Safe, transports anchor resolved from the index.
+    expect(await systemAccount.bootstrapSealed(), "still sealed after retry").to.equal(true);
+    const indexer = await ethers.getContractAt("EFSIndexer", retry.proxies.EFSIndexer, deployer);
+    expect((await indexer.rootAnchorUID()).toLowerCase(), "root reused, not re-attested").to.equal(
+      rootBefore.toLowerCase(),
+    );
+    expect(retry.transportsAnchorUID, "transports UID resolved from index on retry").to.not.equal(ethers.ZeroHash);
+    expect(retry.ownershipTransferred, "ownership idempotently ends at the Safe").to.equal(true);
+    const sa = await ethers.getContractAt("SystemAccount", retry.systemAccount, deployer);
+    expect((await sa.owner()).toLowerCase(), "SystemAccount owner == Safe after retry").to.equal(safe);
+    const mirror = await ethers.getContractAt("MirrorResolver", retry.proxies.MirrorResolver, deployer);
+    expect((await mirror.transportsAnchorUID()).toLowerCase(), "MirrorResolver transports set").to.equal(
+      retry.transportsAnchorUID.toLowerCase(),
+    );
   });
 
   after(function () {
