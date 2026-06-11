@@ -72,6 +72,8 @@ contract EdgeResolver is EFSUpgradeableResolver {
     error InvalidDefinition();
     error InvalidTarget();
     error UnknownEdgeSchema();
+    error NotRevocable();
+    error HasExpiration();
 
     // ============================================================================================
     // ERC-7201 NAMESPACED CONFIG (per-deployment, set in initialize())
@@ -269,6 +271,14 @@ contract EdgeResolver is EFSUpgradeableResolver {
             // Defensive: if the resolver is wired into an unknown schema, fail loudly.
             revert UnknownEdgeSchema();
         }
+
+        // Lifecycle invariants — PIN/TAG edges are "active until explicitly revoked", with no
+        // applies=false and no expiry (matches ListEntryResolver). A revocable *schema* only PERMITS
+        // revocable attestations; EAS still accepts revocable=false (welds the edge on permanently)
+        // and nonzero expirationTime (the edge silently expires but EFS reads filter on revocation,
+        // not expiry, so it stays "active" forever). Reject both at write time.
+        if (!attestation.revocable) revert NotRevocable();
+        if (attestation.expirationTime != 0) revert HasExpiration();
 
         _validateDefinition(definition);
 

@@ -32,6 +32,11 @@ const deployedContracts = {
         },
         {
           inputs: [],
+          name: "HasExpiration",
+          type: "error",
+        },
+        {
+          inputs: [],
           name: "InsufficientValue",
           type: "error",
         },
@@ -58,6 +63,11 @@ const deployedContracts = {
         {
           inputs: [],
           name: "NotPayable",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "NotRevocable",
           type: "error",
         },
         {
@@ -1366,6 +1376,11 @@ const deployedContracts = {
         },
         {
           inputs: [],
+          name: "HasExpiration",
+          type: "error",
+        },
+        {
+          inputs: [],
           name: "InsufficientValue",
           type: "error",
         },
@@ -1407,6 +1422,11 @@ const deployedContracts = {
         {
           inputs: [],
           name: "NotPayable",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "NotRevocable",
           type: "error",
         },
         {
@@ -6355,6 +6375,11 @@ const deployedContracts = {
         },
         {
           inputs: [],
+          name: "HasExpiration",
+          type: "error",
+        },
+        {
+          inputs: [],
           name: "InsufficientValue",
           type: "error",
         },
@@ -6396,6 +6421,11 @@ const deployedContracts = {
         {
           inputs: [],
           name: "NotPayable",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "NotRevocable",
           type: "error",
         },
         {

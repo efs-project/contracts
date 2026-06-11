@@ -286,6 +286,27 @@ describe("AliasResolver — REDIRECT (ADR-0050)", function () {
       await expect(attestRedirect(alice, src, src, 7)).to.be.revertedWithCustomError(aliasResolver, "SelfLoop");
     });
 
+    it("a REDIRECT with a nonzero expirationTime reverts (HasExpiration)", async function () {
+      // A REDIRECT is active-until-revoked with no expiry; read-time resolution filters on
+      // revocation, not expiry, so an expiring redirect would resolve forever. Far-future expiry
+      // passes EAS's own check and reaches the resolver guard.
+      const src = await mintData(alice);
+      const dst = await mintData(alice);
+      await expect(
+        eas.connect(alice).attest({
+          schema: redirectSchemaUID,
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: 9_999_999_999n,
+            revocable: true,
+            refUID: src,
+            data: encodeRedirect(dst, 0 /* sameAs */),
+            value: 0n,
+          },
+        }),
+      ).to.be.revertedWithCustomError(aliasResolver, "HasExpiration");
+    });
+
     it("a non-revocable REDIRECT attestation reverts (NotRevocable)", async function () {
       // A revocable schema only PERMITS revocable attestations; EAS still accepts revocable=false.
       // ADR-0050 requires REDIRECTs stay retractable, so the resolver must reject it at write time.

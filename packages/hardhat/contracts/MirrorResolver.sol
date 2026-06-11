@@ -39,6 +39,8 @@ contract MirrorResolver is EFSUpgradeableResolver, OwnableUpgradeable {
     error InvalidTransport();
     error URITooLong();
     error InvalidURIScheme();
+    error NotRevocable();
+    error HasExpiration();
 
     /// @notice Maximum allowed byte length for a MIRROR URI.
     uint256 public constant MAX_URI_LENGTH = 8192;
@@ -113,6 +115,14 @@ contract MirrorResolver is EFSUpgradeableResolver, OwnableUpgradeable {
 
         Attestation memory target = _eas.getAttestation(attestation.refUID);
         if (target.schema != idx.DATA_SCHEMA_UID()) return false;
+
+        // Lifecycle invariants — a MIRROR is "active until explicitly revoked", with no expiry
+        // (matches ListEntryResolver/EdgeResolver). A revocable *schema* only PERMITS revocable
+        // attestations; EAS still accepts revocable=false (a dead/hostile URI welded on permanently)
+        // and nonzero expirationTime (the mirror silently expires but router/file-view reads filter on
+        // revocation, not expiry, so it stays live forever). Reject both at write time.
+        if (!attestation.revocable) revert NotRevocable();
+        if (attestation.expirationTime != 0) revert HasExpiration();
 
         // Validate transportDefinition is a valid Anchor and URI passes scheme/length checks
         (bytes32 transportDefinition, string memory uri) = abi.decode(attestation.data, (bytes32, string));

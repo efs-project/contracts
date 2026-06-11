@@ -216,6 +216,84 @@ describe("EdgeResolver — PIN", function () {
     await tx.wait();
   };
 
+  // ─── Lifecycle guard (active-until-revoked; no applies=false, no expiry) ──────
+
+  const FUTURE_EXPIRY = 9_999_999_999n; // far-future; passes EAS's expiry check → reaches resolver
+
+  describe("lifecycle guard", function () {
+    it("rejects a PIN with a nonzero expirationTime (HasExpiration)", async function () {
+      const targetUID = await createTarget();
+      const definition = await createDefinition();
+      await expect(
+        eas.attest({
+          schema: pinSchemaUID,
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: FUTURE_EXPIRY,
+            revocable: true,
+            refUID: targetUID,
+            data: encodePin(definition),
+            value: 0n,
+          },
+        }),
+      ).to.be.revertedWithCustomError(edgeResolver, "HasExpiration");
+    });
+
+    it("rejects a TAG with a nonzero expirationTime (HasExpiration)", async function () {
+      const targetUID = await createTarget();
+      const definition = await createDefinition();
+      await expect(
+        eas.attest({
+          schema: tagSchemaUID,
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: FUTURE_EXPIRY,
+            revocable: true,
+            refUID: targetUID,
+            data: encodeTag(definition, 1n),
+            value: 0n,
+          },
+        }),
+      ).to.be.revertedWithCustomError(edgeResolver, "HasExpiration");
+    });
+
+    it("rejects a non-revocable PIN (NotRevocable)", async function () {
+      const targetUID = await createTarget();
+      const definition = await createDefinition();
+      await expect(
+        eas.attest({
+          schema: pinSchemaUID,
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: NO_EXPIRATION,
+            revocable: false,
+            refUID: targetUID,
+            data: encodePin(definition),
+            value: 0n,
+          },
+        }),
+      ).to.be.revertedWithCustomError(edgeResolver, "NotRevocable");
+    });
+
+    it("rejects a non-revocable TAG (NotRevocable)", async function () {
+      const targetUID = await createTarget();
+      const definition = await createDefinition();
+      await expect(
+        eas.attest({
+          schema: tagSchemaUID,
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: NO_EXPIRATION,
+            revocable: false,
+            refUID: targetUID,
+            data: encodeTag(definition, 1n),
+            value: 0n,
+          },
+        }),
+      ).to.be.revertedWithCustomError(edgeResolver, "NotRevocable");
+    });
+  });
+
   // ─── Proxy / initialize (ADR-0048) ───────────────────────────────────────────
 
   describe("Proxy / initialize (ADR-0048)", function () {

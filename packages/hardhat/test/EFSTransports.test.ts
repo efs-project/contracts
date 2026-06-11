@@ -444,6 +444,43 @@ describe("EFS Transports & Data Model", function () {
       expect(m1).to.not.equal(m2);
     });
 
+    it("should reject a MIRROR with a nonzero expirationTime (HasExpiration)", async function () {
+      // A MIRROR is active-until-revoked with no expiry; an expiring mirror would read as live
+      // forever (reads filter on revocation, not expiry). Far-future expiry passes EAS → resolver.
+      await expect(
+        eas.attest({
+          schema: mirrorSchemaUID,
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: 9_999_999_999n,
+            revocable: true,
+            refUID: testDataUID,
+            data: encodeMirror(ipfsTransportUID, "ipfs://QmTestHash123"),
+            value: 0n,
+          },
+        }),
+      ).to.be.revertedWithCustomError(mirrorResolver, "HasExpiration");
+    });
+
+    it("should reject a non-revocable MIRROR (NotRevocable)", async function () {
+      // A MIRROR must stay retractable (removal is via eas.revoke()). The revocable *schema* only
+      // permits revocable attestations; EAS still accepts revocable=false, which the resolver rejects
+      // so a dead/hostile mirror URI can't be welded on permanently.
+      await expect(
+        eas.attest({
+          schema: mirrorSchemaUID,
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: NO_EXPIRATION,
+            revocable: false,
+            refUID: testDataUID,
+            data: encodeMirror(ipfsTransportUID, "ipfs://QmTestHash123"),
+            value: 0n,
+          },
+        }),
+      ).to.be.revertedWithCustomError(mirrorResolver, "NotRevocable");
+    });
+
     it("should reject MIRROR without refUID", async function () {
       await expect(
         eas.attest({
