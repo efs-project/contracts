@@ -47,6 +47,8 @@ export interface UseItemOverviewArgs {
   routerAddress?: `0x${string}`;
   routerAbi?: Abi;
   dataSchemaUID?: `0x${string}`;
+  /** Bump to force a re-resolution (e.g. after the editor saves a new Overview). */
+  refreshKey?: number;
 }
 
 /**
@@ -147,6 +149,7 @@ export function useItemOverview(args: UseItemOverviewArgs): OverviewState {
     args.dataSchemaUID,
     args.lensAddresses.join(","),
     args.resourcePathNames.join("/"),
+    args.refreshKey,
   ]);
   return state;
 }
