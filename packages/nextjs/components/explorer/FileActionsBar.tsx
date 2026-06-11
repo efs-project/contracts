@@ -37,10 +37,6 @@ export type FileActionsBarProps = {
   isFilterDrawerOpen?: boolean;
   onToggleFilterDrawer?: () => void;
 
-  // Show hidden/system files toggle (Task 14) — filtered out of the grid by default.
-  showSystemFiles: boolean;
-  onToggleSystemFiles: () => void;
-
   onFolderCreated?: (uid: string, name: string) => void;
   onFileCreated?: (enabledSortUIDs: string[]) => void;
   onListCreated?: (uid: string) => void;
@@ -72,8 +68,6 @@ export const FileActionsBar = ({
   autoProcessSortUIDs,
   isFilterDrawerOpen,
   onToggleFilterDrawer,
-  showSystemFiles,
-  onToggleSystemFiles,
   onFolderCreated,
   onFileCreated,
   onListCreated,
@@ -109,15 +103,6 @@ export const FileActionsBar = ({
             <FunnelIcon className="w-4 h-4" />
           </button>
         )}
-        <label className="label cursor-pointer gap-2 text-xs">
-          <span className="opacity-70">Show hidden</span>
-          <input
-            type="checkbox"
-            className="toggle toggle-xs"
-            checked={showSystemFiles}
-            onChange={onToggleSystemFiles}
-          />
-        </label>
       </div>
 
       {/* ADD dropdown — Folder/File/List require an anchor context */}

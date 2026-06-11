@@ -383,12 +383,16 @@ export async function seedDemoTree() {
     name: string,
     content: string,
     recipient: string = ethers.ZeroAddress,
-  ): Promise<{ fileUID: string; created: boolean }> => {
+  ): Promise<{ fileUID: string; dataUID: string; created: boolean }> => {
     const attester = await signer.getAddress();
     let fileUID = await findAnchor(parentUID, name, dataSchemaUID);
     if (fileUID && (await hasActivePlacement(fileUID, attester))) {
+      // README already placed — look up its existing DATA (the active PIN
+      // target at this file slot) so the caller can idempotently re-apply the
+      // `system` TAG, which targets the DATA UID (like `nsfw`), not the anchor.
+      const existingData = (await edgeResolver.getActivePinTarget(fileUID, attester, dataSchemaUID)) as string;
       console.log(`  README    "${name}" (exists, skipping) ${fileUID.slice(0, 10)}…`);
-      return { fileUID, created: false };
+      return { fileUID, dataUID: existingData, created: false };
     }
     if (!fileUID) {
       if (recipient !== ethers.ZeroAddress) {
@@ -424,27 +428,21 @@ export async function seedDemoTree() {
     if (recipient === ethers.ZeroAddress) {
       await walkAncestorVisibility(signer, fileUID);
     }
-    return { fileUID, created: true };
+    return { fileUID, dataUID, created: true };
   };
 
   /**
-   * Idempotent `system` TAG marking `fileUID` (a README ANCHOR) as an Overview
-   * source. The TAG is `definition = /tags/system anchor UID`,
-   * `refUID = README ANCHOR UID`, `weight = 1` — the exact shape the Overview
-   * design (`packages/nextjs/docs/overview-pane-design.md`) and the folder-
-   * visibility TAGs use (`tagTarget(folderAnchor, dataSchemaUID)`): the target
-   * is an anchor, so the kernel files the entry under the **anchor's EAS
-   * schema** (`anchorSchemaUID`) in `_activeByAAS[systemDef][attester][anchorSchemaUID]`.
+   * Idempotent `system` TAG marking a README's **DATA** as an Overview source.
+   * The TAG is `definition = /tags/system anchor UID`, `refUID = README DATA
+   * UID`, `weight = 1` — the exact shape the descriptive labels (`nsfw`, …) use:
+   * the target is a DATA attestation, so the kernel files the entry under the
+   * **DATA EAS schema** (`dataSchemaUID`) in
+   * `_activeByAAS[systemDef][attester][dataSchemaUID]`.
    *
-   * AGENT-NOTE: the client's `resolveSystemAnchorSet` currently queries the
-   * `dataSchemaUID` bucket, which an anchor-targeted TAG never populates —
-   * verified empirically: `getActiveTargetsByAttesterAndSchema(systemDef,
-   * attester, dataSchemaUID)` returns [] while the same query with
-   * `anchorSchemaUID` returns the README anchor uid. The directory item uid the
-   * client intersects against IS the anchor uid (the README's ANCHOR), so the
-   * client query bucket must be `anchorSchemaUID`, not `dataSchemaUID`. This
-   * seed attests the correct on-chain shape; the client bucket is a separate
-   * one-line fix (see this PR's report / docs/QUESTIONS.md).
+   * Tagging the DATA (not the anchor) is what lets the client's normal
+   * `resolveTagSet`/`matchesUID` descriptive-label path hide system files:
+   * `matchesUID` resolves a file item's DATA UID and checks it against the
+   * excluded-tag set, so `system` must live on the DATA bucket alongside `nsfw`.
    *
    * Idempotency: `hasActiveTagFromAny(target, definition, [attester])` keys on
    * `_activeEdge[edgeHash(attester, target, definition, TAG_SCHEMA)]` — schema-
@@ -453,17 +451,17 @@ export async function seedDemoTree() {
   const tagSystemIfMissing = async (
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     signer: any,
-    fileUID: string,
+    dataUID: string,
     systemDefUID: string,
   ): Promise<void> => {
     const attester = await signer.getAddress();
-    const already = await edgeResolver.hasActiveTagFromAny(fileUID, systemDefUID, [attester]);
+    const already = await edgeResolver.hasActiveTagFromAny(dataUID, systemDefUID, [attester]);
     if (already) {
-      console.log(`  System    tag exists, skipping  ${fileUID.slice(0, 10)}…`);
+      console.log(`  System    tag exists, skipping  ${dataUID.slice(0, 10)}…`);
       return;
     }
-    console.log(`  System    tag → ${fileUID.slice(0, 10)}…  (def=${systemDefUID.slice(0, 10)}…)`);
-    await makeTag(signer, fileUID, systemDefUID, 1n);
+    console.log(`  System    tag → ${dataUID.slice(0, 10)}…  (def=${systemDefUID.slice(0, 10)}…)`);
+    await makeTag(signer, dataUID, systemDefUID, 1n);
   };
 
   // Lookup: returns the anchor UID for `(parent, name, schema)` or null.
@@ -671,7 +669,8 @@ export async function seedDemoTree() {
 
   console.log("\n── /tags/system + Overview READMEs ──");
   // 1. Generic folder anchors /tags and /tags/system (schema 0). The client's
-  //    resolveSystemAnchorSet walks resolvePath(root,"tags")→(…,"system").
+  //    tag filter walks resolvePath(root,"tags")→(…,"system") to resolve the
+  //    `system` definition, then unions its DATA-target set (like `nsfw`).
   const tags = await getOrCreateFolder(deployerSigner, rootUID, "tags");
   const tagsUID = tags.uid;
   const systemFolder = await getOrCreateFolder(deployerSigner, tagsUID, "system");
@@ -694,7 +693,7 @@ export async function seedDemoTree() {
 
   // 2. Folder case (must-have): /docs/README.md + system TAG.
   const docsReadme = await makeOnchainReadmeIfMissing(deployerSigner, docsUID, "README.md", FOLDER_README);
-  await tagSystemIfMissing(deployerSigner, docsReadme.fileUID, systemDefUID);
+  await tagSystemIfMissing(deployerSigner, docsReadme.dataUID, systemDefUID);
 
   // 3. File-anchor case: a README hosted UNDER the /docs/readme.txt file anchor.
   //    A file leaf is itself an anchor that can host children, so the Overview
@@ -711,7 +710,7 @@ export async function seedDemoTree() {
       "",
     ].join("\n");
     const fileReadme = await makeOnchainReadmeIfMissing(deployerSigner, readmeTxtUID, "README.md", FILE_README);
-    await tagSystemIfMissing(deployerSigner, fileReadme.fileUID, systemDefUID);
+    await tagSystemIfMissing(deployerSigner, fileReadme.dataUID, systemDefUID);
   } else {
     console.log("  ⏭️  /docs/readme.txt anchor missing — skipping file-anchor README.");
   }
@@ -737,7 +736,7 @@ export async function seedDemoTree() {
     ADDRESS_README,
     deployerAddr,
   );
-  await tagSystemIfMissing(deployerSigner, addrReadme.fileUID, systemDefUID);
+  await tagSystemIfMissing(deployerSigner, addrReadme.dataUID, systemDefUID);
 
   // ── Summary ───────────────────────────────────────────────────────────────────
 

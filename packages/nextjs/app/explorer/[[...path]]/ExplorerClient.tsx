@@ -35,7 +35,10 @@ export default function ExplorerClient() {
   const [isResolvingLenses, setIsResolvingLenses] = useState(false);
 
   const [isFilterDrawerOpen, setIsFilterDrawerOpen] = useState(false);
-  const [drawerTagFilters, setDrawerTagFilters] = useState<Record<string, DrawerTagFilterState>>({ nsfw: "exclude" });
+  const [drawerTagFilters, setDrawerTagFilters] = useState<Record<string, DrawerTagFilterState>>({
+    nsfw: "exclude",
+    system: "exclude",
+  });
 
   const [sortRefreshKey, setSortRefreshKey] = useState(0);
   // Bumped when out-of-FileBrowser mutations add items to the current directory
@@ -49,24 +52,6 @@ export default function ExplorerClient() {
   const [reverseOrder, setReverseOrder] = useState(false);
   const [autoProcessKey, setAutoProcessKey] = useState(0);
   const [autoProcessSortUIDs, setAutoProcessSortUIDs] = useState<string[]>([]);
-
-  // Show hidden/system files toggle (Task 14). Persisted in localStorage so the
-  // preference survives navigation/reload. Defaults to hidden (system files are
-  // filtered out of the directory grid unless the user opts in).
-  const [showSystemFiles, setShowSystemFiles] = useState<boolean>(
-    () => typeof window !== "undefined" && window.localStorage.getItem("efs.showSystemFiles") === "1",
-  );
-  const toggleSystemFiles = () => {
-    setShowSystemFiles(v => {
-      const next = !v;
-      try {
-        window.localStorage.setItem("efs.showSystemFiles", next ? "1" : "0");
-      } catch {
-        /* ignore */
-      }
-      return next;
-    });
-  };
 
   // Info band — externally controlled by PathBar's ItemButton.
   const [isInfoOpen, setIsInfoOpen] = useState(false);
@@ -195,12 +180,11 @@ export default function ExplorerClient() {
 
   const { data: indexerInfo } = useDeployedContractInfo({ contractName: "Indexer" });
   const { data: sortOverlayInfo } = useDeployedContractInfo({ contractName: "EFSSortOverlay" });
-  // OverviewPane (Task 13) reads file content via the router and resolves the
-  // Overview anchor via EFSFileView/EdgeResolver. These are deployed contracts
-  // whose addresses aren't known until after `yarn deploy`, so pull them the
-  // same way `indexerInfo`/`sortOverlayInfo` are pulled above.
+  // OverviewPane (Task 13) reads file content via the router and lists the
+  // Overview README via EFSFileView. These are deployed contracts whose
+  // addresses aren't known until after `yarn deploy`, so pull them the same
+  // way `indexerInfo`/`sortOverlayInfo` are pulled above.
   const { data: fileViewInfo } = useDeployedContractInfo({ contractName: "EFSFileView" });
-  const { data: edgeResolverInfo } = useDeployedContractInfo({ contractName: "EdgeResolver" });
   const { data: routerInfo } = useDeployedContractInfo({ contractName: "EFSRouter" });
   const { data: easAddressRaw } = useScaffoldReadContract({
     contractName: "Indexer",
@@ -696,17 +680,11 @@ export default function ExplorerClient() {
                 lensAddresses={lensAddresses}
                 resourcePathNames={buildRouterPathNames(currentContainer, currentPath)}
                 publicClient={publicClient}
-                indexerAddress={indexerAddress}
-                indexerAbi={indexerInfo?.abi}
                 fileViewAddress={fileViewInfo?.address as `0x${string}` | undefined}
                 fileViewAbi={fileViewInfo?.abi}
-                edgeResolverAddress={edgeResolverInfo?.address as `0x${string}` | undefined}
-                edgeResolverAbi={edgeResolverInfo?.abi}
                 routerAddress={routerInfo?.address as `0x${string}` | undefined}
                 routerAbi={routerInfo?.abi}
-                rootUID={rootUID as `0x${string}` | undefined}
                 dataSchemaUID={dataSchemaUID as `0x${string}` | undefined}
-                anchorSchemaUID={anchorSchemaUID as `0x${string}` | undefined}
               />
             </div>
           )}
@@ -736,8 +714,6 @@ export default function ExplorerClient() {
                 autoProcessSortUIDs={autoProcessSortUIDs}
                 isFilterDrawerOpen={isFilterDrawerOpen}
                 onToggleFilterDrawer={() => setIsFilterDrawerOpen(prev => !prev)}
-                showSystemFiles={showSystemFiles}
-                onToggleSystemFiles={toggleSystemFiles}
                 onFileCreated={sortUIDs => {
                   setAutoProcessSortUIDs(sortUIDs);
                   setAutoProcessKey(k => k + 1);
@@ -784,7 +760,6 @@ export default function ExplorerClient() {
                     directoryRefreshKey={directoryRefreshKey}
                     recreatedListAnchor={recreatedListAnchor}
                     reverseOrder={reverseOrder}
-                    showSystemFiles={showSystemFiles}
                     onNavigate={(uid, name) => navigateToPath([...currentPath, { uid, name }])}
                   />
                 )}

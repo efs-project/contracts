@@ -5,12 +5,11 @@
  *   1. List the item's data-schema (file) children lens-scoped via
  *      `EFSFileView.getDirectoryPageBySchemaAndAddressList` (single page; the
  *      SDK will own pagination later).
- *   2. Resolve the `/tags/system` anchor set (`resolveSystemAnchorSet`).
- *   3. First-lens-wins: per lens in order, restrict children to that lens's
- *      attester ∩ system set, then pick the one named `README.md`
- *      (`selectOverview`). The first lens yielding a pick provides the page.
- *   4. Fetch the picked file's bytes through the router (`fetchFileContent`).
- *   5. Cap by `MAX_RENDER_BYTES`, sniff text/binary, decode as UTF-8 markdown.
+ *   2. First-lens-wins: per lens in order, restrict children to that lens's
+ *      attester, then pick the one named `README.md` (`selectOverview`). The
+ *      first lens yielding a pick provides the page.
+ *   3. Fetch the picked file's bytes through the router (`fetchFileContent`).
+ *   4. Cap by `MAX_RENDER_BYTES`, sniff text/binary, decode as UTF-8 markdown.
  *
  * No caching / retry / pagination beyond the single page shown here — matches
  * the planned SDK boundary (EFS machinery stays thin in client code).
@@ -18,7 +17,6 @@
 import { useEffect, useState } from "react";
 import type { Abi, PublicClient } from "viem";
 import { fetchFileContent } from "~~/utils/efs/fetchFileContent";
-import { resolveSystemAnchorSet } from "~~/utils/efs/resolveSystemAnchorSet";
 import { selectOverview } from "~~/utils/efs/selectOverview";
 import { MAX_RENDER_BYTES } from "~~/utils/markdown/limits";
 import { sniffContent } from "~~/utils/markdown/sniff";
@@ -44,17 +42,11 @@ export interface UseItemOverviewArgs {
   lensAddresses: string[];
   resourcePathNames: string[];
   publicClient: PublicClient | undefined;
-  indexerAddress?: `0x${string}`;
-  indexerAbi?: Abi;
   fileViewAddress?: `0x${string}`;
   fileViewAbi?: Abi;
-  edgeResolverAddress?: `0x${string}`;
-  edgeResolverAbi?: Abi;
   routerAddress?: `0x${string}`;
   routerAbi?: Abi;
-  rootUID?: `0x${string}`;
   dataSchemaUID?: `0x${string}`;
-  anchorSchemaUID?: `0x${string}`;
 }
 
 /**
@@ -75,17 +67,11 @@ export function useItemOverview(args: UseItemOverviewArgs): OverviewState {
       args.enabled &&
       args.anchorUID &&
       args.publicClient &&
-      args.indexerAddress &&
-      args.indexerAbi &&
       args.fileViewAddress &&
       args.fileViewAbi &&
-      args.edgeResolverAddress &&
-      args.edgeResolverAbi &&
       args.routerAddress &&
       args.routerAbi &&
-      args.rootUID &&
-      args.dataSchemaUID &&
-      args.anchorSchemaUID;
+      args.dataSchemaUID;
     if (!ready) {
       setState({ kind: "none" });
       return;
@@ -106,23 +92,13 @@ export function useItemOverview(args: UseItemOverviewArgs): OverviewState {
         })) as any;
         const items: FileSystemItem[] = (pageRaw?.items ?? pageRaw?.[0] ?? []) as FileSystemItem[];
         if (cancelled) return;
-        // 2. system anchor-set (lowercased anchor UIDs tagged /tags/system).
-        const systemSet = await resolveSystemAnchorSet({
-          publicClient: args.publicClient!,
-          indexerAddress: args.indexerAddress!,
-          indexerAbi: args.indexerAbi!,
-          edgeResolverAddress: args.edgeResolverAddress!,
-          edgeResolverAbi: args.edgeResolverAbi!,
-          rootUID: args.rootUID!,
-          anchorSchemaUID: args.anchorSchemaUID!,
-          lensAddresses: args.lensAddresses,
-        });
-        if (cancelled) return;
-        // 3. First-lens-wins: the lens's system-tagged child named README.md.
+        // 2. First-lens-wins: the lens's child named README.md. `selectOverview`
+        //    matches the name exactly; system-tag visibility is handled by the
+        //    normal explorer tag filter, not here.
         let picked: { uid: string; name: string } | null = null;
         for (const lens of args.lensAddresses) {
           const lensChildren = items
-            .filter(it => it.attester.toLowerCase() === lens.toLowerCase() && systemSet.has(it.uid.toLowerCase()))
+            .filter(it => it.attester.toLowerCase() === lens.toLowerCase())
             .map(it => ({ uid: it.uid, name: it.name }));
           picked = selectOverview(lensChildren);
           if (picked) break;
@@ -131,7 +107,7 @@ export function useItemOverview(args: UseItemOverviewArgs): OverviewState {
           if (!cancelled) setState({ kind: "none" });
           return;
         }
-        // 4. Fetch the picked file's bytes through the router.
+        // 3. Fetch the picked file's bytes through the router.
         const fetched = await fetchFileContent({
           routerAddress: args.routerAddress!,
           routerAbi: args.routerAbi!,
@@ -140,7 +116,7 @@ export function useItemOverview(args: UseItemOverviewArgs): OverviewState {
           resourcePath: [...args.resourcePathNames, picked.name],
         });
         if (cancelled) return;
-        // 5. Size cap, then sniff (bytes-only, never trusting attester MIME).
+        // 4. Size cap, then sniff (bytes-only, never trusting attester MIME).
         if (fetched.bytes.length > MAX_RENDER_BYTES) {
           setState({ kind: "too-large", size: fetched.bytes.length });
           return;
@@ -168,9 +144,7 @@ export function useItemOverview(args: UseItemOverviewArgs): OverviewState {
   }, [
     args.enabled,
     args.anchorUID,
-    args.rootUID,
     args.dataSchemaUID,
-    args.anchorSchemaUID,
     args.lensAddresses.join(","),
     args.resourcePathNames.join("/"),
   ]);
