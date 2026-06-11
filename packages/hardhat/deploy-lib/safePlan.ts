@@ -16,94 +16,65 @@
 // Born-Safe-owned: every proxy initializes with owner_ = Safe, and since the Safe is the CreateX caller
 // the auto-created ProxyAdmins are owned by the Safe. So there is NO transfer phase on this path —
 // nothing is ever owned by a hot key. SystemAccount is likewise owned by the Safe and authors the
-// scaffolding (the Safe, as SystemAccount's owner, executes the registerAnchor calls in Batch 2).
+// scaffolding (the Safe, as SystemAccount's owner, executes the single bootstrap call in Batch 2).
 //
 // The two batches map onto the existing freeze-gate split:
 //   Batch 1 (PRE-gate)  = deploy all 7 proxies via CreateX (atomic init, born Safe-owned) + wire
 //                         (EFSIndexer.wireContracts — pure storage, no EAS call).
 //   --- 🔒 human freeze-table signing happens between the two batches ---
 //   Batch 2 (POST-gate) = register the 9 schemas LAST + author the scaffolding through SystemAccount
-//                         + setTransportsAnchor. (Register-then-author, preserving orchestrate.ts's
-//                         ordering: anchors/transports are attestations EAS rejects until the ANCHOR
-//                         schema is registered, so they MUST follow register-last.)
+//                         (ONE SystemAccount.bootstrap leg). (Register-then-author, preserving
+//                         orchestrate.ts's ordering: anchors are attestations EAS rejects until the
+//                         ANCHOR schema is registered, so they MUST follow register-last.)
+//   Batch 3 (POST-gate) = MirrorResolver.setTransportsAnchor(<realized /transports UID>), fed the REAL
+//                         transports anchor UID read back from the index after Batch 2 (the bootstrap
+//                         call threads real EAS UIDs in memory, so nothing is predicted off-chain).
 //
-// This module produces the call lists + the off-chain UID predictions; deploy/lib/safe.ts turns a call
-// list into the executable MultiSend batch, and the deploy task / fork test drive execution.
+// Why bootstrap is ONE leg (FIX 1 / PR #24): the previous design precomputed every scaffolding-anchor
+// UID off-chain from a *predicted* block timestamp (EAS folds block.timestamp into each UID) and then
+// asserted realized == predicted. On a real network the mined Safe-tx timestamp can differ from the
+// prediction, so the children would be attested under non-existent predicted parent UIDs and the bad
+// writes (non-revocable!) would land BEFORE the post-exec assertion fired. `SystemAccount.bootstrap`
+// authors the whole tree in one call, threading each child's `refUID` from the parent UID the prior
+// `EAS.attest` returned IN THE SAME CALL — timestamp-robust by construction, no off-chain prediction.
+//
+// This module produces the call lists; deploy-lib/safe.ts turns a call list into the executable
+// MultiSend batch, and the deploy task / fork test drive execution.
 
-import { AbiCoder, Contract, Interface, Signer, ZeroAddress, ZeroHash, solidityPackedKeccak256 } from "ethers";
+import { Contract, Interface, Signer, ZeroAddress, ZeroHash } from "ethers";
 import { ethers } from "hardhat";
 import { EAS_ADDRESS, SCHEMA_REGISTRY_ADDRESS } from "./addresses";
 import { Create3Name, buildProxyInitCode, getCreateX, predictProxyAddress } from "./create3";
 import { RESOLVERS, ResolverName, SCHEMAS, computeAllSchemaUIDs } from "./schemas";
 import { SafeCall } from "./safe";
 
-const ABI = AbiCoder.defaultAbiCoder();
-
 // CreateX `deployCreate3(bytes32 salt, bytes initCode)` — the leg each proxy deploy is.
 const CREATEX_IFACE = new Interface(["function deployCreate3(bytes32 salt, bytes initCode) payable returns (address)"]);
 
 // ── Scaffolding spec — the bootstrap anchors, in the EXACT order orchestrate.ts authors them ─────────
-// root → (tags, transports) under root; then the five transport children under /transports/. Each is a
-// SystemAccount.registerAnchor(parent, name, ANCHOR_UID, ZeroHash) call → one EAS ANCHOR attestation.
+// root → (tags, transports) under root; then the five transport children under /transports/. The whole
+// tree is authored by a SINGLE SystemAccount.bootstrap(indexer, ANCHOR_UID, specs[]) call: each child's
+// refUID is the parent UID the prior EAS.attest returned in the same call (timestamp-robust; no
+// off-chain UID prediction). `parentIndex` indexes into this same array; -1 marks the root.
 export interface AnchorSpec {
-  /// key for cross-referencing parents in the precompute graph
-  key: string;
   name: string;
-  /// parent's key, or null for the root (refUID = ZeroHash)
-  parentKey: string | null;
+  /// index into SCAFFOLDING of this anchor's parent, or -1 for the root (refUID = ZeroHash)
+  parentIndex: number;
 }
 
 export const SCAFFOLDING: AnchorSpec[] = [
-  { key: "root", name: "root", parentKey: null },
-  { key: "tags", name: "tags", parentKey: "root" },
-  { key: "transports", name: "transports", parentKey: "root" },
-  { key: "onchain", name: "onchain", parentKey: "transports" },
-  { key: "ipfs", name: "ipfs", parentKey: "transports" },
-  { key: "arweave", name: "arweave", parentKey: "transports" },
-  { key: "magnet", name: "magnet", parentKey: "transports" },
-  { key: "https", name: "https", parentKey: "transports" },
+  { name: "root", parentIndex: -1 }, // 0
+  { name: "tags", parentIndex: 0 }, // 1 → root
+  { name: "transports", parentIndex: 0 }, // 2 → root
+  { name: "onchain", parentIndex: 2 }, // 3 → transports
+  { name: "ipfs", parentIndex: 2 }, // 4 → transports
+  { name: "arweave", parentIndex: 2 }, // 5 → transports
+  { name: "magnet", parentIndex: 2 }, // 6 → transports
+  { name: "https", parentIndex: 2 }, // 7 → transports
 ];
 
-/// EAS UID derivation, matching EAS.sol `_getUID(attestation, bump)` byte-for-byte:
-///   keccak256(abi.encodePacked(schema, recipient, attester, time, expirationTime, revocable, refUID,
-///                              data, bump))
-/// For a fresh attestation EAS uses bump=0 (it only increments on a UID collision, which cannot happen
-/// for these distinct fresh requests). The deploy ASSERTS post-exec that the realized UID == this
-/// prediction, failing loudly if a bump ever occurred. `time` is the executing block's timestamp —
-/// within a single MultiSend batch every attestation shares ONE block.timestamp, so the whole anchor
-/// chain is computable from that single value.
-export function computeAnchorUID(args: {
-  schema: string;
-  recipient: string;
-  attester: string;
-  time: bigint;
-  expirationTime: bigint;
-  revocable: boolean;
-  refUID: string;
-  data: string;
-  bump?: number;
-}): string {
-  return solidityPackedKeccak256(
-    ["bytes32", "address", "address", "uint64", "uint64", "bool", "bytes32", "bytes", "uint32"],
-    [
-      args.schema,
-      args.recipient,
-      args.attester,
-      args.time,
-      args.expirationTime,
-      args.revocable,
-      args.refUID,
-      args.data,
-      args.bump ?? 0,
-    ],
-  );
-}
-
-/// The ANCHOR attestation `data` field exactly as SystemAccount.registerAnchor encodes it:
-/// abi.encode(string name, bytes32 schemaUID=ZeroHash).
-export function anchorData(name: string): string {
-  return ABI.encode(["string", "bytes32"], [name, ZeroHash]);
-}
+/// Index of the `/transports` anchor in SCAFFOLDING (its realized UID feeds setTransportsAnchor).
+export const TRANSPORTS_INDEX = SCAFFOLDING.findIndex(a => a.name === "transports");
 
 export interface SafePlan {
   safe: string;
@@ -118,11 +89,9 @@ export interface SafePlan {
   impls: Record<Create3Name, string>;
   /// Batch 1: CreateX proxy deploys (atomic init, born Safe-owned) + wireContracts.
   batch1: SafeCall[];
-  /// Batch 2: register 9 schemas LAST + author scaffolding + setTransportsAnchor.
+  /// Batch 2: register 9 schemas LAST + author the whole scaffolding tree via ONE
+  /// SystemAccount.bootstrap leg (timestamp-robust — no off-chain UID prediction).
   batch2: SafeCall[];
-  /// off-chain scaffolding UID predictions, keyed by AnchorSpec.key. Populated once the executing
-  /// block timestamp is known (predictScaffoldingUIDs).
-  predictScaffoldingUIDs: (time: bigint) => Record<string, string>;
 }
 
 /// Init args per CREATE3 contract — IDENTICAL shape to orchestrate.ts initSpecs, except the owner
@@ -216,7 +185,7 @@ export async function buildSafePlan(deployer: Signer, safe: string, log = true):
     batch1.push({ to: proxies.EFSIndexer, data, label: "EFSIndexer.wireContracts" });
   }
 
-  // ── Batch 2: register 9 schemas LAST + author scaffolding + setTransportsAnchor ──────────────────
+  // ── Batch 2: register 9 schemas LAST + author the whole scaffolding tree (ONE bootstrap leg) ─────
   const batch2: SafeCall[] = [];
   const registryIface = new Interface([
     "function register(string schema, address resolver, bool revocable) returns (bytes32)",
@@ -225,32 +194,15 @@ export async function buildSafePlan(deployer: Signer, safe: string, log = true):
     const data = registryIface.encodeFunctionData("register", [s.fieldString, proxies[s.resolver], s.revocable]);
     batch2.push({ to: registryAddr, data, label: `register ${s.name}` });
   }
-  // NOTE: the scaffolding legs (registerAnchor × 8) + MirrorResolver.setTransportsAnchor are
-  // TIMESTAMP-DEPENDENT and are appended to Batch 2 by assembleScaffoldingCalls(time) at execution time
-  // — each registerAnchor takes the PARENT anchor's UID as an argument, and EAS folds block.timestamp
-  // into every UID, so the parent UID (hence the child's refUID arg) isn't fixed until the executing
-  // block is known. They are authored THROUGH SystemAccount (attester == SystemAccount); the Safe is
+  // Scaffolding: a SINGLE SystemAccount.bootstrap leg. The whole anchor tree (root → tags/transports →
+  // 5 transport children) is authored in one call that threads each child's refUID from the parent UID
+  // the prior EAS.attest returned in the same call — so it is timestamp-robust (FIX 1, PR #24): no
+  // off-chain UID prediction, nothing to drift against. The call is idempotent (reuses already-created
+  // anchors via the index), authored THROUGH SystemAccount (attester == SystemAccount); the Safe is
   // SystemAccount's owner, so the Safe-context MultiSend leg satisfies onlyAuthorizedModuleOrOwner.
-  // Batch 2 as returned here holds the 9 register legs; the caller concatenates the scaffolding legs.
-
-  const predictScaffoldingUIDs = (time: bigint): Record<string, string> => {
-    const uids: Record<string, string> = {};
-    for (const a of SCAFFOLDING) {
-      const refUID = a.parentKey === null ? ZeroHash : uids[a.parentKey];
-      uids[a.key] = computeAnchorUID({
-        schema: schemaUIDs.ANCHOR,
-        recipient: ZeroAddress,
-        attester: systemAccount,
-        time,
-        expirationTime: 0n,
-        revocable: false,
-        refUID,
-        data: anchorData(a.name),
-        bump: 0,
-      });
-    }
-    return uids;
-  };
+  // MirrorResolver.setTransportsAnchor needs the REALIZED /transports UID, only known after Batch 2
+  // executes, so it is a separate post-gate Safe tx the orchestrator issues after reading it back.
+  batch2.push(await buildBootstrapCall(deployer, systemAccount, proxies.EFSIndexer, schemaUIDs.ANCHOR));
 
   return {
     safe,
@@ -261,46 +213,34 @@ export async function buildSafePlan(deployer: Signer, safe: string, log = true):
     impls,
     batch1,
     batch2,
-    predictScaffoldingUIDs,
   };
 }
 
-/// Build the timestamp-dependent Batch-2 scaffolding + setTransportsAnchor legs. The anchor chain's
-/// parent UIDs depend on the executing block's timestamp (EAS folds block.timestamp into every UID),
-/// so these legs are assembled once `time` is known (the next block's timestamp). All legs in one
-/// MultiSend share a single block.timestamp, so the precomputed chain matches the realized chain.
-///
-/// Returns the scaffolding SafeCalls (one registerAnchor per anchor, in dependency order) followed by
-/// MirrorResolver.setTransportsAnchor(transportsUID), plus the predicted UID map for assertion.
-export async function assembleScaffoldingCalls(
+/// Encode the single `SystemAccount.bootstrap(indexer, ANCHOR_UID, specs[])` MultiSend leg that authors
+/// the whole scaffolding tree. The BootstrapAnchor[] is SCAFFOLDING mapped to the on-chain struct
+/// (`{ name, parentIndex, anchorSchemaToRegister=ZeroHash }`). Timestamp-robust + idempotent on-chain.
+export async function buildBootstrapCall(
   deployer: Signer,
-  plan: SafePlan,
-  time: bigint,
-): Promise<{ calls: SafeCall[]; uids: Record<string, string> }> {
-  const uids = plan.predictScaffoldingUIDs(time);
+  systemAccount: string,
+  indexer: string,
+  anchorSchemaUID: string,
+): Promise<SafeCall> {
   const saIface = (await ethers.getContractFactory("SystemAccount", deployer)).interface;
-  const calls: SafeCall[] = [];
-  for (const a of SCAFFOLDING) {
-    const parent = a.parentKey === null ? ZeroHash : uids[a.parentKey];
-    const data = saIface.encodeFunctionData("registerAnchor", [parent, a.name, plan.schemaUIDs.ANCHOR, ZeroHash]);
-    calls.push({ to: plan.systemAccount, data, label: `registerAnchor ${a.name}` });
-  }
-  // MirrorResolver.setTransportsAnchor(transportsUID) — owner-gated; the Safe (born owner) executes it.
-  const mirrorIface = (await ethers.getContractFactory("MirrorResolver", deployer)).interface;
-  const data = mirrorIface.encodeFunctionData("setTransportsAnchor", [uids.transports]);
-  calls.push({ to: plan.proxies.MirrorResolver, data, label: "MirrorResolver.setTransportsAnchor" });
-  return { calls, uids };
+  const specs = SCAFFOLDING.map(a => ({ name: a.name, parentIndex: a.parentIndex, anchorSchemaToRegister: ZeroHash }));
+  const data = saIface.encodeFunctionData("bootstrap", [indexer, anchorSchemaUID, specs]);
+  return { to: systemAccount, data, label: "SystemAccount.bootstrap (scaffolding tree)" };
 }
 
-/// Read the SystemRegistry/EAS-side realized UID for an anchor and assert it equals the precomputed
-/// UID (the bump-0 assertion). Throws loudly if a bump occurred or the chain drifted.
-export function assertNoBump(realized: string, predicted: string, label: string): void {
-  if (realized.toLowerCase() !== predicted.toLowerCase()) {
-    throw new Error(
-      `SAFE-DEPLOY: scaffolding UID drift for ${label} — realized ${realized} != precomputed ${predicted}. ` +
-        `A bump (UID collision) or timestamp/parent drift occurred; the off-chain prediction is invalid.`,
-    );
-  }
+/// Encode the `MirrorResolver.setTransportsAnchor(transportsUID)` leg — owner-gated; the Safe (born
+/// owner) executes it with the REAL /transports UID read back from the index after Batch 2.
+export async function buildSetTransportsAnchorCall(
+  deployer: Signer,
+  mirrorResolver: string,
+  transportsUID: string,
+): Promise<SafeCall> {
+  const mirrorIface = (await ethers.getContractFactory("MirrorResolver", deployer)).interface;
+  const data = mirrorIface.encodeFunctionData("setTransportsAnchor", [transportsUID]);
+  return { to: mirrorResolver, data, label: "MirrorResolver.setTransportsAnchor" };
 }
 
 void Contract;

@@ -1,16 +1,19 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
-import {
-    IEAS,
-    AttestationRequest,
-    AttestationRequestData,
-    MultiAttestationRequest,
-    RevocationRequest
-} from "@ethereum-attestation-service/eas-contracts/contracts/IEAS.sol";
+import { IEAS, AttestationRequest, AttestationRequestData, MultiAttestationRequest, RevocationRequest } from "@ethereum-attestation-service/eas-contracts/contracts/IEAS.sol";
 import { OwnableUpgradeable } from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import { ReentrancyGuardUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+
+/// @notice The minimal slice of EFSIndexer that `bootstrap` reads for idempotency — the root anchor
+///         UID and child path resolution. Kept as a local interface (not an EFSIndexer import) so
+///         SystemAccount stays neutral and does not depend on the kernel's full ABI.
+interface IEFSAnchorIndex {
+    function rootAnchorUID() external view returns (bytes32);
+
+    function resolvePath(bytes32 parentUID, string calldata name) external view returns (bytes32);
+}
 
 /**
  * @title SystemAccount
@@ -160,6 +163,76 @@ contract SystemAccount is Initializable, OwnableUpgradeable, ReentrancyGuardUpgr
                     })
                 })
             );
+    }
+
+    // ============================================================================================
+    // BOOTSTRAP — author the whole scaffolding tree in ONE call (timestamp-robust)
+    // ============================================================================================
+
+    /// @notice One node of the bootstrap scaffolding tree.
+    /// @param name               the anchor name segment.
+    /// @param parentIndex        index into the SAME specs array of this node's parent; a negative
+    ///                           value (sentinel) marks the root (refUID = ZeroHash). A child MUST
+    ///                           appear after its parent so the parent's UID is already realized.
+    /// @param anchorSchemaToRegister the ANCHOR `schemaUID` data field (a schema-alias anchor's
+    ///                           target, or ZeroHash for a plain path anchor) — the second ANCHOR field.
+    struct BootstrapAnchor {
+        string name;
+        int256 parentIndex;
+        bytes32 anchorSchemaToRegister;
+    }
+
+    /// @notice Author the entire bootstrap scaffolding tree (root → children) in a SINGLE call,
+    ///         threading the REAL EAS-returned UIDs in memory: each child's `refUID` is the parent
+    ///         UID that the prior `EAS.attest` in this same call returned. This is timestamp-robust
+    ///         by construction — EAS folds `block.timestamp` into every UID, but since the parent UID
+    ///         is read back from EAS (never predicted off-chain), the child always references the
+    ///         parent that actually exists, whatever timestamp the mined block carried. There is no
+    ///         off-chain UID precompute to drift against.
+    ///
+    /// @dev    Idempotent (ADR-0028 retry-safety): before attesting each node it checks the index —
+    ///         the root via `indexer.rootAnchorUID()`, children via `indexer.resolvePath(parent, name)`
+    ///         — and REUSES an already-created anchor instead of re-attesting (re-attesting root after
+    ///         it exists is rejected by EFSIndexer; re-attesting a child would mint a duplicate). So a
+    ///         partial-then-retried bootstrap fills only the gaps and a fully-seeded retry is a
+    ///         zero-write no-op. Authored THROUGH this contract (attester == SystemAccount).
+    ///
+    /// @param indexer         the EFS index used only to read existing anchors for idempotency.
+    /// @param anchorSchemaUID the registered ANCHOR schema UID to attest under.
+    /// @param specs           the scaffolding tree in dependency order (parent before child).
+    /// @return createdUIDs    the realized UID of each node, parallel to `specs` (reused or new).
+    function bootstrap(
+        IEFSAnchorIndex indexer,
+        bytes32 anchorSchemaUID,
+        BootstrapAnchor[] calldata specs
+    ) external nonReentrant onlyAuthorizedModuleOrOwner returns (bytes32[] memory createdUIDs) {
+        createdUIDs = new bytes32[](specs.length);
+        for (uint256 i = 0; i < specs.length; i++) {
+            BootstrapAnchor calldata spec = specs[i];
+            bytes32 parent = spec.parentIndex < 0 ? bytes32(0) : createdUIDs[uint256(spec.parentIndex)];
+
+            // Idempotency: reuse an already-created anchor rather than re-attesting (root re-attest is
+            // rejected by EFSIndexer; a child re-attest would mint a duplicate name slot).
+            bytes32 existing = spec.parentIndex < 0 ? indexer.rootAnchorUID() : indexer.resolvePath(parent, spec.name);
+            if (existing != bytes32(0)) {
+                createdUIDs[i] = existing;
+                continue;
+            }
+
+            createdUIDs[i] = _eas.attest(
+                AttestationRequest({
+                    schema: anchorSchemaUID,
+                    data: AttestationRequestData({
+                        recipient: address(0),
+                        expirationTime: 0,
+                        revocable: false,
+                        refUID: parent,
+                        data: abi.encode(spec.name, spec.anchorSchemaToRegister),
+                        value: 0
+                    })
+                })
+            );
+        }
     }
 
     // ============================================================================================

@@ -1,9 +1,9 @@
 import { HardhatRuntimeEnvironment } from "hardhat/types";
 import { DeployFunction } from "hardhat-deploy/types";
-import { CREATEX_ADDRESS } from "./lib/addresses";
-import { orchestrate, OrchestrationResult, RunMode } from "./lib/orchestrate";
-import { orchestrateViaSafe } from "./lib/orchestrateSafe";
-import { SAFE_PROXY_FACTORY_141, deployTestSafe } from "./lib/safe";
+import { CREATEX_ADDRESS } from "../deploy-lib/addresses";
+import { orchestrate, OrchestrationResult, RunMode } from "../deploy-lib/orchestrate";
+import { orchestrateViaSafe } from "../deploy-lib/orchestrateSafe";
+import { SAFE_PROXY_FACTORY_141, deployTestSafe } from "../deploy-lib/safe";
 
 // EFS orchestrated CREATE3 deploy (Phase D core) — the single source of truth for standing up the
 // upgradeable EFS system per docs/DEPLOYMENT.md §3. Replaces the nonce-prediction + TestERC1967Proxy
@@ -60,7 +60,7 @@ const deployEfsCore: DeployFunction = async function (hre: HardhatRuntimeEnviron
       console.log(`[efs-core] Safe-native rehearsal — deployed 1-of-1 test Safe ${safe}`);
     }
     console.log(`[efs-core] Safe-native CREATE3 deploy — safe=${safe}, deployer=${deployer} (born Safe-owned)`);
-    result = await orchestrateViaSafe(signer, safe, [owner], { pinTimestamp: isHardhat });
+    result = await orchestrateViaSafe(signer, safe, [owner]);
   } else {
     const mode = (process.env.EFS_DEPLOY_MODE as RunMode) ?? "full";
     console.log(`[efs-core] orchestrated CREATE3 deploy — mode=${mode}, deployer=${deployer}`);

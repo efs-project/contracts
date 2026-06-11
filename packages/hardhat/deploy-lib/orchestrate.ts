@@ -7,7 +7,7 @@
 //   1. Predict all 6 proxy CREATE3 addresses (depend only on deployer+salt) → compute all 9 UIDs.
 //   2. Deploy each resolver impl + its CREATE3 proxy (atomic initialize via the proxy constructor),
 //      passing the precomputed UIDs/partner refs as init args.
-//   3. VERIFY GATE (deploy/lib/verify.ts) — abort on any failure.
+//   3. VERIFY GATE (deploy-lib/verify.ts) — abort on any failure.
 //   4. Wire: EFSIndexer.wireContracts(...), MirrorResolver.setTransportsAnchor(...), /transports/*.
 //   --- FREEZE GATE (human on real Sepolia; auto on fork) ---
 //   6. Register the 9 schemas LAST against the proxy addresses; assert getSchema(uid).resolver==proxy.
@@ -84,28 +84,20 @@ async function readProxyAdmin(proxy: string): Promise<string> {
   return ethers.getAddress("0x" + raw.slice(-40));
 }
 
-/// Create an anchor under `parent` if it doesn't already exist; returns its UID.
-///
-/// ADR-0053: the bootstrap scaffolding is now authored THROUGH SystemAccount (so the anchors'
-/// EAS attester is the SystemAccount address, not the deployer EOA). We call
-/// `SystemAccount.registerAnchor(...)` as the owner=deployer rather than attesting via EAS
-/// directly. The idempotency guard (resolvePath) is unchanged — the attester switch only changes
-/// WHO authors the write, not whether it's skipped. `eas` is retained only to extract the new UID
-/// from the receipt's Attested event (which EAS emits regardless of the caller).
-async function ensureAnchor(
-  eas: Contract,
-  systemAccount: Contract,
-  indexer: Contract,
-  anchorSchemaUID: string,
-  parent: string,
-  name: string,
-): Promise<string> {
-  const existing: string = parent === ZeroHash ? ZeroHash : await indexer.resolvePath(parent, name);
-  if (existing !== ZeroHash) return existing;
-  const tx = await systemAccount.registerAnchor(parent, name, anchorSchemaUID, ZeroHash);
-  const receipt = await tx.wait();
-  return extractAttestedUID(receipt, eas);
-}
+// ── Bootstrap scaffolding tree (root → tags/transports → 5 transport children) ────────────────────
+// The whole tree is authored by ONE timestamp-robust SystemAccount.bootstrap call (FIX 1, PR #24):
+// each child's refUID is threaded from the parent UID the prior EAS.attest returned in the same call,
+// so nothing is predicted off-chain. parentIndex indexes into this array; -1 = root (refUID=ZeroHash).
+const BOOTSTRAP_SCAFFOLDING: { name: string; parentIndex: number }[] = [
+  { name: "root", parentIndex: -1 }, // 0
+  { name: "tags", parentIndex: 0 }, // 1 → root
+  { name: "transports", parentIndex: 0 }, // 2 → root
+  { name: "onchain", parentIndex: 2 }, // 3 → transports
+  { name: "ipfs", parentIndex: 2 }, // 4 → transports
+  { name: "arweave", parentIndex: 2 }, // 5 → transports
+  { name: "magnet", parentIndex: 2 }, // 6 → transports
+  { name: "https", parentIndex: 2 }, // 7 → transports
+];
 
 export async function orchestrate(deployer: Signer, mode: RunMode, log = true): Promise<OrchestrationResult> {
   const deployerAddr = await deployer.getAddress();
@@ -215,14 +207,9 @@ export async function orchestrate(deployer: Signer, mode: RunMode, log = true): 
   // Constructor takes IEAS; initialize(owner_=deployer) makes the deployer the ceremony owner so it
   // can author the bootstrap scaffolding through the relay. Not a resolver (in no schema UID).
   {
-    const res = await deployResolverViaCreate3(
-      createx,
-      deployer,
-      "SystemAccount",
-      [EAS_ADDRESS],
-      "initialize",
-      [deployerAddr],
-    );
+    const res = await deployResolverViaCreate3(createx, deployer, "SystemAccount", [EAS_ADDRESS], "initialize", [
+      deployerAddr,
+    ]);
     deploys.SystemAccount = res;
     systemAccountAddr = res.proxy; // realized == predicted (asserted inside deployResolverViaCreate3)
     l(`  SystemAccount: impl=${res.impl} proxy=${res.proxy} proxyAdmin=${res.proxyAdmin}`);
@@ -343,9 +330,14 @@ export async function registerAndTransfer(
   }
   result.registered = true;
 
-  // ── Post-register anchors: root, tags, /transports/* + setTransportsAnchor (owner still deployer)
-  // ADR-0053: authored THROUGH SystemAccount (attester == SystemAccount address), not the deployer
-  // EOA. The deployer is SystemAccount's owner during the ceremony, so it may author via the relay.
+  // ── Post-register scaffolding: root, tags, /transports/* via ONE SystemAccount.bootstrap call,
+  //    then setTransportsAnchor (owner still deployer). ADR-0053: authored THROUGH SystemAccount
+  //    (attester == SystemAccount address), not the deployer EOA — the deployer is SystemAccount's
+  //    owner during the ceremony, so it may author via the relay. FIX 1 (PR #24): bootstrap threads
+  //    the real EAS UIDs in memory (timestamp-robust, no off-chain prediction) and is idempotent
+  //    (reuses already-created anchors — incl. the root via indexer.rootAnchorUID(), FIX 2), so an
+  //    --after-freeze-gate retry after root already exists reuses it instead of re-attesting (which
+  //    EFSIndexer rejects once rootAnchorUID is set).
   const indexer = (await ethers.getContractAt("EFSIndexer", proxies.EFSIndexer, deployer)) as unknown as Contract;
   const mirror = (await ethers.getContractAt(
     "MirrorResolver",
@@ -357,13 +349,17 @@ export async function registerAndTransfer(
     result.systemAccount,
     deployer,
   )) as unknown as Contract;
-  const rootUID = await ensureAnchor(eas, systemAccount, indexer, schemaUIDs.ANCHOR, ZeroHash, "root");
+  const specs = BOOTSTRAP_SCAFFOLDING.map(a => ({
+    name: a.name,
+    parentIndex: a.parentIndex,
+    anchorSchemaToRegister: ZeroHash,
+  }));
+  await (await systemAccount.bootstrap(proxies.EFSIndexer, schemaUIDs.ANCHOR, specs)).wait();
+  // Read the realized UIDs back from the index (bootstrap returns them too, but a state-changing call
+  // doesn't surface its return value off-chain without a static call — the index read is canonical).
+  const rootUID: string = await indexer.rootAnchorUID();
   l(`  root anchor: ${rootUID} (attester=SystemAccount ${result.systemAccount})`);
-  await ensureAnchor(eas, systemAccount, indexer, schemaUIDs.ANCHOR, rootUID, "tags");
-  const transportsUID = await ensureAnchor(eas, systemAccount, indexer, schemaUIDs.ANCHOR, rootUID, "transports");
-  for (const t of ["onchain", "ipfs", "arweave", "magnet", "https"]) {
-    await ensureAnchor(eas, systemAccount, indexer, schemaUIDs.ANCHOR, transportsUID, t);
-  }
+  const transportsUID: string = await indexer.resolvePath(rootUID, "transports");
   result.transportsAnchorUID = transportsUID;
   if ((await mirror.transportsAnchorUID()) === ZeroHash) {
     await (await mirror.setTransportsAnchor(transportsUID)).wait();
@@ -428,13 +424,17 @@ export async function registerAndTransfer(
 /// the test Safe for the rehearsal (there is no real Safe and no human on the fork).
 async function resolveSafe(deployer: Signer): Promise<string> {
   const env = process.env.EFS_SAFE_ADDRESS;
-  const networkName = (await ethers.provider.getNetwork()).name;
-  // hardhat fork detection: the in-process network is always named "hardhat" (chainId 31337). The
-  // SE-2 provider reports "unknown" for a forked chain on some versions, so also accept the explicit
-  // hardhat network name from the runtime config.
-  const isHardhat = networkName === "hardhat" || networkName === "unknown";
+  const net = await ethers.provider.getNetwork();
+  const networkName = net.name;
+  // Fork-rehearsal detection: the deploy is a throwaway local rehearsal whenever it runs on the
+  // chainId-31337 dev chain — whether reached as the in-process `hardhat` network (test suite) OR as
+  // the `localhost` network pointed at a `yarn fork`/`yarn chain` node (the CI deploy-pin-check job:
+  // `LOCALHOST_RPC_URL=… yarn deploy`). Real Sepolia/mainnet have distinct chainIds (11155111 / 1)
+  // and network names, so this never loosens the hard-fail on a real target. (SE-2 also sometimes
+  // reports a forked chain's name as "unknown"; accept that too.)
+  const isForkRehearsal = net.chainId === 31337n || networkName === "hardhat" || networkName === "unknown";
 
-  // A well-formed, non-zero checksummed address is required on any non-hardhat network.
+  // A well-formed, non-zero checksummed address is required on any non-fork-rehearsal network.
   const valid = !!env && ethers.isAddress(env) && env !== ZeroAddress;
   if (valid) {
     const checksummed = ethers.getAddress(env as string);
@@ -444,7 +444,7 @@ async function resolveSafe(deployer: Signer): Promise<string> {
     return checksummed;
   }
 
-  if (!isHardhat) {
+  if (!isForkRehearsal) {
     throw new Error(
       `EFS_SAFE_ADDRESS is unset/zero/invalid (got ${env ?? "<unset>"}) on network "${networkName}". ` +
         `The single-step ownership transfer is IRREVERSIBLE — set EFS_SAFE_ADDRESS to the checksummed ` +
@@ -484,13 +484,19 @@ async function perSchemaSmoke(
     return extractAttestedUID(await tx.wait(), eas);
   };
 
-  // ANCHOR (file under root)
-  const fileAnchor = await attest(
-    schemaUIDs.ANCHOR,
-    abi.encode(["string", "bytes32"], ["smoke.txt", ZeroHash]),
-    rootUID,
-    false,
-  );
+  // ANCHOR (file under root) — retry-safe (FIX 3, PR #24): the smoke anchor is non-revocable and its
+  // name is deterministic ("smoke.txt"), so a re-attest on an --after-freeze-gate retry would hit
+  // DuplicateFileName and abort before ownership transfer. Reuse the existing anchor if the index
+  // already has it; only attest when absent. (Deterministic + idempotent — no random name.)
+  let fileAnchor: string = await indexer.resolvePath(rootUID, "smoke.txt");
+  if (fileAnchor === ZeroHash) {
+    fileAnchor = await attest(
+      schemaUIDs.ANCHOR,
+      abi.encode(["string", "bytes32"], ["smoke.txt", ZeroHash]),
+      rootUID,
+      false,
+    );
+  }
   if (fileAnchor === ZeroHash) throw new Error("SMOKE: ANCHOR produced no UID");
 
   // DATA (empty)

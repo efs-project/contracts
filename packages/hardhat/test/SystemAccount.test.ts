@@ -128,7 +128,16 @@ describe("SystemAccount (ADR-0053)", function () {
         systemAccount.connect(stranger).multiAttest([
           {
             schema: plainSchemaUID,
-            data: [{ recipient: ZeroAddress, expirationTime: 0n, revocable: true, refUID: ZeroHash, data: enc.encode(["string"], ["m"]), value: 0n }],
+            data: [
+              {
+                recipient: ZeroAddress,
+                expirationTime: 0n,
+                revocable: true,
+                refUID: ZeroHash,
+                data: enc.encode(["string"], ["m"]),
+                value: 0n,
+              },
+            ],
           },
         ]),
       ).to.be.revertedWithCustomError(systemAccount, "NotAuthorized");
@@ -136,7 +145,16 @@ describe("SystemAccount (ADR-0053)", function () {
       const tx = await systemAccount.multiAttest([
         {
           schema: plainSchemaUID,
-          data: [{ recipient: ZeroAddress, expirationTime: 0n, revocable: true, refUID: ZeroHash, data: enc.encode(["string"], ["m"]), value: 0n }],
+          data: [
+            {
+              recipient: ZeroAddress,
+              expirationTime: 0n,
+              revocable: true,
+              refUID: ZeroHash,
+              data: enc.encode(["string"], ["m"]),
+              value: 0n,
+            },
+          ],
         },
       ]);
       const uid = getUID(await tx.wait());
@@ -180,6 +198,97 @@ describe("SystemAccount (ADR-0053)", function () {
     });
   });
 
+  describe("bootstrap scaffolding tree (FIX 1, PR #24)", function () {
+    // An ANCHOR-shaped schema (no resolver) so we can read attester/refUID off the raw EAS records
+    // without standing up the full EFSIndexer + EdgeResolver chain. Idempotency reads go to a mock
+    // index (MockAnchorIndex) that the test seeds to simulate prior (partial) bootstraps.
+    let anchorSchemaUID: string;
+    let mockIndex: any;
+
+    // SCAFFOLDING (orchestrate.ts / safePlan.ts): root → tags/transports → 5 transport children.
+    const SPECS = [
+      { name: "root", parentIndex: -1, anchorSchemaToRegister: ZeroHash },
+      { name: "tags", parentIndex: 0, anchorSchemaToRegister: ZeroHash },
+      { name: "transports", parentIndex: 0, anchorSchemaToRegister: ZeroHash },
+      { name: "onchain", parentIndex: 2, anchorSchemaToRegister: ZeroHash },
+      { name: "ipfs", parentIndex: 2, anchorSchemaToRegister: ZeroHash },
+      { name: "arweave", parentIndex: 2, anchorSchemaToRegister: ZeroHash },
+      { name: "magnet", parentIndex: 2, anchorSchemaToRegister: ZeroHash },
+      { name: "https", parentIndex: 2, anchorSchemaToRegister: ZeroHash },
+    ];
+
+    // Collect the UIDs of every Attested event in a receipt, in emission order.
+    const attestedUIDs = (receipt: any): string[] => {
+      const out: string[] = [];
+      for (const log of receipt.logs) {
+        try {
+          const parsed = eas.interface.parseLog(log);
+          if (parsed?.name === "Attested") out.push(parsed.args.uid);
+        } catch {
+          /* not an Attested log */
+        }
+      }
+      return out;
+    };
+
+    beforeEach(async function () {
+      await (await registry.register("string name, bytes32 schemaUID", ZeroAddress, false)).wait();
+      anchorSchemaUID = ethers.solidityPackedKeccak256(
+        ["string", "address", "bool"],
+        ["string name, bytes32 schemaUID", ZeroAddress, false],
+      );
+      const MockFactory = await ethers.getContractFactory("MockAnchorIndex");
+      mockIndex = await MockFactory.deploy();
+      await mockIndex.waitForDeployment();
+    });
+
+    it("authors the whole tree in one call, attester == SystemAccount, correctly parented", async function () {
+      const tx = await systemAccount.bootstrap(await mockIndex.getAddress(), anchorSchemaUID, SPECS);
+      const receipt = await tx.wait();
+      const uids = attestedUIDs(receipt);
+      // 8 fresh anchors (mock index reports nothing exists yet) → 8 Attested events.
+      expect(uids.length).to.equal(8);
+
+      // Every anchor authored by SystemAccount, each child's refUID == its parent's UID, root.refUID==0.
+      for (let i = 0; i < SPECS.length; i++) {
+        const att = await eas.getAttestation(uids[i]);
+        expect(att.attester, `${SPECS[i].name} attester`).to.equal(systemAccountAddr);
+        expect(att.schema).to.equal(anchorSchemaUID);
+        const expectedParent = SPECS[i].parentIndex < 0 ? ZeroHash : uids[SPECS[i].parentIndex];
+        expect(att.refUID, `${SPECS[i].name} refUID == parent`).to.equal(expectedParent);
+        // ANCHOR data == abi.encode(name, ZeroHash).
+        expect(att.data).to.equal(enc.encode(["string", "bytes32"], [SPECS[i].name, ZeroHash]));
+      }
+    });
+
+    it("is idempotent: reuses already-created anchors (root + a child) instead of re-attesting", async function () {
+      // First call: everything fresh.
+      const r1 = await (await systemAccount.bootstrap(await mockIndex.getAddress(), anchorSchemaUID, SPECS)).wait();
+      const uids1 = attestedUIDs(r1);
+      expect(uids1.length).to.equal(8);
+
+      // Seed the mock to report the root + /transports as already existing (a partial prior bootstrap),
+      // so a retry must REUSE them and only fill gaps — but here we report ALL as existing for a full
+      // no-op retry. We map each spec's realized UID into the mock's path index.
+      await (await mockIndex.setRoot(uids1[0])).wait();
+      // children: setPath(parentUID, name, uid)
+      for (let i = 1; i < SPECS.length; i++) {
+        const parentUID = uids1[SPECS[i].parentIndex];
+        await (await mockIndex.setPath(parentUID, SPECS[i].name, uids1[i])).wait();
+      }
+
+      // Second call: fully seeded → ZERO new attestations (idempotent no-op), returns the same UIDs.
+      const r2 = await (await systemAccount.bootstrap(await mockIndex.getAddress(), anchorSchemaUID, SPECS)).wait();
+      expect(attestedUIDs(r2).length, "fully-seeded retry attests nothing").to.equal(0);
+    });
+
+    it("bootstrap is gated (onlyAuthorizedModuleOrOwner)", async function () {
+      await expect(
+        systemAccount.connect(stranger).bootstrap(await mockIndex.getAddress(), anchorSchemaUID, SPECS),
+      ).to.be.revertedWithCustomError(systemAccount, "NotAuthorized");
+    });
+  });
+
   describe("nonReentrant guard", function () {
     // Shared rig: a SystemAccount bound to a malicious EAS that, when its callback target is set,
     // re-enters SystemAccount during attest/multiAttest/revoke. The attacker is an authorized
@@ -219,10 +328,7 @@ describe("SystemAccount (ADR-0053)", function () {
         // a real ReentrancyGuard trip from a false-green (stack-too-deep / out-of-gas recursion),
         // which would NOT carry this custom error. The error is decoded against SystemAccount's
         // ABI (it inherits ReentrancyGuardUpgradeable), proving the revert came from the guard.
-        await expect(attacker.attack(mode)).to.be.revertedWithCustomError(
-          saReentrant,
-          "ReentrancyGuardReentrantCall",
-        );
+        await expect(attacker.attack(mode)).to.be.revertedWithCustomError(saReentrant, "ReentrancyGuardReentrantCall");
       });
     }
 

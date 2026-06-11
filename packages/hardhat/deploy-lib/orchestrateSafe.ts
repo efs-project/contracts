@@ -17,11 +17,11 @@
 // and the unit suite.
 
 import { Contract, Signer } from "ethers";
-import { ethers, network } from "hardhat";
+import { ethers } from "hardhat";
 import { ResolverName, SCHEMAS } from "./schemas";
 import { Create3DeployResult, Create3Name } from "./create3";
 import { OrchestrationResult } from "./orchestrate";
-import { assembleScaffoldingCalls, assertNoBump, buildSafePlan, SafePlan } from "./safePlan";
+import { buildSetTransportsAnchorCall, buildSafePlan, SafePlan } from "./safePlan";
 import { executeBatchAsSafe, getSafe } from "./safe";
 
 // EIP-1967 admin slot — bytes32(uint256(keccak256("eip1967.proxy.admin")) - 1).
@@ -32,36 +32,29 @@ async function readProxyAdmin(proxy: string): Promise<string> {
 }
 
 export interface SafeOrchestrationResult extends OrchestrationResult {
-  /// The full precomputed plan (Safe-keyed addresses/UIDs + the two batches).
+  /// The full precomputed plan (Safe-keyed addresses + the deploy/register batches).
   plan: SafePlan;
-  /// The two Safe transaction hashes (Batch 1, Batch 2) — for the freeze ledger.
-  safeTxHashes: { batch1: string; batch2: string };
-  /// Realized scaffolding UIDs (anchor key → UID), asserted == precomputed.
+  /// The Safe transaction hashes (Batch 1 deploys, Batch 2 register+bootstrap, Batch 3
+  /// setTransportsAnchor) — for the freeze ledger.
+  safeTxHashes: { batch1: string; batch2: string; batch3: string };
+  /// Realized scaffolding UIDs (anchor name → UID), read back from the index after bootstrap.
   scaffoldingUIDs: Record<string, string>;
-}
-
-/// Predict the timestamp the next mined block will carry so the scaffolding-UID precompute is exact.
-/// On the in-process hardhat fork we PIN it (evm_setNextBlockTimestamp) so realized == precomputed
-/// deterministically; on a real network we cannot pin it, so we predict (latest + 1) and rely on the
-/// post-exec bump/UID assertion to fail loudly if the miner chose a different timestamp.
-async function nextBlockTimestamp(pin: boolean): Promise<bigint> {
-  const latest = await ethers.provider.getBlock("latest");
-  const t = BigInt(latest!.timestamp) + 1n;
-  if (pin) {
-    await network.provider.send("evm_setNextBlockTimestamp", [Number(t)]);
-  }
-  return t;
 }
 
 /// Run the full Safe-native deploy. `deployer` funds impl deploys + pays gas to execute the Safe txs
 /// (gas only — authority is the owner signatures); `safe` is the EFS.eth Safe; `owners` are the Safe
-/// owner signers (1-of-1 for the fork rehearsal, threshold-N for the real Safe). `pinTimestamp` should
-/// be true on the hardhat fork (deterministic UID precompute), false on a real network.
+/// owner signers (1-of-1 for the fork rehearsal, threshold-N for the real Safe).
+///
+/// FIX 1 (PR #24): the scaffolding is authored by a SINGLE timestamp-robust SystemAccount.bootstrap
+/// call (in Batch 2) that threads real EAS-returned UIDs in memory — there is NO off-chain UID
+/// prediction and therefore no `pinTimestamp` knob and no post-write `assertNoBump`. The scaffolding
+/// UIDs are simply whatever EAS returned; the deploy reads them back from the index for the result and
+/// to feed setTransportsAnchor.
 export async function orchestrateViaSafe(
   deployer: Signer,
   safe: string,
   owners: Signer[],
-  opts: { pinTimestamp?: boolean; log?: boolean } = {},
+  opts: { log?: boolean } = {},
 ): Promise<SafeOrchestrationResult> {
   const log = opts.log ?? true;
   const l = (...a: unknown[]) => log && console.log(...a);
@@ -96,14 +89,11 @@ export async function orchestrateViaSafe(
   // ── 🔒 FREEZE GATE — on the fork this is immediate; on real Sepolia the human signs the freeze
   //    table between Batch 1 and Batch 2 (the two batches are independent Safe txs). ────────────────
 
-  // ── Batch 2 (post-gate): register 9 schemas LAST + scaffolding + setTransportsAnchor ─────────────
-  // The scaffolding legs are timestamp-dependent (EAS folds block.timestamp into every UID), so we pin
-  // the next block timestamp (fork) / predict it (real), assemble the legs against it, and concatenate.
-  const time = await nextBlockTimestamp(opts.pinTimestamp ?? true);
-  const { calls: scaffoldingCalls, uids: predictedUIDs } = await assembleScaffoldingCalls(deployer, plan, time);
-  const batch2 = [...plan.batch2, ...scaffoldingCalls];
-  l(`Safe-native deploy: executing Batch 2 (${batch2.length} legs) as the Safe (block.timestamp=${time})...`);
-  const b2 = await executeBatchAsSafe(safeContract, batch2, owners, deployer);
+  // ── Batch 2 (post-gate): register 9 schemas LAST + author scaffolding (ONE bootstrap leg) ────────
+  // FIX 1: the scaffolding is a single SystemAccount.bootstrap leg that threads real EAS UIDs in
+  // memory — timestamp-robust, no off-chain prediction, no pinned timestamp.
+  l(`Safe-native deploy: executing Batch 2 (${plan.batch2.length} legs: register×9 + bootstrap) as the Safe...`);
+  const b2 = await executeBatchAsSafe(safeContract, plan.batch2, owners, deployer);
   l(`  Batch 2 executed (SafeTx ${b2.txHash})`);
 
   // ── Assert: 9 schemas registered against the Safe-keyed proxies ──────────────────────────────────
@@ -119,23 +109,40 @@ export async function orchestrateViaSafe(
     }
   }
 
-  // ── Assert: realized scaffolding UIDs == precomputed (the bump-0 assertion) ───────────────────────
+  // ── Read back the realized scaffolding UIDs (whatever EAS returned — no prediction to assert) ────
+  // The bootstrap call authored the tree with real, timestamp-correct UIDs; we read them from the
+  // index for the result and to feed setTransportsAnchor. The tree must be present + correctly parented
+  // (root non-zero; every child resolves under its parent), which is the meaningful post-write check.
   const indexer = (await ethers.getContractAt("EFSIndexer", plan.proxies.EFSIndexer, deployer)) as unknown as Contract;
   const realizedUIDs: Record<string, string> = {};
   const rootRealized: string = await indexer.rootAnchorUID();
-  assertNoBump(rootRealized, predictedUIDs.root, "root");
+  if (rootRealized === ethers.ZeroHash) throw new Error("SAFE-DEPLOY: bootstrap left rootAnchorUID unset");
   realizedUIDs.root = rootRealized;
-  // resolvePath(parent, name) walks the index; assert each scaffolding child resolves to its precompute.
   const transportsRealized: string = await indexer.resolvePath(rootRealized, "transports");
-  assertNoBump(transportsRealized, predictedUIDs.transports, "transports");
+  if (transportsRealized === ethers.ZeroHash)
+    throw new Error("SAFE-DEPLOY: /transports anchor missing after bootstrap");
   realizedUIDs.transports = transportsRealized;
-  const tagsRealized: string = await indexer.resolvePath(rootRealized, "tags");
-  assertNoBump(tagsRealized, predictedUIDs.tags, "tags");
-  realizedUIDs.tags = tagsRealized;
+  realizedUIDs.tags = await indexer.resolvePath(rootRealized, "tags");
   for (const t of ["onchain", "ipfs", "arweave", "magnet", "https"]) {
     const realized: string = await indexer.resolvePath(transportsRealized, t);
-    assertNoBump(realized, predictedUIDs[t], `transports/${t}`);
+    if (realized === ethers.ZeroHash) throw new Error(`SAFE-DEPLOY: /transports/${t} anchor missing after bootstrap`);
     realizedUIDs[t] = realized;
+  }
+
+  // ── Batch 3 (post-gate): MirrorResolver.setTransportsAnchor(<realized /transports UID>) ───────────
+  // Fed the REAL transports UID the bootstrap call produced (read back above) — owner-gated; the Safe
+  // (born owner) executes it. Separate from Batch 2 because the UID isn't known until bootstrap runs.
+  l("Safe-native deploy: executing Batch 3 (setTransportsAnchor) as the Safe...");
+  const b3 = await executeBatchAsSafe(
+    safeContract,
+    [await buildSetTransportsAnchorCall(deployer, plan.proxies.MirrorResolver, transportsRealized)],
+    owners,
+    deployer,
+  );
+  l(`  Batch 3 executed (SafeTx ${b3.txHash})`);
+  const mirror = await ethers.getContractAt("MirrorResolver", plan.proxies.MirrorResolver, deployer);
+  if ((await mirror.transportsAnchorUID()).toLowerCase() !== transportsRealized.toLowerCase()) {
+    throw new Error("SAFE-DEPLOY: MirrorResolver.transportsAnchorUID != realized /transports UID after Batch 3");
   }
 
   // ── Assert: BORN Safe-owned — every ProxyAdmin + Ownable resolver + SystemAccount owner == Safe,
@@ -175,7 +182,7 @@ export async function orchestrateViaSafe(
     registered: true,
     ownershipTransferred: false, // born-owned — there is no transfer phase on the Safe path
     plan,
-    safeTxHashes: { batch1: b1.txHash, batch2: b2.txHash },
+    safeTxHashes: { batch1: b1.txHash, batch2: b2.txHash, batch3: b3.txHash },
     scaffoldingUIDs: realizedUIDs,
   };
   return result;

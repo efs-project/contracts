@@ -1,11 +1,11 @@
 import { expect } from "chai";
 import { ethers } from "hardhat";
-import { CREATEX_ADDRESS, EAS_ADDRESS } from "../deploy/lib/addresses";
-import { orchestrateViaSafe } from "../deploy/lib/orchestrateSafe";
-import { predictProxyAddress } from "../deploy/lib/create3";
-import { getCreateX } from "../deploy/lib/create3";
-import { RESOLVERS, SCHEMAS } from "../deploy/lib/schemas";
-import { deployTestSafe, SAFE_PROXY_FACTORY_141 } from "../deploy/lib/safe";
+import { CREATEX_ADDRESS, EAS_ADDRESS } from "../deploy-lib/addresses";
+import { orchestrateViaSafe } from "../deploy-lib/orchestrateSafe";
+import { predictProxyAddress } from "../deploy-lib/create3";
+import { getCreateX } from "../deploy-lib/create3";
+import { RESOLVERS, SCHEMAS } from "../deploy-lib/schemas";
+import { deployTestSafe, SAFE_PROXY_FACTORY_141 } from "../deploy-lib/safe";
 
 // Fork rehearsal for the SAFE-NATIVE EFS deploy (docs/DEPLOYMENT.md §1/§3, ADR-0048, ADR-0053).
 //
@@ -54,9 +54,10 @@ describe("DeploySafe.fork — Safe-native deploy, born Safe-owned", function () 
       eoaKeyedIndexer.toLowerCase(),
     );
 
-    // Drive the whole deploy FROM the Safe (two owner-signed MultiSend batches). pinTimestamp=true so
-    // the scaffolding-UID precompute is exact on the fork.
-    const result = await orchestrateViaSafe(deployer, safe, [ownerSigner], { pinTimestamp: true, log: false });
+    // Drive the whole deploy FROM the Safe (owner-signed MultiSend batches). FIX 1 (PR #24): the
+    // scaffolding is authored by a single timestamp-robust SystemAccount.bootstrap leg threading real
+    // EAS UIDs in memory — no off-chain UID prediction, no pinned timestamp.
+    const result = await orchestrateViaSafe(deployer, safe, [ownerSigner], { log: false });
 
     // ── 7 proxies at the Safe-keyed predicted CREATE3 addresses, with code ──────────────────────────
     expect(Object.keys(result.proxies)).to.have.lengthOf(6);
@@ -131,13 +132,19 @@ describe("DeploySafe.fork — Safe-native deploy, born Safe-owned", function () 
       result.systemAccount.toLowerCase(),
     );
 
-    // ── Realized scaffolding UIDs == precomputed (the bump-0 assertion held inside orchestrateViaSafe;
-    //    re-assert here against resolvePath). ──────────────────────────────────────────────────────
+    // ── Scaffolding tree correctly parented (FIX 1: UIDs are whatever EAS returned — read back from
+    //    the index, not predicted off-chain). The result's scaffoldingUIDs are the index read-back;
+    //    re-assert the parenting holds: /transports and /transports/ipfs resolve under their parents,
+    //    and the result map matches. ───────────────────────────────────────────────────────────────
     expect(root.toLowerCase()).to.equal(result.scaffoldingUIDs.root.toLowerCase());
-    expect((await indexer.resolvePath(root, "transports")).toLowerCase()).to.equal(
-      result.scaffoldingUIDs.transports.toLowerCase(),
-    );
+    const transports = await indexer.resolvePath(root, "transports");
+    expect(transports.toLowerCase()).to.equal(result.scaffoldingUIDs.transports.toLowerCase());
+    expect(transports.toLowerCase()).to.equal(result.transportsAnchorUID.toLowerCase());
     expect(ipfs.toLowerCase()).to.equal(result.scaffoldingUIDs.ipfs.toLowerCase());
+    // The /transports/ipfs anchor's refUID is the /transports anchor (correct parenting).
+    expect(ipfsAtt.refUID.toLowerCase()).to.equal(transports.toLowerCase());
+    // tags resolves under root too.
+    expect((await indexer.resolvePath(root, "tags")).toLowerCase()).to.equal(result.scaffoldingUIDs.tags.toLowerCase());
 
     // ── Basic round-trip read: author a file anchor under root through SystemAccount (Safe-signed) is
     //    out of scope; instead prove the registered schemas accept a write — push an ANCHOR via the
