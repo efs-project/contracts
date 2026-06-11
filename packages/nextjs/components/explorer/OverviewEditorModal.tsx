@@ -19,6 +19,7 @@
  */
 
 import { useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { StopIcon } from "@heroicons/react/24/outline";
 import { usePublicClient, useWalletClient } from "wagmi";
 import { MarkdownEditor } from "~~/components/markdown/MarkdownEditor";
@@ -146,7 +147,9 @@ export const OverviewEditorModal = (props: OverviewEditorModalProps) => {
     }
   };
 
-  return (
+  if (typeof document === "undefined") return null;
+
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4">
       <div className="bg-base-100 rounded-xl shadow-xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden">
         {/* Header */}
@@ -207,6 +210,7 @@ export const OverviewEditorModal = (props: OverviewEditorModalProps) => {
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 };
