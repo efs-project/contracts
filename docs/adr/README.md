@@ -63,6 +63,7 @@ What else we looked at and why it lost.
 - [ADR-0005 — ContentType moved from DATA to PROPERTY](./0005-content-type-moved-to-property.md)
 - [ADR-0006 — Folders don't need TAGs for visibility](./0006-folders-no-tags-for-visibility.md) *(Superseded by ADR-0038)*
 - [ADR-0038 — Tag-only folder visibility (single-source)](./0038-tag-only-folder-visibility.md)
+- [ADR-0052 — PROPERTY is revocable](./0052-property-is-revocable.md)
 
 ### Index Design
 - [ADR-0007 — `_activeByAttesterAndSchema`: swap-and-pop compact index](./0007-activeByAttesterAndSchema-swap-and-pop.md) *(Swap-and-pop decision intact; array element type widened from `bytes32` to `TagEntry { tagUID, weight }` per ADR-0041)*
@@ -119,6 +120,7 @@ What else we looked at and why it lost.
 
 ### View APIs
 - [ADR-0036 — Opaque-cursor pagination for multi-source views](./0036-opaque-cursor-pagination.md)
+- [ADR-0051 — Reads exclude revoked (and superseded) by default; full history is opt-in](./0051-reads-exclude-revoked-by-default.md)
 
 ### Frontend / Static Export
 - [ADR-0040 — Read dynamic route params from `usePathname`, not `useParams`, in static-exported dynamic routes](./0040-static-export-usepathname-over-useparams.md)
