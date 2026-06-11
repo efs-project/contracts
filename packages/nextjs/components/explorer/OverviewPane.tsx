@@ -54,10 +54,13 @@ export function OverviewPane(props: OverviewPaneProps) {
     onOverviewSaved,
     ...overviewArgs
   } = props;
-  const [collapsed, setCollapsed] = useState(false);
+  // Default: minimized (a thin rail). Persisted — once a user expands it, it
+  // stays expanded across navigation.
+  const [collapsed, setCollapsed] = useState(true);
   const [editing, setEditing] = useState(false);
+  const [creating, setCreating] = useState(false);
   useEffect(() => {
-    setCollapsed(typeof window !== "undefined" && window.localStorage.getItem(COLLAPSE_KEY) === "1");
+    setCollapsed(typeof window === "undefined" || window.localStorage.getItem(COLLAPSE_KEY) !== "0");
   }, []);
   const setCollapsedPersist = (next: boolean) => {
     setCollapsed(next);
@@ -70,33 +73,97 @@ export function OverviewPane(props: OverviewPaneProps) {
 
   const state = useItemOverview({ ...overviewArgs, enabled: overviewArgs.anchorUID != null });
 
-  const canShowEdit = state.kind === "markdown" && state.source === "onchain" && canEdit && editAnchorUID && indexerAddress;
+  // Do we have everything needed to WRITE an Overview here? (false on address
+  // roots / no wallet, or before the schema UIDs have loaded.)
+  const writeReady = !!(
+    canEdit &&
+    editAnchorUID &&
+    anchorSchemaUID &&
+    overviewArgs.dataSchemaUID &&
+    propertySchemaUID &&
+    pinSchemaUID &&
+    tagSchemaUID &&
+    mirrorSchemaUID &&
+    indexerAddress
+  );
+  const hasContent =
+    state.kind === "markdown" || state.kind === "binary" || state.kind === "too-large" || state.kind === "error";
+  const canCreate = state.kind === "none" && writeReady; // no README, and we can add one
+  const canShowEdit = state.kind === "markdown" && state.source === "onchain" && writeReady;
   const showMirrorDisabled = state.kind === "markdown" && state.source === "mirror";
 
-  // The pane does not exist until we've actually found a README. While resolving
-  // (`loading`) or when there's none, render nothing — no flashing empty shell or
-  // spinner. The hook keeps running (this component stays mounted); once it has
-  // content the pane materializes.
-  if (state.kind === "none" || state.kind === "loading") return null;
+  // The editor modal (portals itself to <body>). Edit when a README exists;
+  // Create when there's none. Mutually exclusive by `state.kind`.
+  const editorModal =
+    (editing && state.kind === "markdown" && writeReady && (
+      <OverviewEditorModal
+        mode="edit"
+        initialText={state.text}
+        parentAnchorUID={editAnchorUID!}
+        anchorSchemaUID={anchorSchemaUID!}
+        dataSchemaUID={overviewArgs.dataSchemaUID!}
+        propertySchemaUID={propertySchemaUID!}
+        pinSchemaUID={pinSchemaUID!}
+        tagSchemaUID={tagSchemaUID!}
+        mirrorSchemaUID={mirrorSchemaUID!}
+        indexerAddress={indexerAddress!}
+        onSaved={() => {
+          onOverviewSaved?.();
+          setEditing(false);
+        }}
+        onClose={() => setEditing(false)}
+      />
+    )) ||
+    (creating && canCreate && (
+      <OverviewEditorModal
+        mode="create"
+        initialText=""
+        parentAnchorUID={editAnchorUID!}
+        anchorSchemaUID={anchorSchemaUID!}
+        dataSchemaUID={overviewArgs.dataSchemaUID!}
+        propertySchemaUID={propertySchemaUID!}
+        pinSchemaUID={pinSchemaUID!}
+        tagSchemaUID={tagSchemaUID!}
+        mirrorSchemaUID={mirrorSchemaUID!}
+        indexerAddress={indexerAddress!}
+        onSaved={() => {
+          onOverviewSaved?.();
+          setCreating(false);
+          setCollapsedPersist(false); // expand to reveal the freshly-created Overview
+        }}
+        onClose={() => setCreating(false)}
+      />
+    ));
 
-  // Collapsed → a thin icon rail that returns the column width to the file list
-  // (rather than leaving an empty w-96 shell).
-  if (collapsed) {
+  // Nothing to show and nothing to add (e.g. an address root with no README, or
+  // no wallet) → no rail at all.
+  if (!hasContent && !canCreate && state.kind !== "loading") return null;
+
+  // Minimized rail — the default. Also the only form while loading or when the
+  // item has no README but one can be added (the "+" affordance).
+  if (collapsed || !hasContent) {
+    const isAdd = canCreate; // state === "none" && writeReady
     return (
       <aside className="w-9 flex-shrink-0 border-r border-base-300 bg-base-100 flex flex-col items-center pt-2">
-        <button
-          className="btn btn-ghost btn-xs px-1 font-bold"
-          onClick={() => setCollapsedPersist(false)}
-          title="Show Overview"
-          aria-label="Show Overview"
-        >
-          »
-        </button>
+        {state.kind === "loading" ? (
+          <span className="loading loading-spinner loading-xs mt-1 opacity-60" />
+        ) : (
+          <button
+            className="btn btn-ghost btn-xs px-1 font-bold"
+            onClick={() => (isAdd ? setCreating(true) : setCollapsedPersist(false))}
+            title={isAdd ? "Add an Overview" : "Show Overview"}
+            aria-label={isAdd ? "Add an Overview" : "Show Overview"}
+          >
+            {isAdd ? "+" : "»"}
+          </button>
+        )}
         <span className="mt-2 text-[10px] font-semibold text-base-content/50 [writing-mode:vertical-rl]">Overview</span>
+        {editorModal}
       </aside>
     );
   }
 
+  // Expanded — a README exists and the pane is open.
   return (
     <aside className="w-96 flex-shrink-0 border-r border-base-300 overflow-y-auto bg-base-100">
       <div className="flex items-center justify-between px-3 py-2 border-b border-base-content/10">
@@ -137,40 +204,11 @@ export function OverviewPane(props: OverviewPaneProps) {
         {state.kind === "markdown" && (
           <>
             <MarkdownView source={state.text} />
-            {state.source === "mirror" && (
-              <p className="mt-4 text-[10px] opacity-50">served from an external mirror</p>
-            )}
+            {state.source === "mirror" && <p className="mt-4 text-[10px] opacity-50">served from an external mirror</p>}
           </>
         )}
       </div>
-      {editing &&
-        state.kind === "markdown" &&
-        editAnchorUID &&
-        anchorSchemaUID &&
-        overviewArgs.dataSchemaUID &&
-        propertySchemaUID &&
-        pinSchemaUID &&
-        tagSchemaUID &&
-        mirrorSchemaUID &&
-        indexerAddress && (
-          <OverviewEditorModal
-            mode="edit"
-            initialText={state.text}
-            parentAnchorUID={editAnchorUID}
-            anchorSchemaUID={anchorSchemaUID}
-            dataSchemaUID={overviewArgs.dataSchemaUID}
-            propertySchemaUID={propertySchemaUID}
-            pinSchemaUID={pinSchemaUID}
-            tagSchemaUID={tagSchemaUID}
-            mirrorSchemaUID={mirrorSchemaUID}
-            indexerAddress={indexerAddress}
-            onSaved={() => {
-              onOverviewSaved?.();
-              setEditing(false);
-            }}
-            onClose={() => setEditing(false)}
-          />
-        )}
+      {editorModal}
     </aside>
   );
 }
