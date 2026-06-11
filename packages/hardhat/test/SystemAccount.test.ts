@@ -73,8 +73,10 @@ describe("SystemAccount (ADR-0053)", function () {
       expect(await systemAccount.getEAS()).to.equal(await eas.getAddress());
     });
 
-    it("isAuthorized: owner always; module only after authorization", async function () {
-      expect(await systemAccount.isAuthorized(ownerAddr)).to.equal(true);
+    it("isAuthorized: owner is NOT a relay writer (P1 fix); module only after authorization", async function () {
+      // PR #24 P1 fix: the owner is no longer a general relay writer. isAuthorized reports relay
+      // membership only — the owner's sole write power is the one-time bootstrap (until seal()).
+      expect(await systemAccount.isAuthorized(ownerAddr)).to.equal(false);
       expect(await systemAccount.isAuthorized(moduleAddr)).to.equal(false);
       await (await systemAccount.setModuleAuthorization(moduleAddr, true)).wait();
       expect(await systemAccount.isAuthorized(moduleAddr)).to.equal(true);
@@ -98,34 +100,23 @@ describe("SystemAccount (ADR-0053)", function () {
     });
   });
 
-  describe("attester-relay gating", function () {
+  describe("attester-relay gating (module-only — PR #24 P1 fix)", function () {
     it("reverts for an unauthorized caller", async function () {
       await expect(
         systemAccount.connect(stranger).attest(attestRequest(plainSchemaUID, enc.encode(["string"], ["x"]))),
       ).to.be.revertedWithCustomError(systemAccount, "NotAuthorized");
     });
 
-    it("owner can author; the EAS attester == SystemAccount address", async function () {
-      const tx = await systemAccount.attest(attestRequest(plainSchemaUID, enc.encode(["string"], ["from-owner"])));
-      const uid = getUID(await tx.wait());
-      const att = await eas.getAttestation(uid);
-      expect(att.attester).to.equal(systemAccountAddr);
-      expect(att.schema).to.equal(plainSchemaUID);
-    });
-
-    it("an authorized module can author; the EAS attester == SystemAccount address", async function () {
-      await (await systemAccount.setModuleAuthorization(moduleAddr, true)).wait();
-      const tx = await systemAccount
-        .connect(module)
-        .attest(attestRequest(plainSchemaUID, enc.encode(["string"], ["from-module"])));
-      const uid = getUID(await tx.wait());
-      const att = await eas.getAttestation(uid);
-      expect(att.attester).to.equal(systemAccountAddr);
-    });
-
-    it("multiAttest is gated and attests under SystemAccount", async function () {
+    // REGRESSION GUARD for the P1 finding: the owner (the EFS.eth Safe post-handoff) must NOT be able
+    // to relay arbitrary payloads as the permanent `system` attester. The steady-state relay is
+    // module-only; the owner is not a module, so every relay method reverts NotAuthorized for it.
+    it("owner CANNOT relay attest/multiAttest/revoke/registerAnchor (the P1 fix)", async function () {
       await expect(
-        systemAccount.connect(stranger).multiAttest([
+        systemAccount.attest(attestRequest(plainSchemaUID, enc.encode(["string"], ["from-owner"]))),
+      ).to.be.revertedWithCustomError(systemAccount, "NotAuthorized");
+
+      await expect(
+        systemAccount.multiAttest([
           {
             schema: plainSchemaUID,
             data: [
@@ -142,7 +133,27 @@ describe("SystemAccount (ADR-0053)", function () {
         ]),
       ).to.be.revertedWithCustomError(systemAccount, "NotAuthorized");
 
-      const tx = await systemAccount.multiAttest([
+      await expect(
+        systemAccount.revoke({ schema: plainSchemaUID, data: { uid: ZeroHash, value: 0n } }),
+      ).to.be.revertedWithCustomError(systemAccount, "NotAuthorized");
+
+      await expect(
+        systemAccount.registerAnchor(ZeroHash, "x", plainSchemaUID, ZeroHash),
+      ).to.be.revertedWithCustomError(systemAccount, "NotAuthorized");
+    });
+
+    it("an authorized module can author; the EAS attester == SystemAccount address", async function () {
+      await (await systemAccount.setModuleAuthorization(moduleAddr, true)).wait();
+      const tx = await systemAccount
+        .connect(module)
+        .attest(attestRequest(plainSchemaUID, enc.encode(["string"], ["from-module"])));
+      const uid = getUID(await tx.wait());
+      const att = await eas.getAttestation(uid);
+      expect(att.attester).to.equal(systemAccountAddr);
+    });
+
+    it("multiAttest is module-gated and attests under SystemAccount", async function () {
+      const multiReq = [
         {
           schema: plainSchemaUID,
           data: [
@@ -156,21 +167,31 @@ describe("SystemAccount (ADR-0053)", function () {
             },
           ],
         },
-      ]);
+      ];
+      await expect(systemAccount.connect(stranger).multiAttest(multiReq)).to.be.revertedWithCustomError(
+        systemAccount,
+        "NotAuthorized",
+      );
+
+      await (await systemAccount.setModuleAuthorization(moduleAddr, true)).wait();
+      const tx = await systemAccount.connect(module).multiAttest(multiReq);
       const uid = getUID(await tx.wait());
       const att = await eas.getAttestation(uid);
       expect(att.attester).to.equal(systemAccountAddr);
     });
 
-    it("revoke is gated; SystemAccount can revoke what it authored", async function () {
-      const tx = await systemAccount.attest(attestRequest(plainSchemaUID, enc.encode(["string"], ["to-revoke"])));
+    it("revoke is module-gated; SystemAccount can revoke what it authored", async function () {
+      await (await systemAccount.setModuleAuthorization(moduleAddr, true)).wait();
+      const tx = await systemAccount
+        .connect(module)
+        .attest(attestRequest(plainSchemaUID, enc.encode(["string"], ["to-revoke"])));
       const uid = getUID(await tx.wait());
 
       await expect(
         systemAccount.connect(stranger).revoke({ schema: plainSchemaUID, data: { uid, value: 0n } }),
       ).to.be.revertedWithCustomError(systemAccount, "NotAuthorized");
 
-      await (await systemAccount.revoke({ schema: plainSchemaUID, data: { uid, value: 0n } })).wait();
+      await (await systemAccount.connect(module).revoke({ schema: plainSchemaUID, data: { uid, value: 0n } })).wait();
       const att = await eas.getAttestation(uid);
       expect(att.revocationTime).to.be.greaterThan(0n);
     });
@@ -178,14 +199,17 @@ describe("SystemAccount (ADR-0053)", function () {
 
   describe("registerAnchor typed sugar", function () {
     // Register an ANCHOR-shaped schema (no resolver) to exercise the typed ANCHOR encoding.
-    it("builds the ANCHOR request and authors it under SystemAccount", async function () {
+    it("builds the ANCHOR request and authors it under SystemAccount (module-only)", async function () {
       await (await registry.register("string name, bytes32 schemaUID", ZeroAddress, false)).wait();
       const anchorSchemaUID = ethers.solidityPackedKeccak256(
         ["string", "address", "bool"],
         ["string name, bytes32 schemaUID", ZeroAddress, false],
       );
 
-      const tx = await systemAccount.registerAnchor(ZeroHash, "root", anchorSchemaUID, ZeroHash);
+      // registerAnchor is part of the steady-state relay → module-only (PR #24 P1 fix). Authorize a
+      // module and author through it; the owner itself cannot call it (covered by the relay-gating test).
+      await (await systemAccount.setModuleAuthorization(moduleAddr, true)).wait();
+      const tx = await systemAccount.connect(module).registerAnchor(ZeroHash, "root", anchorSchemaUID, ZeroHash);
       const uid = getUID(await tx.wait());
       const att = await eas.getAttestation(uid);
       expect(att.attester).to.equal(systemAccountAddr);
@@ -282,17 +306,54 @@ describe("SystemAccount (ADR-0053)", function () {
       expect(attestedUIDs(r2).length, "fully-seeded retry attests nothing").to.equal(0);
     });
 
-    it("bootstrap is gated (onlyAuthorizedModuleOrOwner)", async function () {
+    it("bootstrap is owner-gated (PR #24 P1 fix); a stranger reverts", async function () {
       await expect(
         systemAccount.connect(stranger).bootstrap(await mockIndex.getAddress(), anchorSchemaUID, SPECS),
-      ).to.be.revertedWithCustomError(systemAccount, "NotAuthorized");
+      ).to.be.revertedWithCustomError(systemAccount, "OwnableUnauthorizedAccount");
+    });
+
+    it("an authorized module CANNOT bootstrap (bootstrap is owner-only, not the relay gate)", async function () {
+      // Confirms the modifier split: bootstrap is onlyOwner, NOT onlyAuthorizedModule. Authorizing a
+      // module grants relay access (attest/etc.) but never the one-time bootstrap ceremony power.
+      await (await systemAccount.setModuleAuthorization(moduleAddr, true)).wait();
+      await expect(
+        systemAccount.connect(module).bootstrap(await mockIndex.getAddress(), anchorSchemaUID, SPECS),
+      ).to.be.revertedWithCustomError(systemAccount, "OwnableUnauthorizedAccount");
+    });
+
+    it("bootstrap reverts after seal(); seal() is onlyOwner and permanent", async function () {
+      // Owner CAN bootstrap before seal.
+      expect(await systemAccount.bootstrapSealed()).to.equal(false);
+      await (await systemAccount.bootstrap(await mockIndex.getAddress(), anchorSchemaUID, SPECS)).wait();
+
+      // seal() is owner-only: a stranger cannot seal.
+      await expect(systemAccount.connect(stranger).seal()).to.be.revertedWithCustomError(
+        systemAccount,
+        "OwnableUnauthorizedAccount",
+      );
+
+      // Owner seals → bootstrapSealed flips true and the event fires.
+      await expect(systemAccount.seal()).to.emit(systemAccount, "BootstrapSealedEvent");
+      expect(await systemAccount.bootstrapSealed()).to.equal(true);
+
+      // After seal, bootstrap reverts forever — even for the owner.
+      await expect(
+        systemAccount.bootstrap(await mockIndex.getAddress(), anchorSchemaUID, SPECS),
+      ).to.be.revertedWithCustomError(systemAccount, "BootstrapSealed");
+
+      // Seal is permanent: a second seal is a no-op (does NOT revert) and the contract stays sealed.
+      await (await systemAccount.seal()).wait();
+      expect(await systemAccount.bootstrapSealed()).to.equal(true);
+      await expect(
+        systemAccount.bootstrap(await mockIndex.getAddress(), anchorSchemaUID, SPECS),
+      ).to.be.revertedWithCustomError(systemAccount, "BootstrapSealed");
     });
   });
 
   describe("nonReentrant guard", function () {
     // Shared rig: a SystemAccount bound to a malicious EAS that, when its callback target is set,
     // re-enters SystemAccount during attest/multiAttest/revoke. The attacker is an authorized
-    // module so the re-entry clears `onlyAuthorizedModuleOrOwner` and is stopped by `nonReentrant`
+    // module so the re-entry clears `onlyAuthorizedModule` and is stopped by `nonReentrant`
     // specifically — not by the auth gate.
     let reentrantEAS: any;
     let saReentrant: any;

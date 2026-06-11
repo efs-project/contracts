@@ -34,6 +34,17 @@ interface IEFSAnchorIndex {
  *           - Content authority = WHAT each authorized module writes, which lives entirely in
  *             that module's own code. No human can make `SystemAccount` emit a specific payload.
  *
+ *         Owner write authority is confined to the ONE-TIME bootstrap ceremony (ADR-0053, PR
+ *         #24 P1 fix). The owner's only powers are:
+ *           (a) membership — `setModuleAuthorization` (the pre-burn extensibility seam), and
+ *           (b) the one-time `bootstrap(...)` deploy ceremony, gated `onlyOwner` + `whenNotSealed`
+ *               and permanently locked by `seal()` at the end of the deploy.
+ *         The steady-state general relay (`attest` / `multiAttest` / `revoke` / `registerAnchor`)
+ *         is `onlyAuthorizedModule` — NOT owner. After `seal()` the owner (the EFS.eth Safe, a
+ *         human multisig) can NOT emit or revoke arbitrary payloads as the permanent `system`
+ *         attester. Content authority lives only in authorized module code — humans choose
+ *         programs, never payloads.
+ *
  *         Mirrors the upgradeable pattern used by the resolvers (EFSUpgradeableResolver):
  *         the canonical EAS is a constructor immutable (a per-chain constant; immutables live in
  *         the impl bytecode and resolve correctly under the proxy's delegatecall, and EAS is
@@ -48,9 +59,14 @@ interface IEFSAnchorIndex {
 contract SystemAccount is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable {
     error NotAuthorized();
     error ZeroAddress();
+    error BootstrapSealed();
 
     /// @notice Emitted when a module's authorization is set or cleared.
     event ModuleAuthorizationSet(address indexed module, bool authorized);
+
+    /// @notice Emitted once, when the owner permanently seals the bootstrap ceremony. One-way:
+    ///         after this, `bootstrap` reverts forever and the owner holds no write authority.
+    event BootstrapSealedEvent();
 
     /// @notice The canonical EAS for the target chain. Stays a constructor immutable on purpose:
     ///         EAS is a per-chain constant, immutables live in the implementation bytecode and
@@ -68,6 +84,11 @@ contract SystemAccount is Initializable, OwnableUpgradeable, ReentrancyGuardUpgr
     /// @custom:storage-location erc7201:efs.systemaccount.config
     struct SystemAccountConfig {
         mapping(address => bool) authorizedModule;
+        // One-way bootstrap seal (PR #24 P1 fix). Defaults false; set true once by `seal()` and
+        // never reset. After seal, `bootstrap` reverts forever — the owner's one-time deploy-
+        // ceremony write authority is permanently locked. Appended after `authorizedModule` so
+        // the namespaced storage layout stays backward-compatible (additive, upgrade-safe).
+        bool bootstrapSealed;
     }
 
     // keccak256(abi.encode(uint256(keccak256("efs.systemaccount.config")) - 1)) & ~bytes32(uint256(0xff))
@@ -80,12 +101,21 @@ contract SystemAccount is Initializable, OwnableUpgradeable, ReentrancyGuardUpgr
         }
     }
 
-    /// @dev Owner (the deploy/bootstrap caller; the EFS.eth Safe post-handoff) or any
-    ///      authorized module may author through the relay. Owner-may-author lets the deploy
-    ///      ceremony write the bootstrap scaffolding through this contract without a separate
-    ///      module; modules are authorized peers added later (the extensibility seam).
-    modifier onlyAuthorizedModuleOrOwner() {
-        if (msg.sender != owner() && !_cfg().authorizedModule[msg.sender]) revert NotAuthorized();
+    /// @dev Steady-state relay gate (PR #24 P1 fix): ONLY an authorized module may author through
+    ///      the general relay (`attest` / `multiAttest` / `revoke` / `registerAnchor`). The owner is
+    ///      deliberately NOT a writer here — content authority lives only in authorized module code,
+    ///      so the owner (the EFS.eth Safe) can never emit or revoke arbitrary payloads as the
+    ///      permanent `system` attester (ADR-0053: "humans choose programs, never payloads").
+    modifier onlyAuthorizedModule() {
+        if (!_cfg().authorizedModule[msg.sender]) revert NotAuthorized();
+        _;
+    }
+
+    /// @dev Bootstrap-ceremony gate (PR #24 P1 fix): the owner lays the technically-necessary
+    ///      scaffolding ONCE, before `seal()`. After seal, this reverts forever — the owner's
+    ///      write authority is confined to the one-time deploy ceremony and then permanently locked.
+    modifier whenNotSealed() {
+        if (_cfg().bootstrapSealed) revert BootstrapSealed();
         _;
     }
 
@@ -109,23 +139,24 @@ contract SystemAccount is Initializable, OwnableUpgradeable, ReentrancyGuardUpgr
     // ATTESTER RELAY — forward to EAS so the attester == this contract
     // ============================================================================================
 
-    /// @notice Forward a single attestation to EAS. The EAS attester is this contract.
+    /// @notice Forward a single attestation to EAS. The EAS attester is this contract. Module-only:
+    ///         the owner is not a writer here (PR #24 P1 fix) — content authority is module code.
     function attest(
         AttestationRequest calldata request
-    ) external nonReentrant onlyAuthorizedModuleOrOwner returns (bytes32) {
+    ) external nonReentrant onlyAuthorizedModule returns (bytes32) {
         return _eas.attest(request);
     }
 
-    /// @notice Forward a batch of attestations to EAS. The EAS attester is this contract.
+    /// @notice Forward a batch of attestations to EAS. The EAS attester is this contract. Module-only.
     function multiAttest(
         MultiAttestationRequest[] calldata requests
-    ) external nonReentrant onlyAuthorizedModuleOrOwner returns (bytes32[] memory) {
+    ) external nonReentrant onlyAuthorizedModule returns (bytes32[] memory) {
         return _eas.multiAttest(requests);
     }
 
     /// @notice Forward a revocation to EAS. Only attestations whose attester is this contract
-    ///         can be revoked through it (EAS enforces attester == revoker).
-    function revoke(RevocationRequest calldata request) external nonReentrant onlyAuthorizedModuleOrOwner {
+    ///         can be revoked through it (EAS enforces attester == revoker). Module-only.
+    function revoke(RevocationRequest calldata request) external nonReentrant onlyAuthorizedModule {
         _eas.revoke(request);
     }
 
@@ -148,7 +179,7 @@ contract SystemAccount is Initializable, OwnableUpgradeable, ReentrancyGuardUpgr
         string calldata name,
         bytes32 anchorSchemaUID,
         bytes32 anchorSchemaToRegister
-    ) external nonReentrant onlyAuthorizedModuleOrOwner returns (bytes32) {
+    ) external nonReentrant onlyAuthorizedModule returns (bytes32) {
         return
             _eas.attest(
                 AttestationRequest({
@@ -197,6 +228,10 @@ contract SystemAccount is Initializable, OwnableUpgradeable, ReentrancyGuardUpgr
     ///         partial-then-retried bootstrap fills only the gaps and a fully-seeded retry is a
     ///         zero-write no-op. Authored THROUGH this contract (attester == SystemAccount).
     ///
+    ///         Owner-gated + `whenNotSealed` (PR #24 P1 fix): this is the one-time deploy ceremony
+    ///         where the owner lays the technically-necessary scaffolding. After `seal()` it reverts
+    ///         forever; the steady-state relay is module-only and the owner can never author payloads.
+    ///
     /// @param indexer         the EFS index used only to read existing anchors for idempotency.
     /// @param anchorSchemaUID the registered ANCHOR schema UID to attest under.
     /// @param specs           the scaffolding tree in dependency order (parent before child).
@@ -205,7 +240,7 @@ contract SystemAccount is Initializable, OwnableUpgradeable, ReentrancyGuardUpgr
         IEFSAnchorIndex indexer,
         bytes32 anchorSchemaUID,
         BootstrapAnchor[] calldata specs
-    ) external nonReentrant onlyAuthorizedModuleOrOwner returns (bytes32[] memory createdUIDs) {
+    ) external nonReentrant onlyOwner whenNotSealed returns (bytes32[] memory createdUIDs) {
         createdUIDs = new bytes32[](specs.length);
         for (uint256 i = 0; i < specs.length; i++) {
             BootstrapAnchor calldata spec = specs[i];
@@ -240,19 +275,44 @@ contract SystemAccount is Initializable, OwnableUpgradeable, ReentrancyGuardUpgr
     // ============================================================================================
 
     /// @notice Authorize or de-authorize a module to write through this relay. Owner-only.
+    /// @dev Membership/config authority (ADR-0053) — the pre-burn extensibility seam, unchanged by
+    ///      the PR #24 P1 fix. This is the ADR-0053-acknowledged owner power, closed at burn; it does
+    ///      NOT let the owner emit payloads (the authorized contract's own code does that).
     function setModuleAuthorization(address module, bool ok) external onlyOwner {
         if (module == address(0)) revert ZeroAddress();
         _cfg().authorizedModule[module] = ok;
         emit ModuleAuthorizationSet(module, ok);
     }
 
+    /// @notice Permanently seal the bootstrap ceremony (PR #24 P1 fix). Owner-only, ONE-WAY: once
+    ///         sealed, `bootstrap` reverts forever and can never be re-enabled. The deploy calls this
+    ///         after the bootstrap scaffolding and before/at ownership transfer, so the owner's
+    ///         one-time deploy-ceremony write authority is locked before the EFS.eth Safe holds it.
+    /// @dev Idempotent-safe to leave as a revert on a second call (sealing again is meaningless); we
+    ///      simply early-return if already sealed so a defensive double-seal in a batch is a no-op,
+    ///      never a revert that would strand a deploy batch. Either way the contract stays sealed.
+    function seal() external onlyOwner {
+        SystemAccountConfig storage $ = _cfg();
+        if ($.bootstrapSealed) return; // already sealed — no-op, stays sealed (never resettable)
+        $.bootstrapSealed = true;
+        emit BootstrapSealedEvent();
+    }
+
     // ============================================================================================
     // VIEWS
     // ============================================================================================
 
-    /// @notice Whether `account` may author through this relay (an authorized module or the owner).
+    /// @notice Whether `account` may author through the steady-state relay — i.e. is an authorized
+    ///         module. The owner is NOT a relay writer (PR #24 P1 fix); its only write power is the
+    ///         one-time `bootstrap` (until `seal()`), which this view deliberately does not report.
     function isAuthorized(address account) external view returns (bool) {
-        return account == owner() || _cfg().authorizedModule[account];
+        return _cfg().authorizedModule[account];
+    }
+
+    /// @notice Whether the one-time bootstrap ceremony has been permanently sealed. Once true, the
+    ///         owner can never author through this contract again (`bootstrap` reverts forever).
+    function bootstrapSealed() external view returns (bool) {
+        return _cfg().bootstrapSealed;
     }
 
     /// @notice The EAS this SystemAccount was deployed against.

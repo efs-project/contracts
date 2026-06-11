@@ -92,7 +92,9 @@ export async function orchestrateViaSafe(
   // ── Batch 2 (post-gate): register 9 schemas LAST + author scaffolding (ONE bootstrap leg) ────────
   // FIX 1: the scaffolding is a single SystemAccount.bootstrap leg that threads real EAS UIDs in
   // memory — timestamp-robust, no off-chain prediction, no pinned timestamp.
-  l(`Safe-native deploy: executing Batch 2 (${plan.batch2.length} legs: register×9 + bootstrap) as the Safe...`);
+  l(
+    `Safe-native deploy: executing Batch 2 (${plan.batch2.length} legs: register×9 + bootstrap + seal) as the Safe...`,
+  );
   const b2 = await executeBatchAsSafe(safeContract, plan.batch2, owners, deployer);
   l(`  Batch 2 executed (SafeTx ${b2.txHash})`);
 
@@ -166,6 +168,9 @@ export async function orchestrateViaSafe(
     const sa = await ethers.getContractAt("SystemAccount", plan.systemAccount, deployer);
     if ((await sa.owner()).toLowerCase() !== safe.toLowerCase())
       throw new Error("SAFE-DEPLOY: SystemAccount owner != Safe");
+    // PR #24 P1 fix: bootstrap ceremony permanently sealed by the Batch-2 seal() leg — the relay is
+    // now module-only and the owner (the Safe) can never emit/revoke arbitrary payloads as `system`.
+    if (!(await sa.bootstrapSealed())) throw new Error("SAFE-DEPLOY: SystemAccount bootstrap not sealed after Batch 2");
   }
 
   l(

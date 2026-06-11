@@ -568,7 +568,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     EFSFileView: {
-      address: "0x495372078be4fBb81A58b1EbB7d0B3cc899a178E",
+      address: "0xC40b42eeE598ECE9e6D2add529534095014d8fAC",
       abi: [
         {
           inputs: [
@@ -1131,7 +1131,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     EFSRouter: {
-      address: "0xC40b42eeE598ECE9e6D2add529534095014d8fAC",
+      address: "0xc4e9462D3155ef58920D23d21C3b796e6bD03Cd5",
       abi: [
         {
           inputs: [
@@ -5478,7 +5478,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     ListReader: {
-      address: "0xc4e9462D3155ef58920D23d21C3b796e6bD03Cd5",
+      address: "0x6986D435279D5714E1647418D9fa5b796A6744aA",
       abi: [
         {
           inputs: [
@@ -6916,6 +6916,11 @@ const deployedContracts = {
         },
         {
           inputs: [],
+          name: "BootstrapSealed",
+          type: "error",
+        },
+        {
+          inputs: [],
           name: "InvalidInitialization",
           type: "error",
         },
@@ -6960,6 +6965,12 @@ const deployedContracts = {
           inputs: [],
           name: "ZeroAddress",
           type: "error",
+        },
+        {
+          anonymous: false,
+          inputs: [],
+          name: "BootstrapSealedEvent",
+          type: "event",
         },
         {
           anonymous: false,
@@ -7119,6 +7130,19 @@ const deployedContracts = {
             },
           ],
           stateMutability: "nonpayable",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "bootstrapSealed",
+          outputs: [
+            {
+              internalType: "bool",
+              name: "",
+              type: "bool",
+            },
+          ],
+          stateMutability: "view",
           type: "function",
         },
         {
@@ -7316,6 +7340,13 @@ const deployedContracts = {
             },
           ],
           name: "revoke",
+          outputs: [],
+          stateMutability: "nonpayable",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "seal",
           outputs: [],
           stateMutability: "nonpayable",
           type: "function",

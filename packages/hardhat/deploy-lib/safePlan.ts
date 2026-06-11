@@ -23,9 +23,11 @@
 //                         (EFSIndexer.wireContracts — pure storage, no EAS call).
 //   --- 🔒 human freeze-table signing happens between the two batches ---
 //   Batch 2 (POST-gate) = register the 9 schemas LAST + author the scaffolding through SystemAccount
-//                         (ONE SystemAccount.bootstrap leg). (Register-then-author, preserving
-//                         orchestrate.ts's ordering: anchors are attestations EAS rejects until the
-//                         ANCHOR schema is registered, so they MUST follow register-last.)
+//                         (ONE SystemAccount.bootstrap leg) + SystemAccount.seal() (PR #24 P1 fix:
+//                         lock the owner's bootstrap write authority; relay becomes module-only).
+//                         (Register-then-author, preserving orchestrate.ts's ordering: anchors are
+//                         attestations EAS rejects until the ANCHOR schema is registered, so they
+//                         MUST follow register-last. Seal is the last leg, after bootstrap.)
 //   Batch 3 (POST-gate) = MirrorResolver.setTransportsAnchor(<realized /transports UID>), fed the REAL
 //                         transports anchor UID read back from the index after Batch 2 (the bootstrap
 //                         call threads real EAS UIDs in memory, so nothing is predicted off-chain).
@@ -90,7 +92,8 @@ export interface SafePlan {
   /// Batch 1: CreateX proxy deploys (atomic init, born Safe-owned) + wireContracts.
   batch1: SafeCall[];
   /// Batch 2: register 9 schemas LAST + author the whole scaffolding tree via ONE
-  /// SystemAccount.bootstrap leg (timestamp-robust — no off-chain UID prediction).
+  /// SystemAccount.bootstrap leg (timestamp-robust — no off-chain UID prediction) +
+  /// SystemAccount.seal() as the last leg (PR #24 P1 fix: relay becomes module-only).
   batch2: SafeCall[];
 }
 
@@ -199,10 +202,17 @@ export async function buildSafePlan(deployer: Signer, safe: string, log = true):
   // the prior EAS.attest returned in the same call — so it is timestamp-robust (FIX 1, PR #24): no
   // off-chain UID prediction, nothing to drift against. The call is idempotent (reuses already-created
   // anchors via the index), authored THROUGH SystemAccount (attester == SystemAccount); the Safe is
-  // SystemAccount's owner, so the Safe-context MultiSend leg satisfies onlyAuthorizedModuleOrOwner.
+  // SystemAccount's owner, so the Safe-context MultiSend leg satisfies bootstrap's onlyOwner gate
+  // (bootstrap is owner-gated + whenNotSealed — PR #24 P1 fix — sealed by the seal() leg below).
   // MirrorResolver.setTransportsAnchor needs the REALIZED /transports UID, only known after Batch 2
   // executes, so it is a separate post-gate Safe tx the orchestrator issues after reading it back.
   batch2.push(await buildBootstrapCall(deployer, systemAccount, proxies.EFSIndexer, schemaUIDs.ANCHOR));
+  // Seal the bootstrap ceremony as the LAST Batch-2 leg (PR #24 P1 fix): after bootstrap authors the
+  // scaffolding, `seal()` permanently locks the owner's one-time write authority. The Safe is born the
+  // owner here, so there is no later transfer to gate before — sealing in-batch is the equivalent of
+  // the EOA path's seal-before-transfer. After this leg the steady-state relay is module-only and the
+  // Safe can never emit/revoke arbitrary payloads as the permanent `system` attester (ADR-0053).
+  batch2.push(await buildSealCall(deployer, systemAccount));
 
   return {
     safe,
@@ -229,6 +239,15 @@ export async function buildBootstrapCall(
   const specs = SCAFFOLDING.map(a => ({ name: a.name, parentIndex: a.parentIndex, anchorSchemaToRegister: ZeroHash }));
   const data = saIface.encodeFunctionData("bootstrap", [indexer, anchorSchemaUID, specs]);
   return { to: systemAccount, data, label: "SystemAccount.bootstrap (scaffolding tree)" };
+}
+
+/// Encode the `SystemAccount.seal()` leg (PR #24 P1 fix) — owner-only, one-way. Permanently locks the
+/// owner's bootstrap write authority; executed by the Safe (born owner) as the last Batch-2 leg, after
+/// the bootstrap scaffolding. After it, the steady-state relay is module-only.
+export async function buildSealCall(deployer: Signer, systemAccount: string): Promise<SafeCall> {
+  const saIface = (await ethers.getContractFactory("SystemAccount", deployer)).interface;
+  const data = saIface.encodeFunctionData("seal", []);
+  return { to: systemAccount, data, label: "SystemAccount.seal (lock bootstrap ceremony)" };
 }
 
 /// Encode the `MirrorResolver.setTransportsAnchor(transportsUID)` leg — owner-gated; the Safe (born

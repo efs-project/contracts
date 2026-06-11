@@ -155,5 +155,29 @@ describe("DeploySafe.fork — Safe-native deploy, born Safe-owned", function () 
     // The MirrorResolver knows the transports anchor (setTransportsAnchor ran in Batch 2).
     const mirror = await ethers.getContractAt("MirrorResolver", result.proxies.MirrorResolver, deployer);
     expect((await mirror.transportsAnchorUID()).toLowerCase()).to.equal(result.transportsAnchorUID.toLowerCase());
+
+    // ── PR #24 P1 fix: bootstrap sealed in Batch 2; owner cannot relay-write as `system` ─────────
+    // Batch 2's last leg was SystemAccount.seal(), so the bootstrap ceremony is permanently locked
+    // and the steady-state relay is module-only. The Safe (owner) is not an authorized module, so it
+    // can never emit/revoke arbitrary payloads as the permanent `system` attester. We assert the
+    // sealed flag (the in-batch seal landed) and that a NON-module caller's relay attempt reverts —
+    // the relay is module-gated, not owner-gated. (Re-driving a full Safe MultiSend just to prove the
+    // owner-path reverts is unnecessary: the gate is `onlyAuthorizedModule`, and the Safe holds no
+    // module authorization — bootstrapSealed()==true is the on-chain proof the ceremony is closed.)
+    expect(await systemAccount.bootstrapSealed(), "bootstrap sealed by Batch-2 seal() leg").to.equal(true);
+    await expect(
+      systemAccount.connect(deployer).attest({
+        schema: result.schemaUIDs.ANCHOR,
+        data: {
+          recipient: ethers.ZeroAddress,
+          expirationTime: 0n,
+          revocable: false,
+          refUID: root,
+          data: ethers.AbiCoder.defaultAbiCoder().encode(["string", "bytes32"], ["evil", ethers.ZeroHash]),
+          value: 0n,
+        },
+      }),
+      "a non-module caller cannot relay as `system`",
+    ).to.be.revertedWithCustomError(systemAccount, "NotAuthorized");
   });
 });

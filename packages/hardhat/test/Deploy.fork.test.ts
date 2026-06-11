@@ -129,6 +129,33 @@ describe("Deploy.fork — orchestrated CREATE3 deploy + register-last", function
     expect(ipfsAtt.attester.toLowerCase(), "/transports/ipfs authored by SystemAccount").to.equal(
       result.systemAccount.toLowerCase(),
     );
+
+    // ── PR #24 P1 fix: bootstrap sealed + owner-cannot-relay after the ceremony ──────────────────
+    // The deploy called seal() after bootstrap and before transfer; the bootstrap ceremony is now
+    // permanently locked and the steady-state relay is module-only. Assert the owner (the Safe) can
+    // neither relay-write nor re-open the ceremony — this is the on-chain guard for the finding.
+    expect(await systemAccount.bootstrapSealed(), "bootstrap sealed at deploy").to.equal(true);
+    const saAsOwner = systemAccount.connect(safeSigner);
+    await expect(
+      saAsOwner.attest({
+        schema: result.schemaUIDs.ANCHOR,
+        data: {
+          recipient: ethers.ZeroAddress,
+          expirationTime: 0n,
+          revocable: false,
+          refUID: root,
+          data: ethers.AbiCoder.defaultAbiCoder().encode(["string", "bytes32"], ["evil", ethers.ZeroHash]),
+          value: 0n,
+        },
+      }),
+      "owner (Safe) cannot relay attest as `system`",
+    ).to.be.revertedWithCustomError(systemAccount, "NotAuthorized");
+    await expect(
+      saAsOwner.bootstrap(result.proxies.EFSIndexer, result.schemaUIDs.ANCHOR, [
+        { name: "evil", parentIndex: -1, anchorSchemaToRegister: ethers.ZeroHash },
+      ]),
+      "bootstrap reverts after seal even for the owner",
+    ).to.be.revertedWithCustomError(systemAccount, "BootstrapSealed");
   });
 
   after(function () {

@@ -355,6 +355,16 @@ export async function registerAndTransfer(
     anchorSchemaToRegister: ZeroHash,
   }));
   await (await systemAccount.bootstrap(proxies.EFSIndexer, schemaUIDs.ANCHOR, specs)).wait();
+  // ── Seal the bootstrap ceremony (PR #24 P1 fix) ─────────────────────────────────────────────
+  // Permanently lock the owner's one-time bootstrap write authority BEFORE ownership transfers to
+  // the Safe. After this the steady-state relay is module-only — the Safe (a human multisig) can
+  // never emit/revoke arbitrary payloads as the permanent `system` attester (ADR-0053 content-
+  // authority split). Ordering: deploy → wire → register → bootstrap → SEAL → transfer-ownership.
+  // Idempotent on-chain (a second seal is a no-op), so an --after-freeze-gate retry is safe.
+  if (!(await systemAccount.bootstrapSealed())) {
+    await (await systemAccount.seal()).wait();
+    l("  SystemAccount.seal() — bootstrap ceremony permanently sealed (relay now module-only)");
+  }
   // Read the realized UIDs back from the index (bootstrap returns them too, but a state-changing call
   // doesn't surface its return value off-chain without a static call — the index read is canonical).
   const rootUID: string = await indexer.rootAnchorUID();
