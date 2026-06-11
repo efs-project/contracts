@@ -2682,7 +2682,6 @@ __metadata:
     react-hot-toast: "npm:~2.4.0"
     react-markdown: "npm:^10"
     rehype-autolink-headings: "npm:^7"
-    rehype-parse: "npm:^9"
     rehype-sanitize: "npm:^6"
     rehype-slug: "npm:^6"
     rehype-stringify: "npm:^10"
@@ -13725,7 +13724,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"rehype-parse@npm:^9, rehype-parse@npm:^9.0.0, rehype-parse@npm:^9.0.1":
+"rehype-parse@npm:^9.0.0, rehype-parse@npm:^9.0.1":
   version: 9.0.1
   resolution: "rehype-parse@npm:9.0.1"
   dependencies:

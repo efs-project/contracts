@@ -21,10 +21,9 @@
  * folder ANCHOR(s) (name + schema=ZeroHash), mirroring the seed's
  * getOrCreateFolder.
  */
-
+import type { AttestFn } from "./uploadOnchainFile";
 import { decodeEventLog, encodeAbiParameters, parseAbiItem, zeroAddress, zeroHash } from "viem";
 import type { Abi, PublicClient, TransactionReceipt, WalletClient } from "viem";
-import type { AttestFn } from "./uploadOnchainFile";
 
 export interface ApplySystemTagArgs {
   dataUID: `0x${string}`;

@@ -8,7 +8,7 @@ Informal dated log of small decisions agents made while working. Lighter than AD
 
 ---
 
-- 2026-06-10 (markdown-for-items, client): Overview system-tag query uses anchorSchemaUID (anchor-targeted TAGs bucket under the target anchor's EAS schema, verified on fork); README *listing* uses dataSchemaUID. Two distinct schemas. Resolves the QUESTIONS.md bucket entry.
+- 2026-06-10 (markdown-for-items, client): Overview README selection lists a container's children via dataSchemaUID and picks the first lens whose listing contains an exact-name `README.md` (anchors are case-sensitive, so the match is exact). The `system` tag that hides such files is a normal DATA-targeted TAG handled by FileBrowser's existing nsfw-style tag-filter machinery — not a separate anchor-targeted query. (Supersedes an earlier note on this branch that described a distinct anchorSchemaUID system-tag query; that bespoke path was dropped before the PR.)
 
 ### 2026-05-31 — [claude-opus-4.6 · dev] LIST_ENTRY → pure identity; order + label as PROPERTYs (ADR-0046)
 

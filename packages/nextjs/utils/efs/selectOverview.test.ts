@@ -1,6 +1,6 @@
-import { test } from "node:test";
-import assert from "node:assert/strict";
 import { selectOverview } from "./selectOverview.ts";
+import assert from "node:assert/strict";
+import { test } from "node:test";
 
 const c = (name: string, uid = name) => ({ uid, name });
 

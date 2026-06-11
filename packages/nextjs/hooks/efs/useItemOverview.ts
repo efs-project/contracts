@@ -136,7 +136,8 @@ export function useItemOverview(args: UseItemOverviewArgs): OverviewState {
         }
         setState({ kind: "markdown", text: new TextDecoder("utf-8").decode(fetched.bytes), source: fetched.source });
       } catch (e) {
-        if (!cancelled) setState({ kind: "error", message: e instanceof Error ? e.message : "Failed to load Overview" });
+        if (!cancelled)
+          setState({ kind: "error", message: e instanceof Error ? e.message : "Failed to load Overview" });
       }
     })();
     return () => {

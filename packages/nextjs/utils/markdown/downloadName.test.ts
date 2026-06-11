@@ -1,6 +1,6 @@
-import { test } from "node:test";
-import assert from "node:assert/strict";
 import { safeDownloadName } from "./downloadName.ts";
+import assert from "node:assert/strict";
+import { test } from "node:test";
 
 test("keeps a normal filename", () => {
   assert.equal(safeDownloadName("report.pdf"), "report.pdf");

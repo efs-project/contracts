@@ -12,7 +12,6 @@
  * addresses and exposes `chunkCount()` / `chunkAddress(index)` so the on-chain
  * `web3://` reader can reassemble the file.
  */
-
 import type { Abi } from "viem";
 
 export const MOCK_CHUNKED_FILE_ABI = [

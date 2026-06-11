@@ -7,6 +7,15 @@ in `packages/hardhat` (dev data only). No contract / schema / ADR changes.
 **Status:** revised after 3-way review (feasibility / security / requirements);
 awaiting James's review before implementation.
 
+> **Implementation note (post-build):** this is the pre-build proposal and is kept
+> as the design record. Two things changed during implementation — see
+> `docs/decisions.md`: (1) the `system` tag ships as a normal DATA-targeted TAG via
+> the existing nsfw-style filter, not the bespoke anchor-targeted
+> `resolveSystemAnchorSet` path described in §"`system` tag convention"; (2) the
+> Overview pane auto-expands when a `README.md` resolves and collapses to a rail
+> otherwise (per-item, no localStorage persistence), superseding §3's
+> "collapsed state persisted in localStorage."
+
 ## Goal
 
 When viewing any EFS item — folder, file, address, schema, or attestation — the
@@ -61,12 +70,13 @@ Instead, we fix the convention: the **`system` TAG targets the file's ANCHOR
 UID**, filed under **`anchorSchemaUID`** (the anchor's EAS schema, verified
 on-chain — an anchor-targeted TAG files under the target anchor's EAS schema
 bucket; querying `anchorSchemaUID` returns the seeded README anchor uids,
-`dataSchemaUID` returns `[]`). The README **file** is separately *listed* under
+`dataSchemaUID` returns `[]`). The README **file** is separately _listed_ under
 **`dataSchemaUID`** via `EFSFileView.getDirectoryPageBySchemaAndAddressList`.
 Both schemas are used, for different steps: listing = dataSchema, tag-query =
 anchorSchema. Both the Overview resolver and the hidden-files filter match the
 system set directly against a directory item's `uid` (the directory-item uid is
 the ANCHOR uid). This is:
+
 - simplest (no per-child DATA-UID round-trip, no dependence on `dataUIDMap`),
 - correct for "system/hidden is a placement role of this file at this path,"
 - a deliberate, documented divergence from the `nsfw`-on-DATA convention; the
@@ -174,14 +184,14 @@ untrusted input).
 Dependencies (Tier-2 courtesy flag; substance of the approved feature, on the
 Ephemeral debug UI):
 
-| Package | Version | Role |
-|---|---|---|
-| `react-markdown` | ^10 | renderer (React elements, not an HTML string) |
-| `remark-gfm` | ^4 | tables, footnotes, task lists, strikethrough, autolinks |
-| `rehype-sanitize` | ^6 | sanitize — **last** rehype plugin |
-| `rehype-slug` | ^6 | stable heading `id`s |
-| `rehype-autolink-headings` | ^7 | clickable heading anchors (`behavior:"wrap"`) |
-| `@tailwindcss/typography` | ^0.5 (dev) | `prose` classes |
+| Package                    | Version    | Role                                                    |
+| -------------------------- | ---------- | ------------------------------------------------------- |
+| `react-markdown`           | ^10        | renderer (React elements, not an HTML string)           |
+| `remark-gfm`               | ^4         | tables, footnotes, task lists, strikethrough, autolinks |
+| `rehype-sanitize`          | ^6         | sanitize — **last** rehype plugin                       |
+| `rehype-slug`              | ^6         | stable heading `id`s                                    |
+| `rehype-autolink-headings` | ^7         | clickable heading anchors (`behavior:"wrap"`)           |
+| `@tailwindcss/typography`  | ^0.5 (dev) | `prose` classes                                         |
 
 Wikipedia-style richness: headings-with-anchors, tables, footnotes, blockquotes,
 fenced code, task lists, autolinks. Auto-TOC deferred (anchors suffice for v1).
@@ -235,10 +245,10 @@ and monospace `body` font don't override the pane:
    `TextDecoder('utf-8',{fatal:true})` over the head + NUL/control-byte and
    magic-number checks (`%PDF`, PNG/JPEG/GIF, zip `PK`, gzip `1F 8B`). Binary →
    download card, never inline.
-5. **Size cap (1 MB) AND a structural guard (A2).** Cap bytes before parse; after
-   parse, reject if hast node-count > ~50k or blockquote/list nesting depth > 32
-   (mirrors ADR-0021 `MAX_ANCHOR_DEPTH`). Either → "too large / too complex" +
-   download card. Pure byte-cap alone is insufficient (structural amplification).
+5. **Size cap (1 MiB) before parse (A2).** Reject oversized bytes → "too large" +
+   download card. The byte cap also bounds the parsed tree: each hast node costs
+   several input bytes, so input size caps node count and nesting depth — a
+   separate post-parse structural pass proved unnecessary and was descoped.
 6. **Safe download card (M2).** Build the blob with a **neutral type only**
    (`application/octet-stream`), offer **download only — never open/navigate to
    the blob URL**, **sanitize the filename** (strip path separators, control
@@ -246,7 +256,7 @@ and monospace `body` font don't override the pane:
    to `[A-Za-z0-9._-]` + length; `.bin` if a dangerous ext was stripped), and
    **revoke the object URL on unmount/navigation**.
 7. **Link policy (M3).** Absolute `http/https` → new tab + `rel="noopener
-   noreferrer"`. `mailto` allowed. **Relative and protocol-relative (`//host`,
+noreferrer"`. `mailto` allowed. **Relative and protocol-relative (`//host`,
    `/path`) hrefs are rendered inert (non-navigating) in v1** — lenses are the
    trust boundary, and a bare relative link could smuggle a lens-swap. In-app
    navigation arrives with the future `efs://` seam, resolving to a typed route.
@@ -303,7 +313,7 @@ The all-repo holistic review (`planning/Reviews/2026-06-10-holistic-review.md`)
 touched this feature at five points:
 
 - **SEC-1 / UX-6 (validates the design):** the router emits the attester-set
-  `contentType` *unsanitized* (header-injection capable), confirming it is
+  `contentType` _unsanitized_ (header-injection capable), confirming it is
   attacker-controlled — so the independent byte-sniff (not trusting
   `contentType`) is the right call. Magic-bytes sniffing is explicitly endorsed.
 - **DX-4 (no exposure):** EdgeResolver emits no events; this read-only,
@@ -353,7 +363,7 @@ lens. ~6-8 attestations. Also seed one README on a **file** anchor and confirm a
 
 ## Testing
 
-Repo test runner is **`node --test` over `utils/**/*.test.ts`** (not Jest).
+Repo test runner is **`node --test`** over the `utils` test files (not Jest).
 
 - **Framework-light unit tests** (no react-markdown import, so they run under the
   existing runner): byte-sniff classifier (markdown/text vs PDF/PNG/zip/gzip/NUL),

@@ -17,11 +17,10 @@
  * (the in-progress SDK will own fetch/resolution/hashing). No React hook is
  * called inside the seams — the `attest` handle is injected per the seams' design.
  */
-
 import { useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { StopIcon, XMarkIcon } from "@heroicons/react/24/outline";
 import { usePublicClient, useWalletClient } from "wagmi";
+import { StopIcon, XMarkIcon } from "@heroicons/react/24/outline";
 import { MarkdownEditor } from "~~/components/markdown/MarkdownEditor";
 import { useDeployedContractInfo, useScaffoldWriteContract } from "~~/hooks/scaffold-eth";
 import { useTargetNetwork } from "~~/hooks/scaffold-eth/useTargetNetwork";

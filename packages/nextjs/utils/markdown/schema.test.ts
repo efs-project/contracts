@@ -1,14 +1,14 @@
-import { test } from "node:test";
+import { overviewSchema } from "./schema.ts";
 import assert from "node:assert/strict";
-import { unified } from "unified";
-import remarkParse from "remark-parse";
-import remarkGfm from "remark-gfm";
-import remarkRehype from "remark-rehype";
-import rehypeSlug from "rehype-slug";
+import { test } from "node:test";
 import rehypeAutolinkHeadings from "rehype-autolink-headings";
 import rehypeSanitize from "rehype-sanitize";
+import rehypeSlug from "rehype-slug";
 import rehypeStringify from "rehype-stringify";
-import { overviewSchema } from "./schema.ts";
+import remarkGfm from "remark-gfm";
+import remarkParse from "remark-parse";
+import remarkRehype from "remark-rehype";
+import { unified } from "unified";
 
 async function render(md: string): Promise<string> {
   const file = await unified()
@@ -41,7 +41,7 @@ test("strips javascript: and data: links (href removed entirely)", async () => {
   assert.match(html, /<a>a<\/a>/);
 });
 test("strips raw script / onerror / iframe / svg", async () => {
-  const html = await render('<script>x</script><img src=x onerror=alert(1)><iframe></iframe><svg onload=alert(1)>');
+  const html = await render("<script>x</script><img src=x onerror=alert(1)><iframe></iframe><svg onload=alert(1)>");
   assert.doesNotMatch(html, /<script|onerror|<iframe|onload/i);
 });
 test("removes img entirely (no external image loads in v1)", async () => {
@@ -70,7 +70,9 @@ test("strips mixed-case and obfuscated script protocols", async () => {
   assert.doesNotMatch(html, /href=/i);
 });
 test("strips style, base, and form/formaction", async () => {
-  const html = await render('<style>body{display:none}</style><base href="//evil.example/"><form><input formaction="javascript:alert(1)"></form>');
+  const html = await render(
+    '<style>body{display:none}</style><base href="//evil.example/"><form><input formaction="javascript:alert(1)"></form>',
+  );
   assert.doesNotMatch(html, /<style|<base|formaction|<form|<input/i);
 });
 test("documents protocol-relative href behavior (passes sanitize; renderer makes it inert)", async () => {

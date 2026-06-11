@@ -60,7 +60,6 @@
     "eslint-plugin-prettier": "~5.2.1",
     "postcss": "~8.4.45",
     "prettier": "~3.3.3",
-    "rehype-parse": "^9",
     "rehype-stringify": "^10",
     "remark-parse": "^11",
     "remark-rehype": "^11",

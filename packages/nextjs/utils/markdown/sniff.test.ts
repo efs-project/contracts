@@ -1,6 +1,6 @@
-import { test } from "node:test";
-import assert from "node:assert/strict";
 import { sniffContent } from "./sniff.ts";
+import assert from "node:assert/strict";
+import { test } from "node:test";
 
 const enc = (s: string) => new TextEncoder().encode(s);
 
