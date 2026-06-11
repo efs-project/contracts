@@ -53,7 +53,7 @@ export interface UseItemOverviewArgs {
   routerAddress?: `0x${string}`;
   routerAbi?: Abi;
   rootUID?: `0x${string}`;
-  anchorSchemaUID?: `0x${string}`;
+  dataSchemaUID?: `0x${string}`;
 }
 
 /**
@@ -83,7 +83,7 @@ export function useItemOverview(args: UseItemOverviewArgs): OverviewState {
       args.routerAddress &&
       args.routerAbi &&
       args.rootUID &&
-      args.anchorSchemaUID;
+      args.dataSchemaUID;
     if (!ready) {
       setState({ kind: "none" });
       return;
@@ -100,7 +100,7 @@ export function useItemOverview(args: UseItemOverviewArgs): OverviewState {
           address: args.fileViewAddress!,
           abi: args.fileViewAbi!,
           functionName: "getDirectoryPageBySchemaAndAddressList",
-          args: [args.anchorUID!, args.anchorSchemaUID!, args.lensAddresses as `0x${string}`[], "0x", 1000n],
+          args: [args.anchorUID!, args.dataSchemaUID!, args.lensAddresses as `0x${string}`[], "0x", 1000n],
         })) as any;
         const items: FileSystemItem[] = (pageRaw?.items ?? pageRaw?.[0] ?? []) as FileSystemItem[];
         if (cancelled) return;
@@ -112,7 +112,7 @@ export function useItemOverview(args: UseItemOverviewArgs): OverviewState {
           edgeResolverAddress: args.edgeResolverAddress!,
           edgeResolverAbi: args.edgeResolverAbi!,
           rootUID: args.rootUID!,
-          anchorSchemaUID: args.anchorSchemaUID!,
+          dataSchemaUID: args.dataSchemaUID!,
           lensAddresses: args.lensAddresses,
         });
         if (cancelled) return;
@@ -167,7 +167,7 @@ export function useItemOverview(args: UseItemOverviewArgs): OverviewState {
     args.enabled,
     args.anchorUID,
     args.rootUID,
-    args.anchorSchemaUID,
+    args.dataSchemaUID,
     args.lensAddresses.join(","),
     args.resourcePathNames.join("/"),
   ]);
