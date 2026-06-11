@@ -3,10 +3,8 @@
 import { useEffect, useState } from "react";
 import { OverviewEditorModal } from "./OverviewEditorModal";
 import { MarkdownView } from "~~/components/markdown/MarkdownView";
-import { useItemOverview, type UseItemOverviewArgs } from "~~/hooks/efs/useItemOverview";
+import { type UseItemOverviewArgs, useItemOverview } from "~~/hooks/efs/useItemOverview";
 import { safeDownloadName } from "~~/utils/markdown/downloadName";
-
-const COLLAPSE_KEY = "efs.overviewCollapsed";
 
 function DownloadCard({ bytes, fileName, note }: { bytes: Uint8Array; fileName: string; note: string }) {
   const [url, setUrl] = useState<string>();
@@ -54,22 +52,13 @@ export function OverviewPane(props: OverviewPaneProps) {
     onOverviewSaved,
     ...overviewArgs
   } = props;
-  // Default: minimized (a thin rail). Persisted — once a user expands it, it
-  // stays expanded across navigation.
-  const [collapsed, setCollapsed] = useState(true);
   const [editing, setEditing] = useState(false);
   const [creating, setCreating] = useState(false);
-  useEffect(() => {
-    setCollapsed(typeof window === "undefined" || window.localStorage.getItem(COLLAPSE_KEY) !== "0");
-  }, []);
-  const setCollapsedPersist = (next: boolean) => {
-    setCollapsed(next);
-    try {
-      window.localStorage.setItem(COLLAPSE_KEY, next ? "1" : "0");
-    } catch {
-      /* ignore */
-    }
-  };
+  // Manual collapse override. `null` means follow the default: minimized while
+  // there's no README, auto-expanded once one resolves. The caller remounts this
+  // component per item (`key={anchorUID}`), so all local state resets on
+  // navigation — each item re-evaluates against its own README from scratch.
+  const [userCollapsed, setUserCollapsed] = useState<boolean | null>(null);
 
   const state = useItemOverview({ ...overviewArgs, enabled: overviewArgs.anchorUID != null });
 
@@ -91,6 +80,9 @@ export function OverviewPane(props: OverviewPaneProps) {
   const canCreate = state.kind === "none" && writeReady; // no README, and we can add one
   const canShowEdit = state.kind === "markdown" && state.source === "onchain" && writeReady;
   const showMirrorDisabled = state.kind === "markdown" && state.source === "mirror";
+  // Minimized while there's no README; auto-expanded once one resolves. A manual
+  // toggle (`«`/`»`) overrides until the next navigation.
+  const collapsed = userCollapsed ?? !hasContent;
 
   // The editor modal (portals itself to <body>). Edit when a README exists;
   // Create when there's none. Mutually exclusive by `state.kind`.
@@ -129,7 +121,8 @@ export function OverviewPane(props: OverviewPaneProps) {
         onSaved={() => {
           onOverviewSaved?.();
           setCreating(false);
-          setCollapsedPersist(false); // expand to reveal the freshly-created Overview
+          // The refresh re-resolves to the new README; with no manual override
+          // the pane auto-expands to reveal it.
         }}
         onClose={() => setCreating(false)}
       />
@@ -150,7 +143,7 @@ export function OverviewPane(props: OverviewPaneProps) {
         ) : (
           <button
             className="btn btn-ghost btn-xs px-1 font-bold"
-            onClick={() => (isAdd ? setCreating(true) : setCollapsedPersist(false))}
+            onClick={() => (isAdd ? setCreating(true) : setUserCollapsed(false))}
             title={isAdd ? "Add an Overview" : "Show Overview"}
             aria-label={isAdd ? "Add an Overview" : "Show Overview"}
           >
@@ -181,7 +174,7 @@ export function OverviewPane(props: OverviewPaneProps) {
           )}
           <button
             className="btn btn-ghost btn-xs px-1 font-bold"
-            onClick={() => setCollapsedPersist(true)}
+            onClick={() => setUserCollapsed(true)}
             title="Collapse Overview"
             aria-label="Collapse Overview"
           >

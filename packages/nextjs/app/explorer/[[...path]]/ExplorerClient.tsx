@@ -7,7 +7,6 @@ import { useAccount, usePublicClient } from "wagmi";
 import { ContainerInfoPanel } from "~~/components/explorer/ContainerInfoPanel";
 import { FileActionsBar } from "~~/components/explorer/FileActionsBar";
 import { DrawerTagFilterState, FileBrowser } from "~~/components/explorer/FileBrowser";
-import { OverviewEditorModal } from "~~/components/explorer/OverviewEditorModal";
 import { OverviewPane } from "~~/components/explorer/OverviewPane";
 import { PathBar } from "~~/components/explorer/PathBar";
 import { TagFilterDrawer } from "~~/components/explorer/TagFilterDrawer";
@@ -45,7 +44,6 @@ export default function ExplorerClient() {
   // Bumped after the Overview editor saves; flows into useItemOverview (via
   // OverviewPane's refreshKey) to force the pane to re-resolve the README.
   const [overviewRefreshKey, setOverviewRefreshKey] = useState(0);
-  const [creatingOverview, setCreatingOverview] = useState(false);
   // Bumped when out-of-FileBrowser mutations add items to the current directory
   // (file upload, folder create). `CreateItemModal` lives under FileActionsBar,
   // not FileBrowser, so it can't call FileBrowser's internal `refetch*` hooks
@@ -687,6 +685,7 @@ export default function ExplorerClient() {
           {!pathError && (
             <div className="hidden lg:block">
               <OverviewPane
+                key={currentAnchorUID ?? "none"}
                 anchorUID={currentAnchorUID as `0x${string}` | null}
                 lensAddresses={lensAddresses}
                 resourcePathNames={buildRouterPathNames(currentContainer, currentPath)}
@@ -750,8 +749,6 @@ export default function ExplorerClient() {
                   setRecreatedListAnchor(uid);
                   setDirectoryRefreshKey(k => k + 1);
                 }}
-                overviewEditable={overviewEditable}
-                onCreateOverview={() => setCreatingOverview(true)}
               />
             )}
 
@@ -805,28 +802,6 @@ export default function ExplorerClient() {
           </section>
         </div>
       </div>
-
-      {/* Create-Overview modal. Owned at ExplorerClient level so the create
-          entry in FileActionsBar can open it and a save bumps the shared
-          refresh key (re-resolving the Overview pane). The schema UIDs are
-          guaranteed present here by the loading-guard early return above; the
-          modal additionally self-disables Save until its ABI loads. */}
-      {creatingOverview && currentAnchorUID && (
-        <OverviewEditorModal
-          mode="create"
-          initialText=""
-          parentAnchorUID={currentAnchorUID as `0x${string}`}
-          anchorSchemaUID={anchorSchemaUID as `0x${string}`}
-          dataSchemaUID={dataSchemaUID as `0x${string}`}
-          propertySchemaUID={propertySchemaUID as `0x${string}`}
-          pinSchemaUID={pinSchemaUID as `0x${string}`}
-          tagSchemaUID={tagSchemaUID as `0x${string}`}
-          mirrorSchemaUID={mirrorSchemaUID as `0x${string}`}
-          indexerAddress={indexerAddress as `0x${string}`}
-          onSaved={() => setOverviewRefreshKey(k => k + 1)}
-          onClose={() => setCreatingOverview(false)}
-        />
-      )}
     </div>
   );
 }
