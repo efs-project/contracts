@@ -147,6 +147,15 @@ export function useItemOverview(args: UseItemOverviewArgs): OverviewState {
     args.lensAddresses.join(","),
     args.resourcePathNames.join("/"),
     args.refreshKey,
+    // Contract/client readiness. `useDeployedContractInfo` resolves async, so
+    // these flip from undefined once bytecode loads — re-resolve when they do,
+    // otherwise an Overview that mounted too early stays blank until an
+    // unrelated path/lens/refresh change.
+    args.fileViewAddress,
+    args.routerAddress,
+    !!args.fileViewAbi,
+    !!args.routerAbi,
+    !!args.publicClient,
   ]);
   return state;
 }

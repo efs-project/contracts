@@ -579,11 +579,14 @@ export default function ExplorerClient() {
 
   const containerKind = currentContainer?.kind ?? "anchor";
 
-  // Overview edit/create gate. Requires a connected wallet, and excludes
-  // address-container roots: those resolve to a synthetic parent anchor the
-  // upload helper can't write under (it hard-reverts), so editing/creating an
-  // Overview there is unsupported for v1.
-  const overviewEditable = !!connectedAddress && currentContainer?.kind !== "address";
+  // Overview edit/create gate. Requires a connected wallet, and excludes only
+  // the *synthetic address-container root* (currentAnchorUID === container.uid):
+  // that parent anchor isn't real, so the upload helper hard-reverts under it.
+  // Deeper address paths (/explorer/<addr>/<folder>) resolve to a real anchor
+  // and are writable — same parent CreateItemModal.anchorParent() uses.
+  const overviewEditable =
+    !!connectedAddress &&
+    !(currentContainer?.kind === "address" && currentAnchorUID?.toLowerCase() === currentContainer.uid.toLowerCase());
 
   return (
     <div className="flex flex-col h-screen w-full bg-base-100 p-4 gap-3">
