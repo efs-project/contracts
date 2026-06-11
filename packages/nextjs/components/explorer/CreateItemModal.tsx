@@ -50,22 +50,48 @@ const MOCK_CHUNKED_FILE_ABI = [
 const MOCK_CHUNKED_FILE_BYTECODE =
   "0x60806040523461013f57610274803803806100198161015a565b92833981019060208183031261013f578051906001600160401b03821161013f570181601f8201121561013f578051916001600160401b038311610144578260051b9160208061006a81860161015a565b80968152019382010191821161013f57602001915b81831061011f576000845b80518210156101115760009160018060a01b0360208260051b84010151168354680100000000000000008110156100fd57600181018086558110156100e957602085806001969752200190838060a01b0319825416179055019061008a565b634e487b7160e01b85526032600452602485fd5b634e487b7160e01b85526041600452602485fd5b60405160f490816101808239f35b82516001600160a01b038116810361013f5781526020928301920161007f565b600080fd5b634e487b7160e01b600052604160045260246000fd5b6040519190601f01601f191682016001600160401b038111838210176101445760405256fe6080806040526004361015601257600080fd5b60003560e01c9081632bfedae0146053575063f91f093714603257600080fd5b34604e576000366003190112604e576020600054604051908152f35b600080fd5b34604e576020366003190112604e576004359060005482101560a857600080527f290decd9548b62a8d60345a988386fc84ba6bc95484008f6362f93160ef3e563909101546001600160a01b03168152602090f35b634e487b7160e01b600052603260045260246000fdfea26469706673582212206ea2dc51d432b7722a3857f0e86c67aaa8fa760e9dee9a8bbd7f8fac66eade7f64736f6c634300081c0033";
 
-// Mirrors EFSIndexer.sol::_isValidAnchorName so we fail fast with a friendly
-// message instead of waiting for the on-chain revert. Reject the same byte set
-// the contract rejects: NUL, space, " # % & / : = ? @ [ \ ] ^ ` { | }, plus the
-// reserved relative segments "." and "..".
-const FORBIDDEN_ANCHOR_NAME_CHARS = new Set([
-  0x00, 0x20, 0x22, 0x23, 0x25, 0x26, 0x2f, 0x3a, 0x3d, 0x3f, 0x40, 0x5b, 0x5c, 0x5d, 0x5e, 0x60, 0x7b, 0x7c, 0x7d,
-]);
+// Reserved bytes that MUST be percent-encoded (UPPERCASE %XX) in a canonical
+// anchor name — mirrors EFSIndexer.sol::_isReservedByte. NOTE: '%' (0x25) is
+// deliberately NOT here; the escape parser in validateAnchorName handles it.
+function isReservedAnchorByte(b: number): boolean {
+  if (b < 0x20 || b === 0x7f) return true; // C0 controls + DEL
+  // space " # & / : = ? @ [ \ ] ^ ` { | }
+  return [
+    0x20, 0x22, 0x23, 0x26, 0x2f, 0x3a, 0x3d, 0x3f, 0x40, 0x5b, 0x5c, 0x5d, 0x5e, 0x60, 0x7b, 0x7c, 0x7d,
+  ].includes(b);
+}
 
+const isUpperHex = (b: number): boolean => (b >= 0x30 && b <= 0x39) || (b >= 0x41 && b <= 0x46); // 0-9 A-F
+const hexNibble = (b: number): number => (b <= 0x39 ? b - 0x30 : b - 0x41 + 10);
+const hex2 = (b: number): string => b.toString(16).toUpperCase().padStart(2, "0");
+
+// Mirrors EFSIndexer.sol::_isValidAnchorName exactly so the client precheck and the on-chain rule
+// agree: a name accepted here is accepted on-chain, and vice versa. The canonical form (ADR-0025)
+// gives every name ONE on-chain spelling — reserved bytes appear ONLY as UPPERCASE %XX escapes,
+// every other byte (including high-bit UTF-8) appears bare. Reserved characters are therefore typed
+// as their %XX escape (e.g. a literal "/" → "%2F"); auto-encoding is deliberately not done here so
+// the entered string is exactly what gets attested.
 function validateAnchorName(name: string): string | null {
   if (name.length === 0) return "Name cannot be empty.";
   if (name === "." || name === "..") return "Name cannot be '.' or '..'.";
   const bytes = new TextEncoder().encode(name);
-  for (const b of bytes) {
-    if (FORBIDDEN_ANCHOR_NAME_CHARS.has(b)) {
-      const ch = b === 0x20 ? "space" : b === 0x00 ? "NUL" : `'${String.fromCharCode(b)}'`;
-      return `Name cannot contain ${ch}.`;
+  for (let i = 0; i < bytes.length; i++) {
+    const c = bytes[i];
+    if (c === 0x25) {
+      // '%' must introduce a canonical UPPERCASE %XX escape carrying a reserved byte (or '%' itself).
+      if (i + 2 >= bytes.length)
+        return "Incomplete escape: '%' must be followed by two uppercase hex digits (e.g. %2F).";
+      const h1 = bytes[i + 1];
+      const h2 = bytes[i + 2];
+      if (!isUpperHex(h1) || !isUpperHex(h2)) return "Percent-escapes must use UPPERCASE hex (e.g. %2F, not %2f).";
+      const decoded = (hexNibble(h1) << 4) | hexNibble(h2);
+      if (!isReservedAnchorByte(decoded) && decoded !== 0x25)
+        return `%${String.fromCharCode(h1)}${String.fromCharCode(h2)} is not allowed: only reserved characters may be percent-encoded; write unreserved bytes bare.`;
+      i += 2; // consume the two hex digits
+    } else if (isReservedAnchorByte(c)) {
+      const label =
+        c === 0x20 ? "space" : c < 0x20 || c === 0x7f ? `control byte 0x${hex2(c)}` : `'${String.fromCharCode(c)}'`;
+      return `Name cannot contain a bare ${label}; percent-encode it as %${hex2(c)}.`;
     }
   }
   return null;
