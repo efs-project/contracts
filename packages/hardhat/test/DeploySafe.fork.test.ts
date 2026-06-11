@@ -8,6 +8,7 @@ import { getCreateX } from "../deploy-lib/create3";
 import { RESOLVERS, SCHEMAS } from "../deploy-lib/schemas";
 import { buildSafePlan } from "../deploy-lib/safePlan";
 import { deployTestSafe, SAFE_PROXY_FACTORY_141 } from "../deploy-lib/safe";
+import { runVerifyGate } from "../deploy-lib/verify";
 
 // Fork rehearsal for the SAFE-NATIVE EFS deploy (docs/DEPLOYMENT.md §1/§3, ADR-0048, ADR-0053).
 //
@@ -66,7 +67,31 @@ describe("DeploySafe.fork — Safe-native deploy, born Safe-owned", function () 
     // Drive the whole deploy FROM the Safe (owner-signed MultiSend batches). FIX 1 (PR #24): the
     // scaffolding is authored by a single timestamp-robust SystemAccount.bootstrap leg threading real
     // EAS UIDs in memory — no off-chain UID prediction, no pinned timestamp.
-    const result = await orchestrateViaSafe(deployer, safe, [ownerSigner], { log: false });
+    //
+    // PR #24 P1 (FIX A): capture the orchestrator's log so we can prove the VERIFY GATE ran on the
+    // Safe path BEFORE Batch 2 (which contains the 9 permanent register legs). We run with log:true and
+    // tee console.log into `logLines`, then assert the gate's GREEN marker precedes "executing Batch 2".
+    const logLines: string[] = [];
+    const origLog = console.log;
+    console.log = (...a: unknown[]) => {
+      logLines.push(a.map(String).join(" "));
+    };
+    let result: Awaited<ReturnType<typeof orchestrateViaSafe>>;
+    try {
+      result = await orchestrateViaSafe(deployer, safe, [ownerSigner], { log: true });
+    } finally {
+      console.log = origLog;
+    }
+
+    // ── PR #24 P1 (FIX A): the verify gate ran on the Safe path, and ran BEFORE Batch 2 ─────────────
+    // runVerifyGate logs "[verify] GATE GREEN ✓" on success; Batch 2 (the register legs) logs
+    // "executing Batch 2". The gate index must exist and precede the Batch-2 index — proof that no
+    // permanent schema is registered before the Safe-keyed proxies pass the same gate the EOA path runs.
+    const gateGreenIdx = logLines.findIndex(line => /\[verify\] GATE GREEN/.test(line));
+    const batch2Idx = logLines.findIndex(line => /executing Batch 2/.test(line));
+    expect(gateGreenIdx, "verify gate ran on the Safe path (GATE GREEN logged)").to.be.greaterThan(-1);
+    expect(batch2Idx, "Batch 2 executed").to.be.greaterThan(-1);
+    expect(gateGreenIdx, "verify gate ran BEFORE Batch 2 (before any register leg)").to.be.lessThan(batch2Idx);
 
     // ── 7 proxies at the Safe-keyed predicted CREATE3 addresses, with code ──────────────────────────
     expect(Object.keys(result.proxies)).to.have.lengthOf(6);
@@ -217,6 +242,17 @@ describe("DeploySafe.fork — Safe-native deploy, born Safe-owned", function () 
       }),
       "a non-module caller cannot relay as `system`",
     ).to.be.revertedWithCustomError(systemAccount, "NotAuthorized");
+
+    // ── PR #24 P1 (FIX A) negative: the verify gate CATCHES a drifted config ─────────────────────────
+    // Re-run runVerifyGate against the live Safe-keyed proxies but with a deliberately drifted LIST_ENTRY
+    // UID. The gate's self-UID getter check (ListEntryResolver.listEntrySchemaUID() == computed UID)
+    // must fail and THROW — proving that on the Safe path a proxy whose self-derived UID doesn't match
+    // the to-be-registered UID is caught before any registration, not after. (Read-only; no state change.)
+    const driftedUIDs = { ...result.schemaUIDs, LIST_ENTRY: ethers.ZeroHash };
+    await expect(
+      runVerifyGate({ deploys: result.deploys, schemaUIDs: driftedUIDs, deployer }),
+      "verify gate catches a drifted self-UID (would-be permanent-register against a drifted proxy)",
+    ).to.be.rejectedWith(/VERIFY GATE/);
 
     // Capture the now-deployed + sealed system so the omit-branch test below can re-invoke
     // buildSafePlan against it (a second full deploy would collide on the deterministic addresses).

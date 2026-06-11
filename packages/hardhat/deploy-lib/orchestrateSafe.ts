@@ -8,6 +8,8 @@
 //
 //   buildSafePlan        → predict Safe-keyed addresses/UIDs, deploy impls, assemble batch call lists
 //   Batch 1 (pre-gate)   → CreateX proxy deploys (atomic init, born Safe-owned) + wireContracts
+//   --- 🔒 VERIFY GATE (PR #24 P1) → runVerifyGate against the on-chain Safe-keyed proxies; throws
+//       before any registration on drift — mirrors the EOA path's step-3 gate ---
 //   --- 🔒 freeze-table signing between batches (human on real Sepolia; immediate on the fork) ---
 //   Batch 2 (post-gate)  → register 9 schemas LAST + author scaffolding (SystemAccount) + transports
 //   assert born-owned    → ProxyAdmins + Ownable resolvers + SystemAccount owner == Safe; deployer holds
@@ -23,6 +25,7 @@ import { Create3DeployResult, Create3Name } from "./create3";
 import { OrchestrationResult } from "./orchestrate";
 import { buildSetTransportsAnchorCall, buildSafePlan, SafePlan, SCAFFOLDING, TRANSPORTS_INDEX } from "./safePlan";
 import { executeBatchAsSafe, getSafe } from "./safe";
+import { runVerifyGate } from "./verify";
 
 // EIP-1967 admin slot — bytes32(uint256(keccak256("eip1967.proxy.admin")) - 1).
 const EIP1967_ADMIN_SLOT = "0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103";
@@ -110,8 +113,25 @@ export async function orchestrateViaSafe(
     };
   }
 
+  // ── 🔒 VERIFY GATE (PR #24 P1) — mirror the EOA path's step-3 gate on the Safe path ──────────────
+  // The EOA orchestrator (orchestrate.ts step 3) runs runVerifyGate AFTER deploy+init and BEFORE
+  // register-last, so a proxy initialized with a drifted self-UID / EAS / field-string config is
+  // caught before its permanent schema is registered. The Safe path executes Batch 2 — which contains
+  // the 9 permanent SchemaRegistry.register legs — and so it MUST run the same gate first, against the
+  // now-on-chain Safe-keyed proxies. The handles runVerifyGate needs are exactly what we just built:
+  // `deploys` (resolver→{proxy, predicted, impl}) and the Safe-keyed `schemaUIDs`. realized==predicted
+  // is trivially true here (we read the realized proxies), but the load-bearing checks — initialize
+  // locked (proxy 2nd call + impl-direct), self-UID getters == Safe-keyed computed UID, getEAS()==EAS,
+  // golden-vector field strings — all run against the live Safe-keyed proxies. On failure it THROWS,
+  // stopping before any registration. The gate is read-only / idempotent, so on a resume where Batch 1
+  // already landed it simply re-runs harmlessly before Batch 2; it always runs at least once before the
+  // first register. This is the natural gate point: Batch 1 done → VERIFY GATE → [human signs the
+  // freeze table on real Sepolia; immediate on the fork] → Batch 2.
+  l("Safe-native deploy: running verify gate against the on-chain Safe-keyed proxies (pre-register)...");
+  await runVerifyGate({ deploys, schemaUIDs: plan.schemaUIDs, deployer });
+
   // ── 🔒 FREEZE GATE — on the fork this is immediate; on real Sepolia the human signs the freeze
-  //    table between Batch 1 and Batch 2 (the two batches are independent Safe txs). ────────────────
+  //    table between the verify gate and Batch 2 (the two batches are independent Safe txs). ─────────
 
   // ── Batch 2 (post-gate): register 9 schemas LAST + author scaffolding (ONE bootstrap leg) ────────
   // FIX 1: the scaffolding is a single SystemAccount.bootstrap leg that threads real EAS UIDs in
