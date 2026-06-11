@@ -91,10 +91,10 @@ describe("EFSRouter Web3 Capabilities", function () {
       ["string", "address", "bool"],
       ["string name, bytes32 schemaUID", futureIndexerAddr, false],
     );
-    // PROPERTY is revocable (ADR-0052) — flips the UID; matches deploy/lib/schemas.ts + golden vector.
+    // PROPERTY is non-revocable interned content (ADR-0052) — matches deploy/lib/schemas.ts + golden vector.
     propertySchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
-      ["string value", futureIndexerAddr, true],
+      ["string value", futureIndexerAddr, false],
     );
     // DATA is an empty schema — pure identity (ADR-0049).
     dataSchemaUID = ethers.solidityPackedKeccak256(["string", "address", "bool"], ["", futureIndexerAddr, false]);
@@ -133,7 +133,7 @@ describe("EFSRouter Web3 Capabilities", function () {
 
     // Register schemas
     await (await registry.register("string name, bytes32 schemaUID", futureIndexerAddr, false)).wait();
-    await (await registry.register("string value", futureIndexerAddr, true)).wait(); // PROPERTY revocable (ADR-0052)
+    await (await registry.register("string value", futureIndexerAddr, false)).wait(); // PROPERTY non-revocable (ADR-0052)
     await (await registry.register("", futureIndexerAddr, false)).wait(); // DATA: empty schema (ADR-0049)
     await (await registry.register("bytes32 definition", await edgeResolver.getAddress(), true)).wait();
     await (await registry.register("bytes32 definition, int256 weight", await edgeResolver.getAddress(), true)).wait();
@@ -352,8 +352,9 @@ describe("EFSRouter Web3 Capabilities", function () {
           data: {
             recipient: ZeroAddress,
             expirationTime: NO_EXPIRATION,
-            // PROPERTY is revocable (ADR-0052) — the value attestation can be withdrawn.
-            revocable: true,
+            // PROPERTY is non-revocable interned content (ADR-0052) — the value is shared
+            // dumb content; the revocable claim is the PIN binding, not the value.
+            revocable: false,
             refUID: ZERO_BYTES32,
             data: enc.encode(["string"], [value]),
             value: 0n,
@@ -364,11 +365,6 @@ describe("EFSRouter Web3 Capabilities", function () {
 
     await pinAtPath(propertyUID, keyAnchorUID, signer);
     return propertyUID;
-  }
-
-  /** Revoke a PROPERTY value attestation directly in EAS (ADR-0052 withdraw-the-value path). */
-  async function revokeProperty(propertyUID: string, signer: Signer = owner): Promise<void> {
-    await (await eas.connect(signer).revoke({ schema: propertySchemaUID, data: { uid: propertyUID, value: 0n } })).wait();
   }
 
   async function addMirror(
@@ -913,36 +909,29 @@ describe("EFSRouter Web3 Capabilities", function () {
       expect(headers.find((h: any) => h.key === "Content-Type")?.value).to.equal("application/octet-stream");
     });
 
-    it("Should read a revoked PROPERTY value as absent (ADR-0051/0052)", async function () {
-      // ADR-0052: PROPERTY is revocable. ADR-0051: a revoked value reads as absent by
-      // default even while its binding PIN is still active. Round-trip: place contentType,
-      // read it (present) → revoke the PROPERTY VALUE attestation (not the PIN) → read again
-      // (default to application/octet-stream). The PIN is untouched throughout.
-      const targetAddress = ethers.getAddress("0x0000000000000000000000000000000000000090");
-      await setCode(targetAddress, "0x00" + Buffer.from("revoke-prop").toString("hex"));
-
-      const fileAnchorUID = await createFileAnchor(ideasUID, "revoke_prop.png");
-      const dataUID = await createData("revoke-prop-content");
-      const propertyUID = await addProperty(dataUID, "contentType", "image/png");
-      await addMirror(dataUID, onchainTransportUID, `web3://${targetAddress}`);
-      await pinAtPath(dataUID, fileAnchorUID);
-
-      // Present before revocation.
-      const [, , headersBefore] = await router.request(["ideas", "revoke_prop.png"], ownerParams());
-      expect(headersBefore.find((h: any) => h.key === "Content-Type")?.value).to.equal("image/png");
-
-      // Revoke the PROPERTY value attestation itself (the PIN binding stays active).
-      await revokeProperty(propertyUID);
-
-      // Absent by default — falls back to the generic content type.
-      const [statusAfter, , headersAfter] = await router.request(["ideas", "revoke_prop.png"], ownerParams());
-      expect(statusAfter).to.equal(200); // file still served; only the contentType claim is withdrawn
-      expect(headersAfter.find((h: any) => h.key === "Content-Type")?.value).to.equal("application/octet-stream");
+    it("Should reject a revocable PROPERTY attestation at the resolver (ADR-0052)", async function () {
+      // ADR-0052: PROPERTY is NON-revocable interned content — a value is dumb shared content,
+      // not a claim. EFSIndexer.onAttest rejects a revocable PROPERTY (`attestation.revocable`),
+      // exactly as it does for ANCHOR and DATA. The revocable claim lives in the PIN, not here.
+      await expect(
+        eas.attest({
+          schema: propertySchemaUID,
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: NO_EXPIRATION,
+            revocable: true, // <- rejected: PROPERTY must be non-revocable
+            refUID: ZERO_BYTES32,
+            data: enc.encode(["string"], ["image/png"]),
+            value: 0n,
+          },
+        }),
+      ).to.be.reverted;
     });
 
-    it("Should read contentType as absent after the binding PIN is revoked (ADR-0041 path intact)", async function () {
-      // The pre-ADR-0052 removal path: revoke the binding PIN (not the value). Still works —
-      // getActivePinTarget returns 0x0 once the PIN is revoked, so the lookup short-circuits.
+    it("Should remove/change a contentType by revoking the binding PIN; value untouched (ADR-0052)", async function () {
+      // PROPERTY values are non-revocable (ADR-0052): removal/change of a property is done by
+      // revoking or superseding the PIN (the binding), never the value. Revoke the binding PIN —
+      // getActivePinTarget returns 0x0, so the lookup short-circuits and the value is left intact.
       const targetAddress = ethers.getAddress("0x0000000000000000000000000000000000000091");
       await setCode(targetAddress, "0x00" + Buffer.from("revoke-pin").toString("hex"));
 

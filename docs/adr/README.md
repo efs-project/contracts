@@ -63,7 +63,7 @@ What else we looked at and why it lost.
 - [ADR-0005 — ContentType moved from DATA to PROPERTY](./0005-content-type-moved-to-property.md)
 - [ADR-0006 — Folders don't need TAGs for visibility](./0006-folders-no-tags-for-visibility.md) *(Superseded by ADR-0038)*
 - [ADR-0038 — Tag-only folder visibility (single-source)](./0038-tag-only-folder-visibility.md)
-- [ADR-0052 — PROPERTY is revocable](./0052-property-is-revocable.md)
+- [ADR-0052 — PROPERTY is non-revocable (interned shared value)](./0052-property-is-revocable.md)
 
 ### Index Design
 - [ADR-0007 — `_activeByAttesterAndSchema`: swap-and-pop compact index](./0007-activeByAttesterAndSchema-swap-and-pop.md) *(Swap-and-pop decision intact; array element type widened from `bytes32` to `TagEntry { tagUID, weight }` per ADR-0041)*

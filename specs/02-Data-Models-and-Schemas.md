@@ -58,7 +58,7 @@ The resolver validates only the byte-level canonical form (percent-encoding + up
 `refUID = 0x0 (standalone — no parent reference)`
 - `value` (string)
 
-**Revocable**: `true` (ADR-0052) — a PROPERTY value is a *claim/assertion* (a MIME type, a name, a reserved-key `contentHash`/`size`), not an identity Schelling point like DATA, so the author can withdraw it. Revoking the value attestation removes it from the default read view (ADR-0051) without erasing the bytes (revocation flags, never deletes). The *binding* (which container the value applies to, from which attester) lives in the PIN and can still be moved/superseded independently — there are now two retract paths: revoke the value (withdraw the statement everywhere it's bound) or revoke/replace the PIN (unbind or change it at one slot).
+**Revocable**: `false` (ADR-0052) — a PROPERTY value is dumb, shared, *interned* content (an "anchor for a string"), not a claim. Many PINs can point at one value (best-effort dedup); nobody owns the value. Non-revocability is what makes a value safely shareable — a shared value can't be yanked out from under the other bindings that point at it. This is symmetric with DATA (§3): value = content, claim = edge. The revocable *claim* is the **PIN** (the binding): which container the value applies to, from which attester. Removal or change of a property is done by revoking or superseding the PIN, never the value (see Removal below). The reserved-key `contentHash`/`size` claims (ADR-0049) are likewise interned values bound by a PIN; retracting one means revoking its PIN.
 
 **Details**: Per ADR-0035 (superseded by ADR-0041 for the cardinality story), PROPERTY no longer carries a `key` field and no longer targets a container via `refUID`. Instead:
 
@@ -66,7 +66,7 @@ The resolver validates only the byte-level canonical form (percent-encoding + up
 2. The **value** is the PROPERTY attestation's sole field.
 3. The **binding** is a **PIN** with `definition = keyAnchorUID`, `refUID = propertyUID`. PIN is cardinality-1 (ADR-0041) — re-PINning the same key anchor from the same attester supersedes the previous binding in O(1).
 
-`EFSIndexer.onAttest` enforces only that PROPERTY is standalone (`refUID = 0x0`) — no target-kind validation, and (unlike ANCHOR/DATA) no revocable restriction, since PROPERTY is revocable (ADR-0052). A revoked PROPERTY value is flagged in `EFSIndexer._isRevoked` via `onRevoke` and reads as absent by default (ADR-0051): the lens-scoped lookup (`EFSRouter._getContentType`, ADR-0014) checks `indexer.isRevoked(propertyUID)` in addition to the active-PIN check and falls back to the default (`application/octet-stream`) when the value is withdrawn. Per-attester singleton is a hard guarantee from `EdgeResolver._activeBySlot[keyAnchor][attester][PROPERTY_SCHEMA_UID]`. Reads are lens-scoped per ADR-0014.
+`EFSIndexer.onAttest` enforces that PROPERTY is standalone (`refUID = 0x0`) and non-revocable (rejects `attestation.revocable`, exactly like ANCHOR and DATA) — no target-kind validation. On a successful attest it emits `PropertyCreated(propertyUID, attester, valueHash)` where `valueHash = keccak256(bytes(value))` is the value's canonical content key (ADR-0052; ties to the forthcoming canonical-hashing spec) — the indexed topic clients use to find an existing value to dedup against. The binding's per-attester singleton is a hard guarantee from `EdgeResolver._activeBySlot[keyAnchor][attester][PROPERTY_SCHEMA_UID]`; a revoked PIN is excluded from reads by default (ADR-0051), which is how a property is removed. Reads are lens-scoped per ADR-0014.
 
 ### Example — contentType on a DATA
 
@@ -101,10 +101,12 @@ Other common (non-reserved) key anchors: `"previousVersion"` (value is a DATA UI
 
 ### Removal
 
-Two paths, both honored by default reads (ADR-0051):
+The PROPERTY value is non-revocable interned content (ADR-0052) — removal and change happen at the **PIN** (the binding), never the value:
 
-- **Unbind at a slot (ADR-0041 path):** revoke the PIN with `eas.revoke(pinUID)`. The binding is gone — the key anchor's slot becomes empty for that attester until a new PIN is attested. Replacing the value is just a new PIN at the same slot pointing at a new PROPERTY; the old PIN is superseded automatically (no extra revoke needed). The value attestation is untouched and could still be referenced elsewhere.
-- **Withdraw the value (ADR-0052 path):** revoke the PROPERTY value attestation itself with `eas.revoke(propertyUID)`. It then reads as absent **everywhere it is bound**, even while the PIN(s) stay active — appropriate for "I no longer stand behind this claim." Because revocation flags rather than erases, the bytes persist and the `includeRevoked` opt-in (where exposed) can still surface them. Footgun (ADR-0052): a value shared across many bindings is withdrawn from all of them at once; mint a fresh PROPERTY per binding (the upload flow already does) when independent retraction is wanted.
+- **Unbind a slot:** revoke the PIN with `eas.revoke(pinUID)`. The binding is gone — the key anchor's slot becomes empty for that attester until a new PIN is attested, and the slot is excluded from default reads (ADR-0051). The shared value attestation is untouched and other bindings that point at it are unaffected.
+- **Change a value:** attest a new PIN at the same slot pointing at a (new or existing, interned) PROPERTY; the old PIN is superseded automatically in O(1) (no extra revoke needed, ADR-0041).
+
+A single value attestation may be shared across many bindings (best-effort dedup — the upload flow can hardlink an existing value rather than mint a new one). Because the value is non-revocable, sharing is safe: unbinding one PIN never withdraws the value from the others.
 
 ## 3. Data Schema
 **Purpose**: Standalone file identity — pure, empty, non-revocable, location-independent.

@@ -2,7 +2,7 @@
 
 **Status:** Proposed
 **Date:** 2026-06-10
-**Related:** ADR-0009 (append-only indices), ADR-0013/0014 (lens-scoped reads), ADR-0031 (first-wins resolution), ADR-0036 (cursor pagination), ADR-0052 (PROPERTY revocable). Lands with the schema-freeze PR.
+**Related:** ADR-0009 (append-only indices), ADR-0013/0014 (lens-scoped reads), ADR-0031 (first-wins resolution), ADR-0036 (cursor pagination), ADR-0052 (PROPERTY non-revocable interned value). Lands with the schema-freeze PR.
 
 ## Context
 
@@ -29,7 +29,7 @@ Scope and properties:
 
 - **Enables.** "Delete" / "untrust" as a first-class, intuitive default everywhere, with no loss of the immutable record. Unifies a previously ad-hoc behavior into one rule consumers can rely on.
 - **Costs.** Read paths over append-only arrays iterate-then-filter (already the ADR-0009 reality; hot paths stay O(1) via the active-edge sets). View functions that should expose history grow an `includeRevoked` parameter — an additive API change.
-- **Implies.** This is **upgradeable read/logic, not frozen schema shape** — it does not touch any of the nine schema UIDs. It does, however, make ADR-0052 (PROPERTY revocable) behave correctly: revoking a PROPERTY value now removes it from the default view, which is the point.
+- **Implies.** This is **upgradeable read/logic, not frozen schema shape** — it does not touch any of the nine schema UIDs. It operates on the revocable schemas (PIN, TAG, MIRROR, LIST_ENTRY, REDIRECT); PROPERTY is non-revocable interned content (ADR-0052), so its *value* is never hidden — but its revocable **binding PIN** is, which is how a property is removed from the default view (revoke the PIN, and `getActivePinTarget` stops returning it).
 - **Follow-up.** Audit each view surface to confirm the default holds and add `includeRevoked` where a consumer needs the historical set; the SDK adopts the same default in its read layer.
 
 ## Alternatives considered

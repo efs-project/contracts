@@ -36,8 +36,13 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
     /// @notice Emitted when a MIRROR attestation is attached to a DATA (retrieval method).
     event MirrorCreated(bytes32 indexed dataUID, bytes32 indexed mirrorUID, address indexed attester);
 
-    /// @notice Emitted when a PROPERTY attestation is attached to an Anchor.
-    event PropertyCreated(bytes32 indexed propertyUID, address indexed attester);
+    /// @notice Emitted when a PROPERTY (interned value) attestation is created.
+    /// @dev    `valueHash = keccak256(bytes(value))` is the value's canonical content key (ties
+    ///         to the forthcoming canonical-hashing spec). It is the lookup key clients use to
+    ///         find an existing value to dedup against — off-chain via this indexed topic, and
+    ///         on-chain via the future opt-in intern registry (ADR-0052). PROPERTY is
+    ///         non-revocable interned content; the revocable claim is the PIN binding.
+    event PropertyCreated(bytes32 indexed propertyUID, address indexed attester, bytes32 indexed valueHash);
 
     /// @notice Emitted when any EFS-native attestation (ANCHOR, DATA, PROPERTY) is revoked.
     event AttestationRevoked(bytes32 indexed uid, address indexed attester);
@@ -123,10 +128,13 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
     uint256 public constant MAX_ANCHOR_DEPTH = 32;
 
     // Content-addressed deduplication: keccak256(contentHash) => first DATA UID.
-    // ADR-0049: DATA is now empty (pure identity) and carries no contentHash, so this is
-    // no longer written. The slot is RETAINED (declared, never removed) to preserve storage
-    // layout/order; it is unused/advisory. Dedup is now client-side prevention + REDIRECT
-    // resolution (ADR-0050). EFSFileView.getCanonicalData still reads it (returns bytes32(0)).
+    // AGENT-NOTE: this is a RETAINED DEAD SLOT, kept for storage-layout stability, no longer
+    // written (ADR-0049). DATA is now empty (pure identity) and carries no contentHash, so
+    // nothing writes here. Do NOT remove the slot — deleting storage risks the layout snapshot
+    // / upgrade-safety gate. ADR-0049 prose was corrected to say "retained as a dead slot, no
+    // longer written" (it previously said "removed") so code and ADR agree. Dedup is now
+    // client-side prevention + REDIRECT resolution (ADR-0050). EFSFileView.getCanonicalData
+    // still reads it (returns bytes32(0)).
     mapping(bytes32 => bytes32) public dataByContentKey;
 
     // Revocation tracking (set in onRevoke, never cleared)
@@ -442,16 +450,22 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
             emit DataCreated(attestation.uid, attestation.attester);
             return true;
         } else if (schema == $.propertySchemaUID) {
-            // PROPERTY is a standalone value (ADR-0035): refUID must be 0x0. Placement lives
-            // in a PIN under an Anchor<PROPERTY>(name="<key>") (ADR-0041, superseding the
-            // original TAG framing). PROPERTY is REVOCABLE (ADR-0052): a value is a claim the
-            // author can withdraw, not an identity Schelling point like DATA — so unlike ANCHOR
-            // and DATA we do NOT reject revocable attestations here. A revoked PROPERTY value
-            // reads as absent by default (ADR-0051); onRevoke flags it in _isRevoked, and the
-            // lens-scoped lookups (e.g. EFSRouter._getContentType) skip flagged values.
+            // PROPERTY is a standalone value (ADR-0035): refUID must be 0x0, non-revocable.
+            // Placement lives in a PIN under an Anchor<PROPERTY>(name="<key>") (ADR-0041,
+            // superseding the original TAG framing). PROPERTY is NON-revocable interned content
+            // (ADR-0052): a value is dumb, shared content (many PINs can point at one value),
+            // not a claim — so the revocable *claim* lives in the PIN (the binding), not here.
+            // Non-revocability is what makes a value safely shareable: it can't be yanked out
+            // from under other bindings. Like ANCHOR and DATA, we reject revocable attestations.
             if (attestation.refUID != EMPTY_UID) return false;
+            if (attestation.revocable) return false;
 
-            emit PropertyCreated(attestation.uid, attestation.attester);
+            // valueHash = keccak256(bytes(value)) is the value's canonical lookup key (ties to
+            // the forthcoming canonical-hashing spec). Clients use it as the content key to find
+            // an existing value to dedup against — off-chain via this event's indexed topic, and
+            // on-chain via the future opt-in intern registry (ADR-0052). Decode the sole field.
+            (string memory value) = abi.decode(attestation.data, (string));
+            emit PropertyCreated(attestation.uid, attestation.attester, keccak256(bytes(value)));
             return true;
         }
 

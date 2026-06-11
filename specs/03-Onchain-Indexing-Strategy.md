@@ -55,7 +55,7 @@ Where this is enforced today (audited at the schema freeze):
 
 - **Placement** (`EFSRouter._findDataAtPath`, `EFSFileView`): `EdgeResolver.getActivePinTarget` returns only the unrevoked PIN — active-only by construction.
 - **Mirrors** (`EFSRouter._getBestMirrorURI`, `EFSFileView`): skip `indexer.isRevoked(uid)`.
-- **PROPERTY values** (`EFSRouter._getContentType`, ADR-0014): now checks `indexer.isRevoked(propertyUID)` in addition to the active-PIN check, so a revoked PROPERTY value (ADR-0052) reads as absent even while its binding PIN is active.
+- **PROPERTY values** (`EFSRouter._getContentType`, ADR-0014): the PROPERTY value is non-revocable interned content (ADR-0052) — the revocable claim is the **PIN** binding. `getActivePinTarget` returns only the unrevoked binding PIN, so revoking the PIN removes the value from the default view (no separate value-revocation check is needed or possible).
 - **Directory children / anchor slices** (EFSIndexer, EFSFileView): `showRevoked` defaults false.
 - **List entries** (`ListReader.entries`, typed accessors): `ListEntryResolver` swap-and-pops a revoked entry out of its active array on `onRevoke`, so the stateless reader never sees it; typed accessors additionally reject `revocationTime != 0`.
 
@@ -68,14 +68,14 @@ EFSIndexer emits structured events from its native schema resolver hooks, enabli
 event AnchorCreated(bytes32 indexed parentUID, bytes32 indexed anchorUID, address indexed attester, bytes32 anchorSchema);
 event DataCreated(bytes32 indexed dataUID, address indexed attester, bytes32 contentHash);
 event MirrorCreated(bytes32 indexed dataUID, bytes32 indexed mirrorUID, address indexed attester);
-event PropertyCreated(bytes32 indexed anchorUID, bytes32 indexed propertyUID, address indexed attester);
+event PropertyCreated(bytes32 indexed propertyUID, address indexed attester, bytes32 indexed valueHash);
 event AttestationRevoked(bytes32 indexed uid, address indexed attester);  // native-schema revocations
 event RevocationIndexed(bytes32 indexed uid);                              // externally-resolved schemas indexed via indexRevocation()
 ```
 
 Subscribe to both revocation events. `AttestationRevoked` fires from the resolver hook on native schemas (ANCHOR, DATA, PROPERTY); `RevocationIndexed` fires when an external resolver calls `indexRevocation()` to surface a TAG/MIRROR/SORT_INFO revocation into the kernel.
 
-All events are indexed on the most useful lookup fields. `DataCreated` includes `contentHash` for off-chain dedup tracking. `MirrorCreated` links mirrors to their parent DATA. A Graph subgraph subscribing to these events can reconstruct full directory state without any additional contract reads during sync.
+All events are indexed on the most useful lookup fields. `MirrorCreated` links mirrors to their parent DATA. `PropertyCreated`'s third topic `valueHash = keccak256(bytes(value))` is the interned value's **canonical content key** (ADR-0052; ties to the forthcoming canonical-hashing spec) — the lookup key clients use to find an existing PROPERTY value to dedup against (point a new PIN at it rather than minting a fresh value). It is the off-chain half of the dedup story; the on-chain half is a future opt-in intern registry (ADR-0052, `docs/FUTURE_WORK.md`). A Graph subgraph subscribing to these events can reconstruct full directory state without any additional contract reads during sync.
 
 `EFSSortOverlay` emits `ItemSorted(sortInfoUID, parentAnchor, itemUID, leftNeighbour, rightNeighbour)` for each item inserted into a sorted list — enabling The Graph to reconstruct sorted order off-chain.
 

@@ -1,4 +1,5 @@
 import { expect } from "chai";
+import { anyValue } from "@nomicfoundation/hardhat-chai-matchers/withArgs";
 import { ethers } from "hardhat";
 import { EFSIndexer, EAS, SchemaRegistry } from "../typechain-types";
 import { Signer, ZeroAddress } from "ethers";
@@ -429,6 +430,31 @@ describe("EFSIndexer", function () {
           },
         }),
       ).to.be.revertedWithCustomError(eas, "Irrevocable");
+    });
+
+    it("Should emit PropertyCreated with valueHash = keccak256(bytes(value)) (ADR-0052 dedup key)", async function () {
+      // ADR-0052: the PropertyCreated valueHash topic is the value's canonical content key —
+      // the lookup key clients use to find an existing value to dedup against. It is
+      // keccak256 of the UTF-8 value bytes, computed from the decoded `string value` field.
+      const schemaEncoder = new ethers.AbiCoder();
+      const value = "image/png";
+      const expectedValueHash = ethers.keccak256(ethers.toUtf8Bytes(value));
+      const attesterAddr = await owner.getAddress();
+      await expect(
+        eas.attest({
+          schema: propertySchemaUID,
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: NO_EXPIRATION,
+            revocable: false,
+            refUID: ZERO_BYTES32,
+            data: schemaEncoder.encode(["string"], [value]),
+            value: 0n,
+          },
+        }),
+      )
+        .to.emit(indexer, "PropertyCreated")
+        .withArgs(anyValue, attesterAddr, expectedValueHash);
     });
 
     it("Should reject PROPERTY with non-zero refUID (must be free-floating per ADR-0035)", async function () {

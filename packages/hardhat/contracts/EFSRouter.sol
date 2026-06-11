@@ -940,11 +940,6 @@ contract EFSRouter is IDecentralizedApp {
         bytes32 propertyUID = edgeResolver.getActivePinTarget(keyAnchor, attester, propertySchema);
         if (propertyUID == bytes32(0)) return "application/octet-stream";
 
-        // 2b. The PROPERTY value attestation is itself revocable (ADR-0052). A revoked value
-        //     reads as absent by default (ADR-0051) even when its binding PIN is still active —
-        //     match the existing revocation idiom (indexer-maintained flag, set in onRevoke).
-        if (indexer.isRevoked(propertyUID)) return "application/octet-stream";
-
         // 3. Decode the value.
         IEAS.Attestation memory propAtt = eas.getAttestation(propertyUID);
         string memory value = abi.decode(propAtt.data, (string));

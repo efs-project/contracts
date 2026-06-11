@@ -11,7 +11,7 @@ A first-principles + adversarial durability review (28 candidate cracks, all ref
 | # | Schema | Field string (exact) | revocable | Resolver (proxy) | Schema UID |
 |---|---|---|---|---|---|
 | 1 | ANCHOR | `string name, bytes32 schemaUID` | `false` | EFSIndexer proxy `0x…TBD` | `0x…TBD` |
-| 2 | PROPERTY | `string value` | `true` | EFSIndexer proxy `0x…TBD` | `0x…TBD` |
+| 2 | PROPERTY | `string value` | `false` | EFSIndexer proxy `0x…TBD` | `0x…TBD` |
 | 3 | DATA | `` (empty — pure identity) | `false` | EFSIndexer proxy `0x…TBD` | `0x…TBD` |
 | 4 | PIN | `bytes32 definition` | `true` | EdgeResolver proxy `0x…TBD` | `0x…TBD` |
 | 5 | TAG | `bytes32 definition, int256 weight` | `true` | EdgeResolver proxy `0x…TBD` | `0x…TBD` |
@@ -20,7 +20,7 @@ A first-principles + adversarial durability review (28 candidate cracks, all ref
 | 8 | LIST_ENTRY | `bytes32 listUID, bytes32 target` | `true` | ListEntryResolver proxy `0x…TBD` | `0x…TBD` |
 | 9 | REDIRECT | `bytes32 target, uint16 kind` | `true` | AliasResolver proxy `0x…TBD` | `0x…TBD` |
 
-**PROPERTY (ADR-0052):** `revocable: true`. PROPERTY is a *claim/value*, not an identity Schelling point like DATA — so it belongs with the revocable claim-schemas. Revoking a value withdraws it from the default view (ADR-0051) without erasing the bytes. Flipped from `false` before freeze; recomputes PROPERTY's UID only (no other schema affected).
+**PROPERTY (ADR-0052):** `revocable: false`. PROPERTY is a non-revocable *interned value* — dumb shared content (an "anchor for a string"), not a claim. Many PINs can point at one value (best-effort dedup); nobody owns the value. Revocability and removal live in the **PIN** (the binding), not the value — revoke or supersede the PIN to unbind/change a property; the shared value is untouched. Non-revocability is what makes a value safely shareable: it can't be yanked out from under other bindings. Symmetric with DATA (value = content, claim = edge).
 
 **DATA (ADR-0049):** empty schema = pure identity. `contentHash` + `size` move to trust-scoped reserved-key PROPERTYs (lets you pin a 10 GB IPFS file with zero download; multiple lens-scoped hash claims). This is a real Tier-1 reshape (new DATA UID, removes `dataByContentKey`) — safe now because nothing is frozen on Sepolia yet.
 

@@ -3103,6 +3103,12 @@ const deployedContracts = {
               name: "attester",
               type: "address",
             },
+            {
+              indexed: true,
+              internalType: "bytes32",
+              name: "valueHash",
+              type: "bytes32",
+            },
           ],
           name: "PropertyCreated",
           type: "event",
