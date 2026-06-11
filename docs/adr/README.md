@@ -103,6 +103,7 @@ What else we looked at and why it lost.
 - [ADR-0030 — Mainnet permanence (no upgradeability)](./0030-mainnet-permanence.md)
 - [ADR-0031 — Lenses as URL query param with first-wins fallback](./0031-lenses-url-param-model.md)
 - [ADR-0032 — EAS as foundational dependency](./0032-eas-as-foundation.md)
+- [ADR-0053 — SystemAccount: the neutral system write-identity](./0053-system-account-write-identity.md)
 
 ### Navigation & Containers
 - [ADR-0033 — Root containers and schema alias anchors](./0033-root-containers-and-schema-alias-anchors.md)
