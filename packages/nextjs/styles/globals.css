@@ -410,6 +410,14 @@ main,
   font-family: ui-sans-serif, system-ui, sans-serif;
 }
 
+/* The global dark-mode neon glow on h1/h2 is tuned for chrome titles; inside
+   rendered prose (Overview pane + editor live preview) it overpowers the
+   long-form content and out-shouts the modal's own title. Dial it down to a
+   faint accent so headings read as calm document structure, not signage. */
+[data-theme="dark"] .prose-efs :is(h1, h2, h3, h4) {
+  text-shadow: 0 0 6px oklch(var(--p) / 0.18);
+}
+
 /* ──────────────────────────────────────────────
    @uiw/react-md-editor — themed to the daisyUI palette
    Scoped under `.efs-md-editor` (added on the MarkdownEditor wrapper) so the
@@ -427,11 +435,13 @@ main,
   border-radius: 0;
 }
 
-/* Toolbar: elevated surface, mono affordance */
+/* Toolbar: elevated surface, mono affordance. Border uses a faint base-content
+   tint (not --b3, which equals the toolbar fill and renders invisible) so the
+   seam between toolbar and textarea stays crisp. */
 .efs-md-editor .w-md-editor-toolbar {
   background-color: oklch(var(--b3)) !important;
-  border-bottom: 1px solid oklch(var(--b3)) !important;
-  padding: 4px 6px;
+  border-bottom: 1px solid oklch(var(--bc) / 0.12) !important;
+  padding: 5px 6px;
 }
 
 .efs-md-editor .w-md-editor-toolbar ul > li > button {
