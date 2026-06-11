@@ -38,10 +38,12 @@ Resolution (lens-scoped):
 2. Resolve the **`system` tag-set** for the active lenses (see "system tag
    convention" below) — the set of system-tagged child **anchor UIDs**.
 3. **Select** the page, deterministically: first-lens-wins; within a lens, the
-   system-tagged child named `readme.md` (case-insensitive), else none. (No
-   precedence list / markdown-ish fallback — simplified per James 2026-06-11:
-   the overview is just the folder's `readme.md`. The `system` tag remains the
-   separate, general hide-bucket for keeping the file list clean.)
+   system-tagged child named exactly `README.md`, else none. Anchor names are
+   CASE-SENSITIVE on-chain (`README.md` ≠ `readme.md` ≠ `ReadMe.md` are distinct
+   anchors), so we match one canonical name exactly — no case-folding, no
+   precedence list, no markdown-ish fallback (simplified per James 2026-06-11).
+   The `system` tag remains the separate, general hide-bucket for keeping the
+   file list clean.
 4. **Fetch** that child's bytes via the extracted router util.
 5. **Sniff** the bytes (don't trust `contentType`); if markdown/text → sanitize
    and render; if binary → download card. (Order is pick → fetch → sniff, NOT
