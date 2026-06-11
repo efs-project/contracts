@@ -41,8 +41,8 @@ const GOLDEN: GoldenVector[] = [
   {
     name: "PROPERTY",
     fieldString: "string value",
-    revocable: false,
-    uid: "0xe03f507bf21e4b7b6b5f29addd4f0c3fbb708ca4f700a244f36ed9483aaec689",
+    revocable: true,
+    uid: "0x9a3ce6ff3cd911f1f456a8ccea59584679c00f1c8aa0d8b23cb2ebc6f6323674",
   },
   {
     name: "DATA",

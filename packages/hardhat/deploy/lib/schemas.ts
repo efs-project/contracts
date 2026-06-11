@@ -35,7 +35,11 @@ export interface SchemaDef {
 // (changing any orphans the schema's data on a chain where it is registered).
 export const SCHEMAS: SchemaDef[] = [
   { name: "ANCHOR", fieldString: "string name, bytes32 schemaUID", revocable: false, resolver: "EFSIndexer" },
-  { name: "PROPERTY", fieldString: "string value", revocable: false, resolver: "EFSIndexer" },
+  // PROPERTY is revocable (ADR-0052): a value is a claim/assertion, not an identity Schelling
+  // point like DATA, so the author can withdraw it. Revoking removes it from the default read
+  // view (ADR-0051) without erasing the bytes. Flipped false→true before the Sepolia freeze;
+  // recomputes PROPERTY's UID only (no other schema affected).
+  { name: "PROPERTY", fieldString: "string value", revocable: true, resolver: "EFSIndexer" },
   // DATA is an empty schema — pure file identity (ADR-0049).
   { name: "DATA", fieldString: "", revocable: false, resolver: "EFSIndexer" },
   { name: "PIN", fieldString: "bytes32 definition", revocable: true, resolver: "EdgeResolver" },

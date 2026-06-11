@@ -51,7 +51,9 @@ const deployEFSIndexer: DeployFunction = async function (hre: HardhatRuntimeEnvi
   //    See ADR-0041.
   const schemas = [
     { name: "ANCHOR", definition: "string name, bytes32 schemaUID", revocable: false },
-    { name: "PROPERTY", definition: "string value", revocable: false },
+    // PROPERTY is revocable (ADR-0052) — a claim/value the author can withdraw, not an
+    // identity Schelling point. Must match deploy/lib/schemas.ts and the golden vector.
+    { name: "PROPERTY", definition: "string value", revocable: true },
     // DATA is an empty schema — pure file identity (ADR-0049). No fields; contentHash/size
     // now live as lens-scoped reserved-key PROPERTYs bound to the DATA UID.
     { name: "DATA", definition: "", revocable: false },

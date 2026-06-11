@@ -58,7 +58,7 @@ The resolver validates only the byte-level canonical form (percent-encoding + up
 `refUID = 0x0 (standalone — no parent reference)`
 - `value` (string)
 
-**Revocable**: `false` — PROPERTY is permanent, like DATA. The *binding* (which container the value applies to, from which attester) lives in the PIN and is the only thing that can move.
+**Revocable**: `true` (ADR-0052) — a PROPERTY value is a *claim/assertion* (a MIME type, a name, a reserved-key `contentHash`/`size`), not an identity Schelling point like DATA, so the author can withdraw it. Revoking the value attestation removes it from the default read view (ADR-0051) without erasing the bytes (revocation flags, never deletes). The *binding* (which container the value applies to, from which attester) lives in the PIN and can still be moved/superseded independently — there are now two retract paths: revoke the value (withdraw the statement everywhere it's bound) or revoke/replace the PIN (unbind or change it at one slot).
 
 **Details**: Per ADR-0035 (superseded by ADR-0041 for the cardinality story), PROPERTY no longer carries a `key` field and no longer targets a container via `refUID`. Instead:
 
@@ -66,7 +66,7 @@ The resolver validates only the byte-level canonical form (percent-encoding + up
 2. The **value** is the PROPERTY attestation's sole field.
 3. The **binding** is a **PIN** with `definition = keyAnchorUID`, `refUID = propertyUID`. PIN is cardinality-1 (ADR-0041) — re-PINning the same key anchor from the same attester supersedes the previous binding in O(1).
 
-`EFSIndexer.onAttest` enforces only that PROPERTY is standalone (`refUID = 0x0`) and non-revocable — no target-kind validation. Per-attester singleton is a hard guarantee from `EdgeResolver._activeBySlot[keyAnchor][attester][PROPERTY_SCHEMA_UID]`. Reads are lens-scoped per ADR-0014.
+`EFSIndexer.onAttest` enforces only that PROPERTY is standalone (`refUID = 0x0`) — no target-kind validation, and (unlike ANCHOR/DATA) no revocable restriction, since PROPERTY is revocable (ADR-0052). A revoked PROPERTY value is flagged in `EFSIndexer._isRevoked` via `onRevoke` and reads as absent by default (ADR-0051): the lens-scoped lookup (`EFSRouter._getContentType`, ADR-0014) checks `indexer.isRevoked(propertyUID)` in addition to the active-PIN check and falls back to the default (`application/octet-stream`) when the value is withdrawn. Per-attester singleton is a hard guarantee from `EdgeResolver._activeBySlot[keyAnchor][attester][PROPERTY_SCHEMA_UID]`. Reads are lens-scoped per ADR-0014.
 
 ### Example — contentType on a DATA
 
@@ -101,7 +101,10 @@ Other common (non-reserved) key anchors: `"previousVersion"` (value is a DATA UI
 
 ### Removal
 
-Revoke the PIN with `eas.revoke(pinUID)`. The PROPERTY value itself is non-revocable (permanent), but the binding is gone — the key anchor's slot becomes empty for that attester until a new PIN is attested. Replacing the value is just a new PIN at the same slot pointing at a new PROPERTY; the old PIN is superseded automatically (no extra revoke needed).
+Two paths, both honored by default reads (ADR-0051):
+
+- **Unbind at a slot (ADR-0041 path):** revoke the PIN with `eas.revoke(pinUID)`. The binding is gone — the key anchor's slot becomes empty for that attester until a new PIN is attested. Replacing the value is just a new PIN at the same slot pointing at a new PROPERTY; the old PIN is superseded automatically (no extra revoke needed). The value attestation is untouched and could still be referenced elsewhere.
+- **Withdraw the value (ADR-0052 path):** revoke the PROPERTY value attestation itself with `eas.revoke(propertyUID)`. It then reads as absent **everywhere it is bound**, even while the PIN(s) stay active — appropriate for "I no longer stand behind this claim." Because revocation flags rather than erases, the bytes persist and the `includeRevoked` opt-in (where exposed) can still surface them. Footgun (ADR-0052): a value shared across many bindings is withdrawn from all of them at once; mint a fresh PROPERTY per binding (the upload flow already does) when independent retraction is wanted.
 
 ## 3. Data Schema
 **Purpose**: Standalone file identity — pure, empty, non-revocable, location-independent.

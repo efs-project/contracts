@@ -442,11 +442,14 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
             emit DataCreated(attestation.uid, attestation.attester);
             return true;
         } else if (schema == $.propertySchemaUID) {
-            // PROPERTY is a standalone value (ADR-0035): refUID must be 0x0, non-revocable.
-            // Placement lives in a TAG under an Anchor<PROPERTY>(name="<key>"), symmetric
-            // with DATA. The TAG's _validateDefinition handles container-kind validation.
+            // PROPERTY is a standalone value (ADR-0035): refUID must be 0x0. Placement lives
+            // in a PIN under an Anchor<PROPERTY>(name="<key>") (ADR-0041, superseding the
+            // original TAG framing). PROPERTY is REVOCABLE (ADR-0052): a value is a claim the
+            // author can withdraw, not an identity Schelling point like DATA — so unlike ANCHOR
+            // and DATA we do NOT reject revocable attestations here. A revoked PROPERTY value
+            // reads as absent by default (ADR-0051); onRevoke flags it in _isRevoked, and the
+            // lens-scoped lookups (e.g. EFSRouter._getContentType) skip flagged values.
             if (attestation.refUID != EMPTY_UID) return false;
-            if (attestation.revocable) return false;
 
             emit PropertyCreated(attestation.uid, attestation.attester);
             return true;

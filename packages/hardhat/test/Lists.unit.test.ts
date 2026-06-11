@@ -937,6 +937,27 @@ describe("Lists — Unit Tests", function () {
       expect(es[0].targetType).to.equal(1); // denormalized from LIST
     });
 
+    it("C6b: entries() excludes a revoked LIST_ENTRY by default (ADR-0051)", async function () {
+      // ADR-0051: reads exclude revoked by default. For lists this holds by construction —
+      // ListEntryResolver swap-and-pops the entry out of its active array on revoke, so the
+      // stateless ListReader.entries() view never sees it. No filter in ListReader needed.
+      const listUID = await attestList(alice, true, false, 1); // ADDR, allowsDuplicates, not appendOnly
+      const signers = await ethers.getSigners();
+      const aliceAddr = await alice.getAddress();
+      const uid1 = await attestAddrEntry(alice, listUID, await signers[2].getAddress());
+      const uid2 = await attestAddrEntry(alice, listUID, await signers[3].getAddress());
+
+      let es = await listReader.entries(listUID, aliceAddr, 0n, 10n);
+      expect(es.length).to.equal(2);
+
+      await revokeEntry(alice, uid1);
+
+      es = await listReader.entries(listUID, aliceAddr, 0n, 10n);
+      expect(es.length).to.equal(1);
+      expect(es.map(e => e.entryUID)).to.not.include(uid1);
+      expect(es[0].entryUID).to.equal(uid2);
+    });
+
     it("C7: entries() pagination", async function () {
       const listUID = await attestList(alice, true, false, 1); // duplicates allowed
       const signers = await ethers.getSigners();

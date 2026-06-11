@@ -44,6 +44,23 @@ Because EAS is permissionless, anyone can attest files to a folder. To prevent O
 - **Append-Only Kernel**: EFSIndexer is the append-only kernel. Arrays are never modified after a write. When an attestation is revoked, `onRevoke` sets `_isRevoked[uid] = true` but leaves all arrays intact. This eliminates O(N) removal overhead and makes the storage model simpler and cheaper to write (deploy gas: ~2.35M vs ~3.8M for the old swap-and-pop design; revoke gas: ~90k vs ~200k).
 - **`showRevoked` filtering**: Every read function accepts a `bool showRevoked` parameter. When `false` (the default), the function scans forward and skips revoked UIDs, returning only active items. When `true`, revoked items are included — useful for history views and admin tooling.
 
+### Reads exclude revoked (and superseded) by default (ADR-0051)
+
+The single, system-wide rule: **every EFS read excludes revoked and superseded attestations by default; a consumer that wants the full history opts in** (`showRevoked: true`, an `includeRevoked` flag, or a sibling `…IncludingRevoked` view). Two layers, kept distinct:
+
+- **Storage = tombstone.** Append-only and immutable (above). `onRevoke` flags `_isRevoked[uid]`; nothing is erased or compacted. A "superseded" entry (e.g. a cardinality-1 PIN replaced by re-attestation at the same slot, §PIN) is likewise retained but inactive.
+- **Default read = "deleted."** Revoked/superseded items are skipped in loops, absent from listings, and not served by the router. The default view shows each attester's **current** claims, per-attester / per-lens (you can only revoke your own attestations, so default-hide is always the author withdrawing their own claim — credible neutrality holds, since the withdrawal is itself a permanent, opt-in-visible record).
+
+Where this is enforced today (audited at the schema freeze):
+
+- **Placement** (`EFSRouter._findDataAtPath`, `EFSFileView`): `EdgeResolver.getActivePinTarget` returns only the unrevoked PIN — active-only by construction.
+- **Mirrors** (`EFSRouter._getBestMirrorURI`, `EFSFileView`): skip `indexer.isRevoked(uid)`.
+- **PROPERTY values** (`EFSRouter._getContentType`, ADR-0014): now checks `indexer.isRevoked(propertyUID)` in addition to the active-PIN check, so a revoked PROPERTY value (ADR-0052) reads as absent even while its binding PIN is active.
+- **Directory children / anchor slices** (EFSIndexer, EFSFileView): `showRevoked` defaults false.
+- **List entries** (`ListReader.entries`, typed accessors): `ListEntryResolver` swap-and-pops a revoked entry out of its active array on `onRevoke`, so the stateless reader never sees it; typed accessors additionally reject `revocationTime != 0`.
+
+**Deferred (FUTURE_WORK, ADR-0051):** the generic referencing-index getters on EFSIndexer (`getReferencingAttestationCount`, `getAllReferencing`, `getReferencingByAttester`, `getReferencingBySchemaAndAttester`) return the raw append-only arrays with no `includeRevoked` opt-in. Bringing them under the uniform default is a multi-function additive ABI change and was kept out of the freeze PR; the serving/router path is fully covered.
+
 ### Kernel Events (Off-Chain Indexing)
 EFSIndexer emits structured events from its native schema resolver hooks, enabling efficient off-chain indexing without scanning all EAS `Attested` events:
 
