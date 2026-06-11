@@ -333,11 +333,12 @@ export async function seedDemoTree() {
     // Runtime = 0x00 (STOP) || content bytes — matches the router's SSTORE2 read.
     const runtime = ethers.concat(["0x00", ethers.toUtf8Bytes(content)]);
     const runtimeLen = ethers.dataLength(runtime);
-    // SSTORE2 deploy stub (EVM): copy `runtimeLen` bytes from code offset 0x0b
-    // to memory and RETURN them. 0x0b = length of this 11-byte init prefix.
-    //   61 LLLL  PUSH2 runtimeLen
+    // SSTORE2 deploy stub (EVM): copy `runtimeLen` bytes from code offset 0x0c
+    // to memory and RETURN them. 0x0c = length of this 12-byte init prefix
+    // (PUSH2+imm = 3 bytes, then the 9-byte DUP1…RETURN sequence below).
+    //   61 LLLL  PUSH2 runtimeLen   (3 bytes)
     //   80       DUP1
-    //   60 0b    PUSH1 0x0b
+    //   60 0c    PUSH1 0x0c         (runtime starts right after this 12-byte prefix)
     //   60 00    PUSH1 0x00
     //   39       CODECOPY
     //   60 00    PUSH1 0x00
@@ -345,7 +346,7 @@ export async function seedDemoTree() {
     const initCode = ethers.concat([
       "0x61",
       ethers.zeroPadValue(ethers.toBeHex(runtimeLen), 2),
-      "0x80600b6000396000f3",
+      "0x80600c6000396000f3",
       runtime,
     ]);
     // Deploy the raw-bytecode data contract via a bare tx with no `to`.
