@@ -2,7 +2,7 @@
 
 **Status:** Accepted — superseded in part by ADR-0048 (allowlist widened to add `ftp://`, `s3://`, `gs://`, `dat://`, `rsync://`, `bittorrent://`; the XSS-rejection intent below is preserved)
 **Date:** 2026-04-16
-**Related:** PR #8 commit e523335, ADR-0012, ADR-0048
+**Related:** PR #8 commit e523335, ADR-0012
 
 ## Context
 
