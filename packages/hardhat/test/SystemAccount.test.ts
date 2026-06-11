@@ -181,29 +181,58 @@ describe("SystemAccount (ADR-0053)", function () {
   });
 
   describe("nonReentrant guard", function () {
-    it("reverts a re-entry into attest", async function () {
-      // Deploy a SystemAccount bound to a malicious EAS that re-enters during attest.
+    // Shared rig: a SystemAccount bound to a malicious EAS that, when its callback target is set,
+    // re-enters SystemAccount during attest/multiAttest/revoke. The attacker is an authorized
+    // module so the re-entry clears `onlyAuthorizedModuleOrOwner` and is stopped by `nonReentrant`
+    // specifically — not by the auth gate.
+    let reentrantEAS: any;
+    let saReentrant: any;
+    let attacker: any;
+
+    beforeEach(async function () {
       const ReentrantEASFactory = await ethers.getContractFactory("ReentrantEAS");
-      const reentrantEAS = await ReentrantEASFactory.deploy();
+      reentrantEAS = await ReentrantEASFactory.deploy();
       await reentrantEAS.waitForDeployment();
 
-      const saReentrant = await deployResolverProxy(
-        "SystemAccount",
-        [await reentrantEAS.getAddress()],
-        [ownerAddr],
-        owner,
-      );
+      saReentrant = await deployResolverProxy("SystemAccount", [await reentrantEAS.getAddress()], [ownerAddr], owner);
 
       const AttackerFactory = await ethers.getContractFactory("SystemAccountReentrancyAttacker");
-      const attacker = await AttackerFactory.deploy(await (saReentrant as any).getAddress());
+      attacker = await AttackerFactory.deploy(await (saReentrant as any).getAddress());
       await attacker.waitForDeployment();
 
-      // Authorize the attacker as a module, point the EAS callback at it, then attack.
       await (await (saReentrant as any).setModuleAuthorization(await attacker.getAddress(), true)).wait();
-      await (await reentrantEAS.setReentryTarget(await attacker.getAddress())).wait();
+    });
 
-      // The re-entry trips ReentrancyGuardUpgradeable, bubbling up to revert the outer attest.
-      await expect(attacker.attack()).to.be.reverted;
+    // mode: 0 = attest, 1 = multiAttest, 2 = revoke (matches the attacker's selector).
+    const ENTRYPOINTS: Array<[string, number]> = [
+      ["attest", 0],
+      ["multiAttest", 1],
+      ["revoke", 2],
+    ];
+
+    for (const [name, mode] of ENTRYPOINTS) {
+      it(`reverts a re-entry into ${name} with the guard's custom error`, async function () {
+        // Point the EAS callback at the attacker so the relayed call re-enters the same entrypoint.
+        await (await reentrantEAS.setReentryTarget(await attacker.getAddress())).wait();
+
+        // Assert the SPECIFIC guard error rather than a bare `reverted`: this is what distinguishes
+        // a real ReentrancyGuard trip from a false-green (stack-too-deep / out-of-gas recursion),
+        // which would NOT carry this custom error. The error is decoded against SystemAccount's
+        // ABI (it inherits ReentrancyGuardUpgradeable), proving the revert came from the guard.
+        await expect(attacker.attack(mode)).to.be.revertedWithCustomError(
+          saReentrant,
+          "ReentrancyGuardReentrantCall",
+        );
+      });
+    }
+
+    it("positive control: a single non-reentrant attest through SystemAccount succeeds", async function () {
+      // Same authorized attacker + same SystemAccount, but the EAS callback is left UNSET, so the
+      // relayed attest does not re-enter. This proves the guard blocks reentry specifically — it
+      // does not block ordinary single calls — so the reverts above are the guard, not a mock that
+      // refuses every call.
+      expect(await reentrantEAS.reentryTarget()).to.equal(ZeroAddress);
+      await expect(attacker.attack(0)).to.not.be.reverted;
     });
   });
 });
