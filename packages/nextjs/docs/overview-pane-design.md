@@ -288,6 +288,32 @@ strips it first.) Invariants pinned now: a single gateway-allowlist config
 constant; blob URLs always revoked on unmount and never navigated to (download
 only); in-app navigation resolves to a typed route, never a raw attacker string.
 
+## Holistic review (2026-06-10) inputs + branch base
+
+The all-repo holistic review (`planning/Reviews/2026-06-10-holistic-review.md`)
+touched this feature at five points:
+
+- **SEC-1 / UX-6 (validates the design):** the router emits the attester-set
+  `contentType` *unsanitized* (header-injection capable), confirming it is
+  attacker-controlled — so the independent byte-sniff (not trusting
+  `contentType`) is the right call. Magic-bytes sniffing is explicitly endorsed.
+- **DX-4 (no exposure):** EdgeResolver emits no events; this read-only,
+  `eth_call`-based feature doesn't depend on the event surface.
+- **DX-2 (fold in):** the SDK's intended-but-stubbed shape exposes
+  `fetch(ref, opts) -> bytes` and `hashContent`. Shape `lib/efs/fetchFileContent.ts`
+  to converge with that signature so the eventual SDK swap is clean.
+- **UX-5 (flag):** the review rates "verify bytes against `contentHash`" as High
+  for the hackathon, but explicitly as **SDK read-path** work — consistent with
+  our deferral. The provenance line stays; the verified/mismatch badge is a clean
+  later add once the SDK owns hashing.
+
+**Branch base:** built on `main`. Verified the `schema-freeze` worktree does
+**not** modify the debug-UI files this feature reuses (`FileBrowser.tsx`,
+`ExplorerClient.tsx`, `useLensesDirectoryPage.ts` are byte-identical to main), so
+a later rebase onto the frozen schemas is trivial — the reused machinery matches
+and all new code is additive. contentHash being deferred further insulates this
+feature from ADR-0049's DATA-struct change.
+
 ## Non-goals (v1)
 
 No editing/authoring affordance. No version history. No external image loading.
