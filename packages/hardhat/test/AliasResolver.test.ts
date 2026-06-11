@@ -286,6 +286,26 @@ describe("AliasResolver — REDIRECT (ADR-0050)", function () {
       await expect(attestRedirect(alice, src, src, 7)).to.be.revertedWithCustomError(aliasResolver, "SelfLoop");
     });
 
+    it("a non-revocable REDIRECT attestation reverts (NotRevocable)", async function () {
+      // A revocable schema only PERMITS revocable attestations; EAS still accepts revocable=false.
+      // ADR-0050 requires REDIRECTs stay retractable, so the resolver must reject it at write time.
+      const src = await mintData(alice);
+      const dst = await mintData(alice);
+      await expect(
+        eas.connect(alice).attest({
+          schema: redirectSchemaUID,
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: NO_EXPIRATION,
+            revocable: false,
+            refUID: src,
+            data: encodeRedirect(dst, 0 /* sameAs */),
+            value: 0n,
+          },
+        }),
+      ).to.be.revertedWithCustomError(aliasResolver, "NotRevocable");
+    });
+
     it("revoking a REDIRECT works (revocable=true)", async function () {
       const src = await mintData(alice);
       const dst = await mintData(alice);

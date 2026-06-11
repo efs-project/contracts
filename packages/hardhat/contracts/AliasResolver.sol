@@ -61,6 +61,7 @@ contract AliasResolver is EFSUpgradeableResolver {
     error TargetNotData();
     error SourceNotAnchor();
     error TargetNotAnchorOrData();
+    error NotRevocable();
 
     // ── Events ──────────────────────────────────────────────────────────────────
     event RedirectAttested(bytes32 indexed source, bytes32 indexed target, uint16 indexed kind, bytes32 redirectUID);
@@ -157,6 +158,11 @@ contract AliasResolver is EFSUpgradeableResolver {
         // pointing at this resolver; without this guard their attests would skip write-time typing.
         if (a.schema != $.redirectSchemaUID) revert WrongSchema();
         if (a.data.length != EXPECTED_DATA_LEN) revert BadPayload();
+        // REDIRECT must stay retractable (ADR-0050). A revocable *schema* only PERMITS revocable
+        // attestations — EAS still lets an attester submit one with revocable=false, which would make
+        // this sameAs/supersededBy/symlink redirect permanent and uncorrectable. Reject it at the
+        // write-time guard, mirroring ListEntryResolver's NotRevocable check.
+        if (!a.revocable) revert NotRevocable();
 
         (bytes32 target, uint16 kind) = abi.decode(a.data, (bytes32, uint16));
         bytes32 source = a.refUID;
