@@ -60,8 +60,11 @@ A first-principles + adversarial durability review (28 candidate cracks, all ref
 - [ ] Mainnet-fork dry run; addresses + UIDs match this table.
 - [ ] FREEZE_LEDGER committed (salts, factory, predicted/realized addrs, impl bytecode keccak, proxy + ProxyAdmin addrs, field strings, UID inputs, EAS/registry + chainId, register/init txs).
 - [ ] Human sign-off on the FREEZE_LEDGER ("no pending field changes").
-- [ ] **SystemAccount pre-burn:** call `SystemAccount.sealModules()` — permanently prevents any new system-writer module from being authorized post-burn (ADR-0053 "pre-burn only" membership). Verify `SystemAccount.modulesSealed() == true` before proceeding.
-- [ ] BURN (`ProxyAdmin.renounceOwnership()`) for all **7** proxies (6 resolver proxies + SystemAccount proxy) — LAST action. Post-burn verify: `owner()==0` for each ProxyAdmin, ex-owner `upgradeAndCall` reverts, attestations still succeed; `SystemAccount.owner() == 0`; record burn txs + blocks.
+- [ ] **SystemAccount pre-burn:** call `SystemAccount.sealModules()` — permanently prevents any new system-writer module from being authorized post-burn (ADR-0053 "pre-burn only" membership). Verify `SystemAccount.modulesSealed() == true` before proceeding. (Do this while the Safe is still owner; the `renounceOwnership()` in (b) below is the final owner action.)
+- [ ] BURN — LAST actions:
+  - (a) `ProxyAdmin.renounceOwnership()` for all **7** ProxyAdmins (6 resolver proxies + the SystemAccount proxy) — freezes logic (no further `upgradeAndCall`).
+  - (b) `SystemAccount.renounceOwnership()` — zeroes the *proxied contract's own* `OwnableUpgradeable` owner. This is a **distinct owner** from the proxy's ProxyAdmin; the ProxyAdmin renounce in (a) does NOT touch it, so this explicit step is required for `SystemAccount.owner() == 0`. Safe to renounce: `sealModules()` + `seal()` have already frozen every meaningful owner power, and ongoing system-content authoring runs through the sealed `onlyAuthorizedModule` relay, not the owner.
+  - Post-burn verify: `owner()==0` for each ProxyAdmin, ex-owner `upgradeAndCall` reverts, attestations still succeed, **`SystemAccount.owner()==0` AND `SystemAccount.modulesSealed()==true`**; record burn txs + blocks.
 
 ## Sign-off
 
