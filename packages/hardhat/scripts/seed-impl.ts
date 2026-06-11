@@ -114,10 +114,14 @@ export async function seedDemoTree() {
   // 05_mirrors.ts (names: onchain, ipfs, arweave, magnet, https).
   const transportsUID = await indexer.resolvePath(rootUID, "transports");
   const httpsTransportUID = await indexer.resolvePath(transportsUID, "https");
+  // READMEs use the on-chain transport so the Overview pane can actually fetch
+  // and render their bytes back through the router's web3:// SSTORE2 branch.
+  const onchainTransportUID = await indexer.resolvePath(transportsUID, "onchain");
 
   console.log(`Indexer:  ${indexer.target}`);
   console.log(`Root:     ${rootUID}`);
-  console.log(`/transports/https:  ${httpsTransportUID.slice(0, 14)}…\n`);
+  console.log(`/transports/https:  ${httpsTransportUID.slice(0, 14)}…`);
+  console.log(`/transports/onchain: ${onchainTransportUID.slice(0, 14)}…\n`);
 
   // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -302,6 +306,163 @@ export async function seedDemoTree() {
 
     await makePin(signer, propertyUID, keyAnchorUID);
     return propertyUID;
+  };
+
+  /**
+   * Deploy the bytes of `content` as an on-chain SSTORE2-style body and wrap it
+   * in a `MockChunkedFile` so the EFSRouter's `web3://` branch can read it back
+   * via `chunkCount()` / `chunkAddress()` + `extcodecopy`.
+   *
+   * The router skips the first runtime byte (the SSTORE2 STOP-opcode convention,
+   * `EFSRouter.sol` §"Normal SSTORE2 skips first byte 0x00"), so the data
+   * contract's runtime must be `0x00 || content`. We deploy it with the minimal
+   * SSTORE2 init code: `PUSH(len) DUP1 PUSH(offset) PUSH0 CODECOPY PUSH0 RETURN`
+   * followed by the runtime payload. Returns the `MockChunkedFile` address as a
+   * `web3://0x…` URI string ready to hand to `makeMirror`.
+   *
+   * This is the one place the seed puts *real, retrievable* bytes on-chain (the
+   * other demo files use HTTPS mirrors to placeholder hosts). READMEs must
+   * actually render in the Overview pane, so their bytes have to come back
+   * through the router — an unreachable HTTPS mirror would render nothing.
+   */
+  const deployOnchainMirrorURI = async (
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    signer: any,
+    content: string,
+  ): Promise<string> => {
+    // Runtime = 0x00 (STOP) || content bytes — matches the router's SSTORE2 read.
+    const runtime = ethers.concat(["0x00", ethers.toUtf8Bytes(content)]);
+    const runtimeLen = ethers.dataLength(runtime);
+    // SSTORE2 deploy stub (EVM): copy `runtimeLen` bytes from code offset 0x0b
+    // to memory and RETURN them. 0x0b = length of this 11-byte init prefix.
+    //   61 LLLL  PUSH2 runtimeLen
+    //   80       DUP1
+    //   60 0b    PUSH1 0x0b
+    //   60 00    PUSH1 0x00
+    //   39       CODECOPY
+    //   60 00    PUSH1 0x00
+    //   f3       RETURN
+    const initCode = ethers.concat([
+      "0x61",
+      ethers.zeroPadValue(ethers.toBeHex(runtimeLen), 2),
+      "0x80600b6000396000f3",
+      runtime,
+    ]);
+    // Deploy the raw-bytecode data contract via a bare tx with no `to`.
+    const dataTx = await signer.sendTransaction({ data: initCode });
+    const dataReceipt = await dataTx.wait();
+    const dataContract = dataReceipt.contractAddress as string;
+
+    // Wrap the single data chunk in a MockChunkedFile (chunkCount/chunkAddress).
+    const MockChunkedFile = await ethers.getContractFactory("MockChunkedFile", signer);
+    const chunked = await MockChunkedFile.deploy([dataContract]);
+    await chunked.waitForDeployment();
+    const chunkedAddr = await chunked.getAddress();
+    console.log(`  Onchain   ${chunkedAddr}  (${runtimeLen - 1} bytes)`);
+    return `web3://${chunkedAddr}`;
+  };
+
+  /**
+   * Idempotent on-chain README at `(parentUID, name)` with real retrievable
+   * bytes. Mirrors `makeFileIfMissing` (anchor + DATA + contentType PROPERTY +
+   * MIRROR + PIN + ancestor visibility) but uses an on-chain `web3://` mirror so
+   * the Overview pane can fetch and render the markdown. `parentUID` may be a
+   * folder anchor, a file anchor, or an address container (`bytes32(uint160)`).
+   *
+   * For address containers the file-slot anchor can't use `refUID=parent` (the
+   * address bytes32 isn't a real attestation UID EAS would accept), so callers
+   * pass `recipient` to take the ANCHOR recipient-fallback path (ADR-0033,
+   * EFSIndexer §"Resolve Parent … else recipient cast to bytes32"); the anchor
+   * is then attested with `recipient=addr, refUID=0x0` and parents itself.
+   */
+  const makeOnchainReadmeIfMissing = async (
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    signer: any,
+    parentUID: string,
+    name: string,
+    content: string,
+    recipient: string = ethers.ZeroAddress,
+  ): Promise<{ fileUID: string; created: boolean }> => {
+    const attester = await signer.getAddress();
+    let fileUID = await findAnchor(parentUID, name, dataSchemaUID);
+    if (fileUID && (await hasActivePlacement(fileUID, attester))) {
+      console.log(`  README    "${name}" (exists, skipping) ${fileUID.slice(0, 10)}…`);
+      return { fileUID, created: false };
+    }
+    if (!fileUID) {
+      if (recipient !== ethers.ZeroAddress) {
+        // Address-container slot: recipient-fallback parenting (refUID=0x0).
+        const tx = await eas.connect(signer).attest({
+          schema: anchorSchemaUID,
+          data: {
+            recipient,
+            expirationTime: 0n,
+            revocable: false,
+            refUID: ethers.ZeroHash,
+            data: encode.encode(["string", "bytes32"], [name, dataSchemaUID]),
+            value: 0n,
+          },
+        });
+        fileUID = await getUID(tx);
+        console.log(`  Anchor    "${name}"  ${fileUID.slice(0, 10)}…  (recipient=${recipient.slice(0, 10)}…)`);
+      } else {
+        fileUID = await makeAnchor(signer, name, parentUID, dataSchemaUID);
+      }
+    }
+    const dataUID = await makeData(signer, content);
+    await makeProperty(signer, dataUID, "contentType", "text/markdown");
+    const onchainURI = await deployOnchainMirrorURI(signer, content);
+    await makeMirror(signer, dataUID, onchainTransportUID, onchainURI);
+    await makePin(signer, dataUID, fileUID);
+    // Ancestor visibility TAGs apply only to anchor-parented placements: each
+    // walked parent becomes a TAG `refUID`, which must be a real attestation.
+    // For address-container slots (recipient-fallback) the immediate parent is
+    // `bytes32(uint160(addr))` — not an attestation — so EAS reverts NotFound on
+    // the first hop. Address-container listings don't rely on these folder
+    // visibility TAGs anyway, so skip the walk for that path.
+    if (recipient === ethers.ZeroAddress) {
+      await walkAncestorVisibility(signer, fileUID);
+    }
+    return { fileUID, created: true };
+  };
+
+  /**
+   * Idempotent `system` TAG marking `fileUID` (a README ANCHOR) as an Overview
+   * source. The TAG is `definition = /tags/system anchor UID`,
+   * `refUID = README ANCHOR UID`, `weight = 1` — the exact shape the Overview
+   * design (`packages/nextjs/docs/overview-pane-design.md`) and the folder-
+   * visibility TAGs use (`tagTarget(folderAnchor, dataSchemaUID)`): the target
+   * is an anchor, so the kernel files the entry under the **anchor's EAS
+   * schema** (`anchorSchemaUID`) in `_activeByAAS[systemDef][attester][anchorSchemaUID]`.
+   *
+   * AGENT-NOTE: the client's `resolveSystemAnchorSet` currently queries the
+   * `dataSchemaUID` bucket, which an anchor-targeted TAG never populates —
+   * verified empirically: `getActiveTargetsByAttesterAndSchema(systemDef,
+   * attester, dataSchemaUID)` returns [] while the same query with
+   * `anchorSchemaUID` returns the README anchor uid. The directory item uid the
+   * client intersects against IS the anchor uid (the README's ANCHOR), so the
+   * client query bucket must be `anchorSchemaUID`, not `dataSchemaUID`. This
+   * seed attests the correct on-chain shape; the client bucket is a separate
+   * one-line fix (see this PR's report / docs/QUESTIONS.md).
+   *
+   * Idempotency: `hasActiveTagFromAny(target, definition, [attester])` keys on
+   * `_activeEdge[edgeHash(attester, target, definition, TAG_SCHEMA)]` — schema-
+   * bucket-independent — so re-runs are a clean no-op.
+   */
+  const tagSystemIfMissing = async (
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    signer: any,
+    fileUID: string,
+    systemDefUID: string,
+  ): Promise<void> => {
+    const attester = await signer.getAddress();
+    const already = await edgeResolver.hasActiveTagFromAny(fileUID, systemDefUID, [attester]);
+    if (already) {
+      console.log(`  System    tag exists, skipping  ${fileUID.slice(0, 10)}…`);
+      return;
+    }
+    console.log(`  System    tag → ${fileUID.slice(0, 10)}…  (def=${systemDefUID.slice(0, 10)}…)`);
+    await makeTag(signer, fileUID, systemDefUID, 1n);
   };
 
   // Lookup: returns the anchor UID for `(parent, name, schema)` or null.
@@ -499,6 +660,84 @@ export async function seedDemoTree() {
   }
   await walkAncestorVisibility(user1, photoUID);
 
+  // ── /tags/system + Overview READMEs (Task 15) ───────────────────────────────────
+  //
+  // The explorer's Overview pane renders a `system`-tagged README child of the
+  // item being viewed. Seed the `/tags/system` definition anchor plus three
+  // demo READMEs — on a folder, on a file anchor, and under the demo lens's
+  // address container — so "any item type" is exercised. All idempotent and
+  // guarded exactly like the rest of the seed.
+
+  console.log("\n── /tags/system + Overview READMEs ──");
+  // 1. Generic folder anchors /tags and /tags/system (schema 0). The client's
+  //    resolveSystemAnchorSet walks resolvePath(root,"tags")→(…,"system").
+  const tags = await getOrCreateFolder(deployerSigner, rootUID, "tags");
+  const tagsUID = tags.uid;
+  const systemFolder = await getOrCreateFolder(deployerSigner, tagsUID, "system");
+  const systemDefUID = systemFolder.uid;
+
+  const FOLDER_README = [
+    "# Docs",
+    "",
+    "Welcome to the **docs** folder.",
+    "",
+    "## Contents",
+    "",
+    "| File | About |",
+    "|------|-------|",
+    "| readme.txt | legacy notes |",
+    "",
+    "> Rendered safely in the Overview pane.",
+    "",
+  ].join("\n");
+
+  // 2. Folder case (must-have): /docs/README.md + system TAG.
+  const docsReadme = await makeOnchainReadmeIfMissing(deployerSigner, docsUID, "README.md", FOLDER_README);
+  await tagSystemIfMissing(deployerSigner, docsReadme.fileUID, systemDefUID);
+
+  // 3. File-anchor case: a README hosted UNDER the /docs/readme.txt file anchor.
+  //    A file leaf is itself an anchor that can host children, so the Overview
+  //    of a *file* resolves system-tagged children the same way a folder does.
+  const readmeTxtUID = await findAnchor(docsUID, "readme.txt", dataSchemaUID);
+  if (readmeTxtUID) {
+    const FILE_README = [
+      "# readme.txt",
+      "",
+      "Overview for the **readme.txt** file item.",
+      "",
+      "This README is hosted *under a file anchor* to exercise the non-folder",
+      "Overview path — a file leaf can host children just like a folder.",
+      "",
+    ].join("\n");
+    const fileReadme = await makeOnchainReadmeIfMissing(deployerSigner, readmeTxtUID, "README.md", FILE_README);
+    await tagSystemIfMissing(deployerSigner, fileReadme.fileUID, systemDefUID);
+  } else {
+    console.log("  ⏭️  /docs/readme.txt anchor missing — skipping file-anchor README.");
+  }
+
+  // 4. Address-container case: a README under the demo lens's (deployer's)
+  //    address root. Address containers have no anchor UID to use as refUID, so
+  //    the file-slot anchor takes the recipient-fallback path (recipient=addr,
+  //    refUID=0x0) — same pattern as 07_persona_names.ts. The Overview of an
+  //    address then resolves this system-tagged child.
+  const ADDRESS_README = [
+    "# Demo lens",
+    "",
+    "Overview for this **address** container.",
+    "",
+    "Files placed by this address (the demo deployer lens) show up across the",
+    "explorer; this page is its address-level Overview.",
+    "",
+  ].join("\n");
+  const addrReadme = await makeOnchainReadmeIfMissing(
+    deployerSigner,
+    ethers.zeroPadValue(deployerAddr, 32),
+    "README.md",
+    ADDRESS_README,
+    deployerAddr,
+  );
+  await tagSystemIfMissing(deployerSigner, addrReadme.fileUID, systemDefUID);
+
   // ── Summary ───────────────────────────────────────────────────────────────────
 
   console.log("\n═══════════════════════════════════════");
@@ -506,6 +745,7 @@ export async function seedDemoTree() {
   console.log(`  docs/     ${docsUID.slice(0, 14)}…`);
   console.log(`  images/   ${imagesUID.slice(0, 14)}…`);
   console.log(`  shared/   ${sharedUID.slice(0, 14)}…`);
+  console.log(`  tags/system  ${systemDefUID.slice(0, 14)}…`);
   console.log("═══════════════════════════════════════\n");
   console.log("Tip: open the explorer at http://localhost:3000/explorer");
   console.log("     to browse the seeded data.\n");

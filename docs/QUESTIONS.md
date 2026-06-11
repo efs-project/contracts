@@ -17,6 +17,43 @@ Questions agents have flagged for human decision. Review and resolve before agen
 
 ## Open
 
+### [tier-2, 2026-06-10, claude] Overview `resolveSystemAnchorSet` queries the wrong schema bucket
+
+The Task-15 demo seed now creates `/tags/system` and three `system`-tagged
+READMEs (folder `/docs/README.md`, a file-anchor README under `/docs/readme.txt`,
+and an address-container README). The TAG shape matches the Overview design and
+the existing folder-visibility convention: `definition=/tags/system anchor`,
+`refUID=README ANCHOR uid`, `weight=1`.
+
+**Empirically verified on a Sepolia fork** that an anchor-targeted TAG files
+under the **target anchor's EAS schema = `anchorSchemaUID`**, NOT `dataSchemaUID`
+(EdgeResolver reads `getAttestation(refUID).schema`; an ANCHOR's EAS schema is
+always `anchorSchemaUID`, regardless of its decoded `anchorSchema` field). Live
+reads: `getActiveTargetsByAttesterAndSchema(systemDef, deployer, anchorSchemaUID)`
+returns all three README anchor uids; the same query with `dataSchemaUID` returns
+`[]`. The directory-item uid the client intersects against IS the ANCHOR uid.
+
+But `packages/nextjs/utils/efs/resolveSystemAnchorSet.ts` queries the
+**`dataSchemaUID`** bucket (introduced by commit `2a17b76`, "correct system-tag
+schema bucket to dataSchema"). With the correct seed in place this returns an
+empty set, so the Overview pane renders nothing and the hidden-files filter
+hides nothing.
+
+- **A**: revert the client to query `anchorSchemaUID` (one-line: pass
+  `anchorSchemaUID` instead of `dataSchemaUID` to
+  `getActiveTargetsByAttesterAndSchema`; thread `anchorSchemaUID` into
+  `resolveSystemAnchorSet`/`useItemOverview`/`FileBrowser`). The pre-`2a17b76`
+  design-doc line (`…system, anchorSchemaUID`) was correct.
+- **B**: change the seed/convention so the system TAG targets the README **DATA**
+  uid (lands in dataSchema bucket) — rejected: the client intersects the set
+  against directory-item ANCHOR uids, so a DATA-uid set would never match.
+
+**Default if not answered:** A — the seed is correct as-is; the client query
+bucket is the bug. Flagged as a spawned follow-up task.
+
+**Blocks:** the Overview pane actually rendering the seeded READMEs. Does NOT
+block this seed PR (the on-chain shape is correct and independently verified).
+
 ### [tier-2, 2026-04-16, claude] Devnet upgradeability proxy pattern
 
 You said you plan to add upgradeability for devnet/Sepolia. Which proxy pattern?

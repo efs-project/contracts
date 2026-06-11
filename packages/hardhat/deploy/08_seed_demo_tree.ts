@@ -3,7 +3,8 @@ import { DeployFunction } from "hardhat-deploy/types";
 import { seedDemoTree } from "../scripts/seed-impl";
 
 /**
- * Run the `/docs`, `/images`, `/shared` demo seed as a hardhat-deploy step so
+ * Run the `/docs`, `/images`, `/shared`, `/tags/system` demo seed as a
+ * hardhat-deploy step so
  * **any** path into deploy auto-seeds — not just the root-level `yarn deploy`
  * that happens to chain `&& yarn hardhat:seed` after workspace deploy.
  *
