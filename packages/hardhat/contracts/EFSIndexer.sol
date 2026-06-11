@@ -44,7 +44,11 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
     ///         non-revocable interned content; the revocable claim is the PIN binding.
     event PropertyCreated(bytes32 indexed propertyUID, address indexed attester, bytes32 indexed valueHash);
 
-    /// @notice Emitted when any EFS-native attestation (ANCHOR, DATA, PROPERTY) is revoked.
+    /// @notice SchemaResolver onRevoke hook — flips the `_isRevoked` read-filter for an attestation
+    ///         under this indexer's schemas. NOTE: ANCHOR/DATA/PROPERTY are all non-revocable
+    ///         (their onAttest rejects `revocable`), so EAS never invokes this in practice; it
+    ///         remains as the resolver-interface contract. The revocable schemas
+    ///         (PIN/TAG/MIRROR/LIST_ENTRY/REDIRECT) are tracked by their own resolvers.
     event AttestationRevoked(bytes32 indexed uid, address indexed attester);
 
     /// @notice Emitted when an external attestation is indexed via the public index() API.
