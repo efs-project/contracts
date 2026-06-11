@@ -5008,7 +5008,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     ListEntryResolver: {
-      address: "0x61363ac1c0f7B59c5F81bFd6d03216BF75aFFe7B",
+      address: "0xc3C05009ac3D62745F4766136a7c68D334D0377E",
       abi: [
         {
           inputs: [
@@ -5711,7 +5711,7 @@ const deployedContracts = {
       },
     },
     ListReader: {
-      address: "0x47dc508dAf593D6839f2e4963Ea13A7E449b5138",
+      address: "0x8A84d1B3f420e262a739aaCC304973e179d2f11d",
       abi: [
         {
           inputs: [
@@ -6110,7 +6110,7 @@ const deployedContracts = {
       },
     },
     ListResolver: {
-      address: "0xFb3B3Dea450Ee849f0FCaA268Ce160D32Ad933cd",
+      address: "0x0eD4796Fd5f0E8f87Dc12D048E90B04FC112b214",
       abi: [
         {
           inputs: [
