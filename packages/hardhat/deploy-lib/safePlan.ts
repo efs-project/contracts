@@ -91,18 +91,29 @@ export interface SafePlan {
   impls: Record<Create3Name, string>;
   /// Batch 1: CreateX proxy deploys (atomic init, born Safe-owned) + wireContracts.
   batch1: SafeCall[];
-  /// Batch 2: register 9 schemas LAST + author the whole scaffolding tree via ONE
-  /// SystemAccount.bootstrap leg (timestamp-robust — no off-chain UID prediction) +
+  /// Batch 2: register the (up to 9) not-yet-registered schemas LAST + author the whole scaffolding
+  /// tree via ONE SystemAccount.bootstrap leg (timestamp-robust — no off-chain UID prediction) +
   /// SystemAccount.seal() as the last leg (PR #24 P1 fix: relay becomes module-only).
-  /// On a post-seal re-run (the SystemAccount proxy already deployed AND already sealed),
-  /// the bootstrap + seal legs are OMITTED (they would revert `BootstrapSealed`) — see
-  /// `batch2BootstrapOmitted`.
+  /// Idempotent on a re-run: register legs for already-registered schemas are OMITTED (EAS register
+  /// is NOT idempotent — re-including would revert `AlreadyExists`) — see `batch2RegistersOmitted`;
+  /// and on a post-seal re-run (the SystemAccount proxy already deployed AND already sealed) the
+  /// bootstrap + seal legs are OMITTED (they would revert `BootstrapSealed`) — see
+  /// `batch2BootstrapOmitted`. A re-run of a fully-registered+sealed system therefore yields an empty
+  /// Batch 2 (a clean no-op), letting recovery proceed to Batch 3.
   batch2: SafeCall[];
   /// True when Batch 2 omitted the bootstrap + seal legs because the SystemAccount was already
-  /// deployed and `bootstrapSealed()` was already true (idempotent post-seal re-run). The schema
-  /// register legs are still included (register is idempotent — AlreadyExists is tolerated on-chain
-  /// by the registry, and the orchestrator re-asserts getSchema afterwards).
+  /// deployed and `bootstrapSealed()` was already true (idempotent post-seal re-run).
   batch2BootstrapOmitted: boolean;
+  /// Count of `SchemaRegistry.register` legs OMITTED from Batch 2 because the schema's expected UID
+  /// was already registered (`getSchema(uid).uid != bytes32(0)`). EAS register is NOT idempotent — it
+  /// reverts `AlreadyExists` once a UID exists — so on a re-run after a prior Batch 2 landed (e.g. a
+  /// failure between Batch 2 and Batch 3) re-including the register legs would abort the whole
+  /// MultiSend on the first one and strand recovery. We query the registry at plan-build time and drop
+  /// the leg for any already-registered schema (same shape as the bootstrap/seal omit above). On a
+  /// FIRST deploy no proxies/schemas exist yet → all 9 legs included → this is 0; on a re-run of a
+  /// fully-registered system → all 9 omitted → this is 9 and (with bootstrap+seal omitted) Batch 2 is
+  /// an empty no-op, so recovery proceeds to Batch 3 instead of reverting.
+  batch2RegistersOmitted: number;
 }
 
 /// Init args per CREATE3 contract — IDENTICAL shape to orchestrate.ts initSpecs, except the owner
@@ -197,11 +208,30 @@ export async function buildSafePlan(deployer: Signer, safe: string, log = true):
   }
 
   // ── Batch 2: register 9 schemas LAST + author the whole scaffolding tree (ONE bootstrap leg) ─────
+  // EAS SchemaRegistry.register is NOT idempotent — it reverts `AlreadyExists` once a UID is
+  // registered. A *failed* Batch 2 is atomic and lands nothing, but a re-run after a *successful*
+  // register (e.g. a failure between a complete Batch 2 and Batch 3) would re-include the legs and
+  // revert the whole MultiSend on the first one, stranding recovery. So we query the registry at
+  // plan-build time for each schema's expected UID and OMIT any already-registered leg (same shape as
+  // the bootstrap/seal omit below, which guards on getCode/bootstrapSealed). On a first deploy the
+  // proxies/schemas don't exist yet → every leg is included.
   const batch2: SafeCall[] = [];
   const registryIface = new Interface([
     "function register(string schema, address resolver, bool revocable) returns (bytes32)",
   ]);
+  const registry = await ethers.getContractAt(
+    "@ethereum-attestation-service/eas-contracts/contracts/ISchemaRegistry.sol:ISchemaRegistry",
+    registryAddr,
+    deployer,
+  );
+  let batch2RegistersOmitted = 0;
   for (const s of SCHEMAS) {
+    const existing = await registry.getSchema(schemaUIDs[s.name]);
+    if (existing.uid !== ZeroHash) {
+      batch2RegistersOmitted++;
+      l(`  register ${s.name} OMITTED — already registered (${schemaUIDs[s.name]})`);
+      continue;
+    }
     const data = registryIface.encodeFunctionData("register", [s.fieldString, proxies[s.resolver], s.revocable]);
     batch2.push({ to: registryAddr, data, label: `register ${s.name}` });
   }
@@ -251,6 +281,7 @@ export async function buildSafePlan(deployer: Signer, safe: string, log = true):
     batch1,
     batch2,
     batch2BootstrapOmitted,
+    batch2RegistersOmitted,
   };
 }
 

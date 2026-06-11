@@ -92,8 +92,11 @@ export async function orchestrateViaSafe(
   // ── Batch 2 (post-gate): register 9 schemas LAST + author scaffolding (ONE bootstrap leg) ────────
   // FIX 1: the scaffolding is a single SystemAccount.bootstrap leg that threads real EAS UIDs in
   // memory — timestamp-robust, no off-chain prediction, no pinned timestamp.
+  const registersIncluded = SCHEMAS.length - plan.batch2RegistersOmitted;
   l(
-    `Safe-native deploy: executing Batch 2 (${plan.batch2.length} legs: register×9${
+    `Safe-native deploy: executing Batch 2 (${plan.batch2.length} legs: register×${registersIncluded}${
+      plan.batch2RegistersOmitted ? ` — ${plan.batch2RegistersOmitted} register legs OMITTED (already registered)` : ""
+    }${
       plan.batch2BootstrapOmitted ? " — bootstrap + seal OMITTED (already sealed)" : " + bootstrap + seal"
     }) as the Safe...`,
   );

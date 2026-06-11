@@ -100,6 +100,13 @@ describe("DeploySafe.fork — Safe-native deploy, born Safe-owned", function () 
       expect(rec.schema, `${s.name} field string`).to.equal(s.fieldString);
       expect(rec.revocable, `${s.name} revocable`).to.equal(s.revocable);
     }
+    // First deploy: nothing was registered beforehand, so all 9 register legs were INCLUDED in Batch 2
+    // (no register-omit happened on the initial run — the omit path is exercised by the re-run test).
+    expect(result.plan.batch2RegistersOmitted, "first deploy includes all 9 register legs (none omitted)").to.equal(0);
+    expect(
+      result.plan.batch2.filter(leg => /^register /.test(leg.label ?? "")),
+      "first deploy Batch 2 has 9 register legs",
+    ).to.have.lengthOf(SCHEMAS.length);
 
     // ── BORN Safe-owned: ProxyAdmins + Ownable resolvers + SystemAccount owner == Safe; deployer holds
     //    nothing; NO transfer phase ran. ────────────────────────────────────────────────────────────
@@ -195,20 +202,23 @@ describe("DeploySafe.fork — Safe-native deploy, born Safe-owned", function () 
     sealedSystem = await takeSnapshot();
   });
 
-  // ── PR #24 P1 follow-up: post-seal re-run of buildSafePlan OMITS bootstrap + seal ─────────────────
-  // The EOA after-gate retry is covered in Deploy.fork.test.ts. The Safe omit-branch is exercised here:
-  // buildSafePlan is sealed-aware — when the SystemAccount proxy already exists AND bootstrapSealed() is
-  // true, Batch 2 OMITS the bootstrap + seal legs (they would revert BootstrapSealed on a re-run) and
-  // sets batch2BootstrapOmitted=true. The register×9 legs stay (register is idempotent). We restore the
-  // post-seal snapshot from the happy-path test and re-build the plan against that deployed+sealed system.
-  it("post-seal buildSafePlan omits the bootstrap + seal legs (Safe omit-branch)", async function () {
+  // ── PR #24 P1 follow-up: post-seal re-run of buildSafePlan is a fully idempotent no-op Batch 2 ────
+  // The EOA after-gate retry is covered in Deploy.fork.test.ts. The Safe idempotency is exercised here:
+  // buildSafePlan queries on-chain state at plan-build time — when the SystemAccount proxy already
+  // exists AND bootstrapSealed() is true, Batch 2 OMITS the bootstrap + seal legs (they would revert
+  // BootstrapSealed), and for each schema whose expected UID is already registered it OMITS the register
+  // leg (EAS register is NOT idempotent — re-including would revert AlreadyExists on the first one and
+  // abort the whole MultiSend, stranding recovery). On a fully-registered+sealed system that means ALL
+  // 9 register legs AND bootstrap+seal are omitted, leaving Batch 2 empty — a clean no-op so recovery
+  // proceeds to Batch 3. We restore the post-seal snapshot from the happy-path test and re-build.
+  it("post-seal buildSafePlan omits all register legs + bootstrap + seal (Batch 2 is an idempotent no-op)", async function () {
     // Restore the system the happy path deployed + sealed (deterministic addresses preclude a 2nd deploy).
     await sealedSystem.restore();
 
     const [deployer] = await ethers.getSigners();
 
     // Sanity: the SystemAccount is in fact deployed AND sealed in the restored state — the two
-    // preconditions the omit-branch keys off.
+    // preconditions the bootstrap+seal omit keys off.
     const saPredicted = (await predictProxyAddress(await getCreateX(deployer), deployedSafe, "SystemAccount"))
       .predicted;
     expect(await ethers.provider.getCode(saPredicted), "SystemAccount has code (deployed)").to.not.equal("0x");
@@ -218,18 +228,20 @@ describe("DeploySafe.fork — Safe-native deploy, born Safe-owned", function () 
     // Re-build the plan against the deployed+sealed system. This is the post-seal re-run path.
     const plan = await buildSafePlan(deployer, deployedSafe, false);
 
-    // ── The omit flag is set ──────────────────────────────────────────────────────────────────────
+    // ── The omit flags are set: bootstrap+seal omitted, and all 9 registers omitted ─────────────────
     expect(plan.batch2BootstrapOmitted, "batch2BootstrapOmitted on a post-seal re-run").to.equal(true);
-
-    // ── Batch 2 = register×9 only; the bootstrap + seal legs are GONE ───────────────────────────────
-    expect(plan.batch2, "Batch 2 has only the 9 register legs (bootstrap + seal omitted)").to.have.lengthOf(
-      SCHEMAS.length,
-    );
     expect(SCHEMAS.length, "freeze set is 9 schemas").to.equal(9);
-    // Every remaining leg is a register leg; none is the bootstrap or seal leg.
-    for (const leg of plan.batch2) {
-      expect(leg.label, "remaining Batch-2 leg is a register leg").to.match(/^register /);
-    }
+    expect(
+      plan.batch2RegistersOmitted,
+      "all 9 register legs omitted — the schemas are already registered (register is NOT idempotent)",
+    ).to.equal(9);
+
+    // ── Batch 2 is EMPTY — every register leg + bootstrap + seal omitted (full idempotency) ─────────
+    expect(plan.batch2, "Batch 2 is an empty no-op (all registers + bootstrap + seal omitted)").to.have.lengthOf(0);
+    expect(
+      plan.batch2.some(leg => /^register /.test(leg.label ?? "")),
+      "no register leg in Batch 2",
+    ).to.equal(false);
     expect(
       plan.batch2.some(leg => /bootstrap/i.test(leg.label ?? "")),
       "no bootstrap leg in Batch 2",
