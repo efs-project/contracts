@@ -415,6 +415,26 @@ describe("EFSIndexer", function () {
       ).to.be.revertedWithCustomError(eas, "InvalidAttestation");
     });
 
+    it("Should reject DATA with a non-empty payload (empty-identity invariant, ADR-0049)", async function () {
+      // EAS does not enforce the registered schema's ABI on attestation.data — it stores
+      // whatever bytes are passed. The resolver must reject any non-zero-length DATA payload
+      // so arbitrary bytes can't be smuggled in and served as valid pure-identity DATA.
+      const schemaEncoder = new ethers.AbiCoder();
+      await expect(
+        eas.attest({
+          schema: dataSchemaUID,
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: NO_EXPIRATION,
+            revocable: false,
+            refUID: ZERO_BYTES32,
+            data: schemaEncoder.encode(["string"], ["smuggled"]), // non-empty — must be rejected
+            value: 0n,
+          },
+        }),
+      ).to.be.revertedWithCustomError(eas, "InvalidAttestation");
+    });
+
     it("Should reject revocable PROPERTY (schema is non-revocable per ADR-0035)", async function () {
       const schemaEncoder = new ethers.AbiCoder();
       await expect(

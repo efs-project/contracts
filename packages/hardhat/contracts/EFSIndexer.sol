@@ -447,8 +447,13 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
             // The attestation carries no fields (zero-length payload) — its UID *is* the
             // file's identity. contentHash/size now live as lens-scoped reserved-key
             // PROPERTYs bound to this UID, not as DATA fields, so there is nothing to decode.
+            // EAS does not enforce the registered schema's ABI on attestation.data — it stores
+            // whatever bytes are passed — so the resolver must reject any non-empty payload to
+            // keep the empty-DATA canonical invariant (a DATA UID carrying arbitrary bytes would
+            // otherwise be indexed and served as valid pure-identity DATA).
             if (attestation.refUID != EMPTY_UID) return false;
             if (attestation.revocable) return false;
+            if (attestation.data.length != 0) return false;
 
             // The bare DATA UID is already tracked by _indexGlobal above (step 1).
             emit DataCreated(attestation.uid, attestation.attester);
