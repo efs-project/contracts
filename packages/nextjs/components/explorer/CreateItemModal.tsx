@@ -991,11 +991,8 @@ export const CreateItemModal = ({
       // dedup read (`indexer.dataByContentKey`) was removed: DATA carries no contentHash, that
       // index is no longer written, and identical bytes now mint distinct DATA UIDs. Client-side
       // dedup prevention (query the property index for a trusted contentHash claim before upload
-      // and hardlink instead of minting) plus attaching contentHash/size as reserved-key
-      // PROPERTYs is future PROPERTY/SDK upload-flow work. `contentHash`/`fileSize` are still
-      // computed above so the follow-up has the values ready; they are not used yet.
-      void contentHash;
-      void fileSize;
+      // and hardlink instead of minting) remains future PROPERTY/SDK upload-flow work. The
+      // reserved-key contentHash/size PROPERTYs are now attached below alongside contentType.
 
       ops.log(opId, "Creating DATA attestation (empty — pure identity, ADR-0049)...");
       const dataTxHash = await attest(
@@ -1024,38 +1021,65 @@ export const CreateItemModal = ({
       ops.log(opId, `DATA created: ${dataUID.slice(0, 10)}...`);
       checkCancelled();
 
-      // contentType PROPERTY (ADR-0035 / ADR-0005-superseded) uses the unified
-      // free-floating model: key anchor under the DATA, free-floating PROPERTY
-      // with value, then a PIN binding them. Three transactions; only the PIN
-      // is revocable, so flipping a MIME type is a PIN re-attest (which supersedes
-      // the prior PIN in O(1)), not a PROPERTY revoke.
-      ops.log(opId, "Creating contentType key anchor...");
-      let contentTypeKeyAnchorUID: `0x${string}` | undefined;
-      if (indexer && publicClient) {
-        contentTypeKeyAnchorUID = (await publicClient.readContract({
-          address: indexer.address as `0x${string}`,
-          abi: indexer.abi,
-          functionName: "resolveAnchor",
-          args: [dataUID, "contentType", propertySchemaUID as `0x${string}`],
-        })) as `0x${string}`;
-      }
-      if (!contentTypeKeyAnchorUID || contentTypeKeyAnchorUID === (ethers.ZeroHash as `0x${string}`)) {
-        const encodedKey = ethers.AbiCoder.defaultAbiCoder().encode(
-          ["string", "bytes32"],
-          ["contentType", propertySchemaUID],
-        );
-        const keyTx = await attest(
+      // Reserved-key PROPERTYs bound to the DATA UID (ADR-0049, specs/02 §Property).
+      // Each uses the unified free-floating model (ADR-0035 / ADR-0041): a key anchor
+      // under the DATA, a free-floating PROPERTY carrying the value, then a PIN binding
+      // them. Three transactions per key; only the PIN is revocable, so changing a value
+      // is a PIN re-attest (which supersedes the prior PIN in O(1)), not a PROPERTY revoke.
+      // All values are string-encoded: contentType is the MIME type, contentHash is the
+      // 0x-prefixed keccak hex computed above, size is the decimal byte count.
+      const bindProperty = async (key: string, value: string) => {
+        ops.log(opId, `Creating ${key} key anchor...`);
+        let keyAnchorUID: `0x${string}` | undefined;
+        if (indexer && publicClient) {
+          keyAnchorUID = (await publicClient.readContract({
+            address: indexer.address as `0x${string}`,
+            abi: indexer.abi,
+            functionName: "resolveAnchor",
+            args: [dataUID, key, propertySchemaUID as `0x${string}`],
+          })) as `0x${string}`;
+        }
+        if (!keyAnchorUID || keyAnchorUID === (ethers.ZeroHash as `0x${string}`)) {
+          const encodedKey = ethers.AbiCoder.defaultAbiCoder().encode(["string", "bytes32"], [key, propertySchemaUID]);
+          const keyTx = await attest(
+            {
+              functionName: "attest",
+              args: [
+                {
+                  schema: anchorSchemaUID as `0x${string}`,
+                  data: {
+                    recipient: ethers.ZeroAddress,
+                    expirationTime: 0n,
+                    revocable: false,
+                    refUID: dataUID,
+                    data: encodedKey as `0x${string}`,
+                    value: 0n,
+                  },
+                },
+              ],
+            },
+            { silent: true },
+          );
+          if (!keyTx) throw new Error(`${key} key anchor attestation failed.`);
+          const keyReceipt = await publicClient.waitForTransactionReceipt({ hash: keyTx });
+          keyAnchorUID = extractUIDFromReceipt(keyReceipt);
+          if (!keyAnchorUID) throw new Error(`Could not extract ${key} key anchor UID`);
+        }
+
+        ops.log(opId, `Attesting ${key} PROPERTY...`);
+        const encodedProperty = ethers.AbiCoder.defaultAbiCoder().encode(["string"], [value]);
+        const propTxHash = await attest(
           {
             functionName: "attest",
             args: [
               {
-                schema: anchorSchemaUID as `0x${string}`,
+                schema: propertySchemaUID as `0x${string}`,
                 data: {
                   recipient: ethers.ZeroAddress,
                   expirationTime: 0n,
                   revocable: false,
-                  refUID: dataUID,
-                  data: encodedKey as `0x${string}`,
+                  refUID: ethers.ZeroHash as `0x${string}`,
+                  data: encodedProperty as `0x${string}`,
                   value: 0n,
                 },
               },
@@ -1063,64 +1087,42 @@ export const CreateItemModal = ({
           },
           { silent: true },
         );
-        if (!keyTx) throw new Error("contentType key anchor attestation failed.");
-        const keyReceipt = await publicClient.waitForTransactionReceipt({ hash: keyTx });
-        contentTypeKeyAnchorUID = extractUIDFromReceipt(keyReceipt);
-        if (!contentTypeKeyAnchorUID) throw new Error("Could not extract contentType key anchor UID");
-      }
+        if (!propTxHash) throw new Error(`${key} PROPERTY attestation failed.`);
+        const propReceipt = await publicClient.waitForTransactionReceipt({ hash: propTxHash });
+        const propertyUID = extractUIDFromReceipt(propReceipt);
+        if (!propertyUID) throw new Error(`Could not extract ${key} PROPERTY UID`);
 
-      ops.log(opId, "Attesting content type PROPERTY...");
-      const encodedProperty = ethers.AbiCoder.defaultAbiCoder().encode(["string"], [contentType]);
-      const propTxHash = await attest(
-        {
-          functionName: "attest",
-          args: [
-            {
-              schema: propertySchemaUID as `0x${string}`,
-              data: {
-                recipient: ethers.ZeroAddress,
-                expirationTime: 0n,
-                revocable: false,
-                refUID: ethers.ZeroHash as `0x${string}`,
-                data: encodedProperty as `0x${string}`,
-                value: 0n,
+        ops.log(opId, `Binding ${key} PROPERTY via PIN...`);
+        // AGENT-NOTE: PROPERTY value binding is a PIN under ADR-0041 (cardinality 1).
+        // Re-binding at the same key anchor supersedes the prior PIN in O(1) — no
+        // revoke-then-attest dance.
+        const encodedPin = ethers.AbiCoder.defaultAbiCoder().encode(["bytes32"], [keyAnchorUID]);
+        const pinTxHash = await attest(
+          {
+            functionName: "attest",
+            args: [
+              {
+                schema: pinSchemaUID as `0x${string}`,
+                data: {
+                  recipient: ethers.ZeroAddress,
+                  expirationTime: 0n,
+                  revocable: true,
+                  refUID: propertyUID,
+                  data: encodedPin as `0x${string}`,
+                  value: 0n,
+                },
               },
-            },
-          ],
-        },
-        { silent: true },
-      );
-      if (!propTxHash) throw new Error("contentType PROPERTY attestation failed.");
-      const propReceipt = await publicClient.waitForTransactionReceipt({ hash: propTxHash });
-      const contentTypePropertyUID = extractUIDFromReceipt(propReceipt);
-      if (!contentTypePropertyUID) throw new Error("Could not extract contentType PROPERTY UID");
+            ],
+          },
+          { silent: true },
+        );
+        if (pinTxHash) await publicClient.waitForTransactionReceipt({ hash: pinTxHash });
+        checkCancelled();
+      };
 
-      ops.log(opId, "Binding contentType PROPERTY via PIN...");
-      // AGENT-NOTE: PROPERTY value binding is a PIN under ADR-0041 (cardinality 1).
-      // Re-binding (changing contentType) at the same key anchor supersedes the prior PIN
-      // in O(1) — no revoke-then-attest dance.
-      const encodedContentTypePin = ethers.AbiCoder.defaultAbiCoder().encode(["bytes32"], [contentTypeKeyAnchorUID]);
-      const contentTypePinTxHash = await attest(
-        {
-          functionName: "attest",
-          args: [
-            {
-              schema: pinSchemaUID as `0x${string}`,
-              data: {
-                recipient: ethers.ZeroAddress,
-                expirationTime: 0n,
-                revocable: true,
-                refUID: contentTypePropertyUID,
-                data: encodedContentTypePin as `0x${string}`,
-                value: 0n,
-              },
-            },
-          ],
-        },
-        { silent: true },
-      );
-      if (contentTypePinTxHash) await publicClient.waitForTransactionReceipt({ hash: contentTypePinTxHash });
-      checkCancelled();
+      await bindProperty("contentType", contentType);
+      await bindProperty("contentHash", contentHash);
+      await bindProperty("size", fileSize.toString());
 
       const transportAnchorUID = await resolveTransportAnchor(transportName);
       if (!transportAnchorUID) {
