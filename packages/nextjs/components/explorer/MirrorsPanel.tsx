@@ -321,7 +321,7 @@ export const MirrorsPanel = ({ fileAnchorUID, lensAddresses }: { fileAnchorUID: 
         return;
       }
 
-      const MAX_ONCHAIN_SIZE = 24_000_000;
+      const MAX_ONCHAIN_SIZE = 30_000_000;
       if (dataBytes.length > MAX_ONCHAIN_SIZE) {
         notification.error(
           `File too large for on-chain upload (${Math.round(dataBytes.length / 1024 / 1024)}MB). ` +

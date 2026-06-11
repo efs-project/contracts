@@ -26,7 +26,7 @@
  * PIN in O(1) (ADR-0041), so a retry cleanly converges — only the orphaned
  * intermediate artifacts from the failed attempt linger.
  */
-
+import { MOCK_CHUNKED_FILE_ABI, MOCK_CHUNKED_FILE_BYTECODE } from "./sstore2";
 import {
   decodeEventLog,
   encodeAbiParameters,
@@ -38,15 +38,17 @@ import {
 } from "viem";
 import type { Abi, PublicClient, TransactionReceipt, WalletClient } from "viem";
 import { computeContentHash } from "~~/utils/efs/transports";
-import { MOCK_CHUNKED_FILE_ABI, MOCK_CHUNKED_FILE_BYTECODE } from "./sstore2";
 
 /**
  * Injected attest handle. Structurally a subset of the `writeContractAsync`
  * returned by `useScaffoldWriteContract({ contractName: "EAS" })`: it accepts
  * the `attest` functionName + a loosely-typed `args` tuple and the scaffold
- * `{ silent }` option, returning the tx hash (or undefined). Real return type is
- * `Promise<WriteContractReturnType | undefined>` where `WriteContractReturnType`
- * is `0x${string}` — assignable to this.
+ * `{ silent }` option, returning the tx hash (or undefined).
+ *
+ * The scaffold handle is NOT directly assignable: its `args` is a strongly-typed
+ * ABI tuple, and a function parameter is contravariant, so a `readonly unknown[]`
+ * param can't accept it without widening. Callers bridge the gap with a single
+ * documented `as unknown as AttestFn` cast at the injection site.
  */
 export type AttestFn = (
   args: { functionName: "attest"; args: readonly unknown[] },
@@ -93,8 +95,11 @@ export interface UploadOnchainFileResult {
 /** Thrown when `isCancelled()` flips true at a tx boundary. */
 export const UPLOAD_CANCELLED = "__UPLOAD_CANCELLED__";
 
-// On-chain SSTORE2 limit, mirrored from CreateItemModal. ~24MB.
-const MAX_ONCHAIN_SIZE = 24_000_000;
+// On-chain SSTORE2 sanity bound, mirrored from CreateItemModal. ~30MB.
+// Not a protocol limit: each CHUNK_SIZE slice becomes its own SSTORE2
+// contract (EIP-170 caps contract code at 24,576 B), so this just bounds
+// the number of sequential in-browser deploy txs (~1,250 at 24 KB/chunk).
+const MAX_ONCHAIN_SIZE = 30_000_000;
 const CHUNK_SIZE = 24000;
 const MAX_ANCHOR_DEPTH = 32;
 
@@ -197,7 +202,9 @@ export async function uploadOnchainFile(args: UploadOnchainFileArgs): Promise<Up
   const fileSize = BigInt(bytes.length);
 
   const totalChunks = Math.ceil(bytes.length / CHUNK_SIZE) || 1;
-  log(`Uploading ${Math.round(bytes.length / 1024) || 1}KB in ${totalChunks} chunk${totalChunks > 1 ? "s" : ""} via SSTORE2...`);
+  log(
+    `Uploading ${Math.round(bytes.length / 1024) || 1}KB in ${totalChunks} chunk${totalChunks > 1 ? "s" : ""} via SSTORE2...`,
+  );
   const chunkAddresses: `0x${string}`[] = [];
 
   for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
@@ -429,7 +436,10 @@ export async function uploadOnchainFile(args: UploadOnchainFileArgs): Promise<Up
   log("Binding contentType PROPERTY via PIN...");
   // PROPERTY value binding is a PIN under ADR-0041 (cardinality 1). Re-binding at
   // the same key anchor supersedes the prior PIN in O(1).
-  const encodedContentTypePin = encodeAbiParameters([{ name: "definition", type: "bytes32" }], [contentTypeKeyAnchorUID]);
+  const encodedContentTypePin = encodeAbiParameters(
+    [{ name: "definition", type: "bytes32" }],
+    [contentTypeKeyAnchorUID],
+  );
   const contentTypePinTxHash = await attest(
     {
       functionName: "attest",
@@ -530,7 +540,12 @@ export async function uploadOnchainFile(args: UploadOnchainFileArgs): Promise<Up
     const attester = account.address;
     let current = parentAnchorUID;
     let walked = 0;
-    while (walked < MAX_ANCHOR_DEPTH && current && current !== zeroHash && current.toLowerCase() !== rootUID.toLowerCase()) {
+    while (
+      walked < MAX_ANCHOR_DEPTH &&
+      current &&
+      current !== zeroHash &&
+      current.toLowerCase() !== rootUID.toLowerCase()
+    ) {
       const tagged = (await publicClient.readContract({
         address: edgeResolverAddress,
         abi: edgeResolverAbi,
