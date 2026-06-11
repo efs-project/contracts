@@ -22,7 +22,7 @@ To make fast directory browsing possible, two resolver contracts maintain comple
 
 **EFSIndexer** (resolver for ANCHOR, DATA, PROPERTY schemas):
 1. When an Anchor is created, EAS calls `onAttest` → the indexer records parent–child relationships, name lookups, and schema-filtered child lists.
-2. When a standalone DATA is created (`refUID = 0x0`), the indexer records content-addressed deduplication via `dataByContentKey[contentHash]`.
+2. When a standalone DATA is created (`refUID = 0x0`), the indexer records its UID and attester. DATA is an **empty schema** (pure identity, ADR-0049); `contentHash` and `size` are reserved-key PROPERTYs bound to the DATA UID via PIN, not DATA fields. Content-addressed dedup is best-effort client-side (see ADR-0049/0050).
 3. When a PROPERTY or MIRROR references a DATA, the indexer records it in referencing indices.
 
 **EdgeResolver** (resolver for PIN and TAG schemas — ADR-0041):
@@ -66,7 +66,7 @@ EFSIndexer emits structured events from its native schema resolver hooks, enabli
 
 ```solidity
 event AnchorCreated(bytes32 indexed parentUID, bytes32 indexed anchorUID, address indexed attester, bytes32 anchorSchema);
-event DataCreated(bytes32 indexed dataUID, address indexed attester, bytes32 contentHash);
+event DataCreated(bytes32 indexed dataUID, address indexed attester);
 event MirrorCreated(bytes32 indexed dataUID, bytes32 indexed mirrorUID, address indexed attester);
 event PropertyCreated(bytes32 indexed propertyUID, address indexed attester, bytes32 indexed valueHash);
 event AttestationRevoked(bytes32 indexed uid, address indexed attester);  // native-schema revocations
@@ -89,7 +89,7 @@ To support subjective file resolution natively onchain, two coordinated index sy
 - **Core Referencing History**: `_allReferencing` and `_referencingByAttester` track immutable history, ensuring revocations do not break the chain of edits.
 - **Deduplicated Directory Listings**: `getChildrenByAddressList` walks the global `_children` array (unique, insertion order) and includes only items where any of the provided attesters has contributed — no duplicates possible. Pass the returned cursor to get the next page.
 - **Schema + Attester Filtered Listings**: `getAnchorsBySchemaAndAddressList(parentUID, anchorSchema, attesters, startCursor, pageSize, reverseOrder, showRevoked)` intersects `_childrenBySchema[anchorSchema]` with `_containsAttestations` per attester. Use this when the caller wants a specific anchor type (e.g. `DATA_SCHEMA_UID` for file anchors, `SORT_INFO_SCHEMA_UID` for sort anchors) from a multi-attester directory without interleaving unrelated anchor types.
-- **Content-Addressed Dedup**: `dataByContentKey[contentHash]` maps content hashes to the first (canonical) DATA UID.
+- **Content-addressed dedup (client-side)**: `dataByContentKey` is no longer written — it's retained as a declared but unused/advisory storage slot (ADR-0049), not deleted. Dedup is best-effort client-side: query the PROPERTY index for a trusted `contentHash` claim before upload; if found, hardlink the existing DATA via a new PIN rather than minting a new DATA. Dedup resolution for existing duplicates uses the REDIRECT primitive (ADR-0050).
 
 ### EdgeResolver: PIN and TAG storage (per-cardinality indices)
 

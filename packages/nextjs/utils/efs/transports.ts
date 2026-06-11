@@ -59,7 +59,10 @@ export function detectTransport(uri: string): TransportType {
   if (uri.startsWith("ipfs://")) return "ipfs";
   if (uri.startsWith("ar://")) return "arweave";
   if (uri.startsWith("magnet:")) return "magnet";
-  if (uri.startsWith("https://") || uri.startsWith("http://")) return "https";
+  if (uri.startsWith("https://")) return "https";
+  // http:// is intentionally rejected — MirrorResolver._isAllowedScheme only permits https://.
+  // Accepting http:// here would pass early validation but cause MIRROR attestation to revert.
+  // (ADR-0023 scheme safety)
   // Additional off-chain schemes the MirrorResolver allowlist accepts (bottom priority tier).
   if (uri.startsWith("ftp://")) return "ftp";
   if (uri.startsWith("s3://")) return "s3";

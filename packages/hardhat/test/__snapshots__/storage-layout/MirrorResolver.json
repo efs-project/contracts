@@ -1,0 +1,8 @@
+[
+  {
+    "slot": "0",
+    "offset": 0,
+    "label": "transportsAnchorUID",
+    "type": "bytes32"
+  }
+]

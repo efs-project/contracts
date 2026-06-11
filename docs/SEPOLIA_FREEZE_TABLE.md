@@ -40,9 +40,16 @@ A first-principles + adversarial durability review (28 candidate cracks, all ref
 - [ ] On-chain self-derived UID (`ListEntryResolver._listEntrySchemaUID` etc.) == `keccak256(goldenFieldString, proxyAddr, revocable)` == the UID being registered (all three equal).
 - [ ] Golden-vector test: contract field-string constants byte-identical to the deploy script (no UID drift).
 - [ ] `getSchema(uid).resolver == proxy`; no conflicting prior registration of the same tuple.
-- [ ] `wireContracts()` / `setTransportsAnchor()` / `setSortsAnchor()` set and locked.
+- [ ] `wireContracts()` set and locked (pure storage, no EAS call; run pre-registration in Batch 1). `MirrorResolver.setTransportsAnchor()` set post-Batch-2 (Batch 3). No `setSortsAnchor()` — SORT_INFO is deferred.
 - [ ] Upgrade admin = the EFS.eth Safe, set via single-step `Ownable` / `OwnableUpgradeable` `transferOwnership` (the resolvers use `OwnableUpgradeable`; the OZ v5 `ProxyAdmin` is single-step `Ownable` — there is no `Ownable2Step` accept step). The deploy asserts each `owner() == Safe` and that the deployer holds nothing; not burned/renounced yet.
   - ⚠️ The single-step transfer is **irreversible**: there is no pending-owner / accept handshake, so a wrong or unset target permanently misassigns the upgrade authority. The `EFS_SAFE_ADDRESS` MUST be verified as the correct checksummed Safe before the `--after-freeze-gate` run. The deploy enforces this — `resolveSafe` hard-fails on any non-`hardhat` network when `EFS_SAFE_ADDRESS` is unset/zero/invalid (I-5a).
+
+## Post-Batch-2/3 verification (after register-last + `SystemAccount.bootstrap` + `MirrorResolver.setTransportsAnchor`)
+
+- [ ] **Pre-registration wiring confirmed**: `EFSIndexer.wireContracts(...)` ran in Batch 1 (pure storage, no EAS call); all resolver cross-refs are set.
+- [ ] **`/transports` anchor created**: `SystemAccount.bootstrap(...)` authored the `/transports` anchor and all `/transports/*` children in Batch 2; verify each child resolves under `/transports` by reading from the index.
+- [ ] **`MirrorResolver.transportsAnchorUID()` == realized `/transports` UID**: confirm the UID returned by `MirrorResolver.transportsAnchorUID()` equals the realized `/transports` anchor UID set via `setTransportsAnchor()` in Batch 3.
+- [ ] **No `setSortsAnchor()` step**: SORT_INFO is deferred; no sort-anchor wiring is expected or present.
 
 ## Pre-BURN checklist (the irreversible end-state gate — separate from registration)
 
@@ -53,7 +60,8 @@ A first-principles + adversarial durability review (28 candidate cracks, all ref
 - [ ] Mainnet-fork dry run; addresses + UIDs match this table.
 - [ ] FREEZE_LEDGER committed (salts, factory, predicted/realized addrs, impl bytecode keccak, proxy + ProxyAdmin addrs, field strings, UID inputs, EAS/registry + chainId, register/init txs).
 - [ ] Human sign-off on the FREEZE_LEDGER ("no pending field changes").
-- [ ] BURN (`ProxyAdmin.renounceOwnership()`) is the LAST action; then post-burn verify (`owner()==0`, ex-owner `upgradeAndCall` reverts, attestations still succeed); record burn tx + block.
+- [ ] **SystemAccount pre-burn:** call `SystemAccount.sealModules()` — permanently prevents any new system-writer module from being authorized post-burn (ADR-0053 "pre-burn only" membership). Verify `SystemAccount.modulesSealed() == true` before proceeding.
+- [ ] BURN (`ProxyAdmin.renounceOwnership()`) for all **7** proxies (6 resolver proxies + SystemAccount proxy) — LAST action. Post-burn verify: `owner()==0` for each ProxyAdmin, ex-owner `upgradeAndCall` reverts, attestations still succeed; `SystemAccount.owner() == 0`; record burn txs + blocks.
 
 ## Sign-off
 

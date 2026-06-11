@@ -11,7 +11,7 @@ import { readLiveLayout, writeSnapshot, snapshotPath } from "../test/helpers/sto
 // Commit the resulting test/__snapshots__/storage-layout/*.json in the same PR as the storage
 // change, with an explanation of why the append is layout-safe.
 
-const GUARDED = ["EFSIndexer", "EdgeResolver", "ListEntryResolver"];
+const GUARDED = ["EFSIndexer", "EdgeResolver", "ListEntryResolver", "MirrorResolver", "SystemAccount"];
 
 async function main() {
   await run("compile");

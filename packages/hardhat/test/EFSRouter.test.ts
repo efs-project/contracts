@@ -1036,6 +1036,50 @@ describe("EFSRouter Web3 Capabilities", function () {
       expect(ct).to.include("ipfs://QmCallerTest");
     });
 
+    it("Should return no data for an explicit empty ?lenses= even when caller/system have content", async function () {
+      // Viewer sovereignty (specs/overview.md §Lenses, ADR-0039/0053): the `system` lens is
+      // default-on but USER-REMOVABLE. An explicit empty `?lenses=` means the user has removed
+      // every lens (including system), so the router must return NO data — it must NOT fall back
+      // to caller/system. This is distinct from an ABSENT ?lenses= param (next test), which DOES
+      // keep the caller→system fallback. The distinction is the presence of the `lenses` key in
+      // the parsed query params, not the emptiness of its value.
+      //
+      // owner is both the caller (msg.sender on the eth_call) and the system lens
+      // (systemAccount is unset in these unit tests, so _systemLens() == indexer.DEPLOYER() == owner).
+      // So absent the fix, owner's placement below WOULD be served. With the fix, explicit empty
+      // ?lenses= short-circuits to no data.
+      const fileAnchorUID = await createFileAnchor(ideasUID, "explicit_empty.txt");
+      const dataUID = await createData("explicit empty lens content");
+      await addProperty(dataUID, "contentType", "text/plain");
+      await addMirror(dataUID, ipfsTransportUID, "ipfs://QmExplicitEmpty");
+      await pinAtPath(dataUID, fileAnchorUID);
+
+      // Sanity: with owner as an explicit lens, the file resolves (200).
+      const [okStatus] = await router.request(["ideas", "explicit_empty.txt"], ownerParams());
+      expect(okStatus).to.equal(200);
+
+      // Explicit empty ?lenses= → user removed all lenses → 404, no fallback to caller/system.
+      const [statusCode] = await router.request(["ideas", "explicit_empty.txt"], [{ key: "lenses", value: "" }]);
+      expect(statusCode).to.equal(404);
+    });
+
+    it("Should keep the caller→system fallback when ?lenses= is absent entirely", async function () {
+      // Absent ?lenses= (no `lenses` key in params at all) preserves the documented
+      // caller→system fallback. owner == caller == system lens here, so owner's placement
+      // resolves. Contrast with the explicit-empty case above, which returns 404.
+      const fileAnchorUID = await createFileAnchor(ideasUID, "absent_lenses.txt");
+      const dataUID = await createData("absent lens content");
+      await addProperty(dataUID, "contentType", "text/plain");
+      await addMirror(dataUID, ipfsTransportUID, "ipfs://QmAbsentLenses");
+      await pinAtPath(dataUID, fileAnchorUID);
+
+      // No `lenses` key at all → fallback applies → 200.
+      const [statusCode, , headers] = await router.request(["ideas", "absent_lenses.txt"], []);
+      expect(statusCode).to.equal(200);
+      const ct = headers.find((h: any) => h.key === "Content-Type")?.value ?? "";
+      expect(ct).to.include("ipfs://QmAbsentLenses");
+    });
+
     it("Should prefer ar:// over ipfs:// when both mirrors exist", async function () {
       // ar:// priority = 1, ipfs:// priority = 2 — arweave should win
       const fileAnchorUID = await createFileAnchor(ideasUID, "priority_test.txt");

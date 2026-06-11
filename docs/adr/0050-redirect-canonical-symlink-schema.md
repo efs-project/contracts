@@ -4,7 +4,7 @@
 **Date:** 2026-05-31
 **Deciders:** James (schema freeze is human-gated)
 **Permanence-tier:** Etched (REDIRECT field string) + Durable (resolution algorithm)
-**Related:** ADR-0049 (DATA pure identity), ADR-0048 (freeze set + proxy/burn), ADR-0031 (lens-scoped reads)
+**Related:** ADR-0049 (DATA pure identity), ADR-0048 (freeze set + proxy/burn; this ADR amends ADR-0048's freeze count to 9 schemas / 6 schema resolvers), ADR-0031 (lens-scoped reads)
 
 ## Context
 

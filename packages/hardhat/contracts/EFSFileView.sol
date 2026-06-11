@@ -421,6 +421,13 @@ contract EFSFileView {
         }
 
         bytes32[] memory buf = new bytes32[](maxItems);
+        // Winning placement (lens) attester for each buffered target, kept in lockstep with
+        // `buf`. The item's `attester` must be the attester whose active PIN won the walk —
+        // NOT the DATA attestation author. With hardlinks/dedup the two differ (Alice can
+        // place Bob's DATA in her lens), and clients scope follow-up PROPERTY/MIRROR reads
+        // to the winning lens (ADR-0013, ADR-0014). This matches EFSRouter._findDataAtPath,
+        // which returns the placement attester, not the DATA author.
+        address[] memory bufAttesters = new address[](maxItems);
         uint256 count = 0;
 
         while (attesterIdx < attesters.length && count < maxItems) {
@@ -444,12 +451,15 @@ contract EFSFileView {
             }
             if (taken) continue;
 
+            bufAttesters[count] = currentAttester;
             buf[count++] = target;
         }
 
-        // Trim buffer, build items.
+        // Trim buffers, build items. `buf` and `bufAttesters` advanced in lockstep, so the
+        // same `count` trims both.
         assembly ("memory-safe") {
             mstore(buf, count)
+            mstore(bufAttesters, count)
         }
 
         bytes32 dataSchemaUID = indexer.DATA_SCHEMA_UID();
@@ -475,7 +485,9 @@ contract EFSFileView {
                 childCount: 0,
                 propertyCount: 0,
                 timestamp: att.time,
-                attester: att.attester,
+                // Placement (lens) attester whose active PIN won the walk — NOT
+                // `att.attester` (the DATA author). See `bufAttesters` declaration above.
+                attester: bufAttesters[i],
                 schema: att.schema,
                 // AGENT-NOTE: hash/size now live as PROPERTYs (ADR-0049), not DATA fields.
                 // Surfacing them in listings is future on-chain property-index work.

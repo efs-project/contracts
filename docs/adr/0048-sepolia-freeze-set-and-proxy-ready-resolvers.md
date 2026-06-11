@@ -1,6 +1,6 @@
 # ADR-0048: Sepolia freeze set + proxy-ready resolvers (burn to immutable)
 
-**Status:** Proposed (r2 — hardened after multi-agent security review)
+**Status:** Proposed (r2 — hardened after multi-agent security review; freeze set amended by ADR-0050: 9 schemas / 6 schema resolvers, adding REDIRECT + AliasResolver — see ADR-0050)
 **Date:** 2026-05-31
 **Deciders:** James (freeze sign-off is human-gated)
 **Permanence-tier:** Etched

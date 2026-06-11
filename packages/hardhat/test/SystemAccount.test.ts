@@ -100,6 +100,68 @@ describe("SystemAccount (ADR-0053)", function () {
     });
   });
 
+  describe("module-authorization seal (FIX A, PR #24 P1)", function () {
+    // The one-way membership latch. After sealModules(), the set of contracts that may write as
+    // `system` can never change again — making ADR-0053's "membership authority is pre-burn only"
+    // a contract-enforced fact the burn ceremony asserts, not just documented intent.
+    it("modulesSealed() reflects state and starts false", async function () {
+      expect(await systemAccount.modulesSealed()).to.equal(false);
+    });
+
+    it("before sealing, the owner can authorize/de-authorize modules", async function () {
+      await (await systemAccount.setModuleAuthorization(moduleAddr, true)).wait();
+      expect(await systemAccount.isAuthorized(moduleAddr)).to.equal(true);
+      await (await systemAccount.setModuleAuthorization(moduleAddr, false)).wait();
+      expect(await systemAccount.isAuthorized(moduleAddr)).to.equal(false);
+    });
+
+    it("sealModules() is onlyOwner", async function () {
+      await expect(systemAccount.connect(stranger).sealModules()).to.be.revertedWithCustomError(
+        systemAccount,
+        "OwnableUnauthorizedAccount",
+      );
+    });
+
+    it("sealModules() latches membership: emits, flips modulesSealed(), and setModuleAuthorization reverts forever", async function () {
+      await expect(systemAccount.sealModules()).to.emit(systemAccount, "ModuleAuthorizationSealed");
+      expect(await systemAccount.modulesSealed()).to.equal(true);
+
+      // After the seal the owner can no longer grant OR revoke module status — membership is frozen.
+      await expect(systemAccount.setModuleAuthorization(moduleAddr, true)).to.be.revertedWithCustomError(
+        systemAccount,
+        "ModulesSealed",
+      );
+      await expect(systemAccount.setModuleAuthorization(moduleAddr, false)).to.be.revertedWithCustomError(
+        systemAccount,
+        "ModulesSealed",
+      );
+    });
+
+    it("sealModules() is idempotent and permanent: a second call is a no-op (does not revert), stays sealed", async function () {
+      await (await systemAccount.sealModules()).wait();
+      await (await systemAccount.sealModules()).wait(); // no-op, must not revert
+      expect(await systemAccount.modulesSealed()).to.equal(true);
+      await expect(systemAccount.setModuleAuthorization(moduleAddr, true)).to.be.revertedWithCustomError(
+        systemAccount,
+        "ModulesSealed",
+      );
+    });
+
+    it("the bootstrap seal and the module seal are INDEPENDENT one-way latches", async function () {
+      // seal() locks bootstrap but leaves membership open; sealModules() locks membership but leaves
+      // bootstrap untouched. The burn ceremony asserts both; neither implies the other.
+      await (await systemAccount.seal()).wait();
+      expect(await systemAccount.bootstrapSealed()).to.equal(true);
+      expect(await systemAccount.modulesSealed()).to.equal(false);
+      // membership still mutable after the bootstrap seal:
+      await (await systemAccount.setModuleAuthorization(moduleAddr, true)).wait();
+      expect(await systemAccount.isAuthorized(moduleAddr)).to.equal(true);
+
+      await (await systemAccount.sealModules()).wait();
+      expect(await systemAccount.modulesSealed()).to.equal(true);
+    });
+  });
+
   describe("attester-relay gating (module-only — PR #24 P1 fix)", function () {
     it("reverts for an unauthorized caller", async function () {
       await expect(
@@ -348,6 +410,117 @@ describe("SystemAccount (ADR-0053)", function () {
       await expect(
         systemAccount.bootstrap(await mockIndex.getAddress(), anchorSchemaUID, SPECS),
       ).to.be.revertedWithCustomError(systemAccount, "BootstrapSealed");
+    });
+
+    // ----------------------------------------------------------------------------------------------
+    // FIX B (PR #24 P2) — the idempotency path must PROVE a reused anchor is self-authored with the
+    // exact canonical shape before adopting it, or revert PollutedAnchor. Otherwise a third party can
+    // create a root/scaffolding anchor between ANCHOR registration and bootstrap (supported-EOA
+    // fallback) and a retry would inherit a stale/foreign/wrong anchor — sealing polluted scaffolding.
+    // ----------------------------------------------------------------------------------------------
+    describe("verify adopted scaffolding anchors (FIX B)", function () {
+      // A one-node tree (just the root) keeps the pollution surface easy to seed/inspect.
+      const ROOT_SPEC = [{ name: "root", parentIndex: -1, anchorSchemaToRegister: ZeroHash }];
+
+      // Attest an ANCHOR-shaped record directly via EAS as `signer`, with overridable shape so we can
+      // forge foreign / wrong-shaped anchors. Returns the new UID. (Schema is the no-resolver
+      // ANCHOR-shaped schema registered in the parent beforeEach, so any signer may attest under it.)
+      const attestRawAnchor = async (
+        signer: Signer,
+        opts: {
+          name?: string;
+          schemaToRegister?: string;
+          revocable?: boolean;
+          expirationTime?: bigint;
+          refUID?: string;
+        } = {},
+      ): Promise<string> => {
+        const name = opts.name ?? "root";
+        const schemaToRegister = opts.schemaToRegister ?? ZeroHash;
+        const tx = await eas.connect(signer).attest({
+          schema: anchorSchemaUID,
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: opts.expirationTime ?? 0n,
+            revocable: opts.revocable ?? false,
+            refUID: opts.refUID ?? ZeroHash,
+            data: enc.encode(["string", "bytes32"], [name, schemaToRegister]),
+            value: 0n,
+          },
+        });
+        return getUID(await tx.wait());
+      };
+
+      it("adopts a correctly self-authored root anchor idempotently (no re-attest, returns the same UID)", async function () {
+        // First, let SystemAccount author the real root (canonical shape, attester == SystemAccount).
+        const r1 = await (
+          await systemAccount.bootstrap(await mockIndex.getAddress(), anchorSchemaUID, ROOT_SPEC)
+        ).wait();
+        const rootUID = attestedUIDs(r1)[0];
+        expect(rootUID).to.not.equal(ZeroHash);
+
+        // Seed the mock to report it as existing, then retry: must REUSE it (zero new attestations).
+        await (await mockIndex.setRoot(rootUID)).wait();
+        const r2 = await (
+          await systemAccount.bootstrap(await mockIndex.getAddress(), anchorSchemaUID, ROOT_SPEC)
+        ).wait();
+        expect(attestedUIDs(r2).length, "self-authored canonical anchor is adopted with no re-attest").to.equal(0);
+      });
+
+      it("reverts PollutedAnchor when the existing root anchor was authored by a THIRD PARTY", async function () {
+        // A stranger front-runs and creates a (correctly-shaped but foreign-authored) root anchor.
+        const foreignRoot = await attestRawAnchor(stranger, { name: "root" });
+        await (await mockIndex.setRoot(foreignRoot)).wait();
+        await expect(
+          systemAccount.bootstrap(await mockIndex.getAddress(), anchorSchemaUID, ROOT_SPEC),
+        ).to.be.revertedWithCustomError(systemAccount, "PollutedAnchor");
+      });
+
+      it("reverts PollutedAnchor when the existing anchor has the wrong PAYLOAD (name/schema mismatch)", async function () {
+        // Stranger creates an anchor with a different name → decoded payload won't match the spec.
+        const wrongName = await attestRawAnchor(stranger, { name: "not-root" });
+        await (await mockIndex.setRoot(wrongName)).wait();
+        await expect(
+          systemAccount.bootstrap(await mockIndex.getAddress(), anchorSchemaUID, ROOT_SPEC),
+        ).to.be.revertedWithCustomError(systemAccount, "PollutedAnchor");
+      });
+
+      it("reverts PollutedAnchor when the existing anchor is under the WRONG SCHEMA (revocable ANCHOR shape)", async function () {
+        // Mint an anchor with the exact canonical payload + parent, but under a REVOCABLE ANCHOR-shaped
+        // schema (a different schema UID, and revocable != the canonical non-revocable shape). bootstrap
+        // validates `schema == anchorSchemaUID` AND `revocable == false`, so an anchor that drifts on
+        // either is rejected rather than adopted — proving the immutable-shape gate, not just attester.
+        await (await registry.register("string name, bytes32 schemaUID", ZeroAddress, true)).wait();
+        const revocableAnchorSchema = ethers.solidityPackedKeccak256(
+          ["string", "address", "bool"],
+          ["string name, bytes32 schemaUID", ZeroAddress, true],
+        );
+        const tx = await eas.connect(stranger).attest({
+          schema: revocableAnchorSchema,
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: 0n,
+            revocable: true,
+            refUID: ZeroHash,
+            data: enc.encode(["string", "bytes32"], ["root", ZeroHash]),
+            value: 0n,
+          },
+        });
+        const revocableRoot = getUID(await tx.wait());
+        await (await mockIndex.setRoot(revocableRoot)).wait();
+        await expect(
+          systemAccount.bootstrap(await mockIndex.getAddress(), anchorSchemaUID, ROOT_SPEC),
+        ).to.be.revertedWithCustomError(systemAccount, "PollutedAnchor");
+      });
+
+      it("reverts PollutedAnchor when the index points at a NON-EXISTENT UID (stale/garbage pointer)", async function () {
+        // getAttestation on an unknown UID returns a zero-valued record (attester == address(0)), so a
+        // stale pointer is rejected by the attester check rather than silently adopted.
+        await (await mockIndex.setRoot("0x" + "ab".repeat(32))).wait();
+        await expect(
+          systemAccount.bootstrap(await mockIndex.getAddress(), anchorSchemaUID, ROOT_SPEC),
+        ).to.be.revertedWithCustomError(systemAccount, "PollutedAnchor");
+      });
     });
   });
 

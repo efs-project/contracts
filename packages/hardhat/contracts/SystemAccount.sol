@@ -2,6 +2,7 @@
 pragma solidity 0.8.26;
 
 import { IEAS, AttestationRequest, AttestationRequestData, MultiAttestationRequest, RevocationRequest } from "@ethereum-attestation-service/eas-contracts/contracts/IEAS.sol";
+import { Attestation } from "@ethereum-attestation-service/eas-contracts/contracts/Common.sol";
 import { OwnableUpgradeable } from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import { ReentrancyGuardUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
@@ -61,12 +62,30 @@ contract SystemAccount is Initializable, OwnableUpgradeable, ReentrancyGuardUpgr
     error ZeroAddress();
     error BootstrapSealed();
 
+    /// @notice Module-authorization membership has been permanently sealed (PR #24 P1 fix). Thrown by
+    ///         `setModuleAuthorization` once `sealModules()` has latched membership closed forever.
+    error ModulesSealed();
+
+    /// @notice A reused (idempotent-path) anchor failed shape validation (PR #24 P2 fix): it was not
+    ///         authored by THIS contract, or its schema / parent / revocability / expiration / payload
+    ///         did not match the canonical ANCHOR this bootstrap would have minted. Rather than seal
+    ///         polluted scaffolding, `bootstrap` reverts so a foreign or wrong-shaped anchor is rejected.
+    error PollutedAnchor();
+
     /// @notice Emitted when a module's authorization is set or cleared.
     event ModuleAuthorizationSet(address indexed module, bool authorized);
 
     /// @notice Emitted once, when the owner permanently seals the bootstrap ceremony. One-way:
     ///         after this, `bootstrap` reverts forever and the owner holds no write authority.
     event BootstrapSealedEvent();
+
+    /// @notice Emitted once, when the owner permanently seals module-authorization membership (PR #24
+    ///         P1 fix). One-way: after this, `setModuleAuthorization` reverts forever, so the set of
+    ///         contracts that may write through `system` can never change again — making ADR-0053's
+    ///         "membership authority is pre-burn only" a contract-enforced fact the burn ceremony
+    ///         asserts, not just a documented intent. (Named distinctly from the `ModulesSealed` error,
+    ///         which an event of the same name would illegally redeclare.)
+    event ModuleAuthorizationSealed();
 
     /// @notice The canonical EAS for the target chain. Stays a constructor immutable on purpose:
     ///         EAS is a per-chain constant, immutables live in the implementation bytecode and
@@ -89,6 +108,13 @@ contract SystemAccount is Initializable, OwnableUpgradeable, ReentrancyGuardUpgr
         // ceremony write authority is permanently locked. Appended after `authorizedModule` so
         // the namespaced storage layout stays backward-compatible (additive, upgrade-safe).
         bool bootstrapSealed;
+        // One-way module-authorization seal (PR #24 P1 fix). Defaults false; set true once by
+        // `sealModules()` and never reset. After this, `setModuleAuthorization` reverts forever, so
+        // membership (which contracts may write as `system`) is frozen — the burn ceremony asserts
+        // this to make ADR-0053's "membership authority is pre-burn only" contract-enforced, not just
+        // documented. Appended AFTER `bootstrapSealed` (END of the struct) so the namespaced storage
+        // layout stays backward-compatible (additive, upgrade-safe — never reorder/insert).
+        bool _modulesSealed;
     }
 
     // keccak256(abi.encode(uint256(keccak256("efs.systemaccount.config")) - 1)) & ~bytes32(uint256(0xff))
@@ -250,6 +276,13 @@ contract SystemAccount is Initializable, OwnableUpgradeable, ReentrancyGuardUpgr
             // rejected by EFSIndexer; a child re-attest would mint a duplicate name slot).
             bytes32 existing = spec.parentIndex < 0 ? indexer.rootAnchorUID() : indexer.resolvePath(parent, spec.name);
             if (existing != bytes32(0)) {
+                // PR #24 P2 fix: only adopt an existing anchor we can PROVE this contract authored with
+                // the exact canonical shape. On the supported-EOA fallback a third party can create a
+                // root/scaffolding anchor between ANCHOR registration and bootstrap, and a retry could
+                // otherwise inherit a stale/foreign anchor — sealing polluted scaffolding. Verify the
+                // full immutable shape (attester, schema, parent, non-revocable, no expiration, exact
+                // payload) before reuse; revert PollutedAnchor instead of adopting anything foreign.
+                _requireCanonicalAnchor(existing, anchorSchemaUID, parent, spec.name, spec.anchorSchemaToRegister);
                 createdUIDs[i] = existing;
                 continue;
             }
@@ -270,18 +303,70 @@ contract SystemAccount is Initializable, OwnableUpgradeable, ReentrancyGuardUpgr
         }
     }
 
+    /// @notice Assert that an existing anchor UID is one THIS contract authored with the exact
+    ///         canonical ANCHOR shape, before the idempotency path adopts it (PR #24 P2 fix). Fetches
+    ///         the live EAS record and requires every immutable property to match what `bootstrap`
+    ///         would itself have minted for this node:
+    ///           - `attester == address(this)` — authored by THIS SystemAccount, not a third party;
+    ///           - `schema   == anchorSchemaUID` — the ANCHOR schema this bootstrap registers under;
+    ///           - `refUID   == parent` — the realized parent UID (ZeroHash for root);
+    ///           - `revocable == false` — ANCHOR is non-revocable (it must never have been revocable);
+    ///           - `expirationTime == 0` — anchors never expire;
+    ///           - `data == abi.encode(name, anchorSchemaToRegister)` — the exact ANCHOR payload, so a
+    ///             same-named-but-wrong-target alias anchor is also rejected.
+    ///         Any mismatch reverts `PollutedAnchor` rather than sealing over foreign/wrong scaffolding.
+    /// @dev Mirrors the encoding used by `registerAnchor` / `bootstrap` (`abi.encode(string, bytes32)`).
+    function _requireCanonicalAnchor(
+        bytes32 existing,
+        bytes32 anchorSchemaUID,
+        bytes32 parent,
+        string calldata name,
+        bytes32 anchorSchemaToRegister
+    ) private view {
+        Attestation memory a = _eas.getAttestation(existing);
+        if (
+            a.attester != address(this) ||
+            a.schema != anchorSchemaUID ||
+            a.refUID != parent ||
+            a.revocable ||
+            a.expirationTime != 0 ||
+            keccak256(a.data) != keccak256(abi.encode(name, anchorSchemaToRegister))
+        ) {
+            revert PollutedAnchor();
+        }
+    }
+
     // ============================================================================================
     // CONFIG — owner-gated membership authority (the extensibility seam)
     // ============================================================================================
 
     /// @notice Authorize or de-authorize a module to write through this relay. Owner-only.
-    /// @dev Membership/config authority (ADR-0053) — the pre-burn extensibility seam, unchanged by
-    ///      the PR #24 P1 fix. This is the ADR-0053-acknowledged owner power, closed at burn; it does
-    ///      NOT let the owner emit payloads (the authorized contract's own code does that).
+    /// @dev Membership/config authority (ADR-0053) — the pre-burn extensibility seam. This is the
+    ///      ADR-0053-acknowledged owner power; it does NOT let the owner emit payloads (the authorized
+    ///      contract's own code does that). Reverts once `sealModules()` has latched membership closed
+    ///      (PR #24 P1 fix): after the seal, the set of `system` writers can never change again, so the
+    ///      Safe cannot authorize a new module to write/revoke/register as the permanent `system`
+    ///      attester post-burn — making ADR-0053's "membership authority is pre-burn only" a
+    ///      contract-enforced invariant the burn ceremony asserts, not merely documented intent.
     function setModuleAuthorization(address module, bool ok) external onlyOwner {
+        if (_cfg()._modulesSealed) revert ModulesSealed();
         if (module == address(0)) revert ZeroAddress();
         _cfg().authorizedModule[module] = ok;
         emit ModuleAuthorizationSet(module, ok);
+    }
+
+    /// @notice Permanently seal module-authorization membership (PR #24 P1 fix). Owner-only, ONE-WAY:
+    ///         once sealed, `setModuleAuthorization` reverts forever and the authorized-module set can
+    ///         never change again. The burn ceremony calls this so that after the resolver/proxy burn
+    ///         the Safe cannot authorize a new module to write as the permanent `system` attester —
+    ///         making ADR-0053's "membership authority is pre-burn only" claim contract-enforced.
+    /// @dev Mirrors `seal()`: idempotent (a second call is a harmless no-op, never a revert that would
+    ///      strand a deploy/burn batch), and never resettable. Either way the contract stays sealed.
+    function sealModules() external onlyOwner {
+        SystemAccountConfig storage $ = _cfg();
+        if ($._modulesSealed) return; // already sealed — no-op, stays sealed (never resettable)
+        $._modulesSealed = true;
+        emit ModuleAuthorizationSealed();
     }
 
     /// @notice Permanently seal the bootstrap ceremony (PR #24 P1 fix). Owner-only, ONE-WAY: once
@@ -313,6 +398,13 @@ contract SystemAccount is Initializable, OwnableUpgradeable, ReentrancyGuardUpgr
     ///         owner can never author through this contract again (`bootstrap` reverts forever).
     function bootstrapSealed() external view returns (bool) {
         return _cfg().bootstrapSealed;
+    }
+
+    /// @notice Whether module-authorization membership has been permanently sealed (PR #24 P1 fix).
+    ///         Once true, `setModuleAuthorization` reverts forever — the set of contracts that may
+    ///         write as `system` is frozen, so membership is provably pre-burn only (ADR-0053).
+    function modulesSealed() external view returns (bool) {
+        return _cfg()._modulesSealed;
     }
 
     /// @notice The EAS this SystemAccount was deployed against.

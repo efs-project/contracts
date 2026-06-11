@@ -26,7 +26,7 @@ import * as fs from "fs";
  * slot at the end), run `yarn hardhat run scripts/snapshot-storage-layout.ts`.
  */
 
-const GUARDED = ["EFSIndexer", "EdgeResolver", "ListEntryResolver"] as const;
+const GUARDED = ["EFSIndexer", "EdgeResolver", "ListEntryResolver", "MirrorResolver", "SystemAccount"] as const;
 
 describe("StorageLayout gate — append-only kernel slots are frozen (ADR-0009, ADR-0048)", function () {
   before(async function () {
@@ -52,6 +52,7 @@ describe("StorageLayout gate — append-only kernel slots are frozen (ADR-0009, 
       ["EFSIndexer", "MockEFSIndexerV2"],
       ["EdgeResolver", "MockEdgeResolverV2"],
       ["ListEntryResolver", "MockListEntryResolverV2"],
+      ["MirrorResolver", "MockMirrorResolverV2"],
     ];
     for (const [v1, v2] of pairs) {
       const problems = diffLayout(readSnapshot(v1), readLiveLayout(v2));

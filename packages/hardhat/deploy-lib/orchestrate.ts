@@ -475,6 +475,16 @@ async function resolveSafe(deployer: Signer): Promise<string> {
     if (checksummed === ZeroAddress) {
       throw new Error("EFS_SAFE_ADDRESS resolves to the zero address — refusing to transfer ownership.");
     }
+    // Address syntax alone is not enough on a real network (I-5a): a typo to an EOA, a self-destructed
+    // contract, or a non-Safe contract would permanently transfer every ProxyAdmin/resolver/SystemAccount
+    // owner to an address with no Safe governance path (single-step, irreversible). Require that the
+    // target (1) has deployed code and (2) actually behaves like a Safe — getThreshold() returns nonzero
+    // and getOwners() returns a non-empty owner set. On the fork rehearsal the test Safe is freshly
+    // deployed via the canonical factory and this check would pass too, but we skip it there to keep the
+    // rehearsal path independent of any extra RPC round-trips and degenerate test-Safe shapes.
+    if (!isForkRehearsal) {
+      await assertIsSafe(checksummed, networkName);
+    }
     return checksummed;
   }
 
@@ -494,6 +504,54 @@ async function resolveSafe(deployer: Signer): Promise<string> {
     if (a.toLowerCase() !== deployerAddr.toLowerCase()) return a;
   }
   return signers[1].getAddress();
+}
+
+/// Minimal Safe ABI for the read-only sanity check (subset of deploy-lib/safe.ts's SAFE_ABI). Reused
+/// here rather than importing getSafe(), which binds to a Signer; the check needs only provider reads.
+const SAFE_SANITY_ABI = [
+  "function getThreshold() view returns (uint256)",
+  "function getOwners() view returns (address[])",
+];
+
+/// Sanity-check that `addr` is a live Safe before accepting it as the irreversible ownership-transfer
+/// target on a real network (I-5a). Throws a clear, abort-the-deploy error if `addr` has no code, or if
+/// the Safe ABI probes revert or return degenerate values (threshold 0 / empty owner set). Skipped on the
+/// fork rehearsal by the caller — only runs on real Sepolia/mainnet.
+async function assertIsSafe(addr: string, networkName: string): Promise<void> {
+  const code = await ethers.provider.getCode(addr);
+  if (code === "0x" || code === "0x0") {
+    throw new Error(
+      `EFS_SAFE_ADDRESS ${addr} has NO deployed code on network "${networkName}" — it is an EOA or an ` +
+        `unfunded/typo'd address. The single-step ownership transfer is IRREVERSIBLE; refusing to hand ` +
+        `permanent upgrade authority to a non-contract. Double-check the checksummed EFS.eth Safe address.`,
+    );
+  }
+
+  const safe = new ethers.Contract(addr, SAFE_SANITY_ABI, ethers.provider);
+  let threshold: bigint;
+  let owners: string[];
+  try {
+    threshold = await safe.getThreshold();
+    owners = await safe.getOwners();
+  } catch (e) {
+    throw new Error(
+      `EFS_SAFE_ADDRESS ${addr} has code but does not respond to the Safe interface ` +
+        `(getThreshold()/getOwners() reverted) on network "${networkName}": ${(e as Error).message}. ` +
+        `It is a contract but not a Gnosis Safe — refusing the irreversible ownership transfer.`,
+    );
+  }
+  if (threshold === 0n) {
+    throw new Error(
+      `EFS_SAFE_ADDRESS ${addr} reports getThreshold() == 0 on network "${networkName}" — not a valid ` +
+        `Safe configuration. Refusing the irreversible ownership transfer.`,
+    );
+  }
+  if (owners.length === 0) {
+    throw new Error(
+      `EFS_SAFE_ADDRESS ${addr} reports an empty owner set (getOwners() == []) on network ` +
+        `"${networkName}" — not a valid Safe configuration. Refusing the irreversible ownership transfer.`,
+    );
+  }
 }
 
 /// Step 8 (subset): push one attestation through each of the 9 schemas; assert no revert + index write.

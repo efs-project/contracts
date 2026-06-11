@@ -740,6 +740,49 @@ describe("EFSFileView", function () {
     expect(page.items[0].uid).to.equal(bobData);
   });
 
+  it("getFilesAtPath: FileSystemItem.attester is the placement (lens) attester, not the DATA author (hardlink/dedup)", async function () {
+    // Codex P1 regression: with hardlinks/dedup, the placement attester whose active PIN won
+    // the walk can differ from the DATA attestation author. Alice can hardlink Bob's DATA into
+    // her own lens by emitting a PIN(definition=slot, refUID=bobData, attester=alice). The
+    // listed item's `attester` must be the WINNING PLACEMENT attester (Alice) — not the DATA
+    // author (Bob) — so clients can scope follow-up PROPERTY/MIRROR reads to the winning lens,
+    // matching EFSRouter._findDataAtPath's (target, placementAttester) return shape.
+    const aliceAddr = await alice.getAddress();
+    const bobAddr = await bob.getAddress();
+
+    const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32);
+    const folderUID = await createAnchor("folder", rootUID, ZERO_BYTES32);
+    const slotUID = await createAnchor("doc.txt", folderUID, dataSchemaUID, alice);
+
+    // Bob authors the DATA (he is `att.attester` on the DATA attestation).
+    const bobDataTx = await eas.connect(bob).attest({
+      schema: dataSchemaUID,
+      data: {
+        recipient: ZeroAddress,
+        expirationTime: NO_EXPIRATION,
+        revocable: false,
+        refUID: ZERO_BYTES32,
+        data: "0x", // DATA is an empty schema — pure identity (ADR-0049)
+        value: 0n,
+      },
+    });
+    const bobData = getUIDFromReceipt(await bobDataTx.wait());
+    const bobDataAtt = await eas.getAttestation(bobData);
+    expect(bobDataAtt.attester).to.equal(bobAddr); // precondition: Bob is the DATA author
+
+    // Alice hardlinks Bob's DATA into HER lens: she emits the placement PIN.
+    await createPin(bobData, slotUID, alice);
+    expect(await edgeResolver.getActivePinTarget(slotUID, aliceAddr, dataSchemaUID)).to.equal(bobData);
+
+    // Listing with Alice's lens: the item targets Bob's DATA, but the placement attester is Alice.
+    const page = await fileView.getFilesAtPath(slotUID, [aliceAddr], dataSchemaUID, "0x", 10);
+    expect(page.items.length).to.equal(1);
+    expect(page.items[0].uid).to.equal(bobData);
+    // The fix: attester is the winning lens (Alice), NOT the DATA author (Bob).
+    expect(page.items[0].attester).to.equal(aliceAddr);
+    expect(page.items[0].attester).to.not.equal(bobAddr);
+  });
+
   it("Surfaces >10k tagged folders without silent truncation (ADR-0036)", async function () {
     // Regression for the old MAX_TAGGED_FOLDERS=10000 silent-cap landmine. The cursor-based
     // walker must continue past any arbitrary cap. We do NOT create 10k folders here (too

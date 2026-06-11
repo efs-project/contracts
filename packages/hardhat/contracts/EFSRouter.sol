@@ -286,7 +286,7 @@ contract EFSRouter is IDecentralizedApp {
         }
 
         // 2. Find DATA via TAG query: resolve lenses → TAG → DATA → MIRROR
-        (bytes32 dataUID, address dataAttester) = _findDataAtPath(targetAnchor, lenses, caller);
+        (bytes32 dataUID, address dataAttester) = _findDataAtPath(targetAnchor, lenses, caller, lensesExplicit);
         if (dataUID == bytes32(0)) {
             // Schema/Attestation containers with no DATA attached fall back to raw-info JSON
             // instead of 404. Only fires when the user typed the container itself (no sub-path)
@@ -834,10 +834,18 @@ contract EFSRouter is IDecentralizedApp {
     //   1. caller (from ?caller= param or msg.sender if non-zero) — user sees their own files
     //   2. SystemAccount — the `system` lens, the neutral system-provided-defaults author
     //      (ADR-0053; replaces the throwaway deployer EOA of ADR-0016/0039).
+    //
+    // The `system` lens is default-on but USER-REMOVABLE (ADR-0039/0053, specs/overview.md
+    // §Lenses). `lensesExplicit` distinguishes "no ?lenses= param" (apply the caller→system
+    // fallback above) from "explicit ?lenses= that parsed to zero valid lenses" (the user has
+    // removed every lens, including system, so we must return no data — never silently fall
+    // back to caller/system). Without this flag an empty `?lenses=` would be indistinguishable
+    // from an absent one, violating viewer sovereignty.
     function _findDataAtPath(
         bytes32 targetAnchor,
         address[] memory lenses,
-        address caller
+        address caller,
+        bool lensesExplicit
     ) private view returns (bytes32, address) {
         bytes32 dataSchema = indexer.DATA_SCHEMA_UID();
         address systemLens = _systemLens();
@@ -845,6 +853,11 @@ contract EFSRouter is IDecentralizedApp {
         address[] memory attesters;
         if (lenses.length > 0) {
             attesters = lenses;
+        } else if (lensesExplicit) {
+            // User supplied `?lenses=` but it parsed to zero valid lenses — every lens
+            // (including the system default) has been removed. Return no data rather than
+            // falling back to caller/system.
+            return (bytes32(0), address(0));
         } else if (caller != address(0)) {
             // Try caller first, then the system lens as fallback
             attesters = new address[](2);

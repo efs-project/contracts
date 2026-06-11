@@ -6956,6 +6956,11 @@ const deployedContracts = {
         },
         {
           inputs: [],
+          name: "ModulesSealed",
+          type: "error",
+        },
+        {
+          inputs: [],
           name: "NotAuthorized",
           type: "error",
         },
@@ -6988,6 +6993,11 @@ const deployedContracts = {
         },
         {
           inputs: [],
+          name: "PollutedAnchor",
+          type: "error",
+        },
+        {
+          inputs: [],
           name: "ReentrancyGuardReentrantCall",
           type: "error",
         },
@@ -7013,6 +7023,12 @@ const deployedContracts = {
             },
           ],
           name: "Initialized",
+          type: "event",
+        },
+        {
+          anonymous: false,
+          inputs: [],
+          name: "ModuleAuthorizationSealed",
           type: "event",
         },
         {
@@ -7221,6 +7237,19 @@ const deployedContracts = {
           type: "function",
         },
         {
+          inputs: [],
+          name: "modulesSealed",
+          outputs: [
+            {
+              internalType: "bool",
+              name: "",
+              type: "bool",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
           inputs: [
             {
               components: [
@@ -7377,6 +7406,13 @@ const deployedContracts = {
         {
           inputs: [],
           name: "seal",
+          outputs: [],
+          stateMutability: "nonpayable",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "sealModules",
           outputs: [],
           stateMutability: "nonpayable",
           type: "function",

@@ -11,7 +11,9 @@ This runbook produces a **mainnet-forward** Sepolia deployment: the Sepolia stru
 ## 0. What gets deployed
 
 - **6 resolver implementations** (non-deterministic addresses; not in any UID): EFSIndexer, EdgeResolver, MirrorResolver, ListResolver, ListEntryResolver, AliasResolver.
-- **6 Transparent proxies (CREATE3-deterministic)** — these addresses ARE baked into the schema UIDs and are permanent. Each has its own `ProxyAdmin`.
+- **7 CREATE3-deterministic contracts** — these addresses ARE baked into the schema UIDs (for the 6 resolvers) or into the system bootstrap (for SystemAccount) and are permanent:
+  - **6 Transparent proxies** for the schema resolvers: EFSIndexer, EdgeResolver, MirrorResolver, ListResolver, ListEntryResolver, AliasResolver. Each has its own `ProxyAdmin`.
+  - **1 SystemAccount proxy** (Transparent, CREATE3-deterministic): the neutral system write-identity (ADR-0053). Has its own `ProxyAdmin`. Separate from the resolver proxies; its burn requires additional verification (see burn checklist).
 - **3 stateless views** (redeployable, in no UID): EFSRouter, EFSFileView, ListReader.
 - **9 EAS schemas** registered against the proxy addresses: ANCHOR, PROPERTY, DATA(empty), PIN, TAG, MIRROR, LIST, LIST_ENTRY, REDIRECT. (SORT_INFO + EFSSortOverlay are **deferred**, added later additively.)
 
@@ -192,7 +194,7 @@ yarn deploy:efs-views --network sepolia
 
 **Upgrading a resolver later (from the Safe):** in Safe{Wallet}, propose a tx to `ProxyAdmin.upgradeAndCall(proxy, newImpl, 0x)`; sign; execute. Or script it with `@safe-global/protocol-kit`.
 
-**Burn to immutable (pre-mainnet, after a ≥14-day soak):** the pre-burn checklist is in `docs/SEPOLIA_FREEZE_TABLE.md`; when satisfied, the Safe executes `ProxyAdmin.renounceOwnership()` per proxy. Address + UID + data unchanged; logic frozen forever.
+**Burn to immutable (pre-mainnet, after a ≥14-day soak):** the pre-burn checklist is in `docs/SEPOLIA_FREEZE_TABLE.md`; when satisfied, the Safe executes `ProxyAdmin.renounceOwnership()` per proxy — all **7** proxies (6 resolver proxies + SystemAccount proxy). For SystemAccount specifically: also call `SystemAccount.sealModules()` **before** burning its ProxyAdmin, verify `SystemAccount.modulesSealed() == true`, and confirm `SystemAccount.owner() == 0` after the ProxyAdmin burn — this permanently prevents any new system-writer module from being authorized post-burn (ADR-0053 "pre-burn only" membership). Address + UID + data unchanged; logic frozen forever.
 
 ---
 
