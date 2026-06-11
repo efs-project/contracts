@@ -5,9 +5,8 @@
  *   1. List the item's data-schema (file) children lens-scoped via
  *      `EFSFileView.getDirectoryPageBySchemaAndAddressList` (single page; the
  *      SDK will own pagination later).
- *   2. First-lens-wins: per lens in order, restrict children to that lens's
- *      attester, then pick the one named `README.md` (`selectOverview`). The
- *      first lens yielding a pick provides the page.
+ *   2. Pick the child named `README.md` (`selectOverview`) from the lens-scoped
+ *      listing; the router applies first-lens-wins when its bytes are fetched.
  *   3. Fetch the picked file's bytes through the router (`fetchFileContent`).
  *   4. Cap by `MAX_RENDER_BYTES`, sniff text/binary, decode as UTF-8 markdown.
  *
@@ -54,12 +53,12 @@ export interface UseItemOverviewArgs {
 /**
  * One decoded `EFSFileView.FileSystemItem` — the fields this hook reads. The
  * full struct also carries parentUID/isFolder/hasData/childCount/propertyCount/
- * timestamp/schema/contentHash; we only need uid + name + attester.
+ * timestamp/schema/contentHash/attester; we only need uid + name (the router
+ * resolves the winning lens at fetch time, so the item's attester is not read).
  */
 interface FileSystemItem {
   uid: `0x${string}`;
   name: string;
-  attester: `0x${string}`;
 }
 
 export function useItemOverview(args: UseItemOverviewArgs): OverviewState {
@@ -94,17 +93,14 @@ export function useItemOverview(args: UseItemOverviewArgs): OverviewState {
         })) as any;
         const items: FileSystemItem[] = (pageRaw?.items ?? pageRaw?.[0] ?? []) as FileSystemItem[];
         if (cancelled) return;
-        // 2. First-lens-wins: the lens's child named README.md. `selectOverview`
-        //    matches the name exactly; system-tag visibility is handled by the
-        //    normal explorer tag filter, not here.
-        let picked: { uid: string; name: string } | null = null;
-        for (const lens of args.lensAddresses) {
-          const lensChildren = items
-            .filter(it => it.attester.toLowerCase() === lens.toLowerCase())
-            .map(it => ({ uid: it.uid, name: it.name }));
-          picked = selectOverview(lensChildren);
-          if (picked) break;
-        }
+        // 2. Pick the child named exactly README.md. The listing is already
+        //    restricted to the requested lenses, and the router applies
+        //    first-lens-wins when the bytes are fetched (step 3). We deliberately
+        //    do NOT re-derive the lens from `item.attester` (the anchor *creator*):
+        //    a later lens can reuse an existing README.md anchor with its own PIN,
+        //    and filtering by the creator would drop that lens's Overview.
+        //    System-tag visibility is handled by the normal explorer tag filter.
+        const picked = selectOverview(items.map(it => ({ uid: it.uid, name: it.name })));
         if (!picked) {
           if (!cancelled) setState({ kind: "none" });
           return;
