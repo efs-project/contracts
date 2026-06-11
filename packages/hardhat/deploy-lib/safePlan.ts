@@ -399,9 +399,27 @@ export async function detectDeployPhase(deployer: Signer, plan: PredictedPlan): 
 
   // Phase 2 — registered + sealed but transports not wired (Batch 3 / setTransportsAnchor still owed).
   const mirror = await ethers.getContractAt("MirrorResolver", plan.proxies.MirrorResolver, deployer);
-  if ((await mirror.transportsAnchorUID()) === ZeroHash) return 2;
+  const wiredTransports = await mirror.transportsAnchorUID();
+  if (wiredTransports === ZeroHash) return 2;
 
-  // Phase 3 — transports wired; the system is complete.
+  // Phase 3 — transports wired; the system is complete. BUT setTransportsAnchor is ONE-SHOT, so a
+  // stale or hand-edited Batch 3 could have welded in the WRONG UID, which this resume would otherwise
+  // accept as "done" and emit an empty artifact — while every MIRROR write then validates transport
+  // ancestry against the wrong subtree (PR #24 P2). So verify the wired UID is the REALIZED /transports
+  // anchor (resolvePath(root, "transports") — the exact value the execute path feeds setTransportsAnchor
+  // in orchestrate.ts). A mismatch is unrecoverable on this proxy (one-shot setter already consumed), so
+  // throw loudly rather than report success.
+  const indexer = await ethers.getContractAt("EFSIndexer", plan.proxies.EFSIndexer, deployer);
+  const root = await indexer.rootAnchorUID();
+  const realizedTransports = await indexer.resolvePath(root, "transports");
+  if (realizedTransports === ZeroHash || wiredTransports.toLowerCase() !== realizedTransports.toLowerCase()) {
+    throw new Error(
+      `[detectDeployPhase] MirrorResolver.transportsAnchorUID() ${wiredTransports} != realized ` +
+        `/transports anchor ${realizedTransports} (root ${root}). Batch 3 wired the wrong UID into the ` +
+        `one-shot setter — MIRROR ancestry validation would resolve against the wrong subtree, and this ` +
+        `is unrecoverable on this proxy. Investigate before treating the ceremony as complete.`,
+    );
+  }
   return 3;
 }
 

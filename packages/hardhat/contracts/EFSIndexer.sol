@@ -365,6 +365,10 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
         if (schema == $.anchorSchemaUID) {
             // Anchors are permanent structural nodes — revocable anchors are rejected.
             if (attestation.revocable) return false;
+            // ...and non-expiring: a non-revocable *schema* doesn't stop EAS accepting a nonzero
+            // expirationTime, and EFS reads filter on revocation/index state, not EAS expiry — so an
+            // expiring anchor would keep resolving forever past its expiry. Reject it (PR #24 P2).
+            if (attestation.expirationTime != 0) return false;
 
             (string memory name, bytes32 anchorSchema) = abi.decode(attestation.data, (string, bytes32));
 
@@ -453,6 +457,7 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
             // otherwise be indexed and served as valid pure-identity DATA).
             if (attestation.refUID != EMPTY_UID) return false;
             if (attestation.revocable) return false;
+            if (attestation.expirationTime != 0) return false; // permanent identity — no EAS expiry (PR #24 P2)
             if (attestation.data.length != 0) return false;
 
             // The bare DATA UID is already tracked by _indexGlobal above (step 1).
@@ -468,6 +473,7 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
             // from under other bindings. Like ANCHOR and DATA, we reject revocable attestations.
             if (attestation.refUID != EMPTY_UID) return false;
             if (attestation.revocable) return false;
+            if (attestation.expirationTime != 0) return false; // interned value is permanent — no EAS expiry (PR #24 P2)
 
             // valueHash = keccak256(bytes(value)) is the value's canonical lookup key (ties to
             // the forthcoming canonical-hashing spec). Clients use it as the content key to find

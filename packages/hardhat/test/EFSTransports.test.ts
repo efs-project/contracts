@@ -410,6 +410,63 @@ describe("EFS Transports & Data Model", function () {
     });
   });
 
+  // ─── Lifecycle: permanent content schemas reject EAS expiry (PR #24 P2) ─────
+  // ANCHOR/DATA/PROPERTY are non-revocable permanent structure; EFS reads filter on revocation/index
+  // state, not EAS expiry, so an expiring one would resolve forever past expiry. The kernel rejects a
+  // nonzero expirationTime alongside the existing non-revocable checks. Far-future expiry passes EAS's
+  // own check and reaches EFSIndexer.onAttest (which returns false → EAS reverts the attestation).
+  describe("permanent content rejects EAS expiry", function () {
+    const FUTURE_EXPIRY = 9_999_999_999n;
+
+    it("rejects an ANCHOR with a nonzero expirationTime", async function () {
+      await expect(
+        eas.attest({
+          schema: anchorSchemaUID,
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: FUTURE_EXPIRY,
+            revocable: false,
+            refUID: rootUID,
+            data: encodeAnchor("expiring-folder"),
+            value: 0n,
+          },
+        }),
+      ).to.be.reverted;
+    });
+
+    it("rejects a DATA with a nonzero expirationTime", async function () {
+      await expect(
+        eas.attest({
+          schema: dataSchemaUID,
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: FUTURE_EXPIRY,
+            revocable: false,
+            refUID: ZERO_BYTES32,
+            data: "0x",
+            value: 0n,
+          },
+        }),
+      ).to.be.reverted;
+    });
+
+    it("rejects a PROPERTY with a nonzero expirationTime", async function () {
+      await expect(
+        eas.attest({
+          schema: propertySchemaUID,
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: FUTURE_EXPIRY,
+            revocable: false,
+            refUID: ZERO_BYTES32,
+            data: encodePropertyValue("x"),
+            value: 0n,
+          },
+        }),
+      ).to.be.reverted;
+    });
+  });
+
   // ─── PROPERTY on DATA Tests ───────────────────────────────────────────────
 
   describe("PROPERTY on DATA", function () {
