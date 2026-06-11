@@ -135,6 +135,29 @@ describe("Deploy.fork — orchestrated CREATE3 deploy + register-last", function
     expect(ipfsAtt.attester.toLowerCase(), "/transports/ipfs authored by SystemAccount").to.equal(
       result.systemAccount.toLowerCase(),
     );
+    // PR #24 P2 fix: bootstrap seeds ALL 11 allowed transport schemes (MirrorResolver._isAllowedScheme),
+    // so no scheme is left squattable (first-writer-wins) on a fresh deploy. Names = client TransportType.
+    const ALL_TRANSPORTS = [
+      "onchain",
+      "ipfs",
+      "arweave",
+      "magnet",
+      "https",
+      "ftp",
+      "s3",
+      "gs",
+      "dat",
+      "rsync",
+      "bittorrent",
+    ];
+    for (const t of ALL_TRANSPORTS) {
+      const uid = await indexer.resolvePath(result.transportsAnchorUID, t);
+      expect(uid, `/transports/${t} anchor seeded by bootstrap`).to.not.equal(ethers.ZeroHash);
+      const att = await easRead.getAttestation(uid);
+      expect(att.attester.toLowerCase(), `/transports/${t} authored by SystemAccount`).to.equal(
+        result.systemAccount.toLowerCase(),
+      );
+    }
 
     // ── PR #24 P1 fix: bootstrap sealed + owner-cannot-relay after the ceremony ──────────────────
     // The deploy called seal() after bootstrap and before transfer; the bootstrap ceremony is now

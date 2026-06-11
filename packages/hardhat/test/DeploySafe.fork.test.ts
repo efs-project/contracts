@@ -168,6 +168,28 @@ describe("DeploySafe.fork — Safe-native deploy, born Safe-owned", function () 
     expect(await indexer.resolvePath(root, "transports")).to.not.equal(ethers.ZeroHash);
     expect(await indexer.resolvePath(result.transportsAnchorUID, "https")).to.not.equal(ethers.ZeroHash);
 
+    // PR #24 P2 fix: the Safe bootstrap seeds ALL 11 allowed transport schemes
+    // (MirrorResolver._isAllowedScheme), so no scheme is left squattable on a fresh deploy.
+    const ALL_TRANSPORTS = [
+      "onchain",
+      "ipfs",
+      "arweave",
+      "magnet",
+      "https",
+      "ftp",
+      "s3",
+      "gs",
+      "dat",
+      "rsync",
+      "bittorrent",
+    ];
+    for (const t of ALL_TRANSPORTS) {
+      expect(
+        await indexer.resolvePath(result.transportsAnchorUID, t),
+        `/transports/${t} anchor seeded by Safe bootstrap`,
+      ).to.not.equal(ethers.ZeroHash);
+    }
+
     // The MirrorResolver knows the transports anchor (setTransportsAnchor ran in Batch 2).
     const mirror = await ethers.getContractAt("MirrorResolver", result.proxies.MirrorResolver, deployer);
     expect((await mirror.transportsAnchorUID()).toLowerCase()).to.equal(result.transportsAnchorUID.toLowerCase());

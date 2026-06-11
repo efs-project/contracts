@@ -84,19 +84,32 @@ async function readProxyAdmin(proxy: string): Promise<string> {
   return ethers.getAddress("0x" + raw.slice(-40));
 }
 
-// ── Bootstrap scaffolding tree (root → tags/transports → 5 transport children) ────────────────────
+// ── Bootstrap scaffolding tree (root → tags/transports → 11 transport children) ───────────────────
 // The whole tree is authored by ONE timestamp-robust SystemAccount.bootstrap call (FIX 1, PR #24):
 // each child's refUID is threaded from the parent UID the prior EAS.attest returned in the same call,
 // so nothing is predicted off-chain. parentIndex indexes into this array; -1 = root (refUID=ZeroHash).
+//
+// The transport children = every scheme MirrorResolver._isAllowedScheme accepts (11). Each name is the
+// TransportType the client's detectTransport() yields, since the explorer resolves /transports/<name>
+// with that exact string before minting a MIRROR (utils/efs/transports.ts). web3:// → "onchain" and
+// ar:// → "arweave" are the two where the anchor name differs from the URI scheme; the other nine match
+// the scheme token. All 11 must be canonical /transports/* anchors so no scheme is left squattable
+// (first-writer-wins) on a fresh deploy.
 const BOOTSTRAP_SCAFFOLDING: { name: string; parentIndex: number }[] = [
   { name: "root", parentIndex: -1 }, // 0
   { name: "tags", parentIndex: 0 }, // 1 → root
   { name: "transports", parentIndex: 0 }, // 2 → root
-  { name: "onchain", parentIndex: 2 }, // 3 → transports
+  { name: "onchain", parentIndex: 2 }, // 3 → transports (web3://)
   { name: "ipfs", parentIndex: 2 }, // 4 → transports
-  { name: "arweave", parentIndex: 2 }, // 5 → transports
+  { name: "arweave", parentIndex: 2 }, // 5 → transports (ar://)
   { name: "magnet", parentIndex: 2 }, // 6 → transports
   { name: "https", parentIndex: 2 }, // 7 → transports
+  { name: "ftp", parentIndex: 2 }, // 8 → transports
+  { name: "s3", parentIndex: 2 }, // 9 → transports
+  { name: "gs", parentIndex: 2 }, // 10 → transports
+  { name: "dat", parentIndex: 2 }, // 11 → transports
+  { name: "rsync", parentIndex: 2 }, // 12 → transports
+  { name: "bittorrent", parentIndex: 2 }, // 13 → transports
 ];
 
 export async function orchestrate(deployer: Signer, mode: RunMode, log = true): Promise<OrchestrationResult> {

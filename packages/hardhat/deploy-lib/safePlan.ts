@@ -54,10 +54,15 @@ import { SafeCall } from "./safe";
 const CREATEX_IFACE = new Interface(["function deployCreate3(bytes32 salt, bytes initCode) payable returns (address)"]);
 
 // ── Scaffolding spec — the bootstrap anchors, in the EXACT order orchestrate.ts authors them ─────────
-// root → (tags, transports) under root; then the five transport children under /transports/. The whole
+// root → (tags, transports) under root; then the eleven transport children under /transports/. The whole
 // tree is authored by a SINGLE SystemAccount.bootstrap(indexer, ANCHOR_UID, specs[]) call: each child's
 // refUID is the parent UID the prior EAS.attest returned in the same call (timestamp-robust; no
 // off-chain UID prediction). `parentIndex` indexes into this same array; -1 marks the root.
+//
+// This list MUST stay byte-identical to orchestrate.ts's BOOTSTRAP_SCAFFOLDING (same names, same order).
+// The transport children = every scheme MirrorResolver._isAllowedScheme accepts (11), each named with
+// the TransportType the client's detectTransport() yields (utils/efs/transports.ts) — web3:// → "onchain"
+// and ar:// → "arweave" differ from the URI scheme; the other nine match the scheme token.
 export interface AnchorSpec {
   name: string;
   /// index into SCAFFOLDING of this anchor's parent, or -1 for the root (refUID = ZeroHash)
@@ -68,11 +73,17 @@ export const SCAFFOLDING: AnchorSpec[] = [
   { name: "root", parentIndex: -1 }, // 0
   { name: "tags", parentIndex: 0 }, // 1 → root
   { name: "transports", parentIndex: 0 }, // 2 → root
-  { name: "onchain", parentIndex: 2 }, // 3 → transports
+  { name: "onchain", parentIndex: 2 }, // 3 → transports (web3://)
   { name: "ipfs", parentIndex: 2 }, // 4 → transports
-  { name: "arweave", parentIndex: 2 }, // 5 → transports
+  { name: "arweave", parentIndex: 2 }, // 5 → transports (ar://)
   { name: "magnet", parentIndex: 2 }, // 6 → transports
   { name: "https", parentIndex: 2 }, // 7 → transports
+  { name: "ftp", parentIndex: 2 }, // 8 → transports
+  { name: "s3", parentIndex: 2 }, // 9 → transports
+  { name: "gs", parentIndex: 2 }, // 10 → transports
+  { name: "dat", parentIndex: 2 }, // 11 → transports
+  { name: "rsync", parentIndex: 2 }, // 12 → transports
+  { name: "bittorrent", parentIndex: 2 }, // 13 → transports
 ];
 
 /// Index of the `/transports` anchor in SCAFFOLDING (its realized UID feeds setTransportsAnchor).
