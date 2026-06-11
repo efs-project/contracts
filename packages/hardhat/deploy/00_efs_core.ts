@@ -56,13 +56,9 @@ const deployEfsCore: DeployFunction = async function (hre: HardhatRuntimeEnviron
     //                           the useful pre-flight (it shows the REAL Safe-keyed predicted addresses /
     //                           freeze-table values, no revert); on a real network the operator
     //                           proposes/signs/executes each batch in Safe{Wallet} (DEPLOYMENT.md §4).
-    //
-    // Escape hatch (unchanged): real address + EFS_SAFE_OWNER_KEYS (operator loaded the real owner keys
-    // as local signers) → `execute`. That is the only way a supplied real Safe self-executes.
     const signers = await hre.ethers.getSigners();
     const owner = signers[1] ?? signers[0];
     const isForkRehearsal = isLocalNetwork && chainId === 31337;
-    const ownerKeysAvailable = !!process.env.EFS_SAFE_OWNER_KEYS;
     let safe = process.env.EFS_SAFE_ADDRESS;
     let mode: "execute" | "propose";
     let owners = [owner];
@@ -77,11 +73,12 @@ const deployEfsCore: DeployFunction = async function (hre: HardhatRuntimeEnviron
       console.log(`[efs-core] Safe-native rehearsal — deployed 1-of-1 test Safe ${safe}`);
       mode = "execute"; // auto test-Safe: its single owner is a local signer (real signatures).
     } else {
-      // Real EFS_SAFE_ADDRESS supplied. The local signer can't be assumed to own it, so build/propose by
-      // default on ANY network (fork pre-flight or real ceremony). Self-execute ONLY when the operator
-      // explicitly loaded the real owner keys as local signers via EFS_SAFE_OWNER_KEYS.
-      mode = ownerKeysAvailable ? "execute" : "propose";
-      if (mode === "propose") owners = []; // no owner signatures used in propose mode
+      // A supplied real EFS_SAFE_ADDRESS is ALWAYS build/propose. The local signer cannot be assumed to
+      // own it, and EFS deliberately has NO raw-private-keys-in-env self-execute path (a footgun the
+      // project avoids). The operator proposes/signs/executes each batch in Safe{Wallet} (DEPLOYMENT.md
+      // §4). Only the auto-deployed 1-of-1 test Safe (above) ever self-executes.
+      mode = "propose";
+      owners = []; // no owner signatures used in propose mode
     }
     console.log(
       `[efs-core] Safe-native CREATE3 deploy — safe=${safe}, deployer=${deployer}, mode=${mode} (born Safe-owned)`,

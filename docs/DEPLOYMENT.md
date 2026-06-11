@@ -156,8 +156,8 @@ yarn deploy:efs --via-safe --network sepolia
 #    No transfer phase — everything is born Safe-owned. The verify gate runs automatically at Phase 1
 #    (the re-run after Batch 1), before Batch 2 is emitted. Batch 3 is never emitted before Batch 2 has
 #    landed (its arg is the realized /transports UID, minted only when Batch 2's bootstrap runs).
-#    (If you ever load the real owner keys as local signers, set EFS_SAFE_OWNER_KEYS to opt into
-#     in-process self-execution instead — otherwise build/propose is the default on real networks.)
+#    A supplied real EFS_SAFE_ADDRESS is ALWAYS build/propose — EFS has no raw-keys-in-env
+#    self-execute path; you sign + execute each emitted batch in Safe{Wallet}.
 # 4. deploy the read views (NON-FROZEN; redeployable anytime, in no UID, outside the freeze)
 yarn deploy:efs-views --network sepolia
 ```
