@@ -28,9 +28,12 @@ async function expectRevert(p: Promise<unknown>, label: string): Promise<void> {
 export async function runVerifyGate(input: VerifyInput): Promise<void> {
   const { deploys, schemaUIDs, deployer } = input;
 
-  // (1) Golden-vector: the contract field-string constants must match deploy-lib/schemas.ts, so the
-  //     UIDs we computed equal what the contracts self-derive. We assert the two self-deriving
-  //     resolvers below; the rest are covered by the golden-vector test (test/Deploy.fork.test.ts).
+  // (1) realized == predicted per proxy. NOTE on golden vectors: step (5) below RE-DERIVES UIDs from
+  //     deploy-lib/schemas.ts, so it is self-consistent, NOT a contract↔script field-string check. The
+  //     authoritative field-string integrity guard is the OFF-CHAIN test/SchemaGoldenVectors.test.ts
+  //     (committed UID + field-string literals at a fixed mock resolver) — it must be green at freeze
+  //     time (freeze-checklist gate). On-chain, only the two self-deriving resolvers (ListEntry/Alias)
+  //     embed a real field-string constant; those are cross-checked in (3).
   console.log("  [verify] realized == predicted (per proxy)...");
   for (const d of Object.values(deploys)) {
     if (d.proxy.toLowerCase() !== d.predicted.toLowerCase()) {
@@ -68,6 +71,24 @@ export async function runVerifyGate(input: VerifyInput): Promise<void> {
   const aliasR = await ethers.getContractAt("AliasResolver", deploys.AliasResolver.proxy, deployer);
   const onchainRedirectUID: string = await aliasR.redirectSchemaUID();
   assertEq(onchainRedirectUID, schemaUIDs.REDIRECT, "AliasResolver.redirectSchemaUID");
+
+  // (3b) init-supplied cross-reference UIDs (PR #24 50yr-review, M-1). (3) above only checks the two
+  //      SELF-DERIVED UIDs (ListEntry/Alias). The UIDs threaded INTO initialize() as typing/config
+  //      cross-references were unchecked — a mis-threaded init arg would register a correct schema UID
+  //      yet wire the WRONG typing target into permanent resolver behavior (e.g. REDIRECTs validating
+  //      sameAs endpoints against a wrong DATA UID, or the kernel matching attestations against a wrong
+  //      ANCHOR/PROPERTY/DATA UID). The gate is the thing meant to catch a future init-arg refactor, so
+  //      assert every stored cross-ref against the same schemaUIDs map before the irreversible register.
+  console.log("  [verify] init-supplied cross-ref UIDs (kernel + edge + alias) == computed...");
+  const indexer = await ethers.getContractAt("EFSIndexer", deploys.EFSIndexer.proxy, deployer);
+  assertEq(await indexer.ANCHOR_SCHEMA_UID(), schemaUIDs.ANCHOR, "EFSIndexer.ANCHOR_SCHEMA_UID");
+  assertEq(await indexer.PROPERTY_SCHEMA_UID(), schemaUIDs.PROPERTY, "EFSIndexer.PROPERTY_SCHEMA_UID");
+  assertEq(await indexer.DATA_SCHEMA_UID(), schemaUIDs.DATA, "EFSIndexer.DATA_SCHEMA_UID");
+  const edge = await ethers.getContractAt("EdgeResolver", deploys.EdgeResolver.proxy, deployer);
+  assertEq(await edge.PIN_SCHEMA_UID(), schemaUIDs.PIN, "EdgeResolver.PIN_SCHEMA_UID");
+  assertEq(await edge.TAG_SCHEMA_UID(), schemaUIDs.TAG, "EdgeResolver.TAG_SCHEMA_UID");
+  assertEq(await aliasR.dataSchemaUID(), schemaUIDs.DATA, "AliasResolver.dataSchemaUID");
+  assertEq(await aliasR.anchorSchemaUID(), schemaUIDs.ANCHOR, "AliasResolver.anchorSchemaUID");
 
   // (4) proxy.getEAS() == EAS for every resolver.
   console.log("  [verify] getEAS() == canonical EAS (per proxy)...");

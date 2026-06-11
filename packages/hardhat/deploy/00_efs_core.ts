@@ -1,6 +1,6 @@
 import { HardhatRuntimeEnvironment } from "hardhat/types";
 import { DeployFunction } from "hardhat-deploy/types";
-import { CREATEX_ADDRESS } from "../deploy-lib/addresses";
+import { CREATEX_ADDRESS, EXPECTED_EFS_SAFE } from "../deploy-lib/addresses";
 import { orchestrate, OrchestrationResult, RunMode } from "../deploy-lib/orchestrate";
 import { orchestrateViaSafe } from "../deploy-lib/orchestrateSafe";
 import { SAFE_PROXY_FACTORY_141, deployTestSafe } from "../deploy-lib/safe";
@@ -91,6 +91,25 @@ const deployEfsCore: DeployFunction = async function (hre: HardhatRuntimeEnviron
       // own it, and EFS deliberately has NO raw-private-keys-in-env self-execute path (a footgun the
       // project avoids). The operator proposes/signs/executes each batch in Safe{Wallet} (DEPLOYMENT.md
       // §4). Only the auto-deployed 1-of-1 test Safe (above) ever self-executes.
+      //
+      // PR #24 50yr-review (M-4): the Safe is the CreateX caller, so it is mixed into every CREATE3 salt
+      // and keys the realized proxy addresses AND all 9 schema UIDs. A typo to a different *valid* Safe
+      // passes every shape check yet silently keys the entire permanent deploy wrong. On a real network,
+      // require the supplied Safe to be the canonical EFS.eth Safe (a deliberate constant, not whatever
+      // env happens to hold). Skipped on the fork rehearsal (isForkRehearsal) where any address is fine.
+      if (
+        !isForkRehearsal &&
+        safe.toLowerCase() !== EXPECTED_EFS_SAFE.toLowerCase() &&
+        process.env.EFS_SAFE_EXPECTED_OVERRIDE !== "1"
+      ) {
+        throw new Error(
+          `[efs-core] EFS_SAFE_ADDRESS ${safe} != the canonical EFS.eth Safe ${EXPECTED_EFS_SAFE} ` +
+            `(deploy-lib/addresses.ts). The Safe keys every CREATE3 address + schema UID, so a wrong Safe ` +
+            `silently produces a wrong permanent deploy. If the Safe legitimately changed, update ` +
+            `EXPECTED_EFS_SAFE in the same PR that re-signs the freeze table; for a one-off testnet Safe, ` +
+            `set EFS_SAFE_EXPECTED_OVERRIDE=1.`,
+        );
+      }
       mode = "propose";
       owners = []; // no owner signatures used in propose mode
     }

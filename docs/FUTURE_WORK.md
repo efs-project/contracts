@@ -8,6 +8,42 @@ Backlog of known improvements, scale concerns, and architectural enhancements th
 
 ---
 
+## 50-year freeze review (PR #24) — pre-mainnet follow-ups
+
+A six-angle expert review (schema-permanence, proxy/burn, kernel-integrity, adversarial-resolver, EAS/evolution, deploy-ceremony) of the Sepolia freeze + upgradeable contracts ran 2026-06-11. **Verdict: the frozen schema surface (9 field strings + revocable flags + resolver-proxy addresses) is sound — zero freeze-blockers.** Fixed in-PR: burn-checklist completeness (renounce EFSIndexer/MirrorResolver owners), verify-gate cross-ref UID assertions, expected-Safe pin, golden-vector comment. The items below are recoverable-later (upgrade-safe logic, docs, or pre-mainnet decisions) — none reopen the freeze, but each should land before mainnet.
+
+### Kernel read-DoS: budgeted scan on the address-list getters [pre-mainnet, upgrade-safe]
+`EFSIndexer.getChildrenByAddressList` / `getAnchorsBySchemaAndAddressList` scan the append-only child arrays with no per-call budget (only `pageSize` bounds *results*, not *work*). A spammed directory (anyone can append non-revocable anchors forever) can push a lens-filtered page past RPC gas caps → that directory becomes permanently unreadable via those getters. The view layer already has `_FOLDER_SCAN_BUDGET_PER_CALL`; the kernel getters don't. Add a `(results, nextCursor, scanned)` budgeted variant (additive ABI, deployable via proxy upgrade). Ideally before freeze so clients bind to the safe shape.
+
+### Active-visibility index decision [pre-mainnet kernel decision]
+Kernel reads are O(append-only-history), not O(live-size) — the "redeployable stateless reads" mitigation does NOT cover the kernel (its address is frozen into UIDs). Decide before mainnet whether to add a direct active-visibility index in EFSIndexer (a new ERC-7201-namespaced mapping is upgrade-safe for go-forward writes; historical back-population is the hard part). Deepest long-horizon scale item (see also "Garbage collection / index compaction" below).
+
+### `_indexGlobal` explicit depth guard [upgrade-safe hardening]
+The upward `_containsAttestations` walk in `_indexGlobal` has no explicit `MAX_ANCHOR_DEPTH` break — currently safe only by the emergent invariant that the creation-time cap bounds every `_parents` chain. `_propagateContains` carries the redundant guard as defense-in-depth; `_indexGlobal` should match it. Cheap, upgrade-safe.
+
+### EAS-coupling verified-in-writing + semantics register [document-now / freeze-ledger]
+ADR-0032 bets the whole system on a specific EAS deployment but nowhere records that mainnet EAS + SchemaRegistry are non-upgradeable (no proxy/admin/pause). Add a FREEZE_LEDGER appendix (or ADR) recording the exact addresses + bytecode hash + immutability confirmation, signed with the freeze, and enumerate the load-bearing EAS semantics in one place: `attester == msg.sender` (SystemAccount identity), `refUID`, `revocationTime`, `expirationTime` (now rejected by resolvers), `recipient`, raw-bytes `data` (not ABI-enforced).
+
+### SSTORE2 / extcodecopy evolution ADR [document-now]
+The on-chain `web3://` serving path depends on legacy `extcodecopy` semantics that EOF / future EVM changes could alter — the one storage assumption with no on-chain escape hatch. Write the survival argument down: multi-mirror redundancy + permissionless new `/transports/` schemes are the mitigation; a web3-only DATA with no second mirror is at risk under EVM evolution.
+
+### State-walk recovery runbook + ENS/cold-boot discovery [document-now / pre-mainnet]
+(a) Document that the full system reconstructs from contract STATE alone (events are EIP-4444-expiring convenience) — write the reconstruct-from-state procedure. (b) Register `efs.eth` and publish canonical URLs as `web3://efs.eth/...` (EIP-4804) so router redeploys don't rot every shared URL, and so a cold reader can find the indexer/router/`system` in 50 years without this repo surviving. (c) Consider mirroring the social-layer taxonomies (transport priority, REDIRECT `kind`, reserved PROPERTY keys) on-chain as `system`-authored content so meaning is chain-recoverable.
+
+### chainId in mirror URIs: reconcile spec vs router [document-now, Tier-2 spec/code]
+`EFSRouter` parses then *ignores* the `:chainId` suffix in `web3://addr:chainId` mirror URIs (it `extcodecopy`s on the router's own chain), while `specs/overview.md` implies chainId is honored. Clarify the spec: on-chain web3:// serving is same-chain-only; `:chainId` is advisory off-chain-client metadata; state the L2/fork posture (one router per chain; cross-chain mirrors are client-followed, not extcodecopy targets).
+
+### MirrorResolver self-schema guard [upgrade-safe hardening]
+MirrorResolver is the only frozen resolver whose `onAttest`/`onRevoke` lack an `a.schema == ownMirrorUID` guard — it runs its DATA/transport validation on, and indexes, foreign-schema attestations. Not exploitable today (reads filter mirrors by `MIRROR_SCHEMA_UID`, and `index()` is permissionless anyway), but adding the guard for symmetry hardens it against a future upgrade that moves MIRROR state into the resolver.
+
+### Burn-completeness integration test [test debt]
+Add a test that runs the full burn sequence (renounce all ProxyAdmins + EFSIndexer/MirrorResolver/SystemAccount owners + sealModules) then asserts *every* owner == 0 and *every* one-shot setter (`setSortsAnchor`, `setTransportsAnchor`, `wireContracts`, `upgradeAndCall`) reverts — so the burn-incompleteness class this review caught can't regress.
+
+### REDIRECT read-time resolution spec + conformance vectors [before durable seeding]
+ADR-0050 defers multi-hop cycle/chain resolution (cycle → lowest-UID-in-SCC, depth cap, lens precedence) to a Durable read-time spec. Pin it with conformance vectors before any durable REDIRECT data is seeded — doesn't block the freeze, blocks durable seeding.
+
+---
+
 ## Architecture & Extensibility
 
 ### Web-of-trust UX + user-configurable system lenses
