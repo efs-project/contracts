@@ -27,9 +27,24 @@ const deployEfsCore: DeployFunction = async function (hre: HardhatRuntimeEnviron
   if (createxCode === "0x") {
     console.log(
       `[efs-core] CreateX not present at ${CREATEX_ADDRESS} on this network — skipping orchestrated ` +
-        `deploy (run against a Sepolia fork: MAINNET_FORKING_ENABLED=true, or real Sepolia/mainnet).`,
+        `deploy (run against a Sepolia fork: MAINNET_FORKING_ENABLED=true, or real Sepolia).`,
     );
     return;
+  }
+
+  // FIX (PR #24 P2): the EAS / SchemaRegistry constants in deploy-lib/addresses.ts are Sepolia-only
+  // (also live on the pinned Sepolia fork). Deploying on any other chain — notably mainnet — would
+  // initialize resolvers against the wrong EAS and drive register/reads through Sepolia constants,
+  // producing resolvers mainnet EAS can't call. Until verified per-chain constants are wired, hard-fail
+  // anything but Sepolia (11155111) and its local fork (31337). This is the "reject non-Sepolia until
+  // mainnet constants are wired" guard — the deploy is mainnet-forward, not mainnet-now.
+  const chainId = Number((await hre.ethers.provider.getNetwork()).chainId);
+  if (chainId !== 11155111 && chainId !== 31337) {
+    throw new Error(
+      `[efs-core] EFS deploy is configured for Sepolia + its pinned fork only (chainId 11155111/31337); ` +
+        `chainId ${chainId} is unsupported. Wire verified EAS/SchemaRegistry constants in ` +
+        `deploy-lib/addresses.ts (select by chainId) before deploying to another chain.`,
+    );
   }
 
   // Safe-native path (docs/DEPLOYMENT.md §1/§3, ADR-0048/0053): deploy the whole system FROM the
@@ -42,7 +57,6 @@ const deployEfsCore: DeployFunction = async function (hre: HardhatRuntimeEnviron
   if (viaSafe) {
     const onFork = (await hre.ethers.provider.getCode(SAFE_PROXY_FACTORY_141)) !== "0x";
     const isLocalNetwork = hre.network.name === "hardhat" || hre.network.name === "localhost";
-    const chainId = Number((await hre.ethers.provider.getNetwork()).chainId);
     // FIX A (PR #24 P2): the deciding axis is which Safe we hold owner signatures for — NOT whether
     // we're on a fork. SELF-EXECUTION is valid ONLY against the auto-deployed 1-of-1 test Safe (its
     // single owner IS a local signer). For ANY supplied real EFS_SAFE_ADDRESS, the gas-paying deployer
