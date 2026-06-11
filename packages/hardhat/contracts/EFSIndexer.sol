@@ -468,7 +468,7 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
             // the forthcoming canonical-hashing spec). Clients use it as the content key to find
             // an existing value to dedup against — off-chain via this event's indexed topic, and
             // on-chain via the future opt-in intern registry (ADR-0052). Decode the sole field.
-            (string memory value) = abi.decode(attestation.data, (string));
+            string memory value = abi.decode(attestation.data, (string));
             emit PropertyCreated(attestation.uid, attestation.attester, keccak256(bytes(value)));
             return true;
         }
@@ -895,6 +895,13 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
     ///        - a malformed or truncated escape (`%`, `%2`, `%ZZ`);
     ///        - a lowercase-hex escape (`%2f`) — only UPPERCASE hex (`%2F`) is canonical, so a
     ///          single byte can't have two valid encodings.
+    ///        - a *non-canonical* escape — a well-formed uppercase `%XX` whose decoded byte did NOT
+    ///          have to be escaped. Canonicity requires the escape carry a byte that genuinely must
+    ///          be percent-encoded: the decoded byte must be `_isReservedByte(b) || b == 0x25` (`%`).
+    ///          So `%2F` (/), `%20` (space), `%25` (literal %) are accepted, but `%41` (A) and
+    ///          `%2E` (.) are rejected — those bytes are unreserved and must appear bare, giving each
+    ///          byte exactly ONE valid spelling.  (`%` itself is reserved-for-escaping but is
+    ///          deliberately excluded from `_isReservedByte`, so it is admitted explicitly here.)
     ///      All other bytes — including high-bit (>= 0x80) UTF-8 bytes for non-ASCII names — pass
     ///      through unescaped. `%` is legal ONLY as the lead byte of a well-formed `%XX` escape.
     ///      Single byte-pass over the name (no allocation).
@@ -911,6 +918,12 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
                 // "%" — must introduce a canonical uppercase %XX escape.
                 if (i + 2 >= len) return false; // truncated (need two more bytes)
                 if (!_isUpperHex(nb[i + 1]) || !_isUpperHex(nb[i + 2])) return false;
+                // Canonicity: the escape must carry a byte that genuinely had to be encoded.
+                // Decode the two uppercase-hex nibbles and reject the escape unless the byte is
+                // reserved (or `%` itself, which is reserved-for-escaping but excluded from
+                // _isReservedByte). This blocks aliases like %41 (A) / %2E (.) — they must be bare.
+                bytes1 decoded = bytes1((_hexNibble(nb[i + 1]) << 4) | _hexNibble(nb[i + 2]));
+                if (!_isReservedByte(decoded) && decoded != 0x25) return false;
                 i += 2; // consume the two hex digits
             } else if (_isReservedByte(c)) {
                 // Bare reserved byte — must have been percent-encoded client-side.
@@ -948,6 +961,14 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
     ///      has exactly one canonical %XX escape.
     function _isUpperHex(bytes1 c) private pure returns (bool) {
         return (c >= 0x30 && c <= 0x39) || (c >= 0x41 && c <= 0x46);
+    }
+
+    /// @dev Decodes one UPPERCASE hex digit (0-9 or A-F) to its 0–15 nibble value. Caller must have
+    ///      already confirmed the byte via `_isUpperHex`; behavior for other bytes is unspecified.
+    function _hexNibble(bytes1 c) private pure returns (uint8) {
+        uint8 v = uint8(c);
+        // '0'..'9' → 0..9 ; 'A'..'F' → 10..15
+        return v <= 0x39 ? v - 0x30 : v - 0x41 + 10;
     }
 
     function _sliceUIDs(

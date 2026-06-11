@@ -548,6 +548,61 @@ describe("EFSIndexer", function () {
       const uid = getUIDFromReceipt(await tx.wait());
       expect(await indexer.resolvePath(ZERO_BYTES32, "a%2Fb")).to.equal(uid);
     });
+
+    it("accepts a single bare letter (A)", async function () {
+      const tx = await attestRootAnchor("A");
+      const uid = getUIDFromReceipt(await tx.wait());
+      expect(await indexer.resolvePath(ZERO_BYTES32, "A")).to.equal(uid);
+    });
+
+    it("accepts a space escape (%20)", async function () {
+      const tx = await attestRootAnchor("Episode%205");
+      const uid = getUIDFromReceipt(await tx.wait());
+      expect(await indexer.resolvePath(ZERO_BYTES32, "Episode%205")).to.equal(uid);
+    });
+
+    it("accepts a literal-percent escape (%25)", async function () {
+      const tx = await attestRootAnchor("100%25");
+      const uid = getUIDFromReceipt(await tx.wait());
+      expect(await indexer.resolvePath(ZERO_BYTES32, "100%25")).to.equal(uid);
+    });
+
+    it("accepts high-bit UTF-8 pass-through (café as caf%C3%A9 — reserved escape, raw UTF-8 bytes)", async function () {
+      // café NFC-encoded: the é is the two UTF-8 bytes 0xC3 0xA9; neither is reserved so both
+      // pass through bare. A reserved byte (e.g. %20) elsewhere is the canonical escape.
+      const name = "café%20edition"; // "café edition" → café raw UTF-8 + %20 for the space
+      const tx = await attestRootAnchor(name);
+      const uid = getUIDFromReceipt(await tx.wait());
+      expect(await indexer.resolvePath(ZERO_BYTES32, name)).to.equal(uid);
+    });
+
+    it("rejects a non-canonical escape of an unreserved letter (%41 ≡ A)", async function () {
+      await expect(attestRootAnchor("%41")).to.be.revertedWithCustomError(indexer, "InvalidAnchorName");
+    });
+
+    it("rejects a non-canonical escape of a dot (readme%2Etxt ≡ readme.txt)", async function () {
+      await expect(attestRootAnchor("readme%2Etxt")).to.be.revertedWithCustomError(indexer, "InvalidAnchorName");
+    });
+
+    it("rejects a non-canonical escape of a bare dot (%2E)", async function () {
+      await expect(attestRootAnchor("%2E")).to.be.revertedWithCustomError(indexer, "InvalidAnchorName");
+    });
+
+    it("rejects a non-canonical escape of dot-dot (%2E%2E)", async function () {
+      await expect(attestRootAnchor("%2E%2E")).to.be.revertedWithCustomError(indexer, "InvalidAnchorName");
+    });
+
+    it("rejects a bare slash (/)", async function () {
+      await expect(attestRootAnchor("a/b")).to.be.revertedWithCustomError(indexer, "InvalidAnchorName");
+    });
+
+    it('rejects the relative segment "."', async function () {
+      await expect(attestRootAnchor(".")).to.be.revertedWithCustomError(indexer, "InvalidAnchorName");
+    });
+
+    it('rejects the relative segment ".."', async function () {
+      await expect(attestRootAnchor("..")).to.be.revertedWithCustomError(indexer, "InvalidAnchorName");
+    });
   });
 
   describe("Path Resolution", function () {
