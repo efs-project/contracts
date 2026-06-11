@@ -389,3 +389,23 @@ main,
 [data-theme="dark"] body::after {
   z-index: 2; /* Scanlines behind UI content */
 }
+
+/* Overview pane — map Tailwind typography to the active daisyUI theme (v4 oklch
+   vars), and override the global monospace body font for readable long-form. */
+.prose-efs {
+  --tw-prose-body: oklch(var(--bc));
+  --tw-prose-headings: oklch(var(--bc));
+  --tw-prose-links: oklch(var(--p));
+  --tw-prose-bold: oklch(var(--bc));
+  --tw-prose-code: oklch(var(--bc));
+  --tw-prose-quotes: oklch(var(--bc) / 0.8);
+  --tw-prose-quote-borders: oklch(var(--b3));
+  --tw-prose-bullets: oklch(var(--bc) / 0.5);
+  --tw-prose-counters: oklch(var(--bc) / 0.6);
+  --tw-prose-hr: oklch(var(--b3));
+  --tw-prose-th-borders: oklch(var(--b3));
+  --tw-prose-td-borders: oklch(var(--b3));
+  --tw-prose-pre-bg: oklch(var(--b2));
+  --tw-prose-pre-code: oklch(var(--bc));
+  font-family: ui-sans-serif, system-ui, sans-serif;
+}
