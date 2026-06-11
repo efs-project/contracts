@@ -54,6 +54,7 @@ export interface UseItemOverviewArgs {
   routerAbi?: Abi;
   rootUID?: `0x${string}`;
   dataSchemaUID?: `0x${string}`;
+  anchorSchemaUID?: `0x${string}`;
 }
 
 /**
@@ -83,7 +84,8 @@ export function useItemOverview(args: UseItemOverviewArgs): OverviewState {
       args.routerAddress &&
       args.routerAbi &&
       args.rootUID &&
-      args.dataSchemaUID;
+      args.dataSchemaUID &&
+      args.anchorSchemaUID;
     if (!ready) {
       setState({ kind: "none" });
       return;
@@ -112,7 +114,7 @@ export function useItemOverview(args: UseItemOverviewArgs): OverviewState {
           edgeResolverAddress: args.edgeResolverAddress!,
           edgeResolverAbi: args.edgeResolverAbi!,
           rootUID: args.rootUID!,
-          dataSchemaUID: args.dataSchemaUID!,
+          anchorSchemaUID: args.anchorSchemaUID!,
           lensAddresses: args.lensAddresses,
         });
         if (cancelled) return;
@@ -168,6 +170,7 @@ export function useItemOverview(args: UseItemOverviewArgs): OverviewState {
     args.anchorUID,
     args.rootUID,
     args.dataSchemaUID,
+    args.anchorSchemaUID,
     args.lensAddresses.join(","),
     args.resourcePathNames.join("/"),
   ]);

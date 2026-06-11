@@ -8,6 +8,8 @@ Informal dated log of small decisions agents made while working. Lighter than AD
 
 ---
 
+- 2026-06-10 (markdown-for-items, client): Overview system-tag query uses anchorSchemaUID (anchor-targeted TAGs bucket under the target anchor's EAS schema, verified on fork); README *listing* uses dataSchemaUID. Two distinct schemas. Resolves the QUESTIONS.md bucket entry.
+
 ### 2026-05-31 — [claude-opus-4.6 · dev] LIST_ENTRY → pure identity; order + label as PROPERTYs (ADR-0046)
 
 Resolves the OPEN free-text question below. Rather than add a `string` label field to LIST_ENTRY, we **removed `int256 weight`** from the schema entirely (LIST_ENTRY is now `bytes32 listUID, bytes32 target` — pure membership). Order *and* free-text label became PIN-bound (cardinality-1) PROPERTYs on the **stable entry UID** (`"weight"` = decimal-string rank, `"name"` = arbitrary-length label). One move fixes both open issues: reorder/edit re-PIN a PROPERTY in O(1) without churning the entry UID (so labels survive — the §7 orphan footgun is gone), and the 31-byte free-text cap disappears (label is a `string` PROPERTY; ANY-mode `target` is now `keccak(text)`). Sorting is client-side over the order PROPERTY; the on-chain SortOverlay was rejected because it can't source list entries without coupling the kernel to list semantics (a hardened invariant). Adversarially reviewed (PROCEED-WITH-CHANGES; the cheaper per-list ordering-vector alternative is recorded + rejected in the ADR). Validated on the deployed stack: Lists 56/56, simulate 42/42, client typecheck + unit 23/23, property round-trip 10/10 (80-byte label, lens isolation, reorder/edit keep UID). Full ADR: **ADR-0046**.

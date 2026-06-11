@@ -56,11 +56,15 @@ when a tag filter is already active. So this feature does **not** piggyback on
 that machinery.
 
 Instead, we fix the convention: the **`system` TAG targets the file's ANCHOR
-UID**, filed under the file's **`dataSchemaUID`** bucket (verified vs
-`EFSFileView.getDirectoryPageBySchemaAndAddressList` — a README is a dataSchema
-child, so listing/tagging must use dataSchema, not anchorSchema). Both the
-Overview resolver and the hidden-files filter match it directly against a
-directory item's `uid`. This is:
+UID**, filed under **`anchorSchemaUID`** (the anchor's EAS schema, verified
+on-chain — an anchor-targeted TAG files under the target anchor's EAS schema
+bucket; querying `anchorSchemaUID` returns the seeded README anchor uids,
+`dataSchemaUID` returns `[]`). The README **file** is separately *listed* under
+**`dataSchemaUID`** via `EFSFileView.getDirectoryPageBySchemaAndAddressList`.
+Both schemas are used, for different steps: listing = dataSchema, tag-query =
+anchorSchema. Both the Overview resolver and the hidden-files filter match the
+system set directly against a directory item's `uid` (the directory-item uid is
+the ANCHOR uid). This is:
 - simplest (no per-child DATA-UID round-trip, no dependence on `dataUIDMap`),
 - correct for "system/hidden is a placement role of this file at this path,"
 - a deliberate, documented divergence from the `nsfw`-on-DATA convention; the

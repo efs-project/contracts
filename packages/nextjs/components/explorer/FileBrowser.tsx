@@ -663,8 +663,10 @@ export const FileBrowser = ({
   // `/tags/system` kernel-active anchor-target set via resolveSystemAnchorSet
   // and is applied as a final visibility filter when showSystemFiles is off.
   // Keyed on the same inputs the directory listing keys on (anchor, lenses,
-  // dataSchema). lensKey is the joined-address string so a fresh array identity
-  // doesn't re-run the effect when the actual lenses are unchanged.
+  // anchorSchema). The system TAG targets the file's ANCHOR uid and is filed
+  // under the anchor's EAS schema bucket (anchorSchemaUID) — verified on-chain;
+  // query that bucket. lensKey is the joined-address string so a fresh array
+  // identity doesn't re-run the effect when the actual lenses are unchanged.
   const lensKey = lensAddresses.join(",");
   useEffect(() => {
     if (
@@ -672,7 +674,7 @@ export const FileBrowser = ({
       !indexerInfo ||
       !edgeResolverAddress ||
       !rootUID ||
-      !dataSchemaUID ||
+      !anchorSchemaUID ||
       lensAddresses.length === 0
     ) {
       setSystemSet(new Set());
@@ -686,7 +688,7 @@ export const FileBrowser = ({
       edgeResolverAddress,
       edgeResolverAbi: EDGE_RESOLVER_ABI as unknown as Abi,
       rootUID: rootUID as `0x${string}`,
-      dataSchemaUID: dataSchemaUID as `0x${string}`,
+      anchorSchemaUID: anchorSchemaUID as `0x${string}`,
       lensAddresses,
     })
       .then(set => {
@@ -700,7 +702,7 @@ export const FileBrowser = ({
     };
     // lensKey stands in for lensAddresses (stable string key); see comment above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [publicClient, indexerInfo, edgeResolverAddress, rootUID, dataSchemaUID, currentAnchorUID, lensKey]);
+  }, [publicClient, indexerInfo, edgeResolverAddress, rootUID, anchorSchemaUID, currentAnchorUID, lensKey]);
 
   // Staleness for the active sort on this anchor — drives the preview banner count
   const { data: activeSortStaleness } = useScaffoldReadContract({

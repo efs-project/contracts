@@ -9,17 +9,18 @@ export interface SystemSetArgs {
   edgeResolverAddress: `0x${string}`;
   edgeResolverAbi: Abi;
   rootUID: `0x${string}`;
-  dataSchemaUID: `0x${string}`;
+  anchorSchemaUID: `0x${string}`;
   lensAddresses: string[];
 }
 
 /**
  * Resolve the set of child ANCHOR UIDs tagged `system` by any active lens.
- * Convention: the system TAG targets the file's ANCHOR uid, but is filed under
- * the file's DATA schema bucket (targetSchema = dataSchema), so results match a
- * directory item's `uid` directly — directory items are enumerated by dataSchema.
- * Degrades to an empty set when /tags/system does not exist. Lowercased UIDs in
- * the set.
+ * Convention: the system TAG targets the file's ANCHOR uid and is filed under
+ * the anchor's EAS schema bucket (`anchorSchemaUID`) — verified on-chain; query
+ * that bucket. Listing of the README file itself is a separate dataSchema
+ * concern. Results match a directory item's `uid` directly (the directory-item
+ * uid is the ANCHOR uid). Degrades to an empty set when /tags/system does not
+ * exist. Lowercased UIDs in the set.
  *
  * Deliberately does NOT reuse FileBrowser's resolveTagSet/matchesUID: that path
  * unions a DATA-target bucket and is weight-filtered (effective TAG, ADR-0042).
@@ -33,7 +34,7 @@ export async function resolveSystemAnchorSet(args: SystemSetArgs): Promise<Set<s
     edgeResolverAddress,
     edgeResolverAbi,
     rootUID,
-    dataSchemaUID,
+    anchorSchemaUID,
     lensAddresses,
   } = args;
 
@@ -73,7 +74,7 @@ export async function resolveSystemAnchorSet(args: SystemSetArgs): Promise<Set<s
         address: edgeResolverAddress,
         abi: edgeResolverAbi,
         functionName: "getActiveTargetsByAttesterAndSchema",
-        args: [systemDef, lens as `0x${string}`, dataSchemaUID, 0n, 200n],
+        args: [systemDef, lens as `0x${string}`, anchorSchemaUID, 0n, 200n],
       })) as readonly `0x${string}`[];
 
       for (const target of targets) {

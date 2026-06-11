@@ -706,6 +706,7 @@ export default function ExplorerClient() {
                 routerAbi={routerInfo?.abi}
                 rootUID={rootUID as `0x${string}` | undefined}
                 dataSchemaUID={dataSchemaUID as `0x${string}` | undefined}
+                anchorSchemaUID={anchorSchemaUID as `0x${string}` | undefined}
               />
             </div>
           )}
