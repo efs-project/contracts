@@ -20,7 +20,7 @@
 
 import { useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { StopIcon } from "@heroicons/react/24/outline";
+import { StopIcon, XMarkIcon } from "@heroicons/react/24/outline";
 import { usePublicClient, useWalletClient } from "wagmi";
 import { MarkdownEditor } from "~~/components/markdown/MarkdownEditor";
 import { useDeployedContractInfo, useScaffoldWriteContract } from "~~/hooks/scaffold-eth";
@@ -150,26 +150,37 @@ export const OverviewEditorModal = (props: OverviewEditorModalProps) => {
   if (typeof document === "undefined") return null;
 
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4">
-      <div className="bg-base-100 rounded-xl shadow-xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+      <div className="terminal-panel bg-base-200 border border-base-300 rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden">
         {/* Header */}
-        <div className="px-5 py-4 border-b border-base-300">
-          <h3 className="text-lg font-semibold">{mode === "edit" ? "Edit Overview" : "Create Overview"}</h3>
-          <p className="text-xs text-base-content/60 mt-1">
+        <div className="relative px-6 py-4 border-b border-base-300/80">
+          <h3 className="neon-text text-base font-bold uppercase tracking-[0.18em] text-primary pr-8">
+            {mode === "edit" ? "Edit Overview" : "Create Overview"}
+          </h3>
+          <p className="text-xs text-base-content/60 mt-2 leading-relaxed pr-8">
             Saving writes ~8–10 on-chain transactions as your connected wallet. Editing replaces your own version only
             (lens-scoped) — it never touches anyone else&apos;s.
           </p>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close editor"
+            title="Close editor"
+            className="btn btn-ghost btn-sm btn-circle absolute right-3 top-3"
+          >
+            <XMarkIcon className="w-5 h-5" />
+          </button>
         </div>
 
         {/* Body */}
-        <div className="px-5 py-4 overflow-y-auto flex-1">
+        <div className="px-6 py-5 overflow-y-auto flex-1">
           {!walletClient ? (
             <div className="text-center text-base-content/70 py-12">Connect a wallet to edit the Overview.</div>
           ) : (
             <>
               <MarkdownEditor value={text} onChange={setText} />
               {isSaving && (
-                <div className="mt-3 flex items-center gap-2 text-sm text-base-content/70">
+                <div className="mt-4 flex items-center gap-2 text-sm text-base-content/70">
                   <span className="loading loading-spinner loading-xs" />
                   Saving Overview on-chain… (see the background-ops drawer for progress)
                 </div>
@@ -179,7 +190,7 @@ export const OverviewEditorModal = (props: OverviewEditorModalProps) => {
         </div>
 
         {/* Footer */}
-        <div className="px-5 py-4 border-t border-base-300 flex items-center justify-end gap-2">
+        <div className="px-6 py-4 border-t border-base-300/80 flex items-center justify-end gap-2">
           {isSaving ? (
             <button
               type="button"

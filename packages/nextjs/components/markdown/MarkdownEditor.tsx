@@ -30,18 +30,23 @@ export function MarkdownEditor({ value, onChange }: { value: string; onChange: (
   }, []);
 
   return (
-    <div className="flex flex-col lg:flex-row gap-3" data-color-mode={colorMode}>
-      <div className="flex-1 min-w-0">
-        <MDEditor value={value} onChange={v => onChange(v ?? "")} preview="edit" height={360} />
-      </div>
-      <div className="flex-1 min-w-0 border border-base-300 rounded-lg overflow-y-auto" style={{ maxHeight: 380 }}>
-        <div className="text-xs font-semibold text-base-content/60 px-3 py-2 border-b border-base-content/10">
-          Preview
+    <div className="efs-md-editor flex flex-col lg:flex-row gap-4" data-color-mode={colorMode}>
+      {/* Editor column */}
+      <div className="flex-1 min-w-0 flex flex-col gap-2">
+        <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-base-content/50 px-0.5">Editor</div>
+        <div className="border border-base-300 rounded-lg overflow-hidden">
+          <MDEditor value={value} onChange={v => onChange(v ?? "")} preview="edit" height={420} />
         </div>
-        {/* No extra prose wrapper: MarkdownView already renders its own
-            <article className="prose prose-efs">. Wrapping again would nest prose. */}
-        <div className="p-3">
-          <MarkdownView source={value} />
+      </div>
+      {/* Preview column */}
+      <div className="flex-1 min-w-0 flex flex-col gap-2">
+        <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-base-content/50 px-0.5">Preview</div>
+        <div className="border border-base-300 rounded-lg overflow-y-auto bg-base-100" style={{ height: 420 }}>
+          {/* No extra prose wrapper: MarkdownView already renders its own
+              <article className="prose prose-efs">. Wrapping again would nest prose. */}
+          <div className="p-4">
+            <MarkdownView source={value} />
+          </div>
         </div>
       </div>
     </div>

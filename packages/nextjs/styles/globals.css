@@ -409,3 +409,87 @@ main,
   --tw-prose-pre-code: oklch(var(--bc));
   font-family: ui-sans-serif, system-ui, sans-serif;
 }
+
+/* ──────────────────────────────────────────────
+   @uiw/react-md-editor — themed to the daisyUI palette
+   Scoped under `.efs-md-editor` (added on the MarkdownEditor wrapper) so the
+   override never leaks to any other consumer. Mirrors `.prose-efs`'s approach:
+   map @uiw's surfaces onto the active theme's oklch vars
+   (--b1 textarea, --b3 toolbar/borders, --bc text/icons, --p hover/active).
+   `!important` only where @uiw ships its own ID/element-level rules that would
+   otherwise win on specificity.
+   ────────────────────────────────────────────── */
+
+.efs-md-editor .w-md-editor {
+  background-color: oklch(var(--b1)) !important;
+  color: oklch(var(--bc)) !important;
+  box-shadow: none;
+  border-radius: 0;
+}
+
+/* Toolbar: elevated surface, mono affordance */
+.efs-md-editor .w-md-editor-toolbar {
+  background-color: oklch(var(--b3)) !important;
+  border-bottom: 1px solid oklch(var(--b3)) !important;
+  padding: 4px 6px;
+}
+
+.efs-md-editor .w-md-editor-toolbar ul > li > button {
+  color: oklch(var(--bc));
+}
+
+.efs-md-editor .w-md-editor-toolbar ul > li > button svg {
+  color: oklch(var(--bc));
+}
+
+/* Hover / active states use the primary (green) accent */
+.efs-md-editor .w-md-editor-toolbar ul > li > button:hover,
+.efs-md-editor .w-md-editor-toolbar ul > li > button:focus {
+  background-color: oklch(var(--p) / 0.15);
+  color: oklch(var(--p));
+}
+
+.efs-md-editor .w-md-editor-toolbar ul > li > button:hover svg,
+.efs-md-editor .w-md-editor-toolbar ul > li > button:focus svg {
+  color: oklch(var(--p));
+}
+
+.efs-md-editor .w-md-editor-toolbar li.active > button {
+  background-color: oklch(var(--p) / 0.2);
+  color: oklch(var(--p));
+}
+
+/* Toolbar group dividers */
+.efs-md-editor .w-md-editor-toolbar-divider {
+  background-color: oklch(var(--bc) / 0.15);
+}
+
+/* Text area: base surface, mono, themed caret/text */
+.efs-md-editor .w-md-editor-content,
+.efs-md-editor .w-md-editor-area,
+.efs-md-editor .w-md-editor-input {
+  background-color: oklch(var(--b1));
+}
+
+.efs-md-editor .w-md-editor-text-input,
+.efs-md-editor .w-md-editor-text,
+.efs-md-editor .w-md-editor-text-pre > code,
+.efs-md-editor .w-md-editor-text-pre .token {
+  color: oklch(var(--bc)) !important;
+  -webkit-text-fill-color: oklch(var(--bc)) !important;
+  font-family: "JetBrains Mono", "Share Tech Mono", monospace !important;
+  caret-color: oklch(var(--p));
+}
+
+/* Markdown syntax tokens: keep them legible against the dark base */
+.efs-md-editor .w-md-editor-text-pre .token.title,
+.efs-md-editor .w-md-editor-text-pre .token.bold,
+.efs-md-editor .w-md-editor-text-pre .token.url {
+  color: oklch(var(--p)) !important;
+  -webkit-text-fill-color: oklch(var(--p)) !important;
+}
+
+/* Selection inside the textarea */
+.efs-md-editor .w-md-editor-text-input::selection {
+  background: oklch(var(--p) / 0.25);
+}
