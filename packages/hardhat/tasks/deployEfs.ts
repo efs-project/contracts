@@ -13,14 +13,30 @@ import { task } from "hardhat/config";
 task("deploy:efs", "Run the EFS core CREATE3 deploy ceremony (Phase D); EFSCore tag only")
   .addFlag("untilFreezeGate", "Deploy + verify + wire, then STOP before any schema is registered")
   .addFlag("afterFreezeGate", "Re-bind the existing proxies, then register + transfer-to-Safe + smoke")
+  .addFlag("viaSafe", "Deploy FROM the EFS.eth Safe (born Safe-owned, two MultiSend batches; no transfer)")
   .setAction(async (args, hre) => {
-    const { untilFreezeGate, afterFreezeGate } = args as {
+    const { untilFreezeGate, afterFreezeGate, viaSafe } = args as {
       untilFreezeGate: boolean;
       afterFreezeGate: boolean;
+      viaSafe: boolean;
     };
 
     if (untilFreezeGate && afterFreezeGate) {
       throw new Error("deploy:efs: pass at most one of --until-freeze-gate / --after-freeze-gate.");
+    }
+
+    // Safe-native path (docs/DEPLOYMENT.md §1/§3): deploy FROM the EFS.eth Safe as two owner-signed
+    // MultiSend batches, born Safe-owned (no transfer phase). The freeze-gate flags don't apply here —
+    // the gate is the human signing the freeze table BETWEEN the two Safe batches. Equivalent to
+    // setting EFS_DEPLOY_VIA_SAFE=1 + EFS_SAFE_ADDRESS=<Safe>.
+    if (viaSafe) {
+      if (untilFreezeGate || afterFreezeGate) {
+        throw new Error("deploy:efs: --via-safe is its own two-batch flow; don't combine with the freeze-gate flags.");
+      }
+      process.env.EFS_DEPLOY_VIA_SAFE = "1";
+      console.log(`[deploy:efs] via-safe network=${hre.network.name} — born Safe-owned, EFSCore tag only.`);
+      await hre.run("deploy", { tags: "EFSCore" });
+      return;
     }
 
     const mode = untilFreezeGate ? "until-freeze-gate" : afterFreezeGate ? "after-freeze-gate" : "full";
