@@ -43,19 +43,22 @@ const deployEfsCore: DeployFunction = async function (hre: HardhatRuntimeEnviron
     const onFork = (await hre.ethers.provider.getCode(SAFE_PROXY_FACTORY_141)) !== "0x";
     const isLocalNetwork = hre.network.name === "hardhat" || hre.network.name === "localhost";
     const chainId = Number((await hre.ethers.provider.getNetwork()).chainId);
-    // FIX A (PR #24): split fork-rehearsal SELF-EXECUTION from real-network BUILD/PROPOSE.
+    // FIX A (PR #24 P2): the deciding axis is which Safe we hold owner signatures for — NOT whether
+    // we're on a fork. SELF-EXECUTION is valid ONLY against the auto-deployed 1-of-1 test Safe (its
+    // single owner IS a local signer). For ANY supplied real EFS_SAFE_ADDRESS, the gas-paying deployer
+    // is just an EOA, NOT a Safe owner — even on the fork. Self-signing + execTransaction would
+    // fabricate invalid signatures and revert Batch 1 (the bug this fix closes). So:
     //
-    // Fork rehearsal (chainId 31337 / network hardhat|localhost, the auto-test-Safe path): we deploy a
-    // real 1-of-1 test Safe whose single owner IS a local signer, so the process holds real owner
-    // signatures — `mode: "execute"` signs + execTransactions the batches in-process. UNCHANGED.
+    //   no EFS_SAFE_ADDRESS  → auto-deploy a 1-of-1 test Safe (fork only) → `execute` (self-sign).
+    //   real EFS_SAFE_ADDRESS → `propose` REGARDLESS of network (fork or real): build the MultiSend
+    //                           batches + emit safe-batches.json + a ceremony summary against the real
+    //                           Safe-keyed addresses, and DO NOT call execTransaction. On a fork this is
+    //                           the useful pre-flight (it shows the REAL Safe-keyed predicted addresses /
+    //                           freeze-table values, no revert); on a real network the operator
+    //                           proposes/signs/executes each batch in Safe{Wallet} (DEPLOYMENT.md §4).
     //
-    // Real network with a real EFS_SAFE_ADDRESS: the gas-paying deployer is just an EOA, NOT a Safe
-    // owner — it has no owner signatures. Self-signing + execTransaction would fabricate invalid
-    // signatures and revert Batch 1 (the bug this fix closes). So default to `mode: "propose"`: build
-    // the MultiSend batches + emit safe-batches.json + a ceremony summary, and DO NOT call
-    // execTransaction. The operator proposes/signs/executes each batch in Safe{Wallet} (DEPLOYMENT.md
-    // §4). We only switch to `execute` on a real network if the operator explicitly signals that real
-    // owner keys are loaded as local signers via EFS_SAFE_OWNER_KEYS (a clean opt-in signal).
+    // Escape hatch (unchanged): real address + EFS_SAFE_OWNER_KEYS (operator loaded the real owner keys
+    // as local signers) → `execute`. That is the only way a supplied real Safe self-executes.
     const signers = await hre.ethers.getSigners();
     const owner = signers[1] ?? signers[0];
     const isForkRehearsal = isLocalNetwork && chainId === 31337;
@@ -72,11 +75,12 @@ const deployEfsCore: DeployFunction = async function (hre: HardhatRuntimeEnviron
       }
       safe = await deployTestSafe(signer, [await owner.getAddress()], 1);
       console.log(`[efs-core] Safe-native rehearsal — deployed 1-of-1 test Safe ${safe}`);
-      mode = "execute"; // fork rehearsal: the test-Safe owner is a local signer (real signatures).
+      mode = "execute"; // auto test-Safe: its single owner is a local signer (real signatures).
     } else {
-      // Real EFS_SAFE_ADDRESS supplied. Self-execute ONLY on the fork rehearsal, OR on a real network
-      // when the operator explicitly loaded owner keys; otherwise build/propose (the safe default).
-      mode = isForkRehearsal || ownerKeysAvailable ? "execute" : "propose";
+      // Real EFS_SAFE_ADDRESS supplied. The local signer can't be assumed to own it, so build/propose by
+      // default on ANY network (fork pre-flight or real ceremony). Self-execute ONLY when the operator
+      // explicitly loaded the real owner keys as local signers via EFS_SAFE_OWNER_KEYS.
+      mode = ownerKeysAvailable ? "execute" : "propose";
       if (mode === "propose") owners = []; // no owner signatures used in propose mode
     }
     console.log(

@@ -97,7 +97,7 @@ The Phase-D deploy script automates steps 1–4 and 6–8; step 5 is the human g
    - golden-vector: contract field-string constants == `deploy-lib/schemas.ts` (no UID drift);
    - storage-layout snapshot matches.
 4. **Wire partners**: `EFSIndexer.wireContracts(...)`, `MirrorResolver.setTransportsAnchor(...)`; create the `/transports/*` anchors. (No SORT_INFO wiring — deferred.)
-5. **🔒 FREEZE GATE (HUMAN):** fill `docs/SEPOLIA_FREEZE_TABLE.md` (the FREEZE_LEDGER) with realized proxy addresses, computed UIDs, impl+proxy bytecode keccak, salts, factory, EAS+registry+chainId. **James reviews and signs.** _No schema is registered before this signature._
+5. **🔒 FREEZE GATE (HUMAN):** fill `docs/SEPOLIA_FREEZE_TABLE.md` (the FREEZE*LEDGER) with realized proxy addresses, computed UIDs, impl+proxy bytecode keccak, salts, factory, EAS+registry+chainId. **James reviews and signs.** \_No schema is registered before this signature.*
 6. **Register the 9 schemas LAST** in EAS, `resolver = proxy`. Assert `getSchema(uid).resolver == proxy` and no conflicting prior registration. (Registration is cheap, idempotent — `AlreadyExists` reverts harmlessly.)
 7. **Transfer ownership to the EFS.eth Safe**: every `ProxyAdmin.transferOwnership(SAFE)` + every resolver `Ownable.transferOwnership(SAFE)` (EFSIndexer, MirrorResolver). Assert each `owner() == SAFE` and the deployer EOA holds nothing.
 8. **Live smoke + pin**: push one real attestation through _every_ schema (onAttest no revert + expected index written) + one revoke per revocable schema; regenerate + commit `packages/nextjs/contracts/deployedContracts.ts`; confirm `git diff --exit-code` (ADR-0037 pin holds).
@@ -113,13 +113,22 @@ The Phase-D deploy script automates steps 1–4 and 6–8; step 5 is the human g
 
 ```bash
 cd packages/hardhat
-# 1. one-time: fund a gas-paying EOA (gas only — authority is the Safe owner signatures), set the Safe
+# 1. one-time: fund a gas-paying EOA (gas only — authority is the Safe owner signatures)
 yarn account:import                       # a funded deployer EOA (gas)
-echo "EFS_SAFE_ADDRESS=0x...EFS.eth Safe..." >> .env
-# 2. rehearse on the pinned fork (deploys a 1-of-1 test Safe automatically; full born-owned assertions)
+# 2a. MECHANISM REHEARSAL (no EFS_SAFE_ADDRESS): exercises the full two-batch born-owned flow end to
+#     end against a 1-of-1 test Safe the task DEPLOYS automatically. Because that test Safe's single
+#     owner IS a local signer, the task SELF-EXECUTES (mode "execute") and runs the full born-owned
+#     assertions. This is the "does the ceremony work?" rehearsal — it does NOT use the real Safe.
 yarn deploy:efs --via-safe --network hardhat
-#    (or run the fork rehearsal directly:
+#    (or run the mechanism rehearsal directly:
 #     MAINNET_FORKING_ENABLED=true npx hardhat test test/DeploySafe.fork.test.ts --network hardhat)
+# 2b. REAL-SAFE FORK PRE-FLIGHT (with the real EFS_SAFE_ADDRESS exported): a supplied real Safe is NOT
+#     owned by any local signer — even on the fork — so the task runs in BUILD/PROPOSE mode (PR #24 P2):
+#     it emits deployments/hardhat/safe-batches.json + the REAL Safe-keyed predicted addresses / freeze-
+#     table values to review, and does NOT self-execute (no fabricated signatures, no revert). This is
+#     the useful "what will the real ceremony produce?" pre-flight — distinct from the 2a mechanism
+#     rehearsal (which deploys + self-executes a throwaway test Safe).
+EFS_SAFE_ADDRESS=0x...EFS.eth Safe... yarn deploy:efs --via-safe --network hardhat
 # 3. on real Sepolia/mainnet: the deployer EOA has NO Safe-owner keys, so the task runs in
 #    BUILD/PROPOSE mode — it does NOT self-execute (a non-owner EOA can't sign the Safe; self-signing
 #    would revert Batch 1). Propose mode is PHASE-AWARE (PR #24 P1): each invocation detects the
