@@ -42,7 +42,11 @@ export function OverviewPane(props: Omit<UseItemOverviewArgs, "enabled">) {
 
   const state = useItemOverview({ ...props, enabled: props.anchorUID != null });
 
-  if (state.kind === "none") return null;
+  // The pane does not exist until we've actually found a README. While resolving
+  // (`loading`) or when there's none, render nothing — no flashing empty shell or
+  // spinner. The hook keeps running (this component stays mounted); once it has
+  // content the pane materializes.
+  if (state.kind === "none" || state.kind === "loading") return null;
 
   // Collapsed → a thin icon rail that returns the column width to the file list
   // (rather than leaving an empty w-96 shell).
@@ -76,7 +80,6 @@ export function OverviewPane(props: Omit<UseItemOverviewArgs, "enabled">) {
         </button>
       </div>
       <div className="p-3">
-        {state.kind === "loading" && <span className="loading loading-spinner loading-sm" />}
         {state.kind === "error" && <p className="text-error text-sm">{state.message}</p>}
         {state.kind === "too-large" && (
           <p className="text-sm opacity-70">Too large to preview ({Math.ceil(state.size / 1024)} KB).</p>
