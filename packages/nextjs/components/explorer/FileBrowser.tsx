@@ -1878,10 +1878,13 @@ export const FileBrowser = ({
               ) : fileContentType?.startsWith("audio/") ? (
                 <audio src={fileContent} controls className="w-full" />
               ) : fileContentType?.startsWith("text/html") || fileContentType === "application/xhtml+xml" ? (
-                // Untrusted HTML from a mirror — render in a fully-sandboxed iframe
-                // (sandbox="" disables scripts, same-origin, forms, top-navigation).
+                // Untrusted HTML from a mirror. `allow-scripts` runs JS + WASM, but
+                // we deliberately OMIT `allow-same-origin`: that pairing lets the
+                // framed content rewrite its own iframe and escape the sandbox.
+                // Without it the iframe is an opaque origin — scripts run but can't
+                // reach the parent app's DOM / cookies / storage.
                 <iframe
-                  sandbox=""
+                  sandbox="allow-scripts"
                   srcDoc={fileContent}
                   title={selectedFile.name}
                   className="w-full rounded border border-base-300 bg-white"
@@ -2005,9 +2008,10 @@ export const FileBrowser = ({
                 ) : fileContentType?.startsWith("audio/") ? (
                   <audio src={fileContent} controls className="w-[60vw]" />
                 ) : fileContentType?.startsWith("text/html") || fileContentType === "application/xhtml+xml" ? (
-                  // Untrusted HTML — fully-sandboxed iframe (no scripts/same-origin/forms).
+                  // Untrusted HTML — runs JS + WASM via allow-scripts, but no
+                  // allow-same-origin (opaque origin; can't reach the parent app).
                   <iframe
-                    sandbox=""
+                    sandbox="allow-scripts"
                     srcDoc={fileContent}
                     title={selectedFile.name}
                     className="rounded bg-white"
