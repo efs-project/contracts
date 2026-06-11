@@ -224,6 +224,28 @@ don't repaint: a single gateway-allowlist config constant; blob URLs always
 revoked on unmount and never navigated to (only `download`); in-app navigation
 resolves to a typed route, never a raw attacker string.
 
+## SDK boundary (keep EFS machinery thin)
+
+An EFS SDK is in progress (`efs-project/sdk`, branch `chore/scaffold`). This
+feature does not depend on it, but it must not hand-roll robust versions of
+things the SDK will own — those stay thin and isolated behind one seam each, so
+swapping to the SDK later is a localized change, not a rewrite.
+
+- **EFS machinery the SDK will own — keep thin, delegate-ready:** fetching bytes
+  from mirrors / the router (the single `lib/efs/fetchFileContent.ts` util),
+  lens-scoped directory + `system`-tag + README resolution (centralized in
+  `useItemOverview`), and content addressing / hashing. **Do not** build a
+  multihash/CID verifier or any canonical-hashing logic — that is squarely SDK
+  territory (it must hash identically across clients), which is exactly why
+  `contentHash` is deferred above. Reuse the existing router path as-is; don't
+  over-engineer mirror retrieval/fallback robustness the SDK will replace.
+- **Client-only concerns — build properly now:** the sanitized Markdown renderer
+  and schema, byte-sniffing, the `OverviewPane`, the 3-pane layout, and the
+  hidden-files toggle. The SDK won't own web rendering/UX; these are ours.
+
+Litmus test for any added complexity: "would the SDK make this trivial?" If yes,
+keep it minimal and isolated rather than polishing it here.
+
 ## Non-goals (v1)
 
 No editing / authoring affordance (existing create-file + tag-as-`system` flows
