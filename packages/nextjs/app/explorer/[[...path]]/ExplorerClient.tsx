@@ -115,21 +115,23 @@ export default function ExplorerClient() {
   const hasLensesParam = lensesParam !== null;
 
   // System tail-fallback tier (ADR-0039). On devnet: a bootstrap curator
-  // address, the dev/demo attester, and the EFS deployer, so fresh users
+  // address, the dev/demo attester, and the SystemAccount, so fresh users
   // see seeded + live-demo content before configuring any web of trust.
-  // Deployer is a runtime read from the indexer; `Indexer.DEPLOYER` is an
-  // immutable set in its constructor. Mainnet will replace all three with
-  // a user-configurable list.
-  const { data: deployerAddress } = useScaffoldReadContract({
-    contractName: "Indexer",
-    functionName: "DEPLOYER",
-  });
+  // The bootstrap/system content (root, `/transports/*`, official defaults)
+  // is authored by `SystemAccount` (ADR-0053), NOT by `Indexer.DEPLOYER()`
+  // (which now returns `owner()` — the Safe post-transfer, which authors
+  // nothing). So the system default lens must be the SystemAccount address;
+  // we read it from the named deployment (deployedContracts.ts), the same
+  // way the explorer reads every other deployed address. Mainnet will
+  // replace all three with a user-configurable list.
+  const { data: systemAccountInfo } = useDeployedContractInfo({ contractName: "SystemAccount" });
+  const systemAccountAddress = systemAccountInfo?.address;
 
   const systemLenses = useMemo(() => {
     const out: string[] = [DEVNET_BOOTSTRAP_CURATOR, DEVNET_DEV_ATTESTER];
-    if (deployerAddress && typeof deployerAddress === "string") out.push(deployerAddress);
+    if (systemAccountAddress) out.push(systemAccountAddress);
     return out;
-  }, [deployerAddress]);
+  }, [systemAccountAddress]);
 
   const lensAddresses = useMemo(() => {
     return defaultLensesForContainer({
