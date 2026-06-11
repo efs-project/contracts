@@ -11,6 +11,7 @@ import { type Abi, zeroHash } from "viem";
 import { useAccount, usePublicClient, useReadContract } from "wagmi";
 import {
   AdjustmentsHorizontalIcon,
+  ArrowDownTrayIcon,
   ArrowsPointingOutIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
@@ -32,6 +33,7 @@ import { isFile, isList, isTopic } from "~~/utils/efs/efsTypes";
 import { fetchFileContent as fetchFileContentUtil } from "~~/utils/efs/fetchFileContent";
 import { SORT_OVERLAY_ABI } from "~~/utils/efs/sortOverlay";
 import { TRANSPORT_LABELS } from "~~/utils/efs/transports";
+import { safeDownloadName } from "~~/utils/markdown/downloadName";
 import { notification } from "~~/utils/scaffold-eth";
 
 export type DrawerTagFilterState = "neutral" | "include" | "exclude";
@@ -1159,6 +1161,31 @@ export const FileBrowser = ({
     setPreviewFullscreen(false);
   };
 
+  // Download the currently-previewed file. `fileContent` is one of: a `blob:` URL
+  // (binary/pdf/video/audio), a base64 string (raster images), or raw text/SVG.
+  // We trigger a download-only anchor with a sanitized filename (anchor names are
+  // attacker-controlled — strip bidi/path tricks). Object URLs we mint are revoked.
+  const handleDownload = () => {
+    if (!fileContent || !selectedFile) return;
+    let href = fileContent;
+    let minted = false;
+    if (fileContent.startsWith("blob:")) {
+      href = fileContent;
+    } else if (fileContentType?.startsWith("image/") && !fileContentType.includes("svg")) {
+      href = `data:${fileContentType};base64,${fileContent}`;
+    } else {
+      href = URL.createObjectURL(new Blob([fileContent], { type: fileContentType || "application/octet-stream" }));
+      minted = true;
+    }
+    const a = document.createElement("a");
+    a.href = href;
+    a.download = safeDownloadName(selectedFile.name);
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    if (minted) setTimeout(() => URL.revokeObjectURL(href), 1000);
+  };
+
   // File-only items for gallery navigation
   const fileItems =
     (sortedItems ?? visibleItems)?.filter(
@@ -1771,6 +1798,14 @@ export const FileBrowser = ({
               <h3 className="font-bold text-sm truncate">{selectedFile.name}</h3>
             </div>
             <div className="flex items-center gap-1 flex-shrink-0">
+              <button
+                className="btn btn-ghost btn-sm btn-circle"
+                onClick={handleDownload}
+                disabled={!fileContent}
+                title="Download"
+              >
+                <ArrowDownTrayIcon className="w-4 h-4" />
+              </button>
               <button
                 className="btn btn-ghost btn-sm btn-circle"
                 onClick={() => setPreviewFullscreen(true)}
