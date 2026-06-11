@@ -259,4 +259,71 @@ describe("DeploySafe.fork — Safe-native deploy, born Safe-owned", function () 
     const transportsUID = await indexer.resolvePath(root, "transports");
     expect(transportsUID, "/transports UID resolves from the index (non-zero)").to.not.equal(ethers.ZeroHash);
   });
+
+  // ── PR #24 P2: end-to-end re-run of the WHOLE Safe ceremony on an already-complete system ─────────
+  // The buildSafePlan-only test above proves Batch 2's omit flags, but it never re-drives the full
+  // orchestration — it can't catch Batch 1 (deployCreate3 address-taken / wireContracts one-shot) or
+  // Batch 3 (setTransportsAnchor one-shot) reverting on resume. This re-invokes the SAME entry the
+  // happy path used (orchestrateViaSafe) against the deployed+sealed system and asserts it completes
+  // WITHOUT reverting: Batch 1 skipped (proxies present + indexer wired), Batch 2 omitted (registered +
+  // sealed), Batch 3 skipped (transports wired) — a clean no-op that still verifies the system.
+  // (Per the known per-file CREATE3 isolation artifact, we stay within this file's snapshot.)
+  it("re-running orchestrateViaSafe on a complete system is a clean no-op (Batch 1 skipped, Batch 2 omitted, Batch 3 skipped)", async function () {
+    // Restore the system the happy path deployed + sealed (deterministic addresses preclude a 2nd deploy).
+    await sealedSystem.restore();
+
+    const [deployer, ownerSigner] = await ethers.getSigners();
+    const safeLc = deployedSafe.toLowerCase();
+
+    // Re-drive the FULL Safe orchestration end-to-end against the already-complete system. The fixes
+    // make this a no-op rather than a revert: skip Batch 1 (proxies exist + wired), omit Batch 2
+    // (registered + sealed), skip Batch 3 (transports already wired).
+    const result = await orchestrateViaSafe(deployer, deployedSafe, [ownerSigner], { log: false });
+
+    // ── Batch 1 SKIPPED: the txHash sentinel marks the skip (no real Safe tx was executed) ──────────
+    expect(result.safeTxHashes.batch1, "Batch 1 skipped — already deployed").to.match(/skipped/i);
+    // ── Batch 2 OMITTED: bootstrap+seal omitted and all 9 register legs omitted (empty no-op batch) ──
+    expect(result.plan.batch2BootstrapOmitted, "Batch 2 bootstrap+seal omitted on re-run").to.equal(true);
+    expect(result.plan.batch2RegistersOmitted, "all 9 register legs omitted on re-run").to.equal(SCHEMAS.length);
+    expect(result.plan.batch2, "Batch 2 is an empty no-op").to.have.lengthOf(0);
+    // ── Batch 3 SKIPPED: the txHash sentinel marks the skip (setTransportsAnchor was not re-executed) ─
+    expect(result.safeTxHashes.batch3, "Batch 3 skipped — already wired").to.match(/skipped/i);
+
+    // ── The system still verifies after the no-op re-run ────────────────────────────────────────────
+    // Proxies present at their Safe-keyed addresses.
+    const createx = await getCreateX(deployer);
+    for (const r of RESOLVERS) {
+      const predicted = (await predictProxyAddress(createx, deployedSafe, r)).predicted;
+      expect(result.proxies[r].toLowerCase(), `${r} == Safe-keyed predicted`).to.equal(predicted.toLowerCase());
+      expect(await ethers.provider.getCode(result.proxies[r]), `${r} has code`).to.not.equal("0x");
+    }
+    // Schemas registered against the Safe-keyed proxies.
+    expect(result.registered).to.equal(true);
+    const reg = await ethers.getContractAt(
+      "@ethereum-attestation-service/eas-contracts/contracts/ISchemaRegistry.sol:ISchemaRegistry",
+      "0x0a7E2Ff54e76B8E6659aedc9103FB21c038050D0",
+      deployer,
+    );
+    const proxyByResolver = result.proxies as Record<string, string>;
+    for (const s of SCHEMAS) {
+      const rec = await reg.getSchema(result.schemaUIDs[s.name]);
+      expect(rec.resolver.toLowerCase(), `${s.name} resolver == Safe-keyed proxy`).to.equal(
+        proxyByResolver[s.resolver].toLowerCase(),
+      );
+    }
+    // Sealed, transports wired, owner == Safe.
+    const systemAccount = await ethers.getContractAt("SystemAccount", result.systemAccount, deployer);
+    expect(await systemAccount.bootstrapSealed(), "still sealed after re-run").to.equal(true);
+    expect((await systemAccount.owner()).toLowerCase(), "SystemAccount owner == Safe").to.equal(safeLc);
+    const mirror = await ethers.getContractAt("MirrorResolver", result.proxies.MirrorResolver, deployer);
+    expect(
+      (await mirror.transportsAnchorUID()).toLowerCase(),
+      "MirrorResolver still wired to the realized /transports UID",
+    ).to.equal(result.transportsAnchorUID.toLowerCase());
+    const indexer = await ethers.getContractAt("EFSIndexer", result.proxies.EFSIndexer, deployer);
+    expect((await indexer.owner()).toLowerCase(), "EFSIndexer owner == Safe").to.equal(safeLc);
+    expect(await indexer.resolvePath(await indexer.rootAnchorUID(), "transports"), "/transports present").to.not.equal(
+      ethers.ZeroHash,
+    );
+  });
 });

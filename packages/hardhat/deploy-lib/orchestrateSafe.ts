@@ -65,9 +65,33 @@ export async function orchestrateViaSafe(
   const safeContract = await getSafe(safe, deployer);
 
   // ── Batch 1 (pre-gate): CreateX proxy deploys (atomic init, born Safe-owned) + wireContracts ──────
-  l(`Safe-native deploy: executing Batch 1 (${plan.batch1.length} legs) as the Safe...`);
-  const b1 = await executeBatchAsSafe(safeContract, plan.batch1, owners, deployer);
-  l(`  Batch 1 executed (SafeTx ${b1.txHash})`);
+  // Idempotent on a re-run (analogous to the Batch 2 register/bootstrap omit). Batch 1's legs are NOT
+  // idempotent on-chain: CreateX `deployCreate3` reverts once an address is taken, and
+  // `EFSIndexer.wireContracts` is one-shot (`edgeResolver == address(0)` guard). So a re-run after
+  // Batch 1 landed (process exited before Batch 2/3, or an operator re-runs after the freeze-table
+  // signing) would revert the whole MultiSend on the first deployCreate3 and strand recovery. All 7
+  // proxies deploy ATOMICALLY in Batch 1, so any one of them having code means Batch 1 already landed —
+  // we key off the EFSIndexer proxy. When skipping, we also assert the indexer is wired (the
+  // wireContracts leg ran) and that it wired the Safe-keyed EdgeResolver — a consistency check that the
+  // landed Batch 1 matches THIS plan, not a foreign/partial deploy.
+  const indexerCode = await ethers.provider.getCode(plan.proxies.EFSIndexer);
+  let b1: { txHash: string };
+  if (indexerCode !== "0x") {
+    const wiredIndexer = await ethers.getContractAt("EFSIndexer", plan.proxies.EFSIndexer, deployer);
+    const wiredEdge = (await wiredIndexer.edgeResolver()).toLowerCase();
+    if (wiredEdge === ethers.ZeroAddress.toLowerCase())
+      throw new Error("SAFE-DEPLOY: Batch 1 proxies present but EFSIndexer not wired — inconsistent partial Batch 1");
+    if (wiredEdge !== plan.proxies.EdgeResolver.toLowerCase())
+      throw new Error(
+        `SAFE-DEPLOY: EFSIndexer wired to ${wiredEdge} != Safe-keyed EdgeResolver ${plan.proxies.EdgeResolver}`,
+      );
+    l("Safe-native deploy: Batch 1 already landed (proxies deployed + EFSIndexer wired) — SKIPPING Batch 1.");
+    b1 = { txHash: "0x0 (Batch 1 skipped — already deployed)" };
+  } else {
+    l(`Safe-native deploy: executing Batch 1 (${plan.batch1.length} legs) as the Safe...`);
+    b1 = await executeBatchAsSafe(safeContract, plan.batch1, owners, deployer);
+    l(`  Batch 1 executed (SafeTx ${b1.txHash})`);
+  }
 
   // Assert every proxy landed at its Safe-keyed predicted address with code + born Safe-owned admin.
   const deploys: Record<string, Create3DeployResult> = {};
@@ -139,17 +163,32 @@ export async function orchestrateViaSafe(
   // ── Batch 3 (post-gate): MirrorResolver.setTransportsAnchor(<realized /transports UID>) ───────────
   // Fed the REAL transports UID the bootstrap call produced (read back above) — owner-gated; the Safe
   // (born owner) executes it. Separate from Batch 2 because the UID isn't known until bootstrap runs.
-  l("Safe-native deploy: executing Batch 3 (setTransportsAnchor) as the Safe...");
-  const b3 = await executeBatchAsSafe(
-    safeContract,
-    [await buildSetTransportsAnchorCall(deployer, plan.proxies.MirrorResolver, transportsRealized)],
-    owners,
-    deployer,
-  );
-  l(`  Batch 3 executed (SafeTx ${b3.txHash})`);
+  // Idempotent on a re-run (analogous to the Batch 1/Batch 2 omits): setTransportsAnchor is ONE-SHOT
+  // (`require(transportsAnchorUID == EMPTY_UID)`), so a re-run after Batch 3 landed reverts even though
+  // the system is correctly wired. Read the anchor first; if it is already set, ASSERT it equals the
+  // realized /transports UID (consistency — the landed Batch 3 matches THIS plan) and SKIP the tx.
   const mirror = await ethers.getContractAt("MirrorResolver", plan.proxies.MirrorResolver, deployer);
-  if ((await mirror.transportsAnchorUID()).toLowerCase() !== transportsRealized.toLowerCase()) {
-    throw new Error("SAFE-DEPLOY: MirrorResolver.transportsAnchorUID != realized /transports UID after Batch 3");
+  const existingAnchor: string = await mirror.transportsAnchorUID();
+  let b3: { txHash: string };
+  if (existingAnchor !== ethers.ZeroHash) {
+    if (existingAnchor.toLowerCase() !== transportsRealized.toLowerCase())
+      throw new Error(
+        `SAFE-DEPLOY: MirrorResolver.transportsAnchorUID ${existingAnchor} != realized /transports UID ${transportsRealized}`,
+      );
+    l("Safe-native deploy: MirrorResolver already wired to the realized /transports UID — SKIPPING Batch 3.");
+    b3 = { txHash: "0x0 (Batch 3 skipped — already wired)" };
+  } else {
+    l("Safe-native deploy: executing Batch 3 (setTransportsAnchor) as the Safe...");
+    b3 = await executeBatchAsSafe(
+      safeContract,
+      [await buildSetTransportsAnchorCall(deployer, plan.proxies.MirrorResolver, transportsRealized)],
+      owners,
+      deployer,
+    );
+    l(`  Batch 3 executed (SafeTx ${b3.txHash})`);
+    if ((await mirror.transportsAnchorUID()).toLowerCase() !== transportsRealized.toLowerCase()) {
+      throw new Error("SAFE-DEPLOY: MirrorResolver.transportsAnchorUID != realized /transports UID after Batch 3");
+    }
   }
 
   // ── Assert: BORN Safe-owned — every ProxyAdmin + Ownable resolver + SystemAccount owner == Safe,
