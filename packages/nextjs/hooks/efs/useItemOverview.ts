@@ -2,13 +2,13 @@
  * useItemOverview — resolve an EFS item's "Overview" markdown.
  *
  * Thin orchestration seam composing already-built utils:
- *   1. List the item's anchor-schema children lens-scoped via
+ *   1. List the item's data-schema (file) children lens-scoped via
  *      `EFSFileView.getDirectoryPageBySchemaAndAddressList` (single page; the
  *      SDK will own pagination later).
  *   2. Resolve the `/tags/system` anchor set (`resolveSystemAnchorSet`).
  *   3. First-lens-wins: per lens in order, restrict children to that lens's
- *      attester ∩ system set, then apply filename precedence (`selectOverview`).
- *      The first lens yielding a pick provides the page.
+ *      attester ∩ system set, then pick the one named `README.md`
+ *      (`selectOverview`). The first lens yielding a pick provides the page.
  *   4. Fetch the picked file's bytes through the router (`fetchFileContent`).
  *   5. Cap by `MAX_RENDER_BYTES`, sniff text/binary, decode as UTF-8 markdown.
  *
@@ -118,7 +118,7 @@ export function useItemOverview(args: UseItemOverviewArgs): OverviewState {
           lensAddresses: args.lensAddresses,
         });
         if (cancelled) return;
-        // 3. First-lens-wins, then filename precedence within that lens.
+        // 3. First-lens-wins: the lens's system-tagged child named README.md.
         let picked: { uid: string; name: string } | null = null;
         for (const lens of args.lensAddresses) {
           const lensChildren = items
