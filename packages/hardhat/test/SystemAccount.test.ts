@@ -137,9 +137,10 @@ describe("SystemAccount (ADR-0053)", function () {
         systemAccount.revoke({ schema: plainSchemaUID, data: { uid: ZeroHash, value: 0n } }),
       ).to.be.revertedWithCustomError(systemAccount, "NotAuthorized");
 
-      await expect(
-        systemAccount.registerAnchor(ZeroHash, "x", plainSchemaUID, ZeroHash),
-      ).to.be.revertedWithCustomError(systemAccount, "NotAuthorized");
+      await expect(systemAccount.registerAnchor(ZeroHash, "x", plainSchemaUID, ZeroHash)).to.be.revertedWithCustomError(
+        systemAccount,
+        "NotAuthorized",
+      );
     });
 
     it("an authorized module can author; the EAS attester == SystemAccount address", async function () {

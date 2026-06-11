@@ -92,9 +92,7 @@ export async function orchestrateViaSafe(
   // ── Batch 2 (post-gate): register 9 schemas LAST + author scaffolding (ONE bootstrap leg) ────────
   // FIX 1: the scaffolding is a single SystemAccount.bootstrap leg that threads real EAS UIDs in
   // memory — timestamp-robust, no off-chain prediction, no pinned timestamp.
-  l(
-    `Safe-native deploy: executing Batch 2 (${plan.batch2.length} legs: register×9 + bootstrap + seal) as the Safe...`,
-  );
+  l(`Safe-native deploy: executing Batch 2 (${plan.batch2.length} legs: register×9 + bootstrap + seal) as the Safe...`);
   const b2 = await executeBatchAsSafe(safeContract, plan.batch2, owners, deployer);
   l(`  Batch 2 executed (SafeTx ${b2.txHash})`);
 
