@@ -6,8 +6,569 @@ import { GenericContractsDeclaration } from "~~/utils/scaffold-eth/contract";
 
 const deployedContracts = {
   31337: {
+    AliasResolver: {
+      address: "0xB0B76064eE417f7568427cbd3fDAcB2e5589743d",
+      abi: [
+        {
+          inputs: [
+            {
+              internalType: "contract IEAS",
+              name: "eas",
+              type: "address",
+            },
+          ],
+          stateMutability: "nonpayable",
+          type: "constructor",
+        },
+        {
+          inputs: [],
+          name: "AccessDenied",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "BadPayload",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "InsufficientValue",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "InvalidEAS",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "InvalidInitialization",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "InvalidLength",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "NotInitializing",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "NotPayable",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "SelfLoop",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "SourceNotAnchor",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "SourceNotData",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "TargetNotAnchorOrData",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "TargetNotData",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "WrongSchema",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "ZeroTarget",
+          type: "error",
+        },
+        {
+          anonymous: false,
+          inputs: [
+            {
+              indexed: false,
+              internalType: "uint64",
+              name: "version",
+              type: "uint64",
+            },
+          ],
+          name: "Initialized",
+          type: "event",
+        },
+        {
+          anonymous: false,
+          inputs: [
+            {
+              indexed: true,
+              internalType: "bytes32",
+              name: "source",
+              type: "bytes32",
+            },
+            {
+              indexed: true,
+              internalType: "bytes32",
+              name: "target",
+              type: "bytes32",
+            },
+            {
+              indexed: true,
+              internalType: "uint16",
+              name: "kind",
+              type: "uint16",
+            },
+            {
+              indexed: false,
+              internalType: "bytes32",
+              name: "redirectUID",
+              type: "bytes32",
+            },
+          ],
+          name: "RedirectAttested",
+          type: "event",
+        },
+        {
+          anonymous: false,
+          inputs: [
+            {
+              indexed: true,
+              internalType: "bytes32",
+              name: "source",
+              type: "bytes32",
+            },
+            {
+              indexed: true,
+              internalType: "bytes32",
+              name: "target",
+              type: "bytes32",
+            },
+            {
+              indexed: true,
+              internalType: "uint16",
+              name: "kind",
+              type: "uint16",
+            },
+            {
+              indexed: false,
+              internalType: "bytes32",
+              name: "redirectUID",
+              type: "bytes32",
+            },
+          ],
+          name: "RedirectRevoked",
+          type: "event",
+        },
+        {
+          inputs: [],
+          name: "anchorSchemaUID",
+          outputs: [
+            {
+              internalType: "bytes32",
+              name: "",
+              type: "bytes32",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              components: [
+                {
+                  internalType: "bytes32",
+                  name: "uid",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "bytes32",
+                  name: "schema",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "uint64",
+                  name: "time",
+                  type: "uint64",
+                },
+                {
+                  internalType: "uint64",
+                  name: "expirationTime",
+                  type: "uint64",
+                },
+                {
+                  internalType: "uint64",
+                  name: "revocationTime",
+                  type: "uint64",
+                },
+                {
+                  internalType: "bytes32",
+                  name: "refUID",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "address",
+                  name: "recipient",
+                  type: "address",
+                },
+                {
+                  internalType: "address",
+                  name: "attester",
+                  type: "address",
+                },
+                {
+                  internalType: "bool",
+                  name: "revocable",
+                  type: "bool",
+                },
+                {
+                  internalType: "bytes",
+                  name: "data",
+                  type: "bytes",
+                },
+              ],
+              internalType: "struct Attestation",
+              name: "attestation",
+              type: "tuple",
+            },
+          ],
+          name: "attest",
+          outputs: [
+            {
+              internalType: "bool",
+              name: "",
+              type: "bool",
+            },
+          ],
+          stateMutability: "payable",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "dataSchemaUID",
+          outputs: [
+            {
+              internalType: "bytes32",
+              name: "",
+              type: "bytes32",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "getEAS",
+          outputs: [
+            {
+              internalType: "contract IEAS",
+              name: "",
+              type: "address",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "dataSchemaUID_",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "anchorSchemaUID_",
+              type: "bytes32",
+            },
+          ],
+          name: "initialize",
+          outputs: [],
+          stateMutability: "nonpayable",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "isPayable",
+          outputs: [
+            {
+              internalType: "bool",
+              name: "",
+              type: "bool",
+            },
+          ],
+          stateMutability: "pure",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              components: [
+                {
+                  internalType: "bytes32",
+                  name: "uid",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "bytes32",
+                  name: "schema",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "uint64",
+                  name: "time",
+                  type: "uint64",
+                },
+                {
+                  internalType: "uint64",
+                  name: "expirationTime",
+                  type: "uint64",
+                },
+                {
+                  internalType: "uint64",
+                  name: "revocationTime",
+                  type: "uint64",
+                },
+                {
+                  internalType: "bytes32",
+                  name: "refUID",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "address",
+                  name: "recipient",
+                  type: "address",
+                },
+                {
+                  internalType: "address",
+                  name: "attester",
+                  type: "address",
+                },
+                {
+                  internalType: "bool",
+                  name: "revocable",
+                  type: "bool",
+                },
+                {
+                  internalType: "bytes",
+                  name: "data",
+                  type: "bytes",
+                },
+              ],
+              internalType: "struct Attestation[]",
+              name: "attestations",
+              type: "tuple[]",
+            },
+            {
+              internalType: "uint256[]",
+              name: "values",
+              type: "uint256[]",
+            },
+          ],
+          name: "multiAttest",
+          outputs: [
+            {
+              internalType: "bool",
+              name: "",
+              type: "bool",
+            },
+          ],
+          stateMutability: "payable",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              components: [
+                {
+                  internalType: "bytes32",
+                  name: "uid",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "bytes32",
+                  name: "schema",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "uint64",
+                  name: "time",
+                  type: "uint64",
+                },
+                {
+                  internalType: "uint64",
+                  name: "expirationTime",
+                  type: "uint64",
+                },
+                {
+                  internalType: "uint64",
+                  name: "revocationTime",
+                  type: "uint64",
+                },
+                {
+                  internalType: "bytes32",
+                  name: "refUID",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "address",
+                  name: "recipient",
+                  type: "address",
+                },
+                {
+                  internalType: "address",
+                  name: "attester",
+                  type: "address",
+                },
+                {
+                  internalType: "bool",
+                  name: "revocable",
+                  type: "bool",
+                },
+                {
+                  internalType: "bytes",
+                  name: "data",
+                  type: "bytes",
+                },
+              ],
+              internalType: "struct Attestation[]",
+              name: "attestations",
+              type: "tuple[]",
+            },
+            {
+              internalType: "uint256[]",
+              name: "values",
+              type: "uint256[]",
+            },
+          ],
+          name: "multiRevoke",
+          outputs: [
+            {
+              internalType: "bool",
+              name: "",
+              type: "bool",
+            },
+          ],
+          stateMutability: "payable",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "redirectSchemaUID",
+          outputs: [
+            {
+              internalType: "bytes32",
+              name: "",
+              type: "bytes32",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              components: [
+                {
+                  internalType: "bytes32",
+                  name: "uid",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "bytes32",
+                  name: "schema",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "uint64",
+                  name: "time",
+                  type: "uint64",
+                },
+                {
+                  internalType: "uint64",
+                  name: "expirationTime",
+                  type: "uint64",
+                },
+                {
+                  internalType: "uint64",
+                  name: "revocationTime",
+                  type: "uint64",
+                },
+                {
+                  internalType: "bytes32",
+                  name: "refUID",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "address",
+                  name: "recipient",
+                  type: "address",
+                },
+                {
+                  internalType: "address",
+                  name: "attester",
+                  type: "address",
+                },
+                {
+                  internalType: "bool",
+                  name: "revocable",
+                  type: "bool",
+                },
+                {
+                  internalType: "bytes",
+                  name: "data",
+                  type: "bytes",
+                },
+              ],
+              internalType: "struct Attestation",
+              name: "attestation",
+              type: "tuple",
+            },
+          ],
+          name: "revoke",
+          outputs: [
+            {
+              internalType: "bool",
+              name: "",
+              type: "bool",
+            },
+          ],
+          stateMutability: "payable",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "version",
+          outputs: [
+            {
+              internalType: "string",
+              name: "",
+              type: "string",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          stateMutability: "payable",
+          type: "receive",
+        },
+      ],
+      inheritedFunctions: {},
+    },
     EFSFileView: {
-      address: "0x04fD5Ee60B015B6EfD21a54D1E662D68868683c5",
+      address: "0x495372078be4fBb81A58b1EbB7d0B3cc899a178E",
       abi: [
         {
           inputs: [
@@ -74,7 +635,7 @@ const deployedContracts = {
           inputs: [
             {
               internalType: "bytes32",
-              name: "contentHash",
+              name: "",
               type: "bytes32",
             },
           ],
@@ -86,7 +647,7 @@ const deployedContracts = {
               type: "bytes32",
             },
           ],
-          stateMutability: "view",
+          stateMutability: "pure",
           type: "function",
         },
         {
@@ -570,7 +1131,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     EFSRouter: {
-      address: "0x19C7dAeb1828942DeBf60FB78FF70292300E7800",
+      address: "0xC40b42eeE598ECE9e6D2add529534095014d8fAC",
       abi: [
         {
           inputs: [
@@ -598,6 +1159,11 @@ const deployedContracts = {
               internalType: "bytes32",
               name: "_dataSchemaUID",
               type: "bytes32",
+            },
+            {
+              internalType: "address",
+              name: "_systemAccount",
+              type: "address",
             },
           ],
           stateMutability: "nonpayable",
@@ -763,1016 +1329,30 @@ const deployedContracts = {
           stateMutability: "view",
           type: "function",
         },
+        {
+          inputs: [],
+          name: "systemAccount",
+          outputs: [
+            {
+              internalType: "address",
+              name: "",
+              type: "address",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
       ],
       inheritedFunctions: {},
     },
-    EFSSortOverlay: {
-      address: "0x806c44f027a6f6ee75aDe3F6DBf1c6DB496FfC67",
-      abi: [
-        {
-          inputs: [
-            {
-              internalType: "contract IEAS",
-              name: "eas",
-              type: "address",
-            },
-            {
-              internalType: "bytes32",
-              name: "sortInfoSchemaUID",
-              type: "bytes32",
-            },
-            {
-              internalType: "contract EFSIndexer",
-              name: "_indexer",
-              type: "address",
-            },
-          ],
-          stateMutability: "nonpayable",
-          type: "constructor",
-        },
-        {
-          inputs: [],
-          name: "AccessDenied",
-          type: "error",
-        },
-        {
-          inputs: [],
-          name: "ArrayLengthMismatch",
-          type: "error",
-        },
-        {
-          inputs: [],
-          name: "InsufficientValue",
-          type: "error",
-        },
-        {
-          inputs: [],
-          name: "InvalidEAS",
-          type: "error",
-        },
-        {
-          inputs: [],
-          name: "InvalidItem",
-          type: "error",
-        },
-        {
-          inputs: [],
-          name: "InvalidLength",
-          type: "error",
-        },
-        {
-          inputs: [],
-          name: "InvalidPosition",
-          type: "error",
-        },
-        {
-          inputs: [],
-          name: "InvalidSortInfo",
-          type: "error",
-        },
-        {
-          inputs: [],
-          name: "LimitTooLarge",
-          type: "error",
-        },
-        {
-          inputs: [],
-          name: "NotPayable",
-          type: "error",
-        },
-        {
-          inputs: [],
-          name: "Reentrant",
-          type: "error",
-        },
-        {
-          inputs: [],
-          name: "StaleStartIndex",
-          type: "error",
-        },
-        {
-          inputs: [],
-          name: "UnnecessaryReposition",
-          type: "error",
-        },
-        {
-          inputs: [],
-          name: "UnsupportedSourceType",
-          type: "error",
-        },
-        {
-          anonymous: false,
-          inputs: [
-            {
-              indexed: true,
-              internalType: "bytes32",
-              name: "sortInfoUID",
-              type: "bytes32",
-            },
-            {
-              indexed: true,
-              internalType: "bytes32",
-              name: "parentAnchor",
-              type: "bytes32",
-            },
-            {
-              indexed: true,
-              internalType: "bytes32",
-              name: "itemUID",
-              type: "bytes32",
-            },
-            {
-              indexed: false,
-              internalType: "bytes32",
-              name: "newLeftNeighbour",
-              type: "bytes32",
-            },
-            {
-              indexed: false,
-              internalType: "bytes32",
-              name: "newRightNeighbour",
-              type: "bytes32",
-            },
-          ],
-          name: "ItemRepositioned",
-          type: "event",
-        },
-        {
-          anonymous: false,
-          inputs: [
-            {
-              indexed: true,
-              internalType: "bytes32",
-              name: "sortInfoUID",
-              type: "bytes32",
-            },
-            {
-              indexed: true,
-              internalType: "bytes32",
-              name: "parentAnchor",
-              type: "bytes32",
-            },
-            {
-              indexed: true,
-              internalType: "bytes32",
-              name: "itemUID",
-              type: "bytes32",
-            },
-            {
-              indexed: false,
-              internalType: "bytes32",
-              name: "leftNeighbour",
-              type: "bytes32",
-            },
-            {
-              indexed: false,
-              internalType: "bytes32",
-              name: "rightNeighbour",
-              type: "bytes32",
-            },
-          ],
-          name: "ItemSorted",
-          type: "event",
-        },
-        {
-          inputs: [],
-          name: "DEFAULT_MAX_TRAVERSAL",
-          outputs: [
-            {
-              internalType: "uint256",
-              name: "",
-              type: "uint256",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [],
-          name: "MAX_PAGE_SIZE",
-          outputs: [
-            {
-              internalType: "uint256",
-              name: "",
-              type: "uint256",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [],
-          name: "SORT_INFO_SCHEMA_UID",
-          outputs: [
-            {
-              internalType: "bytes32",
-              name: "",
-              type: "bytes32",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              components: [
-                {
-                  internalType: "bytes32",
-                  name: "uid",
-                  type: "bytes32",
-                },
-                {
-                  internalType: "bytes32",
-                  name: "schema",
-                  type: "bytes32",
-                },
-                {
-                  internalType: "uint64",
-                  name: "time",
-                  type: "uint64",
-                },
-                {
-                  internalType: "uint64",
-                  name: "expirationTime",
-                  type: "uint64",
-                },
-                {
-                  internalType: "uint64",
-                  name: "revocationTime",
-                  type: "uint64",
-                },
-                {
-                  internalType: "bytes32",
-                  name: "refUID",
-                  type: "bytes32",
-                },
-                {
-                  internalType: "address",
-                  name: "recipient",
-                  type: "address",
-                },
-                {
-                  internalType: "address",
-                  name: "attester",
-                  type: "address",
-                },
-                {
-                  internalType: "bool",
-                  name: "revocable",
-                  type: "bool",
-                },
-                {
-                  internalType: "bytes",
-                  name: "data",
-                  type: "bytes",
-                },
-              ],
-              internalType: "struct Attestation",
-              name: "attestation",
-              type: "tuple",
-            },
-          ],
-          name: "attest",
-          outputs: [
-            {
-              internalType: "bool",
-              name: "",
-              type: "bool",
-            },
-          ],
-          stateMutability: "payable",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              internalType: "bytes32",
-              name: "sortInfoUID",
-              type: "bytes32",
-            },
-            {
-              internalType: "bytes32",
-              name: "parentAnchor",
-              type: "bytes32",
-            },
-            {
-              internalType: "bytes32[]",
-              name: "newItems",
-              type: "bytes32[]",
-            },
-          ],
-          name: "computeHints",
-          outputs: [
-            {
-              internalType: "bytes32[]",
-              name: "leftHints",
-              type: "bytes32[]",
-            },
-            {
-              internalType: "bytes32[]",
-              name: "rightHints",
-              type: "bytes32[]",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              internalType: "bytes32",
-              name: "sortInfoUID",
-              type: "bytes32",
-            },
-            {
-              internalType: "bytes32",
-              name: "parentAnchor",
-              type: "bytes32",
-            },
-          ],
-          name: "getLastProcessedIndex",
-          outputs: [
-            {
-              internalType: "uint256",
-              name: "",
-              type: "uint256",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              internalType: "bytes32",
-              name: "sortInfoUID",
-              type: "bytes32",
-            },
-          ],
-          name: "getSortConfig",
-          outputs: [
-            {
-              components: [
-                {
-                  internalType: "address",
-                  name: "sortFunc",
-                  type: "address",
-                },
-                {
-                  internalType: "bytes32",
-                  name: "targetSchema",
-                  type: "bytes32",
-                },
-                {
-                  internalType: "uint8",
-                  name: "sourceType",
-                  type: "uint8",
-                },
-              ],
-              internalType: "struct EFSSortOverlay.SortConfig",
-              name: "",
-              type: "tuple",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              internalType: "bytes32",
-              name: "sortInfoUID",
-              type: "bytes32",
-            },
-            {
-              internalType: "bytes32",
-              name: "parentAnchor",
-              type: "bytes32",
-            },
-          ],
-          name: "getSortHead",
-          outputs: [
-            {
-              internalType: "bytes32",
-              name: "",
-              type: "bytes32",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              internalType: "bytes32",
-              name: "sortInfoUID",
-              type: "bytes32",
-            },
-            {
-              internalType: "bytes32",
-              name: "parentAnchor",
-              type: "bytes32",
-            },
-          ],
-          name: "getSortLength",
-          outputs: [
-            {
-              internalType: "uint256",
-              name: "",
-              type: "uint256",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              internalType: "bytes32",
-              name: "sortInfoUID",
-              type: "bytes32",
-            },
-            {
-              internalType: "bytes32",
-              name: "parentAnchor",
-              type: "bytes32",
-            },
-            {
-              internalType: "bytes32",
-              name: "itemUID",
-              type: "bytes32",
-            },
-          ],
-          name: "getSortNode",
-          outputs: [
-            {
-              components: [
-                {
-                  internalType: "bytes32",
-                  name: "prev",
-                  type: "bytes32",
-                },
-                {
-                  internalType: "bytes32",
-                  name: "next",
-                  type: "bytes32",
-                },
-              ],
-              internalType: "struct EFSSortOverlay.Node",
-              name: "",
-              type: "tuple",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              internalType: "bytes32",
-              name: "sortInfoUID",
-              type: "bytes32",
-            },
-            {
-              internalType: "bytes32",
-              name: "parentAnchor",
-              type: "bytes32",
-            },
-          ],
-          name: "getSortStaleness",
-          outputs: [
-            {
-              internalType: "uint256",
-              name: "",
-              type: "uint256",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              internalType: "bytes32",
-              name: "sortInfoUID",
-              type: "bytes32",
-            },
-            {
-              internalType: "bytes32",
-              name: "parentAnchor",
-              type: "bytes32",
-            },
-          ],
-          name: "getSortTail",
-          outputs: [
-            {
-              internalType: "bytes32",
-              name: "",
-              type: "bytes32",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              internalType: "bytes32",
-              name: "sortInfoUID",
-              type: "bytes32",
-            },
-            {
-              internalType: "bytes32",
-              name: "parentAnchor",
-              type: "bytes32",
-            },
-            {
-              internalType: "bytes32",
-              name: "startNode",
-              type: "bytes32",
-            },
-            {
-              internalType: "uint256",
-              name: "limit",
-              type: "uint256",
-            },
-            {
-              internalType: "bool",
-              name: "showRevoked",
-              type: "bool",
-            },
-          ],
-          name: "getSortedChunk",
-          outputs: [
-            {
-              internalType: "bytes32[]",
-              name: "items",
-              type: "bytes32[]",
-            },
-            {
-              internalType: "bytes32",
-              name: "nextCursor",
-              type: "bytes32",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              internalType: "bytes32",
-              name: "sortInfoUID",
-              type: "bytes32",
-            },
-            {
-              internalType: "bytes32",
-              name: "parentAnchor",
-              type: "bytes32",
-            },
-            {
-              internalType: "bytes32",
-              name: "startNode",
-              type: "bytes32",
-            },
-            {
-              internalType: "uint256",
-              name: "limit",
-              type: "uint256",
-            },
-            {
-              internalType: "uint256",
-              name: "maxTraversal",
-              type: "uint256",
-            },
-            {
-              internalType: "address[]",
-              name: "attesters",
-              type: "address[]",
-            },
-            {
-              internalType: "bool",
-              name: "showRevoked",
-              type: "bool",
-            },
-          ],
-          name: "getSortedChunkByAddressList",
-          outputs: [
-            {
-              internalType: "bytes32[]",
-              name: "items",
-              type: "bytes32[]",
-            },
-            {
-              internalType: "bytes32",
-              name: "nextCursor",
-              type: "bytes32",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [],
-          name: "indexer",
-          outputs: [
-            {
-              internalType: "contract EFSIndexer",
-              name: "",
-              type: "address",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [],
-          name: "isPayable",
-          outputs: [
-            {
-              internalType: "bool",
-              name: "",
-              type: "bool",
-            },
-          ],
-          stateMutability: "pure",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              internalType: "bytes32",
-              name: "sortInfoUID",
-              type: "bytes32",
-            },
-          ],
-          name: "isSortRegistered",
-          outputs: [
-            {
-              internalType: "bool",
-              name: "",
-              type: "bool",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              components: [
-                {
-                  internalType: "bytes32",
-                  name: "uid",
-                  type: "bytes32",
-                },
-                {
-                  internalType: "bytes32",
-                  name: "schema",
-                  type: "bytes32",
-                },
-                {
-                  internalType: "uint64",
-                  name: "time",
-                  type: "uint64",
-                },
-                {
-                  internalType: "uint64",
-                  name: "expirationTime",
-                  type: "uint64",
-                },
-                {
-                  internalType: "uint64",
-                  name: "revocationTime",
-                  type: "uint64",
-                },
-                {
-                  internalType: "bytes32",
-                  name: "refUID",
-                  type: "bytes32",
-                },
-                {
-                  internalType: "address",
-                  name: "recipient",
-                  type: "address",
-                },
-                {
-                  internalType: "address",
-                  name: "attester",
-                  type: "address",
-                },
-                {
-                  internalType: "bool",
-                  name: "revocable",
-                  type: "bool",
-                },
-                {
-                  internalType: "bytes",
-                  name: "data",
-                  type: "bytes",
-                },
-              ],
-              internalType: "struct Attestation[]",
-              name: "attestations",
-              type: "tuple[]",
-            },
-            {
-              internalType: "uint256[]",
-              name: "values",
-              type: "uint256[]",
-            },
-          ],
-          name: "multiAttest",
-          outputs: [
-            {
-              internalType: "bool",
-              name: "",
-              type: "bool",
-            },
-          ],
-          stateMutability: "payable",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              components: [
-                {
-                  internalType: "bytes32",
-                  name: "uid",
-                  type: "bytes32",
-                },
-                {
-                  internalType: "bytes32",
-                  name: "schema",
-                  type: "bytes32",
-                },
-                {
-                  internalType: "uint64",
-                  name: "time",
-                  type: "uint64",
-                },
-                {
-                  internalType: "uint64",
-                  name: "expirationTime",
-                  type: "uint64",
-                },
-                {
-                  internalType: "uint64",
-                  name: "revocationTime",
-                  type: "uint64",
-                },
-                {
-                  internalType: "bytes32",
-                  name: "refUID",
-                  type: "bytes32",
-                },
-                {
-                  internalType: "address",
-                  name: "recipient",
-                  type: "address",
-                },
-                {
-                  internalType: "address",
-                  name: "attester",
-                  type: "address",
-                },
-                {
-                  internalType: "bool",
-                  name: "revocable",
-                  type: "bool",
-                },
-                {
-                  internalType: "bytes",
-                  name: "data",
-                  type: "bytes",
-                },
-              ],
-              internalType: "struct Attestation[]",
-              name: "attestations",
-              type: "tuple[]",
-            },
-            {
-              internalType: "uint256[]",
-              name: "values",
-              type: "uint256[]",
-            },
-          ],
-          name: "multiRevoke",
-          outputs: [
-            {
-              internalType: "bool",
-              name: "",
-              type: "bool",
-            },
-          ],
-          stateMutability: "payable",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              internalType: "bytes32",
-              name: "sortInfoUID",
-              type: "bytes32",
-            },
-            {
-              internalType: "bytes32",
-              name: "parentAnchor",
-              type: "bytes32",
-            },
-            {
-              internalType: "uint256",
-              name: "expectedStartIndex",
-              type: "uint256",
-            },
-            {
-              internalType: "bytes32[]",
-              name: "items",
-              type: "bytes32[]",
-            },
-            {
-              internalType: "bytes32[]",
-              name: "leftHints",
-              type: "bytes32[]",
-            },
-            {
-              internalType: "bytes32[]",
-              name: "rightHints",
-              type: "bytes32[]",
-            },
-          ],
-          name: "processItems",
-          outputs: [],
-          stateMutability: "nonpayable",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              internalType: "bytes32",
-              name: "sortInfoUID",
-              type: "bytes32",
-            },
-            {
-              internalType: "bytes32",
-              name: "parentAnchor",
-              type: "bytes32",
-            },
-            {
-              internalType: "bytes32",
-              name: "itemUID",
-              type: "bytes32",
-            },
-            {
-              internalType: "bytes32",
-              name: "newLeftHint",
-              type: "bytes32",
-            },
-            {
-              internalType: "bytes32",
-              name: "newRightHint",
-              type: "bytes32",
-            },
-          ],
-          name: "repositionItem",
-          outputs: [],
-          stateMutability: "nonpayable",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              components: [
-                {
-                  internalType: "bytes32",
-                  name: "uid",
-                  type: "bytes32",
-                },
-                {
-                  internalType: "bytes32",
-                  name: "schema",
-                  type: "bytes32",
-                },
-                {
-                  internalType: "uint64",
-                  name: "time",
-                  type: "uint64",
-                },
-                {
-                  internalType: "uint64",
-                  name: "expirationTime",
-                  type: "uint64",
-                },
-                {
-                  internalType: "uint64",
-                  name: "revocationTime",
-                  type: "uint64",
-                },
-                {
-                  internalType: "bytes32",
-                  name: "refUID",
-                  type: "bytes32",
-                },
-                {
-                  internalType: "address",
-                  name: "recipient",
-                  type: "address",
-                },
-                {
-                  internalType: "address",
-                  name: "attester",
-                  type: "address",
-                },
-                {
-                  internalType: "bool",
-                  name: "revocable",
-                  type: "bool",
-                },
-                {
-                  internalType: "bytes",
-                  name: "data",
-                  type: "bytes",
-                },
-              ],
-              internalType: "struct Attestation",
-              name: "attestation",
-              type: "tuple",
-            },
-          ],
-          name: "revoke",
-          outputs: [
-            {
-              internalType: "bool",
-              name: "",
-              type: "bool",
-            },
-          ],
-          stateMutability: "payable",
-          type: "function",
-        },
-        {
-          inputs: [],
-          name: "version",
-          outputs: [
-            {
-              internalType: "string",
-              name: "",
-              type: "string",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          stateMutability: "payable",
-          type: "receive",
-        },
-      ],
-      inheritedFunctions: {
-        attest:
-          "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
-        isPayable:
-          "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
-        multiAttest:
-          "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
-        multiRevoke:
-          "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
-        revoke:
-          "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
-        version:
-          "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
-      },
-    },
     EdgeResolver: {
-      address: "0xC64700624b2129C81288e7Bd4d5Ec9DD006eb2D0",
+      address: "0xb40297CC4ccD2f837CcF75831B5fA2cAb96C1CFe",
       abi: [
         {
           inputs: [
             {
               internalType: "contract IEAS",
               name: "eas",
-              type: "address",
-            },
-            {
-              internalType: "bytes32",
-              name: "pinSchemaUID",
-              type: "bytes32",
-            },
-            {
-              internalType: "bytes32",
-              name: "tagSchemaUID",
-              type: "bytes32",
-            },
-            {
-              internalType: "contract IEFSIndexerForEdges",
-              name: "_indexer",
-              type: "address",
-            },
-            {
-              internalType: "contract ISchemaRegistry",
-              name: "_schemaRegistry",
               type: "address",
             },
           ],
@@ -1801,6 +1381,11 @@ const deployedContracts = {
         },
         {
           inputs: [],
+          name: "InvalidInitialization",
+          type: "error",
+        },
+        {
+          inputs: [],
           name: "InvalidLength",
           type: "error",
         },
@@ -1816,6 +1401,11 @@ const deployedContracts = {
         },
         {
           inputs: [],
+          name: "NotInitializing",
+          type: "error",
+        },
+        {
+          inputs: [],
           name: "NotPayable",
           type: "error",
         },
@@ -1823,6 +1413,19 @@ const deployedContracts = {
           inputs: [],
           name: "UnknownEdgeSchema",
           type: "error",
+        },
+        {
+          anonymous: false,
+          inputs: [
+            {
+              indexed: false,
+              internalType: "uint64",
+              name: "version",
+              type: "uint64",
+            },
+          ],
+          name: "Initialized",
+          type: "event",
         },
         {
           inputs: [],
@@ -2300,6 +1903,19 @@ const deployedContracts = {
           type: "function",
         },
         {
+          inputs: [],
+          name: "getEAS",
+          outputs: [
+            {
+              internalType: "contract IEAS",
+              name: "",
+              type: "address",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
           inputs: [
             {
               internalType: "bytes32",
@@ -2488,6 +2104,34 @@ const deployedContracts = {
             },
           ],
           stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "pinSchemaUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "tagSchemaUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "contract IEFSIndexerForEdges",
+              name: "indexer_",
+              type: "address",
+            },
+            {
+              internalType: "contract ISchemaRegistry",
+              name: "schemaRegistry_",
+              type: "address",
+            },
+          ],
+          name: "initialize",
+          outputs: [],
+          stateMutability: "nonpayable",
           type: "function",
         },
         {
@@ -2849,23 +2493,10 @@ const deployedContracts = {
           type: "receive",
         },
       ],
-      inheritedFunctions: {
-        attest:
-          "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
-        isPayable:
-          "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
-        multiAttest:
-          "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
-        multiRevoke:
-          "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
-        revoke:
-          "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
-        version:
-          "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
-      },
+      inheritedFunctions: {},
     },
     Indexer: {
-      address: "0x2a88C3373cD7D7CAc90420515614d5C43777A00c",
+      address: "0x7B2dE8E2c646B73c084610d8553F0E63F5D493Dd",
       abi: [
         {
           inputs: [
@@ -2873,26 +2504,6 @@ const deployedContracts = {
               internalType: "contract IEAS",
               name: "eas",
               type: "address",
-            },
-            {
-              internalType: "bytes32",
-              name: "anchorSchemaUID",
-              type: "bytes32",
-            },
-            {
-              internalType: "bytes32",
-              name: "propertySchemaUID",
-              type: "bytes32",
-            },
-            {
-              internalType: "bytes32",
-              name: "dataSchemaUID",
-              type: "bytes32",
-            },
-            {
-              internalType: "bytes32",
-              name: "blobSchemaUID",
-              type: "bytes32",
             },
           ],
           stateMutability: "nonpayable",
@@ -2940,6 +2551,11 @@ const deployedContracts = {
         },
         {
           inputs: [],
+          name: "InvalidInitialization",
+          type: "error",
+        },
+        {
+          inputs: [],
           name: "InvalidLength",
           type: "error",
         },
@@ -2955,7 +2571,34 @@ const deployedContracts = {
         },
         {
           inputs: [],
+          name: "NotInitializing",
+          type: "error",
+        },
+        {
+          inputs: [],
           name: "NotPayable",
+          type: "error",
+        },
+        {
+          inputs: [
+            {
+              internalType: "address",
+              name: "owner",
+              type: "address",
+            },
+          ],
+          name: "OwnableInvalidOwner",
+          type: "error",
+        },
+        {
+          inputs: [
+            {
+              internalType: "address",
+              name: "account",
+              type: "address",
+            },
+          ],
+          name: "OwnableUnauthorizedAccount",
           type: "error",
         },
         {
@@ -3053,14 +2696,21 @@ const deployedContracts = {
               name: "attester",
               type: "address",
             },
-            {
-              indexed: false,
-              internalType: "bytes32",
-              name: "contentHash",
-              type: "bytes32",
-            },
           ],
           name: "DataCreated",
+          type: "event",
+        },
+        {
+          anonymous: false,
+          inputs: [
+            {
+              indexed: false,
+              internalType: "uint64",
+              name: "version",
+              type: "uint64",
+            },
+          ],
+          name: "Initialized",
           type: "event",
         },
         {
@@ -3086,6 +2736,25 @@ const deployedContracts = {
             },
           ],
           name: "MirrorCreated",
+          type: "event",
+        },
+        {
+          anonymous: false,
+          inputs: [
+            {
+              indexed: true,
+              internalType: "address",
+              name: "previousOwner",
+              type: "address",
+            },
+            {
+              indexed: true,
+              internalType: "address",
+              name: "newOwner",
+              type: "address",
+            },
+          ],
+          name: "OwnershipTransferred",
           type: "event",
         },
         {
@@ -3129,19 +2798,6 @@ const deployedContracts = {
         {
           inputs: [],
           name: "ANCHOR_SCHEMA_UID",
-          outputs: [
-            {
-              internalType: "bytes32",
-              name: "",
-              type: "bytes32",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [],
-          name: "BLOB_SCHEMA_UID",
           outputs: [
             {
               internalType: "bytes32",
@@ -4526,6 +4182,34 @@ const deployedContracts = {
           inputs: [
             {
               internalType: "bytes32",
+              name: "anchorSchemaUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "propertySchemaUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "dataSchemaUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "address",
+              name: "owner_",
+              type: "address",
+            },
+          ],
+          name: "initialize",
+          outputs: [],
+          stateMutability: "nonpayable",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
               name: "uid",
               type: "bytes32",
             },
@@ -4739,6 +4423,19 @@ const deployedContracts = {
           type: "function",
         },
         {
+          inputs: [],
+          name: "owner",
+          outputs: [
+            {
+              internalType: "address",
+              name: "",
+              type: "address",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
           inputs: [
             {
               internalType: "bytes32",
@@ -4752,6 +4449,13 @@ const deployedContracts = {
             },
           ],
           name: "propagateContains",
+          outputs: [],
+          stateMutability: "nonpayable",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "renounceOwnership",
           outputs: [],
           stateMutability: "nonpayable",
           type: "function",
@@ -4946,6 +4650,19 @@ const deployedContracts = {
           type: "function",
         },
         {
+          inputs: [
+            {
+              internalType: "address",
+              name: "newOwner",
+              type: "address",
+            },
+          ],
+          name: "transferOwnership",
+          outputs: [],
+          stateMutability: "nonpayable",
+          type: "function",
+        },
+        {
           inputs: [],
           name: "version",
           outputs: [
@@ -5014,7 +4731,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     ListEntryResolver: {
-      address: "0x61363ac1c0f7B59c5F81bFd6d03216BF75aFFe7B",
+      address: "0x9Dd2CAE58F9F46280D84aE0ef31c243dc5dAd8aA",
       abi: [
         {
           inputs: [
@@ -5022,11 +4739,6 @@ const deployedContracts = {
               internalType: "contract IEAS",
               name: "eas",
               type: "address",
-            },
-            {
-              internalType: "bytes32",
-              name: "listSchemaUID",
-              type: "bytes32",
             },
           ],
           stateMutability: "nonpayable",
@@ -5084,6 +4796,11 @@ const deployedContracts = {
         },
         {
           inputs: [],
+          name: "InvalidInitialization",
+          type: "error",
+        },
+        {
+          inputs: [],
           name: "InvalidLength",
           type: "error",
         },
@@ -5105,6 +4822,11 @@ const deployedContracts = {
         {
           inputs: [],
           name: "NotAList",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "NotInitializing",
           type: "error",
         },
         {
@@ -5141,6 +4863,19 @@ const deployedContracts = {
           inputs: [],
           name: "WrongSchema",
           type: "error",
+        },
+        {
+          anonymous: false,
+          inputs: [
+            {
+              indexed: false,
+              internalType: "uint64",
+              name: "version",
+              type: "uint64",
+            },
+          ],
+          name: "Initialized",
+          type: "event",
         },
         {
           anonymous: false,
@@ -5301,6 +5036,19 @@ const deployedContracts = {
           type: "function",
         },
         {
+          inputs: [],
+          name: "getEAS",
+          outputs: [
+            {
+              internalType: "contract IEAS",
+              name: "",
+              type: "address",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
           inputs: [
             {
               internalType: "bytes32",
@@ -5448,6 +5196,19 @@ const deployedContracts = {
           type: "function",
         },
         {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "listSchemaUID",
+              type: "bytes32",
+            },
+          ],
+          name: "initialize",
+          outputs: [],
+          stateMutability: "nonpayable",
+          type: "function",
+        },
+        {
           inputs: [],
           name: "isPayable",
           outputs: [
@@ -5458,6 +5219,19 @@ const deployedContracts = {
             },
           ],
           stateMutability: "pure",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "listEntrySchemaUID",
+          outputs: [
+            {
+              internalType: "bytes32",
+              name: "",
+              type: "bytes32",
+            },
+          ],
+          stateMutability: "view",
           type: "function",
         },
         {
@@ -5701,23 +5475,10 @@ const deployedContracts = {
           type: "receive",
         },
       ],
-      inheritedFunctions: {
-        attest:
-          "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
-        isPayable:
-          "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
-        multiAttest:
-          "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
-        multiRevoke:
-          "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
-        revoke:
-          "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
-        version:
-          "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
-      },
+      inheritedFunctions: {},
     },
     ListReader: {
-      address: "0x47dc508dAf593D6839f2e4963Ea13A7E449b5138",
+      address: "0xc4e9462D3155ef58920D23d21C3b796e6bD03Cd5",
       abi: [
         {
           inputs: [
@@ -6116,7 +5877,7 @@ const deployedContracts = {
       },
     },
     ListResolver: {
-      address: "0xFb3B3Dea450Ee849f0FCaA268Ce160D32Ad933cd",
+      address: "0xdEAb8859ab356B5db7c27313eE079461cB87e137",
       abi: [
         {
           inputs: [
@@ -6146,13 +5907,36 @@ const deployedContracts = {
         },
         {
           inputs: [],
+          name: "InvalidInitialization",
+          type: "error",
+        },
+        {
+          inputs: [],
           name: "InvalidLength",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "NotInitializing",
           type: "error",
         },
         {
           inputs: [],
           name: "NotPayable",
           type: "error",
+        },
+        {
+          anonymous: false,
+          inputs: [
+            {
+              indexed: false,
+              internalType: "uint64",
+              name: "version",
+              type: "uint64",
+            },
+          ],
+          name: "Initialized",
+          type: "event",
         },
         {
           anonymous: false,
@@ -6276,6 +6060,26 @@ const deployedContracts = {
         },
         {
           inputs: [],
+          name: "getEAS",
+          outputs: [
+            {
+              internalType: "contract IEAS",
+              name: "",
+              type: "address",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "initialize",
+          outputs: [],
+          stateMutability: "nonpayable",
+          type: "function",
+        },
+        {
+          inputs: [],
           name: "isPayable",
           outputs: [
             {
@@ -6528,34 +6332,16 @@ const deployedContracts = {
           type: "receive",
         },
       ],
-      inheritedFunctions: {
-        attest:
-          "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
-        isPayable:
-          "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
-        multiAttest:
-          "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
-        multiRevoke:
-          "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
-        revoke:
-          "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
-        version:
-          "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
-      },
+      inheritedFunctions: {},
     },
     MirrorResolver: {
-      address: "0x9CfBEaB5419279528B3e9A68B7522dFDED882137",
+      address: "0xf844378a282FB3F9A4c2A47DaD3Be1706c6f3226",
       abi: [
         {
           inputs: [
             {
               internalType: "contract IEAS",
               name: "eas",
-              type: "address",
-            },
-            {
-              internalType: "contract IEFSIndexerForMirror",
-              name: "_indexer",
               type: "address",
             },
           ],
@@ -6584,6 +6370,11 @@ const deployedContracts = {
         },
         {
           inputs: [],
+          name: "InvalidInitialization",
+          type: "error",
+        },
+        {
+          inputs: [],
           name: "InvalidLength",
           type: "error",
         },
@@ -6599,13 +6390,72 @@ const deployedContracts = {
         },
         {
           inputs: [],
+          name: "NotInitializing",
+          type: "error",
+        },
+        {
+          inputs: [],
           name: "NotPayable",
+          type: "error",
+        },
+        {
+          inputs: [
+            {
+              internalType: "address",
+              name: "owner",
+              type: "address",
+            },
+          ],
+          name: "OwnableInvalidOwner",
+          type: "error",
+        },
+        {
+          inputs: [
+            {
+              internalType: "address",
+              name: "account",
+              type: "address",
+            },
+          ],
+          name: "OwnableUnauthorizedAccount",
           type: "error",
         },
         {
           inputs: [],
           name: "URITooLong",
           type: "error",
+        },
+        {
+          anonymous: false,
+          inputs: [
+            {
+              indexed: false,
+              internalType: "uint64",
+              name: "version",
+              type: "uint64",
+            },
+          ],
+          name: "Initialized",
+          type: "event",
+        },
+        {
+          anonymous: false,
+          inputs: [
+            {
+              indexed: true,
+              internalType: "address",
+              name: "previousOwner",
+              type: "address",
+            },
+            {
+              indexed: true,
+              internalType: "address",
+              name: "newOwner",
+              type: "address",
+            },
+          ],
+          name: "OwnershipTransferred",
+          type: "event",
         },
         {
           inputs: [],
@@ -6693,6 +6543,19 @@ const deployedContracts = {
         },
         {
           inputs: [],
+          name: "getEAS",
+          outputs: [
+            {
+              internalType: "contract IEAS",
+              name: "",
+              type: "address",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [],
           name: "indexer",
           outputs: [
             {
@@ -6702,6 +6565,24 @@ const deployedContracts = {
             },
           ],
           stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "contract IEFSIndexerForMirror",
+              name: "indexer_",
+              type: "address",
+            },
+            {
+              internalType: "address",
+              name: "owner_",
+              type: "address",
+            },
+          ],
+          name: "initialize",
+          outputs: [],
+          stateMutability: "nonpayable",
           type: "function",
         },
         {
@@ -6870,6 +6751,26 @@ const deployedContracts = {
           type: "function",
         },
         {
+          inputs: [],
+          name: "owner",
+          outputs: [
+            {
+              internalType: "address",
+              name: "",
+              type: "address",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "renounceOwnership",
+          outputs: [],
+          stateMutability: "nonpayable",
+          type: "function",
+        },
+        {
           inputs: [
             {
               components: [
@@ -6954,6 +6855,19 @@ const deployedContracts = {
           type: "function",
         },
         {
+          inputs: [
+            {
+              internalType: "address",
+              name: "newOwner",
+              type: "address",
+            },
+          ],
+          name: "transferOwnership",
+          outputs: [],
+          stateMutability: "nonpayable",
+          type: "function",
+        },
+        {
           inputs: [],
           name: "transportsAnchorUID",
           outputs: [
@@ -6984,109 +6898,10 @@ const deployedContracts = {
           type: "receive",
         },
       ],
-      inheritedFunctions: {
-        attest:
-          "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
-        isPayable:
-          "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
-        multiAttest:
-          "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
-        multiRevoke:
-          "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
-        revoke:
-          "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
-        version:
-          "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
-      },
+      inheritedFunctions: {},
     },
-    NameSort: {
-      address: "0xe9e0e645C145E9d99246aB522AFF724F31F95E00",
-      abi: [
-        {
-          inputs: [
-            {
-              internalType: "contract IEAS",
-              name: "_eas",
-              type: "address",
-            },
-          ],
-          stateMutability: "nonpayable",
-          type: "constructor",
-        },
-        {
-          inputs: [],
-          name: "eas",
-          outputs: [
-            {
-              internalType: "contract IEAS",
-              name: "",
-              type: "address",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              internalType: "bytes32",
-              name: "uid",
-              type: "bytes32",
-            },
-            {
-              internalType: "bytes32",
-              name: "",
-              type: "bytes32",
-            },
-          ],
-          name: "getSortKey",
-          outputs: [
-            {
-              internalType: "bytes",
-              name: "",
-              type: "bytes",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              internalType: "bytes32",
-              name: "a",
-              type: "bytes32",
-            },
-            {
-              internalType: "bytes32",
-              name: "b",
-              type: "bytes32",
-            },
-            {
-              internalType: "bytes32",
-              name: "",
-              type: "bytes32",
-            },
-          ],
-          name: "isLessThan",
-          outputs: [
-            {
-              internalType: "bool",
-              name: "",
-              type: "bool",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-      ],
-      inheritedFunctions: {
-        getSortKey: "contracts/interfaces/ISortFunc.sol",
-        isLessThan: "contracts/interfaces/ISortFunc.sol",
-      },
-    },
-    SchemaNameIndex: {
-      address: "0x9B0F3b52Eaa4625459dA9d4f3fd1d35194652c60",
+    SystemAccount: {
+      address: "0x19b249b3E733049f7B97DFddb6dE60c4Bf95C205",
       abi: [
         {
           inputs: [
@@ -7095,43 +6910,161 @@ const deployedContracts = {
               name: "eas",
               type: "address",
             },
-            {
-              internalType: "bytes32",
-              name: "namingSchemaUID",
-              type: "bytes32",
-            },
           ],
           stateMutability: "nonpayable",
           type: "constructor",
+        },
+        {
+          inputs: [],
+          name: "InvalidInitialization",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "NotAuthorized",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "NotInitializing",
+          type: "error",
+        },
+        {
+          inputs: [
+            {
+              internalType: "address",
+              name: "owner",
+              type: "address",
+            },
+          ],
+          name: "OwnableInvalidOwner",
+          type: "error",
+        },
+        {
+          inputs: [
+            {
+              internalType: "address",
+              name: "account",
+              type: "address",
+            },
+          ],
+          name: "OwnableUnauthorizedAccount",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "ReentrancyGuardReentrantCall",
+          type: "error",
+        },
+        {
+          inputs: [],
+          name: "ZeroAddress",
+          type: "error",
+        },
+        {
+          anonymous: false,
+          inputs: [
+            {
+              indexed: false,
+              internalType: "uint64",
+              name: "version",
+              type: "uint64",
+            },
+          ],
+          name: "Initialized",
+          type: "event",
         },
         {
           anonymous: false,
           inputs: [
             {
               indexed: true,
-              internalType: "bytes32",
-              name: "schemaUID",
-              type: "bytes32",
+              internalType: "address",
+              name: "module",
+              type: "address",
             },
             {
               indexed: false,
-              internalType: "string",
-              name: "name",
-              type: "string",
-            },
-            {
-              indexed: false,
-              internalType: "bytes32",
-              name: "attestationUID",
-              type: "bytes32",
+              internalType: "bool",
+              name: "authorized",
+              type: "bool",
             },
           ],
-          name: "SchemaNameIndexed",
+          name: "ModuleAuthorizationSet",
           type: "event",
         },
         {
-          inputs: [],
-          name: "NAMING_SCHEMA_UID",
+          anonymous: false,
+          inputs: [
+            {
+              indexed: true,
+              internalType: "address",
+              name: "previousOwner",
+              type: "address",
+            },
+            {
+              indexed: true,
+              internalType: "address",
+              name: "newOwner",
+              type: "address",
+            },
+          ],
+          name: "OwnershipTransferred",
+          type: "event",
+        },
+        {
+          inputs: [
+            {
+              components: [
+                {
+                  internalType: "bytes32",
+                  name: "schema",
+                  type: "bytes32",
+                },
+                {
+                  components: [
+                    {
+                      internalType: "address",
+                      name: "recipient",
+                      type: "address",
+                    },
+                    {
+                      internalType: "uint64",
+                      name: "expirationTime",
+                      type: "uint64",
+                    },
+                    {
+                      internalType: "bool",
+                      name: "revocable",
+                      type: "bool",
+                    },
+                    {
+                      internalType: "bytes32",
+                      name: "refUID",
+                      type: "bytes32",
+                    },
+                    {
+                      internalType: "bytes",
+                      name: "data",
+                      type: "bytes",
+                    },
+                    {
+                      internalType: "uint256",
+                      name: "value",
+                      type: "uint256",
+                    },
+                  ],
+                  internalType: "struct AttestationRequestData",
+                  name: "data",
+                  type: "tuple",
+                },
+              ],
+              internalType: "struct AttestationRequest",
+              name: "request",
+              type: "tuple",
+            },
+          ],
+          name: "attest",
           outputs: [
             {
               internalType: "bytes32",
@@ -7139,12 +7072,58 @@ const deployedContracts = {
               type: "bytes32",
             },
           ],
-          stateMutability: "view",
+          stateMutability: "nonpayable",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "contract IEFSAnchorIndex",
+              name: "indexer",
+              type: "address",
+            },
+            {
+              internalType: "bytes32",
+              name: "anchorSchemaUID",
+              type: "bytes32",
+            },
+            {
+              components: [
+                {
+                  internalType: "string",
+                  name: "name",
+                  type: "string",
+                },
+                {
+                  internalType: "int256",
+                  name: "parentIndex",
+                  type: "int256",
+                },
+                {
+                  internalType: "bytes32",
+                  name: "anchorSchemaToRegister",
+                  type: "bytes32",
+                },
+              ],
+              internalType: "struct SystemAccount.BootstrapAnchor[]",
+              name: "specs",
+              type: "tuple[]",
+            },
+          ],
+          name: "bootstrap",
+          outputs: [
+            {
+              internalType: "bytes32[]",
+              name: "createdUIDs",
+              type: "bytes32[]",
+            },
+          ],
+          stateMutability: "nonpayable",
           type: "function",
         },
         {
           inputs: [],
-          name: "_eas",
+          name: "getEAS",
           outputs: [
             {
               internalType: "contract IEAS",
@@ -7158,12 +7137,12 @@ const deployedContracts = {
         {
           inputs: [
             {
-              internalType: "bytes32",
-              name: "uid",
-              type: "bytes32",
+              internalType: "address",
+              name: "owner_",
+              type: "address",
             },
           ],
-          name: "indexAttestation",
+          name: "initialize",
           outputs: [],
           stateMutability: "nonpayable",
           type: "function",
@@ -7171,95 +7150,12 @@ const deployedContracts = {
         {
           inputs: [
             {
-              internalType: "bytes32",
-              name: "",
-              type: "bytes32",
-            },
-          ],
-          name: "schemaNames",
-          outputs: [
-            {
-              internalType: "string",
-              name: "",
-              type: "string",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-      ],
-      inheritedFunctions: {},
-    },
-    TimestampSort: {
-      address: "0xdAC7424d00eA6Fc56069f548049884E0b31316FD",
-      abi: [
-        {
-          inputs: [
-            {
-              internalType: "contract IEAS",
-              name: "_eas",
+              internalType: "address",
+              name: "account",
               type: "address",
             },
           ],
-          stateMutability: "nonpayable",
-          type: "constructor",
-        },
-        {
-          inputs: [],
-          name: "eas",
-          outputs: [
-            {
-              internalType: "contract IEAS",
-              name: "",
-              type: "address",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              internalType: "bytes32",
-              name: "uid",
-              type: "bytes32",
-            },
-            {
-              internalType: "bytes32",
-              name: "",
-              type: "bytes32",
-            },
-          ],
-          name: "getSortKey",
-          outputs: [
-            {
-              internalType: "bytes",
-              name: "",
-              type: "bytes",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              internalType: "bytes32",
-              name: "a",
-              type: "bytes32",
-            },
-            {
-              internalType: "bytes32",
-              name: "b",
-              type: "bytes32",
-            },
-            {
-              internalType: "bytes32",
-              name: "",
-              type: "bytes32",
-            },
-          ],
-          name: "isLessThan",
+          name: "isAuthorized",
           outputs: [
             {
               internalType: "bool",
@@ -7270,11 +7166,193 @@ const deployedContracts = {
           stateMutability: "view",
           type: "function",
         },
+        {
+          inputs: [
+            {
+              components: [
+                {
+                  internalType: "bytes32",
+                  name: "schema",
+                  type: "bytes32",
+                },
+                {
+                  components: [
+                    {
+                      internalType: "address",
+                      name: "recipient",
+                      type: "address",
+                    },
+                    {
+                      internalType: "uint64",
+                      name: "expirationTime",
+                      type: "uint64",
+                    },
+                    {
+                      internalType: "bool",
+                      name: "revocable",
+                      type: "bool",
+                    },
+                    {
+                      internalType: "bytes32",
+                      name: "refUID",
+                      type: "bytes32",
+                    },
+                    {
+                      internalType: "bytes",
+                      name: "data",
+                      type: "bytes",
+                    },
+                    {
+                      internalType: "uint256",
+                      name: "value",
+                      type: "uint256",
+                    },
+                  ],
+                  internalType: "struct AttestationRequestData[]",
+                  name: "data",
+                  type: "tuple[]",
+                },
+              ],
+              internalType: "struct MultiAttestationRequest[]",
+              name: "requests",
+              type: "tuple[]",
+            },
+          ],
+          name: "multiAttest",
+          outputs: [
+            {
+              internalType: "bytes32[]",
+              name: "",
+              type: "bytes32[]",
+            },
+          ],
+          stateMutability: "nonpayable",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "owner",
+          outputs: [
+            {
+              internalType: "address",
+              name: "",
+              type: "address",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "parent",
+              type: "bytes32",
+            },
+            {
+              internalType: "string",
+              name: "name",
+              type: "string",
+            },
+            {
+              internalType: "bytes32",
+              name: "anchorSchemaUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "anchorSchemaToRegister",
+              type: "bytes32",
+            },
+          ],
+          name: "registerAnchor",
+          outputs: [
+            {
+              internalType: "bytes32",
+              name: "",
+              type: "bytes32",
+            },
+          ],
+          stateMutability: "nonpayable",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "renounceOwnership",
+          outputs: [],
+          stateMutability: "nonpayable",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              components: [
+                {
+                  internalType: "bytes32",
+                  name: "schema",
+                  type: "bytes32",
+                },
+                {
+                  components: [
+                    {
+                      internalType: "bytes32",
+                      name: "uid",
+                      type: "bytes32",
+                    },
+                    {
+                      internalType: "uint256",
+                      name: "value",
+                      type: "uint256",
+                    },
+                  ],
+                  internalType: "struct RevocationRequestData",
+                  name: "data",
+                  type: "tuple",
+                },
+              ],
+              internalType: "struct RevocationRequest",
+              name: "request",
+              type: "tuple",
+            },
+          ],
+          name: "revoke",
+          outputs: [],
+          stateMutability: "nonpayable",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "address",
+              name: "module",
+              type: "address",
+            },
+            {
+              internalType: "bool",
+              name: "ok",
+              type: "bool",
+            },
+          ],
+          name: "setModuleAuthorization",
+          outputs: [],
+          stateMutability: "nonpayable",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "address",
+              name: "newOwner",
+              type: "address",
+            },
+          ],
+          name: "transferOwnership",
+          outputs: [],
+          stateMutability: "nonpayable",
+          type: "function",
+        },
       ],
-      inheritedFunctions: {
-        getSortKey: "contracts/interfaces/ISortFunc.sol",
-        isLessThan: "contracts/interfaces/ISortFunc.sol",
-      },
+      inheritedFunctions: {},
     },
   },
 } as const;
