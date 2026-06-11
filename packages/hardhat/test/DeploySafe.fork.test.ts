@@ -1,10 +1,12 @@
 import { expect } from "chai";
 import { ethers } from "hardhat";
+import { takeSnapshot, SnapshotRestorer } from "@nomicfoundation/hardhat-network-helpers";
 import { CREATEX_ADDRESS, EAS_ADDRESS } from "../deploy-lib/addresses";
 import { orchestrateViaSafe } from "../deploy-lib/orchestrateSafe";
 import { predictProxyAddress } from "../deploy-lib/create3";
 import { getCreateX } from "../deploy-lib/create3";
 import { RESOLVERS, SCHEMAS } from "../deploy-lib/schemas";
+import { buildSafePlan } from "../deploy-lib/safePlan";
 import { deployTestSafe, SAFE_PROXY_FACTORY_141 } from "../deploy-lib/safe";
 
 // Fork rehearsal for the SAFE-NATIVE EFS deploy (docs/DEPLOYMENT.md §1/§3, ADR-0048, ADR-0053).
@@ -24,6 +26,13 @@ describe("DeploySafe.fork — Safe-native deploy, born Safe-owned", function () 
   this.timeout(240_000);
 
   let forked = false;
+  // Snapshot of the fork AFTER the happy-path Safe deploy has run (SystemAccount deployed + sealed).
+  // The omit-branch test restores this so it re-invokes buildSafePlan against the SAME deployed+sealed
+  // system the happy path produced — the deterministic Safe-keyed CREATE3 addresses make a second full
+  // deploy collide, so we reuse the first rather than standing up a second system.
+  let sealedSystem: SnapshotRestorer;
+  // The Safe address the happy-path deploy used (re-targeted by the omit-branch test post-restore).
+  let deployedSafe: string;
 
   before(async function () {
     const createxCode = await ethers.provider.getCode(CREATEX_ADDRESS);
@@ -179,5 +188,63 @@ describe("DeploySafe.fork — Safe-native deploy, born Safe-owned", function () 
       }),
       "a non-module caller cannot relay as `system`",
     ).to.be.revertedWithCustomError(systemAccount, "NotAuthorized");
+
+    // Capture the now-deployed + sealed system so the omit-branch test below can re-invoke
+    // buildSafePlan against it (a second full deploy would collide on the deterministic addresses).
+    deployedSafe = safe;
+    sealedSystem = await takeSnapshot();
+  });
+
+  // ── PR #24 P1 follow-up: post-seal re-run of buildSafePlan OMITS bootstrap + seal ─────────────────
+  // The EOA after-gate retry is covered in Deploy.fork.test.ts. The Safe omit-branch is exercised here:
+  // buildSafePlan is sealed-aware — when the SystemAccount proxy already exists AND bootstrapSealed() is
+  // true, Batch 2 OMITS the bootstrap + seal legs (they would revert BootstrapSealed on a re-run) and
+  // sets batch2BootstrapOmitted=true. The register×9 legs stay (register is idempotent). We restore the
+  // post-seal snapshot from the happy-path test and re-build the plan against that deployed+sealed system.
+  it("post-seal buildSafePlan omits the bootstrap + seal legs (Safe omit-branch)", async function () {
+    // Restore the system the happy path deployed + sealed (deterministic addresses preclude a 2nd deploy).
+    await sealedSystem.restore();
+
+    const [deployer] = await ethers.getSigners();
+
+    // Sanity: the SystemAccount is in fact deployed AND sealed in the restored state — the two
+    // preconditions the omit-branch keys off.
+    const saPredicted = (await predictProxyAddress(await getCreateX(deployer), deployedSafe, "SystemAccount"))
+      .predicted;
+    expect(await ethers.provider.getCode(saPredicted), "SystemAccount has code (deployed)").to.not.equal("0x");
+    const systemAccount = await ethers.getContractAt("SystemAccount", saPredicted, deployer);
+    expect(await systemAccount.bootstrapSealed(), "SystemAccount already sealed").to.equal(true);
+
+    // Re-build the plan against the deployed+sealed system. This is the post-seal re-run path.
+    const plan = await buildSafePlan(deployer, deployedSafe, false);
+
+    // ── The omit flag is set ──────────────────────────────────────────────────────────────────────
+    expect(plan.batch2BootstrapOmitted, "batch2BootstrapOmitted on a post-seal re-run").to.equal(true);
+
+    // ── Batch 2 = register×9 only; the bootstrap + seal legs are GONE ───────────────────────────────
+    expect(plan.batch2, "Batch 2 has only the 9 register legs (bootstrap + seal omitted)").to.have.lengthOf(
+      SCHEMAS.length,
+    );
+    expect(SCHEMAS.length, "freeze set is 9 schemas").to.equal(9);
+    // Every remaining leg is a register leg; none is the bootstrap or seal leg.
+    for (const leg of plan.batch2) {
+      expect(leg.label, "remaining Batch-2 leg is a register leg").to.match(/^register /);
+    }
+    expect(
+      plan.batch2.some(leg => /bootstrap/i.test(leg.label ?? "")),
+      "no bootstrap leg in Batch 2",
+    ).to.equal(false);
+    expect(
+      plan.batch2.some(leg => /seal/i.test(leg.label ?? "")),
+      "no seal leg in Batch 2",
+    ).to.equal(false);
+
+    // ── The /transports UID for setTransportsAnchor is resolved from the index (real, non-zero),
+    //    NOT minted by a fresh bootstrap (which was omitted). ─────────────────────────────────────────
+    const indexer = await ethers.getContractAt("EFSIndexer", plan.proxies.EFSIndexer, deployer);
+    const root = await indexer.rootAnchorUID();
+    expect(root, "root anchor present from the prior bootstrap").to.not.equal(ethers.ZeroHash);
+    const transportsUID = await indexer.resolvePath(root, "transports");
+    expect(transportsUID, "/transports UID resolves from the index (non-zero)").to.not.equal(ethers.ZeroHash);
   });
 });
