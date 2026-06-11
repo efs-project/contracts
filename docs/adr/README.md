@@ -19,6 +19,10 @@ ADRs are **immutable** once `Status: Accepted`. To change a decision:
 
 This preserves the chain of reasoning. Future agents can see *why* we tried X, *why* we moved to Y, and *what we learned*.
 
+### Partial supersession / amendment (Status-line note)
+
+When a later ADR changes only *part* of an earlier decision (e.g. ADR-0049 moved DATA's fields out but left "standalone + non-revocable" intact; ADR-0050 amended ADR-0048's freeze count from 8 to 9 schemas), record it as a **parenthetical on the old ADR's Status or Related line only** — e.g. `Accepted (superseded in part by ADR-0049 — …; standalone + non-revocable still hold)`. The body stays untouched; the new ADR's Context explains the amendment. This is the house pattern (human-approved 2026-06-11): the Status line is the ADR's one mutable slot, so a reader landing on the old ADR sees immediately which parts still bind without the historical record being rewritten. Do **not** route these through a separate tombstone log — the pointer belongs on the document itself.
+
 ### Grace period for retroactive ADRs
 
 ADRs marked `formalized retroactively` capture a decision made *before* the ADR was written, so the first readers may catch prose-level errors (wrong cross-reference, miscounted schemas, stale function name, inaccurate gas estimate) that don't reflect the decision itself.
