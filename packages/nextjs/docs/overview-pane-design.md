@@ -2,8 +2,10 @@
 
 **Date:** 2026-06-10
 **Branch:** `markdown-for-items`
-**Surface:** `packages/nextjs/` debug UI only (Ephemeral). No contract / schema / ADR changes.
-**Status:** awaiting James's review before implementation.
+**Surface:** `packages/nextjs/` debug UI (Ephemeral) + a small demo-seed addition
+in `packages/hardhat` (dev data only). No contract / schema / ADR changes.
+**Status:** revised after 3-way review (feasibility / security / requirements);
+awaiting James's review before implementation.
 
 ## Goal
 
@@ -14,144 +16,176 @@ item type, and expressive enough to approximate a Wikipedia-style article.
 
 Three-pane layout: **tree | Overview pane | folder-contents / file-preview**.
 The Overview pane is **optional** — it only renders when the current item
-actually has a configured page; otherwise the view stays two-pane.
+actually has a configured page; otherwise the view stays two-pane. (This is the
+agreed resolution of the brief's "empty state when none": no passive empty pane.
+Discoverability/authoring of a missing Overview is out of scope for view-only
+v1 — authoring already works via the existing create-file + tag flows.)
 
 ## The model (settled — see planning/Decisions.md 2026-06-10)
 
 A page is **a normal Markdown file** (DATA + MIRROR) that is a child of the item
-and carries a `system` TAG. It is NOT a new schema or a special property. The
-client:
+and carries a `system` TAG. It is NOT a new schema or a special property.
 
-1. Lists the current item's children, lens-scoped.
-2. Finds children carrying the active lens's `system` TAG.
-3. Picks the page: first match by filename precedence
-   `README.md` -> `index.md` -> `overview.md` -> `about.md` (case-insensitive),
-   restricted to children that sniff as Markdown/text.
-4. Fetches its bytes via the existing `EFSRouter.request()` path.
-5. Sniffs -> (optionally) integrity-checks -> sanitizes -> renders.
+Every item type works because the explorer already reduces each to a single
+`bytes32` parent (`currentAnchorUID`): a folder anchor, a **file anchor** (a file
+leaf is itself an anchor that can host children — confirmed in `ExplorerClient`
+path resolution), an address-derived parent, or an alias anchor for
+schema/attestation (ADR-0033). Listing children of that parent is uniform.
 
-The `system` TAG also drives a **"show hidden / system files" toggle**: system-
-tagged files are hidden from the right-pane file list by default (OS-file-explorer
-model), revealed by the toggle. `system` is the general hide-bucket for future
-OS-ish files (thumbnails, indexes).
+Resolution (lens-scoped):
 
-### Naming (researched)
+1. List the item's children via `EFSFileView.getDirectoryPageBySchemaAndAddressList`.
+2. Resolve the **`system` tag-set** for the active lenses (see "system tag
+   convention" below) — the set of system-tagged child **anchor UIDs**.
+3. **Select** the page among system-tagged children, deterministically:
+   first-lens-wins, then within that lens by filename precedence
+   `README.md` → `index.md` → `overview.md` → `about.md` (case-insensitive); if a
+   lens has a system-tagged child but none match those names, fall back to its
+   first system-tagged child whose name ends in `.md`/`.markdown`/`.txt`.
+4. **Fetch** that child's bytes via the extracted router util.
+5. **Sniff** the bytes (don't trust `contentType`); if markdown/text → sanitize
+   and render; if binary → download card. (Order is pick → fetch → sniff, NOT
+   sniff-to-select — we fetch only the single selected candidate.)
 
-- **Recognized filename:** `README.md` (with the precedence fallbacks above).
-  Maximum author muscle-memory; the filename is a tie-breaker/intent signal on
-  top of the `system` TAG, which is the real selector.
-- **UI label:** **"Overview."** Reads naturally across every item type
-  ("Overview" of an address / schema / attestation / folder), where "README"
-  feels odd on a non-folder. "wiki" is reserved for a future aggregate
-  interlinked graph, not the per-item unit.
+### `system` tag convention (chosen — resolves the review's critical finding)
+
+A 3-way review found that reusing `FileBrowser.resolveTagSet` + its `matchesUID`
+path would **silently fail**: that path returns a mixed set of DATA-UIDs and
+anchor-UIDs and matches file items through a `dataUIDMap` that is only populated
+when a tag filter is already active. So this feature does **not** piggyback on
+that machinery.
+
+Instead, we fix the convention: the **`system` TAG targets the file's ANCHOR
+UID** (`targetSchema = anchorSchemaUID`), and both the Overview resolver and the
+hidden-files filter match it directly against a directory item's `uid`. This is:
+- simplest (no per-child DATA-UID round-trip, no dependence on `dataUIDMap`),
+- correct for "system/hidden is a placement role of this file at this path,"
+- a deliberate, documented divergence from the `nsfw`-on-DATA convention; the
+  SDK can normalize tag-target conventions later.
+
+A small shared helper `resolveSystemAnchorSet(parentUID, lensAddresses, anchorSchemaUID)`
+does: `resolvePath(fsRoot, "tags")` → `resolvePath(tagsRoot, "system")` →
+`EdgeResolver.getActiveTargetsByAttesterAndSchema(systemDef, lens, anchorSchemaUID)`
+per lens, unioned into a `Set<anchorUID>`. Used by both the hook and the
+hidden-files filter. Degrades to empty (feature simply absent) if `/tags/system`
+doesn't exist.
 
 ## Architecture
 
-Three new, well-bounded units plus one small refactor of code we touch.
+Three new well-bounded units, one shared helper, plus targeted edits.
 
 ### 1. `lib/efs/fetchFileContent.ts` (extracted util)
 
-Today `fetchFileContent` is a closure inside `FileBrowser.tsx` (~L533-693). It
-calls `EFSRouter.request(pathSegments, queryParams)` and already handles:
-on-chain SSTORE2 chunk reassembly (EIP-7617 `web3-next-chunk` pagination),
-external-mirror delegation (`message/external-body` -> `resolveGatewayUrl` ->
-`fetch`), and lens-scoped `contentType` extraction.
+Today `fetchFileContent` is a closure in `FileBrowser.tsx` (~L533-693) entangled
+with component state. Extract a **pure async** function:
 
-Extract it into a shared, framework-light async util returning
-`{ bytes: Uint8Array, contentType: string | null, source: "onchain" | "mirror" }`.
-Reuse it from both `FileBrowser` (unchanged behavior) and the new hook. This is
-the one justified tidy-up — code we're already working in, not a drive-by.
+```
+fetchFileContent({ routerAddress, routerAbi, publicClient, lensAddresses, resourcePath })
+  -> Promise<{ bytes: Uint8Array; contentType: string | null; source: "onchain" | "mirror" }>
+```
+
+It keeps the existing logic: `EFSRouter.request(resourcePath, queryParams)`,
+on-chain SSTORE2 chunk reassembly (EIP-7617 `web3-next-chunk` pagination),
+external-mirror delegation (`message/external-body` → `resolveGatewayUrl` →
+`fetch`), lens-scoped `contentType` extraction. The cancellation guard
+(`fetchIdRef`) and all `setState` calls **stay in the callers** — the util is
+side-effect-free and returns a promise. `FileBrowser` is refactored to call it
+and apply results to its own state; this is the one existing path we touch, so
+it gets explicit before/after regression checking (the `fetchIdRef` guard must
+remain intact).
 
 ### 2. `hooks/efs/useItemOverview.ts`
 
-`useItemOverview(anchorUID, lensAddresses, { dataSchemaUID, anchorSchemaUID, ... })`
+`useItemOverview({ anchorUID, lensAddresses, resourcePathNames, dataSchemaUID, anchorSchemaUID, indexerInfo, routerInfo, edgeResolverAddress })`
 
-Resolves the item's Overview, returning a discriminated state:
-`loading | none | { kind: "markdown", text } | { kind: "binary", contentType, downloadUrl, size } | { kind: "error", message } | { kind: "too-large", size }`.
+Returns a discriminated state:
+`loading | none | { kind:"markdown", text, source } | { kind:"binary", contentType, bytes, fileName, size, source } | { kind:"too-large", size } | { kind:"error", message }`.
 
-Steps:
-- List children via `EFSFileView.getDirectoryPageBySchemaAndAddressList`
-  (lens-scoped; first-lens-wins, same as file resolution).
-- Resolve the `system` tag-set for the active lenses (reuse FileBrowser's
-  existing `resolveTagSet` pattern — the same path that does `nsfw`).
-- Choose the candidate by filename precedence among system-tagged children.
-- Fetch bytes via the extracted util.
-- **Size cap** (see Security) before decode.
-- **Sniff** bytes to classify markdown/text vs binary.
-- Return the appropriate state. Cancel-guarded against rapid navigation, like
-  the existing path-resolution effects.
+Steps: list children (lens-scoped) → `resolveSystemAnchorSet` → select candidate
+(§model step 3) → `fetchFileContent` with `resourcePathNames` + selected name →
+**size cap** before decode → **sniff** → return state. Cancel-guarded against
+rapid navigation. Needs `resourcePathNames` (the router path prefix for the
+current item, i.e. the equivalent of `currentPathNames`) so it can address the
+selected child — threaded from `ExplorerClient`.
 
 ### 3. `components/explorer/OverviewPane.tsx`
 
-Presentational. Consumes `useItemOverview`. Renders:
-- `markdown` -> `<MarkdownView source={text} />` inside a themed panel.
-- `binary` -> a download/open card (filename, detected type, size, source).
-- `too-large` -> "Too large to preview (N MB)" + download link.
-- `error` -> inline error.
-- `none` -> the pane is not rendered at all (parent checks state first).
+Presentational; consumes `useItemOverview`. Renders: `markdown` →
+`<MarkdownView>` in a themed panel; `binary`/`too-large` → a **safe download
+card** (see Security M2); `error` → inline error; `none` → parent renders no
+pane. Labeled **"Overview."** Collapsible, with a small provenance line when
+`source === "mirror"` ("served from an external mirror"). Collapsed state
+persisted in localStorage under a single global key (not per-item). Given a
+readable measure for long-form prose, the column has a sensible default/max
+width between the tree and the contents pane.
 
-Collapsible; remembers collapsed state per session (localStorage). Labeled
-"Overview."
+### 4. `components/markdown/MarkdownView.tsx` (~40-60 lines)
 
-### 4. `components/markdown/MarkdownView.tsx` (the ~40-60 line renderer)
-
-The single sanitized render path. No raw-HTML injection sink (no `rehype-raw`,
-no React HTML-string escape hatch).
+Single sanitized render path. No raw-HTML injection sink (no `rehype-raw`, no
+HTML-string escape hatch).
 
 ```
 remarkPlugins:  [remarkGfm]
-rehypePlugins:  [rehypeSlug, rehypeAutolinkHeadings, [rehypeSanitize, efsSchema]]  // sanitize LAST
-components:     { a: <override>, img: <override> }                                  // future-EFS seam
+rehypePlugins:  [rehypeSlug, [rehypeAutolinkHeadings, { behavior: "wrap" }], [rehypeSanitize, efsSchema]]  // sanitize LAST
+components:     { a: <EfsLink>, img: <EfsImage> }                                                          // future-EFS seam
 ```
 
-- Wrapped in `<article className="prose max-w-none">`.
-- `components.a` / `components.img` are the reserved seams for future `efs://`
-  link -> in-app navigation and image -> async EFS-blob resolution. **Built as
-  thin pass-throughs in v1** (see Images), with full access to the parsed node.
+- `behavior: "wrap"` is **pinned** (review M1): it wraps heading text in the
+  anchor and injects no extra span/svg/aria/tabindex nodes — nothing the tight
+  schema would strip, so anchors don't break and the schema needn't widen.
+- Wrapped in `<article className="prose prose-efs max-w-none">` (a dedicated
+  class so the dark-theme `!important` `bg-base-200` rules and the global
+  monospace `body` font don't bleed in; prose font set explicitly).
+- `components.a`/`components.img` are the reserved seams for future `efs://`
+  link → in-app navigation and image → async EFS-blob resolution. In v1:
+  `EfsLink` opens absolute http/https in a new tab with
+  `rel="noopener noreferrer"`, and renders relative / non-allowlisted hrefs as
+  **inert text** (no navigation — see M3); `EfsImage` renders an inert
+  placeholder + alt only (see Images).
 
-### 5. Layout + toggle wiring (`ExplorerClient.tsx`, `FileActionsBar`, `FileBrowser`)
+### 5. Layout + hidden-files toggle
 
 - Insert `<OverviewPane>` as a middle column between the tree `<aside>` and the
-  file `<section>`. Rendered only when `useItemOverview` state is renderable.
-  Below `lg`, it stacks above the file browser / is toggleable rather than
-  crushing the columns.
-- Add a "show hidden / system files" toggle in `FileActionsBar`; thread a
-  `showSystemFiles` flag into `FileBrowser`, which filters out items in the
-  `system` tag-set unless the flag is set. Toggle state persisted in
+  file `<section>` in `ExplorerClient.tsx`, rendered only when the hook state is
+  renderable. Below `lg` it stacks above the file browser / is toggleable.
+- Add a "show hidden / system files" toggle in `FileActionsBar`; thread
+  `showSystemFiles` into `FileBrowser`, which hides items whose `uid` is in the
+  `resolveSystemAnchorSet` result unless the flag is set. This is a **dedicated**
+  filter using the anchor-targeted set above — independent of the existing
+  `drawerTagFilters`/`matchesUID` DATA-targeted path. Toggle persisted in
   localStorage.
 
 ## Markdown stack (assemble, not adopt)
 
-Decisive research outcome: build a thin wrapper over `react-markdown`; do not
-adopt a batteries-included viewer (`@uiw/react-markdown-preview` bundles v9 +
-unsanitized GitHub CSS that fights daisyUI; Streamdown is for AI streaming; MDX
-executes JSX — categorically unsafe for untrusted input).
+Build a thin wrapper over `react-markdown`; do not adopt a batteries-included
+viewer (`@uiw/react-markdown-preview` bundles v9 + unsanitized GitHub CSS that
+fights daisyUI; Streamdown targets AI streaming; MDX executes JSX — unsafe for
+untrusted input).
 
-Dependencies (Tier-2 courtesy flag — these are the substance of the approved
-feature, on the Ephemeral debug UI):
+Dependencies (Tier-2 courtesy flag; substance of the approved feature, on the
+Ephemeral debug UI):
 
 | Package | Version | Role |
 |---|---|---|
 | `react-markdown` | ^10 | renderer (React elements, not an HTML string) |
 | `remark-gfm` | ^4 | tables, footnotes, task lists, strikethrough, autolinks |
 | `rehype-sanitize` | ^6 | sanitize — **last** rehype plugin |
-| `rehype-slug` | ^6 | stable heading `id`s (anchors + `#fragment` links) |
-| `rehype-autolink-headings` | ^7 | clickable heading anchors |
+| `rehype-slug` | ^6 | stable heading `id`s |
+| `rehype-autolink-headings` | ^7 | clickable heading anchors (`behavior:"wrap"`) |
 | `@tailwindcss/typography` | ^0.5 (dev) | `prose` classes |
 
-Gives Wikipedia-style richness now: headings-with-anchors, tables, footnotes,
-blockquotes, fenced code, task lists, autolinks. Auto-TOC is deferred (anchors
-are enough for v1).
+Wikipedia-style richness: headings-with-anchors, tables, footnotes, blockquotes,
+fenced code, task lists, autolinks. Auto-TOC deferred (anchors suffice for v1).
 
-### Styling (Tailwind v3.4 + daisyUI v4.12 — repo reality)
+### Styling (Tailwind v3.4 + daisyUI v4.12 — verified repo reality)
 
-The repo is **not** on Tailwind v4 / daisyUI v5, so `prose` is not auto-themed.
-Add `require("@tailwindcss/typography")` to `tailwind.config.js` plugins, and add
-a small mapping in `styles/globals.css` so `prose` follows the active daisyUI
-theme via its oklch CSS vars:
+Add `require("@tailwindcss/typography")` to `tailwind.config.js` plugins; add a
+`prose-efs` mapping in `styles/globals.css` so prose follows the active daisyUI
+theme via its oklch vars, and so the dark-theme global `!important` surface rules
+and monospace `body` font don't override the pane:
 
 ```css
-.prose {
+.prose-efs {
   --tw-prose-body: oklch(var(--bc));
   --tw-prose-headings: oklch(var(--bc));
   --tw-prose-links: oklch(var(--p));
@@ -164,112 +198,141 @@ theme via its oklch CSS vars:
   --tw-prose-td-borders: oklch(var(--b3));
   --tw-prose-pre-bg: oklch(var(--b2));
   --tw-prose-pre-code: oklch(var(--bc));
+  /* explicit readable family for long-form, overriding the global mono body */
+  font-family: ui-sans-serif, system-ui, sans-serif;
 }
 ```
 
-(Exact var list finalized during implementation; the app chrome stays its
-monospace "terminal" aesthetic — the prose body may use a more readable family
-for long-form, a polish detail.)
+(Exact var list finalized in implementation.)
 
-## Security & integrity (hard requirements, adversarially validated)
+## Security & integrity (hard requirements — adversarially reviewed)
 
 **MUST hold in v1:**
 
-1. **Sanitize last, tightened schema.** Extend `defaultSchema`: link protocols
-   `http/https/mailto` only; image `src` effectively disabled in v1 (see Images);
-   allow regex-constrained `id` (`/^user-content-/`, keep `clobberPrefix`) so
-   `rehype-slug` anchors and GFM footnotes survive; allow table `align`,
+1. **Sanitize last, explicit allowlist (M3/M4).** Extend `defaultSchema` and make
+   the sanitize schema the source of truth (do NOT rely on react-markdown's
+   `urlTransform`, whose default allows `irc/ircs/xmpp` + relative). Set
+   `protocols.href: ['http','https','mailto']` explicitly; **`img` is removed from
+   `tagNames` (and its `src`/`srcset`/`loading`/`referrerpolicy` stripped)** so no
+   network image request can fire (A1). Keep `defaultSchema`'s built-in
+   `clobberPrefix: 'user-content'` + `clobber: ['name','id']` for DOM-clobber
+   defense — do **not** hand-roll an `id` regex (M4). Allow table `align`,
    task-list checkboxes, fenced-code `language-*`. **Never** allow
-   `svg`/`iframe`/`math`/`style`/`script`/`on*`. No `rehype-raw`. Do not override
-   react-markdown's `urlTransform` (keep its protocol gate as defense-in-depth).
-2. **Single render path** — react-markdown builds React elements; no raw-HTML
-   injection sink anywhere (no second sanitizer to drift).
-3. **Don't trust `contentType`** (attester-controlled). Independently sniff:
-   `TextDecoder('utf-8', { fatal: true })` over the head + NUL/control-byte and
-   magic-number checks (`%PDF`, PNG/JPEG/GIF, zip `PK`, gzip `1F 8B`). Binary ->
+   `svg`/`iframe`/`math`/`style`/`script`/`on*`. No `rehype-raw`.
+2. **Single render path** — React elements only; no raw-HTML sink anywhere.
+3. **`behavior:"wrap"` on autolink-headings (M1)** so no injected node needs the
+   schema widened.
+4. **Don't trust `contentType`** (attester-controlled). Independently sniff:
+   `TextDecoder('utf-8',{fatal:true})` over the head + NUL/control-byte and
+   magic-number checks (`%PDF`, PNG/JPEG/GIF, zip `PK`, gzip `1F 8B`). Binary →
    download card, never inline.
-4. **Size cap ~1-2 MB** before parse; over cap -> "too large" + download link.
-5. **`target="_blank"` links get `rel="noopener noreferrer"`** via the `a`
-   override.
+5. **Size cap (1 MB) AND a structural guard (A2).** Cap bytes before parse; after
+   parse, reject if hast node-count > ~50k or blockquote/list nesting depth > 32
+   (mirrors ADR-0021 `MAX_ANCHOR_DEPTH`). Either → "too large / too complex" +
+   download card. Pure byte-cap alone is insufficient (structural amplification).
+6. **Safe download card (M2).** Build the blob with a **neutral type only**
+   (`application/octet-stream`), offer **download only — never open/navigate to
+   the blob URL**, **sanitize the filename** (strip path separators, control
+   chars, bidi/zero-width `‪-‮`/`⁦-⁩`/`​-‏`; clamp
+   to `[A-Za-z0-9._-]` + length; `.bin` if a dangerous ext was stripped), and
+   **revoke the object URL on unmount/navigation**.
+7. **Link policy (M3).** Absolute `http/https` → new tab + `rel="noopener
+   noreferrer"`. `mailto` allowed. **Relative and protocol-relative (`//host`,
+   `/path`) hrefs are rendered inert (non-navigating) in v1** — lenses are the
+   trust boundary, and a bare relative link could smuggle a lens-swap. In-app
+   navigation arrives with the future `efs://` seam, resolving to a typed route.
 
 ### Images (v1: block external loading)
 
-Per James: do **not** load external `https://` images (viewer-IP-leak / privacy).
-"Real" images mean EFS-native image resolution, which is the deferred complex
-work. So v1: the `img` override renders an **inert placeholder + alt text** (no
-network fetch). The override is the exact seam where future EFS-blob resolution
-plugs in. Blocking is trivial; resolving is future work.
+Per James: don't load external images (viewer-IP-leak / privacy). v1 strips `img`
+in the sanitize schema AND renders an inert placeholder + alt via the `img`
+override (defense in depth, A1). The override is the seam where future EFS-blob
+image resolution plugs in.
 
-### contentHash (deferred — option (b))
+### contentHash / provenance (deferred verification — judgment call)
 
-The page is rendered safely regardless of byte integrity (sanitizer covers XSS),
-and on-chain content comes straight from chain state, so a hash check only adds
-*integrity* signal for external mirrors. v1 does **not** build the
-multihash/CID verifier. Optionally, a non-blocking best-effort check reusing the
-existing `keccak256` `verifyContentHash` when `source === "mirror"`, surfaced as
-a small "unverified" badge — never blocking the render.
-
-> Note for `docs/decisions.md`: the spec frames `contentHash` as a self-describing
-> multihash/CID, but the live devnet reality is a raw `bytes32` written as bare
-> `keccak256(bytes)` (seed/simulate scripts). The `bytes32` field can't hold a
-> multibase string, so any future verifier must reconcile spec vs. on-chain
-> encoding. Out of scope for this client feature; recorded so it isn't lost.
-
-## Future-proofing (designed-for, not built)
-
-The `components={{ a, img }}` seam + a `protocols` allowlist make later work a
-localized change: `efs://` (or relative) links -> in-app navigation to other
-items; `efs`-ref images -> async blob resolution. Pin these invariants now so we
-don't repaint: a single gateway-allowlist config constant; blob URLs always
-revoked on unmount and never navigated to (only `download`); in-app navigation
-resolves to a typed route, never a raw attacker string.
+Two reviewers split: security wanted a mandatory "unverified" badge; requirements
+wanted the optional keccak badge cut as a half-feature. Resolution honoring
+James's "ignore contentHash unless needed": **build no hash verification at all**,
+but show a small, honest **provenance line when `source === "mirror"`** ("served
+from an external mirror") — this is just labeling the fetch source we already
+track, not a hashing feature, and it avoids rendering mirror-served prose with
+zero provenance signal. On-chain content carries no such line (it's trusted chain
+state). The `bytes32`-keccak vs. spec'd-multihash discrepancy is recorded in
+`docs/decisions.md` and surfaced to James (a contracts spec-vs-impl item, Tier 2,
+pre-existing — out of scope for this client feature).
 
 ## SDK boundary (keep EFS machinery thin)
 
-An EFS SDK is in progress (`efs-project/sdk`, branch `chore/scaffold`). This
-feature does not depend on it, but it must not hand-roll robust versions of
-things the SDK will own — those stay thin and isolated behind one seam each, so
-swapping to the SDK later is a localized change, not a rewrite.
+An EFS SDK is in progress (`efs-project/sdk`, `chore/scaffold`). This feature
+doesn't depend on it but must not hand-roll robust versions of what it will own.
 
-- **EFS machinery the SDK will own — keep thin, delegate-ready:** fetching bytes
-  from mirrors / the router (the single `lib/efs/fetchFileContent.ts` util),
-  lens-scoped directory + `system`-tag + README resolution (centralized in
-  `useItemOverview`), and content addressing / hashing. **Do not** build a
-  multihash/CID verifier or any canonical-hashing logic — that is squarely SDK
-  territory (it must hash identically across clients), which is exactly why
-  `contentHash` is deferred above. Reuse the existing router path as-is; don't
-  over-engineer mirror retrieval/fallback robustness the SDK will replace.
-- **Client-only concerns — build properly now:** the sanitized Markdown renderer
-  and schema, byte-sniffing, the `OverviewPane`, the 3-pane layout, and the
-  hidden-files toggle. The SDK won't own web rendering/UX; these are ours.
+- **EFS machinery (thin, delegate-ready):** mirror/router fetch
+  (`fetchFileContent`), lens/`system`-tag/README resolution (`useItemOverview` +
+  `resolveSystemAnchorSet`), content addressing/hashing. **No** multihash/CID
+  verifier or canonical-hashing logic — SDK territory (must hash identically
+  cross-client); this is why `contentHash` verification is deferred. Reuse the
+  existing router path as-is.
+- **Client-only (build properly):** the sanitized renderer + schema, sniffing,
+  `OverviewPane`, layout, hidden-files toggle.
 
-Litmus test for any added complexity: "would the SDK make this trivial?" If yes,
-keep it minimal and isolated rather than polishing it here.
+Litmus: "would the SDK make this trivial?" If yes, keep it minimal and isolated.
+
+## Future-proofing (designed-for, not built)
+
+The `components={{ a, img }}` overrides **plus the sanitize schema's `protocols`
+allowlist** are the seam for later `efs://` links → typed in-app navigation and
+`efs`-ref images → async blob resolution. (Note for the future implementer: the
+schema, not just the overrides, must be extended to admit `efs://`, or sanitize
+strips it first.) Invariants pinned now: a single gateway-allowlist config
+constant; blob URLs always revoked on unmount and never navigated to (download
+only); in-app navigation resolves to a typed route, never a raw attacker string.
 
 ## Non-goals (v1)
 
-No editing / authoring affordance (existing create-file + tag-as-`system` flows
-already work). No version history. No external image loading. No `efs://` link /
-image resolution. No auto-TOC. No multihash/CID verification. Client-only.
+No editing/authoring affordance. No version history. No external image loading.
+No `efs://` link/image resolution. No auto-TOC. No multihash/CID verification.
+Client-only (plus demo-seed data).
+
+## Demo-seed data (new — needed to test end-to-end)
+
+No existing seed creates `/tags/system` or any system-tagged file. Add an
+idempotent step (in `packages/hardhat` seed, dev-only, matching the existing
+fail-soft/localhost-only guards): create `/tags/system`, and on a demo folder
+(e.g. `/docs`) attest a `README.md` (ANCHOR + DATA + MIRROR + PIN +
+`contentType="text/markdown"`) and a `TAG(definition=systemTagAnchor,
+refUID=README_anchorUID, targetSchema=anchorSchema, weight=1)` from the demo
+lens. ~6-8 attestations. Also seed one README on a **file** anchor and confirm an
+**address** Overview path, so "any item type" is exercised, not just folders.
 
 ## File-change summary
 
-- **New:** `lib/efs/fetchFileContent.ts`, `hooks/efs/useItemOverview.ts`,
-  `components/explorer/OverviewPane.tsx`, `components/markdown/MarkdownView.tsx`,
-  `lib/markdown/schema.ts` (sanitize schema), a byte-sniff util.
-- **Edit:** `ExplorerClient.tsx` (insert pane column), `FileActionsBar.tsx`
-  (toggle), `FileBrowser.tsx` (consume extracted util; `showSystemFiles` filter),
-  `tailwind.config.js` (+typography plugin), `styles/globals.css` (prose vars),
-  `package.json` (deps).
+- **New:** `lib/efs/fetchFileContent.ts`, `lib/efs/resolveSystemAnchorSet.ts`,
+  `lib/markdown/schema.ts`, `lib/markdown/sniff.ts`,
+  `hooks/efs/useItemOverview.ts`, `components/explorer/OverviewPane.tsx`,
+  `components/markdown/MarkdownView.tsx`.
+- **Edit:** `ExplorerClient.tsx` (middle column + thread `resourcePathNames`),
+  `FileActionsBar.tsx` (toggle), `FileBrowser.tsx` (consume extracted util;
+  `showSystemFiles` filter), `tailwind.config.js`, `styles/globals.css`,
+  `package.json`, plus the hardhat demo-seed step + `docs/decisions.md` note.
 
 ## Testing
 
-- Unit: byte-sniff classifier (markdown/text vs PDF/PNG/zip/NUL); filename
-  precedence selection; size-cap boundary; sanitize schema rejects the markdown
-  XSS vector set (`javascript:`/`data:` links, raw script/`onerror`/`iframe`/
-  `svg onload`, allows footnotes/anchors/tables/task-lists).
-- `yarn next:check-types` clean; Jest `transformIgnorePatterns` allow-lists the
-  ESM remark/rehype graph.
-- Manual: seed an item with a `system`-tagged `README.md`, confirm it renders in
-  the Overview pane, the hidden-files toggle reveals/hides it, a non-markdown
-  `system` file shows a download card, and an item with no page stays two-pane.
+Repo test runner is **`node --test` over `utils/**/*.test.ts`** (not Jest).
+
+- **Framework-light unit tests** (no react-markdown import, so they run under the
+  existing runner): byte-sniff classifier (markdown/text vs PDF/PNG/zip/gzip/NUL),
+  filename-precedence + fallback selection, size-cap + node-count/depth boundary,
+  filename sanitization for the download card.
+- **Sanitization tests** need the ESM remark/rehype graph; verify the test setup
+  can import it (add a transform/allow-list or a tiny harness invoking the
+  `unified` processor directly). Assert the XSS vector set is neutralized
+  (`javascript:`/`data:` links, raw script/`onerror`/`iframe`/`svg onload`,
+  protocol-relative `//host`, relative `/path` rendered inert) and that richness
+  survives (footnotes, heading anchors with `id="user-content-…"`, tables,
+  task lists). Include a DOM-clobber case (`## constructor` → prefixed id).
+- `yarn next:check-types` clean.
+- **Manual matrix** (after the new seed): a **folder**, a **file**, and an
+  **address** each with a `system`-tagged `README.md` render in the Overview
+  pane; the hidden-files toggle reveals/hides system files; a non-markdown
+  `system` file shows the safe download card; an item with no page stays 2-pane.
