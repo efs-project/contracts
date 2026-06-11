@@ -3,19 +3,13 @@ export interface OverviewCandidate {
   name: string;
 }
 
-const PRECEDENCE = ["readme.md", "index.md", "overview.md", "about.md"];
-const MARKDOWNISH = /\.(md|markdown|txt)$/i;
-
 /**
- * Pick the Overview file among ONE lens's system-tagged children. Order:
- * filename precedence (case-insensitive) → first markdown-ish name → null.
- * The hook calls this per lens in order (first-lens-wins): the first lens that
- * yields a non-null result provides the page.
+ * Pick the Overview file among ONE lens's system-tagged children: the file named
+ * `readme.md` (case-insensitive), else null. The hook calls this per lens in
+ * order (first-lens-wins): the first lens with a `readme.md` provides the page;
+ * if no lens has one, no Overview pane renders. The `system` tag is a separate
+ * concern (it hides the file from the list); selection here is purely by name.
  */
 export function selectOverview(candidates: OverviewCandidate[]): OverviewCandidate | null {
-  for (const want of PRECEDENCE) {
-    const hit = candidates.find(c => c.name.toLowerCase() === want);
-    if (hit) return hit;
-  }
-  return candidates.find(c => MARKDOWNISH.test(c.name)) ?? null;
+  return candidates.find(c => c.name.toLowerCase() === "readme.md") ?? null;
 }

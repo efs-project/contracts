@@ -4,22 +4,18 @@ import { selectOverview } from "./selectOverview.ts";
 
 const c = (name: string, uid = name) => ({ uid, name });
 
-test("prefers README.md (case-insensitive) over others", () => {
-  const picked = selectOverview([c("about.md"), c("ReadMe.md"), c("index.md")]);
-  assert.equal(picked?.name, "ReadMe.md");
+test("finds readme.md case-insensitively", () => {
+  assert.equal(selectOverview([c("notes.md"), c("ReadMe.md"), c("about.md")])?.name, "ReadMe.md");
 });
-test("falls through precedence: index before overview before about", () => {
-  assert.equal(selectOverview([c("about.md"), c("overview.md"), c("index.md")])?.name, "index.md");
+test("returns the readme.md uid/name pair", () => {
+  assert.deepEqual(selectOverview([c("README.md", "0xabc")]), { uid: "0xabc", name: "README.md" });
 });
-test("falls back to first markdown-ish name when no precedence match", () => {
-  assert.equal(selectOverview([c("photo.png"), c("notes.md"), c("data.csv")])?.name, "notes.md");
+test("returns null when there is no readme.md (no precedence fallback)", () => {
+  assert.equal(selectOverview([c("index.md"), c("overview.md"), c("notes.md")]), null);
 });
-test("returns null when no markdown-ish candidate", () => {
-  assert.equal(selectOverview([c("photo.png"), c("data.csv")]), null);
+test("ignores other markdown files (no markdown-ish fallback)", () => {
+  assert.equal(selectOverview([c("photo.png"), c("guide.md")]), null);
 });
 test("returns null on empty input", () => {
   assert.equal(selectOverview([]), null);
-});
-test("overview.md beats about.md", () => {
-  assert.equal(selectOverview([{ uid: "1", name: "about.md" }, { uid: "2", name: "overview.md" }])?.name, "overview.md");
 });
