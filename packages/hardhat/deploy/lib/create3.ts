@@ -16,26 +16,37 @@ import { ethers } from "hardhat";
 import { CREATEX_ADDRESS } from "./addresses";
 import type { ResolverName } from "./schemas";
 
-/// Committed, FROZEN per-resolver salt entropy (bytes 21..31 of the raw salt — 11 bytes). These are
+/// CREATE3-deployed contract names: the six schema resolvers PLUS `SystemAccount` (ADR-0053). The
+/// latter is NOT a resolver (in no schema UID) but IS deployed deterministically in the same
+/// proxy-deploy phase, so its address is stable/Etched-at-first-write and reuses the same salt
+/// machinery.
+export type Create3Name = ResolverName | "SystemAccount";
+
+/// Committed, FROZEN per-contract salt entropy (bytes 21..31 of the raw salt — 11 bytes). These are
 /// parity-critical: the realized proxy address is a function of (deployer, salt), so changing a salt
 /// changes the address and every UID baked against it. Frozen at Phase D; do not edit without a new
-/// ADR + a full re-freeze of the affected schema(s). Chosen as the ASCII tag of the resolver, left-
-/// padded — human-legible in the salt and collision-free across the six resolvers.
+/// ADR + a full re-freeze of the affected schema(s). Chosen as the ASCII tag of the contract, left-
+/// padded — human-legible in the salt and collision-free across the set.
 // Each value is exactly 11 bytes (bytes 21..31 of the raw salt). The bytes are the ASCII tag of the
-// resolver, right-aligned and zero-padded — human-legible in the salt and collision-free.
-export const RESOLVER_SALT_ENTROPY: Record<ResolverName, string> = {
+// contract, right-aligned and zero-padded — human-legible in the salt and collision-free.
+//
+// `SystemAccount` (ADR-0053) carries its OWN committed salt, frozen for address stability: its
+// address is Etched at first canonical write (it authors the bootstrap scaffolding and is the
+// default-lens tail), so a redeploy at a different address would fork official-data authorship.
+export const RESOLVER_SALT_ENTROPY: Record<Create3Name, string> = {
   EFSIndexer: "0x00656673696e6465786572", // "efsindexer" (11 bytes)
   EdgeResolver: "0x0000000000000065646765", // "edge" (11 bytes)
   MirrorResolver: "0x00000000006d6972726f72", // "mirror" (11 bytes)
   ListResolver: "0x000000000000006c697374", // "list" (11 bytes)
   ListEntryResolver: "0x00006c697374656e747279", // "listentry" (11 bytes)
   AliasResolver: "0x000000000000616c696173", // "alias" (11 bytes)
+  SystemAccount: "0x000000000073797374656d", // "system" (11 bytes) — ADR-0053, frozen for address stability
 };
 
 /// Build the FULL 32-byte raw salt for a resolver: leading 20 bytes = deployer (permissioned),
 /// byte 20 = 0x00 (no cross-chain redeploy protection — address keyed on (deployer, salt)),
 /// bytes 21..31 = the committed 11-byte entropy.
-export function buildRawSalt(deployer: string, resolver: ResolverName): string {
+export function buildRawSalt(deployer: string, resolver: Create3Name): string {
   const entropy = RESOLVER_SALT_ENTROPY[resolver];
   const entropyBytes = getBytes(zeroPadValue(entropy, 11)); // right-aligned 11 bytes
   return hexlify(
@@ -75,7 +86,7 @@ export async function buildProxyInitCode(
 export async function predictProxyAddress(
   createx: Contract,
   deployer: string,
-  resolver: ResolverName,
+  resolver: Create3Name,
 ): Promise<{ rawSalt: string; predicted: string }> {
   const rawSalt = buildRawSalt(deployer, resolver);
   const gSalt = guardedSalt(deployer, rawSalt);
@@ -84,7 +95,7 @@ export async function predictProxyAddress(
 }
 
 export interface Create3DeployResult {
-  resolver: ResolverName;
+  resolver: Create3Name;
   impl: string;
   proxy: string;
   predicted: string;
@@ -97,7 +108,7 @@ export interface Create3DeployResult {
 export async function deployResolverViaCreate3(
   createx: Contract,
   deployer: Signer,
-  resolver: ResolverName,
+  resolver: Create3Name,
   constructorArgs: unknown[],
   initFn: string,
   initArgs: unknown[],

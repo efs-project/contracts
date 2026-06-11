@@ -87,6 +87,12 @@ describe("DeployE2E.fork — frozen foundation + views round-trip", function () 
         abi: artifact.abi,
       });
     }
+    // Save SystemAccount (ADR-0053) as 00_efs_core.ts does, so deployViews() wires the router's
+    // default-lens fallback to it.
+    {
+      const artifact = await deployments.getArtifact("SystemAccount");
+      await deployments.save("SystemAccount", { address: result.systemAccount, abi: artifact.abi });
+    }
 
     // ── 2. Deploy the 3 stateless views against the proxies (the post-freeze view deploy) ────────
     const views = await deployViews(hre);
@@ -98,6 +104,22 @@ describe("DeployE2E.fork — frozen foundation + views round-trip", function () 
     // reads a different UID than the one registered (would be freeze-relevant).
     expect((await router.dataSchemaUID()).toLowerCase(), "router bound to frozen DATA UID").to.equal(
       schemaUIDs.DATA.toLowerCase(),
+    );
+    // ADR-0053: the router's default-lens fallback points at SystemAccount (the `system` lens),
+    // not the deployer EOA.
+    expect((await router.systemAccount()).toLowerCase(), "router default-lens fallback == SystemAccount").to.equal(
+      result.systemAccount.toLowerCase(),
+    );
+
+    // Bootstrap scaffolding (root) is authored by the SystemAccount address (attester check).
+    const easRead = new ethers.Contract(EAS_ADDRESS, [...EAS_IFACE, "function getAttestation(bytes32) view returns (tuple(bytes32 uid,bytes32 schema,uint64 time,uint64 expirationTime,uint64 revocationTime,bytes32 refUID,address recipient,address attester,bool revocable,bytes data))"], deployer);
+    const rootForAttester: string = await (await ethers.getContractAt("EFSIndexer", proxies.EFSIndexer, deployer)).rootAnchorUID();
+    const rootAtt = await easRead.getAttestation(rootForAttester);
+    expect(rootAtt.attester.toLowerCase(), "root anchor authored by SystemAccount").to.equal(
+      result.systemAccount.toLowerCase(),
+    );
+    expect(rootAtt.attester.toLowerCase(), "root anchor NOT authored by deployer EOA").to.not.equal(
+      deployerAddr.toLowerCase(),
     );
 
     // ── 3. WRITE a real round-trip via EAS against the registered schemas ────────────────────────

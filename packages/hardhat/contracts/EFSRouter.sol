@@ -97,6 +97,14 @@ contract EFSRouter is IDecentralizedApp {
     ISchemaRegistry public schemaRegistry;
     bytes32 public dataSchemaUID;
 
+    /// @notice The SystemAccount (ADR-0053) — the neutral, code-governed `system` lens. Used as
+    ///         the tail of the default-lens chain (ADR-0039): when no `?lenses=` is given, content
+    ///         falls back to `system` (the bootstrap scaffolding / official defaults author), not
+    ///         the throwaway deployer EOA. The router is a redeployable view (its address is in no
+    ///         schema UID), so pointing the fallback here is a view-config change, not a frozen one
+    ///         — it does NOT touch the kernel's immutable `DEPLOYER`/owner or the auto-tag path.
+    address public systemAccount;
+
     /// @dev Top-level URL segment can resolve to four container flavors.
     ///      Resolution precedence at classification: Address (40-hex) →
     ///      Schema (64-hex registered) → Attestation (64-hex existing) → Anchor (name).
@@ -114,13 +122,24 @@ contract EFSRouter is IDecentralizedApp {
         address _eas,
         address _edgeResolver,
         address _schemaRegistry,
-        bytes32 _dataSchemaUID
+        bytes32 _dataSchemaUID,
+        address _systemAccount
     ) {
         indexer = IEFSIndexer(_indexer);
         eas = IEAS(_eas);
         edgeResolver = IEdgeResolverForRouter(_edgeResolver);
         schemaRegistry = ISchemaRegistry(_schemaRegistry);
         dataSchemaUID = _dataSchemaUID;
+        // ADR-0053: the default-lens fallback points at SystemAccount, not the deployer EOA. Falls
+        // back to indexer.DEPLOYER() only if a zero address is passed (pre-ADR-0053 deploys / tests
+        // that don't wire a SystemAccount), preserving the old behavior in that degenerate case.
+        systemAccount = _systemAccount != address(0) ? _systemAccount : indexer.DEPLOYER();
+    }
+
+    /// @dev The system-lens address used as the default-lens fallback (ADR-0053 / ADR-0039).
+    function _systemLens() private view returns (address) {
+        address sa = systemAccount;
+        return sa != address(0) ? sa : indexer.DEPLOYER();
     }
 
     // EIP-6944: Manual Resolve Mode
@@ -818,25 +837,27 @@ contract EFSRouter is IDecentralizedApp {
     //
     // Fallback priority when no ?lenses= is specified:
     //   1. caller (from ?caller= param or msg.sender if non-zero) — user sees their own files
-    //   2. EFS deployer — system-provided defaults (settings, docs, etc.)
+    //   2. SystemAccount — the `system` lens, the neutral system-provided-defaults author
+    //      (ADR-0053; replaces the throwaway deployer EOA of ADR-0016/0039).
     function _findDataAtPath(
         bytes32 targetAnchor,
         address[] memory lenses,
         address caller
     ) private view returns (bytes32, address) {
         bytes32 dataSchema = indexer.DATA_SCHEMA_UID();
+        address systemLens = _systemLens();
 
         address[] memory attesters;
         if (lenses.length > 0) {
             attesters = lenses;
         } else if (caller != address(0)) {
-            // Try caller first, then EFS deployer as fallback
+            // Try caller first, then the system lens as fallback
             attesters = new address[](2);
             attesters[0] = caller;
-            attesters[1] = indexer.DEPLOYER();
+            attesters[1] = systemLens;
         } else {
             attesters = new address[](1);
-            attesters[0] = indexer.DEPLOYER();
+            attesters[0] = systemLens;
         }
 
         // File placement is Shape A — a file Anchor holds at most one DATA per attester.

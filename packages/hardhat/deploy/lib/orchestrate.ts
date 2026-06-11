@@ -17,7 +17,7 @@
 import { Contract, Signer, ZeroAddress, ZeroHash } from "ethers";
 import { ethers } from "hardhat";
 import { EAS_ADDRESS, SCHEMA_REGISTRY_ADDRESS } from "./addresses";
-import { Create3DeployResult, deployResolverViaCreate3, getCreateX, predictProxyAddress } from "./create3";
+import { Create3DeployResult, Create3Name, deployResolverViaCreate3, getCreateX, predictProxyAddress } from "./create3";
 import { RESOLVERS, ResolverName, SCHEMAS, computeAllSchemaUIDs } from "./schemas";
 import { runVerifyGate } from "./verify";
 
@@ -26,6 +26,9 @@ export type RunMode = "full" | "until-freeze-gate" | "after-freeze-gate";
 export interface OrchestrationResult {
   deploys: Record<string, Create3DeployResult>;
   proxies: Record<ResolverName, string>;
+  /// The deterministic CREATE3 address of the SystemAccount proxy (ADR-0053). Etched at first
+  /// canonical write — it authors the bootstrap scaffolding and is the default-lens tail.
+  systemAccount: string;
   schemaUIDs: Record<string, string>;
   transportsAnchorUID: string;
   safe: string;
@@ -82,8 +85,16 @@ async function readProxyAdmin(proxy: string): Promise<string> {
 }
 
 /// Create an anchor under `parent` if it doesn't already exist; returns its UID.
+///
+/// ADR-0053: the bootstrap scaffolding is now authored THROUGH SystemAccount (so the anchors'
+/// EAS attester is the SystemAccount address, not the deployer EOA). We call
+/// `SystemAccount.registerAnchor(...)` as the owner=deployer rather than attesting via EAS
+/// directly. The idempotency guard (resolvePath) is unchanged — the attester switch only changes
+/// WHO authors the write, not whether it's skipped. `eas` is retained only to extract the new UID
+/// from the receipt's Attested event (which EAS emits regardless of the caller).
 async function ensureAnchor(
   eas: Contract,
+  systemAccount: Contract,
   indexer: Contract,
   anchorSchemaUID: string,
   parent: string,
@@ -91,17 +102,7 @@ async function ensureAnchor(
 ): Promise<string> {
   const existing: string = parent === ZeroHash ? ZeroHash : await indexer.resolvePath(parent, name);
   if (existing !== ZeroHash) return existing;
-  const tx = await eas.attest({
-    schema: anchorSchemaUID,
-    data: {
-      recipient: ZeroAddress,
-      expirationTime: 0,
-      revocable: false,
-      refUID: parent,
-      data: ethers.AbiCoder.defaultAbiCoder().encode(["string", "bytes32"], [name, ZeroHash]),
-      value: 0,
-    },
-  });
+  const tx = await systemAccount.registerAnchor(parent, name, anchorSchemaUID, ZeroHash);
   const receipt = await tx.wait();
   return extractAttestedUID(receipt, eas);
 }
@@ -115,15 +116,22 @@ export async function orchestrate(deployer: Signer, mode: RunMode, log = true): 
   const eas = await getEAS(deployer);
 
   // ── Step 1: predict all proxy addresses, compute all UIDs ──────────────────────────────────
+  // SystemAccount (ADR-0053) is predicted/deployed alongside the resolvers (own committed salt,
+  // frozen for address stability) but is NOT in any schema UID — so it does NOT feed
+  // computeAllSchemaUIDs. The schema UIDs depend only on the six resolver proxy addresses.
   l("EFS deploy: predicting CREATE3 proxy addresses...");
   const proxies = {} as Record<ResolverName, string>;
-  const rawSalts = {} as Record<ResolverName, string>;
+  const rawSalts = {} as Record<Create3Name, string>;
   for (const r of RESOLVERS) {
     const { rawSalt, predicted } = await predictProxyAddress(createx, deployerAddr, r);
     proxies[r] = predicted;
     rawSalts[r] = rawSalt;
     l(`  ${r} proxy (predicted): ${predicted}`);
   }
+  const systemAccountPredict = await predictProxyAddress(createx, deployerAddr, "SystemAccount");
+  rawSalts.SystemAccount = systemAccountPredict.rawSalt;
+  let systemAccountAddr = systemAccountPredict.predicted;
+  l(`  SystemAccount proxy (predicted): ${systemAccountAddr}`);
   const schemaUIDs = computeAllSchemaUIDs(proxies);
   l("EFS deploy: computed schema UIDs:");
   for (const s of SCHEMAS) l(`  ${s.name.padEnd(11)} ${schemaUIDs[s.name]}`);
@@ -166,9 +174,25 @@ export async function orchestrate(deployer: Signer, mode: RunMode, log = true): 
         rawSalt: rawSalts[r],
       };
     }
+    // Re-bind SystemAccount too (ADR-0053) — deployed in the until-freeze-gate run.
+    const saCode = await ethers.provider.getCode(systemAccountAddr);
+    if (saCode === "0x") {
+      throw new Error(
+        `after-freeze-gate: no proxy at predicted ${systemAccountAddr} for SystemAccount — run --until-freeze-gate first`,
+      );
+    }
+    deploys.SystemAccount = {
+      resolver: "SystemAccount",
+      impl: ZeroAddress,
+      proxy: systemAccountAddr,
+      predicted: systemAccountAddr,
+      proxyAdmin: await readProxyAdmin(systemAccountAddr),
+      rawSalt: rawSalts.SystemAccount,
+    };
     const result: OrchestrationResult = {
       deploys,
       proxies,
+      systemAccount: systemAccountAddr,
       schemaUIDs,
       transportsAnchorUID: ZeroHash,
       safe: ZeroAddress,
@@ -185,6 +209,23 @@ export async function orchestrate(deployer: Signer, mode: RunMode, log = true): 
     const res = await deployResolverViaCreate3(createx, deployer, r, [EAS_ADDRESS], spec.fn, spec.args);
     deploys[r] = res;
     l(`  ${r}: impl=${res.impl} proxy=${res.proxy} proxyAdmin=${res.proxyAdmin}`);
+  }
+
+  // SystemAccount (ADR-0053): same proxy-deploy phase as the resolvers, own committed salt.
+  // Constructor takes IEAS; initialize(owner_=deployer) makes the deployer the ceremony owner so it
+  // can author the bootstrap scaffolding through the relay. Not a resolver (in no schema UID).
+  {
+    const res = await deployResolverViaCreate3(
+      createx,
+      deployer,
+      "SystemAccount",
+      [EAS_ADDRESS],
+      "initialize",
+      [deployerAddr],
+    );
+    deploys.SystemAccount = res;
+    systemAccountAddr = res.proxy; // realized == predicted (asserted inside deployResolverViaCreate3)
+    l(`  SystemAccount: impl=${res.impl} proxy=${res.proxy} proxyAdmin=${res.proxyAdmin}`);
   }
 
   // ── Step 3: VERIFY GATE ─────────────────────────────────────────────────────────────────────
@@ -221,6 +262,7 @@ export async function orchestrate(deployer: Signer, mode: RunMode, log = true): 
   const result: OrchestrationResult = {
     deploys,
     proxies,
+    systemAccount: systemAccountAddr,
     schemaUIDs,
     transportsAnchorUID: ZeroHash,
     safe: ZeroAddress,
@@ -302,18 +344,25 @@ export async function registerAndTransfer(
   result.registered = true;
 
   // ── Post-register anchors: root, tags, /transports/* + setTransportsAnchor (owner still deployer)
+  // ADR-0053: authored THROUGH SystemAccount (attester == SystemAccount address), not the deployer
+  // EOA. The deployer is SystemAccount's owner during the ceremony, so it may author via the relay.
   const indexer = (await ethers.getContractAt("EFSIndexer", proxies.EFSIndexer, deployer)) as unknown as Contract;
   const mirror = (await ethers.getContractAt(
     "MirrorResolver",
     proxies.MirrorResolver,
     deployer,
   )) as unknown as Contract;
-  const rootUID = await ensureAnchor(eas, indexer, schemaUIDs.ANCHOR, ZeroHash, "root");
-  l(`  root anchor: ${rootUID}`);
-  await ensureAnchor(eas, indexer, schemaUIDs.ANCHOR, rootUID, "tags");
-  const transportsUID = await ensureAnchor(eas, indexer, schemaUIDs.ANCHOR, rootUID, "transports");
+  const systemAccount = (await ethers.getContractAt(
+    "SystemAccount",
+    result.systemAccount,
+    deployer,
+  )) as unknown as Contract;
+  const rootUID = await ensureAnchor(eas, systemAccount, indexer, schemaUIDs.ANCHOR, ZeroHash, "root");
+  l(`  root anchor: ${rootUID} (attester=SystemAccount ${result.systemAccount})`);
+  await ensureAnchor(eas, systemAccount, indexer, schemaUIDs.ANCHOR, rootUID, "tags");
+  const transportsUID = await ensureAnchor(eas, systemAccount, indexer, schemaUIDs.ANCHOR, rootUID, "transports");
   for (const t of ["onchain", "ipfs", "arweave", "magnet", "https"]) {
-    await ensureAnchor(eas, indexer, schemaUIDs.ANCHOR, transportsUID, t);
+    await ensureAnchor(eas, systemAccount, indexer, schemaUIDs.ANCHOR, transportsUID, t);
   }
   result.transportsAnchorUID = transportsUID;
   if ((await mirror.transportsAnchorUID()) === ZeroHash) {
@@ -354,6 +403,18 @@ export async function registerAndTransfer(
     }
     if ((await c.owner()).toLowerCase() !== safe.toLowerCase()) {
       throw new Error(`OWNERSHIP: ${r} owner != Safe`);
+    }
+  }
+
+  // SystemAccount (ADR-0053): OwnableUpgradeable like the resolvers. Transfer its owner to the Safe
+  // alongside them (the membership authority — setModuleAuthorization — is the Safe's, pre-burn).
+  {
+    const sa = await ethers.getContractAt("SystemAccount", result.systemAccount, deployer);
+    if ((await sa.owner()).toLowerCase() === deployerAddr.toLowerCase()) {
+      await (await sa.transferOwnership(safe)).wait();
+    }
+    if ((await sa.owner()).toLowerCase() !== safe.toLowerCase()) {
+      throw new Error("OWNERSHIP: SystemAccount owner != Safe");
     }
   }
   result.ownershipTransferred = true;

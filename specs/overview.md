@@ -42,9 +42,17 @@ path wins (first-attester-wins fallback, per ADR-0031). Alice's
 and configs, lenses compose — overrides cascade through the list.
 
 Without `?lenses=`, the router falls back to `?caller=` (the requesting
-address), then to the EFS deployer as a final default. **Nobody sees
-foreign content unless they explicitly opt in** — viewer sovereignty is
-a core design property.
+address), then to **`system`** as the final default lens. `system` is the
+`SystemAccount` contract (ADR-0053) — a neutral, code-governed identity
+that authors the canonical bootstrap structure (root, `/transports/*`) and
+official defaults. It is the **last default lens**, default-on but
+**user-removable and not reorderable**: a user can drop it (losing the
+fallback) but can never move it ahead of their own content, so it is purely
+additive (first-attester-wins, ADR-0031) — it fills gaps, never shadows
+your content. It **replaces the old deployer-EOA fallback** (ADR-0016/0039).
+EFS.eth is just-another-user: opinionated/curated data is a normal opt-in
+lens, with no special system power. **Nobody sees foreign content unless
+they explicitly opt in** — viewer sovereignty is a core design property.
 
 Reads are lens-scoped beyond just TAG resolution: mirrors and PROPERTYs
 on a DATA are also filtered to the winning attester. This prevents third
@@ -113,7 +121,7 @@ Typical new upload: ~10 transactions. Gas-heavy by design — this is archival, 
 1. Router parses the URL: path segments + `?lenses=`, `?caller=`.
 2. **Top-level segment is classified** into one of four container flavors (ADR-0033): Ethereum address, EAS schema UID, EAS attestation UID, or anchor name. Address seeds `currentParent` with `bytes32(uint160(addr))`; anchor names seed `rootAnchorUID`. For schema and attestation UIDs, the router first checks for an **alias anchor** — a root-child anchor whose name is the UID in lowercase 0x-hex — and seeds `currentParent` with the alias if present; otherwise it seeds the raw UID. Alias anchors let schemas and attestations carry EFS-native metadata (human label PROPERTY, sub-anchors, TAGs) without conflating with the raw EAS record. When the container is an address and `?lenses=` wasn't given, the router defaults lenses to `[caller, segmentAddr]`.
 3. Walks the remaining path segments using `EFSIndexer.resolvePath` — every flavor reduces to a bytes32 parent, so the walk is the same code path.
-4. For each lens attester in order, queries `EdgeResolver` for the active placement PIN at that Anchor → DATA (cardinality-1, O(1) read). First attester with a match wins. Returns the DATA UID plus that attester's address.
+4. For each lens attester in order, queries `EdgeResolver` for the active placement PIN at that Anchor → DATA (cardinality-1, O(1) read). First attester with a match wins. Returns the DATA UID plus that attester's address. With no `?lenses=`, the attester order is `[caller, system]` (or just `[system]` if no caller) — `system` = the `SystemAccount` address (ADR-0053), the default-lens tail, replacing the former deployer-EOA fallback.
 5. Finds the best MIRROR for the DATA **from the same attester**, by transport priority: `web3:// > ar:// > ipfs:// > magnet: > https://`. Skips revoked mirrors and invalid URIs. Capped at 500 mirror scans per request.
 6. Finds the `contentType` PROPERTY **from the same attester** on the DATA. Falls back to `application/octet-stream`.
 7. Serves:

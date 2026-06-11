@@ -79,8 +79,20 @@ export async function deployViews(hre: HardhatRuntimeEnvironment): Promise<Views
   await deploy("EFSFileView", { from: deployer, args: fileViewArgs, log: true, autoMine: true });
   const fileView = await ethers.getContract<Contract>("EFSFileView", deployer);
 
-  // ── EFSRouter(indexerProxy, EAS, edgeResolverProxy, schemaRegistry, dataSchemaUID) ──────────
-  const routerArgs = [indexerDep.address, EAS_ADDRESS, edgeDep.address, schemaRegistryAddress, dataSchemaUID];
+  // ── EFSRouter(indexerProxy, EAS, edgeResolverProxy, schemaRegistry, dataSchemaUID, systemAccount)
+  // ADR-0053: the router's default-lens fallback points at SystemAccount (the `system` lens), not
+  // the deployer EOA. SystemAccount is saved by 00_efs_core.ts as a named deployment. If absent
+  // (older core deploy), pass zero — the router constructor falls back to indexer.DEPLOYER().
+  const systemAccountDep = await getOrNull("SystemAccount");
+  const systemAccountAddr = systemAccountDep?.address ?? ethers.ZeroAddress;
+  const routerArgs = [
+    indexerDep.address,
+    EAS_ADDRESS,
+    edgeDep.address,
+    schemaRegistryAddress,
+    dataSchemaUID,
+    systemAccountAddr,
+  ];
   await redeployIfArgsChanged(hre, "EFSRouter", routerArgs);
   await deploy("EFSRouter", { from: deployer, args: routerArgs, log: true, autoMine: true });
   const router = await ethers.getContract<Contract>("EFSRouter", deployer);

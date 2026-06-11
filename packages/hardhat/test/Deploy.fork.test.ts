@@ -91,6 +91,44 @@ describe("Deploy.fork — orchestrated CREATE3 deploy + register-last", function
     const indexer = await ethers.getContractAt("EFSIndexer", result.proxies.EFSIndexer, deployer);
     const root = await indexer.rootAnchorUID();
     expect(await indexer.resolvePath(root, "smoke.txt")).to.not.equal(ethers.ZeroHash);
+
+    // ── SystemAccount (ADR-0053): deployed at predicted CREATE3 addr, owner==Safe after transfer,
+    //    and the bootstrap scaffolding (root, /transports/*) is authored BY it (attester check). ──
+    const sa = result.deploys.SystemAccount;
+    expect(sa, "SystemAccount in deploys").to.not.equal(undefined);
+    expect(sa.proxy.toLowerCase(), "SystemAccount realized==predicted").to.equal(sa.predicted.toLowerCase());
+    expect(result.systemAccount.toLowerCase()).to.equal(sa.proxy.toLowerCase());
+    expect(await ethers.provider.getCode(sa.proxy), "SystemAccount has code").to.not.equal("0x");
+
+    const systemAccount = await ethers.getContractAt("SystemAccount", result.systemAccount, deployer);
+    expect((await systemAccount.getEAS()).toLowerCase(), "SystemAccount EAS").to.equal(EAS_ADDRESS.toLowerCase());
+    expect((await systemAccount.owner()).toLowerCase(), "SystemAccount owner == Safe").to.equal(safe);
+    // Its ProxyAdmin transferred to the Safe alongside the resolvers (covered by the loop above,
+    // which iterates all of result.deploys including SystemAccount).
+    const saPa = await ethers.getContractAt(
+      "@openzeppelin/contracts/proxy/transparent/ProxyAdmin.sol:ProxyAdmin",
+      sa.proxyAdmin,
+      deployer,
+    );
+    expect((await saPa.owner()).toLowerCase(), "SystemAccount ProxyAdmin owner == Safe").to.equal(safe);
+
+    // Bootstrap scaffolding authored by SystemAccount: read the root + a /transports/* anchor UID
+    // off the index, fetch the EAS attestation, assert attester == SystemAccount (NOT the deployer).
+    const easRead = await ethers.getContractAt(
+      "@ethereum-attestation-service/eas-contracts/contracts/IEAS.sol:IEAS",
+      EAS_ADDRESS,
+      deployer,
+    );
+    const rootAtt = await easRead.getAttestation(root);
+    expect(rootAtt.attester.toLowerCase(), "root anchor authored by SystemAccount").to.equal(
+      result.systemAccount.toLowerCase(),
+    );
+    expect(rootAtt.attester.toLowerCase(), "root anchor NOT authored by deployer EOA").to.not.equal(deployerAddr);
+    const ipfsTransport = await indexer.resolvePath(result.transportsAnchorUID, "ipfs");
+    const ipfsAtt = await easRead.getAttestation(ipfsTransport);
+    expect(ipfsAtt.attester.toLowerCase(), "/transports/ipfs authored by SystemAccount").to.equal(
+      result.systemAccount.toLowerCase(),
+    );
   });
 
   after(function () {

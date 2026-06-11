@@ -172,6 +172,9 @@ describe("EFSRouter Web3 Capabilities", function () {
       await edgeResolver.getAddress(),
       await registry.getAddress(),
       dataSchemaUID,
+      // ADR-0053 systemAccount: zero here → router falls back to indexer.DEPLOYER() (= owner =
+      // deployer in these unit tests), preserving the pre-ADR-0053 default-lens behavior.
+      ethers.ZeroAddress,
     );
     await router.waitForDeployment();
 

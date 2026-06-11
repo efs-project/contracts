@@ -44,12 +44,15 @@ const deployEFSRouter: DeployFunction = async function (hre: HardhatRuntimeEnvir
     schemaRegistryAddress = SCHEMA_REGISTRY_ADDRESS;
   }
 
+  // Legacy/devnet path: no SystemAccount (ADR-0053) here — pass zero so the router falls back to
+  // indexer.DEPLOYER() for the default lens, preserving the pre-ADR-0053 devnet behavior exactly.
   const routerArgs = [
     indexer.target,
     EAS_ADDRESS,
     edgeResolverDeployment.address,
     schemaRegistryAddress,
     dataSchemaUID,
+    ethers.ZeroAddress,
   ];
   await redeployIfArgsChanged(hre, "EFSRouter", routerArgs);
 

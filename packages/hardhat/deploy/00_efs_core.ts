@@ -53,8 +53,17 @@ const deployEfsCore: DeployFunction = async function (hre: HardhatRuntimeEnviron
     });
   }
 
+  // SystemAccount (ADR-0053): save as a named deployment too. NOT a resolver (in no schema UID),
+  // but a deterministic CREATE3 proxy whose address is Etched at first canonical write — downstream
+  // tooling + the views resolve it by name.
+  {
+    const artifact = await hre.deployments.getArtifact("SystemAccount");
+    await hre.deployments.save("SystemAccount", { address: result.systemAccount, abi: artifact.abi });
+  }
+
   console.log("[efs-core] summary:");
   console.log("  proxies:", result.proxies);
+  console.log("  systemAccount:", result.systemAccount);
   console.log("  registered:", result.registered, "ownershipTransferred:", result.ownershipTransferred);
   if (result.registered) console.log("  safe:", result.safe);
 };
