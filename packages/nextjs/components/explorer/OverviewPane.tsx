@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { OverviewEditorModal } from "./OverviewEditorModal";
 import { MarkdownView } from "~~/components/markdown/MarkdownView";
 import { useItemOverview, type UseItemOverviewArgs } from "~~/hooks/efs/useItemOverview";
 import { safeDownloadName } from "~~/utils/markdown/downloadName";
@@ -26,8 +27,35 @@ function DownloadCard({ bytes, fileName, note }: { bytes: Uint8Array; fileName: 
   );
 }
 
-export function OverviewPane(props: Omit<UseItemOverviewArgs, "enabled">) {
+type OverviewPaneProps = Omit<UseItemOverviewArgs, "enabled"> & {
+  /** False for address-container roots (the upload helper would revert on the synthetic parent). */
+  canEdit?: boolean;
+  /** Parent anchor for the README — equals the current anchor UID. */
+  editAnchorUID?: `0x${string}`;
+  anchorSchemaUID?: `0x${string}`;
+  propertySchemaUID?: `0x${string}`;
+  pinSchemaUID?: `0x${string}`;
+  tagSchemaUID?: `0x${string}`;
+  mirrorSchemaUID?: `0x${string}`;
+  indexerAddress?: `0x${string}`;
+  onOverviewSaved?: () => void;
+};
+
+export function OverviewPane(props: OverviewPaneProps) {
+  const {
+    canEdit,
+    editAnchorUID,
+    anchorSchemaUID,
+    propertySchemaUID,
+    pinSchemaUID,
+    tagSchemaUID,
+    mirrorSchemaUID,
+    indexerAddress,
+    onOverviewSaved,
+    ...overviewArgs
+  } = props;
   const [collapsed, setCollapsed] = useState(false);
+  const [editing, setEditing] = useState(false);
   useEffect(() => {
     setCollapsed(typeof window !== "undefined" && window.localStorage.getItem(COLLAPSE_KEY) === "1");
   }, []);
@@ -40,7 +68,10 @@ export function OverviewPane(props: Omit<UseItemOverviewArgs, "enabled">) {
     }
   };
 
-  const state = useItemOverview({ ...props, enabled: props.anchorUID != null });
+  const state = useItemOverview({ ...overviewArgs, enabled: overviewArgs.anchorUID != null });
+
+  const canShowEdit = state.kind === "markdown" && state.source === "onchain" && canEdit && editAnchorUID && indexerAddress;
+  const showMirrorDisabled = state.kind === "markdown" && state.source === "mirror";
 
   // The pane does not exist until we've actually found a README. While resolving
   // (`loading`) or when there's none, render nothing — no flashing empty shell or
@@ -70,14 +101,26 @@ export function OverviewPane(props: Omit<UseItemOverviewArgs, "enabled">) {
     <aside className="w-96 flex-shrink-0 border-r border-base-300 overflow-y-auto bg-base-100">
       <div className="flex items-center justify-between px-3 py-2 border-b border-base-content/10">
         <span className="text-xs font-semibold text-base-content/70">Overview</span>
-        <button
-          className="btn btn-ghost btn-xs px-1 font-bold"
-          onClick={() => setCollapsedPersist(true)}
-          title="Collapse Overview"
-          aria-label="Collapse Overview"
-        >
-          «
-        </button>
+        <div className="flex items-center gap-1">
+          {canShowEdit && (
+            <button className="btn btn-ghost btn-xs" onClick={() => setEditing(true)} title="Edit this Overview">
+              Edit
+            </button>
+          )}
+          {showMirrorDisabled && (
+            <button className="btn btn-ghost btn-xs" disabled title="Editing is only available for on-chain Overviews">
+              Edit
+            </button>
+          )}
+          <button
+            className="btn btn-ghost btn-xs px-1 font-bold"
+            onClick={() => setCollapsedPersist(true)}
+            title="Collapse Overview"
+            aria-label="Collapse Overview"
+          >
+            «
+          </button>
+        </div>
       </div>
       <div className="p-3">
         {state.kind === "error" && <p className="text-error text-sm">{state.message}</p>}
@@ -100,6 +143,34 @@ export function OverviewPane(props: Omit<UseItemOverviewArgs, "enabled">) {
           </>
         )}
       </div>
+      {editing &&
+        state.kind === "markdown" &&
+        editAnchorUID &&
+        anchorSchemaUID &&
+        overviewArgs.dataSchemaUID &&
+        propertySchemaUID &&
+        pinSchemaUID &&
+        tagSchemaUID &&
+        mirrorSchemaUID &&
+        indexerAddress && (
+          <OverviewEditorModal
+            mode="edit"
+            initialText={state.text}
+            parentAnchorUID={editAnchorUID}
+            anchorSchemaUID={anchorSchemaUID}
+            dataSchemaUID={overviewArgs.dataSchemaUID}
+            propertySchemaUID={propertySchemaUID}
+            pinSchemaUID={pinSchemaUID}
+            tagSchemaUID={tagSchemaUID}
+            mirrorSchemaUID={mirrorSchemaUID}
+            indexerAddress={indexerAddress}
+            onSaved={() => {
+              onOverviewSaved?.();
+              setEditing(false);
+            }}
+            onClose={() => setEditing(false)}
+          />
+        )}
     </aside>
   );
 }

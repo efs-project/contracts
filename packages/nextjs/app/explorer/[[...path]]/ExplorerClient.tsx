@@ -7,6 +7,7 @@ import { useAccount, usePublicClient } from "wagmi";
 import { ContainerInfoPanel } from "~~/components/explorer/ContainerInfoPanel";
 import { FileActionsBar } from "~~/components/explorer/FileActionsBar";
 import { DrawerTagFilterState, FileBrowser } from "~~/components/explorer/FileBrowser";
+import { OverviewEditorModal } from "~~/components/explorer/OverviewEditorModal";
 import { OverviewPane } from "~~/components/explorer/OverviewPane";
 import { PathBar } from "~~/components/explorer/PathBar";
 import { TagFilterDrawer } from "~~/components/explorer/TagFilterDrawer";
@@ -41,6 +42,10 @@ export default function ExplorerClient() {
   });
 
   const [sortRefreshKey, setSortRefreshKey] = useState(0);
+  // Bumped after the Overview editor saves; flows into useItemOverview (via
+  // OverviewPane's refreshKey) to force the pane to re-resolve the README.
+  const [overviewRefreshKey, setOverviewRefreshKey] = useState(0);
+  const [creatingOverview, setCreatingOverview] = useState(false);
   // Bumped when out-of-FileBrowser mutations add items to the current directory
   // (file upload, folder create). `CreateItemModal` lives under FileActionsBar,
   // not FileBrowser, so it can't call FileBrowser's internal `refetch*` hooks
@@ -576,6 +581,12 @@ export default function ExplorerClient() {
 
   const containerKind = currentContainer?.kind ?? "anchor";
 
+  // Overview edit/create gate. Requires a connected wallet, and excludes
+  // address-container roots: those resolve to a synthetic parent anchor the
+  // upload helper can't write under (it hard-reverts), so editing/creating an
+  // Overview there is unsupported for v1.
+  const overviewEditable = !!connectedAddress && currentContainer?.kind !== "address";
+
   return (
     <div className="flex flex-col h-screen w-full bg-base-100 p-4 gap-3">
       <div
@@ -685,6 +696,16 @@ export default function ExplorerClient() {
                 routerAddress={routerInfo?.address as `0x${string}` | undefined}
                 routerAbi={routerInfo?.abi}
                 dataSchemaUID={dataSchemaUID as `0x${string}` | undefined}
+                refreshKey={overviewRefreshKey}
+                canEdit={overviewEditable}
+                editAnchorUID={currentAnchorUID as `0x${string}` | undefined}
+                anchorSchemaUID={anchorSchemaUID as `0x${string}` | undefined}
+                propertySchemaUID={propertySchemaUID as `0x${string}` | undefined}
+                pinSchemaUID={pinSchemaUID as `0x${string}` | undefined}
+                tagSchemaUID={tagSchemaUID as `0x${string}` | undefined}
+                mirrorSchemaUID={mirrorSchemaUID as `0x${string}` | undefined}
+                indexerAddress={indexerAddress}
+                onOverviewSaved={() => setOverviewRefreshKey(k => k + 1)}
               />
             </div>
           )}
@@ -729,6 +750,8 @@ export default function ExplorerClient() {
                   setRecreatedListAnchor(uid);
                   setDirectoryRefreshKey(k => k + 1);
                 }}
+                overviewEditable={overviewEditable}
+                onCreateOverview={() => setCreatingOverview(true)}
               />
             )}
 
@@ -782,6 +805,28 @@ export default function ExplorerClient() {
           </section>
         </div>
       </div>
+
+      {/* Create-Overview modal. Owned at ExplorerClient level so the create
+          entry in FileActionsBar can open it and a save bumps the shared
+          refresh key (re-resolving the Overview pane). The schema UIDs are
+          guaranteed present here by the loading-guard early return above; the
+          modal additionally self-disables Save until its ABI loads. */}
+      {creatingOverview && currentAnchorUID && (
+        <OverviewEditorModal
+          mode="create"
+          initialText=""
+          parentAnchorUID={currentAnchorUID as `0x${string}`}
+          anchorSchemaUID={anchorSchemaUID as `0x${string}`}
+          dataSchemaUID={dataSchemaUID as `0x${string}`}
+          propertySchemaUID={propertySchemaUID as `0x${string}`}
+          pinSchemaUID={pinSchemaUID as `0x${string}`}
+          tagSchemaUID={tagSchemaUID as `0x${string}`}
+          mirrorSchemaUID={mirrorSchemaUID as `0x${string}`}
+          indexerAddress={indexerAddress as `0x${string}`}
+          onSaved={() => setOverviewRefreshKey(k => k + 1)}
+          onClose={() => setCreatingOverview(false)}
+        />
+      )}
     </div>
   );
 }

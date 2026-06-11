@@ -3,7 +3,13 @@
 import { useState } from "react";
 import { CreateItemModal, CreationType } from "./CreateItemModal";
 import { SortDropdown } from "./SortDropdown";
-import { DocumentPlusIcon, FolderPlusIcon, FunnelIcon, QueueListIcon } from "@heroicons/react/24/outline";
+import {
+  BookOpenIcon,
+  DocumentPlusIcon,
+  FolderPlusIcon,
+  FunnelIcon,
+  QueueListIcon,
+} from "@heroicons/react/24/outline";
 import type { ClassifiedContainer } from "~~/utils/efs/containers";
 import { notification } from "~~/utils/scaffold-eth";
 
@@ -40,6 +46,10 @@ export type FileActionsBarProps = {
   onFolderCreated?: (uid: string, name: string) => void;
   onFileCreated?: (enabledSortUIDs: string[]) => void;
   onListCreated?: (uid: string) => void;
+
+  /** Gate for the "Add Overview" entry — false on address-container roots (upload helper reverts). */
+  overviewEditable?: boolean;
+  onCreateOverview?: () => void;
 };
 
 /**
@@ -71,6 +81,8 @@ export const FileActionsBar = ({
   onFolderCreated,
   onFileCreated,
   onListCreated,
+  overviewEditable,
+  onCreateOverview,
 }: FileActionsBarProps) => {
   const [creationType, setCreationType] = useState<CreationType | null>(null);
 
@@ -153,6 +165,21 @@ export const FileActionsBar = ({
               <QueueListIcon className="w-4 h-4" /> List
             </button>
           </li>
+          {overviewEditable && onCreateOverview && (
+            <li>
+              <button
+                onClick={() => {
+                  if (!currentAnchorUID) {
+                    notification.info("Open a folder first to add an Overview.");
+                    return;
+                  }
+                  onCreateOverview();
+                }}
+              >
+                <BookOpenIcon className="w-4 h-4" /> Overview
+              </button>
+            </li>
+          )}
         </ul>
       </div>
 
