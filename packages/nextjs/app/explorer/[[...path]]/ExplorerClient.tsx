@@ -50,6 +50,24 @@ export default function ExplorerClient() {
   const [autoProcessKey, setAutoProcessKey] = useState(0);
   const [autoProcessSortUIDs, setAutoProcessSortUIDs] = useState<string[]>([]);
 
+  // Show hidden/system files toggle (Task 14). Persisted in localStorage so the
+  // preference survives navigation/reload. Defaults to hidden (system files are
+  // filtered out of the directory grid unless the user opts in).
+  const [showSystemFiles, setShowSystemFiles] = useState<boolean>(
+    () => typeof window !== "undefined" && window.localStorage.getItem("efs.showSystemFiles") === "1",
+  );
+  const toggleSystemFiles = () => {
+    setShowSystemFiles(v => {
+      const next = !v;
+      try {
+        window.localStorage.setItem("efs.showSystemFiles", next ? "1" : "0");
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  };
+
   // Info band — externally controlled by PathBar's ItemButton.
   const [isInfoOpen, setIsInfoOpen] = useState(false);
   // Sidebar — below `lg` it renders as an overlay, toggled via PathBar button.
@@ -717,6 +735,8 @@ export default function ExplorerClient() {
                 autoProcessSortUIDs={autoProcessSortUIDs}
                 isFilterDrawerOpen={isFilterDrawerOpen}
                 onToggleFilterDrawer={() => setIsFilterDrawerOpen(prev => !prev)}
+                showSystemFiles={showSystemFiles}
+                onToggleSystemFiles={toggleSystemFiles}
                 onFileCreated={sortUIDs => {
                   setAutoProcessSortUIDs(sortUIDs);
                   setAutoProcessKey(k => k + 1);
@@ -763,6 +783,7 @@ export default function ExplorerClient() {
                     directoryRefreshKey={directoryRefreshKey}
                     recreatedListAnchor={recreatedListAnchor}
                     reverseOrder={reverseOrder}
+                    showSystemFiles={showSystemFiles}
                     onNavigate={(uid, name) => navigateToPath([...currentPath, { uid, name }])}
                   />
                 )}

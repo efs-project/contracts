@@ -29,8 +29,9 @@ import { useDeployedContractInfo, useScaffoldReadContract, useScaffoldWriteContr
 import { useBackgroundOps } from "~~/services/store/backgroundOps";
 import { EDGE_RESOLVER_ABI, getEdgeResolverAddress } from "~~/utils/efs/edgeResolver";
 import { isFile, isList, isTopic } from "~~/utils/efs/efsTypes";
-import { SORT_OVERLAY_ABI } from "~~/utils/efs/sortOverlay";
 import { fetchFileContent as fetchFileContentUtil } from "~~/utils/efs/fetchFileContent";
+import { resolveSystemAnchorSet } from "~~/utils/efs/resolveSystemAnchorSet";
+import { SORT_OVERLAY_ABI } from "~~/utils/efs/sortOverlay";
 import { TRANSPORT_LABELS } from "~~/utils/efs/transports";
 import { notification } from "~~/utils/scaffold-eth";
 
@@ -140,6 +141,7 @@ export const FileBrowser = ({
   directoryRefreshKey = 0,
   recreatedListAnchor,
   reverseOrder = false,
+  showSystemFiles = false,
 }: {
   currentAnchorUID: string | null;
   dataSchemaUID: string;
@@ -182,6 +184,13 @@ export const FileBrowser = ({
    *  anchor, so this lifts any stale delete-suppression on it (see effect below). */
   recreatedListAnchor?: string;
   reverseOrder?: boolean;
+  /**
+   * When false (default), child anchors tagged `system` by any active lens
+   * (the `/tags/system` set, per resolveSystemAnchorSet) are hidden from the
+   * directory grid. When true, they're shown. Independent of the descriptive
+   * label include/exclude (drawerTagFilters) path.
+   */
+  showSystemFiles?: boolean;
 }) => {
   const [selectedDebugItem, setSelectedDebugItem] = useState<any | null>(null);
   const [propertiesModalUID, setPropertiesModalUID] = useState<string | null>(null);
@@ -209,6 +218,10 @@ export const FileBrowser = ({
   const [tagFilterVersion, setTagFilterVersion] = useState(0);
   const [edgeResolverAddress, setEdgeResolverAddress] = useState<`0x${string}` | null>(null);
   const [tagsRoot, setTagsRoot] = useState<`0x${string}` | null>(null);
+  // Anchor UIDs tagged `system` by any active lens (`/tags/system`). Used to
+  // hide system files from the grid unless `showSystemFiles` is set (Task 14).
+  // Lowercased UIDs; empty when /tags/system doesn't exist or no lenses.
+  const [systemSet, setSystemSet] = useState<Set<string>>(new Set());
   // Folder-delete confirmation. `pinUIDs` (file placements, cardinality 1) and
   // `tagUIDs` (folder visibility, cardinality N) are populated by scanSubtree.
   // Tracked separately because they live under different EAS schemas (PIN vs TAG)
@@ -638,6 +651,56 @@ export const FileBrowser = ({
     contractName: "Indexer",
     functionName: "sortsAnchorUID",
   });
+
+  // Root anchor — needed by resolveSystemAnchorSet to walk to /tags/system.
+  const { data: rootUID } = useScaffoldReadContract({
+    contractName: "Indexer",
+    functionName: "rootAnchorUID",
+  });
+
+  // System-anchor set for the current directory (Task 14). Independent of the
+  // descriptive-label drawerTagFilters/matchesUID path: this resolves the
+  // `/tags/system` kernel-active anchor-target set via resolveSystemAnchorSet
+  // and is applied as a final visibility filter when showSystemFiles is off.
+  // Keyed on the same inputs the directory listing keys on (anchor, lenses,
+  // dataSchema). lensKey is the joined-address string so a fresh array identity
+  // doesn't re-run the effect when the actual lenses are unchanged.
+  const lensKey = lensAddresses.join(",");
+  useEffect(() => {
+    if (
+      !publicClient ||
+      !indexerInfo ||
+      !edgeResolverAddress ||
+      !rootUID ||
+      !dataSchemaUID ||
+      lensAddresses.length === 0
+    ) {
+      setSystemSet(new Set());
+      return;
+    }
+    let cancelled = false;
+    resolveSystemAnchorSet({
+      publicClient,
+      indexerAddress: indexerInfo.address as `0x${string}`,
+      indexerAbi: indexerInfo.abi as Abi,
+      edgeResolverAddress,
+      edgeResolverAbi: EDGE_RESOLVER_ABI as unknown as Abi,
+      rootUID: rootUID as `0x${string}`,
+      dataSchemaUID: dataSchemaUID as `0x${string}`,
+      lensAddresses,
+    })
+      .then(set => {
+        if (!cancelled) setSystemSet(set);
+      })
+      .catch(() => {
+        if (!cancelled) setSystemSet(new Set());
+      });
+    return () => {
+      cancelled = true;
+    };
+    // lensKey stands in for lensAddresses (stable string key); see comment above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [publicClient, indexerInfo, edgeResolverAddress, rootUID, dataSchemaUID, currentAnchorUID, lensKey]);
 
   // Staleness for the active sort on this anchor — drives the preview banner count
   const { data: activeSortStaleness } = useScaffoldReadContract({
@@ -1071,6 +1134,15 @@ export const FileBrowser = ({
     return true;
   });
 
+  // Hide system files (Task 14) unless the user opted in. Applied as a final,
+  // independent pass after the descriptive-label tag filter above — system
+  // membership comes from the `/tags/system` set (systemSet, anchor-target,
+  // kernel-active), NOT from drawerTagFilters/matchesUID. Everything downstream
+  // (sortedItems, fileItems, the rendered grid, empty-state, pagination) reads
+  // visibleItems so the toggle composes with sort/tag-filter rather than
+  // fighting them.
+  const visibleItems = showSystemFiles ? items : items?.filter((it: any) => !systemSet.has(it.uid.toLowerCase()));
+
   // Keyboard handler ref — lets the useEffect stay above early returns while
   // the actual handler logic (which depends on computed values) is set later.
   const keyHandlerRef = useRef<((e: KeyboardEvent) => void) | null>(null);
@@ -1087,12 +1159,12 @@ export const FileBrowser = ({
   // Items not yet in the sorted list appear at the end in their original order.
   // Falls back to client-side preview sort when on-chain sort has no data.
   const sortedItems: any[] | undefined = (() => {
-    if (!items) return items;
+    if (!visibleItems) return visibleItems;
 
     // Client-side preview sort: use locally-fetched sort keys
     if (isPreviewSort && previewSortKeys.size > 0 && (!sortedUIDs || sortedUIDs.length === 0)) {
       const dir = reverseOrder ? -1 : 1;
-      return [...items].sort((a: any, b: any) => {
+      return [...visibleItems].sort((a: any, b: any) => {
         const aKey = previewSortKeys.get(a.uid?.toLowerCase() ?? "");
         const bKey = previewSortKeys.get(b.uid?.toLowerCase() ?? "");
         if (aKey && bKey) {
@@ -1107,10 +1179,10 @@ export const FileBrowser = ({
     }
 
     // On-chain sorted data
-    if (!sortedUIDs) return items;
+    if (!sortedUIDs) return visibleItems;
     const sortIndexMap = new Map(sortedUIDs.map((uid, idx) => [uid.toLowerCase(), idx]));
     const dir = reverseOrder ? -1 : 1;
-    return [...items].sort((a: any, b: any) => {
+    return [...visibleItems].sort((a: any, b: any) => {
       const ai = sortIndexMap.get(a.uid?.toLowerCase() ?? "");
       const bi = sortIndexMap.get(b.uid?.toLowerCase() ?? "");
       if (ai !== undefined && bi !== undefined) return (ai - bi) * dir;
@@ -1153,7 +1225,7 @@ export const FileBrowser = ({
 
   // File-only items for gallery navigation
   const fileItems =
-    (sortedItems ?? items)?.filter(
+    (sortedItems ?? visibleItems)?.filter(
       (item: any) => isFile(item, dataSchemaUID) && item.uid !== tagsRoot && item.uid !== sortsAnchorUID,
     ) ?? [];
 
@@ -1585,7 +1657,7 @@ export const FileBrowser = ({
           </div>
         )}
         <div className="grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-4 p-4">
-          {(sortedItems ?? items)
+          {(sortedItems ?? visibleItems)
             ?.filter(
               (item: any) =>
                 (isTopic(item) || isFile(item, dataSchemaUID) || isList(item, listSchemaUID)) &&
@@ -1694,7 +1766,7 @@ export const FileBrowser = ({
               );
             })}
 
-          {(sortedItems ?? items)?.length === 0 && (
+          {(sortedItems ?? visibleItems)?.length === 0 && (
             <div className="col-span-full text-center text-gray-500">
               {tagFilteredUIDs !== null
                 ? `No items match tag filter: "${tagFilter}"`
