@@ -1121,8 +1121,15 @@ export const CreateItemModal = ({
       };
 
       await bindProperty("contentType", contentType);
-      await bindProperty("contentHash", contentHash);
-      await bindProperty("size", fileSize.toString());
+      // Only bind contentHash/size when they're REAL (a computed hash / measured size), never the
+      // skipped-or-failed-fetch sentinels. For a pasted link where the fetch was skipped/failed or the
+      // file was too large to hash, contentHash falls back to ZeroHash (L956) and/or size to 0n (L957);
+      // binding those would publish bogus reserved-key claims that group unrelated unknown files under
+      // the zero hash / zero size for dedup/integrity reads. Skip the PROPERTY entirely when unknown —
+      // no "unknown" sentinel attestation. The two are independent: a too-large paste link has a known
+      // size (from Content-Length) but no hash.
+      if (contentHash !== (ethers.ZeroHash as `0x${string}`)) await bindProperty("contentHash", contentHash);
+      if (fileSize > 0n) await bindProperty("size", fileSize.toString());
 
       const transportAnchorUID = await resolveTransportAnchor(transportName);
       if (!transportAnchorUID) {
