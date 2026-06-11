@@ -47,6 +47,13 @@ async function readProxyAdmin(proxy: string): Promise<string> {
   return ethers.getAddress("0x" + raw.slice(-40));
 }
 
+// EIP-1967 implementation slot — bytes32(uint256(keccak256("eip1967.proxy.implementation")) - 1).
+const EIP1967_IMPL_SLOT = "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc";
+async function readImplementation(proxy: string): Promise<string> {
+  const raw = await ethers.provider.getStorage(proxy, EIP1967_IMPL_SLOT);
+  return ethers.getAddress("0x" + raw.slice(-40));
+}
+
 export interface SafeOrchestrationResult extends OrchestrationResult {
   /// FIX A (PR #24): discriminant — "execute" means the batches were signed + executed in-process
   /// (fork rehearsal). The real-network build/propose path returns a `SafeProposeResult` instead.
@@ -340,13 +347,19 @@ export async function orchestrateViaSafe(
 /// (we read the realized proxies); the load-bearing checks (initialize-locked, self-UID getters,
 /// getEAS, golden-vector field strings) all run against the live Safe-keyed proxies.
 ///
-/// PR #24 P2: takes the IMPL-FREE PredictedPlan. A Phase-1 propose resume does NOT deploy impls (no
-/// remaining batch consumes them), so there is no impl address to set — `impl` is left empty. The verify
-/// gate's impl-direct-initialize check is then skipped (it requires an impl handle); every other gate
-/// check (proxy 2nd-initialize-locked, self-UID getters, getEAS, golden-vector field strings) runs
-/// against the live Safe-keyed proxies regardless. The impl's `_disableInitializers` lock is a static
-/// property of the impl bytecode (verified directly on a Phase-0 deploy and by the golden-vector test);
-/// it cannot regress on a resume where the proxies are already live and unchanged.
+/// PR #24 P2: takes the IMPL-FREE PredictedPlan (a Phase-1 propose resume does NOT *deploy* impls — no
+/// remaining batch consumes them). To still verify the impls Batch 1 wired, we read each live proxy's
+/// EIP-1967 implementation slot and pass that address to the gate, so the impl-direct-`initialize()`
+/// (_disableInitializers) check runs against the REAL impl behind each proxy.
+///
+/// PR #24 P2 (50yr-review, follow-up): previously `impl` was blanked here, so on the Safe ceremony the
+/// impl-direct lock check NEVER ran — Phase 0 only emits Batch 1 (it does not run the gate), and Phase 1
+/// blanked the impl. The EOA path checks the impl at create3-deploy time, but the Safe path deploys impls
+/// inside the MultiSend, never through that checked helper. So an impl artifact missing
+/// `_disableInitializers()` could have had schemas registered against its proxy unverified. Reading the
+/// 1967 impl slot from the live proxy closes that — the gate now asserts the locked impl before the
+/// permanent register on every path. (Other gate checks — proxy 2nd-initialize, self-UID getters, cross-
+/// ref UIDs, getEAS, golden vectors — already ran against the live Safe-keyed proxies.)
 async function buildDeploysFromOnchain(
   deployer: Signer,
   plan: PredictedPlan,
@@ -357,9 +370,13 @@ async function buildDeploysFromOnchain(
     const proxy = name === "SystemAccount" ? plan.systemAccount : plan.proxies[name as ResolverName];
     const code = await ethers.provider.getCode(proxy);
     if (code === "0x") throw new Error(`SAFE-DEPLOY (propose): no code at Safe-keyed predicted ${proxy} for ${name}`);
+    const impl = await readImplementation(proxy);
+    if (impl === ethers.ZeroAddress) {
+      throw new Error(`SAFE-DEPLOY (propose): proxy ${proxy} for ${name} has a zero EIP-1967 implementation slot`);
+    }
     deploys[name] = {
       resolver: name,
-      impl: "", // PR #24 P2: a Phase-1 resume deploys no impls — verify gate skips the impl-direct check.
+      impl, // live impl behind the proxy → verify gate runs the impl-direct `_disableInitializers` check.
       proxy,
       predicted: proxy,
       proxyAdmin: await readProxyAdmin(proxy),

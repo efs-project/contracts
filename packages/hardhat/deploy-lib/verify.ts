@@ -43,12 +43,11 @@ export async function runVerifyGate(input: VerifyInput): Promise<void> {
 
   // (2) initialize() locked: a 2nd call on each proxy reverts, and (when an impl handle is available) the
   //     IMPL's direct initialize reverts (_disableInitializers in the base constructor).
-  //     PR #24 P2: a Phase-1 Safe propose resume deploys no impls (no remaining batch consumes them), so
-  //     `d.impl` is empty there — the impl-direct check is skipped. The impl's _disableInitializers lock
-  //     is a static property of the impl bytecode (checked directly on every Phase-0 deploy and by the
-  //     golden-vector test); it cannot regress on a resume where the live proxies are already deployed.
-  //     The proxy 2nd-initialize lock — the gate that actually protects the to-be-registered proxies —
-  //     always runs.
+  //     PR #24 P2 (50yr-review): the Safe propose path now reads each live proxy's EIP-1967 implementation
+  //     slot (buildDeploysFromOnchain) and passes it here, so the impl-direct check runs on the Safe
+  //     ceremony too — closing the gap where Safe-path impls (deployed inside the Batch-1 MultiSend, not
+  //     via the checked create3 helper) were never verified initializer-locked before register. `d.impl`
+  //     is only empty in degenerate cases (none on the real paths); the check is skipped iff absent.
   console.log("  [verify] initialize() locked (2nd proxy call + impl direct call revert)...");
   for (const d of Object.values(deploys)) {
     const proxy = await ethers.getContractAt(d.resolver, d.proxy, deployer);
