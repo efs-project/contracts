@@ -36,7 +36,11 @@ const deployEfsViews: DeployFunction = async function (hre: HardhatRuntimeEnviro
 
 export default deployEfsViews;
 deployEfsViews.tags = ["EFSViews"];
-// Depends on the core foundation. When run via the EFSViews tag alone (deploy:efs-views), the
-// dependency is a no-op if EFSCore already ran (idempotent); the explicit guard in lib/views.ts
-// produces a clear error if the proxies aren't present.
-deployEfsViews.dependencies = ["EFSCore"];
+// Intentionally NO `dependencies = ["EFSCore"]`. hardhat-deploy runs a selected tag's dependencies
+// first, so depending on EFSCore would make `yarn deploy:efs-views` re-enter the core deploy
+// (00_efs_core defaults EFS_DEPLOY_MODE=full, no skip guard) — failing on already-used CREATE3 salts
+// on a normal post-freeze view redeploy, or unexpectedly running the irreversible register/transfer
+// ceremony if the core doesn't exist yet. Instead this binds only to the already-saved core
+// deployments: deployViews() in deploy-lib/views.ts fails with a clear "foundation not found" error
+// if the proxies aren't present. In a full `yarn deploy`, 00_efs_core still runs before 10 by
+// filename order, so the normal one-shot path is unaffected.
