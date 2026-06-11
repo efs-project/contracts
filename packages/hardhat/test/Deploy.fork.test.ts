@@ -1,8 +1,8 @@
 import { expect } from "chai";
 import { ethers, network } from "hardhat";
-import { CREATEX_ADDRESS, EAS_ADDRESS } from "../deploy/lib/addresses";
-import { orchestrate } from "../deploy/lib/orchestrate";
-import { RESOLVERS, SCHEMAS } from "../deploy/lib/schemas";
+import { CREATEX_ADDRESS, EAS_ADDRESS } from "../deploy-lib/addresses";
+import { orchestrate } from "../deploy-lib/orchestrate";
+import { RESOLVERS, SCHEMAS } from "../deploy-lib/schemas";
 
 // Fork rehearsal for the Phase D orchestrated CREATE3 deploy (docs/DEPLOYMENT.md §3, ADR-0048).
 //

@@ -95,6 +95,11 @@ function getContractDataFromDeployments() {
       const inheritedFunctions = metadata ? getInheritedFunctions(JSON.parse(metadata).sources, contractName) : {};
       contracts[contractName] = { address, abi, inheritedFunctions };
     }
+    // Skip a chain that has a `.chainId` marker but NO contract artifacts. The CI Lint job's BARE
+    // hardhat node (no CreateX → core skips, 07/08 skip) can leave an empty `deployments/localhost`
+    // dir; without this guard the output would be `{ 31337: {} }`, which is non-empty and would
+    // CLOBBER the committed deployedContracts.ts to empty. An empty chain contributes nothing.
+    if (Object.keys(contracts).length === 0) continue;
     output[chainId] = contracts;
   }
   return output;

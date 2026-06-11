@@ -18,7 +18,7 @@
 
 import { HardhatRuntimeEnvironment } from "hardhat/types";
 import { Contract } from "ethers";
-import { redeployIfArgsChanged } from "../../deploy-utils";
+import { redeployIfArgsChanged } from "../deploy-utils";
 import { EAS_ADDRESS, SCHEMA_REGISTRY_ADDRESS } from "./addresses";
 
 export interface ViewsDeployResult {

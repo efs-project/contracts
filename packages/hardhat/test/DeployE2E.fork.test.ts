@@ -3,10 +3,10 @@ import fs from "fs";
 import path from "path";
 import { Contract, ZeroAddress, ZeroHash } from "ethers";
 import hre, { ethers, network, deployments } from "hardhat";
-import { CREATEX_ADDRESS, EAS_ADDRESS } from "../deploy/lib/addresses";
-import { orchestrate } from "../deploy/lib/orchestrate";
-import { ResolverName } from "../deploy/lib/schemas";
-import { deployViews } from "../deploy/lib/views";
+import { CREATEX_ADDRESS, EAS_ADDRESS } from "../deploy-lib/addresses";
+import { orchestrate } from "../deploy-lib/orchestrate";
+import { ResolverName } from "../deploy-lib/schemas";
+import { deployViews } from "../deploy-lib/views";
 
 // Full round-trip end-to-end fork test (the deferred "D2" e2e). Proves the deployed CREATE3 proxies
 // (frozen foundation) + the stateless read views (EFSRouter / EFSFileView / ListReader) actually work
@@ -112,8 +112,17 @@ describe("DeployE2E.fork — frozen foundation + views round-trip", function () 
     );
 
     // Bootstrap scaffolding (root) is authored by the SystemAccount address (attester check).
-    const easRead = new ethers.Contract(EAS_ADDRESS, [...EAS_IFACE, "function getAttestation(bytes32) view returns (tuple(bytes32 uid,bytes32 schema,uint64 time,uint64 expirationTime,uint64 revocationTime,bytes32 refUID,address recipient,address attester,bool revocable,bytes data))"], deployer);
-    const rootForAttester: string = await (await ethers.getContractAt("EFSIndexer", proxies.EFSIndexer, deployer)).rootAnchorUID();
+    const easRead = new ethers.Contract(
+      EAS_ADDRESS,
+      [
+        ...EAS_IFACE,
+        "function getAttestation(bytes32) view returns (tuple(bytes32 uid,bytes32 schema,uint64 time,uint64 expirationTime,uint64 revocationTime,bytes32 refUID,address recipient,address attester,bool revocable,bytes data))",
+      ],
+      deployer,
+    );
+    const rootForAttester: string = await (
+      await ethers.getContractAt("EFSIndexer", proxies.EFSIndexer, deployer)
+    ).rootAnchorUID();
     const rootAtt = await easRead.getAttestation(rootForAttester);
     expect(rootAtt.attester.toLowerCase(), "root anchor authored by SystemAccount").to.equal(
       result.systemAccount.toLowerCase(),

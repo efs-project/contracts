@@ -2,7 +2,7 @@ import { HardhatRuntimeEnvironment } from "hardhat/types";
 import { DeployFunction } from "hardhat-deploy/types";
 import { Contract } from "ethers";
 import { redeployIfArgsChanged } from "../deploy-utils";
-import { legacySuperseded } from "./lib/superseded";
+import { legacySuperseded } from "../deploy-lib/superseded";
 
 // EAS Addresses (Sepolia) — same as 01_indexer.ts
 const EAS_ADDRESS = "0xC2679fBD37d54388Ce493F1DB75320D236e1815e";

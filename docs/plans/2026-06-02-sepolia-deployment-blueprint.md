@@ -45,7 +45,7 @@ These are the "must-fix-before-Sepolia" items, all captured in `2026-06-02-schem
 1. Immutables → ERC-7201 storage in guarded `initialize()`; `_disableInitializers()` in impls; keep only `_eas` immutable.
 2. **ListEntryResolver self-UID** computed in `initialize()` (proxy address) + on-chain `listEntrySchemaUID()` getter + verify-gate read-and-assert.
 3. **CREATE3 spike** (CreateX live on Sepolia? exact `deployCreate3AndInit` sig?) + committed salts → realized == predicted.
-4. **Golden-vector test**: contract field-string constants == `deploy/lib/schemas.ts` == on-chain registered UID.
+4. **Golden-vector test**: contract field-string constants == `deploy-lib/schemas.ts` == on-chain registered UID.
 5. **DATA reshape**: delete the `abi.decode` (reverts on empty), migrate the `DataCreated` event, register DATA as `""`, fix ripple consumers.
 6. **`getEAS()` guard** post-deploy/post-upgrade; **storage-layout `validateUpgrade`** + **upgrade-with-state** corruption test.
 7. **Human freeze-table / FREEZE_LEDGER sign-off** before any registration.

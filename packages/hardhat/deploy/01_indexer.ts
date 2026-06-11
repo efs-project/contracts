@@ -1,7 +1,7 @@
 import { HardhatRuntimeEnvironment } from "hardhat/types";
 import { DeployFunction } from "hardhat-deploy/types";
 import { Contract } from "ethers";
-import { legacySuperseded } from "./lib/superseded";
+import { legacySuperseded } from "../deploy-lib/superseded";
 
 // EAS Addresses (Sepolia) - Assuming forking or consistent addresses
 const EAS_ADDRESS = "0xC2679fBD37d54388Ce493F1DB75320D236e1815e";
@@ -52,7 +52,7 @@ const deployEFSIndexer: DeployFunction = async function (hre: HardhatRuntimeEnvi
   const schemas = [
     { name: "ANCHOR", definition: "string name, bytes32 schemaUID", revocable: false },
     // PROPERTY is NON-revocable (ADR-0052) — dumb, shared, interned content (an "anchor for a
-    // string"); the revocable claim is the PIN, not the value. Must match deploy/lib/schemas.ts
+    // string"); the revocable claim is the PIN, not the value. Must match deploy-lib/schemas.ts
     // and the golden vector.
     { name: "PROPERTY", definition: "string value", revocable: false },
     // DATA is an empty schema — pure file identity (ADR-0049). No fields; contentHash/size

@@ -20,7 +20,6 @@ describe("AliasResolver — REDIRECT (ADR-0050)", function () {
   let eas: EAS;
   let registry: SchemaRegistry;
   let alice: Signer;
-  let bob: Signer;
   let dataSchemaUID: string;
   let anchorSchemaUID: string;
   let otherSchemaUID: string; // a non-DATA, non-ANCHOR schema (for negative typing tests)
@@ -57,7 +56,14 @@ describe("AliasResolver — REDIRECT (ADR-0050)", function () {
   const mintData = async (signer: Signer): Promise<string> => {
     const tx = await eas.connect(signer).attest({
       schema: dataSchemaUID,
-      data: { recipient: ZeroAddress, expirationTime: NO_EXPIRATION, revocable: false, refUID: ZERO_BYTES32, data: "0x", value: 0n },
+      data: {
+        recipient: ZeroAddress,
+        expirationTime: NO_EXPIRATION,
+        revocable: false,
+        refUID: ZERO_BYTES32,
+        data: "0x",
+        value: 0n,
+      },
     });
     return getUID(await tx.wait());
   };
@@ -82,7 +88,14 @@ describe("AliasResolver — REDIRECT (ADR-0050)", function () {
   const mintOther = async (signer: Signer): Promise<string> => {
     const tx = await eas.connect(signer).attest({
       schema: otherSchemaUID,
-      data: { recipient: ZeroAddress, expirationTime: NO_EXPIRATION, revocable: false, refUID: ZERO_BYTES32, data: "0x", value: 0n },
+      data: {
+        recipient: ZeroAddress,
+        expirationTime: NO_EXPIRATION,
+        revocable: false,
+        refUID: ZERO_BYTES32,
+        data: "0x",
+        value: 0n,
+      },
     });
     return getUID(await tx.wait());
   };
@@ -104,7 +117,7 @@ describe("AliasResolver — REDIRECT (ADR-0050)", function () {
   };
 
   beforeEach(async function () {
-    [alice, bob] = await ethers.getSigners();
+    [alice] = await ethers.getSigners();
     const aliceAddr = await alice.getAddress();
 
     const RegistryFactory = await ethers.getContractFactory("SchemaRegistry");
@@ -126,7 +139,10 @@ describe("AliasResolver — REDIRECT (ADR-0050)", function () {
     const n = await ethers.provider.getTransactionCount(aliceAddr);
     // impl = n+0, proxy = n+1.
     const futureProxyAddr = ethers.getCreateAddress({ from: aliceAddr, nonce: n + 1 });
-    redirectSchemaUID = ethers.solidityPackedKeccak256(["string", "address", "bool"], [REDIRECT_SCHEMA, futureProxyAddr, true]);
+    redirectSchemaUID = ethers.solidityPackedKeccak256(
+      ["string", "address", "bool"],
+      [REDIRECT_SCHEMA, futureProxyAddr, true],
+    );
 
     aliasResolver = await deployResolverProxy<AliasResolver>(
       "AliasResolver",
@@ -147,7 +163,10 @@ describe("AliasResolver — REDIRECT (ADR-0050)", function () {
       const onChain = await aliasResolver.redirectSchemaUID();
       expect(onChain).to.equal(redirectSchemaUID);
       const proxyAddr = await aliasResolver.getAddress();
-      const offChain = ethers.solidityPackedKeccak256(["string", "address", "bool"], [REDIRECT_SCHEMA, proxyAddr, true]);
+      const offChain = ethers.solidityPackedKeccak256(
+        ["string", "address", "bool"],
+        [REDIRECT_SCHEMA, proxyAddr, true],
+      );
       expect(onChain).to.equal(offChain);
       // It is a real EAS-registered schema with this proxy as resolver and revocable=true.
       const rec = await registry.getSchema(onChain);

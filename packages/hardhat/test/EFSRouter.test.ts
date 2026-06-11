@@ -91,7 +91,7 @@ describe("EFSRouter Web3 Capabilities", function () {
       ["string", "address", "bool"],
       ["string name, bytes32 schemaUID", futureIndexerAddr, false],
     );
-    // PROPERTY is non-revocable interned content (ADR-0052) — matches deploy/lib/schemas.ts + golden vector.
+    // PROPERTY is non-revocable interned content (ADR-0052) — matches deploy-lib/schemas.ts + golden vector.
     propertySchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
       ["string value", futureIndexerAddr, false],

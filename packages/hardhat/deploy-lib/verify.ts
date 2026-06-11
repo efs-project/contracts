@@ -28,7 +28,7 @@ async function expectRevert(p: Promise<unknown>, label: string): Promise<void> {
 export async function runVerifyGate(input: VerifyInput): Promise<void> {
   const { deploys, schemaUIDs, deployer } = input;
 
-  // (1) Golden-vector: the contract field-string constants must match deploy/lib/schemas.ts, so the
+  // (1) Golden-vector: the contract field-string constants must match deploy-lib/schemas.ts, so the
   //     UIDs we computed equal what the contracts self-derive. We assert the two self-deriving
   //     resolvers below; the rest are covered by the golden-vector test (test/Deploy.fork.test.ts).
   console.log("  [verify] realized == predicted (per proxy)...");

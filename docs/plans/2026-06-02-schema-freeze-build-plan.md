@@ -38,12 +38,12 @@
 
 - [ ] **0.1 deps (Tier-2, log in QUESTIONS.md):** `yarn add -D @openzeppelin/contracts-upgradeable@^5.0.2 @openzeppelin/hardhat-upgrades`; `import "@openzeppelin/hardhat-upgrades"` in `hardhat.config.ts`. Confirm `upgrades` namespace + `validateUpgrade` available. Commit.
 - [ ] **0.2 CreateX spike (BLOCKING — critique theme 5):** Verify the CreateX factory is deployed on **Sepolia** at its canonical address (`0xba5Ed099633D3B313e4D5F7bdc1305d3c28ba5Ed`) and on the pinned fork; fetch the **exact** `deployCreate3` / `deployCreate3AndInit` signatures from CreateX source/ABI and confirm `deployCreate3AndInit` lets us pass the proxy constructor calldata for atomic deploy+init. Record a per-chain availability matrix in `docs/decisions.md`. **If CreateX is absent on a target chain, STOP and escalate** (fallback: deploy our own CreateX or use plain CREATE2 with frozen init-code). Decide TS-only (ethers calls CreateX) vs a Solidity helper; vendor `contracts/external/ICreateX.sol` only if Solidity-side calls are needed.
-- [ ] **0.3 salt scheme:** define per-resolver salts as committed constants in `deploy/lib/create3.ts` (e.g. permissioned salt = `deployer ++ entropy`); document they are one-time-chosen and frozen.
+- [ ] **0.3 salt scheme:** define per-resolver salts as committed constants in `deploy-lib/create3.ts` (e.g. permissioned salt = `deployer ++ entropy`); document they are one-time-chosen and frozen.
 
 ---
 
 ## File structure
-**New:** `contracts/base/EFSUpgradeableResolver.sol`, `contracts/AliasResolver.sol`, `contracts/external/ICreateX.sol` (if needed), `deploy/lib/schemas.ts`, `deploy/lib/create3.ts`, `deploy/lib/verify.ts`, `test/{Upgradeability,UpgradeWithState,GoldenVectors,AliasResolver,Freeze.e2e}.test.ts`, `test/helpers/deployProxy.ts`.
+**New:** `contracts/base/EFSUpgradeableResolver.sol`, `contracts/AliasResolver.sol`, `contracts/external/ICreateX.sol` (if needed), `deploy-lib/schemas.ts`, `deploy-lib/create3.ts`, `deploy-lib/verify.ts`, `test/{Upgradeability,UpgradeWithState,GoldenVectors,AliasResolver,Freeze.e2e}.test.ts`, `test/helpers/deployProxy.ts`.
 **Modified:** the 5 resolvers; deploy `01/04/05/09` + new `0X_redirect`; `hardhat.config.ts`; `specs/02`, `specs/overview.md`; events in `EFSIndexer.sol`.
 
 ---
@@ -115,10 +115,10 @@ abstract contract EFSUpgradeableResolver is SchemaResolver, Initializable {
 ---
 
 ## Phase D — deploy pipeline (CREATE3, register-LAST) + the verify gate
-**Files:** `deploy/lib/{schemas,create3,verify}.ts`; rewrite `deploy/01/04/05/09` + new `0X_redirect`; `test/GoldenVectors.test.ts`.
-- [ ] **D1 single-source schema strings:** `deploy/lib/schemas.ts` exports each field string + revocable; `ListEntryResolver.LIST_ENTRY_DEFINITION` is the canonical Solidity copy; golden-vector test asserts byte-equality. BLOB/NAMING/SORT_INFO removed from the registered set.
+**Files:** `deploy-lib/{schemas,create3,verify}.ts`; rewrite `deploy/01/04/05/09` + new `0X_redirect`; `test/GoldenVectors.test.ts`.
+- [ ] **D1 single-source schema strings:** `deploy-lib/schemas.ts` exports each field string + revocable; `ListEntryResolver.LIST_ENTRY_DEFINITION` is the canonical Solidity copy; golden-vector test asserts byte-equality. BLOB/NAMING/SORT_INFO removed from the registered set.
 - [ ] **D2 CREATE3 helper:** `deployProxyCreate3(implFactory, salt, initCalldata, owner)` → deploy impl → CreateX `deployCreate3AndInit` deploys `TransparentUpgradeableProxy(impl, owner, initCalldata)` at the salt-derived address **and inits in one tx** → assert `realized == predicted` (abort on mismatch). Salts from 0.3.
-- [ ] **D3 verify gate** `deploy/lib/verify.ts` (run after each proxy, before any register): (1) realized==predicted; (2) `initialize` reverts on 2nd call; (3) impl `initialize()` reverts directly; (4) **read on-chain self-UID getters** (ListEntry `listEntrySchemaUID()`, others) and assert `== keccak256(fieldString, proxyAddr, revocable)` (critique theme 2 — read, don't recompute); (5) **`proxy.getEAS() == EXPECTED_EAS_FOR_CHAIN`** (theme 8); (6) `wireContracts`/`setTransportsAnchor` set; (7) `validateUpgrade` storage-layout clean.
+- [ ] **D3 verify gate** `deploy-lib/verify.ts` (run after each proxy, before any register): (1) realized==predicted; (2) `initialize` reverts on 2nd call; (3) impl `initialize()` reverts directly; (4) **read on-chain self-UID getters** (ListEntry `listEntrySchemaUID()`, others) and assert `== keccak256(fieldString, proxyAddr, revocable)` (critique theme 2 — read, don't recompute); (5) **`proxy.getEAS() == EXPECTED_EAS_FOR_CHAIN`** (theme 8); (6) `wireContracts`/`setTransportsAnchor` set; (7) `validateUpgrade` storage-layout clean.
 - [ ] **D4 golden-vector test** `test/GoldenVectors.test.ts`: after deploy+init, for each schema **read the deployed value on-chain** and assert it equals the local `solidityPackedKeccak256(["string","address","bool"],[field, proxyAddr, revocable])` AND the EAS-registered UID. Assert Solidity `LIST_ENTRY_DEFINITION` == `schemas.ts`. 
 - [ ] **D5 register-LAST + wire + live smoke:** only after all proxies pass D3 → register all 9 with `resolver = proxy`, assert `getSchema(uid).resolver == proxy` + no conflicting prior registration → wire partners → push one real attestation through **every** schema (onAttest no revert + expected index written) + one revoke per revocable schema (exercise a rejection branch too).
 - [ ] **D6 rollback procedure (theme 10):** document in `deploy/README.md` — if any verify check fails, **halt before register-last**, capture the failing resolver/check, and on a clean network wipe+redeploy from the salt (no real data pre-freeze). Never register against an unverified proxy.

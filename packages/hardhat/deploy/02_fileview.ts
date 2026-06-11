@@ -2,7 +2,7 @@ import { HardhatRuntimeEnvironment } from "hardhat/types";
 import { DeployFunction } from "hardhat-deploy/types";
 import { Contract } from "ethers";
 import { redeployIfArgsChanged } from "../deploy-utils";
-import { legacySuperseded } from "./lib/superseded";
+import { legacySuperseded } from "../deploy-lib/superseded";
 
 const deployEFSFileView: DeployFunction = async function (hre: HardhatRuntimeEnvironment) {
   // AGENT-NOTE (Phase D, I-3): EFSFileView is a stateless view (redeployable, in no UID). On the

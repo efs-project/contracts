@@ -13,6 +13,1269 @@ import { GenericContractsDeclaration } from "~~/utils/scaffold-eth/contract";
  */
 const externalContracts = {
     31337: {
+      // EFSSortOverlay / NameSort / TimestampSort / SchemaNameIndex: deferred by the Phase D
+      // schema-freeze CREATE3 deploy (SORT_INFO + schema-name index are not in the frozen set, so
+      // deployedContracts.ts no longer carries them). The Scaffold-ETH debug UI still references them
+      // for the (deferred) sort + schema-name views; keeping their ABIs here — the same pattern as
+      // OldIndexer below — preserves the debug UI's type-checks. The recorded addresses are the legacy
+      // local-deploy ones; on the canonical fork they're absent, and the UI's query-enabled guards
+      // already no-op when the contract isn't deployed. PR #24.
+      "EFSSortOverlay": {
+        "address": "0x806c44f027a6f6ee75aDe3F6DBf1c6DB496FfC67",
+        "abi": [
+          {
+            "inputs": [
+              {
+                "internalType": "contract IEAS",
+                "name": "eas",
+                "type": "address",
+              },
+              {
+                "internalType": "bytes32",
+                "name": "sortInfoSchemaUID",
+                "type": "bytes32",
+              },
+              {
+                "internalType": "contract EFSIndexer",
+                "name": "_indexer",
+                "type": "address",
+              },
+            ],
+            "stateMutability": "nonpayable",
+            "type": "constructor",
+          },
+          {
+            "inputs": [],
+            "name": "AccessDenied",
+            "type": "error",
+          },
+          {
+            "inputs": [],
+            "name": "ArrayLengthMismatch",
+            "type": "error",
+          },
+          {
+            "inputs": [],
+            "name": "InsufficientValue",
+            "type": "error",
+          },
+          {
+            "inputs": [],
+            "name": "InvalidEAS",
+            "type": "error",
+          },
+          {
+            "inputs": [],
+            "name": "InvalidItem",
+            "type": "error",
+          },
+          {
+            "inputs": [],
+            "name": "InvalidLength",
+            "type": "error",
+          },
+          {
+            "inputs": [],
+            "name": "InvalidPosition",
+            "type": "error",
+          },
+          {
+            "inputs": [],
+            "name": "InvalidSortInfo",
+            "type": "error",
+          },
+          {
+            "inputs": [],
+            "name": "LimitTooLarge",
+            "type": "error",
+          },
+          {
+            "inputs": [],
+            "name": "NotPayable",
+            "type": "error",
+          },
+          {
+            "inputs": [],
+            "name": "Reentrant",
+            "type": "error",
+          },
+          {
+            "inputs": [],
+            "name": "StaleStartIndex",
+            "type": "error",
+          },
+          {
+            "inputs": [],
+            "name": "UnnecessaryReposition",
+            "type": "error",
+          },
+          {
+            "inputs": [],
+            "name": "UnsupportedSourceType",
+            "type": "error",
+          },
+          {
+            "anonymous": false,
+            "inputs": [
+              {
+                "indexed": true,
+                "internalType": "bytes32",
+                "name": "sortInfoUID",
+                "type": "bytes32",
+              },
+              {
+                "indexed": true,
+                "internalType": "bytes32",
+                "name": "parentAnchor",
+                "type": "bytes32",
+              },
+              {
+                "indexed": true,
+                "internalType": "bytes32",
+                "name": "itemUID",
+                "type": "bytes32",
+              },
+              {
+                "indexed": false,
+                "internalType": "bytes32",
+                "name": "newLeftNeighbour",
+                "type": "bytes32",
+              },
+              {
+                "indexed": false,
+                "internalType": "bytes32",
+                "name": "newRightNeighbour",
+                "type": "bytes32",
+              },
+            ],
+            "name": "ItemRepositioned",
+            "type": "event",
+          },
+          {
+            "anonymous": false,
+            "inputs": [
+              {
+                "indexed": true,
+                "internalType": "bytes32",
+                "name": "sortInfoUID",
+                "type": "bytes32",
+              },
+              {
+                "indexed": true,
+                "internalType": "bytes32",
+                "name": "parentAnchor",
+                "type": "bytes32",
+              },
+              {
+                "indexed": true,
+                "internalType": "bytes32",
+                "name": "itemUID",
+                "type": "bytes32",
+              },
+              {
+                "indexed": false,
+                "internalType": "bytes32",
+                "name": "leftNeighbour",
+                "type": "bytes32",
+              },
+              {
+                "indexed": false,
+                "internalType": "bytes32",
+                "name": "rightNeighbour",
+                "type": "bytes32",
+              },
+            ],
+            "name": "ItemSorted",
+            "type": "event",
+          },
+          {
+            "inputs": [],
+            "name": "DEFAULT_MAX_TRAVERSAL",
+            "outputs": [
+              {
+                "internalType": "uint256",
+                "name": "",
+                "type": "uint256",
+              },
+            ],
+            "stateMutability": "view",
+            "type": "function",
+          },
+          {
+            "inputs": [],
+            "name": "MAX_PAGE_SIZE",
+            "outputs": [
+              {
+                "internalType": "uint256",
+                "name": "",
+                "type": "uint256",
+              },
+            ],
+            "stateMutability": "view",
+            "type": "function",
+          },
+          {
+            "inputs": [],
+            "name": "SORT_INFO_SCHEMA_UID",
+            "outputs": [
+              {
+                "internalType": "bytes32",
+                "name": "",
+                "type": "bytes32",
+              },
+            ],
+            "stateMutability": "view",
+            "type": "function",
+          },
+          {
+            "inputs": [
+              {
+                "components": [
+                  {
+                    "internalType": "bytes32",
+                    "name": "uid",
+                    "type": "bytes32",
+                  },
+                  {
+                    "internalType": "bytes32",
+                    "name": "schema",
+                    "type": "bytes32",
+                  },
+                  {
+                    "internalType": "uint64",
+                    "name": "time",
+                    "type": "uint64",
+                  },
+                  {
+                    "internalType": "uint64",
+                    "name": "expirationTime",
+                    "type": "uint64",
+                  },
+                  {
+                    "internalType": "uint64",
+                    "name": "revocationTime",
+                    "type": "uint64",
+                  },
+                  {
+                    "internalType": "bytes32",
+                    "name": "refUID",
+                    "type": "bytes32",
+                  },
+                  {
+                    "internalType": "address",
+                    "name": "recipient",
+                    "type": "address",
+                  },
+                  {
+                    "internalType": "address",
+                    "name": "attester",
+                    "type": "address",
+                  },
+                  {
+                    "internalType": "bool",
+                    "name": "revocable",
+                    "type": "bool",
+                  },
+                  {
+                    "internalType": "bytes",
+                    "name": "data",
+                    "type": "bytes",
+                  },
+                ],
+                "internalType": "struct Attestation",
+                "name": "attestation",
+                "type": "tuple",
+              },
+            ],
+            "name": "attest",
+            "outputs": [
+              {
+                "internalType": "bool",
+                "name": "",
+                "type": "bool",
+              },
+            ],
+            "stateMutability": "payable",
+            "type": "function",
+          },
+          {
+            "inputs": [
+              {
+                "internalType": "bytes32",
+                "name": "sortInfoUID",
+                "type": "bytes32",
+              },
+              {
+                "internalType": "bytes32",
+                "name": "parentAnchor",
+                "type": "bytes32",
+              },
+              {
+                "internalType": "bytes32[]",
+                "name": "newItems",
+                "type": "bytes32[]",
+              },
+            ],
+            "name": "computeHints",
+            "outputs": [
+              {
+                "internalType": "bytes32[]",
+                "name": "leftHints",
+                "type": "bytes32[]",
+              },
+              {
+                "internalType": "bytes32[]",
+                "name": "rightHints",
+                "type": "bytes32[]",
+              },
+            ],
+            "stateMutability": "view",
+            "type": "function",
+          },
+          {
+            "inputs": [
+              {
+                "internalType": "bytes32",
+                "name": "sortInfoUID",
+                "type": "bytes32",
+              },
+              {
+                "internalType": "bytes32",
+                "name": "parentAnchor",
+                "type": "bytes32",
+              },
+            ],
+            "name": "getLastProcessedIndex",
+            "outputs": [
+              {
+                "internalType": "uint256",
+                "name": "",
+                "type": "uint256",
+              },
+            ],
+            "stateMutability": "view",
+            "type": "function",
+          },
+          {
+            "inputs": [
+              {
+                "internalType": "bytes32",
+                "name": "sortInfoUID",
+                "type": "bytes32",
+              },
+            ],
+            "name": "getSortConfig",
+            "outputs": [
+              {
+                "components": [
+                  {
+                    "internalType": "address",
+                    "name": "sortFunc",
+                    "type": "address",
+                  },
+                  {
+                    "internalType": "bytes32",
+                    "name": "targetSchema",
+                    "type": "bytes32",
+                  },
+                  {
+                    "internalType": "uint8",
+                    "name": "sourceType",
+                    "type": "uint8",
+                  },
+                ],
+                "internalType": "struct EFSSortOverlay.SortConfig",
+                "name": "",
+                "type": "tuple",
+              },
+            ],
+            "stateMutability": "view",
+            "type": "function",
+          },
+          {
+            "inputs": [
+              {
+                "internalType": "bytes32",
+                "name": "sortInfoUID",
+                "type": "bytes32",
+              },
+              {
+                "internalType": "bytes32",
+                "name": "parentAnchor",
+                "type": "bytes32",
+              },
+            ],
+            "name": "getSortHead",
+            "outputs": [
+              {
+                "internalType": "bytes32",
+                "name": "",
+                "type": "bytes32",
+              },
+            ],
+            "stateMutability": "view",
+            "type": "function",
+          },
+          {
+            "inputs": [
+              {
+                "internalType": "bytes32",
+                "name": "sortInfoUID",
+                "type": "bytes32",
+              },
+              {
+                "internalType": "bytes32",
+                "name": "parentAnchor",
+                "type": "bytes32",
+              },
+            ],
+            "name": "getSortLength",
+            "outputs": [
+              {
+                "internalType": "uint256",
+                "name": "",
+                "type": "uint256",
+              },
+            ],
+            "stateMutability": "view",
+            "type": "function",
+          },
+          {
+            "inputs": [
+              {
+                "internalType": "bytes32",
+                "name": "sortInfoUID",
+                "type": "bytes32",
+              },
+              {
+                "internalType": "bytes32",
+                "name": "parentAnchor",
+                "type": "bytes32",
+              },
+              {
+                "internalType": "bytes32",
+                "name": "itemUID",
+                "type": "bytes32",
+              },
+            ],
+            "name": "getSortNode",
+            "outputs": [
+              {
+                "components": [
+                  {
+                    "internalType": "bytes32",
+                    "name": "prev",
+                    "type": "bytes32",
+                  },
+                  {
+                    "internalType": "bytes32",
+                    "name": "next",
+                    "type": "bytes32",
+                  },
+                ],
+                "internalType": "struct EFSSortOverlay.Node",
+                "name": "",
+                "type": "tuple",
+              },
+            ],
+            "stateMutability": "view",
+            "type": "function",
+          },
+          {
+            "inputs": [
+              {
+                "internalType": "bytes32",
+                "name": "sortInfoUID",
+                "type": "bytes32",
+              },
+              {
+                "internalType": "bytes32",
+                "name": "parentAnchor",
+                "type": "bytes32",
+              },
+            ],
+            "name": "getSortStaleness",
+            "outputs": [
+              {
+                "internalType": "uint256",
+                "name": "",
+                "type": "uint256",
+              },
+            ],
+            "stateMutability": "view",
+            "type": "function",
+          },
+          {
+            "inputs": [
+              {
+                "internalType": "bytes32",
+                "name": "sortInfoUID",
+                "type": "bytes32",
+              },
+              {
+                "internalType": "bytes32",
+                "name": "parentAnchor",
+                "type": "bytes32",
+              },
+            ],
+            "name": "getSortTail",
+            "outputs": [
+              {
+                "internalType": "bytes32",
+                "name": "",
+                "type": "bytes32",
+              },
+            ],
+            "stateMutability": "view",
+            "type": "function",
+          },
+          {
+            "inputs": [
+              {
+                "internalType": "bytes32",
+                "name": "sortInfoUID",
+                "type": "bytes32",
+              },
+              {
+                "internalType": "bytes32",
+                "name": "parentAnchor",
+                "type": "bytes32",
+              },
+              {
+                "internalType": "bytes32",
+                "name": "startNode",
+                "type": "bytes32",
+              },
+              {
+                "internalType": "uint256",
+                "name": "limit",
+                "type": "uint256",
+              },
+              {
+                "internalType": "bool",
+                "name": "showRevoked",
+                "type": "bool",
+              },
+            ],
+            "name": "getSortedChunk",
+            "outputs": [
+              {
+                "internalType": "bytes32[]",
+                "name": "items",
+                "type": "bytes32[]",
+              },
+              {
+                "internalType": "bytes32",
+                "name": "nextCursor",
+                "type": "bytes32",
+              },
+            ],
+            "stateMutability": "view",
+            "type": "function",
+          },
+          {
+            "inputs": [
+              {
+                "internalType": "bytes32",
+                "name": "sortInfoUID",
+                "type": "bytes32",
+              },
+              {
+                "internalType": "bytes32",
+                "name": "parentAnchor",
+                "type": "bytes32",
+              },
+              {
+                "internalType": "bytes32",
+                "name": "startNode",
+                "type": "bytes32",
+              },
+              {
+                "internalType": "uint256",
+                "name": "limit",
+                "type": "uint256",
+              },
+              {
+                "internalType": "uint256",
+                "name": "maxTraversal",
+                "type": "uint256",
+              },
+              {
+                "internalType": "address[]",
+                "name": "attesters",
+                "type": "address[]",
+              },
+              {
+                "internalType": "bool",
+                "name": "showRevoked",
+                "type": "bool",
+              },
+            ],
+            "name": "getSortedChunkByAddressList",
+            "outputs": [
+              {
+                "internalType": "bytes32[]",
+                "name": "items",
+                "type": "bytes32[]",
+              },
+              {
+                "internalType": "bytes32",
+                "name": "nextCursor",
+                "type": "bytes32",
+              },
+            ],
+            "stateMutability": "view",
+            "type": "function",
+          },
+          {
+            "inputs": [],
+            "name": "indexer",
+            "outputs": [
+              {
+                "internalType": "contract EFSIndexer",
+                "name": "",
+                "type": "address",
+              },
+            ],
+            "stateMutability": "view",
+            "type": "function",
+          },
+          {
+            "inputs": [],
+            "name": "isPayable",
+            "outputs": [
+              {
+                "internalType": "bool",
+                "name": "",
+                "type": "bool",
+              },
+            ],
+            "stateMutability": "pure",
+            "type": "function",
+          },
+          {
+            "inputs": [
+              {
+                "internalType": "bytes32",
+                "name": "sortInfoUID",
+                "type": "bytes32",
+              },
+            ],
+            "name": "isSortRegistered",
+            "outputs": [
+              {
+                "internalType": "bool",
+                "name": "",
+                "type": "bool",
+              },
+            ],
+            "stateMutability": "view",
+            "type": "function",
+          },
+          {
+            "inputs": [
+              {
+                "components": [
+                  {
+                    "internalType": "bytes32",
+                    "name": "uid",
+                    "type": "bytes32",
+                  },
+                  {
+                    "internalType": "bytes32",
+                    "name": "schema",
+                    "type": "bytes32",
+                  },
+                  {
+                    "internalType": "uint64",
+                    "name": "time",
+                    "type": "uint64",
+                  },
+                  {
+                    "internalType": "uint64",
+                    "name": "expirationTime",
+                    "type": "uint64",
+                  },
+                  {
+                    "internalType": "uint64",
+                    "name": "revocationTime",
+                    "type": "uint64",
+                  },
+                  {
+                    "internalType": "bytes32",
+                    "name": "refUID",
+                    "type": "bytes32",
+                  },
+                  {
+                    "internalType": "address",
+                    "name": "recipient",
+                    "type": "address",
+                  },
+                  {
+                    "internalType": "address",
+                    "name": "attester",
+                    "type": "address",
+                  },
+                  {
+                    "internalType": "bool",
+                    "name": "revocable",
+                    "type": "bool",
+                  },
+                  {
+                    "internalType": "bytes",
+                    "name": "data",
+                    "type": "bytes",
+                  },
+                ],
+                "internalType": "struct Attestation[]",
+                "name": "attestations",
+                "type": "tuple[]",
+              },
+              {
+                "internalType": "uint256[]",
+                "name": "values",
+                "type": "uint256[]",
+              },
+            ],
+            "name": "multiAttest",
+            "outputs": [
+              {
+                "internalType": "bool",
+                "name": "",
+                "type": "bool",
+              },
+            ],
+            "stateMutability": "payable",
+            "type": "function",
+          },
+          {
+            "inputs": [
+              {
+                "components": [
+                  {
+                    "internalType": "bytes32",
+                    "name": "uid",
+                    "type": "bytes32",
+                  },
+                  {
+                    "internalType": "bytes32",
+                    "name": "schema",
+                    "type": "bytes32",
+                  },
+                  {
+                    "internalType": "uint64",
+                    "name": "time",
+                    "type": "uint64",
+                  },
+                  {
+                    "internalType": "uint64",
+                    "name": "expirationTime",
+                    "type": "uint64",
+                  },
+                  {
+                    "internalType": "uint64",
+                    "name": "revocationTime",
+                    "type": "uint64",
+                  },
+                  {
+                    "internalType": "bytes32",
+                    "name": "refUID",
+                    "type": "bytes32",
+                  },
+                  {
+                    "internalType": "address",
+                    "name": "recipient",
+                    "type": "address",
+                  },
+                  {
+                    "internalType": "address",
+                    "name": "attester",
+                    "type": "address",
+                  },
+                  {
+                    "internalType": "bool",
+                    "name": "revocable",
+                    "type": "bool",
+                  },
+                  {
+                    "internalType": "bytes",
+                    "name": "data",
+                    "type": "bytes",
+                  },
+                ],
+                "internalType": "struct Attestation[]",
+                "name": "attestations",
+                "type": "tuple[]",
+              },
+              {
+                "internalType": "uint256[]",
+                "name": "values",
+                "type": "uint256[]",
+              },
+            ],
+            "name": "multiRevoke",
+            "outputs": [
+              {
+                "internalType": "bool",
+                "name": "",
+                "type": "bool",
+              },
+            ],
+            "stateMutability": "payable",
+            "type": "function",
+          },
+          {
+            "inputs": [
+              {
+                "internalType": "bytes32",
+                "name": "sortInfoUID",
+                "type": "bytes32",
+              },
+              {
+                "internalType": "bytes32",
+                "name": "parentAnchor",
+                "type": "bytes32",
+              },
+              {
+                "internalType": "uint256",
+                "name": "expectedStartIndex",
+                "type": "uint256",
+              },
+              {
+                "internalType": "bytes32[]",
+                "name": "items",
+                "type": "bytes32[]",
+              },
+              {
+                "internalType": "bytes32[]",
+                "name": "leftHints",
+                "type": "bytes32[]",
+              },
+              {
+                "internalType": "bytes32[]",
+                "name": "rightHints",
+                "type": "bytes32[]",
+              },
+            ],
+            "name": "processItems",
+            "outputs": [],
+            "stateMutability": "nonpayable",
+            "type": "function",
+          },
+          {
+            "inputs": [
+              {
+                "internalType": "bytes32",
+                "name": "sortInfoUID",
+                "type": "bytes32",
+              },
+              {
+                "internalType": "bytes32",
+                "name": "parentAnchor",
+                "type": "bytes32",
+              },
+              {
+                "internalType": "bytes32",
+                "name": "itemUID",
+                "type": "bytes32",
+              },
+              {
+                "internalType": "bytes32",
+                "name": "newLeftHint",
+                "type": "bytes32",
+              },
+              {
+                "internalType": "bytes32",
+                "name": "newRightHint",
+                "type": "bytes32",
+              },
+            ],
+            "name": "repositionItem",
+            "outputs": [],
+            "stateMutability": "nonpayable",
+            "type": "function",
+          },
+          {
+            "inputs": [
+              {
+                "components": [
+                  {
+                    "internalType": "bytes32",
+                    "name": "uid",
+                    "type": "bytes32",
+                  },
+                  {
+                    "internalType": "bytes32",
+                    "name": "schema",
+                    "type": "bytes32",
+                  },
+                  {
+                    "internalType": "uint64",
+                    "name": "time",
+                    "type": "uint64",
+                  },
+                  {
+                    "internalType": "uint64",
+                    "name": "expirationTime",
+                    "type": "uint64",
+                  },
+                  {
+                    "internalType": "uint64",
+                    "name": "revocationTime",
+                    "type": "uint64",
+                  },
+                  {
+                    "internalType": "bytes32",
+                    "name": "refUID",
+                    "type": "bytes32",
+                  },
+                  {
+                    "internalType": "address",
+                    "name": "recipient",
+                    "type": "address",
+                  },
+                  {
+                    "internalType": "address",
+                    "name": "attester",
+                    "type": "address",
+                  },
+                  {
+                    "internalType": "bool",
+                    "name": "revocable",
+                    "type": "bool",
+                  },
+                  {
+                    "internalType": "bytes",
+                    "name": "data",
+                    "type": "bytes",
+                  },
+                ],
+                "internalType": "struct Attestation",
+                "name": "attestation",
+                "type": "tuple",
+              },
+            ],
+            "name": "revoke",
+            "outputs": [
+              {
+                "internalType": "bool",
+                "name": "",
+                "type": "bool",
+              },
+            ],
+            "stateMutability": "payable",
+            "type": "function",
+          },
+          {
+            "inputs": [],
+            "name": "version",
+            "outputs": [
+              {
+                "internalType": "string",
+                "name": "",
+                "type": "string",
+              },
+            ],
+            "stateMutability": "view",
+            "type": "function",
+          },
+          {
+            "stateMutability": "payable",
+            "type": "receive",
+          },
+        ],
+        "inheritedFunctions": {
+          "attest":
+            "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
+          "isPayable":
+            "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
+          "multiAttest":
+            "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
+          "multiRevoke":
+            "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
+          "revoke":
+            "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
+          "version":
+            "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol",
+        },
+      },
+      "NameSort": {
+        "address": "0xe9e0e645C145E9d99246aB522AFF724F31F95E00",
+        "abi": [
+          {
+            "inputs": [
+              {
+                "internalType": "contract IEAS",
+                "name": "_eas",
+                "type": "address",
+              },
+            ],
+            "stateMutability": "nonpayable",
+            "type": "constructor",
+          },
+          {
+            "inputs": [],
+            "name": "eas",
+            "outputs": [
+              {
+                "internalType": "contract IEAS",
+                "name": "",
+                "type": "address",
+              },
+            ],
+            "stateMutability": "view",
+            "type": "function",
+          },
+          {
+            "inputs": [
+              {
+                "internalType": "bytes32",
+                "name": "uid",
+                "type": "bytes32",
+              },
+              {
+                "internalType": "bytes32",
+                "name": "",
+                "type": "bytes32",
+              },
+            ],
+            "name": "getSortKey",
+            "outputs": [
+              {
+                "internalType": "bytes",
+                "name": "",
+                "type": "bytes",
+              },
+            ],
+            "stateMutability": "view",
+            "type": "function",
+          },
+          {
+            "inputs": [
+              {
+                "internalType": "bytes32",
+                "name": "a",
+                "type": "bytes32",
+              },
+              {
+                "internalType": "bytes32",
+                "name": "b",
+                "type": "bytes32",
+              },
+              {
+                "internalType": "bytes32",
+                "name": "",
+                "type": "bytes32",
+              },
+            ],
+            "name": "isLessThan",
+            "outputs": [
+              {
+                "internalType": "bool",
+                "name": "",
+                "type": "bool",
+              },
+            ],
+            "stateMutability": "view",
+            "type": "function",
+          },
+        ],
+        "inheritedFunctions": {
+          "getSortKey": "contracts/interfaces/ISortFunc.sol",
+          "isLessThan": "contracts/interfaces/ISortFunc.sol",
+        },
+      },
+      "TimestampSort": {
+        "address": "0xdAC7424d00eA6Fc56069f548049884E0b31316FD",
+        "abi": [
+          {
+            "inputs": [
+              {
+                "internalType": "contract IEAS",
+                "name": "_eas",
+                "type": "address",
+              },
+            ],
+            "stateMutability": "nonpayable",
+            "type": "constructor",
+          },
+          {
+            "inputs": [],
+            "name": "eas",
+            "outputs": [
+              {
+                "internalType": "contract IEAS",
+                "name": "",
+                "type": "address",
+              },
+            ],
+            "stateMutability": "view",
+            "type": "function",
+          },
+          {
+            "inputs": [
+              {
+                "internalType": "bytes32",
+                "name": "uid",
+                "type": "bytes32",
+              },
+              {
+                "internalType": "bytes32",
+                "name": "",
+                "type": "bytes32",
+              },
+            ],
+            "name": "getSortKey",
+            "outputs": [
+              {
+                "internalType": "bytes",
+                "name": "",
+                "type": "bytes",
+              },
+            ],
+            "stateMutability": "view",
+            "type": "function",
+          },
+          {
+            "inputs": [
+              {
+                "internalType": "bytes32",
+                "name": "a",
+                "type": "bytes32",
+              },
+              {
+                "internalType": "bytes32",
+                "name": "b",
+                "type": "bytes32",
+              },
+              {
+                "internalType": "bytes32",
+                "name": "",
+                "type": "bytes32",
+              },
+            ],
+            "name": "isLessThan",
+            "outputs": [
+              {
+                "internalType": "bool",
+                "name": "",
+                "type": "bool",
+              },
+            ],
+            "stateMutability": "view",
+            "type": "function",
+          },
+        ],
+        "inheritedFunctions": {
+          "getSortKey": "contracts/interfaces/ISortFunc.sol",
+          "isLessThan": "contracts/interfaces/ISortFunc.sol",
+        },
+      },
+      "SchemaNameIndex": {
+        "address": "0x9B0F3b52Eaa4625459dA9d4f3fd1d35194652c60",
+        "abi": [
+          {
+            "inputs": [
+              {
+                "internalType": "contract IEAS",
+                "name": "eas",
+                "type": "address",
+              },
+              {
+                "internalType": "bytes32",
+                "name": "namingSchemaUID",
+                "type": "bytes32",
+              },
+            ],
+            "stateMutability": "nonpayable",
+            "type": "constructor",
+          },
+          {
+            "anonymous": false,
+            "inputs": [
+              {
+                "indexed": true,
+                "internalType": "bytes32",
+                "name": "schemaUID",
+                "type": "bytes32",
+              },
+              {
+                "indexed": false,
+                "internalType": "string",
+                "name": "name",
+                "type": "string",
+              },
+              {
+                "indexed": false,
+                "internalType": "bytes32",
+                "name": "attestationUID",
+                "type": "bytes32",
+              },
+            ],
+            "name": "SchemaNameIndexed",
+            "type": "event",
+          },
+          {
+            "inputs": [],
+            "name": "NAMING_SCHEMA_UID",
+            "outputs": [
+              {
+                "internalType": "bytes32",
+                "name": "",
+                "type": "bytes32",
+              },
+            ],
+            "stateMutability": "view",
+            "type": "function",
+          },
+          {
+            "inputs": [],
+            "name": "_eas",
+            "outputs": [
+              {
+                "internalType": "contract IEAS",
+                "name": "",
+                "type": "address",
+              },
+            ],
+            "stateMutability": "view",
+            "type": "function",
+          },
+          {
+            "inputs": [
+              {
+                "internalType": "bytes32",
+                "name": "uid",
+                "type": "bytes32",
+              },
+            ],
+            "name": "indexAttestation",
+            "outputs": [],
+            "stateMutability": "nonpayable",
+            "type": "function",
+          },
+          {
+            "inputs": [
+              {
+                "internalType": "bytes32",
+                "name": "",
+                "type": "bytes32",
+              },
+            ],
+            "name": "schemaNames",
+            "outputs": [
+              {
+                "internalType": "string",
+                "name": "",
+                "type": "string",
+              },
+            ],
+            "stateMutability": "view",
+            "type": "function",
+          },
+        ],
+        "inheritedFunctions": {},
+      },
       EAS: {
         "address": "0xC2679fBD37d54388Ce493F1DB75320D236e1815e",
         "abi": [

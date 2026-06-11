@@ -1,7 +1,7 @@
 import { HardhatRuntimeEnvironment } from "hardhat/types";
 import { DeployFunction } from "hardhat-deploy/types";
-import { CREATEX_ADDRESS } from "./lib/addresses";
-import { deployViews } from "./lib/views";
+import { CREATEX_ADDRESS } from "../deploy-lib/addresses";
+import { deployViews } from "../deploy-lib/views";
 
 // EFS read-views deploy (Phase D views) — the post-freeze, NON-FROZEN view layer for CreateX
 // networks (Sepolia/mainnet/pinned fork). Deploys EFSFileView + EFSRouter + ListReader against the

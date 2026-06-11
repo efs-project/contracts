@@ -3,7 +3,7 @@
 // The nine schemas frozen at Sepolia registration (ADR-0048; docs/SEPOLIA_FREEZE_TABLE.md).
 // Each schema's UID is `keccak256(abi.encodePacked(fieldString, resolverProxyAddr, revocable))`.
 // The field strings here are the GOLDEN VECTORS — they must be byte-identical to the
-// corresponding constants in the resolver contracts. The verify gate (deploy/lib/verify.ts)
+// corresponding constants in the resolver contracts. The verify gate (deploy-lib/verify.ts)
 // re-derives the self-UID getters on-chain and asserts they equal what this file produces, so
 // any drift between this file and the contracts aborts the deploy before any schema is registered.
 //

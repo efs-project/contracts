@@ -1,10 +1,10 @@
 import { expect } from "chai";
 import { getAddress } from "ethers";
-import { SCHEMAS, computeSchemaUID } from "../deploy/lib/schemas";
+import { SCHEMAS, computeSchemaUID } from "../deploy-lib/schemas";
 
 // I-1 (frozen golden vectors). This guards an ETCHED surface: the 9 field strings hash into the
 // permanent Sepolia schema UIDs. The verify gate's golden-vector step recomputes UIDs from
-// deploy/lib/schemas.ts against itself, which is circular for the 7 schemas whose field strings only
+// deploy-lib/schemas.ts against itself, which is circular for the 7 schemas whose field strings only
 // appear as NatSpec comments in the resolver contracts (ANCHOR/PROPERTY/DATA/PIN/TAG/MIRROR/LIST) —
 // a typo in schemas.ts for those would not be caught on-chain. This test breaks that tautology: it
 // pins each schema's field string AND its UID (at a FIXED mock resolver address, address(0xEF5)) to
@@ -15,7 +15,7 @@ import { SCHEMAS, computeSchemaUID } from "../deploy/lib/schemas";
 // docs/SEPOLIA_FREEZE_TABLE.md — those ARE the freeze-table values.
 //
 // Regenerating after an INTENTIONAL frozen-set change (rare, Tier-1): set the field string + revocable
-// in deploy/lib/schemas.ts, update docs/SEPOLIA_FREEZE_TABLE.md, then recompute the UID with
+// in deploy-lib/schemas.ts, update docs/SEPOLIA_FREEZE_TABLE.md, then recompute the UID with
 // computeSchemaUID(fieldString, MOCK_RESOLVER, revocable) and paste it below. The literals are the
 // frozen record — do not "fix" a failing literal to match drifted code without a deliberate decision.
 
