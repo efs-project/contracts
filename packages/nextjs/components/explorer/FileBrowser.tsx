@@ -1877,6 +1877,16 @@ export const FileBrowser = ({
                 />
               ) : fileContentType?.startsWith("audio/") ? (
                 <audio src={fileContent} controls className="w-full" />
+              ) : fileContentType?.startsWith("text/html") || fileContentType === "application/xhtml+xml" ? (
+                // Untrusted HTML from a mirror — render in a fully-sandboxed iframe
+                // (sandbox="" disables scripts, same-origin, forms, top-navigation).
+                <iframe
+                  sandbox=""
+                  srcDoc={fileContent}
+                  title={selectedFile.name}
+                  className="w-full rounded border border-base-300 bg-white"
+                  style={{ height: "60vh" }}
+                />
               ) : fileContentType && !isTextViewable(fileContentType) ? (
                 <div className="text-center text-gray-500">
                   <p className="font-semibold mb-1">Binary file — cannot preview</p>
@@ -1994,6 +2004,15 @@ export const FileBrowser = ({
                   <video src={fileContent} controls className="max-w-[90vw] max-h-[85vh] object-contain" />
                 ) : fileContentType?.startsWith("audio/") ? (
                   <audio src={fileContent} controls className="w-[60vw]" />
+                ) : fileContentType?.startsWith("text/html") || fileContentType === "application/xhtml+xml" ? (
+                  // Untrusted HTML — fully-sandboxed iframe (no scripts/same-origin/forms).
+                  <iframe
+                    sandbox=""
+                    srcDoc={fileContent}
+                    title={selectedFile.name}
+                    className="rounded bg-white"
+                    style={{ width: "90vw", height: "85vh" }}
+                  />
                 ) : fileContentType && !isTextViewable(fileContentType) ? (
                   <div className="text-center text-white/50">
                     <p className="font-semibold mb-1">Binary file — cannot preview</p>
