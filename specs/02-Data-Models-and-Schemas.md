@@ -141,14 +141,20 @@ Other metadata (content type, description, version history) is likewise stored a
 **URI scheme allowlist** (write-time, in `MirrorResolver._isAllowedScheme`): `web3://`, `ipfs://`, `ar://`, `https://`, `ftp://`, `s3://`, `gs://`, `dat://`, `rsync://`, `magnet:`, `bittorrent://`. Scheme safety is a *client-render* concern, not a write-time one — the router never executes a URI — so the allowlist is permissive about transport/storage schemes and rejects only active-content / inline-payload schemes (`javascript:`, `data:`) that enable XSS when a client renders a mirror in an `<a href>`. This widened set supersedes the original ADR-0023 set (`web3/ipfs/ar/https/magnet` only) in part; the XSS-rejection intent of ADR-0023 is preserved.
 
 ### Transport Definition Anchors
-Well-known transport types are created at deploy time under `/transports/`:
+Well-known transport types are created at deploy time under `/transports/` — all **eleven** allowed schemes get a canonical, un-squattable definition anchor (bootstrap seeds them via `SystemAccount`, so a later writer can't claim the canonical transport name):
 - `/transports/onchain` — `web3://` URIs pointing to SSTORE2 chunk managers
-- `/transports/ipfs` — `ipfs://` URIs
 - `/transports/arweave` — `ar://` URIs
+- `/transports/ipfs` — `ipfs://` URIs
 - `/transports/magnet` — `magnet:` URIs
 - `/transports/https` — `https://` URIs
+- `/transports/ftp` — `ftp://` URIs
+- `/transports/s3` — `s3://` URIs
+- `/transports/gs` — `gs://` URIs
+- `/transports/dat` — `dat://` URIs
+- `/transports/rsync` — `rsync://` URIs
+- `/transports/bittorrent` — `bittorrent://` URIs
 
-The transport preference order for serving is: `web3://` (onchain) > `ar://` > `ipfs://` > `magnet:` > `https://`. See ADR-0012 for rationale.
+The transport preference order for serving keeps the original five ranked per ADR-0012: `web3://` (onchain) > `ar://` > `ipfs://` > `magnet:` > `https://`. The six newly-allowed off-chain schemes (`ftp/s3/gs/dat/rsync/bittorrent`) share the lowest priority tier with `https://` (router `_getBestMirrorURI` priority 4). All non-`web3://` schemes are served as `message/external-body` redirects; only `web3://` is read on-chain (SSTORE2). The widened allowlist is the ADR-0023→ADR-0048 supersession; see ADR-0012 for the priority rationale.
 
 ## 4. Pin Schema (cardinality 1)
 **Purpose**: Singleton edge — at most one active PIN per `(attester, definition, targetSchema)` slot. Used for file placement, PROPERTY value binding, and any predicate where "this slot holds exactly one thing" is the right semantic. ADR-0041.
