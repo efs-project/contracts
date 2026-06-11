@@ -25,3 +25,15 @@ test("invalid utf-8 is binary", () => {
 test("empty input is text", () => {
   assert.equal(sniffContent(new Uint8Array([])), "text");
 });
+test("JPEG magic is binary", () => {
+  assert.equal(sniffContent(new Uint8Array([0xff, 0xd8, 0xff, 0xe0])), "binary");
+});
+test("GIF magic is binary", () => {
+  assert.equal(sniffContent(new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x39, 0x61])), "binary");
+});
+test("ZIP magic is binary", () => {
+  assert.equal(sniffContent(new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0x14])), "binary");
+});
+test("gzip magic is binary", () => {
+  assert.equal(sniffContent(new Uint8Array([0x1f, 0x8b, 0x08])), "binary");
+});

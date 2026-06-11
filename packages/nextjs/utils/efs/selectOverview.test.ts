@@ -20,3 +20,6 @@ test("returns null when no markdown-ish candidate", () => {
 test("returns null on empty input", () => {
   assert.equal(selectOverview([]), null);
 });
+test("overview.md beats about.md", () => {
+  assert.equal(selectOverview([{ uid: "1", name: "about.md" }, { uid: "2", name: "overview.md" }])?.name, "overview.md");
+});
