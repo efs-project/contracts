@@ -7,6 +7,7 @@ import { useAccount, usePublicClient } from "wagmi";
 import { ContainerInfoPanel } from "~~/components/explorer/ContainerInfoPanel";
 import { FileActionsBar } from "~~/components/explorer/FileActionsBar";
 import { DrawerTagFilterState, FileBrowser } from "~~/components/explorer/FileBrowser";
+import { OverviewPane } from "~~/components/explorer/OverviewPane";
 import { PathBar } from "~~/components/explorer/PathBar";
 import { TagFilterDrawer } from "~~/components/explorer/TagFilterDrawer";
 import { TopicTree } from "~~/components/explorer/TopicTree";
@@ -176,6 +177,13 @@ export default function ExplorerClient() {
 
   const { data: indexerInfo } = useDeployedContractInfo({ contractName: "Indexer" });
   const { data: sortOverlayInfo } = useDeployedContractInfo({ contractName: "EFSSortOverlay" });
+  // OverviewPane (Task 13) reads file content via the router and resolves the
+  // Overview anchor via EFSFileView/EdgeResolver. These are deployed contracts
+  // whose addresses aren't known until after `yarn deploy`, so pull them the
+  // same way `indexerInfo`/`sortOverlayInfo` are pulled above.
+  const { data: fileViewInfo } = useDeployedContractInfo({ contractName: "EFSFileView" });
+  const { data: edgeResolverInfo } = useDeployedContractInfo({ contractName: "EdgeResolver" });
+  const { data: routerInfo } = useDeployedContractInfo({ contractName: "EFSRouter" });
   const { data: easAddressRaw } = useScaffoldReadContract({
     contractName: "Indexer",
     functionName: "getEAS",
@@ -657,6 +665,32 @@ export default function ExplorerClient() {
               expandedUIDs={new Set(currentPath.map(p => p.uid))}
             />
           </aside>
+
+          {/* Middle Pane — Overview (Task 13). Renders the directory's Overview
+              markdown/file when one exists; the pane itself returns null when
+              there's no Overview, so the layout naturally falls back to the
+              two-pane (tree + file) arrangement. Hidden below `lg` to mirror
+              how the tree `<aside>` collapses on narrow screens. */}
+          {!pathError && (
+            <div className="hidden lg:block">
+              <OverviewPane
+                anchorUID={currentAnchorUID as `0x${string}` | null}
+                lensAddresses={lensAddresses}
+                resourcePathNames={buildRouterPathNames(currentContainer, currentPath)}
+                publicClient={publicClient}
+                indexerAddress={indexerAddress}
+                indexerAbi={indexerInfo?.abi}
+                fileViewAddress={fileViewInfo?.address as `0x${string}` | undefined}
+                fileViewAbi={fileViewInfo?.abi}
+                edgeResolverAddress={edgeResolverInfo?.address as `0x${string}` | undefined}
+                edgeResolverAbi={edgeResolverInfo?.abi}
+                routerAddress={routerInfo?.address as `0x${string}` | undefined}
+                routerAbi={routerInfo?.abi}
+                rootUID={rootUID as `0x${string}` | undefined}
+                dataSchemaUID={dataSchemaUID as `0x${string}` | undefined}
+              />
+            </div>
+          )}
 
           {/* Right Pane — file actions + browser + (optional) tag drawer */}
           <section className="flex-grow flex flex-col min-w-0">
