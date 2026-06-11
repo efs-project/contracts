@@ -1524,6 +1524,15 @@ export const CreateItemModal = ({
                   if (/^(Qm[1-9A-HJ-NP-Za-km-z]{44,}|bafy[a-z2-7]{50,})$/.test(val)) {
                     val = `ipfs://${val}`;
                   }
+                  if (val !== pasteUri) {
+                    // Fetched/entered content metadata describes the PREVIOUS URI — editing the URI must
+                    // invalidate it. Otherwise a "Fetch Info" for URI A followed by editing to URI B would
+                    // bind A's contentHash/size/type as permanent reserved-key PROPERTY claims on B's DATA
+                    // (PR #24 P2). Re-fetch (or re-enter) after changing the URI.
+                    setPasteContentHash(null);
+                    setPasteSize("");
+                    setPasteContentType("");
+                  }
                   setPasteUri(val);
                 }}
               />
