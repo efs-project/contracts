@@ -14,6 +14,22 @@
  */
 import type { Abi } from "viem";
 
+/**
+ * Upload size limits, derived from the MockChunkedFile gas profile.
+ *
+ * The manager constructor stores chunk addresses with one `_chunks.push()` per
+ * chunk — a cold SSTORE (~22k gas) each — in a SINGLE deploy transaction, so the
+ * whole deploy must fit one block. ~1,000 chunks ≈ 23M gas (comfortably under a
+ * 30M block); beyond that the constructor risks out-of-gas *after* the user has
+ * already paid for every chunk deploy, orphaning them with no recovery. We
+ * therefore cap by CHUNK COUNT and derive the byte cap from it. Lifting this
+ * (true 30MB+) needs a paged/batched manager — see docs/FUTURE_WORK.md
+ * "Gas-test the on-chain upload cap".
+ */
+export const CHUNK_SIZE = 24000;
+export const MAX_CHUNKS = 1000;
+export const MAX_ONCHAIN_SIZE = MAX_CHUNKS * CHUNK_SIZE; // ~24 MB
+
 export const MOCK_CHUNKED_FILE_ABI = [
   {
     inputs: [{ internalType: "address[]", name: "_chunks", type: "address[]" }],

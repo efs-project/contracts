@@ -26,7 +26,7 @@
  * PIN in O(1) (ADR-0041), so a retry cleanly converges — only the orphaned
  * intermediate artifacts from the failed attempt linger.
  */
-import { MOCK_CHUNKED_FILE_ABI, MOCK_CHUNKED_FILE_BYTECODE } from "./sstore2";
+import { CHUNK_SIZE, MAX_CHUNKS, MAX_ONCHAIN_SIZE, MOCK_CHUNKED_FILE_ABI, MOCK_CHUNKED_FILE_BYTECODE } from "./sstore2";
 import {
   decodeEventLog,
   encodeAbiParameters,
@@ -95,12 +95,6 @@ export interface UploadOnchainFileResult {
 /** Thrown when `isCancelled()` flips true at a tx boundary. */
 export const UPLOAD_CANCELLED = "__UPLOAD_CANCELLED__";
 
-// On-chain SSTORE2 sanity bound, mirrored from CreateItemModal. ~30MB.
-// Not a protocol limit: each CHUNK_SIZE slice becomes its own SSTORE2
-// contract (EIP-170 caps contract code at 24,576 B), so this just bounds
-// the number of sequential in-browser deploy txs (~1,250 at 24 KB/chunk).
-const MAX_ONCHAIN_SIZE = 30_000_000;
-const CHUNK_SIZE = 24000;
 const MAX_ANCHOR_DEPTH = 32;
 
 // Inlined from CreateItemModal.tsx ~lines 351–369. Extracts the UID emitted by
@@ -162,10 +156,14 @@ export async function uploadOnchainFile(args: UploadOnchainFileArgs): Promise<Up
   if (!account) throw new Error("walletClient has no account");
 
   if (bytes.length === 0) throw new Error("Cannot upload an empty file.");
-  if (bytes.length > MAX_ONCHAIN_SIZE) {
+  // Reject up front, before any chunk is paid for: the MockChunkedFile
+  // constructor stores every chunk address in one tx and would out-of-gas past
+  // MAX_CHUNKS (see sstore2.ts). The byte cap == MAX_CHUNKS * CHUNK_SIZE, so
+  // these are equivalent — both stated for clarity at the failure site.
+  if (bytes.length > MAX_ONCHAIN_SIZE || Math.ceil(bytes.length / CHUNK_SIZE) > MAX_CHUNKS) {
     throw new Error(
       `File too large for on-chain upload (${Math.round(bytes.length / 1024 / 1024)}MB). ` +
-        `Maximum is ~${MAX_ONCHAIN_SIZE / 1_000_000}MB. Use IPFS or Arweave for large files.`,
+        `Maximum is ~${MAX_ONCHAIN_SIZE / 1_000_000}MB (${MAX_CHUNKS} chunks). Use IPFS or Arweave for large files.`,
     );
   }
 

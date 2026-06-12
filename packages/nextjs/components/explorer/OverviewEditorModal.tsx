@@ -25,16 +25,13 @@ import { MarkdownEditor } from "~~/components/markdown/MarkdownEditor";
 import { useDeployedContractInfo, useScaffoldWriteContract } from "~~/hooks/scaffold-eth";
 import { useTargetNetwork } from "~~/hooks/scaffold-eth/useTargetNetwork";
 import { applySystemTag } from "~~/lib/efs/applySystemTag";
+import { CHUNK_SIZE } from "~~/lib/efs/sstore2";
 import type { AttestFn } from "~~/lib/efs/uploadOnchainFile";
 import { uploadOnchainFile } from "~~/lib/efs/uploadOnchainFile";
 import { useBackgroundOps } from "~~/services/store/backgroundOps";
 import { EDGE_RESOLVER_ABI, getEdgeResolverAddress } from "~~/utils/efs/edgeResolver";
 import { MAX_RENDER_BYTES } from "~~/utils/markdown/limits";
 import { notification } from "~~/utils/scaffold-eth";
-
-// On-chain SSTORE2 chunk size (mirrors uploadOnchainFile). Used only to estimate
-// the transaction count shown to the user before they commit.
-const CHUNK_SIZE = 24000;
 
 export interface OverviewEditorModalProps {
   mode: "create" | "edit";
