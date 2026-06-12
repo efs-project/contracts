@@ -583,14 +583,19 @@ export default function ExplorerClient() {
   // README stays hidden behind whoever already wins (e.g. `?lenses=bob,alice`
   // with Alice connected and Bob's README rendered), so a save would spend the
   // transactions yet never appear. Restrict authoring to `lensAddresses[0]` to
-  // guarantee the connected wallet's Overview is the one shown. Also excludes the
-  // *synthetic address-container root* (currentAnchorUID === container.uid): that
-  // parent anchor isn't real, so the upload helper hard-reverts under it. Deeper
-  // address paths resolve to a real anchor and are writable.
+  // guarantee the connected wallet's Overview is the one shown.
+  //
+  // It also requires a *real anchor* parent. Address / schema / attestation
+  // containers seed `currentAnchorUID` with a synthetic-or-raw UID equal to
+  // `container.uid` (the bytes32 address, or the raw schema/attestation UID when
+  // no alias anchor exists); the upload helper deploys SSTORE2 chunks and only
+  // then reverts on that invalid `refUID`. `currentAnchorUID !== container.uid`
+  // captures exactly those raw roots, while alias anchors and any deeper path
+  // (a real anchor) stay writable.
   const writerIsTopLens = !!connectedAddress && lensAddresses[0]?.toLowerCase() === connectedAddress.toLowerCase();
-  const overviewEditable =
-    writerIsTopLens &&
-    !(currentContainer?.kind === "address" && currentAnchorUID?.toLowerCase() === currentContainer.uid.toLowerCase());
+  const onRealAnchor =
+    !!currentAnchorUID && !!currentContainer && currentAnchorUID.toLowerCase() !== currentContainer.uid.toLowerCase();
+  const overviewEditable = writerIsTopLens && onRealAnchor;
 
   return (
     <div className="flex flex-col h-screen w-full bg-base-100 p-4 gap-3">
