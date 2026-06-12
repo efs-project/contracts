@@ -579,13 +579,18 @@ export default function ExplorerClient() {
 
   const containerKind = currentContainer?.kind ?? "anchor";
 
-  // Overview edit/create gate. Requires a connected wallet, and excludes only
-  // the *synthetic address-container root* (currentAnchorUID === container.uid):
-  // that parent anchor isn't real, so the upload helper hard-reverts under it.
-  // Deeper address paths (/explorer/<addr>/<folder>) resolve to a real anchor
-  // and are writable — same parent CreateItemModal.anchorParent() uses.
+  // Overview edit/create gate. Requires a connected wallet that is also one of
+  // the active lenses — the README is written under the connected wallet, but
+  // the pane only queries `lensAddresses`, so authoring into a lens set that
+  // excludes the writer (an explicit `?lenses=other` URL) would spend the
+  // transactions yet never show the result. Also excludes the *synthetic
+  // address-container root* (currentAnchorUID === container.uid): that parent
+  // anchor isn't real, so the upload helper hard-reverts under it. Deeper
+  // address paths resolve to a real anchor and are writable.
+  const writerInActiveLenses =
+    !!connectedAddress && lensAddresses.some(l => l.toLowerCase() === connectedAddress.toLowerCase());
   const overviewEditable =
-    !!connectedAddress &&
+    writerInActiveLenses &&
     !(currentContainer?.kind === "address" && currentAnchorUID?.toLowerCase() === currentContainer.uid.toLowerCase());
 
   return (
