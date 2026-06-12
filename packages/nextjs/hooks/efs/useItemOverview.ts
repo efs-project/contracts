@@ -67,6 +67,10 @@ export function useItemOverview(args: UseItemOverviewArgs): OverviewState {
     const ready =
       args.enabled &&
       args.anchorUID &&
+      // Explicit empty / unresolvable lenses (e.g. a shared `?lenses=` URL)
+      // scope the view to nothing. EFSFileView rejects an empty attesters list,
+      // so short-circuit to `none` rather than issue a reverting read.
+      args.lensAddresses.length > 0 &&
       args.publicClient &&
       args.fileViewAddress &&
       args.fileViewAbi &&
