@@ -1,6 +1,6 @@
 # ADR-0048: View-layer tag-exclusion directory filter
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-06-12
 **Related:** ADR-0042 (extends), ADR-0041 (TAG/weight), ADR-0038 (folder visibility), ADR-0036 (opaque cursor), specs/02-Data-Models-and-Schemas.md §TAG
 

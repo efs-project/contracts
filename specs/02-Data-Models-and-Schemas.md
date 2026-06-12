@@ -178,7 +178,7 @@ Complex aggregation logic (Sybil resistance, reputation weighting, running avera
 Two distinct concepts used in the codebase:
 
 - **Active TAG** — kernel concept (ADR-0041 §4). A TAG is active if and only if it exists on-chain and is not EAS-revoked. Weight does not affect activity; `weight = -999` is still active.
-- **Effective TAG** — client-layer projection (ADR-0042). For the explorer's descriptive-label include/exclude filter (`FileBrowser.resolveTagSet`), an active TAG is *effective* iff `weight >= 0`. Negative-weight TAGs remain active on-chain but are suppressed for filter sets. `weight = 0` is effective.
+- **Effective TAG** — client-layer projection (ADR-0042). For the explorer's descriptive-label include/exclude filter (`FileBrowser.resolveTagSet`), an active TAG is *effective* iff `weight >= 0`. Negative-weight TAGs remain active on-chain but are suppressed for filter sets. `weight = 0` is effective. The same projection is also available to on-chain consumers with a caller-chosen threshold via `EFSFileView.getDirectoryPageFiltered(... excludeTagDef, minWeight ...)` (ADR-0048) — the view layer compares `weight >= minWeight`; the kernel still never interprets weight (ADR-0041 §4).
 
 This distinction applies only to the descriptive-label filter path. Folder visibility (ADR-0038), `hasActiveTagFromAny`, sort overlays, and all contract helpers use the kernel "active = unrevoked" definition unchanged.
 
