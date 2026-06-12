@@ -458,10 +458,18 @@ export default function ExplorerClient() {
             return;
           }
 
-          // Preserve the original URL-encoded segment so rebuilding the URL
-          // round-trips losslessly (matters for non-ASCII names that were
-          // percent-encoded by the browser).
-          resolvedPath.push({ uid: childUID, name: decodeURIComponent(segment), urlSegment: segment });
+          // `segment` is the ON-CHAIN anchor name (pathSegments were decodeURIComponent'd once at
+          // parse time). Store the RE-ENCODED form as urlSegment so rebuilding the URL round-trips:
+          // a name with reserved bytes as canonical %XX escapes (e.g. "a%2Fb", ADR-0025) must appear
+          // in the URL as "a%252Fb" so the next parse decodes back to "a%2Fb" — NOT the raw decoded
+          // segment, which would single-encode and resolve the wrong anchor on breadcrumb/refresh
+          // (PR #24 P2). encodeURIComponent is a no-op for plain ASCII and correctly re-encodes
+          // non-ASCII + percent escapes. `name` keeps the decoded human form for display.
+          resolvedPath.push({
+            uid: childUID,
+            name: decodeURIComponent(segment),
+            urlSegment: encodeURIComponent(segment),
+          });
           currentUID = childUID;
         }
 
