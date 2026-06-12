@@ -459,7 +459,8 @@ export async function uploadOnchainFile(args: UploadOnchainFileArgs): Promise<Up
     },
     { silent: true },
   );
-  if (contentTypePinTxHash) await publicClient.waitForTransactionReceipt({ hash: contentTypePinTxHash });
+  if (!contentTypePinTxHash) throw new Error("contentType PIN attestation did not return a transaction hash.");
+  await publicClient.waitForTransactionReceipt({ hash: contentTypePinTxHash });
   checkCancelled();
 
   // ── MIRROR (refUID=DATA, /transports/onchain anchor, uri) (CreateItemModal ~lines 1132–1167) ──
@@ -494,7 +495,8 @@ export async function uploadOnchainFile(args: UploadOnchainFileArgs): Promise<Up
     },
     { silent: true },
   );
-  if (mirrorTxHash) await publicClient.waitForTransactionReceipt({ hash: mirrorTxHash });
+  if (!mirrorTxHash) throw new Error("MIRROR attestation did not return a transaction hash.");
+  await publicClient.waitForTransactionReceipt({ hash: mirrorTxHash });
   checkCancelled();
 
   // ── Placement PIN (definition=fileAnchorUID, refUID=DATA) (CreateItemModal ~lines 1170–1194) ──
@@ -521,7 +523,8 @@ export async function uploadOnchainFile(args: UploadOnchainFileArgs): Promise<Up
     },
     { silent: true },
   );
-  if (pinTxHash) await publicClient.waitForTransactionReceipt({ hash: pinTxHash });
+  if (!pinTxHash) throw new Error("Placement PIN attestation did not return a transaction hash.");
+  await publicClient.waitForTransactionReceipt({ hash: pinTxHash });
   checkCancelled();
 
   // ── Ancestor-walk visibility TAGs (CreateItemModal ~lines 1196–1276, ADR-0038/ADR-0041) ──

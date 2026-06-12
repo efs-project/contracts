@@ -191,6 +191,9 @@ export const FileBrowser = ({
   const [tagModalIsFile, setTagModalIsFile] = useState(false);
   const [selectedFile, setSelectedFile] = useState<any | null>(null);
   const [fileContent, setFileContent] = useState<string | null>(null);
+  // Raw fetched bytes, kept verbatim for downloads. The preview may decode these
+  // to text/blob-URL (lossy for binary), so downloads must derive from here.
+  const [fileBytes, setFileBytes] = useState<Uint8Array | null>(null);
   const fetchIdRef = useRef(0);
   const [fileContentType, setFileContentType] = useState<string | null>(null);
   const [fileTransportType, setFileTransportType] = useState<string>("onchain");
@@ -541,6 +544,7 @@ export const FileBrowser = ({
     const fetchId = ++fetchIdRef.current;
     setIsFileLoading(true);
     setFileContent(null);
+    setFileBytes(null);
     setFileContentType(null);
     setFileTransportType("onchain");
     setFetchError(null);
@@ -592,6 +596,7 @@ export const FileBrowser = ({
 
       const contentTypeStr = contentType ?? "text/plain";
       setFileContentType(contentTypeStr);
+      setFileBytes(bytes);
 
       const useBlobUrl =
         (contentTypeStr.startsWith("image/") && !contentTypeStr.includes("svg")) ||
@@ -613,6 +618,7 @@ export const FileBrowser = ({
       const err = e as Error;
       console.error("Failed to fetch file content", err);
       setFileContent(null);
+      setFileBytes(null);
       setFetchError(err.message || String(e));
     } finally {
       // Only clear the loading flag if this fetch is still the active one —
@@ -1156,34 +1162,26 @@ export const FileBrowser = ({
     setSelectedFile(null);
     setSelectedList(null);
     setFileContent(null);
+    setFileBytes(null);
     setFileContentType(null);
     setFetchError(null);
     setPreviewFullscreen(false);
   };
 
-  // Download the currently-previewed file. `fileContent` is one of: a `blob:` URL
-  // (binary/pdf/video/audio), a base64 string (raster images), or raw text/SVG.
-  // We trigger a download-only anchor with a sanitized filename (anchor names are
-  // attacker-controlled — strip bidi/path tricks). Object URLs we mint are revoked.
+  // Download the currently-previewed file from the raw fetched bytes — NOT from
+  // the preview string, which is a lossy text/blob decode for anything binary.
+  // Download-only anchor with a sanitized filename (anchor names are
+  // attacker-controlled — strip bidi/path tricks). The minted URL is revoked.
   const handleDownload = () => {
-    if (!fileContent || !selectedFile) return;
-    let href = fileContent;
-    let minted = false;
-    if (fileContent.startsWith("blob:")) {
-      href = fileContent;
-    } else if (fileContentType?.startsWith("image/") && !fileContentType.includes("svg")) {
-      href = `data:${fileContentType};base64,${fileContent}`;
-    } else {
-      href = URL.createObjectURL(new Blob([fileContent], { type: fileContentType || "application/octet-stream" }));
-      minted = true;
-    }
+    if (!fileBytes || !selectedFile) return;
+    const href = URL.createObjectURL(new Blob([fileBytes], { type: fileContentType || "application/octet-stream" }));
     const a = document.createElement("a");
     a.href = href;
     a.download = safeDownloadName(selectedFile.name);
     document.body.appendChild(a);
     a.click();
     a.remove();
-    if (minted) setTimeout(() => URL.revokeObjectURL(href), 1000);
+    setTimeout(() => URL.revokeObjectURL(href), 1000);
   };
 
   // File-only items for gallery navigation
@@ -1801,7 +1799,7 @@ export const FileBrowser = ({
               <button
                 className="btn btn-ghost btn-sm btn-circle"
                 onClick={handleDownload}
-                disabled={!fileContent}
+                disabled={!fileBytes}
                 title="Download"
               >
                 <ArrowDownTrayIcon className="w-4 h-4" />

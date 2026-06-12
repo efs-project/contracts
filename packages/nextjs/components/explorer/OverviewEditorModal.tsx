@@ -29,7 +29,12 @@ import type { AttestFn } from "~~/lib/efs/uploadOnchainFile";
 import { uploadOnchainFile } from "~~/lib/efs/uploadOnchainFile";
 import { useBackgroundOps } from "~~/services/store/backgroundOps";
 import { EDGE_RESOLVER_ABI, getEdgeResolverAddress } from "~~/utils/efs/edgeResolver";
+import { MAX_RENDER_BYTES } from "~~/utils/markdown/limits";
 import { notification } from "~~/utils/scaffold-eth";
+
+// On-chain SSTORE2 chunk size (mirrors uploadOnchainFile). Used only to estimate
+// the transaction count shown to the user before they commit.
+const CHUNK_SIZE = 24000;
 
 export interface OverviewEditorModalProps {
   mode: "create" | "edit";
@@ -96,6 +101,16 @@ export const OverviewEditorModal = (props: OverviewEditorModalProps) => {
     const opId = useBackgroundOps.getState().start("Saving Overview…");
     try {
       const bytes = new TextEncoder().encode(text);
+      // Refuse to save an Overview the pane would then refuse to render: the
+      // viewer caps markdown at MAX_RENDER_BYTES, so anything larger would cost
+      // a pile of on-chain transactions and only ever display "too large".
+      if (bytes.length > MAX_RENDER_BYTES) {
+        const msg = `Overview is ${(bytes.length / 1024).toFixed(0)} KB; the renderer caps at ${MAX_RENDER_BYTES / 1024} KB.`;
+        notification.error(msg);
+        useBackgroundOps.getState().fail(opId, msg);
+        setIsSaving(false);
+        return;
+      }
       const { dataUID } = await uploadOnchainFile({
         name: "README.md",
         bytes,
@@ -148,6 +163,12 @@ export const OverviewEditorModal = (props: OverviewEditorModalProps) => {
 
   if (typeof document === "undefined") return null;
 
+  const encodedBytes = new TextEncoder().encode(text).length;
+  const overCap = encodedBytes > MAX_RENDER_BYTES;
+  // ~5 fixed attestations (DATA, contentType ×3, ANCHOR, placement PIN, MIRROR,
+  // system TAG) + one SSTORE2 deploy per content chunk.
+  const estTxs = 8 + Math.max(1, Math.ceil(encodedBytes / CHUNK_SIZE));
+
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
       <div className="terminal-panel bg-base-200 border border-base-300 rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden">
@@ -157,8 +178,8 @@ export const OverviewEditorModal = (props: OverviewEditorModalProps) => {
             {mode === "edit" ? "Edit Overview" : "Create Overview"}
           </h3>
           <p className="text-xs text-base-content/60 mt-2 leading-relaxed pr-8">
-            Saving writes ~8–10 on-chain transactions as your connected wallet. Editing replaces your own version only
-            (lens-scoped) — it never touches anyone else&apos;s.
+            Saving writes ~{estTxs} on-chain transactions as your connected wallet (one per content chunk plus the file
+            edges). Editing replaces your own version only (lens-scoped) — it never touches anyone else&apos;s.
           </p>
           <button
             type="button"
@@ -178,6 +199,12 @@ export const OverviewEditorModal = (props: OverviewEditorModalProps) => {
           ) : (
             <>
               <MarkdownEditor value={text} onChange={setText} />
+              {overCap && (
+                <div className="mt-3 text-sm text-error">
+                  This Overview is {(encodedBytes / 1024).toFixed(0)} KB — over the {MAX_RENDER_BYTES / 1024} KB render
+                  cap. The viewer would only show &quot;too large&quot;, so saving is disabled. Trim the content.
+                </div>
+              )}
               {isSaving && (
                 <div className="mt-4 flex items-center gap-2 text-sm text-base-content/70">
                   <span className="loading loading-spinner loading-xs" />
@@ -212,7 +239,7 @@ export const OverviewEditorModal = (props: OverviewEditorModalProps) => {
               type="button"
               className="btn btn-primary"
               onClick={handleSave}
-              disabled={isSaving || text.trim().length === 0 || !indexerAbi}
+              disabled={isSaving || text.trim().length === 0 || !indexerAbi || overCap}
             >
               {isSaving && <span className="loading loading-spinner loading-xs" />}
               {isSaving ? "Saving…" : "Save"}

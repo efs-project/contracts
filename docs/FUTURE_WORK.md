@@ -268,3 +268,21 @@ A single EFS write today detonates into ~8 wallet prompts (chunk SSTORE2 + DATA 
 
 ### EVENT / TRANSITION schema for state-transition edges
 The brainstorm swarm flagged a future need for a schema expressing **state-transition edges** — provenance, ownership handoff, synonymy-with-citation, "X superseded by Y," etc. This is a *directed transition* primitive, distinct from PIN/TAG (membership/placement edges) and from LIST/LIST_ENTRY (collection membership). **Explicitly NOT Lists' job** — noted here so it doesn't get shoehorned into the LIST primitive. If pursued, it gets its own ADR following the purpose-built-schema pattern (ADR-0041/0044 shape), not a generic mechanism (cf. ADR-0045's deferral).
+
+---
+
+## Overview pane — deferred hardening (markdown-for-items PR, codex-gpt-5 review)
+
+Non-blocking follow-ups for the per-item Overview markdown pane. The shipped v1 is a thin client orchestration over existing utils (the SDK is meant to own resolution/fetch/pagination later); these are the rough edges that review surfaced and we consciously deferred.
+
+### Exact `README.md` resolution instead of a directory-page scan
+`useItemOverview` lists the current item's data-schema children (single 1000-item page) and name-matches `README.md`. Two limits: (1) a directory with >1000 children could sort a valid README beyond the first page and miss it (the hook documents "single page; SDK owns pagination"); (2) it does O(page) work on every mounted pane. Better: resolve the exact `README.md` anchor under the parent (e.g. `resolvePath(parent,"README.md")`) and fetch only if it exists — O(1), pagination-proof, and lets the router do lens resolution. Belongs in the SDK resolution layer.
+
+### System-tag hide filter does a global tag scan per load
+Defaulting `drawerTagFilters.system = "exclude"` (so Overviews are hidden from the file list like `nsfw`) routes every Explorer load through `FileBrowser.resolveTagSet`, which resolves `/tags/system` and paginates all active system-tag targets across all lenses before the page renders — O(all Overviews in the lens) rather than O(current page). It reuses the **exact** existing `nsfw` machinery (same accepted pattern), so it's not a new architecture, but the system set grows with one tag per Overview. Proper fix: hide system/README entries by batch-checking only the visible DATA UIDs after the page is known, rather than a global pre-scan — a shared refactor that improves the `nsfw` path too.
+
+### `fetchFileContent` has no pre-buffer byte cap / abort
+The 1 MiB `MAX_RENDER_BYTES` Overview cap is enforced *after* `fetchFileContent` returns the full body. A malicious/oversized mirror could stream a large download (or the on-chain branch could read many chunks) before the pane reports `too-large`. On-chain READMEs — the only *writable* Overview source — are bounded by the editor's pre-save cap (added this PR), so the exposure is external-mirror Overviews. Add `maxBytes` + `AbortSignal` to `fetchFileContent`: reject oversized `Content-Length`, stream with early abort, stop on-chain accumulation past the cap. Shared with the main file preview, so scope it there too.
+
+### Gas-test the on-chain upload cap before advertising 30 MB
+`uploadOnchainFile`'s `MAX_ONCHAIN_SIZE = 30_000_000` at `CHUNK_SIZE = 24000` allows ~1,250 SSTORE2 chunk contracts, then encodes **every** chunk address into one `MockChunkedFile` constructor tx. That single constructor can hit the block gas limit after the user already paid for all chunk deploys, orphaning them with no recovery. The same risk exists at the prior 24 MB (~1,000 chunks) — raising to 30 MB widened it. Fix: derive a `MAX_CHUNKS` from a gas-tested manager budget (and mirror it in `CreateItemModal`/`MirrorsPanel`), or move to a paged/batched manager deploy, before keeping a cap this high. **Open question for James** — he asked for 30 MB; decide between (a) a tested lower cap, (b) a `MAX_CHUNKS` guard at 30 MB, or (c) a paged manager.

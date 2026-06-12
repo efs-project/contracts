@@ -196,5 +196,6 @@ export async function applySystemTag(args: ApplySystemTagArgs): Promise<void> {
     },
     { silent: true },
   );
-  if (tagTx) await publicClient.waitForTransactionReceipt({ hash: tagTx });
+  if (!tagTx) throw new Error("system TAG attestation did not return a transaction hash.");
+  await publicClient.waitForTransactionReceipt({ hash: tagTx });
 }
