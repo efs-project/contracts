@@ -391,6 +391,64 @@ describe("EFSFileView — getDirectoryPageFiltered (ADR-0048)", function () {
     expect(names(page.items)).to.deep.equal(["doc.txt"]);
   });
 
+  it("Cross-lens exclusion: lens A pins DATA, lens B tags it; viewed with [A,B] the file is excluded", async function () {
+    // ADR-0048 union semantic (matches FileBrowser.resolveTagSet × matchesUID): an item is
+    // excluded iff ANY viewed lens tagged ANY DATA UID resolved at the item across the viewed
+    // lenses — NOT just the DATA each lens itself pinned. Here Alice pins DATA_A and Bob (also a
+    // viewed lens) tags DATA_A. The viewer trusts Bob's judgment, so the file must be excluded.
+    // This FAILS against the old per-lens-own-DATA loop (Bob's iteration resolves Bob's own PIN
+    // (zero here) and never checks Bob's tag against Alice's DATA_A).
+    const aliceAddr = await alice.getAddress();
+    const bobAddr = await bob.getAddress();
+    const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32, alice);
+
+    // Alice places the file (anchor + DATA_A + Alice's placement PIN).
+    const tagged = await createFileItem("tagged.txt", rootUID, alice);
+    // A clean file by alice that nobody tags — must survive.
+    await createFileItem("clean.txt", rootUID, alice);
+
+    // Bob (a different attester, but a viewed lens) tags Alice's DATA_A with the exclude tag.
+    // Bob places no PIN of his own here.
+    await createTag(tagged.dataUID, excludeTagDef, bob, 1n);
+
+    const page = await fileView.getDirectoryPageFiltered(
+      rootUID,
+      dataSchemaUID,
+      [aliceAddr, bobAddr],
+      excludeTagDef,
+      0n, // minWeight
+      "0x",
+      10,
+    );
+    // tagged.txt excluded via Bob's tag on Alice's DATA; clean.txt survives.
+    expect(names(page.items)).to.deep.equal(["clean.txt"]);
+  });
+
+  it("Cross-lens control: same setup viewed with [A] only (Bob not a lens) → NOT excluded", async function () {
+    // Lens scoping preserved: Bob's exclude tag is invisible to a viewer who does not trust Bob.
+    // Same fixture as the cross-lens test, but the lens list is [Alice] only.
+    const aliceAddr = await alice.getAddress();
+    const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32, alice);
+
+    const tagged = await createFileItem("tagged.txt", rootUID, alice);
+    await createFileItem("clean.txt", rootUID, alice);
+
+    // Bob tags Alice's DATA, but Bob is NOT in the viewed lens list below.
+    await createTag(tagged.dataUID, excludeTagDef, bob, 1n);
+
+    const page = await fileView.getDirectoryPageFiltered(
+      rootUID,
+      dataSchemaUID,
+      [aliceAddr], // Bob omitted → his tag is out of scope
+      excludeTagDef,
+      0n,
+      "0x",
+      10,
+    );
+    // Neither file excluded: Bob's tag is invisible without trusting Bob.
+    expect(names(page.items)).to.deep.equal(["clean.txt", "tagged.txt"]);
+  });
+
   it("Reused README-style DATA: file tagged by lens B, viewed with [B], is excluded (file→DATA-via-PIN)", async function () {
     // A shared DATA anchor (README) reused across placements. Lens B tags the DATA itself
     // (not the anchor). The filter must resolve the file item to its DATA via B's placement

@@ -393,13 +393,19 @@ contract EFSFileView {
      *         a caller passes, not a baked-in rule). The kernel stays weight-neutral.
      *
      *         **Tag-target asymmetry (load-bearing, ADR-0048).** A descriptive-label TAG targets
-     *         different UIDs for folders vs files:
+     *         different UIDs for folders vs files, and the predicate is a UNION over the viewed
+     *         lenses (mirroring the client's `FileBrowser.resolveTagSet`): an item is excluded iff
+     *         ANY viewed lens has an active `excludeTagDef` TAG (weight >= minWeight) on ANY DATA
+     *         UID resolved at the item across the viewed lenses (files), or on the item's anchor
+     *         UID (folders):
      *           - **folder** item (anchorType == bytes32(0)): the TAG targets the item's ANCHOR
-     *             UID, bucket `ANCHOR_SCHEMA_UID`. Tested directly.
-     *           - **file** item: the TAG targets the item's DATA UID, reached via the placement
-     *             PIN `getActivePinTarget(itemAnchor, lens, dataSchemaUID)`, bucket
-     *             `dataSchemaUID`. Testing `excludeTagDef` against a file's anchor UID is the
-     *             wrong target and excludes nothing — the known footgun.
+     *             UID, bucket `ANCHOR_SCHEMA_UID`. Tested against every lens.
+     *           - **file** item: the TAG targets a DATA UID, reached via the placement PIN
+     *             `getActivePinTarget(itemAnchor, lens, dataSchemaUID)`, bucket `dataSchemaUID`.
+     *             The DATA UIDs of ALL viewed lenses are collected (deduplicated) and each is
+     *             tested against EVERY lens's tags — so a DATA one lens pinned and ANOTHER viewed
+     *             lens tagged is still excluded. Testing `excludeTagDef` against a file's anchor
+     *             UID is the wrong target and excludes nothing — the known footgun.
      *
      *         `maxItems` counts POST-filter result slots: an excluded item advances the walker
      *         but consumes no slot (same as a revoked / out-of-lens skip). A phase-1 scan budget
@@ -544,15 +550,23 @@ contract EFSFileView {
 
     /// @dev Per-item tag-exclusion predicate for `getDirectoryPageFiltered`. Decodes the item's
     ///      anchor once to determine folder-vs-file (anchorType == bytes32(0) ⇒ folder, the same
-    ///      rule `_buildFileSystemItems` uses) and resolves the correct tag target per the
-    ///      ADR-0048 asymmetry:
-    ///        - folder ⇒ test `excludeTagDef` on the ANCHOR UID, bucket ANCHOR_SCHEMA_UID;
-    ///        - file   ⇒ for each lens, resolve DATA UID via the placement PIN
-    ///                   (`getActivePinTarget(anchor, lens, dataSchemaUID)`); if 0, that lens
-    ///                   contributes no tag; else test `excludeTagDef` on the DATA UID, bucket
-    ///                   dataSchemaUID.
-    ///      Returns true iff ANY lens has an active `excludeTagDef` TAG on the resolved target
-    ///      with `weight >= minWeight` (inclusive). All per-item reads are O(1).
+    ///      rule `_buildFileSystemItems` uses) and resolves the correct tag target(s) per the
+    ///      ADR-0048 asymmetry. The semantic is a UNION over the viewed lenses on both the
+    ///      target-resolution side and the tag-attester side — it matches the client's
+    ///      `FileBrowser.resolveTagSet` (union of viewed attesters' tags) × `matchesUID`
+    ///      (item's resolved DATA UIDs) model:
+    ///        - folder ⇒ test `excludeTagDef` on the ANCHOR UID, bucket ANCHOR_SCHEMA_UID,
+    ///                   against every lens (a single target, union over lens tag-attesters);
+    ///        - file   ⇒ first resolve the DEDUPLICATED set of DATA UIDs that ANY lens placed at
+    ///                   this item via the placement PIN
+    ///                   (`getActivePinTarget(anchor, lens, dataSchemaUID)`, dropping zeros), then
+    ///                   test `excludeTagDef` on each such DATA UID (bucket dataSchemaUID) against
+    ///                   every lens. This catches the cross-lens case where one lens pins a DATA
+    ///                   that ANOTHER viewed lens has tagged — the viewer trusts the tagging lens.
+    ///      Returns true iff ANY lens has an active `excludeTagDef` TAG on ANY resolved target
+    ///      with `weight >= minWeight` (inclusive). All per-item reads are O(1); the file branch
+    ///      is O(lenses) PIN reads + O(dataUIDs × lenses) tag reads, bounded by the
+    ///      MAX_ATTESTERS_PER_QUERY (<= 20) cap (no storage list scans).
     function _isItemExcluded(
         bytes32 itemAnchorUID,
         address[] memory attesters,
@@ -582,23 +596,51 @@ contract EFSFileView {
             return false;
         }
 
-        // File: the TAG targets the DATA UID, reached per-lens via the placement PIN.
+        // File: the TAG targets the DATA UID, reached via the placement PIN. The exclusion is a
+        // UNION over the viewed lenses on both sides (mirrors the client's
+        // `dataUIDMap` × `resolveTagSet` model): exclude the item if ANY lens has an active
+        // `excludeTagDef` TAG (weight >= minWeight) on ANY DATA UID that ANY lens placed here.
+        // A per-lens-own-DATA loop would miss the cross-lens case — e.g. Alice pins DATA_A and
+        // Bob (also a viewed lens) tags DATA_A as nsfw; the viewer trusts Bob's judgment, so the
+        // item must be excluded even though Bob never pinned DATA_A himself.
+        //
+        // Step 1: collect the deduplicated set of non-zero DATA UIDs any lens placed at this item.
+        // Bounded by attesters.length (<= MAX_ATTESTERS_PER_QUERY), so a fixed-size memory array
+        // with linear dedup is O(1)-class per read (no storage list scans).
+        //
         // Note (ADR-0048): this branch is reached by any non-folder anchor, including LIST
         // anchors (anchorType == LIST_SCHEMA_UID, non-zero). A LIST has no placement PIN under
-        // `dataSchemaUID`, so `getActivePinTarget` returns 0 for every lens and a LIST is never
-        // excluded — non-folder/non-file anchors resolve no DATA under dataSchemaUID and pass
-        // through unfiltered. Intentional for v1 (file/folder labels only); a three-way classifier
-        // that also filters LIST items is deferred to a redeployable later version of this view.
+        // `dataSchemaUID`, so no lens resolves any DATA, the set below stays empty, and a LIST is
+        // never excluded — non-folder/non-file anchors pass through unfiltered. Intentional for v1
+        // (file/folder labels only); a three-way classifier that also filters LIST items is
+        // deferred to a redeployable later version of this view.
+        bytes32[] memory dataUIDs = new bytes32[](attesters.length);
+        uint256 dataCount = 0;
         for (uint256 i = 0; i < attesters.length; i++) {
             bytes32 dataUID = edgeResolver.getActivePinTarget(itemAnchorUID, attesters[i], dataSchemaUID);
             if (dataUID == bytes32(0)) continue;
-            (bool exists, int256 weight) = edgeResolver.getActiveTagWeight(
-                attesters[i],
-                dataUID,
-                excludeTagDef,
-                dataSchemaUID
-            );
-            if (exists && weight >= minWeight) return true;
+            bool seen = false;
+            for (uint256 j = 0; j < dataCount; j++) {
+                if (dataUIDs[j] == dataUID) {
+                    seen = true;
+                    break;
+                }
+            }
+            if (!seen) dataUIDs[dataCount++] = dataUID;
+        }
+
+        // Step 2: exclude if ANY lens has an active exclude TAG (weight >= minWeight) on ANY of
+        // those resolved DATA UIDs. This is the cross-lens union the client applies.
+        for (uint256 d = 0; d < dataCount; d++) {
+            for (uint256 i = 0; i < attesters.length; i++) {
+                (bool exists, int256 weight) = edgeResolver.getActiveTagWeight(
+                    attesters[i],
+                    dataUIDs[d],
+                    excludeTagDef,
+                    dataSchemaUID
+                );
+                if (exists && weight >= minWeight) return true;
+            }
         }
         return false;
     }

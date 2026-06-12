@@ -34,8 +34,11 @@ kernel weight-neutrality:
 
 2. **`EFSFileView.getDirectoryPageFiltered(bytes32 parent, bytes32 schema, address[] lenses, bytes32 excludeTagDef, int256 minWeight, bytes cursor, uint256 maxItems) → DirectoryPage`** —
    the existing `getDirectoryPageBySchemaAndAddressList` plus a per-item exclusion
-   predicate: skip an item if **any** lens has an active TAG `excludeTagDef` on it
-   with `weight >= minWeight`. The `weight >= minWeight` comparison happens in the
+   predicate (a **union over the viewed lenses**, matching the client's
+   `FileBrowser.resolveTagSet`): an item is excluded iff **any** viewed lens has an
+   active TAG `excludeTagDef` (with `weight >= minWeight`) on **any** DATA UID
+   resolved at the item across the viewed lenses (files), or on the item's anchor
+   UID (folders). The `weight >= minWeight` comparison happens in the
    **view layer** (EFSFileView is stateless and redeployable — *not* Etched). The
    threshold is a **caller argument**: ADR-0042's `weight >= 0` becomes the
    conventional default a caller passes (`minWeight = 0`), not a hard-coded rule.
@@ -45,10 +48,17 @@ kernel weight-neutrality:
   `getActivePinTarget(itemAnchor, lens, dataSchemaUID)`), bucket `dataSchemaUID`;
 - a **folder** item's **ANCHOR UID**, bucket `ANCHOR_SCHEMA_UID`.
 
-The filter must resolve a file item to its DATA before testing the tag (this
-mirrors the client's `resolveTagSet`/`matchesUID` dual-bucket union). Testing
-`excludeTagDef` against a file's anchor UID is the wrong target and silently
-excludes nothing.
+The predicate is a **union over the viewed lenses on both sides**, mirroring the
+client's `resolveTagSet` (union of viewed attesters' tags) × `matchesUID`
+(item's resolved DATA UIDs) model. Concretely: an item is excluded iff **any**
+viewed lens has an active `excludeTagDef` TAG (`weight >= minWeight`) on **any**
+DATA UID resolved at the item across the viewed lenses (files), or on the item's
+anchor UID (folders). For files the filter collects the deduplicated set of DATA
+UIDs that *any* lens placed at the item, then tests each against *every* lens's
+tags — so a DATA that one lens pinned and *another* viewed lens tagged is still
+excluded (the viewer trusts the tagging lens). A per-lens-own-DATA check would
+miss that cross-lens case. Testing `excludeTagDef` against a file's anchor UID is
+the wrong target and silently excludes nothing.
 
 **Bounding.** `maxItems` counts post-filter result slots (an excluded item
 advances the walker but consumes no slot — like a revoked/out-of-lens entry). The
@@ -107,3 +117,15 @@ policy per call."
 - **Multi-tag array in v1.** Multiplies per-item cost and needs parallel
   per-tag thresholds + extra cursor/budget logic for one dominant caller.
   Deferred (redeployable view → zero-migration later).
+
+---
+
+Correction 2026-06-12: prose-accuracy fix within the retroactive-ADR grace
+period. The Decision/asymmetry text now states the **union-over-lenses** file
+semantic explicitly. The original `_isItemExcluded` FILE branch looped lenses
+and only tested each lens's tag against the DATA *that same lens* pinned, missing
+the cross-lens case (one lens pins a DATA that another viewed lens tagged). The
+intended semantic — always "any viewed lens's tag on any DATA resolved at the
+item across the viewed lenses," matching `FileBrowser.resolveTagSet` ×
+`matchesUID` — is unchanged; only the implementation and its description were
+brought into line.
