@@ -41,6 +41,19 @@ export class FileTooLargeError extends Error {
 }
 
 /**
+ * Thrown when the router resolves the path to a 404 — the anchor doesn't exist,
+ * or it exists but no active lens has content there. Distinct from a transport
+ * error so callers probing an optional file (the Overview pane) can treat it as
+ * "absent" rather than a failure.
+ */
+export class FileNotFoundError extends Error {
+  constructor(public readonly path: string) {
+    super(`No file at ${path}`);
+    this.name = "FileNotFoundError";
+  }
+}
+
+/**
  * Pure router-fetch for a single file's bytes. Mirrors the read flow documented
  * in `specs/overview.md` § Read flow:
  *   EFSRouter.request([...path], [{key:"lenses",...}, {key:"chunk",...}]) via the
@@ -171,7 +184,12 @@ export async function fetchFileContent(args: FetchFileArgs): Promise<FetchedFile
         hasMoreChunks = false;
       }
     } else {
-      throw new Error(`Router returned HTTP ${response[0]}`);
+      const status = Number(response[0]);
+      // 404 = path/anchor doesn't exist OR no content for the active lens. For a
+      // caller probing an optional file (the Overview pane) that's "absent", not
+      // an error — surface it distinctly so it can render an empty state.
+      if (status === 404) throw new FileNotFoundError(resourcePath.join("/"));
+      throw new Error(`Router returned HTTP ${status}`);
     }
   }
 

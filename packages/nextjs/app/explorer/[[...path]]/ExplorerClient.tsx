@@ -698,8 +698,6 @@ export default function ExplorerClient() {
                 lensAddresses={lensAddresses}
                 resourcePathNames={buildRouterPathNames(currentContainer, currentPath)}
                 publicClient={publicClient}
-                fileViewAddress={fileViewInfo?.address as `0x${string}` | undefined}
-                fileViewAbi={fileViewInfo?.abi}
                 routerAddress={routerInfo?.address as `0x${string}` | undefined}
                 routerAbi={routerInfo?.abi}
                 dataSchemaUID={dataSchemaUID as `0x${string}` | undefined}

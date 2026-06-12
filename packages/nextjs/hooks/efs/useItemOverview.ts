@@ -1,24 +1,21 @@
 /**
  * useItemOverview — resolve an EFS item's "Overview" markdown.
  *
- * Thin orchestration seam composing already-built utils:
- *   1. List the item's data-schema (file) children lens-scoped via
- *      `EFSFileView.getDirectoryPageBySchemaAndAddressList` (single page; the
- *      SDK will own pagination later).
- *   2. Pick the child named `README.md` (`selectOverview`) from the lens-scoped
- *      listing; the router applies first-lens-wins when its bytes are fetched.
- *   3. Fetch the picked file's bytes through the router (`fetchFileContent`).
- *   4. Cap by `MAX_RENDER_BYTES`, sniff text/binary, decode as UTF-8 markdown.
- *
- * No caching / retry / pagination beyond the single page shown here — matches
- * the planned SDK boundary (EFS machinery stays thin in client code).
+ * Resolves the item's `README.md` directly through the router's EXACT path
+ * lookup (EFSIndexer `resolveAnchor` / `_nameToAnchor`, lens-scoped, first-lens-
+ * wins) — no directory listing or scan. The router returns 404 when the anchor
+ * doesn't exist or no active lens has content there, which we read as "no
+ * Overview". On success: cap by `MAX_RENDER_BYTES`, sniff text/binary, decode as
+ * UTF-8 markdown.
  */
 import { useEffect, useState } from "react";
 import type { Abi, PublicClient } from "viem";
-import { FileTooLargeError, fetchFileContent } from "~~/utils/efs/fetchFileContent";
-import { selectOverview } from "~~/utils/efs/selectOverview";
+import { FileNotFoundError, FileTooLargeError, fetchFileContent } from "~~/utils/efs/fetchFileContent";
 import { MAX_RENDER_BYTES } from "~~/utils/markdown/limits";
 import { sniffContent } from "~~/utils/markdown/sniff";
+
+/** The one canonical Overview filename. Anchor names are case-sensitive on-chain. */
+const OVERVIEW_NAME = "README.md";
 
 export type OverviewState =
   | { kind: "loading" }
@@ -41,24 +38,12 @@ export interface UseItemOverviewArgs {
   lensAddresses: string[];
   resourcePathNames: string[];
   publicClient: PublicClient | undefined;
-  fileViewAddress?: `0x${string}`;
-  fileViewAbi?: Abi;
   routerAddress?: `0x${string}`;
   routerAbi?: Abi;
+  /** Not read by the hook; carried for the consuming component's write-readiness. */
   dataSchemaUID?: `0x${string}`;
   /** Bump to force a re-resolution (e.g. after the editor saves a new Overview). */
   refreshKey?: number;
-}
-
-/**
- * One decoded `EFSFileView.FileSystemItem` — the fields this hook reads. The
- * full struct also carries parentUID/isFolder/hasData/childCount/propertyCount/
- * timestamp/schema/contentHash/attester; we only need uid + name (the router
- * resolves the winning lens at fetch time, so the item's attester is not read).
- */
-interface FileSystemItem {
-  uid: `0x${string}`;
-  name: string;
 }
 
 export function useItemOverview(args: UseItemOverviewArgs): OverviewState {
@@ -67,16 +52,13 @@ export function useItemOverview(args: UseItemOverviewArgs): OverviewState {
     const ready =
       args.enabled &&
       args.anchorUID &&
-      // Explicit empty / unresolvable lenses (e.g. a shared `?lenses=` URL)
-      // scope the view to nothing. EFSFileView rejects an empty attesters list,
-      // so short-circuit to `none` rather than issue a reverting read.
+      // Explicit empty / unresolvable lenses (e.g. a shared `?lenses=` URL) scope
+      // the view to nothing — short-circuit to `none` rather than fall through to
+      // the router's default-lens resolution.
       args.lensAddresses.length > 0 &&
       args.publicClient &&
-      args.fileViewAddress &&
-      args.fileViewAbi &&
       args.routerAddress &&
-      args.routerAbi &&
-      args.dataSchemaUID;
+      args.routerAbi;
     if (!ready) {
       setState({ kind: "none" });
       return;
@@ -85,43 +67,22 @@ export function useItemOverview(args: UseItemOverviewArgs): OverviewState {
     setState({ kind: "loading" });
     (async () => {
       try {
-        // 1. List children lens-scoped. Matches useLensesDirectoryPage's call
-        //    (arg order: parentAnchor, anchorSchema, attesters, cursor "0x",
-        //    maxItems) and decode (DirectoryPage = { items, nextCursor }; viem
-        //    yields a named object, but a positional tuple is handled too).
-        const pageRaw = (await args.publicClient!.readContract({
-          address: args.fileViewAddress!,
-          abi: args.fileViewAbi!,
-          functionName: "getDirectoryPageBySchemaAndAddressList",
-          args: [args.anchorUID!, args.dataSchemaUID!, args.lensAddresses as `0x${string}`[], "0x", 1000n],
-        })) as any;
-        const items: FileSystemItem[] = (pageRaw?.items ?? pageRaw?.[0] ?? []) as FileSystemItem[];
-        if (cancelled) return;
-        // 2. Pick the child named exactly README.md. The listing is already
-        //    restricted to the requested lenses, and the router applies
-        //    first-lens-wins when the bytes are fetched (step 3). We deliberately
-        //    do NOT re-derive the lens from `item.attester` (the anchor *creator*):
-        //    a later lens can reuse an existing README.md anchor with its own PIN,
-        //    and filtering by the creator would drop that lens's Overview.
-        //    System-tag visibility is handled by the normal explorer tag filter.
-        const picked = selectOverview(items.map(it => ({ uid: it.uid, name: it.name })));
-        if (!picked) {
-          if (!cancelled) setState({ kind: "none" });
-          return;
-        }
-        // 3. Fetch the picked file's bytes through the router.
+        // Resolve README.md by EXACT path through the router (lens-scoped,
+        // first-lens-wins). The router's resolveAnchor-backed lookup is O(1) and
+        // pagination-proof — no directory page to scan. 404 ⇒ no such file or no
+        // content for the active lens ⇒ no Overview.
         const fetched = await fetchFileContent({
           routerAddress: args.routerAddress!,
           routerAbi: args.routerAbi!,
           publicClient: args.publicClient!,
           lensAddresses: args.lensAddresses,
-          resourcePath: [...args.resourcePathNames, picked.name],
+          resourcePath: [...args.resourcePathNames, OVERVIEW_NAME],
           // Bound the fetch itself — don't download an oversized external mirror
           // body just to find out it's too large to render.
           maxBytes: MAX_RENDER_BYTES,
         });
         if (cancelled) return;
-        // 4. Size cap (belt — fetch already aborts past maxBytes), then sniff.
+        // Size cap (belt — the fetch already aborts past maxBytes), then sniff.
         if (fetched.bytes.length > MAX_RENDER_BYTES) {
           setState({ kind: "too-large", size: fetched.bytes.length });
           return;
@@ -131,7 +92,7 @@ export function useItemOverview(args: UseItemOverviewArgs): OverviewState {
             kind: "binary",
             bytes: fetched.bytes,
             contentType: fetched.contentType,
-            fileName: picked.name,
+            fileName: OVERVIEW_NAME,
             size: fetched.bytes.length,
             source: fetched.source,
           });
@@ -140,6 +101,10 @@ export function useItemOverview(args: UseItemOverviewArgs): OverviewState {
         setState({ kind: "markdown", text: new TextDecoder("utf-8").decode(fetched.bytes), source: fetched.source });
       } catch (e) {
         if (cancelled) return;
+        if (e instanceof FileNotFoundError) {
+          setState({ kind: "none" });
+          return;
+        }
         if (e instanceof FileTooLargeError) {
           setState({ kind: "too-large", size: e.size });
           return;
@@ -154,17 +119,12 @@ export function useItemOverview(args: UseItemOverviewArgs): OverviewState {
   }, [
     args.enabled,
     args.anchorUID,
-    args.dataSchemaUID,
     args.lensAddresses.join(","),
     args.resourcePathNames.join("/"),
     args.refreshKey,
-    // Contract/client readiness. `useDeployedContractInfo` resolves async, so
-    // these flip from undefined once bytecode loads — re-resolve when they do,
-    // otherwise an Overview that mounted too early stays blank until an
-    // unrelated path/lens/refresh change.
-    args.fileViewAddress,
+    // Contract/client readiness — `useDeployedContractInfo` resolves async, so
+    // these flip from undefined once bytecode loads; re-resolve when they do.
     args.routerAddress,
-    !!args.fileViewAbi,
     !!args.routerAbi,
     !!args.publicClient,
   ]);
