@@ -172,22 +172,24 @@ yarn deploy:efs-views --network sepolia
 > rehearse via `test/DeploySafe.fork.test.ts`, which drives `orchestrateViaSafe` directly and never
 > touches the pin.
 
-**EOA-then-transfer (fallback):**
+**EOA-then-transfer (fork / devnet only — NOT for the real Sepolia/mainnet freeze):**
+
+> ⚠️ The EOA register/bootstrap step is **gated to chainId 31337** (`orchestrate.ts` — front-run safety, PR #24 P1: on a public network there's a mempool window between ANCHOR registration and root bootstrap). So this gated two-phase EOA flow runs only on the **local pinned fork and the devnet VPS** (anvil `--chain-id 31337`). For the **real Sepolia/mainnet freeze use the Safe-native ceremony above** (`--via-safe`), whose Batch 2 registers + bootstraps atomically. The EOA `--until-freeze-gate` (deploy + wire, no register) is allowed on any network, but `--after-freeze-gate` (register) will hard-fail off-31337.
 
 ```bash
 cd packages/hardhat
 # 1. one-time: import the deployer key (encrypted) + set the Safe address
 yarn account:import                       # JamesCarnley.eth or a dedicated deployer
 echo "EFS_SAFE_ADDRESS=0x...your Safe..." >> .env
-# 2. rehearse on the pinned fork (no real txs, full verify + smoke)
+# 2. rehearse the FULL ceremony on the pinned fork (no real txs, full verify + smoke)
 yarn deploy:efs --network hardhat         # (Phase-D script; dry-run/fork)
-# 3. deploy to Sepolia UP TO the freeze gate (deploys + verifies, STOPS before register)
-yarn deploy:efs --network sepolia --until-freeze-gate
+# 3. devnet (anvil --chain-id 31337): deploy UP TO the freeze gate (deploys + verifies, STOPS before register)
+yarn deploy:efs --network localhost --until-freeze-gate
 #    -> review + sign docs/SEPOLIA_FREEZE_TABLE.md
-# 4. register + transfer-to-Safe + smoke (after signing)
-yarn deploy:efs --network sepolia --after-freeze-gate
+# 4. devnet: register + transfer-to-Safe + smoke (after signing) — 31337 only; real nets use --via-safe
+yarn deploy:efs --network localhost --after-freeze-gate
 # 5. deploy the read views (NON-FROZEN; redeployable anytime, in no UID, outside the freeze)
-yarn deploy:efs-views --network sepolia
+yarn deploy:efs-views --network localhost
 ```
 
 `deploy:efs` is a real hardhat task (`packages/hardhat/tasks/deployEfs.ts`, run via the `deploy:efs` package script with the encrypted-key flow). It runs **only** the EFS core ceremony (the `EFSCore` tag → `deploy/00_efs_core.ts`), never the downstream/legacy scripts. The flags map to the run mode: `--via-safe` (Safe-native, born-owned, two MultiSend batches — its own flow, not combinable with the gate flags) / `--until-freeze-gate` / `--after-freeze-gate` / (omit all) full EOA-then-transfer. The EOA fork rehearsal `yarn deploy:efs --network hardhat` exercises the full ceremony end-to-end (deploy + verify + wire + register + transfer + per-schema smoke); the Safe fork rehearsal `yarn deploy:efs --via-safe --network hardhat` deploys a 1-of-1 test Safe and exercises the two-batch born-owned flow (also covered by `test/DeploySafe.fork.test.ts`). `EFS_SAFE_ADDRESS` must be set to the real checksummed Safe before `--after-freeze-gate` (EOA path) or before `--via-safe` on a real network (the task hard-fails otherwise — on the EOA path the transfer is single-step and irreversible, see I-5a; on the Safe path the address is the CreateX caller baked permanently into every address/UID).
