@@ -609,11 +609,7 @@ contract EdgeResolver is SchemaResolver {
     ///         Use this — not `isActiveEdgeAnySchema` — for cross-attester file-placement dedup
     ///         in `getFilesAtPath` (ADR-0041): file placement is PIN-only (Shape A); a TAG from
     ///         an earlier attester must NOT suppress a later attester's valid PIN placement.
-    function isActivePinEdge(
-        address attester,
-        bytes32 targetID,
-        bytes32 definition
-    ) external view returns (bool) {
+    function isActivePinEdge(address attester, bytes32 targetID, bytes32 definition) external view returns (bool) {
         return _activeEdge[_edgeHash(attester, targetID, definition, PIN_SCHEMA_UID)] != bytes32(0);
     }
 

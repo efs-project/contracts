@@ -235,11 +235,7 @@ describe("EFSFileView — getDirectoryPageFiltered (ADR-0048)", function () {
    */
   const deployTestableFileView = async (budget: number = 4): Promise<EFSFileView> => {
     const Factory = await ethers.getContractFactory("EFSFileViewTestable");
-    const tv = await Factory.deploy(
-      await indexer.getAddress(),
-      await edgeResolver.getAddress(),
-      BigInt(budget),
-    );
+    const tv = await Factory.deploy(await indexer.getAddress(), await edgeResolver.getAddress(), BigInt(budget));
     await tv.waitForDeployment();
     return tv as unknown as EFSFileView;
   };
@@ -568,7 +564,15 @@ describe("EFSFileView — getDirectoryPageFiltered (ADR-0048)", function () {
     while (true) {
       calls++;
       if (calls > 20) throw new Error("budget pagination did not terminate");
-      const page = await tv.getDirectoryPageFiltered(rootUID, dataSchemaUID, [aliceAddr], excludeTagDef, 0n, cursor, 10);
+      const page = await tv.getDirectoryPageFiltered(
+        rootUID,
+        dataSchemaUID,
+        [aliceAddr],
+        excludeTagDef,
+        0n,
+        cursor,
+        10,
+      );
       totalItems += page.items.length;
       if (page.nextCursor === "0x") break; // terminated
       const [, , fi] = dec(page.nextCursor);
@@ -639,7 +643,15 @@ describe("EFSFileView — getDirectoryPageFiltered (ADR-0048)", function () {
     while (true) {
       calls++;
       if (calls > 20) throw new Error("phase-0 paging did not terminate");
-      const page = await tv.getDirectoryPageFiltered(rootUID, dataSchemaUID, [aliceAddr], excludeTagDef, 0n, cursor, 10);
+      const page = await tv.getDirectoryPageFiltered(
+        rootUID,
+        dataSchemaUID,
+        [aliceAddr],
+        excludeTagDef,
+        0n,
+        cursor,
+        10,
+      );
       for (const it of page.items) seen.push(it.name);
       if (page.nextCursor === "0x") break;
       const [ph] = dec(page.nextCursor);
@@ -662,7 +674,15 @@ describe("EFSFileView — getDirectoryPageFiltered (ADR-0048)", function () {
     const tagUID = await createTag(item.dataUID, excludeTagDef, alice, 1n);
 
     // Sanity: excluded while the tag is active, and getActiveTagWeight sees it.
-    let page = await fileView.getDirectoryPageFiltered(rootUID, dataSchemaUID, [aliceAddr], excludeTagDef, 0n, "0x", 10);
+    let page = await fileView.getDirectoryPageFiltered(
+      rootUID,
+      dataSchemaUID,
+      [aliceAddr],
+      excludeTagDef,
+      0n,
+      "0x",
+      10,
+    );
     expect(names(page.items)).to.deep.equal([]);
     const active = await edgeResolver.getActiveTagWeight(aliceAddr, item.dataUID, excludeTagDef, dataSchemaUID);
     expect(active.exists).to.equal(true);
@@ -684,7 +704,7 @@ describe("EFSFileView — getDirectoryPageFiltered (ADR-0048)", function () {
     // Revoking the FIRST must not orphan the SECOND — the swap-and-pop re-index the reader depends
     // on must keep the survivor's position index correct (exists=true, correct weight).
     const aliceAddr = await alice.getAddress();
-    const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32, alice);
+    await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32, alice);
 
     const dataA = await createData("A", alice);
     const dataB = await createData("B", alice);
@@ -695,8 +715,12 @@ describe("EFSFileView — getDirectoryPageFiltered (ADR-0048)", function () {
     await createTag(dataB, excludeTagDef, alice, 9n);
 
     // Both present before revoke.
-    expect((await edgeResolver.getActiveTagWeight(aliceAddr, dataA, excludeTagDef, dataSchemaUID)).exists).to.equal(true);
-    expect((await edgeResolver.getActiveTagWeight(aliceAddr, dataB, excludeTagDef, dataSchemaUID)).exists).to.equal(true);
+    expect((await edgeResolver.getActiveTagWeight(aliceAddr, dataA, excludeTagDef, dataSchemaUID)).exists).to.equal(
+      true,
+    );
+    expect((await edgeResolver.getActiveTagWeight(aliceAddr, dataB, excludeTagDef, dataSchemaUID)).exists).to.equal(
+      true,
+    );
 
     // Revoke the FIRST (dataA). In the append array dataA is at index 0, so swap-and-pop moves the
     // last entry (dataB) into slot 0 and updates its index — the case most likely to corrupt.
