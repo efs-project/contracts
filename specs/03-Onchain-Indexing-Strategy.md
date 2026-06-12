@@ -61,21 +61,32 @@ Where this is enforced today (audited at the schema freeze):
 
 **Deferred (FUTURE_WORK, ADR-0051):** the generic referencing-index getters on EFSIndexer (`getReferencingAttestationCount`, `getAllReferencing`, `getReferencingByAttester`, `getReferencingBySchemaAndAttester`) return the raw append-only arrays with no `includeRevoked` opt-in. Bringing them under the uniform default is a multi-function additive ABI change and was kept out of the freeze PR; the serving/router path is fully covered.
 
-### Kernel Events (Off-Chain Indexing)
-EFSIndexer emits structured events from its native schema resolver hooks, enabling efficient off-chain indexing without scanning all EAS `Attested` events:
+### Kernel + resolver Events (Off-Chain Indexing)
+EFSIndexer and the edge/mirror resolvers emit structured events from their schema hooks, so a log-only indexer (The Graph / Ponder) reconstructs full state without per-attestation `eth_call`s and without scanning raw EAS `Attested` (which carries no field data):
 
 ```solidity
-event AnchorCreated(bytes32 indexed parentUID, bytes32 indexed anchorUID, address indexed attester, bytes32 anchorSchema);
+// EFSIndexer — kernel-native schemas
+event AnchorCreated(bytes32 indexed parentUID, bytes32 indexed anchorUID, address indexed attester, bytes32 anchorSchema, string name);
 event DataCreated(bytes32 indexed dataUID, address indexed attester);
-event MirrorCreated(bytes32 indexed dataUID, bytes32 indexed mirrorUID, address indexed attester);
+event MirrorCreated(bytes32 indexed dataUID, bytes32 indexed mirrorUID, address indexed attester); // generic kernel-index signal (no URI)
 event PropertyCreated(bytes32 indexed propertyUID, address indexed attester, bytes32 indexed valueHash);
 event AttestationRevoked(bytes32 indexed uid, address indexed attester);  // native-schema revocations
 event RevocationIndexed(bytes32 indexed uid);                              // externally-resolved schemas indexed via indexRevocation()
+
+// EdgeResolver — PIN/TAG edges. Indexed topics = the active-slot key (definition, attester, targetSchema).
+event PinSet(bytes32 indexed definition, address indexed attester, bytes32 indexed targetSchema, bytes32 pinUID, bytes32 targetID, bytes32 supersededPinUID);
+event PinCleared(bytes32 indexed definition, address indexed attester, bytes32 indexed targetSchema, bytes32 pinUID, bytes32 targetID);
+event TagSet(bytes32 indexed definition, address indexed attester, bytes32 indexed targetSchema, bytes32 tagUID, bytes32 targetID, int256 weight);
+event TagCleared(bytes32 indexed definition, address indexed attester, bytes32 indexed targetSchema, bytes32 tagUID, bytes32 targetID);
+
+// MirrorResolver — the URI-bearing mirror event (the kernel's MirrorCreated omits the URI).
+event MirrorSet(bytes32 indexed dataUID, address indexed attester, bytes32 indexed transportDefinition, bytes32 mirrorUID, string uri);
+event MirrorCleared(bytes32 indexed dataUID, address indexed attester, bytes32 mirrorUID);
 ```
 
-Subscribe to both revocation events. `AttestationRevoked` fires from the resolver hook on native schemas (ANCHOR, DATA, PROPERTY); `RevocationIndexed` fires when an external resolver calls `indexRevocation()` to surface a TAG/MIRROR/SORT_INFO revocation into the kernel.
+Subscribe to both revocation events. `AttestationRevoked` fires from the resolver hook on native schemas (ANCHOR, DATA, PROPERTY); `RevocationIndexed` fires when an external resolver calls `indexRevocation()`. For the edge/mirror layer the typed `PinCleared`/`TagCleared`/`MirrorCleared` events carry the slot/data keys, so an indexer retires the exact active entry without an `eth_call`.
 
-All events are indexed on the most useful lookup fields. `MirrorCreated` links mirrors to their parent DATA. `PropertyCreated`'s third topic `valueHash = keccak256(bytes(value))` is the interned value's **canonical content key** (ADR-0052; ties to the forthcoming canonical-hashing spec) — the lookup key clients use to find an existing PROPERTY value to dedup against (point a new PIN at it rather than minting a fresh value). It is the off-chain half of the dedup story; the on-chain half is a future opt-in intern registry (ADR-0052, `docs/FUTURE_WORK.md`). A Graph subgraph subscribing to these events can reconstruct full directory state without any additional contract reads during sync.
+All events are indexed on the most useful lookup fields. The PIN/TAG topic triple `(definition, attester, targetSchema)` **is** the on-chain active-slot key (`_activeBySlot[definition][attester][targetSchema]`), so a subgraph keys an `ActivePin` entity on it directly. **PIN cardinality-1 supersession** is silent in storage (a re-pin replaces the slot in O(1)); `PinSet.supersededPinUID` makes it observable — it is `bytes32(0)` on a fresh slot or same-target re-attest, and the retired pinUID on a real different-target replacement, so a superseded PIN emits no `PinCleared` (its retirement is read from the next `PinSet`). `MirrorSet` carries the `uri` + `transportDefinition` the router ranks by (the generic `MirrorCreated` is retained as a kernel-index signal but omits the URI). `PropertyCreated`'s third topic `valueHash = keccak256(bytes(value))` is the interned value's **canonical content key** (ADR-0052) — the dedup lookup key. Because PIN events now carry `(definition, targetID, targetSchema)`, PROPERTY *bindings* (a PIN from a reserved-key anchor like `contentType`/`name`/`contentHash` to a PROPERTY value) and LIST_ENTRY order/label bindings are reconstructable from logs too. A Graph subgraph subscribing to these events can reconstruct full directory state — placement, supersession, tags, mirrors, property bindings, revocation — without any additional contract reads during sync.
 
 `EFSSortOverlay` emits `ItemSorted(sortInfoUID, parentAnchor, itemUID, leftNeighbour, rightNeighbour)` for each item inserted into a sorted list — enabling The Graph to reconstruct sorted order off-chain.
 

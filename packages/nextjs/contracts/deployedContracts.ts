@@ -1448,6 +1448,166 @@ const deployedContracts = {
           type: "event",
         },
         {
+          anonymous: false,
+          inputs: [
+            {
+              indexed: true,
+              internalType: "bytes32",
+              name: "definition",
+              type: "bytes32",
+            },
+            {
+              indexed: true,
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+            {
+              indexed: true,
+              internalType: "bytes32",
+              name: "targetSchema",
+              type: "bytes32",
+            },
+            {
+              indexed: false,
+              internalType: "bytes32",
+              name: "pinUID",
+              type: "bytes32",
+            },
+            {
+              indexed: false,
+              internalType: "bytes32",
+              name: "targetID",
+              type: "bytes32",
+            },
+          ],
+          name: "PinCleared",
+          type: "event",
+        },
+        {
+          anonymous: false,
+          inputs: [
+            {
+              indexed: true,
+              internalType: "bytes32",
+              name: "definition",
+              type: "bytes32",
+            },
+            {
+              indexed: true,
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+            {
+              indexed: true,
+              internalType: "bytes32",
+              name: "targetSchema",
+              type: "bytes32",
+            },
+            {
+              indexed: false,
+              internalType: "bytes32",
+              name: "pinUID",
+              type: "bytes32",
+            },
+            {
+              indexed: false,
+              internalType: "bytes32",
+              name: "targetID",
+              type: "bytes32",
+            },
+            {
+              indexed: false,
+              internalType: "bytes32",
+              name: "supersededPinUID",
+              type: "bytes32",
+            },
+          ],
+          name: "PinSet",
+          type: "event",
+        },
+        {
+          anonymous: false,
+          inputs: [
+            {
+              indexed: true,
+              internalType: "bytes32",
+              name: "definition",
+              type: "bytes32",
+            },
+            {
+              indexed: true,
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+            {
+              indexed: true,
+              internalType: "bytes32",
+              name: "targetSchema",
+              type: "bytes32",
+            },
+            {
+              indexed: false,
+              internalType: "bytes32",
+              name: "tagUID",
+              type: "bytes32",
+            },
+            {
+              indexed: false,
+              internalType: "bytes32",
+              name: "targetID",
+              type: "bytes32",
+            },
+          ],
+          name: "TagCleared",
+          type: "event",
+        },
+        {
+          anonymous: false,
+          inputs: [
+            {
+              indexed: true,
+              internalType: "bytes32",
+              name: "definition",
+              type: "bytes32",
+            },
+            {
+              indexed: true,
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+            {
+              indexed: true,
+              internalType: "bytes32",
+              name: "targetSchema",
+              type: "bytes32",
+            },
+            {
+              indexed: false,
+              internalType: "bytes32",
+              name: "tagUID",
+              type: "bytes32",
+            },
+            {
+              indexed: false,
+              internalType: "bytes32",
+              name: "targetID",
+              type: "bytes32",
+            },
+            {
+              indexed: false,
+              internalType: "int256",
+              name: "weight",
+              type: "int256",
+            },
+          ],
+          name: "TagSet",
+          type: "event",
+        },
+        {
           inputs: [],
           name: "PIN_SCHEMA_UID",
           outputs: [
@@ -2652,6 +2812,12 @@ const deployedContracts = {
               internalType: "bytes32",
               name: "anchorSchema",
               type: "bytes32",
+            },
+            {
+              indexed: false,
+              internalType: "string",
+              name: "name",
+              type: "string",
             },
           ],
           name: "AnchorCreated",
@@ -6466,6 +6632,68 @@ const deployedContracts = {
             },
           ],
           name: "Initialized",
+          type: "event",
+        },
+        {
+          anonymous: false,
+          inputs: [
+            {
+              indexed: true,
+              internalType: "bytes32",
+              name: "dataUID",
+              type: "bytes32",
+            },
+            {
+              indexed: true,
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+            {
+              indexed: false,
+              internalType: "bytes32",
+              name: "mirrorUID",
+              type: "bytes32",
+            },
+          ],
+          name: "MirrorCleared",
+          type: "event",
+        },
+        {
+          anonymous: false,
+          inputs: [
+            {
+              indexed: true,
+              internalType: "bytes32",
+              name: "dataUID",
+              type: "bytes32",
+            },
+            {
+              indexed: true,
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+            {
+              indexed: true,
+              internalType: "bytes32",
+              name: "transportDefinition",
+              type: "bytes32",
+            },
+            {
+              indexed: false,
+              internalType: "bytes32",
+              name: "mirrorUID",
+              type: "bytes32",
+            },
+            {
+              indexed: false,
+              internalType: "string",
+              name: "uri",
+              type: "string",
+            },
+          ],
+          name: "MirrorSet",
           type: "event",
         },
         {

@@ -1797,7 +1797,9 @@ describe("EFSIndexer", function () {
       });
       const childUID = getUIDFromReceipt(await tx.wait());
 
-      await expect(tx).to.emit(indexer, "AnchorCreated").withArgs(parentUID, childUID, ownerAddr, ZERO_BYTES32);
+      await expect(tx)
+        .to.emit(indexer, "AnchorCreated")
+        .withArgs(parentUID, childUID, ownerAddr, ZERO_BYTES32, "event-anchor");
     });
 
     it("emits DataCreated when standalone DATA is created", async function () {

@@ -296,6 +296,129 @@ describe("EdgeResolver — PIN", function () {
 
   // ─── Proxy / initialize (ADR-0048) ───────────────────────────────────────────
 
+  // ─── Subgraph events (PR #24) ────────────────────────────────────────────────
+  describe("subgraph events", function () {
+    it("PinSet on a fresh slot reports supersededPinUID == 0", async function () {
+      const ownerAddr = await owner.getAddress();
+      const target = await createTarget();
+      const definition = await createDefinition();
+      const tx = await eas.connect(owner).attest({
+        schema: pinSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: NO_EXPIRATION,
+          revocable: true,
+          refUID: target,
+          data: encodePin(definition),
+          value: 0n,
+        },
+      });
+      const pinUID = getUID(await tx.wait());
+      await expect(tx)
+        .to.emit(edgeResolver, "PinSet")
+        .withArgs(definition, ownerAddr, dummySchemaUID, pinUID, target, ZERO_BYTES32);
+    });
+
+    it("PinSet on a cardinality-1 supersede reports the prior pinUID", async function () {
+      const ownerAddr = await owner.getAddress();
+      const targetA = await createTarget("A");
+      const targetB = await createTarget("B");
+      const definition = await createDefinition();
+      const pin1 = await pinByRef(owner, targetA, definition);
+      const tx2 = await eas.connect(owner).attest({
+        schema: pinSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: NO_EXPIRATION,
+          revocable: true,
+          refUID: targetB,
+          data: encodePin(definition),
+          value: 0n,
+        },
+      });
+      const pin2 = getUID(await tx2.wait());
+      await expect(tx2)
+        .to.emit(edgeResolver, "PinSet")
+        .withArgs(definition, ownerAddr, dummySchemaUID, pin2, targetB, pin1);
+    });
+
+    it("TagSet carries the weight", async function () {
+      const ownerAddr = await owner.getAddress();
+      const target = await createTarget();
+      const definition = await createDefinition();
+      const tx = await eas.connect(owner).attest({
+        schema: tagSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: NO_EXPIRATION,
+          revocable: true,
+          refUID: target,
+          data: encodeTag(definition, 5n),
+          value: 0n,
+        },
+      });
+      const tagUID = getUID(await tx.wait());
+      await expect(tx)
+        .to.emit(edgeResolver, "TagSet")
+        .withArgs(definition, ownerAddr, dummySchemaUID, tagUID, target, 5n);
+    });
+
+    it("PinSet on a same-target re-attest reports supersededPinUID == 0 (no false supersede)", async function () {
+      const ownerAddr = await owner.getAddress();
+      const target = await createTarget();
+      const definition = await createDefinition();
+      await pinByRef(owner, target, definition); // first pin at the slot
+      const tx2 = await eas.connect(owner).attest({
+        schema: pinSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: NO_EXPIRATION,
+          revocable: true,
+          refUID: target, // SAME target → not a supersede
+          data: encodePin(definition),
+          value: 0n,
+        },
+      });
+      const pin2 = getUID(await tx2.wait());
+      await expect(tx2)
+        .to.emit(edgeResolver, "PinSet")
+        .withArgs(definition, ownerAddr, dummySchemaUID, pin2, target, ZERO_BYTES32);
+    });
+
+    it("revoking an already-superseded (stale) PIN emits NO PinCleared", async function () {
+      const targetA = await createTarget("A");
+      const targetB = await createTarget("B");
+      const definition = await createDefinition();
+      const pin1 = await pinByRef(owner, targetA, definition); // active
+      await pinByRef(owner, targetB, definition); // supersedes pin1 (different target, same slot)
+      // pin1 is now stale; revoking it must not emit a clear (it's no longer the active edge).
+      const tx = await eas.connect(owner).revoke({ schema: pinSchemaUID, data: { uid: pin1, value: 0n } });
+      await expect(tx).to.not.emit(edgeResolver, "PinCleared");
+    });
+
+    it("PinCleared on revoke of the active PIN", async function () {
+      const ownerAddr = await owner.getAddress();
+      const target = await createTarget();
+      const definition = await createDefinition();
+      const pinUID = await pinByRef(owner, target, definition);
+      const tx = await eas.connect(owner).revoke({ schema: pinSchemaUID, data: { uid: pinUID, value: 0n } });
+      await expect(tx)
+        .to.emit(edgeResolver, "PinCleared")
+        .withArgs(definition, ownerAddr, dummySchemaUID, pinUID, target);
+    });
+
+    it("TagCleared on revoke of the active TAG", async function () {
+      const ownerAddr = await owner.getAddress();
+      const target = await createTarget();
+      const definition = await createDefinition();
+      const tagUID = await tagByRef(owner, target, definition, 1n);
+      const tx = await eas.connect(owner).revoke({ schema: tagSchemaUID, data: { uid: tagUID, value: 0n } });
+      await expect(tx)
+        .to.emit(edgeResolver, "TagCleared")
+        .withArgs(definition, ownerAddr, dummySchemaUID, tagUID, target);
+    });
+  });
+
   describe("Proxy / initialize (ADR-0048)", function () {
     it("Should reject a second initialize() on the proxy (initialize-once)", async function () {
       // The proxy was already initialized in setup via deployResolverProxy. A second call must
@@ -609,7 +732,7 @@ describe("EdgeResolver — PIN", function () {
   describe("Cross-attester isolation", function () {
     it("Should let two attesters hold independent PINs at the same (def, schema) slot", async function () {
       const definition = await createDefinition("two-attesters");
-      const targetA = await createTarget("alice-target");
+      const targetA = await createTarget("owner-target");
       const targetB = await createTarget("bob-target");
       const u1Addr = await user1.getAddress();
       const u2Addr = await user2.getAddress();
@@ -627,9 +750,9 @@ describe("EdgeResolver — PIN", function () {
     });
 
     it("Should not affect Bob's PIN when Alice supersedes hers", async function () {
-      const definition = await createDefinition("alice-rebinds");
-      const aliceA = await createTarget("alice-A");
-      const aliceB = await createTarget("alice-B");
+      const definition = await createDefinition("owner-rebinds");
+      const aliceA = await createTarget("owner-A");
+      const aliceB = await createTarget("owner-B");
       const bobX = await createTarget("bob-X");
       const u1Addr = await user1.getAddress();
       const u2Addr = await user2.getAddress();

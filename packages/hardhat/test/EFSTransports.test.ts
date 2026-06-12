@@ -501,6 +501,33 @@ describe("EFS Transports & Data Model", function () {
       expect(m1).to.not.equal(m2);
     });
 
+    it("emits MirrorSet with the uri + transportDefinition (subgraph events, PR #24)", async function () {
+      const ownerAddr = await owner.getAddress();
+      const uri = "ipfs://QmEventTestHash";
+      const tx = await eas.attest({
+        schema: mirrorSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: NO_EXPIRATION,
+          revocable: true,
+          refUID: testDataUID,
+          data: encodeMirror(ipfsTransportUID, uri),
+          value: 0n,
+        },
+      });
+      const mirrorUID = getUID(await tx.wait());
+      await expect(tx)
+        .to.emit(mirrorResolver, "MirrorSet")
+        .withArgs(testDataUID, ownerAddr, ipfsTransportUID, mirrorUID, uri);
+    });
+
+    it("emits MirrorCleared on revoke (subgraph events, PR #24)", async function () {
+      const ownerAddr = await owner.getAddress();
+      const mirrorUID = await createMirror(testDataUID, ipfsTransportUID, "ipfs://QmEventClear");
+      const tx = await eas.connect(owner).revoke({ schema: mirrorSchemaUID, data: { uid: mirrorUID, value: 0n } });
+      await expect(tx).to.emit(mirrorResolver, "MirrorCleared").withArgs(testDataUID, ownerAddr, mirrorUID);
+    });
+
     it("should reject a MIRROR with a nonzero expirationTime (HasExpiration)", async function () {
       // A MIRROR is active-until-revoked with no expiry; an expiring mirror would read as live
       // forever (reads filter on revocation, not expiry). Far-future expiry passes EAS → resolver.

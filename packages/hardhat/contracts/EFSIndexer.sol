@@ -23,7 +23,8 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
         bytes32 indexed parentUID,
         bytes32 indexed anchorUID,
         address indexed attester,
-        bytes32 anchorSchema
+        bytes32 anchorSchema,
+        string name
     );
 
     /// @notice Emitted when a standalone DATA attestation is created (file identity).
@@ -444,7 +445,7 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
                 }
             }
 
-            emit AnchorCreated(parentUID, attestation.uid, attestation.attester, anchorSchema);
+            emit AnchorCreated(parentUID, attestation.uid, attestation.attester, anchorSchema, name);
             return true;
         } else if (schema == $.dataSchemaUID) {
             // DATA is pure file identity (ADR-0049): empty schema, standalone, non-revocable.

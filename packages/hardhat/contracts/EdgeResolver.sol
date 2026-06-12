@@ -75,6 +75,45 @@ contract EdgeResolver is EFSUpgradeableResolver {
     error NotRevocable();
     error HasExpiration();
 
+    // ── Edge events (subgraph indexability, PR #24) ─────────────────────────────────────────────
+    // EAS's own `Attested` carries no field data, and the kernel's generic `AttestationIndexed` carries
+    // only (uid, schema, attester) — so without these a log-only indexer cannot see the PIN/TAG edge
+    // (definition, target, weight) or PIN supersession. Indexed topics are the active-slot key readers
+    // use: (definition, attester, targetSchema). `supersededPinUID` makes cardinality-1 PIN replacement
+    // observable (bytes32(0) when the slot was empty or the same target was re-attested). A superseded
+    // PIN emits NO PinCleared — its retirement is signalled by the next PinSet's `supersededPinUID`;
+    // PinCleared fires only on an explicit revoke of the still-active PIN.
+    event PinSet(
+        bytes32 indexed definition,
+        address indexed attester,
+        bytes32 indexed targetSchema,
+        bytes32 pinUID,
+        bytes32 targetID,
+        bytes32 supersededPinUID
+    );
+    event PinCleared(
+        bytes32 indexed definition,
+        address indexed attester,
+        bytes32 indexed targetSchema,
+        bytes32 pinUID,
+        bytes32 targetID
+    );
+    event TagSet(
+        bytes32 indexed definition,
+        address indexed attester,
+        bytes32 indexed targetSchema,
+        bytes32 tagUID,
+        bytes32 targetID,
+        int256 weight
+    );
+    event TagCleared(
+        bytes32 indexed definition,
+        address indexed attester,
+        bytes32 indexed targetSchema,
+        bytes32 tagUID,
+        bytes32 targetID
+    );
+
     // ============================================================================================
     // ERC-7201 NAMESPACED CONFIG (per-deployment, set in initialize())
     // ============================================================================================
@@ -308,11 +347,20 @@ contract EdgeResolver is EFSUpgradeableResolver {
         // Set the latest UID for this (attester, target, def, schema) entry.
         _activeEdge[edgeHash] = attestation.uid;
 
-        // Dispatch to the per-schema active-set storage.
+        // Dispatch to the per-schema active-set storage, then emit the indexable edge event.
         if (isPin) {
-            _onAttestPin(definition, attestation.attester, attestation.uid, targetID, targetSchema, wasActive);
+            bytes32 supersededPinUID = _onAttestPin(
+                definition,
+                attestation.attester,
+                attestation.uid,
+                targetID,
+                targetSchema,
+                wasActive
+            );
+            emit PinSet(definition, attestation.attester, targetSchema, attestation.uid, targetID, supersededPinUID);
         } else {
             _onAttestTag(definition, attestation.attester, attestation.uid, edgeHash, targetSchema, weight, wasActive);
+            emit TagSet(definition, attestation.attester, targetSchema, attestation.uid, targetID, weight);
         }
 
         // Track discovery indices (append-only, never removed). Common to both schemas.
@@ -388,10 +436,15 @@ contract EdgeResolver is EFSUpgradeableResolver {
 
             // Slot/AAS cleanup is unconditional — address-target edges live in
             // `_activeBySlot[def][attester][bytes32(0)]` and need their slot cleared too.
+            // We're inside `_activeEdge[edgeHash] == attestation.uid`, so this UID is still the active
+            // edge (a superseded PIN would have had its _activeEdge entry deleted in _onAttestPin) — the
+            // cleared event therefore reflects a real active→inactive transition for the indexer.
             if (isPin) {
                 _clearPinSlot(definition, attestation.attester, targetSchema, attestation.uid);
+                emit PinCleared(definition, attestation.attester, targetSchema, attestation.uid, targetID);
             } else {
                 _swapAndPopTag(definition, attestation.attester, targetSchema, edgeHash);
+                emit TagCleared(definition, attestation.attester, targetSchema, attestation.uid, targetID);
             }
 
             // The contains-flag bookkeeping (`_activeTotalByDefAndAttester` +
@@ -446,11 +499,13 @@ contract EdgeResolver is EFSUpgradeableResolver {
         bytes32 targetID,
         bytes32 targetSchema,
         bool wasActive
-    ) private {
+    ) private returns (bytes32 supersededPinUID) {
         SlotEntry storage slot = _activeBySlot[definition][attester][targetSchema];
 
-        // If a different prior PIN occupied this slot, supersede it.
+        // If a different prior PIN occupied this slot, supersede it. Capture the retired UID so onAttest
+        // can surface it in PinSet (cardinality-1 replacement is otherwise invisible to a log indexer).
         if (slot.pinUID != bytes32(0) && slot.targetID != targetID) {
+            supersededPinUID = slot.pinUID;
             // Schema-aware: the prior edge lived at the PIN slot for the prior targetID.
             bytes32 priorEdgeHash = _edgeHash(attester, slot.targetID, definition, PIN_SCHEMA_UID());
             // Only clean up counts if the prior edge entry hasn't already been cleared

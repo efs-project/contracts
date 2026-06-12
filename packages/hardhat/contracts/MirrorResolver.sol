@@ -42,6 +42,20 @@ contract MirrorResolver is EFSUpgradeableResolver, OwnableUpgradeable {
     error NotRevocable();
     error HasExpiration();
 
+    // ── Mirror events (subgraph indexability, PR #24) ───────────────────────────────────────────
+    // The kernel's generic MirrorCreated(dataUID, mirrorUID, attester) omits the URI — the whole point
+    // of a MIRROR — because EFSIndexer.index() never decodes the mirror payload. The resolver does, so
+    // it emits the URI-bearing event here. Indexed: (dataUID, attester, transportDefinition) — the
+    // lens-scoped, transport-rankable key the router's mirror selection uses.
+    event MirrorSet(
+        bytes32 indexed dataUID,
+        address indexed attester,
+        bytes32 indexed transportDefinition,
+        bytes32 mirrorUID,
+        string uri
+    );
+    event MirrorCleared(bytes32 indexed dataUID, address indexed attester, bytes32 mirrorUID);
+
     /// @notice Maximum allowed byte length for a MIRROR URI.
     uint256 public constant MAX_URI_LENGTH = 8192;
 
@@ -140,11 +154,18 @@ contract MirrorResolver is EFSUpgradeableResolver, OwnableUpgradeable {
         // Register in EFSIndexer for discovery via getReferencingAttestations
         idx.index(attestation.uid);
 
+        // Surface the URI-bearing mirror event for log indexers (the kernel's MirrorCreated omits it).
+        emit MirrorSet(attestation.refUID, attestation.attester, transportDefinition, attestation.uid, uri);
+
         return true;
     }
 
     function onRevoke(Attestation calldata attestation, uint256 /*value*/) internal override returns (bool) {
         _cfg().indexer.indexRevocation(attestation.uid);
+        // refUID is the DATA this mirror referenced; attester is the lens. (No need to decode the
+        // payload on revoke — the indexer maps mirrorUID→entity, and the dataUID/attester here let a
+        // log indexer retire the mirror without an eth_call.)
+        emit MirrorCleared(attestation.refUID, attestation.attester, attestation.uid);
         return true;
     }
 
