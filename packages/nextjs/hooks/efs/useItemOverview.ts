@@ -15,7 +15,7 @@
  */
 import { useEffect, useState } from "react";
 import type { Abi, PublicClient } from "viem";
-import { fetchFileContent } from "~~/utils/efs/fetchFileContent";
+import { FileTooLargeError, fetchFileContent } from "~~/utils/efs/fetchFileContent";
 import { selectOverview } from "~~/utils/efs/selectOverview";
 import { MAX_RENDER_BYTES } from "~~/utils/markdown/limits";
 import { sniffContent } from "~~/utils/markdown/sniff";
@@ -116,9 +116,12 @@ export function useItemOverview(args: UseItemOverviewArgs): OverviewState {
           publicClient: args.publicClient!,
           lensAddresses: args.lensAddresses,
           resourcePath: [...args.resourcePathNames, picked.name],
+          // Bound the fetch itself — don't download an oversized external mirror
+          // body just to find out it's too large to render.
+          maxBytes: MAX_RENDER_BYTES,
         });
         if (cancelled) return;
-        // 4. Size cap, then sniff (bytes-only, never trusting attester MIME).
+        // 4. Size cap (belt — fetch already aborts past maxBytes), then sniff.
         if (fetched.bytes.length > MAX_RENDER_BYTES) {
           setState({ kind: "too-large", size: fetched.bytes.length });
           return;
@@ -136,8 +139,12 @@ export function useItemOverview(args: UseItemOverviewArgs): OverviewState {
         }
         setState({ kind: "markdown", text: new TextDecoder("utf-8").decode(fetched.bytes), source: fetched.source });
       } catch (e) {
-        if (!cancelled)
-          setState({ kind: "error", message: e instanceof Error ? e.message : "Failed to load Overview" });
+        if (cancelled) return;
+        if (e instanceof FileTooLargeError) {
+          setState({ kind: "too-large", size: e.size });
+          return;
+        }
+        setState({ kind: "error", message: e instanceof Error ? e.message : "Failed to load Overview" });
       }
     })();
     return () => {

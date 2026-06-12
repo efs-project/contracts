@@ -22,6 +22,22 @@ export interface FetchFileArgs {
   lensAddresses: string[];
   /** Full router resource path to the file, e.g. [...currentPathNames, fileName]. */
   resourcePath: string[];
+  /**
+   * Optional hard byte cap. When set, the mirror branch rejects an oversized
+   * `Content-Length` and otherwise streams with an early abort, and the on-chain
+   * branch stops accumulating once the cap is exceeded — so a caller that loads
+   * automatically (the Overview pane) never downloads an arbitrarily large body
+   * just to decide it's too large. Exceeding it throws `FileTooLargeError`.
+   */
+  maxBytes?: number;
+}
+
+/** Thrown by `fetchFileContent` when a `maxBytes` cap is exceeded. */
+export class FileTooLargeError extends Error {
+  constructor(public readonly size: number) {
+    super(`File exceeds the ${size}-byte render cap`);
+    this.name = "FileTooLargeError";
+  }
 }
 
 /**
@@ -39,7 +55,7 @@ export interface FetchFileArgs {
  * DX-2): a parameterized async function returning raw bytes + content metadata.
  */
 export async function fetchFileContent(args: FetchFileArgs): Promise<FetchedFile> {
-  const { routerAddress, routerAbi, publicClient, lensAddresses, resourcePath } = args;
+  const { routerAddress, routerAbi, publicClient, lensAddresses, resourcePath, maxBytes } = args;
 
   const result: number[] = [];
   let contentTypeStr = "text/plain";
@@ -96,9 +112,34 @@ export async function fetchFileContent(args: FetchFileArgs): Promise<FetchedFile
             // Fetch from gateway
             const gatewayResp = await globalThis.fetch(gatewayUrl);
             if (!gatewayResp.ok) throw new Error(`Gateway returned ${gatewayResp.status} for ${gatewayUrl}`);
-            const buf = await gatewayResp.arrayBuffer();
-            const bytes = new Uint8Array(buf);
-            for (let i = 0; i < bytes.length; i++) result.push(bytes[i]);
+            if (maxBytes != null) {
+              // Reject a declared oversized body before reading it…
+              const declared = Number(gatewayResp.headers.get("content-length"));
+              if (Number.isFinite(declared) && declared > maxBytes) throw new FileTooLargeError(declared);
+              // …and stream the rest with an early abort in case Content-Length
+              // was absent or lied (the Overview auto-loads on navigation).
+              const reader = gatewayResp.body?.getReader();
+              if (reader) {
+                let total = 0;
+                for (;;) {
+                  const { done, value } = await reader.read();
+                  if (done) break;
+                  total += value.length;
+                  if (total > maxBytes) {
+                    await reader.cancel();
+                    throw new FileTooLargeError(total);
+                  }
+                  for (let i = 0; i < value.length; i++) result.push(value[i]);
+                }
+              } else {
+                const bytes = new Uint8Array(await gatewayResp.arrayBuffer());
+                if (bytes.length > maxBytes) throw new FileTooLargeError(bytes.length);
+                for (let i = 0; i < bytes.length; i++) result.push(bytes[i]);
+              }
+            } else {
+              const bytes = new Uint8Array(await gatewayResp.arrayBuffer());
+              for (let i = 0; i < bytes.length; i++) result.push(bytes[i]);
+            }
             // Use gateway content-type as fallback if we didn't get one from the contract
             if (contentTypeStr === "text/plain") {
               const gwCt = gatewayResp.headers.get("content-type");
@@ -117,6 +158,7 @@ export async function fetchFileContent(args: FetchFileArgs): Promise<FetchedFile
         for (let i = 0; i < bodyBytes.length; i++) {
           result.push(bodyBytes[i]);
         }
+        if (maxBytes != null && result.length > maxBytes) throw new FileTooLargeError(result.length);
       }
       // Use first content-type header for on-chain responses
       if (ctHeaders.length > 0) contentTypeStr = ctHeaders[0].value;
