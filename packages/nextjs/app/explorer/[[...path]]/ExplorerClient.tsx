@@ -183,11 +183,9 @@ export default function ExplorerClient() {
 
   const { data: indexerInfo } = useDeployedContractInfo({ contractName: "Indexer" });
   const { data: sortOverlayInfo } = useDeployedContractInfo({ contractName: "EFSSortOverlay" });
-  // OverviewPane (Task 13) reads file content via the router and lists the
-  // Overview README via EFSFileView. These are deployed contracts whose
-  // addresses aren't known until after `yarn deploy`, so pull them the same
-  // way `indexerInfo`/`sortOverlayInfo` are pulled above.
-  const { data: fileViewInfo } = useDeployedContractInfo({ contractName: "EFSFileView" });
+  // OverviewPane (Task 13) reads file content via the router. This is a deployed
+  // contract whose address isn't known until after `yarn deploy`, so pull it the
+  // same way `indexerInfo`/`sortOverlayInfo` are pulled above.
   const { data: routerInfo } = useDeployedContractInfo({ contractName: "EFSRouter" });
   const { data: easAddressRaw } = useScaffoldReadContract({
     contractName: "Indexer",
@@ -579,18 +577,19 @@ export default function ExplorerClient() {
 
   const containerKind = currentContainer?.kind ?? "anchor";
 
-  // Overview edit/create gate. Requires a connected wallet that is also one of
-  // the active lenses — the README is written under the connected wallet, but
-  // the pane only queries `lensAddresses`, so authoring into a lens set that
-  // excludes the writer (an explicit `?lenses=other` URL) would spend the
-  // transactions yet never show the result. Also excludes the *synthetic
-  // address-container root* (currentAnchorUID === container.uid): that parent
-  // anchor isn't real, so the upload helper hard-reverts under it. Deeper
+  // Overview edit/create gate. The README is written under the connected wallet,
+  // and the pane renders first-lens-wins — so a write only becomes visible if the
+  // connected wallet is the *highest-priority* lens. A lower-priority writer's
+  // README stays hidden behind whoever already wins (e.g. `?lenses=bob,alice`
+  // with Alice connected and Bob's README rendered), so a save would spend the
+  // transactions yet never appear. Restrict authoring to `lensAddresses[0]` to
+  // guarantee the connected wallet's Overview is the one shown. Also excludes the
+  // *synthetic address-container root* (currentAnchorUID === container.uid): that
+  // parent anchor isn't real, so the upload helper hard-reverts under it. Deeper
   // address paths resolve to a real anchor and are writable.
-  const writerInActiveLenses =
-    !!connectedAddress && lensAddresses.some(l => l.toLowerCase() === connectedAddress.toLowerCase());
+  const writerIsTopLens = !!connectedAddress && lensAddresses[0]?.toLowerCase() === connectedAddress.toLowerCase();
   const overviewEditable =
-    writerInActiveLenses &&
+    writerIsTopLens &&
     !(currentContainer?.kind === "address" && currentAnchorUID?.toLowerCase() === currentContainer.uid.toLowerCase());
 
   return (
