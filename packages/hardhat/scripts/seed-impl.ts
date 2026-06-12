@@ -15,7 +15,7 @@
  * This file exports `seedDemoTree` as a pure function — no auto-invocation at
  * module load — so it can be imported safely from both:
  *   - `scripts/seed.ts` (the `yarn hardhat:seed` CLI wrapper)
- *   - `deploy/08_seed_demo_tree.ts` (the hardhat-deploy step)
+ *   - `deploy/10_seed_demo_tree.ts` (the hardhat-deploy step)
  * Two callers can coexist without double-running; only whoever explicitly
  * invokes `seedDemoTree()` triggers execution.
  *

@@ -31,7 +31,9 @@ const seedDemoTreeStep: DeployFunction = async function (hre: HardhatRuntimeEnvi
 
 export default seedDemoTreeStep;
 seedDemoTreeStep.tags = ["SeedDemoTree"];
-// Must run after the root anchor, transports, schema aliases, and persona
-// names are all in place — the seed emits anchors + TAGs under /transports
-// and uses the persona names for lens demos.
-seedDemoTreeStep.dependencies = ["Indexer", "Mirrors", "SchemaAliases", "PersonaNames"];
+// Must run LAST — after the root anchor, transports, schema aliases, persona
+// names, AND the List contracts (09_lists). The seed's transactions consume
+// deployer nonces, so it must follow every contract-deploying step or it shifts
+// their CREATE addresses; contract addresses must be deterministic for the
+// commit independent of demo-data content (ADR-0037).
+seedDemoTreeStep.dependencies = ["Indexer", "Mirrors", "SchemaAliases", "PersonaNames", "Lists"];
