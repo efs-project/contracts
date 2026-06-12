@@ -750,6 +750,37 @@ contract EdgeResolver is SchemaResolver {
         return _activeByAAS[definition][attester][schema].length;
     }
 
+    /// @notice O(1) read of the raw stored weight of the active TAG `(definition, attester, targetSchema)`
+    ///         whose target is `target`, or `(false, 0)` if no such active TAG exists.
+    ///
+    ///         Pure read over the existing `_activeByAASIndex` / `_activeByAAS` storage — an index
+    ///         lookup followed by the struct read, never a list scan. No new storage, no write-path
+    ///         change. The kernel stays weight-neutral (ADR-0041 §4): the raw `int256` weight is
+    ///         returned verbatim, with no sign/magnitude interpretation. Callers that want a
+    ///         threshold policy (e.g. ADR-0042's `weight >= 0`, or ADR-0048's view-layer exclusion
+    ///         filter) apply it themselves.
+    ///
+    ///         `targetSchema = bytes32(0)` is the canonical sentinel for an address-target TAG
+    ///         (refUID = 0, recipient = the target address), matching the write path.
+    /// @param attester     The TAG's attester (lens).
+    /// @param target       The TAG's target — a target attestation UID, or `bytes32(uint160(addr))`
+    ///                     for an address-target TAG.
+    /// @param definition   The TAG predicate (e.g. the descriptive-label definition).
+    /// @param targetSchema The schema bucket of the target (`bytes32(0)` for address targets).
+    /// @return exists      True iff an active (unrevoked) TAG at this edge exists.
+    /// @return weight      The raw stored `int256` weight (0 when `exists` is false).
+    function getActiveTagWeight(
+        address attester,
+        bytes32 target,
+        bytes32 definition,
+        bytes32 targetSchema
+    ) external view returns (bool exists, int256 weight) {
+        bytes32 edgeHash = _edgeHash(attester, target, definition, TAG_SCHEMA_UID);
+        uint256 indexPlusOne = _activeByAASIndex[definition][attester][targetSchema][edgeHash];
+        if (indexPlusOne == 0) return (false, 0);
+        return (true, _activeByAAS[definition][attester][targetSchema][indexPlusOne - 1].weight);
+    }
+
     /// @notice Legacy alias retained for callers still on the bytes32[]-array name.
     function getActiveTargetsByAttesterAndSchemaCount(
         bytes32 definition,
