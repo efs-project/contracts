@@ -566,7 +566,15 @@ export async function uploadOnchainFile(args: UploadOnchainFileArgs): Promise<Up
   );
   if (!pinTxHash) throw new Error("Placement PIN attestation did not return a transaction hash.");
   await publicClient.waitForTransactionReceipt({ hash: pinTxHash });
-  checkCancelled();
+
+  // COMMIT POINT (Codex P2): once the placement PIN has landed, the file is
+  // saved on-chain — there is nothing left to abort. A cancellation from here on
+  // (drawer/modal close, navigation) must NOT propagate as a failure, or callers
+  // skip their success path: OverviewEditorModal would not run `onSaved()`, so
+  // `excludeRefreshKey` never bumps and a just-created system README (e.g. on a
+  // fresh chain) stays visible in the grid. So NO `checkCancelled()` here, and
+  // the best-effort ancestor walk below swallows cancellation rather than
+  // re-throwing it. The walk is the only remaining work and is itself best-effort.
 
   // ── Ancestor-walk visibility TAGs (CreateItemModal ~lines 1196–1276, ADR-0038/ADR-0041) ──
   // A folder appears in a lens listing iff at least one lens attester has an
@@ -650,11 +658,16 @@ export async function uploadOnchainFile(args: UploadOnchainFileArgs): Promise<Up
       })) as `0x${string}`;
       current = parent;
       walked += 1;
+      // Stops the walk early on cancellation; the throw is caught below and
+      // swallowed (not re-thrown) — the file is already placed (COMMIT POINT).
       checkCancelled();
     }
   } catch (e) {
-    if (e instanceof Error && e.message === UPLOAD_CANCELLED) throw e;
-    log("Ancestor-walk visibility tagging failed; some ancestors may stay hidden.");
+    if (e instanceof Error && e.message === UPLOAD_CANCELLED) {
+      log("Upload cancelled after placement; some ancestors may stay hidden.");
+    } else {
+      log("Ancestor-walk visibility tagging failed; some ancestors may stay hidden.");
+    }
   }
 
   return { dataUID, fileAnchorUID };

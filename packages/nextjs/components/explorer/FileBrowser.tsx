@@ -1998,7 +1998,16 @@ export const FileBrowser = ({
                   onClick={() => setPreviewFullscreen(true)}
                 />
               ) : fileContentType === "application/pdf" ? (
+                // Untrusted PDF bytes from a mirror, served through a blob: URL —
+                // which would otherwise inherit the app's origin. Sandbox it for
+                // the same reason as the HTML preview below: `allow-scripts` keeps
+                // the browser's PDF viewer (incl. pdf.js, which needs JS) working,
+                // but OMITTING `allow-same-origin` pins the frame to an opaque
+                // origin so embedded PDF JS can't reach the parent app's DOM /
+                // cookies / storage. A spoofed contentType only mislabels which
+                // viewer renders here; it can't escalate to a same-origin script.
                 <iframe
+                  sandbox="allow-scripts"
                   src={fileContent}
                   title={selectedFile.name}
                   className="w-full rounded cursor-pointer"
@@ -2137,7 +2146,10 @@ export const FileBrowser = ({
                     className="max-w-[90vw] max-h-[85vh] object-contain"
                   />
                 ) : fileContentType === "application/pdf" ? (
+                  // Untrusted PDF bytes via blob: URL — sandboxed to an opaque
+                  // origin (allow-scripts, no allow-same-origin), same as inline.
                   <iframe
+                    sandbox="allow-scripts"
                     src={fileContent}
                     title={selectedFile.name}
                     className="rounded"
