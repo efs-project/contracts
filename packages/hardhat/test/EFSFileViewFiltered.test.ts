@@ -604,7 +604,15 @@ describe("EFSFileView — getDirectoryPageFiltered (ADR-0048)", function () {
     const tv = await deployTestableFileView(4);
 
     // First call: maxItems=10, budget=4 → budget hit before maxItems, source (6) not exhausted.
-    const first = await tv.getDirectoryPageFiltered(rootUID, dataSchemaUID, [aliceAddr], [excludeTagDef], [0n], "0x", 10);
+    const first = await tv.getDirectoryPageFiltered(
+      rootUID,
+      dataSchemaUID,
+      [aliceAddr],
+      [excludeTagDef],
+      [0n],
+      "0x",
+      10,
+    );
     expect(first.items.length).to.equal(0);
     expect(first.nextCursor).to.not.equal("0x"); // non-empty cursor: budget hit, not exhausted
 
@@ -654,7 +662,15 @@ describe("EFSFileView — getDirectoryPageFiltered (ADR-0048)", function () {
       await createTag(it.dataUID, excludeTagDef, alice, 1n);
     }
     const tv = await deployTestableFileView(4);
-    const page = await tv.getDirectoryPageFiltered(rootUID, dataSchemaUID, [aliceAddr], [excludeTagDef], [0n], "0x", 10);
+    const page = await tv.getDirectoryPageFiltered(
+      rootUID,
+      dataSchemaUID,
+      [aliceAddr],
+      [excludeTagDef],
+      [0n],
+      "0x",
+      10,
+    );
     expect(page.items.length).to.equal(0);
     expect(page.nextCursor).to.not.equal("0x");
   });
@@ -687,7 +703,15 @@ describe("EFSFileView — getDirectoryPageFiltered (ADR-0048)", function () {
     const dec = (cur: string) => enc.decode(["uint256", "uint256", "uint256"], cur) as unknown as bigint[];
 
     // First call: budget=4 folders inspected, all excluded → 0 items, cursor still in phase 0.
-    const first = await tv.getDirectoryPageFiltered(rootUID, dataSchemaUID, [aliceAddr], [excludeTagDef], [0n], "0x", 10);
+    const first = await tv.getDirectoryPageFiltered(
+      rootUID,
+      dataSchemaUID,
+      [aliceAddr],
+      [excludeTagDef],
+      [0n],
+      "0x",
+      10,
+    );
     expect(first.items.length).to.equal(0);
     expect(first.nextCursor).to.not.equal("0x");
     const [phase0] = dec(first.nextCursor);
@@ -748,7 +772,15 @@ describe("EFSFileView — getDirectoryPageFiltered (ADR-0048)", function () {
 
     // Revoke the TAG → the item must REAPPEAR.
     await revokeTag(tagUID, alice);
-    page = await fileView.getDirectoryPageFiltered(rootUID, dataSchemaUID, [aliceAddr], [excludeTagDef], [0n], "0x", 10);
+    page = await fileView.getDirectoryPageFiltered(
+      rootUID,
+      dataSchemaUID,
+      [aliceAddr],
+      [excludeTagDef],
+      [0n],
+      "0x",
+      10,
+    );
     expect(names(page.items)).to.deep.equal(["doc.txt"]);
 
     // And the kernel reader reflects the revoke: (false, 0).
