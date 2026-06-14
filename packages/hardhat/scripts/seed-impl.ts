@@ -403,6 +403,25 @@ export async function seedDemoTree() {
       console.log(`  README    "${name}" (exists, skipping) ${fileUID.slice(0, 10)}…`);
       return { fileUID, dataUID: existingData, created: false };
     }
+    // Build the DATA, contentType, mirror, and system TAG FIRST — none of these
+    // is reachable as a directory item yet (nothing points at this path slot).
+    const dataUID = await makeData(signer, content);
+    await makeProperty(signer, dataUID, "contentType", "text/markdown");
+    const onchainURI = await deployOnchainMirrorURI(signer, content);
+    await makeMirror(signer, dataUID, onchainTransportUID, onchainURI);
+    // Tag the DATA system BEFORE placement so the README is never reachable while
+    // untagged (Codex P2). If the tag fails, makePin never runs and nothing leaks.
+    if (systemDefUID) await tagSystemIfMissing(signer, dataUID, systemDefUID);
+    // Create the non-revocable file ANCHOR LAST, immediately before the placement
+    // PIN (Codex P2). The anchor is a DATA-schema child, so `EFSFileView` phase 1
+    // (`getAnchorsBySchemaAndAddressList`) lists it the instant it exists — but the
+    // ADR-0048 `system` exclude reaches a FILE item's tagged DATA only via
+    // `getActivePinTarget`, so a bare anchor with no PIN cannot be hidden. The
+    // anchor→PIN gap is the one irreducible window (the PIN's `definition` is the
+    // anchor UID, which EAS can't precompute for an atomic batch), so we shrink it
+    // to a single tx instead of leaving the anchor stranded behind DATA/mirror/tag
+    // txs. An interrupted seed that lands the anchor is repaired on re-run:
+    // `findAnchor` above finds the orphaned anchor and this call completes its PIN.
     if (!fileUID) {
       if (recipient !== ethers.ZeroAddress) {
         // Address-container slot: recipient-fallback parenting (refUID=0x0).
@@ -423,13 +442,6 @@ export async function seedDemoTree() {
         fileUID = await makeAnchor(signer, name, parentUID, dataSchemaUID);
       }
     }
-    const dataUID = await makeData(signer, content);
-    await makeProperty(signer, dataUID, "contentType", "text/markdown");
-    const onchainURI = await deployOnchainMirrorURI(signer, content);
-    await makeMirror(signer, dataUID, onchainTransportUID, onchainURI);
-    // Tag the DATA system BEFORE placement so the README is never reachable while
-    // untagged (Codex P2). If the tag fails, makePin never runs and nothing leaks.
-    if (systemDefUID) await tagSystemIfMissing(signer, dataUID, systemDefUID);
     await makePin(signer, dataUID, fileUID);
     // Ancestor visibility TAGs apply only to anchor-parented placements: each
     // walked parent becomes a TAG `refUID`, which must be a real attestation.
