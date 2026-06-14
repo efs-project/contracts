@@ -749,7 +749,14 @@ export default function ExplorerClient() {
                 tagSchemaUID={tagSchemaUID as `0x${string}` | undefined}
                 mirrorSchemaUID={mirrorSchemaUID as `0x${string}` | undefined}
                 indexerAddress={indexerAddress}
-                onOverviewSaved={() => setOverviewRefreshKey(k => k + 1)}
+                onOverviewSaved={() => {
+                  setOverviewRefreshKey(k => k + 1);
+                  // Also refresh the directory: the save may have created
+                  // /tags/system on the fly (unseeded chain), so FileBrowser must
+                  // re-resolve tagsRoot + exclude defs to hide the new system-tagged
+                  // README; and the new README should reflect in the grid (Codex P2).
+                  setDirectoryRefreshKey(k => k + 1);
+                }}
               />
             </div>
           )}

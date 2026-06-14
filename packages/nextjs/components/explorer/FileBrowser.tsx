@@ -321,6 +321,13 @@ export const FileBrowser = ({
   // would be worse — it would fall to an UNFILTERED lens read and leak system/nsfw.
   useEffect(() => {
     if (!publicClient || !indexerInfo) return;
+    // Once `/tags` is found it's permanent — never re-resolve. But if it was
+    // ABSENT at mount (unseeded chain / a real deploy where the demo seed is
+    // skipped), an Overview save can create `/tags/system` on the fly; re-run on
+    // `directoryRefreshKey` (bumped by that save) so tagsRoot — and therefore the
+    // exclude defs — get picked up and the new system-tagged README is hidden
+    // (Codex P2). Without this, the directory stays on the unfiltered listing.
+    if (tagsRoot) return;
     getEdgeResolverAddress(publicClient.chain.id).then(async addr => {
       if (addr) setEdgeResolverAddress(addr);
       try {
@@ -350,7 +357,7 @@ export const FileBrowser = ({
         console.error("Resolving /tags anchor failed; tag filter unavailable", e);
       }
     });
-  }, [publicClient, indexerInfo]);
+  }, [publicClient, indexerInfo, directoryRefreshKey, tagsRoot]);
 
   // Resolve INCLUDE tag filter names → definition UIDs → tagged target sets.
   // Sources: tagFilter (URL, include), drawerTagFilters include entries.
