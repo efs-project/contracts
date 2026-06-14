@@ -101,7 +101,8 @@ contract ListEntryResolver is SchemaResolver {
     mapping(bytes32 listUID => mapping(address attester => EntryRecord[])) private _entries;
 
     // O(1) membership + no-dupes counter
-    mapping(bytes32 listUID => mapping(bytes32 identityKey => mapping(address attester => uint256))) private _entryCount;
+    mapping(bytes32 listUID => mapping(bytes32 identityKey => mapping(address attester => uint256)))
+        private _entryCount;
 
     // Swap-and-pop index: entryUID → (position in _entries[list][attester]) + 1
     mapping(bytes32 entryUID => uint256) private _entryPosPlusOne;
@@ -143,8 +144,10 @@ contract ListEntryResolver is SchemaResolver {
         if (!d.exists) {
             Attestation memory L = _eas.getAttestation(listUID);
             if (L.schema != LIST_SCHEMA_UID) revert NotAList();
-            (d.allowsDuplicates, d.appendOnly, d.targetType, d.targetSchema, d.maxEntries) =
-                abi.decode(L.data, (bool, bool, uint8, bytes32, uint256));
+            (d.allowsDuplicates, d.appendOnly, d.targetType, d.targetSchema, d.maxEntries) = abi.decode(
+                L.data,
+                (bool, bool, uint8, bytes32, uint256)
+            );
             d.exists = true;
             _decl[listUID] = d;
         }
@@ -204,7 +207,7 @@ contract ListEntryResolver is SchemaResolver {
         uint256 pp1 = _entryPosPlusOne[a.uid];
         if (pp1 == 0) return true;
 
-        (bytes32 listUID,) = abi.decode(a.data, (bytes32, bytes32));
+        (bytes32 listUID, ) = abi.decode(a.data, (bytes32, bytes32));
 
         CachedListDecl memory d = _decl[listUID];
         // Unreachable in normal EAS flow: the `pp1 == 0` guard above already returned for any

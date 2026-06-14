@@ -449,6 +449,124 @@ const deployedContracts = {
           inputs: [
             {
               internalType: "bytes32",
+              name: "parentAnchor",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "anchorSchema",
+              type: "bytes32",
+            },
+            {
+              internalType: "address[]",
+              name: "attesters",
+              type: "address[]",
+            },
+            {
+              internalType: "bytes32",
+              name: "excludeTagDef",
+              type: "bytes32",
+            },
+            {
+              internalType: "int256",
+              name: "minWeight",
+              type: "int256",
+            },
+            {
+              internalType: "bytes",
+              name: "cursor",
+              type: "bytes",
+            },
+            {
+              internalType: "uint256",
+              name: "maxItems",
+              type: "uint256",
+            },
+          ],
+          name: "getDirectoryPageFiltered",
+          outputs: [
+            {
+              components: [
+                {
+                  components: [
+                    {
+                      internalType: "bytes32",
+                      name: "uid",
+                      type: "bytes32",
+                    },
+                    {
+                      internalType: "string",
+                      name: "name",
+                      type: "string",
+                    },
+                    {
+                      internalType: "bytes32",
+                      name: "parentUID",
+                      type: "bytes32",
+                    },
+                    {
+                      internalType: "bool",
+                      name: "isFolder",
+                      type: "bool",
+                    },
+                    {
+                      internalType: "bool",
+                      name: "hasData",
+                      type: "bool",
+                    },
+                    {
+                      internalType: "uint256",
+                      name: "childCount",
+                      type: "uint256",
+                    },
+                    {
+                      internalType: "uint256",
+                      name: "propertyCount",
+                      type: "uint256",
+                    },
+                    {
+                      internalType: "uint64",
+                      name: "timestamp",
+                      type: "uint64",
+                    },
+                    {
+                      internalType: "address",
+                      name: "attester",
+                      type: "address",
+                    },
+                    {
+                      internalType: "bytes32",
+                      name: "schema",
+                      type: "bytes32",
+                    },
+                    {
+                      internalType: "bytes32",
+                      name: "contentHash",
+                      type: "bytes32",
+                    },
+                  ],
+                  internalType: "struct EFSFileView.FileSystemItem[]",
+                  name: "items",
+                  type: "tuple[]",
+                },
+                {
+                  internalType: "bytes",
+                  name: "nextCursor",
+                  type: "bytes",
+                },
+              ],
+              internalType: "struct EFSFileView.DirectoryPage",
+              name: "page",
+              type: "tuple",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
               name: "anchorUID",
               type: "bytes32",
             },
@@ -2100,6 +2218,45 @@ const deployedContracts = {
               internalType: "struct EdgeResolver.TagEntry[]",
               name: "",
               type: "tuple[]",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+            {
+              internalType: "bytes32",
+              name: "target",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "definition",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "targetSchema",
+              type: "bytes32",
+            },
+          ],
+          name: "getActiveTagWeight",
+          outputs: [
+            {
+              internalType: "bool",
+              name: "exists",
+              type: "bool",
+            },
+            {
+              internalType: "int256",
+              name: "weight",
+              type: "int256",
             },
           ],
           stateMutability: "view",
