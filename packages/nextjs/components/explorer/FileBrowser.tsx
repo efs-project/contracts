@@ -30,6 +30,7 @@ import { useDeployedContractInfo, useScaffoldReadContract, useScaffoldWriteContr
 import { useBackgroundOps } from "~~/services/store/backgroundOps";
 import { EDGE_RESOLVER_ABI, getEdgeResolverAddress } from "~~/utils/efs/edgeResolver";
 import { isFile, isList, isTopic } from "~~/utils/efs/efsTypes";
+import { computeExcludesPending, tagsRootGateDecision } from "~~/utils/efs/excludeFilter";
 import { fetchFileContent as fetchFileContentUtil } from "~~/utils/efs/fetchFileContent";
 import { SORT_OVERLAY_ABI } from "~~/utils/efs/sortOverlay";
 import { TRANSPORT_LABELS } from "~~/utils/efs/transports";
@@ -552,7 +553,7 @@ export const FileBrowser = ({
       return;
     }
     if (!publicClient || !indexerInfo || !tagsRoot) {
-      if (tagsRootSettled) {
+      if (tagsRootGateDecision(tagsRootSettled) === "release-empty") {
         // `/tags` resolution settled with no anchor — there are no def UIDs to
         // resolve, and an item can only be system/nsfw-tagged if its def anchor
         // exists under `/tags/`, so there is genuinely nothing to hide. Release
@@ -617,14 +618,19 @@ export const FileBrowser = ({
       cancelled = true;
       if (retryTimer) clearTimeout(retryTimer);
     };
-    // Exclude def UID resolution depends ONLY on which exclude tags are active and
-    // where `/tags/` lives — it is lens-independent and unaffected by applying tags
-    // to files. `lensesKey`/`tagFilterVersion` are deliberately NOT deps: including
-    // them re-ran this effect (flashing "Loading…") on every lens change or tag
-    // edit even though the resolved defs never changed. The lens-scoped query
-    // refetches with the already-resolved defs via its own `depsKey`.
-    // `excludeRetry` is a dep so a bounded post-error retry re-runs resolution.
-  }, [drawerExcludeNamesKey, publicClient, indexerInfo, tagsRoot, tagsRootSettled, excludeRetry]);
+    // `lensesKey` is deliberately NOT a dep: def UID resolution is lens-independent,
+    // and including it re-ran this effect (flashing "Loading…") on every lens
+    // change. The lens-scoped query refetches with the already-resolved defs via
+    // its own `depsKey`.
+    // `tagFilterVersion` IS a dep: a default-excluded tag whose DEFINITION doesn't
+    // exist yet (e.g. `nsfw` on the seed, which only creates `/tags/system`)
+    // resolves to nothing, so `excludeTagDefUIDs` omits it. When the user then
+    // creates that definition via TagModal (`onTagChange` bumps tagFilterVersion)
+    // without changing `drawerExcludeNamesKey`, we must re-resolve to pick up the
+    // new def — otherwise the just-tagged item stays visible (Codex P2). The
+    // stable-set comparison keeps this from restarting the cursor when the def set
+    // is unchanged. `excludeRetry` re-runs a bounded post-error retry.
+  }, [drawerExcludeNamesKey, tagFilterVersion, publicClient, indexerInfo, tagsRoot, tagsRootSettled, excludeRetry]);
 
   // Parallel-array minWeights for getDirectoryPageFiltered — all 0n (ADR-0042
   // effective-TAG threshold `weight >= 0`). One entry per resolved exclude def.
@@ -638,7 +644,7 @@ export const FileBrowser = ({
   // system/nsfw items before the resolved def UIDs trigger a self-correcting
   // refetch. The empty-excludes case (`drawerExcludeNamesKey === ""`) is NOT
   // pending — there's nothing to resolve, so we never deadlock there.
-  const excludesPending = drawerExcludeNamesKey !== "" && !excludeResolved;
+  const excludesPending = computeExcludesPending(drawerExcludeNamesKey, excludeResolved);
 
   const fetchFileContent = async (item: any) => {
     if (!efsRouter) {

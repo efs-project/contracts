@@ -291,6 +291,62 @@ describe("EFSFileView — getDirectoryPageFiltered (ADR-0048)", function () {
       expect(neg.exists).to.equal(true);
       expect(neg.weight).to.equal(-7n);
     });
+
+    it("reads an address-target TAG via the targetSchema=0 bucket", async function () {
+      // Address-root content (ADR-0033) is tagged with refUID=0 + recipient=addr,
+      // so EdgeResolver records targetID=bytes32(uint160(addr)) and targetSchema=0
+      // (no target attestation to read a schema from). Confirm getActiveTagWeight
+      // finds it under that sentinel bucket — the address-root README hide path.
+      const aliceAddr = await alice.getAddress();
+      const bobAddr = await bob.getAddress();
+      const addrTarget = ethers.zeroPadValue(bobAddr, 32); // bytes32(uint160(addr))
+
+      await eas.connect(alice).attest({
+        schema: tagSchemaUID,
+        data: {
+          recipient: bobAddr, // address target (refUID empty)
+          expirationTime: NO_EXPIRATION,
+          revocable: true,
+          refUID: ZERO_BYTES32,
+          data: enc.encode(["bytes32", "int256"], [excludeTagDef, 3n]),
+          value: 0n,
+        },
+      });
+
+      const onAddr = await edgeResolver.getActiveTagWeight(aliceAddr, addrTarget, excludeTagDef, ZERO_BYTES32);
+      expect(onAddr.exists).to.equal(true);
+      expect(onAddr.weight).to.equal(3n);
+
+      // An untagged address → (false, 0).
+      const otherAddr = ethers.zeroPadValue(aliceAddr, 32);
+      const untagged = await edgeResolver.getActiveTagWeight(aliceAddr, otherAddr, excludeTagDef, ZERO_BYTES32);
+      expect(untagged.exists).to.equal(false);
+    });
+  });
+
+  // ─────────────────────────── entry-guard reverts ───────────────────────────
+
+  describe("getDirectoryPageFiltered entry guards", function () {
+    it("reverts on empty attesters, too many attesters, and maxItems == 0", async function () {
+      const aliceAddr = await alice.getAddress();
+      const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32, alice);
+
+      // Empty attesters.
+      await expect(fileView.getDirectoryPageFiltered(rootUID, dataSchemaUID, [], [], [], "0x", 10)).to.be.revertedWith(
+        "Attesters list cannot be empty",
+      );
+
+      // > MAX_ATTESTERS_PER_QUERY (20) → 21 copies.
+      const tooMany = Array(21).fill(aliceAddr);
+      await expect(
+        fileView.getDirectoryPageFiltered(rootUID, dataSchemaUID, tooMany, [], [], "0x", 10),
+      ).to.be.revertedWith("Too many attesters");
+
+      // maxItems == 0.
+      await expect(
+        fileView.getDirectoryPageFiltered(rootUID, dataSchemaUID, [aliceAddr], [], [], "0x", 0),
+      ).to.be.revertedWith("maxItems must be > 0");
+    });
   });
 
   // ─────────────────────────── file-item exclusion ───────────────────────────

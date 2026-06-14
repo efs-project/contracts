@@ -27,6 +27,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Abi } from "viem";
 import { usePublicClient } from "wagmi";
+import { reconcileMinWeights, shouldUseFilteredQuery } from "~~/utils/efs/excludeFilter";
 
 interface UseLensesDirectoryPageOptions {
   parentAnchor: `0x${string}` | undefined;
@@ -96,8 +97,7 @@ export function useLensesDirectoryPage({
   // (default `[]`) or passes a length-mismatched array alongside non-empty
   // `excludeTagDefs` would otherwise `require`-revert. Derive an all-zero vector
   // (ADR-0042 `weight >= 0`) whenever the lengths don't already match.
-  const effectiveMinWeights =
-    minWeights.length === excludeTagDefs.length ? minWeights : excludeTagDefs.map(() => 0n);
+  const effectiveMinWeights = reconcileMinWeights(excludeTagDefs, minWeights);
   const [items, setItems] = useState<any[] | undefined>(undefined);
   const [isLoading, setIsLoading] = useState(false);
   const [hasMore, setHasMore] = useState(false);
@@ -228,7 +228,7 @@ export function useLensesDirectoryPage({
           // via getDirectoryPageFiltered so the page returns already filtered.
           // Otherwise keep the unfiltered read unchanged.
           const result = (
-            excludeTagDefs.length > 0
+            shouldUseFilteredQuery(excludeTagDefs)
               ? await publicClient.readContract({
                   address: fileViewAddress,
                   abi: fileViewAbi,
