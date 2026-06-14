@@ -718,33 +718,14 @@ export async function seedDemoTree() {
   );
   await tagSystemIfMissing(deployerSigner, docsReadme.dataUID, systemDefUID);
 
-  // 3. File-anchor case: a README hosted UNDER the /docs/readme.txt file anchor.
-  //    A file leaf is itself an anchor that can host children, so the Overview
-  //    of a *file* resolves system-tagged children the same way a folder does.
-  const readmeTxtUID = await findAnchor(docsUID, "readme.txt", dataSchemaUID);
-  if (readmeTxtUID) {
-    const FILE_README = [
-      "# readme.txt",
-      "",
-      "Overview for the **readme.txt** file item.",
-      "",
-      "This README is hosted *under a file anchor* to exercise the non-folder",
-      "Overview path — a file leaf can host children just like a folder.",
-      "",
-    ].join("\n");
-    const fileReadme = await makeOnchainReadmeIfMissing(
-      deployerSigner,
-      readmeTxtUID,
-      "README.md",
-      FILE_README,
-      ethers.ZeroAddress,
-      systemDefUID,
-      true, // skipVisibilityWalk: parent is a FILE anchor — don't tag it as a folder
-    );
-    await tagSystemIfMissing(deployerSigner, fileReadme.dataUID, systemDefUID);
-  } else {
-    console.log("  ⏭️  /docs/readme.txt anchor missing — skipping file-anchor README.");
-  }
+  // NOTE: no file-anchor (e.g. /docs/readme.txt/README.md) Overview is seeded.
+  // Overviews are FOLDER-SCOPED: the UI gates creation off on file leaves, and the
+  // router can't even resolve a README under a file anchor — `EFSRouter.request`
+  // walks intermediate segments with generic `resolvePath`, which only returns
+  // generic (bytes32(0)) anchors, so the intermediate file anchor `readme.txt`
+  // 404s before the child README is reached (Codex P2). Seeding one would be dead,
+  // unreachable data. Supporting per-file Overviews later needs a router change
+  // (try DATA-schema on intermediate segments) — tracked in docs/FUTURE_WORK.md.
 
   // 4. Address-container case: a README under the demo lens's (deployer's)
   //    address root. Address containers have no anchor UID to use as refUID, so

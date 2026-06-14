@@ -118,6 +118,18 @@ would need a client-side EAS getAttestation + decode per node — EFSIndexer can
 expose an anchorType getter (its address is baked into the schema UIDs). Add it if
 the helper ever gains another caller.
 
+### Per-file Overviews need a router change (currently folder-scoped)
+Overviews are folder-scoped. A per-file Overview (`/docs/readme.txt/README.md`)
+doesn't work end to end: the UI gates creation off on file leaves, and the read
+path can't resolve it either — `EFSRouter.request` walks intermediate segments with
+generic `resolvePath`, which returns only generic (`bytes32(0)`) anchors, so the
+intermediate file anchor `readme.txt` 404s before the child README (Codex). The
+seeded file-README was removed (dead/unreachable data) and the Overview pane no
+longer probes on file leaves. To support per-file Overviews later: have the router
+(and the client resolver) try the DATA-schema `resolveAnchor` on intermediate
+segments too, then ungate creation with the file-anchor visibility-walk guard. Both
+are Durable changes; settle before the Sepolia freeze if file Overviews are wanted.
+
 ### Deferred PR #27 review findings (non-blocking)
 - **EFSFileView exclusion gas (Gemini):** in `_isItemExcluded`, pre-check
   `edgeResolver.hasActiveTagFromAny(target, def, attesters)` before the per-attester

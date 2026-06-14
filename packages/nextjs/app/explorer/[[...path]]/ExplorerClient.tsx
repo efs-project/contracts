@@ -728,8 +728,12 @@ export default function ExplorerClient() {
               markdown/file when one exists; the pane itself returns null when
               there's no Overview, so the layout naturally falls back to the
               two-pane (tree + file) arrangement. Hidden below `lg` to mirror
-              how the tree `<aside>` collapses on narrow screens. */}
-          {!pathError && (
+              how the tree `<aside>` collapses on narrow screens.
+              Overviews are FOLDER-SCOPED: skip the pane (and its README probe) on a
+              file leaf — the router can't resolve `<file>/README.md` (intermediate
+              file anchors 404 under generic resolvePath), so it would always probe
+              to a 404 (Codex P2). */}
+          {!pathError && !currentIsFileLeaf && (
             <div className="hidden lg:block">
               <OverviewPane
                 key={currentAnchorUID ?? "none"}

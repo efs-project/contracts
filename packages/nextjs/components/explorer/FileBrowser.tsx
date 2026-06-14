@@ -547,7 +547,17 @@ export const FileBrowser = ({
   // created under /tags/) are dropped. `minWeights` is all-zero, matching
   // ADR-0042's `weight >= 0` effective-TAG convention.
   useEffect(() => {
-    const names = drawerExcludeNamesKey ? drawerExcludeNamesKey.split(",") : [];
+    const rawNames = drawerExcludeNamesKey ? drawerExcludeNamesKey.split(",") : [];
+    // Order the system-managed safety excludes (system, nsfw) FIRST so the
+    // MAX_EXCLUDE_TAGS cap below can never drop them in favor of user-added tags
+    // that happen to sort earlier alphabetically — dropping a safety tag would
+    // un-hide system/nsfw content despite its drawer toggle still being set to
+    // exclude (Codex P2). drawerExcludeNamesKey is lowercased, so these match.
+    const SAFETY_EXCLUDES = ["system", "nsfw"];
+    const names = [
+      ...rawNames.filter(n => SAFETY_EXCLUDES.includes(n)),
+      ...rawNames.filter(n => !SAFETY_EXCLUDES.includes(n)),
+    ];
     if (names.length === 0) {
       // No active exclude tags. Nothing to resolve — clear the def set and mark
       // resolved so the lens gate doesn't wait on a resolution that never runs
