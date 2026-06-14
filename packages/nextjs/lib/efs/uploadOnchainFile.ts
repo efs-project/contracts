@@ -532,7 +532,12 @@ export async function uploadOnchainFile(args: UploadOnchainFileArgs): Promise<Up
     fileAnchorUID = extractUIDFromReceipt(anchorReceipt);
     if (!fileAnchorUID) throw new Error("Could not extract file Anchor UID");
     log("File anchor created.");
-    checkCancelled();
+    // NO checkCancelled() here: once the ANCHOR is broadcast, the placement PIN
+    // MUST follow. Cancelling between them would leave a DATA-schema README slot
+    // indexed with no PIN — and the exclude predicate reaches the system-tagged
+    // DATA only through the PIN, so the default `system` rule couldn't hide that
+    // visible empty slot (Codex P2). The cancellation checkpoint is the
+    // beforePlacement hook above, before the anchor is created.
   }
 
   // ── Placement PIN (definition=fileAnchorUID, refUID=DATA) (CreateItemModal ~lines 1170–1194) ──

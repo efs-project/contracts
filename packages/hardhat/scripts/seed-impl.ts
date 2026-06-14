@@ -389,6 +389,13 @@ export async function seedDemoTree() {
     // beforePlacement ordering). Callers still re-apply tagSystemIfMissing after,
     // which idempotently repairs an already-placed-but-untagged README.
     systemDefUID?: string,
+    // Set when `parentUID` is a FILE anchor (e.g. an Overview attached to
+    // /docs/readme.txt). The ancestor-visibility walk would otherwise tag that
+    // file anchor with definition=dataSchemaUID, making EFSFileView phase 0 treat
+    // the file as a qualifying folder — duplicate cards + a folder-visible file
+    // (Codex P2). The README still renders via the exact-path Overview lookup, so
+    // the walk is simply skipped for file-parented READMEs.
+    skipVisibilityWalk?: boolean,
   ): Promise<{ fileUID: string; dataUID: string; created: boolean }> => {
     const attester = await signer.getAddress();
     let fileUID = await findAnchor(parentUID, name, dataSchemaUID);
@@ -434,7 +441,7 @@ export async function seedDemoTree() {
     // `bytes32(uint160(addr))` — not an attestation — so EAS reverts NotFound on
     // the first hop. Address-container listings don't rely on these folder
     // visibility TAGs anyway, so skip the walk for that path.
-    if (recipient === ethers.ZeroAddress) {
+    if (recipient === ethers.ZeroAddress && !skipVisibilityWalk) {
       await walkAncestorVisibility(signer, fileUID);
     }
     return { fileUID, dataUID, created: true };
@@ -732,6 +739,7 @@ export async function seedDemoTree() {
       FILE_README,
       ethers.ZeroAddress,
       systemDefUID,
+      true, // skipVisibilityWalk: parent is a FILE anchor — don't tag it as a folder
     );
     await tagSystemIfMissing(deployerSigner, fileReadme.dataUID, systemDefUID);
   } else {
