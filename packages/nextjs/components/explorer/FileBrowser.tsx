@@ -227,6 +227,12 @@ export const FileBrowser = ({
   const [tagFilterVersion, setTagFilterVersion] = useState(0);
   const [edgeResolverAddress, setEdgeResolverAddress] = useState<`0x${string}` | null>(null);
   const [tagsRoot, setTagsRoot] = useState<`0x${string}` | null>(null);
+  // True once the `/tags` lookup has SETTLED — either it resolved to a UID, or it
+  // definitively resolved to absent (no `/tags` anchor on this deploy). Lets the
+  // exclude gate distinguish "still loading, keep holding" from "no tags exist,
+  // nothing to hide → release to the unfiltered read". Stays false on a hard RPC
+  // error so we hold (leak-safe) rather than fall through to unfiltered.
+  const [tagsRootSettled, setTagsRootSettled] = useState(false);
   // Folder-delete confirmation. `pinUIDs` (file placements, cardinality 1) and
   // `tagUIDs` (folder visibility, cardinality N) are populated by scanSubtree.
   // Tracked separately because they live under different EAS schemas (PIN vs TAG)
@@ -354,7 +360,11 @@ export const FileBrowser = ({
           abi: indexerInfo.abi,
           functionName: "rootAnchorUID",
         })) as `0x${string}`;
-        if (!fsRoot || fsRoot === zeroHash) return;
+        if (!fsRoot || fsRoot === zeroHash) {
+          // No filesystem root → no `/tags`, nothing taggable. Settle as absent.
+          setTagsRootSettled(true);
+          return;
+        }
         const tagsUID = (await publicClient.readContract({
           address: indexerInfo.address as `0x${string}`,
           abi: indexerInfo.abi,
@@ -362,8 +372,13 @@ export const FileBrowser = ({
           args: [fsRoot, "tags"],
         })) as `0x${string}`;
         if (tagsUID && tagsUID !== zeroHash) setTagsRoot(tagsUID);
-      } catch {
-        // "tags" not yet created — tag filter will be unavailable
+        // Resolved either way (UID or absent) — settle so the exclude gate can
+        // release instead of holding "Loading…" forever on a deploy without /tags.
+        setTagsRootSettled(true);
+      } catch (e) {
+        // Hard RPC error — leave `tagsRootSettled` false so the exclude gate keeps
+        // holding (leak-safe) rather than dropping to the unfiltered read.
+        console.error("Resolving /tags anchor failed; tag filter unavailable", e);
       }
     });
   }, [publicClient, indexerInfo]);
@@ -548,7 +563,6 @@ export const FileBrowser = ({
         .join(","),
     [drawerTagFilters],
   );
-  const lensesKey = useMemo(() => lensAddresses.join(",").toLowerCase(), [lensAddresses]);
 
   // Resolve the EXCLUDE tags' DEFINITION UIDs (ADR-0048). Unlike the INCLUDE
   // path we do NOT paginate each tag's full target set — the on-chain filter in
@@ -570,11 +584,19 @@ export const FileBrowser = ({
       return;
     }
     if (!publicClient || !indexerInfo || !tagsRoot) {
-      // tagsRoot not resolved yet → excludes are EXPECTED but not yet
-      // resolvable. Keep `excludeResolved` false so the lens gate HOLDS the
-      // fetch (SHOULD-FIX 1) instead of taking the unfiltered branch and
-      // flashing system/nsfw. Leave the def set untouched; this effect re-runs
-      // once tagsRoot lands.
+      if (tagsRootSettled) {
+        // `/tags` resolution settled with no anchor — there are no def UIDs to
+        // resolve, and an item can only be system/nsfw-tagged if its def anchor
+        // exists under `/tags/`, so there is genuinely nothing to hide. Release
+        // the gate to the unfiltered read instead of holding "Loading…" forever.
+        setExcludeTagDefUIDs([]);
+        setExcludeResolved(true);
+        return;
+      }
+      // tagsRoot still loading → excludes are EXPECTED but not yet resolvable.
+      // Keep `excludeResolved` false so the lens gate HOLDS the fetch instead of
+      // taking the unfiltered branch and flashing system/nsfw. This effect
+      // re-runs once tagsRoot (or its settled signal) lands.
       setExcludeResolved(false);
       return;
     }
@@ -621,9 +643,13 @@ export const FileBrowser = ({
     return () => {
       cancelled = true;
     };
-    // lensesKey is included per the integration spec (the resolved defs feed the
-    // lens-scoped filtered query); def UID resolution itself is lens-independent.
-  }, [drawerExcludeNamesKey, tagFilterVersion, publicClient, indexerInfo, tagsRoot, lensesKey]);
+    // Exclude def UID resolution depends ONLY on which exclude tags are active and
+    // where `/tags/` lives — it is lens-independent and unaffected by applying tags
+    // to files. `lensesKey`/`tagFilterVersion` are deliberately NOT deps: including
+    // them re-ran this effect (flashing "Loading…") on every lens change or tag
+    // edit even though the resolved defs never changed. The lens-scoped query
+    // refetches with the already-resolved defs via its own `depsKey`.
+  }, [drawerExcludeNamesKey, publicClient, indexerInfo, tagsRoot, tagsRootSettled]);
 
   // Parallel-array minWeights for getDirectoryPageFiltered — all 0n (ADR-0042
   // effective-TAG threshold `weight >= 0`). One entry per resolved exclude def.
@@ -1039,7 +1065,11 @@ export const FileBrowser = ({
     fileViewAddress: efsFileViewInfo?.address as `0x${string}` | undefined,
     fileViewAbi: efsFileViewInfo?.abi as any,
     pageSize,
-    enabled: useLensesQuery && lensAddresses.length > 0 && !!listSchemaUID,
+    // Gate on `!excludesPending` symmetrically with the file/folder query above.
+    // Lists aren't exclude-tagged so this path is unfiltered by design, but
+    // holding it too keeps the merged `rawItems` from rendering a half-resolved
+    // page (list items present, file/folder items still held) on first mount.
+    enabled: useLensesQuery && lensAddresses.length > 0 && !!listSchemaUID && !excludesPending,
   });
 
   // Parent-driven refetch for out-of-component mutations (create file/folder).
