@@ -209,6 +209,16 @@ export const FileBrowser = ({
   // so the lens-scoped listing comes back already filtered. No client-side
   // exclude scan / exclude UID set is kept.
   const [excludeTagDefUIDs, setExcludeTagDefUIDs] = useState<`0x${string}`[]>([]);
+  // True once the exclude-def-UID resolver effect below has finished resolving
+  // the currently-active exclude tag names — even if the resolved set is empty
+  // because the defs don't exist yet. Starts false and is re-gated false on every
+  // resolution restart (drawer exclude set / lenses / tagsRoot / tagFilterVersion
+  // change). Used to HOLD the lens directory fetch until the real def UIDs are
+  // known, so a fresh mount doesn't take the UNFILTERED branch and briefly flash
+  // `system`/`nsfw` items before a self-correcting refetch (SHOULD-FIX 1). The
+  // empty-excludes case (no active exclude tags) is NOT gated by this — see
+  // `excludesPending` below.
+  const [excludeResolved, setExcludeResolved] = useState(false);
   const [isTagFilterLoading, setIsTagFilterLoading] = useState(false);
   // True while the dataUIDMap is being populated asynchronously.
   // Prevents showing unfiltered results during the brief window between tag resolution and map build.
@@ -548,12 +558,29 @@ export const FileBrowser = ({
   // ADR-0042's `weight >= 0` effective-TAG convention.
   useEffect(() => {
     const names = drawerExcludeNamesKey ? drawerExcludeNamesKey.split(",") : [];
-    if (names.length === 0 || !publicClient || !indexerInfo || !tagsRoot) {
-      // tagsRoot not resolved yet → no excludes (unfiltered) until it resolves —
-      // same pre-resolve window as the include path.
+    if (names.length === 0) {
+      // No active exclude tags. Nothing to resolve — clear the def set and mark
+      // resolved so the lens gate doesn't wait on a resolution that never runs
+      // (would otherwise deadlock the empty-excludes case). The
+      // `drawerExcludeNamesKey === ""` branch in the lens gate also covers this,
+      // but keeping the flag truthful avoids a stale-false carrying over from a
+      // prior non-empty exclude set.
       setExcludeTagDefUIDs([]);
+      setExcludeResolved(true);
       return;
     }
+    if (!publicClient || !indexerInfo || !tagsRoot) {
+      // tagsRoot not resolved yet → excludes are EXPECTED but not yet
+      // resolvable. Keep `excludeResolved` false so the lens gate HOLDS the
+      // fetch (SHOULD-FIX 1) instead of taking the unfiltered branch and
+      // flashing system/nsfw. Leave the def set untouched; this effect re-runs
+      // once tagsRoot lands.
+      setExcludeResolved(false);
+      return;
+    }
+
+    // Excludes are active and resolvable: (re)start resolution.
+    setExcludeResolved(false);
 
     let cancelled = false;
     (async () => {
@@ -576,9 +603,18 @@ export const FileBrowser = ({
         setExcludeTagDefUIDs(prev =>
           prev.length === defs.length && prev.every((u, i) => u === defs[i]) ? prev : defs,
         );
+        // Resolution complete (defs known — possibly empty if the tags don't
+        // exist under /tags/). Release the lens gate.
+        setExcludeResolved(true);
       } catch (e) {
         console.error("Exclude tag def resolution failed", e);
-        if (!cancelled) setExcludeTagDefUIDs([]);
+        if (!cancelled) {
+          setExcludeTagDefUIDs([]);
+          // Resolution settled (errored) — release the gate rather than hold the
+          // directory fetch forever. Worst case the unfiltered branch runs, which
+          // the self-correcting depsKey backstop will re-gate on the next change.
+          setExcludeResolved(true);
+        }
       }
     })();
 
@@ -592,6 +628,16 @@ export const FileBrowser = ({
   // Parallel-array minWeights for getDirectoryPageFiltered — all 0n (ADR-0042
   // effective-TAG threshold `weight >= 0`). One entry per resolved exclude def.
   const excludeMinWeights = useMemo(() => excludeTagDefUIDs.map(() => 0n), [excludeTagDefUIDs]);
+
+  // SHOULD-FIX 1: excludes are EXPECTED (the drawer has active exclude tags) but
+  // their def UIDs haven't resolved yet. While true, HOLD the lens directory
+  // (file/folder) fetch — otherwise its first fetch fires with an empty
+  // `excludeTagDefUIDs`, takes the UNFILTERED
+  // `getDirectoryPageBySchemaAndAddressList` branch, and briefly renders
+  // system/nsfw items before the resolved def UIDs trigger a self-correcting
+  // refetch. The empty-excludes case (`drawerExcludeNamesKey === ""`) is NOT
+  // pending — there's nothing to resolve, so we never deadlock there.
+  const excludesPending = drawerExcludeNamesKey !== "" && !excludeResolved;
 
   const fetchFileContent = async (item: any) => {
     if (!efsRouter) {
@@ -971,7 +1017,11 @@ export const FileBrowser = ({
     // EXCLUDE tags applied on-chain (ADR-0048). Empty array ⇒ unfiltered read.
     excludeTagDefs: excludeTagDefUIDs,
     minWeights: excludeMinWeights,
-    enabled: useLensesQuery && lensAddresses.length > 0,
+    // SHOULD-FIX 1: hold the fetch while excludes are expected but unresolved so
+    // the unfiltered branch never runs on first mount (no system/nsfw flash).
+    // Once resolved (with the real def UIDs, possibly empty), this re-enables and
+    // the filtered read fires. Empty-excludes is never pending → not gated.
+    enabled: useLensesQuery && lensAddresses.length > 0 && !excludesPending,
   });
 
   // Lens-scoped LIST anchors. Lists are placed as anchors with anchorType=LIST_SCHEMA_UID,
@@ -1153,7 +1203,12 @@ export const FileBrowser = ({
   }, []);
 
   if (!currentAnchorUID) return <div>Select a topic</div>;
-  if (isLoading || isTagFilterLoading || isDataUIDMapLoading || isSortLoading) return <div>Loading items...</div>;
+  // `excludesPending` (SHOULD-FIX 1): the lens directory hook is held disabled
+  // while exclude defs resolve, so it reports neither loading nor items — show
+  // the loading state rather than a premature "Topic is empty" during the hold.
+  // Only applies on the lens-scoped path (the gate only disables the lens hook).
+  if (isLoading || isTagFilterLoading || isDataUIDMapLoading || isSortLoading || (useLensesQuery && excludesPending))
+    return <div>Loading items...</div>;
 
   // When a sort is active, reorder rawItems by the sorted UIDs.
   // Items not yet in the sorted list appear at the end in their original order.

@@ -46,8 +46,11 @@ interface UseLensesDirectoryPageOptions {
   /**
    * Per-tag weight thresholds (ADR-0048 / ADR-0042). Parallel to
    * `excludeTagDefs`; an item is excluded for tag k iff a viewed lens has an
-   * active TAG with `weight >= minWeights[k]`. Defaults to all-zero
-   * (ADR-0042's `weight >= 0`) when omitted.
+   * active TAG with `weight >= minWeights[k]`. When omitted OR length-mismatched
+   * with `excludeTagDefs`, it is derived as `excludeTagDefs.map(() => 0n)`
+   * (ADR-0042's `weight >= 0`). The on-chain call requires equal-length parallel
+   * arrays, so a mismatched/empty `minWeights` alongside non-empty
+   * `excludeTagDefs` would `require`-revert — never pass it through raw.
    */
   minWeights?: bigint[];
   /** False disables the hook entirely (state cleared, no fetches). */
@@ -88,6 +91,13 @@ export function useLensesDirectoryPage({
   enabled,
 }: UseLensesDirectoryPageOptions): UseLensesDirectoryPageResult {
   const publicClient = usePublicClient();
+  // The on-chain `getDirectoryPageFiltered` requires `minWeights.length ===
+  // excludeTagDefs.length` (parallel arrays). A caller that omits `minWeights`
+  // (default `[]`) or passes a length-mismatched array alongside non-empty
+  // `excludeTagDefs` would otherwise `require`-revert. Derive an all-zero vector
+  // (ADR-0042 `weight >= 0`) whenever the lengths don't already match.
+  const effectiveMinWeights =
+    minWeights.length === excludeTagDefs.length ? minWeights : excludeTagDefs.map(() => 0n);
   const [items, setItems] = useState<any[] | undefined>(undefined);
   const [isLoading, setIsLoading] = useState(false);
   const [hasMore, setHasMore] = useState(false);
@@ -99,7 +109,7 @@ export function useLensesDirectoryPage({
   // the cursor from 0 (a different filter is a different result set), so it
   // joins depsKey. Lowercased to keep the key stable across hex casing.
   const excludeKey = excludeTagDefs.join(",").toLowerCase();
-  const minWeightsKey = minWeights.map(w => w.toString()).join(",");
+  const minWeightsKey = effectiveMinWeights.map(w => w.toString()).join(",");
   const depsKey = `${enabled ? "1" : "0"}|${parentAnchor ?? ""}|${dataSchemaUID ?? ""}|${lensesKey}|${pageSize.toString()}|${excludeKey}|${minWeightsKey}`;
   const lastDepsRef = useRef<string>("");
   // NOTE: There was previously an `inFlightRef` guard at the top of the fetch
@@ -228,7 +238,7 @@ export function useLensesDirectoryPage({
                     dataSchemaUID,
                     lensAddresses as `0x${string}`[],
                     excludeTagDefs as `0x${string}`[],
-                    minWeights,
+                    effectiveMinWeights,
                     cursor,
                     pageSize,
                   ],

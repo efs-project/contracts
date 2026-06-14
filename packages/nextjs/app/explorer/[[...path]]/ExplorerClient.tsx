@@ -132,6 +132,16 @@ export default function ExplorerClient() {
     functionName: "DEPLOYER",
   });
 
+  // AGENT-NOTE (ADR-0048 / SHOULD-FIX 2): these two devnet constants make
+  // `systemLenses` (and therefore `lensAddresses`) permanently non-empty, which
+  // is load-bearing for the system/nsfw hide guarantee. The on-chain exclude
+  // filter (`getDirectoryPageFiltered`) only runs on the lens-scoped directory
+  // call; the non-lens `EFSFileView.getDirectoryPage` path applies NO exclusion.
+  // When the mainnet TODO above replaces these with a user-configurable list,
+  // an empty result would drop the default view onto the unfiltered path and
+  // leak `system` files. Before allowing an empty list, the non-lens path must
+  // re-add exclusion (client backstop or a filtered `getDirectoryPage` variant).
+  // See the matching note at `defaultLensesForContainer` in utils/efs/containers.ts.
   const systemLenses = useMemo(() => {
     const out: string[] = [DEVNET_BOOTSTRAP_CURATOR, DEVNET_DEV_ATTESTER];
     if (deployerAddress && typeof deployerAddress === "string") out.push(deployerAddress);

@@ -893,6 +893,66 @@ describe("EFSFileView — getDirectoryPageFiltered (ADR-0048)", function () {
       expect(names(page.items)).to.deep.equal(["t2low.txt"]);
     });
 
+    it("Reverts when excludeTagDefs exceeds MAX_EXCLUDE_TAGS_PER_QUERY (9 > cap of 8)", async function () {
+      // ADR-0048 bounds per-query exclude tags at MAX_EXCLUDE_TAGS_PER_QUERY (8) so the
+      // per-item exclusion loop stays cheap. Passing 9 valid, length-matched defs must revert
+      // BEFORE any walk — this is the cap guard, distinct from the length-mismatch guard above.
+      const aliceAddr = await alice.getAddress();
+      const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32, alice);
+      await createFileItem("a.txt", rootUID, alice);
+
+      // Nine distinct, valid exclude-tag definitions (registered schema UIDs). Registered here in
+      // the test body (after the outer beforeEach) so they don't shift any CREATE nonce.
+      const defs: string[] = [];
+      for (let i = 0; i < 9; i++) {
+        const tx = await registry.register(`string capLabel${i}`, ZeroAddress, false);
+        defs.push((await tx.wait())!.logs[0].topics[1]);
+      }
+      const weights = defs.map(() => 0n);
+
+      await expect(
+        fileView.getDirectoryPageFiltered(rootUID, dataSchemaUID, [aliceAddr], defs, weights, "0x", 10),
+      ).to.be.revertedWith("Too many exclude tags");
+    });
+
+    it("Two exclude tags on FOLDER anchors: each-tagged folder excluded (union), untagged folder survives", async function () {
+      // Mirror of the headline multi-tag FILE case, but on FOLDER items — the exclude TAG targets
+      // the folder ANCHOR (bucket ANCHOR_SCHEMA_UID) rather than a DATA. Exercises the union across
+      // two exclude defs on the folder branch of the filter.
+      const aliceAddr = await alice.getAddress();
+      const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32, alice);
+
+      const folderFirst = await createAnchor("first", rootUID, ZERO_BYTES32, alice);
+      const folderSecond = await createAnchor("second", rootUID, ZERO_BYTES32, alice);
+      const folderBoth = await createAnchor("both", rootUID, ZERO_BYTES32, alice);
+      const folderNeither = await createAnchor("neither", rootUID, ZERO_BYTES32, alice);
+
+      // Folder visibility TAG (definition=anchorSchema=dataSchemaUID for this listing) so each
+      // folder qualifies in phase 0.
+      for (const f of [folderFirst, folderSecond, folderBoth, folderNeither]) {
+        await createTag(f, dataSchemaUID, alice);
+      }
+
+      // Exclude tags on the folder ANCHORs (bucket ANCHOR_SCHEMA_UID), union across the two defs.
+      await createTag(folderFirst, excludeTagDef, alice, 1n); // def1 only
+      await createTag(folderSecond, excludeTagDef2, alice, 1n); // def2 only
+      await createTag(folderBoth, excludeTagDef, alice, 1n); // def1 AND
+      await createTag(folderBoth, excludeTagDef2, alice, 1n); // def2 (double-tagged)
+
+      const page = await fileView.getDirectoryPageFiltered(
+        rootUID,
+        dataSchemaUID,
+        [aliceAddr],
+        [excludeTagDef, excludeTagDef2],
+        [0n, 0n],
+        "0x",
+        10,
+      );
+      // first/second/both excluded via the union; only the untagged folder survives. The
+      // double-tagged folder must be excluded once and not corrupt the walk.
+      expect(names(page.items)).to.deep.equal(["neither"]);
+    });
+
     it("Reverts on parallel-array length mismatch (excludeTagDefs.length != minWeights.length)", async function () {
       const aliceAddr = await alice.getAddress();
       const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32, alice);
