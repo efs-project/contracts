@@ -131,15 +131,17 @@ export default function ExplorerClient() {
     functionName: "DEPLOYER",
   });
 
-  // AGENT-NOTE (ADR-0048 / SHOULD-FIX 2): these two devnet constants make
-  // `systemLenses` (and therefore `lensAddresses`) permanently non-empty, which
-  // is load-bearing for the system/nsfw hide guarantee. The on-chain exclude
-  // filter (`getDirectoryPageFiltered`) only runs on the lens-scoped directory
-  // call; the non-lens `EFSFileView.getDirectoryPage` path applies NO exclusion.
-  // When the mainnet TODO above replaces these with a user-configurable list,
-  // an empty result would drop the default view onto the unfiltered path and
-  // leak `system` files. Before allowing an empty list, the non-lens path must
-  // re-add exclusion (client backstop or a filtered `getDirectoryPage` variant).
+  // AGENT-NOTE (ADR-0048): these two devnet constants make `systemLenses` (and
+  // therefore `lensAddresses`) permanently non-empty. There is no longer an
+  // unfiltered read path — the unfiltered `getDirectoryPage` listing fallback was
+  // removed, so every directory read is lens-scoped through
+  // `getDirectoryPageFiltered`. An empty `lensAddresses` now FAILS SAFE: the
+  // FileBrowser directory hooks are disabled and the grid renders empty rather
+  // than showing unfiltered content. The remaining work, when the mainnet TODO
+  // above replaces these constants with a user-configurable list, is to give the
+  // empty-list case a FILTERED listing (so the view isn't simply blank) — NOT to
+  // re-introduce an unfiltered path. (TopicTree's own lens read is not yet
+  // exclude-filtered — see docs/FUTURE_WORK.md.)
   // See the matching note at `defaultLensesForContainer` in utils/efs/containers.ts.
   const systemLenses = useMemo(() => {
     const out: string[] = [DEVNET_BOOTSTRAP_CURATOR, DEVNET_DEV_ATTESTER];
@@ -685,9 +687,8 @@ export default function ExplorerClient() {
               selectedUID={currentAnchorUID}
               activeContainer={currentContainer}
               lensAddresses={lensAddresses}
-              // Same semantics as FileBrowser.explicitLenses — whenever the
-              // URL carries `?lenses=` (even empty), the sidebar must stay
-              // lens-scoped so it doesn't silently render the unscoped tree.
+              // Whenever the URL carries `?lenses=` (even empty), the sidebar must
+              // stay lens-scoped so it doesn't silently render the unscoped tree —
               // ADR-0031 "explicit param must not widen results".
               explicitLenses={hasLensesParam}
               activeSortInfoUID={activeSortInfoUID}

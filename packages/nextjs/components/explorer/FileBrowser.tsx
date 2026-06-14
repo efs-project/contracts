@@ -158,8 +158,8 @@ export const FileBrowser = ({
    * that adds/removes items in the current directory — today: file upload and
    * folder creation, which land via `CreateItemModal` → `FileActionsBar` and
    * therefore can't call the internal `refetch*` functions directly. Delete is
-   * in-component and calls `refetchLensItems` / `refetchStandardItems`
-   * inline; this key is the parallel escape hatch for create.
+   * in-component and calls `refetchLensItems` inline; this key is the parallel
+   * escape hatch for create.
    *
    * Each bump triggers exactly one refetch of whichever query is active
    * (lens-scoped or standard). Initial mount is skipped — the hooks fetch
@@ -183,7 +183,10 @@ export const FileBrowser = ({
   const [isFileLoading, setIsFileLoading] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [previewFullscreen, setPreviewFullscreen] = useState(false);
-  const [pageSize, setPageSize] = useState<bigint>(50n);
+  // Per-fetch page target. Constant since the lens load-more iterates the opaque
+  // cursor (ADR-0036) rather than growing a page size (the old standard-path
+  // load-more that incremented this was removed with the unfiltered fallback).
+  const pageSize = 50n;
 
   // Tag filter state: null = no filter active; Set<string> = allowed DATA/anchor UIDs
   const [tagFilteredUIDs, setTagFilteredUIDs] = useState<Set<string> | null>(null);
@@ -301,18 +304,19 @@ export const FileBrowser = ({
     };
   }, [fileContent]);
 
-  useEffect(() => {
-    setPageSize(50n);
-  }, [currentAnchorUID]);
-
   // Load EdgeResolver address and "tags" anchor UID once.
   // "tags" is a normal anchor under the file system root — discovered the same way
   // any folder is, via resolvePath. Tag definitions (e.g. "favorites") are its children.
+  // `/tags` resolution is DECOUPLED from the EdgeResolver address: it only needs the
+  // indexer (which we already have). The EdgeResolver address is used elsewhere
+  // (include-tag + delete scans); a missing/unknown resolver must NOT wedge the
+  // exclude gate. If we early-returned on `!addr`, `tagsRootSettled` would stay false
+  // and the directory would hold "Loading…" forever; and releasing the gate there
+  // would be worse — it would fall to an UNFILTERED lens read and leak system/nsfw.
   useEffect(() => {
     if (!publicClient || !indexerInfo) return;
     getEdgeResolverAddress(publicClient.chain.id).then(async addr => {
-      if (!addr) return;
-      setEdgeResolverAddress(addr);
+      if (addr) setEdgeResolverAddress(addr);
       try {
         const fsRoot = (await publicClient.readContract({
           address: indexerInfo.address as `0x${string}`,
@@ -984,7 +988,6 @@ export const FileBrowser = ({
 
   // Lens-scoped LIST anchors. Lists are placed as anchors with anchorType=LIST_SCHEMA_UID,
   // so the same schema-filtered directory walk surfaces them — just with the LIST schema.
-  // (The standard `getDirectoryPage` path already returns all anchor children, lists included.)
   const {
     items: lensListItems,
     hasMore: hasMoreLensList,
@@ -1006,10 +1009,7 @@ export const FileBrowser = ({
 
   // Parent-driven refetch for out-of-component mutations (create file/folder).
   // Skip the initial render — the queries fire on their own when deps settle.
-  // Subsequent bumps route to whichever query is currently live. We snapshot
-  // `useLensesQuery` at call time so a mid-flight mode switch (e.g. wallet
-  // disconnect between the create and the refetch) still hits the right
-  // refetcher rather than racing the mode-flip.
+  // Subsequent bumps re-run both lens-scoped refetchers (file/folder + list).
   const firstRefreshRun = useRef(true);
   useEffect(() => {
     if (firstRefreshRun.current) {

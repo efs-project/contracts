@@ -162,7 +162,7 @@ export const OverviewEditorModal = (props: OverviewEditorModalProps) => {
 
   const encodedBytes = new TextEncoder().encode(text).length;
   const overCap = encodedBytes > MAX_RENDER_BYTES;
-  // ~5 fixed attestations (DATA, contentType ×3, ANCHOR, placement PIN, MIRROR,
+  // ~8 fixed attestations (DATA, contentType ×3, ANCHOR, placement PIN, MIRROR,
   // system TAG) + one SSTORE2 deploy per content chunk.
   const estTxs = 8 + Math.max(1, Math.ceil(encodedBytes / CHUNK_SIZE));
 
