@@ -58,23 +58,22 @@ the place-before-tag ordering) isn't unit-testable without a React component-tes
 harness (react-testing-library — a Tier-2 dev dependency). Add RTL and
 component-level tests if the explorer's exclude wiring keeps regressing.
 
-### Overview README anchor is reachable before placement (narrow, partly-inherent)
-Creating an Overview attests the `README.md` file-slot ANCHOR before the DATA is
-placed/tagged. EFSIndexer sets `_containsAttestations[anchorUID][creator]=true` at
-anchor creation, and `getDirectoryPageFiltered` phase 1 qualifies items on that
-flag — so the slot appears in the listing before any placement PIN exists, and
-`_isItemExcluded` (which reaches the DATA via the placement PIN) has no DATA to
-check against the pre-placement `system` tag, so the default exclusion can't hide
-it (Codex). Impact is minor: only the NAME shows (an empty card, no content), only
-on a brand-new README whose first save is interrupted between anchor creation and
-placement, and it self-heals on retry (placement + DATA tag complete → hidden).
-CANNOT be fully eliminated: EAS UIDs aren't precomputable, so the anchor and its
-placement PIN can't be batched atomically (the PIN's `definition` needs the
-anchor's mined UID). Best mitigation: move anchor creation in `uploadOnchainFile`
-to immediately before the placement PIN (shrinks the window from ~6 txs to ~1).
-Deferred because it touches the multi-tx save path that can't be runtime-verified
-without a live wallet flow, and the residual 1-tx window is inherent. Left as an
-unresolved review thread for James's call on whether to do the reorder now.
+### Overview README anchor reachable before placement — mitigated; 1-tx residual is inherent
+EFSIndexer sets `_containsAttestations[anchorUID][creator]=true` at anchor
+creation, and `getDirectoryPageFiltered` phase 1 qualifies items on that flag — so
+a `README.md` file slot appears in the listing the moment its ANCHOR is attested,
+before any placement PIN exists; `_isItemExcluded` reaches the DATA via the PIN,
+so with no PIN it can't hide the slot against the pre-placement `system` tag
+(Codex). MITIGATED: `uploadOnchainFile` now creates the file ANCHOR last —
+immediately before the placement PIN (and after the DATA is system-tagged) —
+shrinking the visible-but-unhidden window from ~6 txs to ~1. The remaining 1-tx
+window (anchor mined, PIN not yet) is INHERENT and can't be closed: EAS UIDs
+aren't precomputable, so the anchor and the PIN that references its UID can't be
+batched atomically. Impact of the residual is minor: name-only (empty card, no
+content), only if a brand-new README's first save is interrupted in that 1-tx gap,
+self-healing on retry. A contract-level fix (phase-1 qualifying on active
+placement rather than `_containsAttestations`) would eliminate it but changes
+Durable listing semantics for all files — out of scope here.
 
 ### Deferred PR #27 review findings (non-blocking)
 - **EFSFileView exclusion gas (Gemini):** in `_isItemExcluded`, pre-check

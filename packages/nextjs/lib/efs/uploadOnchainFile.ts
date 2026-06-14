@@ -283,38 +283,16 @@ export async function uploadOnchainFile(args: UploadOnchainFileArgs): Promise<Up
     // anchor doesn't exist yet — create below
   }
 
-  if (!fileAnchorUID) {
-    // NOTE: the component's `anchorParent()` carve-out (refUID=0 + recipient=addr
-    // for direct children of an Address-container root) is NOT reachable here:
-    // the editor seam always places under a resolved attestation anchor parent,
-    // so the standard (refUID=parent, recipient=0) path applies. Re-parameterized
-    // from CreateItemModal's `anchorParent()` (~lines 404–414) to the standard branch.
-    const txHash = await attest(
-      {
-        functionName: "attest",
-        args: [
-          {
-            schema: anchorSchemaUID,
-            data: {
-              recipient: zeroAddress,
-              expirationTime: 0n,
-              revocable: false,
-              refUID: parentAnchorUID,
-              data: encodedName,
-              value: 0n,
-            },
-          },
-        ],
-      },
-      { silent: true },
-    );
-    if (!txHash) throw new Error("No txHash returned for file ANCHOR creation.");
-    const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
-    fileAnchorUID = extractUIDFromReceipt(receipt);
-    if (!fileAnchorUID) throw new Error("Could not extract file Anchor UID");
-    log("File anchor created.");
-    checkCancelled();
-  }
+  // NOTE: anchor CREATION is deliberately deferred to just before the placement
+  // PIN (see below), not done here. Creating the file-slot ANCHOR sets
+  // `_containsAttestations[anchorUID][attester]` in EFSIndexer, which makes the
+  // slot appear in `getDirectoryPageFiltered` phase 1 immediately — before any
+  // placement PIN exists, so the `system`-tag exclusion (which reaches the DATA
+  // via the PIN) can't yet hide it. Creating the anchor last shrinks that
+  // visible-but-unhidden window from ~6 txs to ~1 (Codex P2). The window can't be
+  // fully closed: EAS UIDs aren't precomputable, so the anchor and the PIN that
+  // references it can't be batched atomically. The read-only reuse check above
+  // stays here (it sets no on-chain state).
 
   // ── DATA attestation (CreateItemModal ~lines 990–1032) ──
   // DEDUP NOTE: we read dataByContentKey for the log but STILL create a fresh
@@ -516,6 +494,44 @@ export async function uploadOnchainFile(args: UploadOnchainFileArgs): Promise<Up
   if (beforePlacement) {
     log("Tagging item before placement...");
     await beforePlacement(dataUID);
+    checkCancelled();
+  }
+
+  // ── File ANCHOR (created LAST, immediately before placement) ──
+  // Deferred here from the reuse check above so the slot is reachable in the
+  // listing for the shortest possible window before its placement PIN hides it
+  // (Codex P2 — see the note at the reuse check). The DATA is already
+  // system-tagged at this point (beforePlacement), so the instant the PIN below
+  // lands, the file is hidden.
+  if (!fileAnchorUID) {
+    // The component's `anchorParent()` carve-out (refUID=0 + recipient=addr for
+    // direct children of an Address-container root) is NOT reachable here: the
+    // editor seam always places under a resolved attestation anchor parent, so the
+    // standard (refUID=parent, recipient=0) path applies.
+    const anchorTxHash = await attest(
+      {
+        functionName: "attest",
+        args: [
+          {
+            schema: anchorSchemaUID,
+            data: {
+              recipient: zeroAddress,
+              expirationTime: 0n,
+              revocable: false,
+              refUID: parentAnchorUID,
+              data: encodedName,
+              value: 0n,
+            },
+          },
+        ],
+      },
+      { silent: true },
+    );
+    if (!anchorTxHash) throw new Error("No txHash returned for file ANCHOR creation.");
+    const anchorReceipt = await publicClient.waitForTransactionReceipt({ hash: anchorTxHash });
+    fileAnchorUID = extractUIDFromReceipt(anchorReceipt);
+    if (!fileAnchorUID) throw new Error("Could not extract file Anchor UID");
+    log("File anchor created.");
     checkCancelled();
   }
 
