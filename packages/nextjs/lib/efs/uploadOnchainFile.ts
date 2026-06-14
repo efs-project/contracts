@@ -85,6 +85,16 @@ export interface UploadOnchainFileArgs {
   isCancelled?: () => boolean;
   /** Optional progress log. */
   onProgress?: (msg: string) => void;
+  /**
+   * Optional hook run on the freshly-attested DATA *immediately before* the
+   * placement PIN — the write that makes the file reachable in the directory.
+   * Use it to apply a descriptive tag (e.g. `system`) that must be active the
+   * instant the file appears, so a cancelled/failed tag can't leave a visible,
+   * untagged file. If it throws (including the cancel sentinel), placement is
+   * skipped — the DATA is orphaned (harmless; content-addressed, reused on retry)
+   * and nothing reachable leaks.
+   */
+  beforePlacement?: (dataUID: `0x${string}`) => Promise<void>;
 }
 
 export interface UploadOnchainFileResult {
@@ -145,6 +155,7 @@ export async function uploadOnchainFile(args: UploadOnchainFileArgs): Promise<Up
     edgeResolverAbi,
     isCancelled,
     onProgress,
+    beforePlacement,
   } = args;
 
   const log = (msg: string) => onProgress?.(msg);
@@ -496,6 +507,17 @@ export async function uploadOnchainFile(args: UploadOnchainFileArgs): Promise<Up
   if (!mirrorTxHash) throw new Error("MIRROR attestation did not return a transaction hash.");
   await publicClient.waitForTransactionReceipt({ hash: mirrorTxHash });
   checkCancelled();
+
+  // ── Pre-placement hook: apply any descriptive tag (e.g. `system`) on the DATA
+  // BEFORE the file becomes reachable, so a cancelled/failed tag can't leave a
+  // visible, untagged file in the directory (Codex P2). If it throws, the
+  // placement PIN below never runs — the DATA is orphaned (harmless) and nothing
+  // reachable leaks.
+  if (beforePlacement) {
+    log("Tagging item before placement...");
+    await beforePlacement(dataUID);
+    checkCancelled();
+  }
 
   // ── Placement PIN (definition=fileAnchorUID, refUID=DATA) (CreateItemModal ~lines 1170–1194) ──
   log("Placing file in folder via PIN...");

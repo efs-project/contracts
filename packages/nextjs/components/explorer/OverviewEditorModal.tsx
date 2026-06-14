@@ -108,7 +108,7 @@ export const OverviewEditorModal = (props: OverviewEditorModalProps) => {
         setIsSaving(false);
         return;
       }
-      const { dataUID } = await uploadOnchainFile({
+      await uploadOnchainFile({
         name: "README.md",
         bytes,
         contentType: "text/markdown",
@@ -129,18 +129,24 @@ export const OverviewEditorModal = (props: OverviewEditorModalProps) => {
         edgeResolverAbi,
         isCancelled: () => cancelledRef.current,
         onProgress: msg => useBackgroundOps.getState().log(opId, msg),
-      });
-      await applySystemTag({
-        dataUID,
-        walletClient,
-        publicClient,
-        attest,
-        indexerAddress,
-        indexerAbi,
-        anchorSchemaUID,
-        tagSchemaUID,
-        edgeResolverAddress,
-        edgeResolverAbi,
+        // Apply the system TAG on the DATA BEFORE the placement PIN makes the
+        // README reachable, so a stopped/rejected/failed tag can never leave a
+        // visible, untagged README in the directory (Codex P2). If this throws,
+        // uploadOnchainFile skips placement — nothing reachable leaks.
+        beforePlacement: async dataUID => {
+          await applySystemTag({
+            dataUID,
+            walletClient,
+            publicClient,
+            attest,
+            indexerAddress,
+            indexerAbi,
+            anchorSchemaUID,
+            tagSchemaUID,
+            edgeResolverAddress,
+            edgeResolverAbi,
+          });
+        },
       });
       useBackgroundOps.getState().complete(opId, "Overview saved");
       onSaved();
