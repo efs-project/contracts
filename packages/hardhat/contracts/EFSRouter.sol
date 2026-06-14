@@ -238,7 +238,9 @@ contract EFSRouter is IDecentralizedApp {
         address caller = msg.sender; // non-zero if web3:// client sets `from` on eth_call
         string memory chunkIndexStr = "";
         for (uint i = 0; i < params.length; i++) {
-            if (_stringsEqual(params[i].key, "lenses")) {
+            if (
+                _stringsEqual(params[i].key, "lenses")
+            ) {
                 lenses = _parseAddressList(params[i].value);
                 lensesExplicit = true;
             } else if (_stringsEqual(params[i].key, "chunk")) {

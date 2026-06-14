@@ -34,8 +34,8 @@ contract ListResolver is SchemaResolver {
         require(a.refUID == bytes32(0), "LIST must be free-floating");
         require(a.recipient == address(0), "LIST must not be directed");
 
-        (bool allowsDuplicates, bool appendOnly, uint8 targetType, bytes32 targetSchema, uint256 maxEntries) = abi
-            .decode(a.data, (bool, bool, uint8, bytes32, uint256));
+        (bool allowsDuplicates, bool appendOnly, uint8 targetType, bytes32 targetSchema, uint256 maxEntries) =
+            abi.decode(a.data, (bool, bool, uint8, bytes32, uint256));
 
         require(targetType <= 2, "invalid targetType");
 
