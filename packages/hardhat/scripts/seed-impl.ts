@@ -389,13 +389,6 @@ export async function seedDemoTree() {
     // beforePlacement ordering). Callers still re-apply tagSystemIfMissing after,
     // which idempotently repairs an already-placed-but-untagged README.
     systemDefUID?: string,
-    // Set when `parentUID` is a FILE anchor (e.g. an Overview attached to
-    // /docs/readme.txt). The ancestor-visibility walk would otherwise tag that
-    // file anchor with definition=dataSchemaUID, making EFSFileView phase 0 treat
-    // the file as a qualifying folder — duplicate cards + a folder-visible file
-    // (Codex P2). The README still renders via the exact-path Overview lookup, so
-    // the walk is simply skipped for file-parented READMEs.
-    skipVisibilityWalk?: boolean,
   ): Promise<{ fileUID: string; dataUID: string; created: boolean }> => {
     const attester = await signer.getAddress();
     let fileUID = await findAnchor(parentUID, name, dataSchemaUID);
@@ -441,7 +434,7 @@ export async function seedDemoTree() {
     // `bytes32(uint160(addr))` — not an attestation — so EAS reverts NotFound on
     // the first hop. Address-container listings don't rely on these folder
     // visibility TAGs anyway, so skip the walk for that path.
-    if (recipient === ethers.ZeroAddress && !skipVisibilityWalk) {
+    if (recipient === ethers.ZeroAddress) {
       await walkAncestorVisibility(signer, fileUID);
     }
     return { fileUID, dataUID, created: true };
@@ -678,10 +671,11 @@ export async function seedDemoTree() {
   // ── /tags/system + Overview READMEs (Task 15) ───────────────────────────────────
   //
   // The explorer's Overview pane renders a `system`-tagged README child of the
-  // item being viewed. Seed the `/tags/system` definition anchor plus three
-  // demo READMEs — on a folder, on a file anchor, and under the demo lens's
-  // address container — so "any item type" is exercised. All idempotent and
-  // guarded exactly like the rest of the seed.
+  // item being viewed. Overviews are FOLDER-SCOPED (file-anchor Overviews are
+  // unreachable — see the note at the file-README section below), so seed the
+  // `/tags/system` definition anchor plus two demo READMEs — on a folder and under
+  // the demo lens's address container. All idempotent and guarded like the rest of
+  // the seed.
 
   console.log("\n── /tags/system + Overview READMEs ──");
   // 1. Generic folder anchors /tags and /tags/system (schema 0). The client's

@@ -18,9 +18,16 @@ awaiting James's review before implementation.
 > EXACT router-path lookup (`<container>/<path>/README.md`), NOT the list/scan
 > resolver described in the resolution sections below; and on-chain exclusion is
 > done by `EFSFileView.getDirectoryPageFiltered` (ADR-0048), independent of the
-> Overview resolver (a system-hidden README still renders in the pane). Treat the
-> resolution/convention sections below as historical design context, superseded by
-> the shipped DATA-targeted + router-exact implementation.
+> Overview resolver (a system-hidden README still renders in the pane). (4)
+> Overviews are FOLDER-SCOPED — the "any EFS item works / **file anchor**" claims
+> below (§Goal and §"Every item type works") are SUPERSEDED. A file-leaf Overview
+> can't be created (the editor is gated off on file leaves) and can't be read
+> (`EFSRouter.request` resolves intermediate path segments with generic
+> `resolvePath`, which returns only generic anchors, so `<file>/README.md` 404s on
+> the intermediate file anchor). Per-file Overviews would need a router change —
+> tracked in `docs/FUTURE_WORK.md`. Treat the resolution/convention AND
+> item-type-coverage sections below as historical design context, superseded by the
+> shipped DATA-targeted + router-exact, folder-scoped implementation.
 
 ## Goal
 
