@@ -132,7 +132,6 @@ export const FileBrowser = ({
   anchorSchemaUID,
   currentPathNames,
   lensAddresses,
-  explicitLenses = false,
   onNavigate,
   tagFilter = "",
   drawerTagFilters = {},
@@ -140,7 +139,6 @@ export const FileBrowser = ({
   sortOverlayAddress,
   sortRefreshKey = 0,
   directoryRefreshKey = 0,
-  recreatedListAnchor,
   reverseOrder = false,
 }: {
   currentAnchorUID: string | null;
@@ -149,18 +147,6 @@ export const FileBrowser = ({
   anchorSchemaUID?: string;
   currentPathNames: string[];
   lensAddresses: string[];
-  /**
-   * True when the caller passed `?lenses=…` explicitly — including the case
-   * where every token in the list failed ENS / hex parsing and
-   * `lensAddresses` ended up empty. Distinguishes "user asked for nothing"
-   * (stay lens-scoped, render empty) from "nothing available to scope to"
-   * (wallet disconnected, no default set — fall through to unscoped). Without
-   * this flag, explicit-but-unresolved URLs like `?lenses=doesnotexist.eth`
-   * silently leak default/unfiltered content into a view the user told us to
-   * scope down. Defaults false for back-compat with callers that don't know
-   * about `lensesParam`.
-   */
-  explicitLenses?: boolean;
   onNavigate: (uid: string, name: string) => void;
   tagFilter?: string;
   drawerTagFilters?: Record<string, DrawerTagFilterState>;
@@ -180,9 +166,6 @@ export const FileBrowser = ({
    * on their own when deps settle.
    */
   directoryRefreshKey?: number;
-  /** Slot anchor of a just-created list. Recreating a deleted list reuses its permanent
-   *  anchor, so this lifts any stale delete-suppression on it (see effect below). */
-  recreatedListAnchor?: string;
   reverseOrder?: boolean;
 }) => {
   const [selectedDebugItem, setSelectedDebugItem] = useState<any | null>(null);
@@ -304,13 +287,6 @@ export const FileBrowser = ({
     attester: string;
   } | null>(null);
 
-  // List anchors whose placement the user just revoked. The standard (non-lens)
-  // `getDirectoryPage` returns anchor children regardless of an active LIST PIN, so a
-  // deleted list would otherwise linger as a dead card (openList reports it missing).
-  // Suppress them locally until the user navigates away. (The lens path already filters
-  // by active placement, so this only matters for the standard view.)
-  const [deletedListAnchors, setDeletedListAnchors] = useState<Set<string>>(new Set());
-
   // Lists are placed like files (ADR-0044 §1): a named ANCHOR with anchorType=LIST_SCHEMA_UID
   // plus a PIN(definition=anchor, refUID=LIST). They surface as anchor children of the folder
   // with `item.schema === LIST_SCHEMA_UID` — no dedicated read needed. The PIN target (the LIST
@@ -327,24 +303,7 @@ export const FileBrowser = ({
 
   useEffect(() => {
     setPageSize(50n);
-    setDeletedListAnchors(new Set()); // clear delete-suppression when navigating folders
   }, [currentAnchorUID]);
-
-  // Recreating a deleted list reuses the SAME permanent anchor (CreateItemModal's
-  // resolveAnchor reuse — the documented recovery path). Without this, the recreated
-  // list's now-active placement would stay hidden by the delete-suppression set until
-  // the user navigated away. Lift suppression on that specific anchor when a create lands
-  // (keyed on directoryRefreshKey so it re-fires even if the same slot is recreated twice).
-  useEffect(() => {
-    if (!recreatedListAnchor) return;
-    const lc = recreatedListAnchor.toLowerCase();
-    setDeletedListAnchors(prev => {
-      if (!prev.has(lc)) return prev;
-      const next = new Set(prev);
-      next.delete(lc);
-      return next;
-    });
-  }, [directoryRefreshKey, recreatedListAnchor]);
 
   // Load EdgeResolver address and "tags" anchor UID once.
   // "tags" is a normal anchor under the file system root — discovered the same way
@@ -789,12 +748,7 @@ export const FileBrowser = ({
   });
 
   // ── Sort overlay integration ─────────────────────────────────────────────────
-  const {
-    sortedUIDs,
-    isLoading: isSortLoading,
-    hasMore: hasSortMore,
-    loadMore: loadMoreSorted,
-  } = useSortedData({
+  const { sortedUIDs, isLoading: isSortLoading } = useSortedData({
     sortInfoUID: activeSortInfoUID,
     parentAnchor: currentAnchorUID ?? undefined,
     sortOverlayAddress,
@@ -984,42 +938,18 @@ export const FileBrowser = ({
     previewFetchKey,
   ]);
 
-  const hasLenses = lensAddresses && lensAddresses.length > 0;
-
-  // Once we've ever been in lens mode, stay there — prevents the standard (show-all) query
-  // from firing its cached result during the brief window when lensAddresses is transitioning
-  // to a new address (e.g. wallet account switch causes a momentary empty array).
-  // BUT: if lensAddresses is empty (wallet disconnect, no default set), fall through to the
-  // standard query rather than leaving both queries disabled — showing unfiltered data is better
-  // than an indefinitely blank directory.
-  //
-  // `explicitLenses` overrides that fallthrough: when the user passed
-  // `?lenses=…` but every token failed to resolve, we STAY in lens mode
-  // (against an empty address list → empty grid) rather than silently
-  // broadening the view to unscoped default content the URL never asked for.
-  // See Codex P2 on PR #9 and ADR-0031 (explicit param must not widen results).
-  const lockedToLenses = useRef(false);
-  if (hasLenses) lockedToLenses.current = true;
-  const useLensesQuery = explicitLenses || ((hasLenses || lockedToLenses.current) && lensAddresses.length > 0);
-
-  const {
-    data: standardItems,
-    isLoading: isStandardLoading,
-    refetch: refetchStandardItems,
-  } = useScaffoldReadContract({
-    contractName: "EFSFileView",
-    functionName: "getDirectoryPage",
-    args: [
-      (currentAnchorUID ? currentAnchorUID : undefined) as `0x${string}` | undefined,
-      0n,
-      pageSize,
-      dataSchemaUID as `0x${string}`,
-      propertySchemaUID as `0x${string}`,
-    ],
-    query: {
-      enabled: !useLensesQuery,
-    },
-  });
+  // Directory reads are ALWAYS lens-scoped — there is no unfiltered fallback.
+  // The previous `EFSFileView.getDirectoryPage` path (used when `lensAddresses`
+  // was empty) applied no exclusion filter and was the one read path that could
+  // leak `system`/`nsfw` items. It was also dead in practice: `systemLenses`
+  // always seeds at least the devnet constants, so `lensAddresses` is never
+  // empty on the default path. Removed so that an empty lens list fails SAFE —
+  // the lens hooks below are disabled (their `enabled` requires a non-empty
+  // address list), the grid renders empty, and no unfiltered content is shown.
+  // When mainnet introduces user-configurable lenses, the fix for "empty list"
+  // is a FILTERED listing, not a return of this unfiltered call. (Was: ADR-0031
+  // explicit-override + Codex P2 on PR #9 — the explicit-empty case already
+  // resolves to an empty grid via the disabled lens hooks.)
 
   // Lens-scoped directory listing iterates the opaque cursor (ADR-0036) across
   // pages. The contract's phase-0 folder scan can return zero items with a
@@ -1047,7 +977,9 @@ export const FileBrowser = ({
     // the unfiltered branch never runs on first mount (no system/nsfw flash).
     // Once resolved (with the real def UIDs, possibly empty), this re-enables and
     // the filtered read fires. Empty-excludes is never pending → not gated.
-    enabled: useLensesQuery && lensAddresses.length > 0 && !excludesPending,
+    // Empty `lensAddresses` (e.g. explicit `?lenses=` whose tokens all failed)
+    // disables the fetch → empty grid, never an unfiltered fallback.
+    enabled: lensAddresses.length > 0 && !excludesPending,
   });
 
   // Lens-scoped LIST anchors. Lists are placed as anchors with anchorType=LIST_SCHEMA_UID,
@@ -1069,7 +1001,7 @@ export const FileBrowser = ({
     // Lists aren't exclude-tagged so this path is unfiltered by design, but
     // holding it too keeps the merged `rawItems` from rendering a half-resolved
     // page (list items present, file/folder items still held) on first mount.
-    enabled: useLensesQuery && lensAddresses.length > 0 && !!listSchemaUID && !excludesPending,
+    enabled: lensAddresses.length > 0 && !!listSchemaUID && !excludesPending,
   });
 
   // Parent-driven refetch for out-of-component mutations (create file/folder).
@@ -1085,18 +1017,13 @@ export const FileBrowser = ({
       return;
     }
     if (directoryRefreshKey === 0) return;
-    if (useLensesQuery) {
-      refetchLensItems().catch(e => console.error("Directory refetch (lenses) failed", e));
-    } else {
-      refetchStandardItems();
-    }
-    if (useLensesQuery) refetchLensListItems().catch(e => console.error("List refetch (lenses) failed", e));
-    // refetch* identities are stable per query; useLensesQuery is the
-    // dispatch key and changes rarely. Intentionally scoped to the bump.
+    refetchLensItems().catch(e => console.error("Directory refetch (lenses) failed", e));
+    refetchLensListItems().catch(e => console.error("List refetch (lenses) failed", e));
+    // refetch* identities are stable per query. Intentionally scoped to the bump.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [directoryRefreshKey]);
 
-  const isLoading = useLensesQuery ? isLensLoading : isStandardLoading;
+  const isLoading = isLensLoading;
   // When explicit-lenses requested an empty list (all tokens unresolved), the
   // lens hook is disabled and `lensItems` is undefined — without this
   // coercion, the grid would render neither items nor the "Topic is empty"
@@ -1105,24 +1032,20 @@ export const FileBrowser = ({
   // empty result instead of a silently-blank pane. Memoized so downstream
   // effects that depend on `rawItems` identity don't refire every render.
   const rawItems = useMemo(() => {
-    if (useLensesQuery) {
-      if (lensAddresses.length === 0) return [];
-      // Merge file/folder anchors with list anchors (the LIST-schema lens walk).
-      // `getDirectoryPageBySchemaAndAddressList` returns qualifying generic folders in
-      // phase 0 of BOTH walks, so every visible subfolder is in lensItems AND
-      // lensListItems — dedupe by UID to avoid duplicate cards / duplicate React keys.
-      const merged = [...(lensItems ?? []), ...(lensListItems ?? [])];
-      const seen = new Set<string>();
-      return merged.filter(it => {
-        const uid = (it.uid as string | undefined)?.toLowerCase();
-        if (!uid || seen.has(uid)) return false;
-        seen.add(uid);
-        return true;
-      });
-    }
-    // Standard `getDirectoryPage` already returns every anchor child, lists included.
-    return standardItems;
-  }, [useLensesQuery, lensAddresses.length, lensItems, lensListItems, standardItems]);
+    if (lensAddresses.length === 0) return [];
+    // Merge file/folder anchors with list anchors (the LIST-schema lens walk).
+    // `getDirectoryPageBySchemaAndAddressList` returns qualifying generic folders in
+    // phase 0 of BOTH walks, so every visible subfolder is in lensItems AND
+    // lensListItems — dedupe by UID to avoid duplicate cards / duplicate React keys.
+    const merged = [...(lensItems ?? []), ...(lensListItems ?? [])];
+    const seen = new Set<string>();
+    return merged.filter(it => {
+      const uid = (it.uid as string | undefined)?.toLowerCase();
+      if (!uid || seen.has(uid)) return false;
+      seen.add(uid);
+      return true;
+    });
+  }, [lensAddresses.length, lensItems, lensListItems]);
 
   // When an INCLUDE tag filter is active, resolve DATA UIDs for each file item.
   // (EXCLUDE filtering is on-chain now — ADR-0048 — so the map is only needed to
@@ -1236,8 +1159,7 @@ export const FileBrowser = ({
   // `excludesPending` (SHOULD-FIX 1): the lens directory hook is held disabled
   // while exclude defs resolve, so it reports neither loading nor items — show
   // the loading state rather than a premature "Topic is empty" during the hold.
-  // Only applies on the lens-scoped path (the gate only disables the lens hook).
-  if (isLoading || isTagFilterLoading || isDataUIDMapLoading || isSortLoading || (useLensesQuery && excludesPending))
+  if (isLoading || isTagFilterLoading || isDataUIDMapLoading || isSortLoading || excludesPending)
     return <div>Loading items...</div>;
 
   // When a sort is active, reorder rawItems by the sorted UIDs.
@@ -1595,12 +1517,8 @@ export const FileBrowser = ({
         opId,
       );
       ops.complete(opId, `Deleted list "${item.name || ""}".`);
-      // Suppress the now-unplaced anchor locally — the standard getDirectoryPage still
-      // returns it (the anchor is permanent), which would leave a dead card.
-      setDeletedListAnchors(prev => new Set(prev).add((item.uid as string).toLowerCase()));
       if (selectedList?.anchorUID === item.uid) closePreview();
-      if (useLensesQuery) await refetchLensListItems();
-      else await refetchStandardItems();
+      await refetchLensListItems();
     } catch (e: any) {
       ops.fail(opId, e?.shortMessage ?? e?.message ?? "Delete failed");
       notification.error(e?.shortMessage ?? e?.message ?? "Could not delete list.");
@@ -1657,11 +1575,7 @@ export const FileBrowser = ({
       );
       ops.complete(opId, `Deleted ${label}.`);
       if (selectedFile?.uid === item.uid) closePreview();
-      if (useLensesQuery) {
-        await refetchLensItems();
-      } else {
-        await refetchStandardItems();
-      }
+      await refetchLensItems();
     } catch (e: any) {
       console.error("Delete failed:", e);
       const msg = e?.shortMessage ?? e?.message ?? "Delete failed.";
@@ -1701,11 +1615,7 @@ export const FileBrowser = ({
         `Deleted ${label} — revoked ${pinUIDs.length} PIN${pinUIDs.length === 1 ? "" : "s"} and ${tagUIDs.length} TAG${tagUIDs.length === 1 ? "" : "s"}.`,
       );
       if (selectedFile?.uid === item.uid) closePreview();
-      if (useLensesQuery) {
-        await refetchLensItems();
-      } else {
-        await refetchStandardItems();
-      }
+      await refetchLensItems();
       setDeleteConfirm(null);
     } catch (e: any) {
       console.error("Folder delete failed:", e);
@@ -1764,13 +1674,12 @@ export const FileBrowser = ({
               (item: any) =>
                 (isTopic(item) || isFile(item, dataSchemaUID) || isList(item, listSchemaUID)) &&
                 item.uid !== tagsRoot &&
-                item.uid !== sortsAnchorUID &&
-                // Local delete-suppression applies ONLY to the standard unscoped view, where the
-                // permanent list anchor reappears via getDirectoryPage after you revoke your PIN.
-                // In a ?lenses= view the lens query is authoritative — if it still returns the card,
-                // another requested lens actively places the same anchor, so suppressing it would
-                // wrongly hide that lens's list until navigation. deleteList() only revokes YOUR PIN.
-                (useLensesQuery || !deletedListAnchors.has((item.uid as string)?.toLowerCase())),
+                item.uid !== sortsAnchorUID,
+              // The lens query is authoritative: if it still returns a deleted list
+              // card, another requested lens actively places the same anchor (your
+              // deleteList() only revokes YOUR PIN), so it should stay visible. No
+              // local delete-suppression — that only mattered for the removed
+              // unscoped getDirectoryPage view where permanent anchors reappeared.
             )
             .map((item: any) => {
               // isTopic = generic anchor (folder) · isFile = DATA anchor · isList = LIST anchor (ADR-0044 §1)
@@ -1853,15 +1762,7 @@ export const FileBrowser = ({
                     </div>
                     <h2 className="card-title text-sm break-all text-center leading-tight">{item.name || "Unnamed"}</h2>
                     <div className="text-xs text-base-content/40">
-                      {isItemList
-                        ? "List"
-                        : isItemTopic
-                          ? useLensesQuery
-                            ? "Folder"
-                            : item.childCount > 0
-                              ? `${item.childCount} items`
-                              : "Empty"
-                          : "File"}
+                      {isItemList ? "List" : isItemTopic ? "Folder" : "File"}
                     </div>
                   </div>
                 </div>
@@ -1878,29 +1779,21 @@ export const FileBrowser = ({
             </div>
           )}
         </div>
-        {/* Load more: lens-scoped mode keys on the opaque cursor (ADR-0036);
-            standard mode keys on the kernel page heuristic + sort overlay. */}
+        {/* Load more: lens-scoped reads iterate the opaque cursor (ADR-0036). */}
         {(() => {
-          const showLoadMore = useLensesQuery
-            ? hasMoreLenses || hasMoreLensList
-            : items && items.length > 0 && items.length >= Number(pageSize);
+          const showLoadMore = hasMoreLenses || hasMoreLensList;
           if (!showLoadMore) return null;
           return (
             <div className="flex justify-center py-4">
               <button
                 className="btn btn-sm btn-outline"
                 onClick={() => {
-                  if (useLensesQuery) {
-                    // Iterate the opaque cursor via the hook; `pageSize` is the
-                    // per-fetch target, not a cumulative cap. Advance BOTH the
-                    // file/folder walk and the list-anchor walk — either may have
-                    // more pages (a folder can have more lists than files, or vice versa).
-                    if (hasMoreLenses) loadMoreLenses();
-                    if (hasMoreLensList) loadMoreLensList();
-                  } else {
-                    setPageSize(prev => prev + 50n);
-                    if (hasSortMore) loadMoreSorted();
-                  }
+                  // Iterate the opaque cursor via the hook; `pageSize` is the
+                  // per-fetch target, not a cumulative cap. Advance BOTH the
+                  // file/folder walk and the list-anchor walk — either may have
+                  // more pages (a folder can have more lists than files, or vice versa).
+                  if (hasMoreLenses) loadMoreLenses();
+                  if (hasMoreLensList) loadMoreLensList();
                 }}
               >
                 Load more

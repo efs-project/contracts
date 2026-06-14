@@ -51,7 +51,6 @@ export default function ExplorerClient() {
   // parallel escape hatch for create. Without it, users had to hard-refresh to
   // see a newly-created file/folder appear.
   const [directoryRefreshKey, setDirectoryRefreshKey] = useState(0);
-  const [recreatedListAnchor, setRecreatedListAnchor] = useState<string | undefined>(undefined);
   const [reverseOrder, setReverseOrder] = useState(false);
   const [autoProcessKey, setAutoProcessKey] = useState(0);
   const [autoProcessSortUIDs, setAutoProcessSortUIDs] = useState<string[]>([]);
@@ -766,10 +765,7 @@ export default function ExplorerClient() {
                   setSortRefreshKey(k => k + 1);
                   setDirectoryRefreshKey(k => k + 1);
                 }}
-                onListCreated={(uid: string) => {
-                  // Surface the (possibly reused) slot anchor so FileBrowser can lift any
-                  // delete-suppression on it — recreating a deleted list reuses its anchor.
-                  setRecreatedListAnchor(uid);
+                onListCreated={() => {
                   setDirectoryRefreshKey(k => k + 1);
                 }}
               />
@@ -783,17 +779,6 @@ export default function ExplorerClient() {
                     dataSchemaUID={dataSchemaUID}
                     anchorSchemaUID={anchorSchemaUID}
                     lensAddresses={lensAddresses}
-                    // True whenever the URL carries `?lenses=…`, INCLUDING
-                    // `?lenses=` with an empty value (explicit "scope to
-                    // nothing") and any failed-resolution case. FileBrowser
-                    // keeps the view lens-scoped so unresolved or
-                    // deliberately-empty explicit links render empty instead
-                    // of silently falling back to the unscoped default —
-                    // Codex P2 on PR #9, ADR-0031 "explicit param must not
-                    // widen results". `hasLensesParam` uses `!== null`
-                    // because `URLSearchParams.get` returns `""` for
-                    // `?lenses=` and `null` only for the absent case.
-                    explicitLenses={hasLensesParam}
                     tagFilter={searchParams.get("tags") || ""}
                     drawerTagFilters={drawerTagFilters}
                     currentPathNames={buildRouterPathNames(currentContainer, currentPath)}
@@ -801,7 +786,6 @@ export default function ExplorerClient() {
                     sortOverlayAddress={sortOverlayAddress}
                     sortRefreshKey={sortRefreshKey}
                     directoryRefreshKey={directoryRefreshKey}
-                    recreatedListAnchor={recreatedListAnchor}
                     reverseOrder={reverseOrder}
                     onNavigate={(uid, name) => navigateToPath([...currentPath, { uid, name }])}
                   />
