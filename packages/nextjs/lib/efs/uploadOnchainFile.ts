@@ -574,15 +574,15 @@ export async function uploadOnchainFile(args: UploadOnchainFileArgs): Promise<Up
   // (anchorType == bytes32(0)). The walk tags `current` with definition=dataSchemaUID
   // starting at `parentAnchorUID`; if that were a FILE anchor it would be mis-tagged
   // as a visible folder and could re-surface via phase-0 folder visibility after its
-  // placement PIN is revoked. This is enforced by construction — the sole caller
-  // (OverviewEditorModal) passes `currentAnchorUID`, which is always the current
-  // folder/container (clicking a file opens a preview, it never becomes
-  // currentAnchorUID) — so the file-anchor case is not reachable. A runtime guard
-  // would have to read each node's anchorType; EFSIndexer can't expose a getter for
-  // it (its address is baked into the schema UIDs — kernel immutability), so the
-  // guard would need a client-side EAS getAttestation + decode. Deferred unless a
-  // per-file Overview is ever added (then guard: skip tagging any node whose decoded
-  // anchorType != bytes32(0)). See docs/FUTURE_WORK.md.
+  // placement PIN is revoked. The file-anchor case IS reachable in principle — a
+  // deep link like `/explorer/docs/readme.txt` resolves `currentAnchorUID` to a file
+  // leaf — so it is ENFORCED at the source: ExplorerClient gates the Overview editor
+  // off on file leaves (`overviewEditable = … && !currentIsFileLeaf`), and
+  // OverviewEditorModal is the sole caller of this helper, so `parentAnchorUID` only
+  // ever reaches here as a folder. A belt-and-suspenders runtime guard in this walk
+  // (skip tagging any node whose anchorType != bytes32(0)) would need a client-side
+  // EAS getAttestation + decode per node — EFSIndexer can't expose an anchorType
+  // getter (its address is baked into the schema UIDs). Deferred to FUTURE_WORK.
   try {
     const rootUID = (await publicClient.readContract({
       address: indexerAddress,

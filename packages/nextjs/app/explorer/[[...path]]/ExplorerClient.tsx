@@ -27,6 +27,11 @@ import {
 export default function ExplorerClient() {
   const [currentPath, setCurrentPath] = useState<PathItem[]>([]);
   const [currentAnchorUID, setCurrentAnchorUID] = useState<string | null>(null);
+  // True when the resolved path's last segment is a DATA-schema FILE leaf (e.g.
+  // deep-linking to /explorer/docs/readme.txt), not a generic folder. Gates the
+  // Overview editor off: creating a README "inside" a file would tag the file
+  // anchor as a visible folder via the ancestor walk (Codex P2 / reachable via URL).
+  const [currentIsFileLeaf, setCurrentIsFileLeaf] = useState(false);
   const [currentContainer, setCurrentContainer] = useState<ClassifiedContainer | null>(null);
   const [isResolving, setIsResolving] = useState(false);
   const [pathError, setPathError] = useState<string | null>(null);
@@ -435,6 +440,9 @@ export default function ExplorerClient() {
           },
         ];
         let currentUID: `0x${string}` = seedUID;
+        // Tracks whether the LAST segment resolved as a DATA-schema file leaf (vs a
+        // generic folder), so the Overview editor can be gated off on files.
+        let lastSegmentIsFile = false;
 
         const ZERO_UID = "0x0000000000000000000000000000000000000000000000000000000000000000";
         for (let i = 0; i < walkSegments.length; i++) {
@@ -456,6 +464,9 @@ export default function ExplorerClient() {
               args: [currentUID, segment, dataSchemaUID as `0x${string}`],
             })) as `0x${string}`;
             if (cancelled) return;
+            // The DATA-schema lookup succeeding means the last segment is a file
+            // leaf (not a folder) — used below to gate the Overview editor.
+            lastSegmentIsFile = childUID !== ZERO_UID;
           }
           if (childUID === ZERO_UID) {
             childUID = (await publicClient.readContract({
@@ -471,23 +482,30 @@ export default function ExplorerClient() {
             // "Folder" in the error text kept deliberately for intermediate segments;
             // for the last segment we checked both folder and file so the user's path
             // is genuinely missing either way.
-            const errorMsg = `'${decodeURIComponent(segment)}' not found in path.`;
+            // `segment` is ALREADY decoded (pathSegmentsFromPathname maps
+            // decodeURIComponent). Do NOT decode again — a name with a literal
+            // percent (e.g. `10%` from `/explorer/10%25`) would throw URIError.
+            const errorMsg = `'${segment}' not found in path.`;
             console.warn(errorMsg);
             setPathError(errorMsg);
             setIsResolving(false);
             return;
           }
 
-          // Preserve the original URL-encoded segment so rebuilding the URL
-          // round-trips losslessly (matters for non-ASCII names that were
-          // percent-encoded by the browser).
-          resolvedPath.push({ uid: childUID, name: decodeURIComponent(segment), urlSegment: segment });
+          // `name` is the decoded on-chain name (segment is already decoded).
+          // `urlSegment` must be the ENCODED form so URL builders (which use it
+          // verbatim) round-trip losslessly — re-encode the decoded segment rather
+          // than decoding it a second time (the old code double-decoded, throwing
+          // URIError on names with a literal `%`, and stored a decoded value in a
+          // field used raw in the URL).
+          resolvedPath.push({ uid: childUID, name: segment, urlSegment: encodeURIComponent(segment) });
           currentUID = childUID;
         }
 
         if (cancelled) return;
         setCurrentPath(resolvedPath);
         setCurrentAnchorUID(currentUID);
+        setCurrentIsFileLeaf(lastSegmentIsFile);
         setCurrentContainer(container);
 
         // localStorage writes are side-effects on global state; keep them
@@ -609,7 +627,11 @@ export default function ExplorerClient() {
   const writerIsTopLens = !!connectedAddress && lensAddresses[0]?.toLowerCase() === connectedAddress.toLowerCase();
   const onRealAnchor =
     !!currentAnchorUID && (!currentContainer || currentAnchorUID.toLowerCase() !== currentContainer.uid.toLowerCase());
-  const overviewEditable = writerIsTopLens && onRealAnchor;
+  // Overviews are folder-scoped. Block the editor when the current anchor is a
+  // DATA-schema file leaf (reachable by deep-linking a file URL) — saving there
+  // would pass the file anchor as parentAnchorUID and the ancestor walk would
+  // mis-tag it as a visible folder (Codex P2).
+  const overviewEditable = writerIsTopLens && onRealAnchor && !currentIsFileLeaf;
 
   return (
     <div className="flex flex-col h-screen w-full bg-base-100 p-4 gap-3">

@@ -67,7 +67,7 @@ query($owner:String!,$name:String!,$num:Int!,$endCursor:String){
   repository(owner:$owner,name:$name){ pullRequest(number:$num){
     reviews(first:100, after:$endCursor){
       pageInfo{ hasNextPage endCursor }
-      nodes{ state bodyText }
+      nodes{ state url author{ login } bodyText }
     }}}}' \
   --jq '.data.repository.pullRequest.reviews.nodes[] | select((.bodyText // "") != "")' > "$BODIES"
 
@@ -111,11 +111,13 @@ if [[ -n "$rows" ]]; then
   echo
 fi
 
-# Review bodies (these are not isResolved-tracked — always surface them).
+# Review bodies (not isResolved-tracked — always surface them, IN FULL). Findings
+# in a long review body live AFTER the intro, so truncating would hide them — the
+# exact body-only miss this tool guards against. Print author, URL, and full text.
 BODY_COUNT="$(jq -rs 'length' "$BODIES")"
 if [[ "$BODY_COUNT" -gt 0 ]]; then
-  echo "REVIEW BODIES (not thread-tracked — read these too):"
-  jq -rs '.[] | "  • [\(.state)] \((.bodyText // "") | gsub("[\r\n]+";" ") | .[0:150])"' "$BODIES"
+  echo "REVIEW BODIES (not thread-tracked — read these IN FULL):"
+  jq -rs '.[] | "\n  ── review by \(.author.login // "?") [\(.state)]  \(.url // "")\n\(.bodyText)"' "$BODIES"
   echo
 fi
 

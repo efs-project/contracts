@@ -186,9 +186,16 @@ export const OverviewEditorModal = (props: OverviewEditorModalProps) => {
           </p>
           <button
             type="button"
-            onClick={onClose}
+            onClick={() => {
+              // Closing during an in-flight save must cancel it — otherwise the
+              // modal (and its Stop button) unmounts while uploadOnchainFile keeps
+              // seeing isCancelled()===false and broadcasts the remaining txs
+              // (Codex P2). Route close through the same cancellation path as Stop.
+              if (isSaving) cancelledRef.current = true;
+              onClose();
+            }}
             aria-label="Close editor"
-            title="Close editor"
+            title={isSaving ? "Stop saving and close" : "Close editor"}
             className="btn btn-ghost btn-sm btn-circle absolute right-3 top-3"
           >
             <XMarkIcon className="w-5 h-5" />
