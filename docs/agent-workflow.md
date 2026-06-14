@@ -147,6 +147,30 @@ back to spraying top-level PR comments. Instead, return one paste-ready review
 comment with file/line findings to the human or coordinating agent and let them
 post it through the proper path.
 
+### Review intake — enumerate before responding (don't trust notifications or formatting)
+
+Agents share one GitHub account and some post malformed inline comments (wrong
+speaker prefix, non-native review, or findings only in a review body). Automated
+notifications and comment formatting are therefore **unreliable** — findings have
+been missed this way. Before responding to review and again before declaring it
+addressed, **enumerate every feedback source** rather than reacting to whatever
+got surfaced:
+
+```bash
+yarn pr:intake <PR>
+```
+
+This lists every review **thread** (each inline comment becomes a thread with
+`isResolved`, no matter how it was posted), every review **body** (body-only
+findings aren't thread-tracked), and every **timeline** comment — then flags each
+unresolved thread `NEEDS REPLY` when its last comment is not a `[<model> · dev]`
+reply. A thread whose last comment is *not* a `· dev` reply has an unaddressed
+reviewer comment — a fresh finding, or a follow-up after a prior dev reply — i.e.
+the exact miss this guards against. The command exits non-zero while
+any thread still needs a dev reply, so it doubles as a pre-"done" gate: review is
+addressed only when `pr:intake` reports `0 ... need a dev reply` **and** you've
+read every review body it prints. (Manual on purpose — no CI comment-parsing.)
+
 ### Review-thread response loop
 
 When the dev agent is addressing review comments, every unresolved thread must be classified into one of three buckets:
