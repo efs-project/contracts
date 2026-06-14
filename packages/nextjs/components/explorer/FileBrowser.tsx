@@ -1065,6 +1065,17 @@ export const FileBrowser = ({
       return;
     }
     if (directoryRefreshKey === 0) return;
+    // RE-GATE instead of refetching when `/tags` is unresolved but excludes are
+    // expected: an Overview save can create `/tags/system` on an unseeded chain and
+    // bump this key, but the tagsRoot re-resolver (also keyed on directoryRefreshKey)
+    // is async — refetching here would run UNFILTERED (excludeTagDefUIDs=[]) and flash
+    // the newly system-tagged README before the re-resolve lands (Codex P2). Hold the
+    // directory (excludesPending) and let the exclude resolver's completion drive a
+    // filtered refetch via its depsKey.
+    if (!tagsRoot && drawerExcludeNamesKey !== "") {
+      setExcludeResolved(false);
+      return;
+    }
     refetchLensItems().catch(e => console.error("Directory refetch (lenses) failed", e));
     refetchLensListItems().catch(e => console.error("List refetch (lenses) failed", e));
     // refetch* identities are stable per query. Intentionally scoped to the bump.
