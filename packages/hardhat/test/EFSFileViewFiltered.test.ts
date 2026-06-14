@@ -40,12 +40,8 @@ describe("EFSFileView — getDirectoryPageFiltered (ADR-0048)", function () {
   // valid definition works; we use a registered schema UID so _validateDefinition passes.
   let excludeTagDef: string;
 
-  let activeTagIndex: Map<string, string>;
-
   beforeEach(async function () {
     [owner, alice, bob] = await ethers.getSigners();
-
-    activeTagIndex = new Map();
 
     const RegistryFactory = await ethers.getContractFactory("SchemaRegistry");
     registry = await RegistryFactory.deploy();
@@ -214,7 +210,6 @@ describe("EFSFileView — getDirectoryPageFiltered (ADR-0048)", function () {
       },
     });
     const uid = getUIDFromReceipt(await tx.wait());
-    activeTagIndex.set(`${targetUID}|${definition}|${await attester.getAddress()}`, uid);
     return uid;
   };
 

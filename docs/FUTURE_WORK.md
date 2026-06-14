@@ -47,8 +47,32 @@ The unfiltered `EFSFileView.getDirectoryPage` listing fallback was removed — e
 ### TopicTree navigation pane is not exclude-filtered (system/nsfw folders show in the sidebar)
 The ADR-0048 exclusion filter is wired into the main FileBrowser grid but NOT into the `TopicTree` sidebar, which lists folders via its own `useLensesDirectoryPage` call without `excludeTagDefs`. So a folder tagged `system`/`nsfw` is hidden from the grid but still appears in the left navigation tree — a partial break of the folder-hide guarantee. Pre-existing (the tree was never filtered) and out of the on-chain-filter PR's grid scope. Fix: lift the exclude-def resolution (currently inside FileBrowser) to a shared hook / ExplorerClient and thread `excludeTagDefUIDs` + `excludeMinWeights` through TopicTree's directory read, so both panes route through `getDirectoryPageFiltered`. Mind TopicTree's own resolution-race gating when doing so.
 
-### Frontend exclude-filter fail-safes are untested (and not reachable by the test runner)
-The nextjs test runner only globs `utils/`, so the load-bearing exclude-filter client logic — the empty-lenses fail-safe (`defaultLensesForContainer` always non-empty per container kind), the exclude-resolution race gate (`excludesPending` / `tagsRootSettled`), and `useLensesDirectoryPage`'s `minWeights` length reconciliation — has zero coverage. Follow-up: extract the pure decision logic into `utils/efs/` helpers (e.g. `reconcileMinWeights`, an exclude-gate predicate) and add unit tests pinning each invariant, with comments tying them to ADR-0048. Also add the missing contract entry-guard cases to `EFSFileViewFiltered.test.ts` (empty attesters, `attesters.length > MAX_LENSES`, `maxItems == 0`) and a `getActiveTagWeight` address-target (`targetSchema == bytes32(0)`) case.
+### Frontend exclude-filter fail-safes — unit coverage (mostly done)
+DONE: the pure decision logic was extracted to `utils/efs/excludeFilter.ts`
+(`shouldUseFilteredQuery`, `reconcileMinWeights`, `computeExcludesPending`,
+`tagsRootGateDecision`) with `utils/efs/excludeFilter.test.ts` + the empty-lenses
+fail-safe in `utils/efs/containers.test.ts`; contract entry-guard reverts and the
+`getActiveTagWeight` address-target case were added to `EFSFileViewFiltered.test.ts`.
+REMAINING: the wiring itself (both directory queries receiving the same excludes;
+the place-before-tag ordering) isn't unit-testable without a React component-test
+harness (react-testing-library — a Tier-2 dev dependency). Add RTL and
+component-level tests if the explorer's exclude wiring keeps regressing.
+
+### Deferred PR #27 review findings (non-blocking)
+- **EFSFileView exclusion gas (Gemini):** in `_isItemExcluded`, pre-check
+  `edgeResolver.hasActiveTagFromAny(target, def, attesters)` before the per-attester
+  `getActiveTagWeight` loop — for the common clean-item case this skips the inner
+  loop (`dataCount × defs × attesters`, worst case 20×8×20). Optimization only;
+  deferred because it changes a near-Etched view contract (needs re-pin + re-test)
+  and the current code is correct.
+- **Markdown structural guard (Codex):** an error boundary now catches render-time
+  blowups from untrusted Overviews (`MarkdownView`), but a cheap pre-parse
+  structural guard (max nesting depth / line count / token shape) would reject
+  pathological input before the parser runs. Add alongside the RTL work above.
+- **`sniffContent` 64 KB window (Gemini):** binary/invalid-UTF-8 after the first
+  64 KB is still classified as text (then rendered as markdown — safe, no raw HTML).
+  Consider a full-file NUL scan if perf permits. Add a >64 KB boundary test and an
+  empty-directory `getDirectoryPageFiltered` test (returns empty items + cursor).
 
 ### EFSFileView phase-0 folder pagination scales with append-only history
 `getDirectoryPageBySchemaAndAddressList` (phase 0) walks `getChildrenWithEdge` history under a fixed scan budget; a hot folder with many revoked or out-of-lens edges can exhaust the budget before returning a full page. Latency scales with historical churn, not live child count. Long-term: add a direct active-visibility index in EFSIndexer or EdgeResolver so phase-0 pagination is O(page) on active children. Tracked alongside ADR-0009 append-only implications.

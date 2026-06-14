@@ -26,3 +26,13 @@ test("clamps length", () => {
 test("falls back when nothing usable remains", () => {
   assert.equal(safeDownloadName("‮​"), "download.bin");
 });
+test("strips leading dots and underscores (hidden-file / traversal guard)", () => {
+  assert.equal(safeDownloadName(".foo"), "foo");
+  assert.equal(safeDownloadName("_bar"), "bar");
+  assert.equal(safeDownloadName("...hidden.txt"), "hidden.txt");
+});
+test("all-dot/underscore and empty inputs fall back to the neutral name", () => {
+  assert.equal(safeDownloadName("..._."), "download.bin");
+  assert.equal(safeDownloadName("..."), "download.bin");
+  assert.equal(safeDownloadName(""), "download.bin");
+});

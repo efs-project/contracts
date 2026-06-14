@@ -383,6 +383,12 @@ export async function seedDemoTree() {
     name: string,
     content: string,
     recipient: string = ethers.ZeroAddress,
+    // When provided, the DATA is system-tagged BEFORE the placement PIN below, so
+    // the README is hidden the instant it becomes reachable — an interrupted seed
+    // can't leave a visible, untagged system file (Codex P2; mirrors the UI's
+    // beforePlacement ordering). Callers still re-apply tagSystemIfMissing after,
+    // which idempotently repairs an already-placed-but-untagged README.
+    systemDefUID?: string,
   ): Promise<{ fileUID: string; dataUID: string; created: boolean }> => {
     const attester = await signer.getAddress();
     let fileUID = await findAnchor(parentUID, name, dataSchemaUID);
@@ -418,6 +424,9 @@ export async function seedDemoTree() {
     await makeProperty(signer, dataUID, "contentType", "text/markdown");
     const onchainURI = await deployOnchainMirrorURI(signer, content);
     await makeMirror(signer, dataUID, onchainTransportUID, onchainURI);
+    // Tag the DATA system BEFORE placement so the README is never reachable while
+    // untagged (Codex P2). If the tag fails, makePin never runs and nothing leaks.
+    if (systemDefUID) await tagSystemIfMissing(signer, dataUID, systemDefUID);
     await makePin(signer, dataUID, fileUID);
     // Ancestor visibility TAGs apply only to anchor-parented placements: each
     // walked parent becomes a TAG `refUID`, which must be a real attestation.
@@ -692,7 +701,14 @@ export async function seedDemoTree() {
   ].join("\n");
 
   // 2. Folder case (must-have): /docs/README.md + system TAG.
-  const docsReadme = await makeOnchainReadmeIfMissing(deployerSigner, docsUID, "README.md", FOLDER_README);
+  const docsReadme = await makeOnchainReadmeIfMissing(
+    deployerSigner,
+    docsUID,
+    "README.md",
+    FOLDER_README,
+    ethers.ZeroAddress,
+    systemDefUID,
+  );
   await tagSystemIfMissing(deployerSigner, docsReadme.dataUID, systemDefUID);
 
   // 3. File-anchor case: a README hosted UNDER the /docs/readme.txt file anchor.
@@ -709,7 +725,14 @@ export async function seedDemoTree() {
       "Overview path — a file leaf can host children just like a folder.",
       "",
     ].join("\n");
-    const fileReadme = await makeOnchainReadmeIfMissing(deployerSigner, readmeTxtUID, "README.md", FILE_README);
+    const fileReadme = await makeOnchainReadmeIfMissing(
+      deployerSigner,
+      readmeTxtUID,
+      "README.md",
+      FILE_README,
+      ethers.ZeroAddress,
+      systemDefUID,
+    );
     await tagSystemIfMissing(deployerSigner, fileReadme.dataUID, systemDefUID);
   } else {
     console.log("  ⏭️  /docs/readme.txt anchor missing — skipping file-anchor README.");
@@ -735,6 +758,7 @@ export async function seedDemoTree() {
     "README.md",
     ADDRESS_README,
     deployerAddr,
+    systemDefUID,
   );
   await tagSystemIfMissing(deployerSigner, addrReadme.dataUID, systemDefUID);
 

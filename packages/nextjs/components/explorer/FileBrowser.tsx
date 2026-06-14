@@ -589,7 +589,20 @@ export const FileBrowser = ({
           ),
         );
         if (cancelled) return;
-        const defs = resolved.filter(uid => uid && uid !== zeroHash);
+        const resolvedDefs = resolved.filter(uid => uid && uid !== zeroHash);
+        // The contract caps `excludeTagDefs.length` at MAX_EXCLUDE_TAGS_PER_QUERY
+        // (8) and reverts above it. The drawer lets users add arbitrary filters, so
+        // cap here — otherwise 9+ active exclude tags would make every directory
+        // read revert and leave the grid empty/stale (Codex P2). Apply a bounded
+        // set + warn rather than fail the whole listing.
+        const MAX_EXCLUDE_TAGS = 8;
+        if (resolvedDefs.length > MAX_EXCLUDE_TAGS) {
+          console.warn(
+            `Active exclude tags (${resolvedDefs.length}) exceed the on-chain cap of ${MAX_EXCLUDE_TAGS}; ` +
+              `only the first ${MAX_EXCLUDE_TAGS} are applied.`,
+          );
+        }
+        const defs = resolvedDefs.slice(0, MAX_EXCLUDE_TAGS);
         // Stable-set comparison: only update state when the UID set actually
         // changed, so a re-resolve to the same defs doesn't restart the cursor.
         setExcludeTagDefUIDs(prev =>
@@ -697,13 +710,16 @@ export const FileBrowser = ({
         resourcePath: [...currentPathNames, item.name],
       });
 
+      // Discard results from a superseded fetch (user clicked a different file).
+      // This MUST come before any setState below — otherwise a slow fetch for File
+      // A resolving after File B was clicked would still overwrite the transport
+      // type with A's value (then bail), leaving B showing A's transport (Gemini).
+      if (fetchId !== fetchIdRef.current) return;
+
       // External mirrors set a specific transport (ipfs/arweave/https/…); on-chain
       // bodies keep the default "onchain" set above. Matches the prior inline
       // setFileTransportType(detectTransport(externalUri)) behavior.
       if (transport !== "onchain") setFileTransportType(transport);
-
-      // Discard results from a superseded fetch (user clicked a different file)
-      if (fetchId !== fetchIdRef.current) return;
 
       const contentTypeStr = contentType ?? "text/plain";
       setFileContentType(contentTypeStr);
@@ -1170,6 +1186,30 @@ export const FileBrowser = ({
   // needed; downstream (sortedItems, fileItems, the grid, empty-state,
   // pagination) reads `visibleItems`.
   const visibleItems = items;
+
+  // Close the side/fullscreen preview if a filter change or refetch removed the
+  // open item from the visible (post-exclude) set — otherwise toggling `system`
+  // back on (or applying an exclude tag) would leave a now-hidden file still
+  // rendering in the preview, defeating the hide guarantee (Codex P2). Inlines the
+  // reset (rather than calling `closePreview`, defined below) so this hook can sit
+  // above the component's early returns, as rules-of-hooks requires.
+  useEffect(() => {
+    if (!visibleItems) return;
+    const openUID = (
+      (selectedFile?.uid as string | undefined) ?? (selectedList?.anchorUID as string | undefined)
+    )?.toLowerCase();
+    if (!openUID) return;
+    const stillVisible = visibleItems.some((it: any) => (it.uid as string | undefined)?.toLowerCase() === openUID);
+    if (!stillVisible) {
+      setSelectedFile(null);
+      setSelectedList(null);
+      setFileContent(null);
+      setFileBytes(null);
+      setFileContentType(null);
+      setFetchError(null);
+      setPreviewFullscreen(false);
+    }
+  }, [visibleItems, selectedFile, selectedList]);
 
   // Keyboard handler ref — lets the useEffect stay above early returns while
   // the actual handler logic (which depends on computed values) is set later.
@@ -2144,7 +2184,18 @@ export const FileBrowser = ({
             setTagModalUID(null);
             setTagModalIsFile(false);
           }}
-          onTagChange={() => setTagFilterVersion(v => v + 1)}
+          onTagChange={() => {
+            setTagFilterVersion(v => v + 1);
+            // Applying/revoking an EXCLUDED tag changes the on-chain filter result,
+            // so the directory must re-query getDirectoryPageFiltered. The
+            // tagFilterVersion bump only re-resolves the def UID *set* — when an
+            // already-known def is applied the set is unchanged, so without an
+            // explicit refetch the newly-hidden item would linger until navigation
+            // (Codex P2). Refetch both lens queries; the include-filter path keys
+            // off tagFilterVersion separately.
+            refetchLensItems().catch(e => console.error("Directory refetch after tag change failed", e));
+            refetchLensListItems().catch(e => console.error("List refetch after tag change failed", e));
+          }}
         />
       )}
       {/* Folder delete confirmation */}

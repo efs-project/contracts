@@ -14,7 +14,13 @@ awaiting James's review before implementation.
 > `resolveSystemAnchorSet` path described in §"`system` tag convention"; (2) the
 > Overview pane auto-expands when a `README.md` resolves and collapses to a rail
 > otherwise (per-item, no localStorage persistence), superseding §3's
-> "collapsed state persisted in localStorage."
+> "collapsed state persisted in localStorage." (3) The README is resolved by an
+> EXACT router-path lookup (`<container>/<path>/README.md`), NOT the list/scan
+> resolver described in the resolution sections below; and on-chain exclusion is
+> done by `EFSFileView.getDirectoryPageFiltered` (ADR-0048), independent of the
+> Overview resolver (a system-hidden README still renders in the pane). Treat the
+> resolution/convention sections below as historical design context, superseded by
+> the shipped DATA-targeted + router-exact implementation.
 
 ## Goal
 
