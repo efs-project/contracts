@@ -569,6 +569,20 @@ export async function uploadOnchainFile(args: UploadOnchainFileArgs): Promise<Up
   // generic-folder ancestor from the immediate parent up to (excluding) root.
   // Skip already-tagged ancestors. Best-effort: failures here don't fail the
   // upload (the file is already placed), they only leave some ancestors hidden.
+  //
+  // INVARIANT (AGENT-NOTE, Codex P2): `parentAnchorUID` MUST be a generic folder
+  // (anchorType == bytes32(0)). The walk tags `current` with definition=dataSchemaUID
+  // starting at `parentAnchorUID`; if that were a FILE anchor it would be mis-tagged
+  // as a visible folder and could re-surface via phase-0 folder visibility after its
+  // placement PIN is revoked. This is enforced by construction — the sole caller
+  // (OverviewEditorModal) passes `currentAnchorUID`, which is always the current
+  // folder/container (clicking a file opens a preview, it never becomes
+  // currentAnchorUID) — so the file-anchor case is not reachable. A runtime guard
+  // would have to read each node's anchorType; EFSIndexer can't expose a getter for
+  // it (its address is baked into the schema UIDs — kernel immutability), so the
+  // guard would need a client-side EAS getAttestation + decode. Deferred unless a
+  // per-file Overview is ever added (then guard: skip tagging any node whose decoded
+  // anchorType != bytes32(0)). See docs/FUTURE_WORK.md.
   try {
     const rootUID = (await publicClient.readContract({
       address: indexerAddress,

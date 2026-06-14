@@ -75,6 +75,19 @@ self-healing on retry. A contract-level fix (phase-1 qualifying on active
 placement rather than `_containsAttestations`) would eliminate it but changes
 Durable listing semantics for all files — out of scope here.
 
+### Ancestor-visibility walk assumes a generic-folder parent (not reachable today)
+`uploadOnchainFile`'s ancestor-visibility walk tags `current` (starting at
+`parentAnchorUID`) with `definition=dataSchemaUID`. If `parentAnchorUID` were a
+FILE anchor it would be mis-tagged as a visible folder and could re-surface via
+phase-0 folder visibility after its placement PIN is revoked (Codex). Not
+reachable today: the sole caller (OverviewEditorModal) passes `currentAnchorUID`,
+always a generic folder. A runtime guard needs each node's anchorType, which
+EFSIndexer can't expose via a getter (its address is baked into the schema UIDs —
+kernel immutability), so it would require a client-side EAS getAttestation +
+decode. Add that guard (skip tagging any node whose decoded anchorType !=
+bytes32(0)) IF a per-file Overview is ever introduced. Invariant documented inline
+at the walk.
+
 ### Deferred PR #27 review findings (non-blocking)
 - **EFSFileView exclusion gas (Gemini):** in `_isItemExcluded`, pre-check
   `edgeResolver.hasActiveTagFromAny(target, def, attesters)` before the per-attester
