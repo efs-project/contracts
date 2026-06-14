@@ -56,6 +56,11 @@ export default function ExplorerClient() {
   // parallel escape hatch for create. Without it, users had to hard-refresh to
   // see a newly-created file/folder appear.
   const [directoryRefreshKey, setDirectoryRefreshKey] = useState(0);
+  // Bumped by an Overview save to re-resolve the exclude tag DEFS (the save may
+  // create /tags/system on the fly). Separate from directoryRefreshKey so the
+  // exclude resolver re-runs (holding the directory) WITHOUT the parent-driven
+  // refetch racing an unfiltered read. See onOverviewSaved + FileBrowser.
+  const [excludeRefreshKey, setExcludeRefreshKey] = useState(0);
   const [reverseOrder, setReverseOrder] = useState(false);
   const [autoProcessKey, setAutoProcessKey] = useState(0);
   const [autoProcessSortUIDs, setAutoProcessSortUIDs] = useState<string[]>([]);
@@ -755,11 +760,15 @@ export default function ExplorerClient() {
                 indexerAddress={indexerAddress}
                 onOverviewSaved={() => {
                   setOverviewRefreshKey(k => k + 1);
-                  // Also refresh the directory: the save may have created
-                  // /tags/system on the fly (unseeded chain), so FileBrowser must
-                  // re-resolve tagsRoot + exclude defs to hide the new system-tagged
-                  // README; and the new README should reflect in the grid (Codex P2).
-                  setDirectoryRefreshKey(k => k + 1);
+                  // Re-resolve excludes (NOT a plain directory refetch): an Overview
+                  // save creates /tags/system on the fly when it's absent — on a real
+                  // deploy /tags exists but /tags/system is only created on first save,
+                  // so the exclude defs go stale and the new system README would show.
+                  // A dedicated key drives the exclude resolver (which HOLDS via
+                  // excludesPending while re-resolving, then drives a FILTERED refetch
+                  // via depsKey) — decoupled from directoryRefreshKey so it can't race
+                  // an unfiltered refetch (Codex P2).
+                  setExcludeRefreshKey(k => k + 1);
                 }}
               />
             </div>
@@ -820,6 +829,7 @@ export default function ExplorerClient() {
                     sortOverlayAddress={sortOverlayAddress}
                     sortRefreshKey={sortRefreshKey}
                     directoryRefreshKey={directoryRefreshKey}
+                    excludeRefreshKey={excludeRefreshKey}
                     reverseOrder={reverseOrder}
                     onNavigate={(uid, name) => navigateToPath([...currentPath, { uid, name }])}
                   />

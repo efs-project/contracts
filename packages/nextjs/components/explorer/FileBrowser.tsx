@@ -140,6 +140,7 @@ export const FileBrowser = ({
   sortOverlayAddress,
   sortRefreshKey = 0,
   directoryRefreshKey = 0,
+  excludeRefreshKey = 0,
   reverseOrder = false,
 }: {
   currentAnchorUID: string | null;
@@ -167,6 +168,10 @@ export const FileBrowser = ({
    * on their own when deps settle.
    */
   directoryRefreshKey?: number;
+  /** Bumped by an Overview save to re-resolve exclude tag defs (the save may create
+   *  /tags/system on the fly). Drives the tagsRoot + exclude resolvers only — NOT
+   *  the parent-driven directory refetch — so it can't race an unfiltered read. */
+  excludeRefreshKey?: number;
   reverseOrder?: boolean;
 }) => {
   const [selectedDebugItem, setSelectedDebugItem] = useState<any | null>(null);
@@ -321,12 +326,12 @@ export const FileBrowser = ({
   // would be worse — it would fall to an UNFILTERED lens read and leak system/nsfw.
   useEffect(() => {
     if (!publicClient || !indexerInfo) return;
-    // Once `/tags` is found it's permanent — never re-resolve. But if it was
-    // ABSENT at mount (unseeded chain / a real deploy where the demo seed is
-    // skipped), an Overview save can create `/tags/system` on the fly; re-run on
-    // `directoryRefreshKey` (bumped by that save) so tagsRoot — and therefore the
-    // exclude defs — get picked up and the new system-tagged README is hidden
-    // (Codex P2). Without this, the directory stays on the unfiltered listing.
+    // Once `/tags` is found it's permanent — never re-resolve. But if `/tags`
+    // itself was ABSENT at mount (a bare chain), an Overview save creates it on the
+    // fly; re-run on `excludeRefreshKey` (bumped by that save) so tagsRoot is picked
+    // up, which in turn re-runs the exclude resolver below. (When `/tags` already
+    // exists but `/tags/system` doesn't — the real-deploy case — tagsRoot is
+    // unchanged and the exclude resolver re-resolves directly off excludeRefreshKey.)
     if (tagsRoot) return;
     getEdgeResolverAddress(publicClient.chain.id).then(async addr => {
       if (addr) setEdgeResolverAddress(addr);
@@ -357,7 +362,7 @@ export const FileBrowser = ({
         console.error("Resolving /tags anchor failed; tag filter unavailable", e);
       }
     });
-  }, [publicClient, indexerInfo, directoryRefreshKey, tagsRoot]);
+  }, [publicClient, indexerInfo, excludeRefreshKey, tagsRoot]);
 
   // Resolve INCLUDE tag filter names → definition UIDs → tagged target sets.
   // Sources: tagFilter (URL, include), drawerTagFilters include entries.
@@ -660,7 +665,22 @@ export const FileBrowser = ({
     // new def — otherwise the just-tagged item stays visible (Codex P2). The
     // stable-set comparison keeps this from restarting the cursor when the def set
     // is unchanged. `excludeRetry` re-runs a bounded post-error retry.
-  }, [drawerExcludeNamesKey, tagFilterVersion, publicClient, indexerInfo, tagsRoot, tagsRootSettled, excludeRetry]);
+    // `excludeRefreshKey` re-runs after an Overview save that may have created
+    // `/tags/system` even when `tagsRoot` is unchanged (the real-deploy case where
+    // `/tags` exists but `/tags/system` is created on first save) — without it the
+    // exclude defs stay stale and the new system README renders (Codex P2). This
+    // sets excludeResolved=false (holds the directory) then re-resolves, so there's
+    // no unfiltered flash.
+  }, [
+    drawerExcludeNamesKey,
+    tagFilterVersion,
+    publicClient,
+    indexerInfo,
+    tagsRoot,
+    tagsRootSettled,
+    excludeRetry,
+    excludeRefreshKey,
+  ]);
 
   // Parallel-array minWeights for getDirectoryPageFiltered — all 0n (ADR-0042
   // effective-TAG threshold `weight >= 0`). One entry per resolved exclude def.
@@ -1075,17 +1095,12 @@ export const FileBrowser = ({
       return;
     }
     if (directoryRefreshKey === 0) return;
-    // RE-GATE instead of refetching when `/tags` is unresolved but excludes are
-    // expected: an Overview save can create `/tags/system` on an unseeded chain and
-    // bump this key, but the tagsRoot re-resolver (also keyed on directoryRefreshKey)
-    // is async — refetching here would run UNFILTERED (excludeTagDefUIDs=[]) and flash
-    // the newly system-tagged README before the re-resolve lands (Codex P2). Hold the
-    // directory (excludesPending) and let the exclude resolver's completion drive a
-    // filtered refetch via its depsKey.
-    if (!tagsRoot && drawerExcludeNamesKey !== "") {
-      setExcludeResolved(false);
-      return;
-    }
+    // Only create/delete/list mutations bump directoryRefreshKey — they don't touch
+    // /tags/system, so the exclude defs are never stale here and a normal refetch is
+    // correct (and filtered, since excludeTagDefUIDs is already resolved). Overview
+    // saves (which CAN create /tags/system) go through `excludeRefreshKey` →
+    // the exclude resolver instead, which holds + re-resolves + drives a filtered
+    // refetch via depsKey, so there's no unfiltered-flash race here.
     refetchLensItems().catch(e => console.error("Directory refetch (lenses) failed", e));
     refetchLensListItems().catch(e => console.error("List refetch (lenses) failed", e));
     // refetch* identities are stable per query. Intentionally scoped to the bump.
