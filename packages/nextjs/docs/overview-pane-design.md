@@ -54,6 +54,12 @@ leaf is itself an anchor that can host children — confirmed in `ExplorerClient
 path resolution), an address-derived parent, or an alias anchor for
 schema/attestation (ADR-0033). Listing children of that parent is uniform.
 
+> **SUPERSEDED (see top note 4):** the shipped feature is FOLDER-SCOPED. The
+> file-anchor case above does NOT work end-to-end — a file-leaf Overview can't be
+> created (editor gated off on file leaves) or read (`<file>/README.md` 404s on
+> the intermediate file anchor). Do not build seed/router work against it; per-file
+> Overviews need a router change, tracked in `docs/FUTURE_WORK.md`.
+
 Resolution (lens-scoped):
 
 1. List the item's children via `EFSFileView.getDirectoryPageBySchemaAndAddressList`.
@@ -363,6 +369,9 @@ refUID=README_anchorUID, targetSchema=anchorSchema, weight=1)` from the demo
 lens. ~6-8 attestations. Also seed one README on a **file** anchor and confirm an
 **address** Overview path, so "any item type" is exercised, not just folders.
 
+> **SUPERSEDED (see top note 4):** as shipped, only folder READMEs are seeded —
+> the file-anchor README seed was removed (it can't be rendered). Don't re-add it.
+
 ## File-change summary
 
 - **New:** `lib/efs/fetchFileContent.ts`, `lib/efs/resolveSystemAnchorSet.ts`,
@@ -390,7 +399,8 @@ Repo test runner is **`node --test`** over the `utils` test files (not Jest).
   survives (footnotes, heading anchors with `id="user-content-…"`, tables,
   task lists). Include a DOM-clobber case (`## constructor` → prefixed id).
 - `yarn next:check-types` clean.
-- **Manual matrix** (after the new seed): a **folder**, a **file**, and an
+- **Manual matrix** (after the new seed): a **folder** ~~, a **file**,~~ and an
   **address** each with a `system`-tagged `README.md` render in the Overview
   pane; the hidden-files toggle reveals/hides system files; a non-markdown
   `system` file shows the safe download card; an item with no page stays 2-pane.
+  (**Superseded, top note 4:** drop the **file** case — folder-scoped only.)

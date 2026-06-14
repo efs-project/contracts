@@ -367,8 +367,11 @@ export async function seedDemoTree() {
    * Idempotent on-chain README at `(parentUID, name)` with real retrievable
    * bytes. Mirrors `makeFileIfMissing` (anchor + DATA + contentType PROPERTY +
    * MIRROR + PIN + ancestor visibility) but uses an on-chain `web3://` mirror so
-   * the Overview pane can fetch and render the markdown. `parentUID` may be a
-   * folder anchor, a file anchor, or an address container (`bytes32(uint160)`).
+   * the Overview pane can fetch and render the markdown. Overviews are
+   * FOLDER-SCOPED, so `parentUID` is only ever a folder anchor or an address
+   * container (`bytes32(uint160)`) — NOT a file anchor (a `<file>/README.md`
+   * can't be resolved by the router; see the no-file-README note at the call
+   * site below). Keep it that way to avoid seeding unreachable Overview data.
    *
    * For address containers the file-slot anchor can't use `refUID=parent` (the
    * address bytes32 isn't a real attestation UID EAS would accept), so callers

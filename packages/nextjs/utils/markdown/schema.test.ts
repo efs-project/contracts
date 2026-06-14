@@ -1,4 +1,4 @@
-import { overviewSchema } from "./schema.ts";
+import { CLOBBER_PREFIX, overviewSchema, resolveHashHref } from "./schema.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import rehypeAutolinkHeadings from "rehype-autolink-headings";
@@ -96,5 +96,24 @@ test("renders table cell alignment", async () => {
 test("autolink heading wrap-anchor (href=#fragment) survives sanitize", async () => {
   const html = await renderWithAnchors("## Hello World");
   assert.match(html, /<h2[^>]*id="user-content-hello-world"[^>]*>/);
+  // Raw pipeline href is the UNprefixed fragment — it does NOT match the
+  // clobber-prefixed id above. MarkdownView's <a> override repairs this at
+  // render time via resolveHashHref (see below), exactly as the protocol-
+  // relative test documents the override neutralizing //host links.
   assert.match(html, /href="#hello-world"/);
+});
+test("resolveHashHref re-points a raw heading fragment at its prefixed id", async () => {
+  const html = await renderWithAnchors("## Hello World");
+  const id = html.match(/<h2[^>]*id="([^"]+)"/)?.[1];
+  const rawHref = html.match(/href="(#[^"]+)"/)?.[1];
+  assert.ok(id && rawHref, "expected both an id and an autolink href");
+  // The gap the bug was about: raw href != "#" + id ...
+  assert.notEqual(rawHref, `#${id}`);
+  // ... and the override closes it.
+  assert.equal(resolveHashHref(rawHref as string), `#${id}`);
+});
+test("resolveHashHref is idempotent and leaves a bare '#' alone", () => {
+  assert.equal(resolveHashHref("#hello-world"), `#${CLOBBER_PREFIX}hello-world`);
+  assert.equal(resolveHashHref(`#${CLOBBER_PREFIX}hello-world`), `#${CLOBBER_PREFIX}hello-world`);
+  assert.equal(resolveHashHref("#"), "#");
 });

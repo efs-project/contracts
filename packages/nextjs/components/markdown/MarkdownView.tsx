@@ -6,7 +6,7 @@ import rehypeAutolinkHeadings from "rehype-autolink-headings";
 import rehypeSanitize from "rehype-sanitize";
 import rehypeSlug from "rehype-slug";
 import remarkGfm from "remark-gfm";
-import { overviewSchema } from "~~/utils/markdown/schema";
+import { overviewSchema, resolveHashHref } from "~~/utils/markdown/schema";
 
 /**
  * Render boundary for UNTRUSTED markdown. The Overview pane auto-loads README
@@ -49,9 +49,11 @@ const components: Components = {
     // wraps around each heading) are safe — they navigate within the rendered
     // doc, no external load, no JS. Render them as real anchors; otherwise every
     // autolinked heading degrades to a dim, inert span, breaking in-page
-    // navigation and heading readability (Gemini).
+    // navigation and heading readability (Gemini). `resolveHashHref` re-points
+    // the fragment at the clobber-prefixed element id so the link actually
+    // resolves after sanitize (Codex P2).
     if (href && href.startsWith("#")) {
-      return <a href={href}>{children}</a>;
+      return <a href={resolveHashHref(href)}>{children}</a>;
     }
     return <span className="opacity-70">{children}</span>;
   },
