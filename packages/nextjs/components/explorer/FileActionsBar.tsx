@@ -9,6 +9,10 @@ import { notification } from "~~/utils/scaffold-eth";
 
 export type FileActionsBarProps = {
   currentAnchorUID: string | null;
+  /** True when the current URL resolved to a DATA-schema FILE leaf (not a folder).
+   *  Creating children under a file anchor would mis-tag it as a folder via the
+   *  ancestor-visibility walk, so the Add actions are gated off (Codex P2). */
+  currentIsFileLeaf?: boolean;
   /** Top-level container — threaded into CreateItemModal for Address parent handling. */
   container?: ClassifiedContainer | null;
 
@@ -48,6 +52,7 @@ export type FileActionsBarProps = {
  */
 export const FileActionsBar = ({
   currentAnchorUID,
+  currentIsFileLeaf = false,
   container,
   anchorSchemaUID,
   dataSchemaUID,
@@ -117,7 +122,7 @@ export const FileActionsBar = ({
           <li>
             <button
               onClick={() => {
-                if (!currentAnchorUID) {
+                if (!currentAnchorUID || currentIsFileLeaf) {
                   notification.info("Open a folder first to add files or subfolders.");
                   return;
                 }
@@ -130,7 +135,7 @@ export const FileActionsBar = ({
           <li>
             <button
               onClick={() => {
-                if (!currentAnchorUID) {
+                if (!currentAnchorUID || currentIsFileLeaf) {
                   notification.info("Open a folder first to add files or subfolders.");
                   return;
                 }
@@ -143,7 +148,7 @@ export const FileActionsBar = ({
           <li>
             <button
               onClick={() => {
-                if (!currentAnchorUID) {
+                if (!currentAnchorUID || currentIsFileLeaf) {
                   notification.info("Open a folder first to add a list.");
                   return;
                 }

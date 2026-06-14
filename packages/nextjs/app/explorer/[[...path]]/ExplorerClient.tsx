@@ -779,6 +779,7 @@ export default function ExplorerClient() {
             {!pathError && (
               <FileActionsBar
                 currentAnchorUID={currentAnchorUID}
+                currentIsFileLeaf={currentIsFileLeaf}
                 container={currentContainer}
                 anchorSchemaUID={anchorSchemaUID}
                 dataSchemaUID={dataSchemaUID}
