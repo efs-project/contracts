@@ -35,6 +35,19 @@ Update statuses with `[x]` as items land. Add notes inline if blocked.
 - [ ] Internal devtools UI (`packages/nextjs/`) confirmed working against devnet
 - [ ] Client knows how to construct `web3://` URLs pointing at the devnet router
 - [ ] "DEVNET — RESETS WEEKLY" warning banner in client UI
+- [ ] **Empty lens list = "show all data" (still filtered + paged).** Intended model:
+      a lens of `vitalik.eth` means "only vitalik's data", "me/my address" means "only
+      mine", and an EMPTY list means "all data from everyone" (the system/nsfw exclusion
+      and pagination still apply). Today an empty/absent lens chain shows nothing, and
+      `defaultLensesForContainer` backfills `systemLenses` so it's rarely empty. Needs:
+      **(a)** an ADR superseding the relevant ADR-0031/0039 viewer-sovereignty +
+      systemLenses-tail semantics; **(b)** a CONTRACT path for an unscoped-but-filtered
+      directory page — e.g. `EFSFileView.getDirectoryPageFiltered` treating an empty
+      `attesters[]` as "all attesters" while still applying the exclude filter + cursor
+      (this MUST land before the Sepolia contract freeze — EFSFileView is redeployable
+      but the model should be settled); **(c)** client wiring so an empty
+      `lensAddresses` routes to that path instead of rendering blank. Deferred from
+      PR #27 (the on-chain tag-filter PR). Design notes in `docs/FUTURE_WORK.md`.
 
 ### Communication
 

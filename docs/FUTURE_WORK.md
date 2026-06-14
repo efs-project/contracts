@@ -41,8 +41,36 @@ EFSIndexer emits events for off-chain indexing. Adding a field to an event later
 ### Dev-UI: TagModal edge-definition scan scales with lifetime churn
 `TagModal` paginates the full append-only `getEdgeDefinitions` set for a target, then does an active-edge lookup and ancestor walk per definition to classify it under `/tags/`. On a heavily-reused DATA UID this scales with all-time edge history, not active tags. Fix: expose a TAG-schema-specific reverse index or `/tags/` classification cache so modal-open cost is O(active tag count). Dev UI / Ephemeral tier.
 
-### Empty default-lens list renders blank instead of a filtered listing
-The unfiltered `EFSFileView.getDirectoryPage` listing fallback was removed — every FileBrowser directory read now goes through the lens-scoped `getDirectoryPageFiltered` (ADR-0048), so an empty `lensAddresses` FAILS SAFE (the directory hooks disable and the grid renders empty, never unfiltered `system`/`nsfw` content). Today `defaultLensesForContainer` always appends `systemLenses` (devnet constants), so the default view is never empty. When the mainnet user-configurable-lenses work (the Web-of-trust UX item under Architecture & Extensibility) makes that list potentially empty, the follow-up is to give the empty-list case a FILTERED listing so the view isn't simply blank — NOT to re-introduce an unfiltered path. See the AGENT-NOTEs at `defaultLensesForContainer` (utils/efs/containers.ts) and `systemLenses` (ExplorerClient.tsx).
+### Empty lens list = "all data" (filtered + paged) — PRE-SEPOLIA, needs ADR + contract path
+Decision (James, 2026-06-14): the lens list is the answer to "whose data?" — `vitalik.eth`
+= only vitalik's, "me/my address" = only mine, and an EMPTY list = **all data from
+everyone**. The `system`/`nsfw` exclusion (ADR-0048) and pagination still apply; "all"
+only widens *whose* content, not *what kind*. This is a pre-Sepolia gate (LAUNCH_CHECKLIST
+→ Devnet → Frontend/Client), intentionally deferred from PR #27.
+
+Current state (what this supersedes): PR #27 removed the unscoped `getDirectoryPage`
+fallback, so an empty `lensAddresses` currently renders BLANK (fail-safe). The new model
+makes empty mean "all", which is the opposite default — so it needs:
+
+- **ADR** superseding the relevant parts of ADR-0031 (viewer sovereignty / "nobody sees
+  foreign content unless opted in") and ADR-0039 (systemLenses tail fallback). Under the
+  new model, "fresh user sees content" is served by empty=all, not by the systemLenses
+  backfill — decide whether systemLenses stays, becomes opt-in, or is dropped.
+- **Contract path** for an unscoped-but-filtered page. Cleanest: let
+  `EFSFileView.getDirectoryPageFiltered` (and the schema/address variant) treat an EMPTY
+  `attesters[]` as "all attesters" — drop the `require(attesters.length > 0)` and add the
+  all-children enumeration (it already walks `_childrenBySchema`; the attester `qualifies`
+  check just becomes unconditional when the list is empty), keeping the exclude filter +
+  opaque cursor. EFSFileView is redeployable, but settle this before the Sepolia freeze.
+  No non-address sentinel needed — the empty `address[]` IS the signal.
+- **Client wiring:** representation is just `lensAddresses.length === 0` ⇒ all. The only
+  subtlety is distinguishing the empty cases. Today defaults are built in
+  `defaultLensesForContainer` (`utils/efs/containers.ts`): `connected → viewedAddress →
+  webOfTrust → systemLenses`. To get a genuine empty, the systemLenses backfill must be
+  removable (per the ADR). James leans toward: clearing the list (incl. an explicit
+  `?lenses=` with no value) means "all" — which would also supersede ADR-0031's "explicit
+  empty must not widen". Re-point the directory hooks so an empty list calls the
+  all-attesters path instead of disabling.
 
 ### TopicTree navigation pane is not exclude-filtered (system/nsfw folders show in the sidebar)
 The ADR-0048 exclusion filter is wired into the main FileBrowser grid but NOT into the `TopicTree` sidebar, which lists folders via its own `useLensesDirectoryPage` call without `excludeTagDefs`. So a folder tagged `system`/`nsfw` is hidden from the grid but still appears in the left navigation tree — a partial break of the folder-hide guarantee. Pre-existing (the tree was never filtered) and out of the on-chain-filter PR's grid scope. Fix: lift the exclude-def resolution (currently inside FileBrowser) to a shared hook / ExplorerClient and thread `excludeTagDefUIDs` + `excludeMinWeights` through TopicTree's directory read, so both panes route through `getDirectoryPageFiltered`. Mind TopicTree's own resolution-race gating when doing so.
