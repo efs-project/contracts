@@ -219,6 +219,11 @@ export const FileBrowser = ({
   // nothing to hide → release to the unfiltered read". Stays false on a hard RPC
   // error so we hold (leak-safe) rather than fall through to unfiltered.
   const [tagsRootSettled, setTagsRootSettled] = useState(false);
+  // Bumped to retry exclude-def resolution after a transient failure. The catch
+  // HOLDS the gate (never releases to an unfiltered read) and schedules a bounded
+  // retry so a transient RPC blip self-heals without the directory wedging on
+  // "Loading…" until a manual filter toggle.
+  const [excludeRetry, setExcludeRetry] = useState(0);
   // Folder-delete confirmation. `pinUIDs` (file placements, cardinality 1) and
   // `tagUIDs` (folder visibility, cardinality N) are populated by scanSubtree.
   // Tracked separately because they live under different EAS schemas (PIN vs TAG)
@@ -568,6 +573,7 @@ export const FileBrowser = ({
     setExcludeResolved(false);
 
     let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
     (async () => {
       try {
         const resolved = await Promise.all(
@@ -589,22 +595,27 @@ export const FileBrowser = ({
           prev.length === defs.length && prev.every((u, i) => u === defs[i]) ? prev : defs,
         );
         // Resolution complete (defs known — possibly empty if the tags don't
-        // exist under /tags/). Release the lens gate.
+        // exist under /tags/). Release the lens gate and reset the retry budget.
         setExcludeResolved(true);
+        if (excludeRetry !== 0) setExcludeRetry(0);
       } catch (e) {
         console.error("Exclude tag def resolution failed", e);
         if (!cancelled) {
-          setExcludeTagDefUIDs([]);
-          // Resolution settled (errored) — release the gate rather than hold the
-          // directory fetch forever. Worst case the unfiltered branch runs, which
-          // the self-correcting depsKey backstop will re-gate on the next change.
-          setExcludeResolved(true);
+          // HOLD the gate — do NOT release to an unfiltered read. Excludes are
+          // active (the drawer requested them), so releasing with empty defs would
+          // run the unfiltered listing and leak system/nsfw. Leave `excludeResolved`
+          // false so the directory keeps holding, and schedule a bounded retry so a
+          // transient RPC blip self-heals (without retry it would wedge on
+          // "Loading…" until a manual filter toggle, since folder navigation is not
+          // a dep of this effect).
+          if (excludeRetry < 3) retryTimer = setTimeout(() => setExcludeRetry(n => n + 1), 1500);
         }
       }
     })();
 
     return () => {
       cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
     };
     // Exclude def UID resolution depends ONLY on which exclude tags are active and
     // where `/tags/` lives — it is lens-independent and unaffected by applying tags
@@ -612,7 +623,8 @@ export const FileBrowser = ({
     // them re-ran this effect (flashing "Loading…") on every lens change or tag
     // edit even though the resolved defs never changed. The lens-scoped query
     // refetches with the already-resolved defs via its own `depsKey`.
-  }, [drawerExcludeNamesKey, publicClient, indexerInfo, tagsRoot, tagsRootSettled]);
+    // `excludeRetry` is a dep so a bounded post-error retry re-runs resolution.
+  }, [drawerExcludeNamesKey, publicClient, indexerInfo, tagsRoot, tagsRootSettled, excludeRetry]);
 
   // Parallel-array minWeights for getDirectoryPageFiltered — all 0n (ADR-0042
   // effective-TAG threshold `weight >= 0`). One entry per resolved exclude def.
@@ -1000,10 +1012,17 @@ export const FileBrowser = ({
     fileViewAddress: efsFileViewInfo?.address as `0x${string}` | undefined,
     fileViewAbi: efsFileViewInfo?.abi as any,
     pageSize,
-    // Gate on `!excludesPending` symmetrically with the file/folder query above.
-    // Lists aren't exclude-tagged so this path is unfiltered by design, but
-    // holding it too keeps the merged `rawItems` from rendering a half-resolved
-    // page (list items present, file/folder items still held) on first mount.
+    // Apply the SAME excludes here as the file/folder query. The LIST walk's
+    // phase-0 returns the same generic qualifying folders, so without this an
+    // excluded (system/nsfw-tagged) folder surfaced via LIST visibility would
+    // re-enter the merged `rawItems` unfiltered. LIST anchors themselves carry no
+    // descriptive tag and have no placement PIN, so getDirectoryPageFiltered still
+    // passes them through per ADR-0048 — only phase-0 folders get filtered.
+    excludeTagDefs: excludeTagDefUIDs,
+    minWeights: excludeMinWeights,
+    // Gate on `!excludesPending` symmetrically with the file/folder query above so
+    // the merged page never renders half-resolved (list items present, file/folder
+    // items still held) on first mount.
     enabled: lensAddresses.length > 0 && !!listSchemaUID && !excludesPending,
   });
 
