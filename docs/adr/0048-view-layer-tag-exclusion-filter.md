@@ -32,16 +32,21 @@ kernel weight-neutrality:
    (EdgeResolver) ABI addition; EdgeResolver is wired into EFSIndexer, so this is a
    near-Etched surface and is the load-bearing item to review.
 
-2. **`EFSFileView.getDirectoryPageFiltered(bytes32 parent, bytes32 schema, address[] lenses, bytes32 excludeTagDef, int256 minWeight, bytes cursor, uint256 maxItems) → DirectoryPage`** —
+2. **`EFSFileView.getDirectoryPageFiltered(bytes32 parent, bytes32 schema, address[] lenses, bytes32[] excludeTagDefs, int256[] minWeights, bytes cursor, uint256 maxItems) → DirectoryPage`** —
    the existing `getDirectoryPageBySchemaAndAddressList` plus a per-item exclusion
-   predicate (a **union over the viewed lenses**, matching the client's
-   `FileBrowser.resolveTagSet`): an item is excluded iff **any** viewed lens has an
-   active TAG `excludeTagDef` (with `weight >= minWeight`) on **any** DATA UID
-   resolved at the item across the viewed lenses (files), or on the item's anchor
-   UID (folders). The `weight >= minWeight` comparison happens in the
-   **view layer** (EFSFileView is stateless and redeployable — *not* Etched). The
-   threshold is a **caller argument**: ADR-0042's `weight >= 0` becomes the
-   conventional default a caller passes (`minWeight = 0`), not a hard-coded rule.
+   predicate over a set of parallel-array `(excludeTagDefs[k], minWeights[k])` pairs
+   (a **union over the viewed lenses AND over the exclude pairs**, matching the
+   client's `FileBrowser.resolveTagSet`): an item is excluded iff for **any** pair
+   `k`, **any** viewed lens has an active TAG `excludeTagDefs[k]` (with
+   `weight >= minWeights[k]`) on **any** DATA UID resolved at the item across the
+   viewed lenses (files), or on the item's anchor UID (folders). Each pair applies
+   the exact single-tag semantic; `require(excludeTagDefs.length == minWeights.length)`
+   (revert on mismatch) and a `MAX_EXCLUDE_TAGS_PER_QUERY = 8` cap keep the per-item
+   loop bounded. Empty arrays ⇒ no exclusion (degenerates to the unfiltered page).
+   The `weight >= minWeight` comparison happens in the **view layer** (EFSFileView is
+   stateless and redeployable — *not* Etched). Each threshold is a **caller
+   argument**: ADR-0042's `weight >= 0` becomes the conventional default a caller
+   passes (`minWeights[k] = 0`), not a hard-coded rule.
 
 **Tag-target asymmetry (load-bearing).** A descriptive-label TAG targets:
 - a **file** item's **DATA UID** (reached via the placement PIN
@@ -68,11 +73,18 @@ call (it returns a non-empty cursor when the budget is hit before `maxItems`). T
 opaque cursor format (ADR-0036) is unchanged — exclusion is a stateless predicate
 on already-walked positions, identical to revocation skips.
 
-**Scope: single exclude tag for v1.** One `(excludeTagDef, minWeight)` per call.
-A multi-tag variant is deferred (EFSFileView is redeployable, so it can ship later
-with zero migration); different policies (`system` always-on vs `nsfw` user-toggle)
-don't share a threshold anyway, so single-tag keeps each call honest about "one
-policy per call."
+**Scope: multi-tag exclude set (parallel arrays).** The signature takes
+`bytes32[] excludeTagDefs, int256[] minWeights` — a set of `(def, minWeight)` pairs,
+one threshold *per tag*. This supersedes the original single-tag v1 scope: the
+explorer needs to hide `system` **and** `nsfw` in one call, and because each pair
+carries its own threshold the "one policy per call" honesty is preserved at the
+pair granularity (`system` always-on vs `nsfw` user-toggle can coexist with
+different thresholds). The per-item cost grows by a bounded factor — the union is
+O(lenses × excludeTags) per item, capped by `MAX_ATTESTERS_PER_QUERY` (≤ 20) and
+`MAX_EXCLUDE_TAGS_PER_QUERY` (≤ 8); the deduplicated DATA-UID set is still collected
+**once per item** (not once per exclude tag). EFSFileView is redeployable, so this
+extension shipped with zero migration. Empty arrays degenerate to the unfiltered
+page (the no-exclusion default).
 
 ## Consequences
 
@@ -129,3 +141,15 @@ intended semantic — always "any viewed lens's tag on any DATA resolved at the
 item across the viewed lenses," matching `FileBrowser.resolveTagSet` ×
 `matchesUID` — is unchanged; only the implementation and its description were
 brought into line.
+
+Update 2026-06-13: the Decision was extended from a **single** `(excludeTagDef,
+minWeight)` to a **multi-tag parallel-array** `(bytes32[] excludeTagDefs, int256[]
+minWeights)` set within the retroactive-ADR grace window — the explorer needs to
+hide `system` + `nsfw` in one call. The Decision and "Scope" sections above were
+updated to the array signature; a `MAX_EXCLUDE_TAGS_PER_QUERY = 8` cap and a
+`require(excludeTagDefs.length == minWeights.length)` were added; the per-item
+DATA-UID set is still deduplicated once per item. The "Multi-tag array in v1"
+bullet under *Alternatives considered* is left intact as the historical record of
+the original deferral (its "deferred" reasoning no longer applies — the variant
+shipped). EFSFileView is redeployable, so this is a zero-migration extension; the
+kernel-neutrality framing is unchanged (the kernel still never interprets weight).

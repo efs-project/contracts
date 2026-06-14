@@ -204,8 +204,11 @@ export const FileBrowser = ({
 
   // Tag filter state: null = no filter active; Set<string> = allowed DATA/anchor UIDs
   const [tagFilteredUIDs, setTagFilteredUIDs] = useState<Set<string> | null>(null);
-  // Excluded UIDs from the drawer's "exclude" filters — empty = no exclusions
-  const [tagExcludedUIDs, setTagExcludedUIDs] = useState<Set<string>>(new Set());
+  // EXCLUDE filtering is applied on-chain (ADR-0048): the active exclude tags'
+  // definition UIDs are resolved below and passed to `getDirectoryPageFiltered`,
+  // so the lens-scoped listing comes back already filtered. No client-side
+  // exclude scan / exclude UID set is kept.
+  const [excludeTagDefUIDs, setExcludeTagDefUIDs] = useState<`0x${string}`[]>([]);
   const [isTagFilterLoading, setIsTagFilterLoading] = useState(false);
   // True while the dataUIDMap is being populated asynchronously.
   // Prevents showing unfiltered results during the brief window between tag resolution and map build.
@@ -355,8 +358,11 @@ export const FileBrowser = ({
     });
   }, [publicClient, indexerInfo]);
 
-  // Resolve tag filter names → definition UIDs → tagged target sets.
-  // Sources: tagFilter (URL, include), drawerTagFilters include entries, drawerTagFilters exclude entries.
+  // Resolve INCLUDE tag filter names → definition UIDs → tagged target sets.
+  // Sources: tagFilter (URL, include), drawerTagFilters include entries.
+  // EXCLUDE filtering is no longer resolved here — it is pushed on-chain via
+  // `getDirectoryPageFiltered` (ADR-0048); see the `excludeTagDefUIDs` effect
+  // below. This effect only scans full target sets for INCLUDE tags.
   useEffect(() => {
     const urlIncludeNames = tagFilter
       .split(",")
@@ -365,15 +371,11 @@ export const FileBrowser = ({
     const drawerIncludeNames = Object.entries(drawerTagFilters)
       .filter(([, s]) => s === "include")
       .map(([name]) => name.toLowerCase());
-    const drawerExcludeNames = Object.entries(drawerTagFilters)
-      .filter(([, s]) => s === "exclude")
-      .map(([name]) => name.toLowerCase());
 
     const includeNames = [...new Set([...urlIncludeNames, ...drawerIncludeNames])];
 
-    if (includeNames.length === 0 && drawerExcludeNames.length === 0) {
+    if (includeNames.length === 0) {
       setTagFilteredUIDs(null);
-      setTagExcludedUIDs(new Set());
       setIsTagFilterLoading(false);
       return;
     }
@@ -481,35 +483,24 @@ export const FileBrowser = ({
 
     const resolve = async () => {
       try {
-        // Fetch each unique tag name exactly once, even if it appears in both lists.
-        const allNames = [...new Set([...includeNames, ...drawerExcludeNames])];
+        // Resolve each unique INCLUDE tag name's effective target set, then
+        // intersect (an item must carry ALL include tags).
         const resolvedEntries = await Promise.all(
-          allNames.map(async name => [name, await resolveTagSet(name)] as const),
+          includeNames.map(async name => [name, await resolveTagSet(name)] as const),
         );
         if (cancelled) return;
         const cache = new Map<string, Set<string>>(resolvedEntries);
 
-        if (includeNames.length > 0) {
-          let intersection = cache.get(includeNames[0])!;
-          for (let i = 1; i < includeNames.length; i++) {
-            const s = cache.get(includeNames[i])!;
-            intersection = new Set([...intersection].filter(uid => s.has(uid)));
-          }
-          setTagFilteredUIDs(intersection);
-        } else {
-          setTagFilteredUIDs(null);
+        let intersection = cache.get(includeNames[0])!;
+        for (let i = 1; i < includeNames.length; i++) {
+          const s = cache.get(includeNames[i])!;
+          intersection = new Set([...intersection].filter(uid => s.has(uid)));
         }
-
-        if (drawerExcludeNames.length > 0) {
-          setTagExcludedUIDs(new Set(drawerExcludeNames.flatMap(name => [...(cache.get(name) ?? [])])));
-        } else {
-          setTagExcludedUIDs(new Set());
-        }
+        setTagFilteredUIDs(intersection);
       } catch (e) {
         console.error("Tag filter resolution failed", e);
         if (!cancelled) {
           setTagFilteredUIDs(null);
-          setTagExcludedUIDs(new Set());
         }
       } finally {
         if (!cancelled) setIsTagFilterLoading(false);
@@ -534,6 +525,73 @@ export const FileBrowser = ({
     dataSchemaUID,
     anchorSchemaUID,
   ]);
+
+  // Active EXCLUDE tag names from the drawer (e.g. the default {nsfw, system}).
+  // Joined into a stable string so the resolver effect below only re-fires when
+  // the SET of exclude tags changes — not on every drawer-object identity churn.
+  const drawerExcludeNamesKey = useMemo(
+    () =>
+      Object.entries(drawerTagFilters)
+        .filter(([, s]) => s === "exclude")
+        .map(([name]) => name.toLowerCase())
+        .sort()
+        .join(","),
+    [drawerTagFilters],
+  );
+  const lensesKey = useMemo(() => lensAddresses.join(",").toLowerCase(), [lensAddresses]);
+
+  // Resolve the EXCLUDE tags' DEFINITION UIDs (ADR-0048). Unlike the INCLUDE
+  // path we do NOT paginate each tag's full target set — the on-chain filter in
+  // `getDirectoryPageFiltered` does the per-item exclusion. We only need the def
+  // UID per active exclude tag. Def UIDs that resolve to zero (tag not yet
+  // created under /tags/) are dropped. `minWeights` is all-zero, matching
+  // ADR-0042's `weight >= 0` effective-TAG convention.
+  useEffect(() => {
+    const names = drawerExcludeNamesKey ? drawerExcludeNamesKey.split(",") : [];
+    if (names.length === 0 || !publicClient || !indexerInfo || !tagsRoot) {
+      // tagsRoot not resolved yet → no excludes (unfiltered) until it resolves —
+      // same pre-resolve window as the include path.
+      setExcludeTagDefUIDs([]);
+      return;
+    }
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const resolved = await Promise.all(
+          names.map(
+            name =>
+              publicClient.readContract({
+                address: indexerInfo.address as `0x${string}`,
+                abi: indexerInfo.abi,
+                functionName: "resolvePath",
+                args: [tagsRoot as `0x${string}`, name],
+              }) as Promise<`0x${string}`>,
+          ),
+        );
+        if (cancelled) return;
+        const defs = resolved.filter(uid => uid && uid !== zeroHash);
+        // Stable-set comparison: only update state when the UID set actually
+        // changed, so a re-resolve to the same defs doesn't restart the cursor.
+        setExcludeTagDefUIDs(prev =>
+          prev.length === defs.length && prev.every((u, i) => u === defs[i]) ? prev : defs,
+        );
+      } catch (e) {
+        console.error("Exclude tag def resolution failed", e);
+        if (!cancelled) setExcludeTagDefUIDs([]);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // lensesKey is included per the integration spec (the resolved defs feed the
+    // lens-scoped filtered query); def UID resolution itself is lens-independent.
+  }, [drawerExcludeNamesKey, tagFilterVersion, publicClient, indexerInfo, tagsRoot, lensesKey]);
+
+  // Parallel-array minWeights for getDirectoryPageFiltered — all 0n (ADR-0042
+  // effective-TAG threshold `weight >= 0`). One entry per resolved exclude def.
+  const excludeMinWeights = useMemo(() => excludeTagDefUIDs.map(() => 0n), [excludeTagDefUIDs]);
 
   const fetchFileContent = async (item: any) => {
     if (!efsRouter) {
@@ -910,6 +968,9 @@ export const FileBrowser = ({
     fileViewAddress: efsFileViewInfo?.address as `0x${string}` | undefined,
     fileViewAbi: efsFileViewInfo?.abi as any,
     pageSize,
+    // EXCLUDE tags applied on-chain (ADR-0048). Empty array ⇒ unfiltered read.
+    excludeTagDefs: excludeTagDefUIDs,
+    minWeights: excludeMinWeights,
     enabled: useLensesQuery && lensAddresses.length > 0,
   });
 
@@ -983,13 +1044,15 @@ export const FileBrowser = ({
     return standardItems;
   }, [useLensesQuery, lensAddresses.length, lensItems, lensListItems, standardItems]);
 
-  // When a tag filter is active, resolve DATA UIDs for each file item.
+  // When an INCLUDE tag filter is active, resolve DATA UIDs for each file item.
+  // (EXCLUDE filtering is on-chain now — ADR-0048 — so the map is only needed to
+  // back the client-side INCLUDE intersection in `matchesUID`.)
   // AGENT-NOTE (ADR-0041): file placement is now PIN (cardinality 1) — there's at
   // most one active DATA per (attester, anchor), so we use the O(1) `getActivePinTarget`
   // reader instead of the old TAG count → enumerate scan. We still build a Set per
   // anchor because multiple attesters can each have their own DATA at the same anchor.
   useEffect(() => {
-    if ((!tagFilteredUIDs && tagExcludedUIDs.size === 0) || !rawItems || !publicClient || !edgeResolverAddress) {
+    if (!tagFilteredUIDs || !rawItems || !publicClient || !edgeResolverAddress) {
       setDataUIDMap(new Map());
       setIsDataUIDMapLoading(false);
       return;
@@ -1046,19 +1109,11 @@ export const FileBrowser = ({
     return () => {
       cancelled = true;
     };
-  }, [
-    tagFilteredUIDs,
-    tagExcludedUIDs,
-    rawItems,
-    publicClient,
-    edgeResolverAddress,
-    dataSchemaUID,
-    connectedAddress,
-    lensAddresses,
-  ]);
+  }, [tagFilteredUIDs, rawItems, publicClient, edgeResolverAddress, dataSchemaUID, connectedAddress, lensAddresses]);
 
-  // Apply tag filters. Include filter (tagFilteredUIDs): item must be in set (null = no filter).
-  // Exclude filter (tagExcludedUIDs): item must NOT be in set (empty = no exclusions).
+  // Apply the INCLUDE tag filter. tagFilteredUIDs: item must be in set (null = no
+  // filter). EXCLUDE filtering happens on-chain now (ADR-0048) — see
+  // `excludeTagDefUIDs` → `getDirectoryPageFiltered`; nothing to do here.
   const matchesUID = (item: any, uidSet: Set<string>): boolean => {
     const anchorUID = item.uid.toLowerCase();
     if (isFile(item, dataSchemaUID)) {
@@ -1075,15 +1130,16 @@ export const FileBrowser = ({
 
   const items = rawItems?.filter((item: any) => {
     if (tagFilteredUIDs !== null && !matchesUID(item, tagFilteredUIDs)) return false;
-    if (tagExcludedUIDs.size > 0 && matchesUID(item, tagExcludedUIDs)) return false;
     return true;
   });
 
-  // `system`-tagged files are hidden via the normal descriptive-label filter
-  // path: `drawerTagFilters` carries `system: "exclude"` as a permanent default
-  // (like `nsfw`), so `tagExcludedUIDs` already includes the system DATA set and
-  // `matchesUID` drops those items in the `items` filter above. No separate pass
-  // is needed; downstream (sortedItems, fileItems, the grid, empty-state,
+  // `system`- and `nsfw`-tagged items are hidden ON-CHAIN (ADR-0048):
+  // `drawerTagFilters` carries `{nsfw, system}: "exclude"` as permanent defaults,
+  // their def UIDs flow into `excludeTagDefUIDs` → `getDirectoryPageFiltered`, so
+  // `rawItems` already excludes them. Toggling `system` off in the Tag Filters
+  // drawer drops it from `excludeTagDefUIDs` → the next fetch (cursor reset via
+  // the hook's depsKey) returns the README again. No client-side exclude pass is
+  // needed; downstream (sortedItems, fileItems, the grid, empty-state,
   // pagination) reads `visibleItems`.
   const visibleItems = items;
 
@@ -1731,7 +1787,7 @@ export const FileBrowser = ({
             <div className="col-span-full text-center text-gray-500">
               {tagFilteredUIDs !== null
                 ? `No items match tag filter: "${tagFilter}"`
-                : tagExcludedUIDs.size > 0
+                : excludeTagDefUIDs.length > 0
                   ? "All items hidden by active exclusion filter"
                   : "Topic is empty"}
             </div>

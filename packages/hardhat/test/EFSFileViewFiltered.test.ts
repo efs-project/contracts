@@ -309,8 +309,8 @@ describe("EFSFileView — getDirectoryPageFiltered (ADR-0048)", function () {
       rootUID,
       dataSchemaUID,
       [aliceAddr],
-      excludeTagDef,
-      0n, // minWeight
+      [excludeTagDef],
+      [0n], // minWeights
       "0x",
       10,
     );
@@ -335,8 +335,8 @@ describe("EFSFileView — getDirectoryPageFiltered (ADR-0048)", function () {
       rootUID,
       dataSchemaUID,
       [aliceAddr],
-      excludeTagDef,
-      0n,
+      [excludeTagDef],
+      [0n],
       "0x",
       10,
     );
@@ -359,8 +359,8 @@ describe("EFSFileView — getDirectoryPageFiltered (ADR-0048)", function () {
       rootUID,
       dataSchemaUID,
       [aliceAddr],
-      excludeTagDef,
-      10n, // minWeight
+      [excludeTagDef],
+      [10n], // minWeights
       "0x",
       10,
     );
@@ -383,8 +383,8 @@ describe("EFSFileView — getDirectoryPageFiltered (ADR-0048)", function () {
       rootUID,
       dataSchemaUID,
       [aliceAddr],
-      excludeTagDef,
-      0n,
+      [excludeTagDef],
+      [0n],
       "0x",
       10,
     );
@@ -415,8 +415,8 @@ describe("EFSFileView — getDirectoryPageFiltered (ADR-0048)", function () {
       rootUID,
       dataSchemaUID,
       [aliceAddr, bobAddr],
-      excludeTagDef,
-      0n, // minWeight
+      [excludeTagDef],
+      [0n], // minWeights
       "0x",
       10,
     );
@@ -440,8 +440,8 @@ describe("EFSFileView — getDirectoryPageFiltered (ADR-0048)", function () {
       rootUID,
       dataSchemaUID,
       [aliceAddr], // Bob omitted → his tag is out of scope
-      excludeTagDef,
-      0n,
+      [excludeTagDef],
+      [0n],
       "0x",
       10,
     );
@@ -471,8 +471,8 @@ describe("EFSFileView — getDirectoryPageFiltered (ADR-0048)", function () {
       rootUID,
       dataSchemaUID,
       [bobAddr],
-      excludeTagDef,
-      0n,
+      [excludeTagDef],
+      [0n],
       "0x",
       10,
     );
@@ -510,8 +510,8 @@ describe("EFSFileView — getDirectoryPageFiltered (ADR-0048)", function () {
         rootUID,
         dataSchemaUID,
         [aliceAddr],
-        excludeTagDef,
-        0n,
+        [excludeTagDef],
+        [0n],
         cursor,
         2,
       );
@@ -545,8 +545,8 @@ describe("EFSFileView — getDirectoryPageFiltered (ADR-0048)", function () {
         rootUID,
         dataSchemaUID,
         [aliceAddr],
-        excludeTagDef,
-        0n,
+        [excludeTagDef],
+        [0n],
         cursor,
         3,
       );
@@ -574,8 +574,8 @@ describe("EFSFileView — getDirectoryPageFiltered (ADR-0048)", function () {
       rootUID,
       dataSchemaUID,
       [aliceAddr],
-      excludeTagDef,
-      0n,
+      [excludeTagDef],
+      [0n],
       "0x",
       10,
     );
@@ -604,7 +604,7 @@ describe("EFSFileView — getDirectoryPageFiltered (ADR-0048)", function () {
     const tv = await deployTestableFileView(4);
 
     // First call: maxItems=10, budget=4 → budget hit before maxItems, source (6) not exhausted.
-    const first = await tv.getDirectoryPageFiltered(rootUID, dataSchemaUID, [aliceAddr], excludeTagDef, 0n, "0x", 10);
+    const first = await tv.getDirectoryPageFiltered(rootUID, dataSchemaUID, [aliceAddr], [excludeTagDef], [0n], "0x", 10);
     expect(first.items.length).to.equal(0);
     expect(first.nextCursor).to.not.equal("0x"); // non-empty cursor: budget hit, not exhausted
 
@@ -626,8 +626,8 @@ describe("EFSFileView — getDirectoryPageFiltered (ADR-0048)", function () {
         rootUID,
         dataSchemaUID,
         [aliceAddr],
-        excludeTagDef,
-        0n,
+        [excludeTagDef],
+        [0n],
         cursor,
         10,
       );
@@ -654,7 +654,7 @@ describe("EFSFileView — getDirectoryPageFiltered (ADR-0048)", function () {
       await createTag(it.dataUID, excludeTagDef, alice, 1n);
     }
     const tv = await deployTestableFileView(4);
-    const page = await tv.getDirectoryPageFiltered(rootUID, dataSchemaUID, [aliceAddr], excludeTagDef, 0n, "0x", 10);
+    const page = await tv.getDirectoryPageFiltered(rootUID, dataSchemaUID, [aliceAddr], [excludeTagDef], [0n], "0x", 10);
     expect(page.items.length).to.equal(0);
     expect(page.nextCursor).to.not.equal("0x");
   });
@@ -687,7 +687,7 @@ describe("EFSFileView — getDirectoryPageFiltered (ADR-0048)", function () {
     const dec = (cur: string) => enc.decode(["uint256", "uint256", "uint256"], cur) as unknown as bigint[];
 
     // First call: budget=4 folders inspected, all excluded → 0 items, cursor still in phase 0.
-    const first = await tv.getDirectoryPageFiltered(rootUID, dataSchemaUID, [aliceAddr], excludeTagDef, 0n, "0x", 10);
+    const first = await tv.getDirectoryPageFiltered(rootUID, dataSchemaUID, [aliceAddr], [excludeTagDef], [0n], "0x", 10);
     expect(first.items.length).to.equal(0);
     expect(first.nextCursor).to.not.equal("0x");
     const [phase0] = dec(first.nextCursor);
@@ -705,8 +705,8 @@ describe("EFSFileView — getDirectoryPageFiltered (ADR-0048)", function () {
         rootUID,
         dataSchemaUID,
         [aliceAddr],
-        excludeTagDef,
-        0n,
+        [excludeTagDef],
+        [0n],
         cursor,
         10,
       );
@@ -736,8 +736,8 @@ describe("EFSFileView — getDirectoryPageFiltered (ADR-0048)", function () {
       rootUID,
       dataSchemaUID,
       [aliceAddr],
-      excludeTagDef,
-      0n,
+      [excludeTagDef],
+      [0n],
       "0x",
       10,
     );
@@ -748,7 +748,7 @@ describe("EFSFileView — getDirectoryPageFiltered (ADR-0048)", function () {
 
     // Revoke the TAG → the item must REAPPEAR.
     await revokeTag(tagUID, alice);
-    page = await fileView.getDirectoryPageFiltered(rootUID, dataSchemaUID, [aliceAddr], excludeTagDef, 0n, "0x", 10);
+    page = await fileView.getDirectoryPageFiltered(rootUID, dataSchemaUID, [aliceAddr], [excludeTagDef], [0n], "0x", 10);
     expect(names(page.items)).to.deep.equal(["doc.txt"]);
 
     // And the kernel reader reflects the revoke: (false, 0).
@@ -792,23 +792,23 @@ describe("EFSFileView — getDirectoryPageFiltered (ADR-0048)", function () {
     expect(b.weight).to.equal(9n); // and at its correct weight (index integrity held)
   });
 
-  // ─────────────────────────── degenerate excludeTagDef ───────────────────────────
+  // ─────────────────────────── degenerate / empty exclude set ───────────────────────────
 
-  it("excludeTagDef == 0 degenerates to 'exclude nothing': filtered page == unfiltered page", async function () {
+  it("Empty exclude arrays degenerate to 'exclude nothing': filtered page == unfiltered page", async function () {
     const aliceAddr = await alice.getAddress();
     const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32, alice);
 
     const item = await createFileItem("only.txt", rootUID, alice);
-    // Even a tag under the zero definition must not be matched as an exclusion when the caller
-    // passes excludeTagDef == 0 — the filtered result must equal the unfiltered listing.
+    // A tagged item that WOULD be excluded under a non-empty policy must survive when the caller
+    // passes empty exclude arrays — the filtered result must equal the unfiltered listing.
     await createTag(item.dataUID, excludeTagDef, alice, 1n);
 
     const filtered = await fileView.getDirectoryPageFiltered(
       rootUID,
       dataSchemaUID,
       [aliceAddr],
-      ZERO_BYTES32, // excludeTagDef == 0 → exclude nothing
-      0n,
+      [], // excludeTagDefs empty → exclude nothing
+      [], // minWeights empty (lengths match)
       "0x",
       10,
     );
@@ -821,5 +821,94 @@ describe("EFSFileView — getDirectoryPageFiltered (ADR-0048)", function () {
     );
     expect(names(filtered.items)).to.deep.equal(names(unfiltered.items));
     expect(names(filtered.items)).to.deep.equal(["only.txt"]);
+  });
+
+  // ─────────────────────────── multi-tag exclusion (ADR-0048) ───────────────────────────
+
+  describe("multi-tag exclusion (parallel arrays)", function () {
+    // A second exclude-tag definition, distinct from `excludeTagDef` (e.g. `system` + `nsfw`).
+    let excludeTagDef2: string;
+
+    beforeEach(async function () {
+      // Registered after every other schema/contract in the outer beforeEach, so it cannot shift
+      // any CREATE nonce (mirrors how `excludeTagDef` itself is registered).
+      const tx = await registry.register("string excludeLabel2", ZeroAddress, false);
+      excludeTagDef2 = (await tx.wait())!.logs[0].topics[1];
+    });
+
+    it("Two exclude tags: first-tagged excluded, second-tagged excluded, neither survives, both excluded once", async function () {
+      // The headline multi-tag case the explorer needs (system + nsfw in ONE call). Exercises the
+      // union across exclude pairs; would FAIL against the single-tag form (only one tag honored).
+      const aliceAddr = await alice.getAddress();
+      const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32, alice);
+
+      const onlyFirst = await createFileItem("first.txt", rootUID, alice);
+      const onlySecond = await createFileItem("second.txt", rootUID, alice);
+      const both = await createFileItem("both.txt", rootUID, alice);
+      await createFileItem("neither.txt", rootUID, alice);
+
+      await createTag(onlyFirst.dataUID, excludeTagDef, alice, 1n); // tag1 only
+      await createTag(onlySecond.dataUID, excludeTagDef2, alice, 1n); // tag2 only
+      await createTag(both.dataUID, excludeTagDef, alice, 1n); // tag1 AND
+      await createTag(both.dataUID, excludeTagDef2, alice, 1n); // tag2 (double-tagged)
+
+      const page = await fileView.getDirectoryPageFiltered(
+        rootUID,
+        dataSchemaUID,
+        [aliceAddr],
+        [excludeTagDef, excludeTagDef2],
+        [0n, 0n],
+        "0x",
+        10,
+      );
+      // first.txt (tag1), second.txt (tag2), both.txt (tag1+tag2) all excluded; only neither.txt
+      // survives. both.txt being double-tagged must not corrupt the walk (excluded once, cleanly).
+      expect(names(page.items)).to.deep.equal(["neither.txt"]);
+    });
+
+    it("Per-tag thresholds minWeights=[0,5]: tag1@weight0 excluded; tag2@weight4 kept, @weight5 excluded", async function () {
+      // Each pair carries its OWN threshold. Proves the loop reads minWeights[k], not a single
+      // shared threshold — fails against the single-tag form (one minWeight for all).
+      const aliceAddr = await alice.getAddress();
+      const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32, alice);
+
+      const t1 = await createFileItem("t1.txt", rootUID, alice); // tag1, weight 0 → excluded (>=0)
+      const t2low = await createFileItem("t2low.txt", rootUID, alice); // tag2, weight 4 → kept (<5)
+      const t2hi = await createFileItem("t2hi.txt", rootUID, alice); // tag2, weight 5 → excluded (>=5)
+
+      await createTag(t1.dataUID, excludeTagDef, alice, 0n);
+      await createTag(t2low.dataUID, excludeTagDef2, alice, 4n);
+      await createTag(t2hi.dataUID, excludeTagDef2, alice, 5n);
+
+      const page = await fileView.getDirectoryPageFiltered(
+        rootUID,
+        dataSchemaUID,
+        [aliceAddr],
+        [excludeTagDef, excludeTagDef2],
+        [0n, 5n], // tag1 threshold 0, tag2 threshold 5
+        "0x",
+        10,
+      );
+      // t1 excluded (0 >= 0), t2low kept (4 < 5), t2hi excluded (5 >= 5).
+      expect(names(page.items)).to.deep.equal(["t2low.txt"]);
+    });
+
+    it("Reverts on parallel-array length mismatch (excludeTagDefs.length != minWeights.length)", async function () {
+      const aliceAddr = await alice.getAddress();
+      const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32, alice);
+      await createFileItem("a.txt", rootUID, alice);
+
+      await expect(
+        fileView.getDirectoryPageFiltered(
+          rootUID,
+          dataSchemaUID,
+          [aliceAddr],
+          [excludeTagDef, excludeTagDef2], // length 2
+          [0n], // length 1 → mismatch
+          "0x",
+          10,
+        ),
+      ).to.be.revertedWith("excludeTagDefs/minWeights length mismatch");
+    });
   });
 });

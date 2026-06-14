@@ -463,14 +463,14 @@ const deployedContracts = {
               type: "address[]",
             },
             {
-              internalType: "bytes32",
-              name: "excludeTagDef",
-              type: "bytes32",
+              internalType: "bytes32[]",
+              name: "excludeTagDefs",
+              type: "bytes32[]",
             },
             {
-              internalType: "int256",
-              name: "minWeight",
-              type: "int256",
+              internalType: "int256[]",
+              name: "minWeights",
+              type: "int256[]",
             },
             {
               internalType: "bytes",
