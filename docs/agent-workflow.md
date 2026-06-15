@@ -91,7 +91,30 @@ Vendor emails: `noreply@anthropic.com`, `noreply@openai.com`, `noreply@google.co
 
 ### PR comments and reviews — use GitHub's native Review feature
 
-For review passes, use `gh pr review` (creates a real Review object, participates in the request-changes flow), not `gh pr comment` (inline discussion only).
+For review passes, use GitHub's native Review feature, not loose PR comments.
+Native Reviews create review objects and inline review threads with Resolve
+buttons; `gh pr comment` is only timeline discussion and should not be used for
+review findings.
+
+EFS agents normally authenticate as James's GitHub account. GitHub will not let
+that same account approve or request changes on its own PRs, so same-account
+agent reviews are advisory GitHub state. Use a native `COMMENT` review with
+inline file comments, and write the blocking disposition in the review body:
+
+```text
+Same-account advisory review: BLOCKING
+```
+
+or:
+
+```text
+Same-account advisory review: NO BLOCKING FINDINGS
+```
+
+`BLOCKING` means at least one unresolved P0/P1/P2 finding remains. Project
+policy treats those findings as blocking until fixed, accepted as pushback,
+explicitly deferred with a durable follow-up, or overridden by James. GitHub will
+not enforce this state while all agents share James's account.
 
 Before posting review feedback, read:
 1. The PR description, including the `Agents involved` field.
@@ -102,9 +125,14 @@ Do **not** leave placeholder comments, probe comments, "testing inline anchor"
 comments, or praise-only shared-account reviews. If you're checking whether an
 anchor works, do it locally and post only the final finding.
 
-- General review: `gh pr review <N> --comment --body "..."`
-- Approve: `gh pr review <N> --approve --body "..."`
-- Request changes: `gh pr review <N> --request-changes --body "..."`
+- Same-account agent review: `gh pr review <N> --comment --body "..."`
+- Same-account inline findings: use native Review file comments through the
+  GitHub UI, connector/API, or another tool that can create inline comments as a
+  `COMMENT` review. If your tooling cannot do this cleanly, return one
+  paste-ready structured review to the coordinating agent or human.
+- Do not use `--approve` or `--request-changes` from James's account. Those
+  states are either rejected by GitHub on self-authored PRs or misleading as
+  separation-of-duties signals.
 
 When fixing issues raised in review, resolve the conversation thread natively:
 
@@ -119,6 +147,30 @@ back to spraying top-level PR comments. Instead, return one paste-ready review
 comment with file/line findings to the human or coordinating agent and let them
 post it through the proper path.
 
+### Review intake — enumerate before responding (don't trust notifications or formatting)
+
+Agents share one GitHub account and some post malformed inline comments (wrong
+speaker prefix, non-native review, or findings only in a review body). Automated
+notifications and comment formatting are therefore **unreliable** — findings have
+been missed this way. Before responding to review and again before declaring it
+addressed, **enumerate every feedback source** rather than reacting to whatever
+got surfaced:
+
+```bash
+yarn pr:intake <PR>
+```
+
+This lists every review **thread** (each inline comment becomes a thread with
+`isResolved`, no matter how it was posted), every review **body** (body-only
+findings aren't thread-tracked), and every **timeline** comment — then flags each
+unresolved thread `NEEDS REPLY` when its last comment is not a `[<model> · dev]`
+reply. A thread whose last comment is *not* a `· dev` reply has an unaddressed
+reviewer comment — a fresh finding, or a follow-up after a prior dev reply — i.e.
+the exact miss this guards against. The command exits non-zero while
+any thread still needs a dev reply, so it doubles as a pre-"done" gate: review is
+addressed only when `pr:intake` reports `0 ... need a dev reply` **and** you've
+read every review body it prints. (Manual on purpose — no CI comment-parsing.)
+
 ### Review-thread response loop
 
 When the dev agent is addressing review comments, every unresolved thread must be classified into one of three buckets:
@@ -131,7 +183,30 @@ Do not silently ignore comments that are out of diff scope, inconvenient, or not
 
 When posting agent-authored follow-up replies, prefer the native GitHub review thread. On Codex/GitHub-connector flows, `_list_pull_request_review_threads` + `_reply_to_review_comment` + `_resolve_review_thread` is the cleanest path; on CLI-only flows, use `gh api graphql` as above.
 
-**Agent reviews are advisory, not governance.** When an agent posts `gh pr review --approve` from the human's GitHub account, that's discussion structure, not real sign-off — the human literally holds the only account that can approve, so self-approval isn't separation of duties. Merge decisions require an explicit acknowledgement from the human (in chat, or as a direct PR comment without a `[model · role]` prefix). Treat an agent's `--approve` as *"I'm satisfied; waiting on human to land."*
+### Review severities
+
+Use severities consistently in agent review comments:
+
+- **P0 — Stop. Do not merge.** Data loss, security break, Etched/permanent
+  invariant break, or a branch state that makes review invalid. Needs a fix or
+  explicit James override.
+- **P1 — Merge-blocking.** Runtime correctness bug, violated spec/ADR contract,
+  broken tests, or serious regression introduced by the PR. Needs a fix or
+  explicit James override.
+- **P2 — Must be resolved before merge.** Usually fixed in the PR, but may be
+  resolved by accepted technical pushback or explicit defer with a durable
+  follow-up.
+- **P3 — Non-blocking.** Cleanup, small clarity issue, optional test gap, or
+  future hardening. Put P3s in the review body unless an inline thread is
+  genuinely useful.
+
+**Agent reviews are advisory, not governance.** Because agents share James's
+GitHub account, they cannot provide separation-of-duties approval or enforced
+request-changes status. Merge decisions require explicit acknowledgement from
+James (in chat, or as a direct PR comment without a `[model · role]` prefix).
+If EFS later needs GitHub-enforced approvals/request-changes or branch-protection
+checks, that requires a separate bot/GitHub App identity. Do not build custom CI
+that parses review comments unless repeated process failures justify it.
 
 ### Speaker prefix on agent-authored comments
 

@@ -175,16 +175,7 @@ export function useSortedData({
     // hasMore is read inside the guard above, but we intentionally exclude it from deps
     // so setting hasMore=false doesn't cause a re-run.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    sortInfoUID,
-    parentAnchor,
-    sortOverlayAddress,
-    publicClient,
-    lensAddresses,
-    showRevoked,
-    pageSize,
-    loadTrigger,
-  ]);
+  }, [sortInfoUID, parentAnchor, sortOverlayAddress, publicClient, lensAddresses, showRevoked, pageSize, loadTrigger]);
 
   return { sortedUIDs, isLoading, hasMore, loadMore, reset };
 }

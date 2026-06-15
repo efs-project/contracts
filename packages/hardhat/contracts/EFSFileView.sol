@@ -41,6 +41,17 @@ interface IEdgeResolverForFileView {
     ///         in `getFilesAtPath` (ADR-0041): file placement is PIN-only (Shape A); a TAG from
     ///         an earlier attester must NOT suppress a later attester's valid PIN placement.
     function isActivePinEdge(address attester, bytes32 targetID, bytes32 definition) external view returns (bool);
+
+    /// @notice O(1) read of the raw stored weight of the active TAG `(definition, attester,
+    ///         targetSchema)` whose target is `target`, or `(false, 0)` if none. Kernel
+    ///         weight-neutral — returns the raw weight; the caller applies any threshold
+    ///         policy (ADR-0048). Used by `getDirectoryPageFiltered` for tag-exclusion.
+    function getActiveTagWeight(
+        address attester,
+        bytes32 target,
+        bytes32 definition,
+        bytes32 targetSchema
+    ) external view returns (bool exists, int256 weight);
 }
 
 interface IEFSIndexer {
@@ -112,6 +123,16 @@ contract EFSFileView {
         uint64 timestamp;
     }
 
+    /// @notice Parallel-array tag-exclusion policy for `getDirectoryPageFiltered` (ADR-0048).
+    /// @dev    Bundles the `(excludeTagDefs[k], minWeights[k])` pairs into one memory value so the
+    ///         exclusion policy travels as a single stack slot through the phase walkers and into
+    ///         `_isItemExcluded` (keeps `viaIR` under the EVM stack limit). `defs.length` must equal
+    ///         `minWeights.length`; an empty policy means "exclude nothing".
+    struct ExcludeFilter {
+        bytes32[] defs;
+        int256[] minWeights;
+    }
+
     /// @notice Opaque-cursor page result for multi-source views. See ADR-0036.
     /// @dev    Callers treat `nextCursor` as opaque bytes: pass it back verbatim for the next
     ///         page, or treat `nextCursor.length == 0` as "fully walked, no more pages."
@@ -174,6 +195,14 @@ contract EFSFileView {
     ///      Callers wanting more than this many lenses need a different aggregation model.
     uint256 private constant MAX_ATTESTERS_PER_QUERY = 20;
 
+    /// @dev Maximum exclude-tag predicates per `getDirectoryPageFiltered` call (ADR-0048).
+    ///      The per-item exclusion check loops over `excludeTagDefs`, so the per-item file branch
+    ///      is O(dataUIDs × lenses × excludeTags); this cap keeps that product bounded alongside
+    ///      `MAX_ATTESTERS_PER_QUERY`. 8 comfortably covers the explorer's `system` + `nsfw` policy
+    ///      (and headroom for future label policies) without letting a caller blow the per-item gas
+    ///      budget. Symmetric in spirit to `MAX_ATTESTERS_PER_QUERY`.
+    uint256 private constant MAX_EXCLUDE_TAGS_PER_QUERY = 8;
+
     /// @dev Internal batch size for `_childrenWithEdge` chunk fetches during the folder
     ///      phase of `getDirectoryPageBySchemaAndAddressList`. Chosen to keep memory use
     ///      bounded while still amortizing external-call overhead.
@@ -187,7 +216,40 @@ contract EFSFileView {
     ///      bounds per-call work; the opaque cursor continues progress across calls
     ///      (same pattern as ADR-0020's `MAX_PAGES = 10` mirror-scan cap in
     ///      `EFSRouter._getBestMirrorURI`).
+    ///
+    ///      Read through `_folderScanBudgetPerCall()` (not the bare constant) so a
+    ///      test-only subclass can override it to a small value and exercise the budget
+    ///      guard without seeding thousands of items. Production default is unchanged.
     uint256 private constant _FOLDER_SCAN_BUDGET_PER_CALL = 2048;
+
+    /// @dev Hard cap on phase-1 entries inspected per call in `getDirectoryPageFiltered`.
+    ///      Symmetric to `_FOLDER_SCAN_BUDGET_PER_CALL` (phase 0). The plain
+    ///      `getDirectoryPageBySchemaAndAddressList` does not need a phase-1 budget because every
+    ///      phase-1 candidate the indexer returns becomes a result item (no per-item drop), so its
+    ///      inner loop is naturally bounded by `maxItems`. The filtered variant can DROP phase-1
+    ///      items (the exclusion predicate), so a page that is 100%-excluded under the lens would
+    ///      otherwise loop the entire phase-1 source in one eth_call. This budget bounds per-call
+    ///      work; the opaque cursor (ADR-0036) continues progress across calls — same pattern as
+    ///      the phase-0 budget and ADR-0020's mirror-scan cap.
+    ///
+    ///      Read through `_fileScanBudgetPerCall()` (not the bare constant) so a test-only
+    ///      subclass can override it to a small value and exercise the budget guard without
+    ///      seeding thousands of items. Production default is unchanged.
+    uint256 private constant _FILE_SCAN_BUDGET_PER_CALL = 2048;
+
+    /// @dev Per-call phase-0 (folder) scan budget. `internal view virtual` so a test-only
+    ///      subclass can override it to a small value to exercise the budget guard
+    ///      (ADR-0048's headline safety mechanism). Returns the production constant by default.
+    function _folderScanBudgetPerCall() internal view virtual returns (uint256) {
+        return _FOLDER_SCAN_BUDGET_PER_CALL;
+    }
+
+    /// @dev Per-call phase-1 (file) scan budget. `internal view virtual` so a test-only
+    ///      subclass can override it to a small value to exercise the budget guard
+    ///      (ADR-0048's headline safety mechanism). Returns the production constant by default.
+    function _fileScanBudgetPerCall() internal view virtual returns (uint256) {
+        return _FILE_SCAN_BUDGET_PER_CALL;
+    }
 
     /**
      * @notice Schema-aware directory listing with folder inclusion. Opaque-cursor paginated
@@ -264,11 +326,12 @@ contract EFSFileView {
 
         // ───── Phase 0: qualifying tagged folders ─────
         if (phase == 0) {
+            uint256 folderBudget = _folderScanBudgetPerCall();
             uint256 taggedTotal = edgeResolver.getChildrenWithEdgeCount(parentAnchor, anchorSchema);
             uint256 scanned = 0; // entries inspected this call — bounded by budget
-            while (count < maxItems && folderIdx < taggedTotal && scanned < _FOLDER_SCAN_BUDGET_PER_CALL) {
+            while (count < maxItems && folderIdx < taggedTotal && scanned < folderBudget) {
                 uint256 remainingSource = taggedTotal - folderIdx;
-                uint256 remainingBudget = _FOLDER_SCAN_BUDGET_PER_CALL - scanned;
+                uint256 remainingBudget = folderBudget - scanned;
                 uint256 chunk = remainingSource < _FOLDER_SCAN_CHUNK ? remainingSource : _FOLDER_SCAN_CHUNK;
                 if (chunk > remainingBudget) chunk = remainingBudget;
                 bytes32[] memory batch = edgeResolver.getChildrenWithEdge(parentAnchor, anchorSchema, folderIdx, chunk);
@@ -333,6 +396,343 @@ contract EFSFileView {
         } else {
             page.nextCursor = abi.encode(phase, folderIdx, fileIdx);
         }
+    }
+
+    /**
+     * @notice Tag-exclusion-filtered directory listing (ADR-0048). Identical walk, sources,
+     *         budgets, and opaque cursor format (ADR-0036) to
+     *         `getDirectoryPageBySchemaAndAddressList`, PLUS a per-item exclusion predicate over
+     *         a set of `(excludeTagDefs[k], minWeights[k])` pairs (parallel arrays, ADR-0048):
+     *
+     *           **Skip an item if, for ANY pair k, ANY attester in `attesters` has an active TAG
+     *           `excludeTagDefs[k]` on it with `weight >= minWeights[k]`.**
+     *
+     *         The exclusion is a UNION across the exclude-tag pairs AND across the viewed lenses —
+     *         each pair applies the exact single-tag semantic the v1 form did (the multi-tag form
+     *         supersedes the single-tag v1 so the explorer can hide e.g. `system` + `nsfw` in one
+     *         call). The comparison is inclusive (`>=`) and lives in the view layer; each
+     *         `minWeights[k]` is a caller argument (ADR-0042's `weight >= 0` is just the
+     *         conventional `minWeight = 0` a caller passes, not a baked-in rule). The kernel stays
+     *         weight-neutral. Empty arrays ⇒ no exclusion (degenerates to the unfiltered page).
+     *
+     *         **Tag-target asymmetry (load-bearing, ADR-0048).** A descriptive-label TAG targets
+     *         different UIDs for folders vs files, and the predicate is a UNION over the viewed
+     *         lenses (mirroring the client's `FileBrowser.resolveTagSet`): an item is excluded iff
+     *         ANY viewed lens has an active `excludeTagDef` TAG (weight >= minWeight) on ANY DATA
+     *         UID resolved at the item across the viewed lenses (files), or on the item's anchor
+     *         UID (folders):
+     *           - **folder** item (anchorType == bytes32(0)): the TAG targets the item's ANCHOR
+     *             UID, bucket `ANCHOR_SCHEMA_UID`. Tested against every lens.
+     *           - **file** item: the TAG targets a DATA UID, reached via the placement PIN
+     *             `getActivePinTarget(itemAnchor, lens, dataSchemaUID)`, bucket `dataSchemaUID`.
+     *             The DATA UIDs of ALL viewed lenses are collected (deduplicated) ONCE per item,
+     *             then each is tested against EVERY lens's tags for EVERY exclude pair — so a DATA
+     *             one lens pinned and ANOTHER viewed lens tagged is still excluded. Testing an
+     *             exclude tag against a file's anchor UID is the wrong target and excludes
+     *             nothing — the known footgun.
+     *
+     *         `maxItems` counts POST-filter result slots: an excluded item advances the walker
+     *         but consumes no slot (same as a revoked / out-of-lens skip). A phase-1 scan budget
+     *         (`_FILE_SCAN_BUDGET_PER_CALL`) is added so a 100%-excluded page can't loop the whole
+     *         phase-1 source in one call — when the budget is hit before `maxItems` is filled, a
+     *         non-empty cursor is returned at the current position.
+     *
+     *         **Scan-budget scope.** The per-call budget bounds *this view's* phase-1 loop (the
+     *         number of candidates inspected here), NOT the work inside a single underlying
+     *         `indexer.getAnchorsBySchemaAndAddressList` call. That indexer call can itself scan up
+     *         to `total` raw positions internally to fill one page when the array is dense with
+     *         revoked / non-lens entries — shared behavior with the sibling
+     *         `getDirectoryPageBySchemaAndAddressList`, which relies on the same indexer call.
+     *
+     * @param parentAnchor  Directory Anchor UID.
+     * @param anchorSchema  Schema to filter on (same role as the sibling function).
+     * @param attesters     Lens addresses (ADR-0031). Must be non-empty.
+     * @param excludeTagDefs TAG predicates whose presence (with `weight >= minWeights[k]`) excludes.
+     *                      Parallel to `minWeights`. Empty ⇒ no exclusion (unfiltered page).
+     * @param minWeights    Inclusive weight thresholds, one per `excludeTagDefs[k]`. Caller-chosen
+     *                      policy; `minWeights.length` must equal `excludeTagDefs.length`.
+     * @param cursor        Opaque token from a prior call (ADR-0036); empty = fresh start.
+     * @param maxItems      Target POST-filter result size. Must be > 0.
+     * @return page         `items` (excluded items omitted) + `nextCursor`. `nextCursor.length == 0`
+     *                      iff both phases are fully walked.
+     */
+    function getDirectoryPageFiltered(
+        bytes32 parentAnchor,
+        bytes32 anchorSchema,
+        address[] memory attesters,
+        bytes32[] memory excludeTagDefs,
+        int256[] memory minWeights,
+        bytes memory cursor,
+        uint256 maxItems
+    ) external view returns (DirectoryPage memory page) {
+        require(attesters.length > 0, "Attesters list cannot be empty");
+        require(attesters.length <= MAX_ATTESTERS_PER_QUERY, "Too many attesters");
+        require(excludeTagDefs.length == minWeights.length, "excludeTagDefs/minWeights length mismatch");
+        require(excludeTagDefs.length <= MAX_EXCLUDE_TAGS_PER_QUERY, "Too many exclude tags");
+        require(maxItems > 0, "maxItems must be > 0");
+
+        // Decode cursor — same defensive contract as getDirectoryPageBySchemaAndAddressList:
+        // wrong length OR out-of-range phase = fresh walk at (phase=0, folderIdx=0, fileIdx=0).
+        uint8 phase = 0;
+        uint256 folderIdx = 0;
+        uint256 fileIdx = 0;
+        if (cursor.length == 96) {
+            (uint256 pRaw, uint256 fRaw, uint256 fiRaw) = abi.decode(cursor, (uint256, uint256, uint256));
+            if (pRaw <= 1) {
+                phase = uint8(pRaw);
+                folderIdx = fRaw;
+                fileIdx = fiRaw;
+            }
+        }
+
+        // Bundle the per-call inputs + mutable walker state into one memory struct. Passing the
+        // walk state by reference into the per-phase helpers keeps each phase's inner locals out
+        // of this function's frame, holding `viaIR` under the EVM stack limit (the phases are
+        // otherwise byte-identical to `getDirectoryPageBySchemaAndAddressList`). `_walkPhase0`
+        // and `_walkPhase1` mutate `w` in place.
+        _FilteredWalk memory w = _FilteredWalk({
+            parentAnchor: parentAnchor,
+            anchorSchema: anchorSchema,
+            attesters: attesters,
+            filter: ExcludeFilter({ defs: excludeTagDefs, minWeights: minWeights }),
+            dataSchemaUID: indexer.DATA_SCHEMA_UID(),
+            anchorSchemaUID: indexer.ANCHOR_SCHEMA_UID(),
+            maxItems: maxItems,
+            phase: phase,
+            folderIdx: folderIdx,
+            fileIdx: fileIdx,
+            buf: new bytes32[](maxItems),
+            count: 0,
+            fileSourceDone: false
+        });
+
+        // ───── Phase 0: qualifying tagged folders ─────
+        if (w.phase == 0) _walkPhase0(w);
+
+        // ───── Phase 1: direct children by schema ─────
+        if (w.phase == 1) _walkPhase1(w);
+
+        // Trim buffer to actual count
+        bytes32[] memory buf = w.buf;
+        uint256 finalCount = w.count;
+        assembly ("memory-safe") {
+            mstore(buf, finalCount)
+        }
+        page.items = _buildFileSystemItems(buf, parentAnchor, w.dataSchemaUID, indexer.PROPERTY_SCHEMA_UID());
+
+        // Emit cursor: empty iff phase 1 fully exhausted, else encoded state.
+        if (w.phase == 1 && w.fileSourceDone) {
+            page.nextCursor = "";
+        } else {
+            page.nextCursor = abi.encode(w.phase, w.folderIdx, w.fileIdx);
+        }
+    }
+
+    /// @dev Per-call inputs + mutable walker state for `getDirectoryPageFiltered`, threaded through
+    ///      the per-phase helpers by reference. Splitting the phases into helpers (each taking only
+    ///      this struct) keeps their inner-loop locals out of the entry function's stack frame so
+    ///      `viaIR` stays under the EVM stack limit; the walk semantics are unchanged.
+    struct _FilteredWalk {
+        // inputs (read-only within the helpers)
+        bytes32 parentAnchor;
+        bytes32 anchorSchema;
+        address[] attesters;
+        ExcludeFilter filter;
+        bytes32 dataSchemaUID;
+        bytes32 anchorSchemaUID;
+        uint256 maxItems;
+        // walker state (mutated in place)
+        uint8 phase;
+        uint256 folderIdx;
+        uint256 fileIdx;
+        bytes32[] buf;
+        uint256 count;
+        bool fileSourceDone;
+    }
+
+    /// @dev Phase 0 of `getDirectoryPageFiltered`: qualifying tagged folders. Mutates `w` (advances
+    ///      `folderIdx`/`count`, may set `phase = 1` when the folder source is exhausted). Logic is
+    ///      identical to the sibling `getDirectoryPageBySchemaAndAddressList` phase 0 plus the
+    ///      per-item exclusion predicate.
+    function _walkPhase0(_FilteredWalk memory w) internal view {
+        uint256 folderBudget = _folderScanBudgetPerCall();
+        uint256 taggedTotal = edgeResolver.getChildrenWithEdgeCount(w.parentAnchor, w.anchorSchema);
+        uint256 scanned = 0; // entries inspected this call — bounded by budget
+        while (w.count < w.maxItems && w.folderIdx < taggedTotal && scanned < folderBudget) {
+            uint256 remainingSource = taggedTotal - w.folderIdx;
+            uint256 remainingBudget = folderBudget - scanned;
+            uint256 chunk = remainingSource < _FOLDER_SCAN_CHUNK ? remainingSource : _FOLDER_SCAN_CHUNK;
+            if (chunk > remainingBudget) chunk = remainingBudget;
+            bytes32[] memory batch = edgeResolver.getChildrenWithEdge(w.parentAnchor, w.anchorSchema, w.folderIdx, chunk);
+            for (uint256 k = 0; k < batch.length; k++) {
+                w.folderIdx++; // advance walker for every inspected entry
+                scanned++;
+                bytes32 uid = batch[k];
+                if (indexer.isRevoked(uid)) continue;
+                if (!edgeResolver.hasActiveTagFromAny(uid, w.anchorSchema, w.attesters)) continue;
+                // Exclusion predicate (post-filter slot accounting): excluded items advance
+                // the walker but consume no slot, identical to a revoked/out-of-lens skip.
+                if (_isItemExcluded(uid, w.attesters, w.filter, w.dataSchemaUID, w.anchorSchemaUID)) continue;
+                w.buf[w.count++] = uid;
+                if (w.count == w.maxItems) break;
+            }
+            if (batch.length < chunk) break; // defensive: resolver returned short batch
+        }
+        if (w.folderIdx >= taggedTotal) {
+            w.phase = 1;
+        }
+    }
+
+    /// @dev Phase 1 of `getDirectoryPageFiltered`: direct children by schema. Mutates `w` (advances
+    ///      `fileIdx`/`count`, sets `fileSourceDone` when the file source is exhausted). Logic is
+    ///      identical to the sibling `getDirectoryPageBySchemaAndAddressList` phase 1 plus the
+    ///      per-item exclusion predicate and the phase-1 scan budget.
+    function _walkPhase1(_FilteredWalk memory w) internal view {
+        uint256 fileBudget = _fileScanBudgetPerCall();
+        uint256 scanned = 0; // phase-1 entries inspected this call — bounded by budget
+        while (w.count < w.maxItems && scanned < fileBudget) {
+            uint256 remainingBudget = fileBudget - scanned;
+            uint256 want = w.maxItems - w.count;
+            // Fetch at most `remainingBudget` candidates so the per-call inspection count
+            // can't exceed the budget regardless of how many get excluded below.
+            if (want > remainingBudget) want = remainingBudget;
+            (bytes32[] memory batch, uint256 nextFileCur) = indexer.getAnchorsBySchemaAndAddressList(
+                w.parentAnchor,
+                w.anchorSchema,
+                w.attesters,
+                w.fileIdx,
+                want,
+                true, // reverseOrder (newest first)
+                false // showRevoked
+            );
+            for (uint256 k = 0; k < batch.length; k++) {
+                scanned++;
+                bytes32 uid = batch[k];
+                if (_isItemExcluded(uid, w.attesters, w.filter, w.dataSchemaUID, w.anchorSchemaUID)) continue;
+                w.buf[w.count++] = uid;
+                if (w.count == w.maxItems) break;
+            }
+            w.fileIdx = nextFileCur;
+            if (nextFileCur == 0) {
+                w.fileSourceDone = true;
+                break;
+            }
+            if (batch.length == 0) {
+                // defensive: indexer returned no items but nonzero cursor — avoid infinite loop
+                break;
+            }
+        }
+    }
+
+    /// @dev Per-item tag-exclusion predicate for `getDirectoryPageFiltered`. Decodes the item's
+    ///      anchor once to determine folder-vs-file (anchorType == bytes32(0) ⇒ folder, the same
+    ///      rule `_buildFileSystemItems` uses) and resolves the correct tag target(s) per the
+    ///      ADR-0048 asymmetry. The exclusion is a UNION across the exclude-tag pairs
+    ///      (`excludeTagDefs[k]`, `minWeights[k]`) AND over the viewed lenses on both the
+    ///      target-resolution side and the tag-attester side — each pair applies the EXACT
+    ///      single-tag semantic, matching the client's `FileBrowser.resolveTagSet` (union of
+    ///      viewed attesters' tags) × `matchesUID` (item's resolved DATA UIDs) model:
+    ///        - folder ⇒ for each pair k, test `excludeTagDefs[k]` on the ANCHOR UID, bucket
+    ///                   ANCHOR_SCHEMA_UID, against every lens (a single target, union over lens
+    ///                   tag-attesters);
+    ///        - file   ⇒ first resolve the DEDUPLICATED set of DATA UIDs that ANY lens placed at
+    ///                   this item via the placement PIN
+    ///                   (`getActivePinTarget(anchor, lens, dataSchemaUID)`, dropping zeros) ONCE,
+    ///                   then for each pair k test `excludeTagDefs[k]` on each such DATA UID
+    ///                   (bucket dataSchemaUID) against every lens. The DATA-set collection happens
+    ///                   ONCE per item (not once per exclude tag); this catches the cross-lens case
+    ///                   where one lens pins a DATA that ANOTHER viewed lens has tagged — the viewer
+    ///                   trusts the tagging lens.
+    ///      Returns true iff, for ANY pair k, ANY lens has an active `excludeTagDefs[k]` TAG on ANY
+    ///      resolved target with `weight >= minWeights[k]` (inclusive). Empty arrays ⇒ false (no
+    ///      exclusion). All per-item reads are O(1); the file branch is O(lenses) PIN reads +
+    ///      O(dataUIDs × lenses × excludeTags) tag reads, bounded by the MAX_ATTESTERS_PER_QUERY
+    ///      (<= 20) and MAX_EXCLUDE_TAGS_PER_QUERY (<= 8) caps (no storage list scans).
+    function _isItemExcluded(
+        bytes32 itemAnchorUID,
+        address[] memory attesters,
+        ExcludeFilter memory filter,
+        bytes32 dataSchemaUID,
+        bytes32 anchorSchemaUID
+    ) internal view returns (bool) {
+        // Empty exclude set ⇒ nothing to exclude. Skip the anchor decode entirely.
+        if (filter.defs.length == 0) return false;
+
+        // Decode the anchor to classify folder vs file (anchorType == 0 ⇒ generic folder).
+        Attestation memory att = eas.getAttestation(itemAnchorUID);
+        bytes32 anchorType = bytes32(0);
+        if (att.data.length > 0) {
+            (, anchorType) = abi.decode(att.data, (string, bytes32));
+        }
+
+        if (anchorType == bytes32(0)) {
+            // Folder: the descriptive-label TAG targets the ANCHOR UID, bucket ANCHOR_SCHEMA_UID.
+            // Union across exclude pairs × lenses.
+            for (uint256 t = 0; t < filter.defs.length; t++) {
+                for (uint256 i = 0; i < attesters.length; i++) {
+                    (bool exists, int256 weight) = edgeResolver.getActiveTagWeight(
+                        attesters[i],
+                        itemAnchorUID,
+                        filter.defs[t],
+                        anchorSchemaUID
+                    );
+                    if (exists && weight >= filter.minWeights[t]) return true;
+                }
+            }
+            return false;
+        }
+
+        // File: the TAG targets the DATA UID, reached via the placement PIN. The exclusion is a
+        // UNION over the viewed lenses on both sides (mirrors the client's
+        // `dataUIDMap` × `resolveTagSet` model): exclude the item if, for ANY exclude pair, ANY
+        // lens has an active TAG (weight >= that pair's minWeight) on ANY DATA UID that ANY lens
+        // placed here. A per-lens-own-DATA loop would miss the cross-lens case — e.g. Alice pins
+        // DATA_A and Bob (also a viewed lens) tags DATA_A as nsfw; the viewer trusts Bob's
+        // judgment, so the item must be excluded even though Bob never pinned DATA_A himself.
+        //
+        // Step 1: collect the deduplicated set of non-zero DATA UIDs any lens placed at this item.
+        // Done ONCE per item (NOT once per exclude tag) — bounded by attesters.length
+        // (<= MAX_ATTESTERS_PER_QUERY), so a fixed-size memory array with linear dedup is
+        // O(1)-class per read (no storage list scans).
+        //
+        // Note (ADR-0048): this branch is reached by any non-folder anchor, including LIST
+        // anchors (anchorType == LIST_SCHEMA_UID, non-zero). A LIST has no placement PIN under
+        // `dataSchemaUID`, so no lens resolves any DATA, the set below stays empty, and a LIST is
+        // never excluded — non-folder/non-file anchors pass through unfiltered. Intentional for v1
+        // (file/folder labels only); a three-way classifier that also filters LIST items is
+        // deferred to a redeployable later version of this view.
+        bytes32[] memory dataUIDs = new bytes32[](attesters.length);
+        uint256 dataCount = 0;
+        for (uint256 i = 0; i < attesters.length; i++) {
+            bytes32 dataUID = edgeResolver.getActivePinTarget(itemAnchorUID, attesters[i], dataSchemaUID);
+            if (dataUID == bytes32(0)) continue;
+            bool seen = false;
+            for (uint256 j = 0; j < dataCount; j++) {
+                if (dataUIDs[j] == dataUID) {
+                    seen = true;
+                    break;
+                }
+            }
+            if (!seen) dataUIDs[dataCount++] = dataUID;
+        }
+
+        // Step 2: exclude if, for ANY exclude pair, ANY lens has an active TAG
+        // (weight >= that pair's minWeight) on ANY of the resolved DATA UIDs. This is the
+        // cross-lens × multi-tag union the client applies.
+        for (uint256 d = 0; d < dataCount; d++) {
+            for (uint256 t = 0; t < filter.defs.length; t++) {
+                for (uint256 i = 0; i < attesters.length; i++) {
+                    (bool exists, int256 weight) = edgeResolver.getActiveTagWeight(
+                        attesters[i],
+                        dataUIDs[d],
+                        filter.defs[t],
+                        dataSchemaUID
+                    );
+                    if (exists && weight >= filter.minWeights[t]) return true;
+                }
+            }
+        }
+        return false;
     }
 
     function _buildFileSystemItems(

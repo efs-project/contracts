@@ -387,5 +387,14 @@ export function defaultLensesForContainer(args: {
   }
   (args.webOfTrust ?? []).forEach(push);
   (args.systemLenses ?? []).forEach(push);
+  // AGENT-NOTE (ADR-0048): the directory listing always runs through the
+  // lens-scoped `getDirectoryPageFiltered` — the unfiltered `getDirectoryPage`
+  // listing fallback was removed, so an empty `lensAddresses` now FAILS SAFE (the
+  // FileBrowser directory hooks disable and the grid renders empty, never
+  // unfiltered content). Today `systemLenses` always appends the devnet constants,
+  // so this is non-empty and the default view shows content. When `systemLenses`
+  // becomes user-configurable for mainnet and could be empty, the work is to give
+  // the empty-list case a FILTERED listing so the view isn't simply blank — NOT to
+  // re-introduce an unfiltered path. See the matching note in ExplorerClient.tsx.
   return out;
 }

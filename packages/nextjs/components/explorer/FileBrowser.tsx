@@ -6,12 +6,12 @@ import { ListPreviewPane } from "./ListPreviewPane";
 import { MirrorsPanel } from "./MirrorsPanel";
 import { PropertiesModal } from "./PropertiesModal";
 import { TagModal } from "./TagModal";
-import { ethers } from "ethers";
 import { createPortal } from "react-dom";
-import { zeroHash } from "viem";
+import { type Abi, zeroHash } from "viem";
 import { useAccount, usePublicClient, useReadContract } from "wagmi";
 import {
   AdjustmentsHorizontalIcon,
+  ArrowDownTrayIcon,
   ArrowsPointingOutIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
@@ -30,8 +30,11 @@ import { useDeployedContractInfo, useScaffoldReadContract, useScaffoldWriteContr
 import { useBackgroundOps } from "~~/services/store/backgroundOps";
 import { EDGE_RESOLVER_ABI, getEdgeResolverAddress } from "~~/utils/efs/edgeResolver";
 import { isFile, isList, isTopic } from "~~/utils/efs/efsTypes";
+import { computeExcludesPending, tagsRootGateDecision } from "~~/utils/efs/excludeFilter";
+import { fetchFileContent as fetchFileContentUtil } from "~~/utils/efs/fetchFileContent";
 import { SORT_OVERLAY_ABI } from "~~/utils/efs/sortOverlay";
-import { TRANSPORT_LABELS, detectTransport, resolveGatewayUrl } from "~~/utils/efs/transports";
+import { TRANSPORT_LABELS } from "~~/utils/efs/transports";
+import { safeDownloadName } from "~~/utils/markdown/downloadName";
 import { notification } from "~~/utils/scaffold-eth";
 
 export type DrawerTagFilterState = "neutral" | "include" | "exclude";
@@ -130,7 +133,6 @@ export const FileBrowser = ({
   anchorSchemaUID,
   currentPathNames,
   lensAddresses,
-  explicitLenses = false,
   onNavigate,
   tagFilter = "",
   drawerTagFilters = {},
@@ -138,7 +140,7 @@ export const FileBrowser = ({
   sortOverlayAddress,
   sortRefreshKey = 0,
   directoryRefreshKey = 0,
-  recreatedListAnchor,
+  excludeRefreshKey = 0,
   reverseOrder = false,
 }: {
   currentAnchorUID: string | null;
@@ -147,18 +149,6 @@ export const FileBrowser = ({
   anchorSchemaUID?: string;
   currentPathNames: string[];
   lensAddresses: string[];
-  /**
-   * True when the caller passed `?lenses=…` explicitly — including the case
-   * where every token in the list failed ENS / hex parsing and
-   * `lensAddresses` ended up empty. Distinguishes "user asked for nothing"
-   * (stay lens-scoped, render empty) from "nothing available to scope to"
-   * (wallet disconnected, no default set — fall through to unscoped). Without
-   * this flag, explicit-but-unresolved URLs like `?lenses=doesnotexist.eth`
-   * silently leak default/unfiltered content into a view the user told us to
-   * scope down. Defaults false for back-compat with callers that don't know
-   * about `lensesParam`.
-   */
-  explicitLenses?: boolean;
   onNavigate: (uid: string, name: string) => void;
   tagFilter?: string;
   drawerTagFilters?: Record<string, DrawerTagFilterState>;
@@ -170,17 +160,18 @@ export const FileBrowser = ({
    * that adds/removes items in the current directory — today: file upload and
    * folder creation, which land via `CreateItemModal` → `FileActionsBar` and
    * therefore can't call the internal `refetch*` functions directly. Delete is
-   * in-component and calls `refetchLensItems` / `refetchStandardItems`
-   * inline; this key is the parallel escape hatch for create.
+   * in-component and calls `refetchLensItems` inline; this key is the parallel
+   * escape hatch for create.
    *
    * Each bump triggers exactly one refetch of whichever query is active
    * (lens-scoped or standard). Initial mount is skipped — the hooks fetch
    * on their own when deps settle.
    */
   directoryRefreshKey?: number;
-  /** Slot anchor of a just-created list. Recreating a deleted list reuses its permanent
-   *  anchor, so this lifts any stale delete-suppression on it (see effect below). */
-  recreatedListAnchor?: string;
+  /** Bumped by an Overview save to re-resolve exclude tag defs (the save may create
+   *  /tags/system on the fly). Drives the tagsRoot + exclude resolvers only — NOT
+   *  the parent-driven directory refetch — so it can't race an unfiltered read. */
+  excludeRefreshKey?: number;
   reverseOrder?: boolean;
 }) => {
   const [selectedDebugItem, setSelectedDebugItem] = useState<any | null>(null);
@@ -189,18 +180,37 @@ export const FileBrowser = ({
   const [tagModalIsFile, setTagModalIsFile] = useState(false);
   const [selectedFile, setSelectedFile] = useState<any | null>(null);
   const [fileContent, setFileContent] = useState<string | null>(null);
+  // Raw fetched bytes, kept verbatim for downloads. The preview may decode these
+  // to text/blob-URL (lossy for binary), so downloads must derive from here.
+  const [fileBytes, setFileBytes] = useState<Uint8Array | null>(null);
   const fetchIdRef = useRef(0);
   const [fileContentType, setFileContentType] = useState<string | null>(null);
   const [fileTransportType, setFileTransportType] = useState<string>("onchain");
   const [isFileLoading, setIsFileLoading] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [previewFullscreen, setPreviewFullscreen] = useState(false);
-  const [pageSize, setPageSize] = useState<bigint>(50n);
+  // Per-fetch page target. Constant since the lens load-more iterates the opaque
+  // cursor (ADR-0036) rather than growing a page size (the old standard-path
+  // load-more that incremented this was removed with the unfiltered fallback).
+  const pageSize = 50n;
 
   // Tag filter state: null = no filter active; Set<string> = allowed DATA/anchor UIDs
   const [tagFilteredUIDs, setTagFilteredUIDs] = useState<Set<string> | null>(null);
-  // Excluded UIDs from the drawer's "exclude" filters — empty = no exclusions
-  const [tagExcludedUIDs, setTagExcludedUIDs] = useState<Set<string>>(new Set());
+  // EXCLUDE filtering is applied on-chain (ADR-0048): the active exclude tags'
+  // definition UIDs are resolved below and passed to `getDirectoryPageFiltered`,
+  // so the lens-scoped listing comes back already filtered. No client-side
+  // exclude scan / exclude UID set is kept.
+  const [excludeTagDefUIDs, setExcludeTagDefUIDs] = useState<`0x${string}`[]>([]);
+  // True once the exclude-def-UID resolver effect below has finished resolving
+  // the currently-active exclude tag names — even if the resolved set is empty
+  // because the defs don't exist yet. Starts false and is re-gated false on every
+  // resolution restart (drawer exclude set / lenses / tagsRoot / tagFilterVersion
+  // change). Used to HOLD the lens directory fetch until the real def UIDs are
+  // known, so a fresh mount doesn't take the UNFILTERED branch and briefly flash
+  // `system`/`nsfw` items before a self-correcting refetch (SHOULD-FIX 1). The
+  // empty-excludes case (no active exclude tags) is NOT gated by this — see
+  // `excludesPending` below.
+  const [excludeResolved, setExcludeResolved] = useState(false);
   const [isTagFilterLoading, setIsTagFilterLoading] = useState(false);
   // True while the dataUIDMap is being populated asynchronously.
   // Prevents showing unfiltered results during the brief window between tag resolution and map build.
@@ -209,6 +219,17 @@ export const FileBrowser = ({
   const [tagFilterVersion, setTagFilterVersion] = useState(0);
   const [edgeResolverAddress, setEdgeResolverAddress] = useState<`0x${string}` | null>(null);
   const [tagsRoot, setTagsRoot] = useState<`0x${string}` | null>(null);
+  // True once the `/tags` lookup has SETTLED — either it resolved to a UID, or it
+  // definitively resolved to absent (no `/tags` anchor on this deploy). Lets the
+  // exclude gate distinguish "still loading, keep holding" from "no tags exist,
+  // nothing to hide → release to the unfiltered read". Stays false on a hard RPC
+  // error so we hold (leak-safe) rather than fall through to unfiltered.
+  const [tagsRootSettled, setTagsRootSettled] = useState(false);
+  // Bumped to retry exclude-def resolution after a transient failure. The catch
+  // HOLDS the gate (never releases to an unfiltered read) and schedules a bounded
+  // retry so a transient RPC blip self-heals without the directory wedging on
+  // "Loading…" until a manual filter toggle.
+  const [excludeRetry, setExcludeRetry] = useState(0);
   // Folder-delete confirmation. `pinUIDs` (file placements, cardinality 1) and
   // `tagUIDs` (folder visibility, cardinality N) are populated by scanSubtree.
   // Tracked separately because they live under different EAS schemas (PIN vs TAG)
@@ -280,13 +301,6 @@ export const FileBrowser = ({
     attester: string;
   } | null>(null);
 
-  // List anchors whose placement the user just revoked. The standard (non-lens)
-  // `getDirectoryPage` returns anchor children regardless of an active LIST PIN, so a
-  // deleted list would otherwise linger as a dead card (openList reports it missing).
-  // Suppress them locally until the user navigates away. (The lens path already filters
-  // by active placement, so this only matters for the standard view.)
-  const [deletedListAnchors, setDeletedListAnchors] = useState<Set<string>>(new Set());
-
   // Lists are placed like files (ADR-0044 §1): a named ANCHOR with anchorType=LIST_SCHEMA_UID
   // plus a PIN(definition=anchor, refUID=LIST). They surface as anchor children of the folder
   // with `item.schema === LIST_SCHEMA_UID` — no dedicated read needed. The PIN target (the LIST
@@ -301,42 +315,37 @@ export const FileBrowser = ({
     };
   }, [fileContent]);
 
-  useEffect(() => {
-    setPageSize(50n);
-    setDeletedListAnchors(new Set()); // clear delete-suppression when navigating folders
-  }, [currentAnchorUID]);
-
-  // Recreating a deleted list reuses the SAME permanent anchor (CreateItemModal's
-  // resolveAnchor reuse — the documented recovery path). Without this, the recreated
-  // list's now-active placement would stay hidden by the delete-suppression set until
-  // the user navigated away. Lift suppression on that specific anchor when a create lands
-  // (keyed on directoryRefreshKey so it re-fires even if the same slot is recreated twice).
-  useEffect(() => {
-    if (!recreatedListAnchor) return;
-    const lc = recreatedListAnchor.toLowerCase();
-    setDeletedListAnchors(prev => {
-      if (!prev.has(lc)) return prev;
-      const next = new Set(prev);
-      next.delete(lc);
-      return next;
-    });
-  }, [directoryRefreshKey, recreatedListAnchor]);
-
   // Load EdgeResolver address and "tags" anchor UID once.
   // "tags" is a normal anchor under the file system root — discovered the same way
   // any folder is, via resolvePath. Tag definitions (e.g. "favorites") are its children.
+  // `/tags` resolution is DECOUPLED from the EdgeResolver address: it only needs the
+  // indexer (which we already have). The EdgeResolver address is used elsewhere
+  // (include-tag + delete scans); a missing/unknown resolver must NOT wedge the
+  // exclude gate. If we early-returned on `!addr`, `tagsRootSettled` would stay false
+  // and the directory would hold "Loading…" forever; and releasing the gate there
+  // would be worse — it would fall to an UNFILTERED lens read and leak system/nsfw.
   useEffect(() => {
     if (!publicClient || !indexerInfo) return;
+    // Once `/tags` is found it's permanent — never re-resolve. But if `/tags`
+    // itself was ABSENT at mount (a bare chain), an Overview save creates it on the
+    // fly; re-run on `excludeRefreshKey` (bumped by that save) so tagsRoot is picked
+    // up, which in turn re-runs the exclude resolver below. (When `/tags` already
+    // exists but `/tags/system` doesn't — the real-deploy case — tagsRoot is
+    // unchanged and the exclude resolver re-resolves directly off excludeRefreshKey.)
+    if (tagsRoot) return;
     getEdgeResolverAddress(publicClient.chain.id).then(async addr => {
-      if (!addr) return;
-      setEdgeResolverAddress(addr);
+      if (addr) setEdgeResolverAddress(addr);
       try {
         const fsRoot = (await publicClient.readContract({
           address: indexerInfo.address as `0x${string}`,
           abi: indexerInfo.abi,
           functionName: "rootAnchorUID",
         })) as `0x${string}`;
-        if (!fsRoot || fsRoot === zeroHash) return;
+        if (!fsRoot || fsRoot === zeroHash) {
+          // No filesystem root → no `/tags`, nothing taggable. Settle as absent.
+          setTagsRootSettled(true);
+          return;
+        }
         const tagsUID = (await publicClient.readContract({
           address: indexerInfo.address as `0x${string}`,
           abi: indexerInfo.abi,
@@ -344,14 +353,22 @@ export const FileBrowser = ({
           args: [fsRoot, "tags"],
         })) as `0x${string}`;
         if (tagsUID && tagsUID !== zeroHash) setTagsRoot(tagsUID);
-      } catch {
-        // "tags" not yet created — tag filter will be unavailable
+        // Resolved either way (UID or absent) — settle so the exclude gate can
+        // release instead of holding "Loading…" forever on a deploy without /tags.
+        setTagsRootSettled(true);
+      } catch (e) {
+        // Hard RPC error — leave `tagsRootSettled` false so the exclude gate keeps
+        // holding (leak-safe) rather than dropping to the unfiltered read.
+        console.error("Resolving /tags anchor failed; tag filter unavailable", e);
       }
     });
-  }, [publicClient, indexerInfo]);
+  }, [publicClient, indexerInfo, excludeRefreshKey, tagsRoot]);
 
-  // Resolve tag filter names → definition UIDs → tagged target sets.
-  // Sources: tagFilter (URL, include), drawerTagFilters include entries, drawerTagFilters exclude entries.
+  // Resolve INCLUDE tag filter names → definition UIDs → tagged target sets.
+  // Sources: tagFilter (URL, include), drawerTagFilters include entries.
+  // EXCLUDE filtering is no longer resolved here — it is pushed on-chain via
+  // `getDirectoryPageFiltered` (ADR-0048); see the `excludeTagDefUIDs` effect
+  // below. This effect only scans full target sets for INCLUDE tags.
   useEffect(() => {
     const urlIncludeNames = tagFilter
       .split(",")
@@ -360,15 +377,11 @@ export const FileBrowser = ({
     const drawerIncludeNames = Object.entries(drawerTagFilters)
       .filter(([, s]) => s === "include")
       .map(([name]) => name.toLowerCase());
-    const drawerExcludeNames = Object.entries(drawerTagFilters)
-      .filter(([, s]) => s === "exclude")
-      .map(([name]) => name.toLowerCase());
 
     const includeNames = [...new Set([...urlIncludeNames, ...drawerIncludeNames])];
 
-    if (includeNames.length === 0 && drawerExcludeNames.length === 0) {
+    if (includeNames.length === 0) {
       setTagFilteredUIDs(null);
-      setTagExcludedUIDs(new Set());
       setIsTagFilterLoading(false);
       return;
     }
@@ -476,35 +489,24 @@ export const FileBrowser = ({
 
     const resolve = async () => {
       try {
-        // Fetch each unique tag name exactly once, even if it appears in both lists.
-        const allNames = [...new Set([...includeNames, ...drawerExcludeNames])];
+        // Resolve each unique INCLUDE tag name's effective target set, then
+        // intersect (an item must carry ALL include tags).
         const resolvedEntries = await Promise.all(
-          allNames.map(async name => [name, await resolveTagSet(name)] as const),
+          includeNames.map(async name => [name, await resolveTagSet(name)] as const),
         );
         if (cancelled) return;
         const cache = new Map<string, Set<string>>(resolvedEntries);
 
-        if (includeNames.length > 0) {
-          let intersection = cache.get(includeNames[0])!;
-          for (let i = 1; i < includeNames.length; i++) {
-            const s = cache.get(includeNames[i])!;
-            intersection = new Set([...intersection].filter(uid => s.has(uid)));
-          }
-          setTagFilteredUIDs(intersection);
-        } else {
-          setTagFilteredUIDs(null);
+        let intersection = cache.get(includeNames[0])!;
+        for (let i = 1; i < includeNames.length; i++) {
+          const s = cache.get(includeNames[i])!;
+          intersection = new Set([...intersection].filter(uid => s.has(uid)));
         }
-
-        if (drawerExcludeNames.length > 0) {
-          setTagExcludedUIDs(new Set(drawerExcludeNames.flatMap(name => [...(cache.get(name) ?? [])])));
-        } else {
-          setTagExcludedUIDs(new Set());
-        }
+        setTagFilteredUIDs(intersection);
       } catch (e) {
         console.error("Tag filter resolution failed", e);
         if (!cancelled) {
           setTagFilteredUIDs(null);
-          setTagExcludedUIDs(new Set());
         }
       } finally {
         if (!cancelled) setIsTagFilterLoading(false);
@@ -530,6 +532,170 @@ export const FileBrowser = ({
     anchorSchemaUID,
   ]);
 
+  // Active EXCLUDE tag names from the drawer (e.g. the default {nsfw, system}).
+  // Joined into a stable string so the resolver effect below only re-fires when
+  // the SET of exclude tags changes — not on every drawer-object identity churn.
+  const drawerExcludeNamesKey = useMemo(
+    () =>
+      Object.entries(drawerTagFilters)
+        .filter(([, s]) => s === "exclude")
+        .map(([name]) => name.toLowerCase())
+        .sort()
+        .join(","),
+    [drawerTagFilters],
+  );
+
+  // Resolve the EXCLUDE tags' DEFINITION UIDs (ADR-0048). Unlike the INCLUDE
+  // path we do NOT paginate each tag's full target set — the on-chain filter in
+  // `getDirectoryPageFiltered` does the per-item exclusion. We only need the def
+  // UID per active exclude tag. Def UIDs that resolve to zero (tag not yet
+  // created under /tags/) are dropped. `minWeights` is all-zero, matching
+  // ADR-0042's `weight >= 0` effective-TAG convention.
+  useEffect(() => {
+    const rawNames = drawerExcludeNamesKey ? drawerExcludeNamesKey.split(",") : [];
+    // Order the system-managed safety excludes (system, nsfw) FIRST so the
+    // MAX_EXCLUDE_TAGS cap below can never drop them in favor of user-added tags
+    // that happen to sort earlier alphabetically — dropping a safety tag would
+    // un-hide system/nsfw content despite its drawer toggle still being set to
+    // exclude (Codex P2). drawerExcludeNamesKey is lowercased, so these match.
+    const SAFETY_EXCLUDES = ["system", "nsfw"];
+    const names = [
+      ...rawNames.filter(n => SAFETY_EXCLUDES.includes(n)),
+      ...rawNames.filter(n => !SAFETY_EXCLUDES.includes(n)),
+    ];
+    if (names.length === 0) {
+      // No active exclude tags. Nothing to resolve — clear the def set and mark
+      // resolved so the lens gate doesn't wait on a resolution that never runs
+      // (would otherwise deadlock the empty-excludes case). The
+      // `drawerExcludeNamesKey === ""` branch in the lens gate also covers this,
+      // but keeping the flag truthful avoids a stale-false carrying over from a
+      // prior non-empty exclude set.
+      setExcludeTagDefUIDs([]);
+      setExcludeResolved(true);
+      return;
+    }
+    if (!publicClient || !indexerInfo || !tagsRoot) {
+      if (tagsRootGateDecision(tagsRootSettled) === "release-empty") {
+        // `/tags` resolution settled with no anchor — there are no def UIDs to
+        // resolve, and an item can only be system/nsfw-tagged if its def anchor
+        // exists under `/tags/`, so there is genuinely nothing to hide. Release
+        // the gate to the unfiltered read instead of holding "Loading…" forever.
+        setExcludeTagDefUIDs([]);
+        setExcludeResolved(true);
+        return;
+      }
+      // tagsRoot still loading → excludes are EXPECTED but not yet resolvable.
+      // Keep `excludeResolved` false so the lens gate HOLDS the fetch instead of
+      // taking the unfiltered branch and flashing system/nsfw. This effect
+      // re-runs once tagsRoot (or its settled signal) lands.
+      setExcludeResolved(false);
+      return;
+    }
+
+    // Excludes are active and resolvable: (re)start resolution.
+    setExcludeResolved(false);
+
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    (async () => {
+      try {
+        const resolved = await Promise.all(
+          names.map(
+            name =>
+              publicClient.readContract({
+                address: indexerInfo.address as `0x${string}`,
+                abi: indexerInfo.abi,
+                functionName: "resolvePath",
+                args: [tagsRoot as `0x${string}`, name],
+              }) as Promise<`0x${string}`>,
+          ),
+        );
+        if (cancelled) return;
+        const resolvedDefs = resolved.filter(uid => uid && uid !== zeroHash);
+        // The contract caps `excludeTagDefs.length` at MAX_EXCLUDE_TAGS_PER_QUERY
+        // (8) and reverts above it. The drawer lets users add arbitrary filters, so
+        // cap here — otherwise 9+ active exclude tags would make every directory
+        // read revert and leave the grid empty/stale (Codex P2). Apply a bounded
+        // set + warn rather than fail the whole listing.
+        const MAX_EXCLUDE_TAGS = 8;
+        if (resolvedDefs.length > MAX_EXCLUDE_TAGS) {
+          console.warn(
+            `Active exclude tags (${resolvedDefs.length}) exceed the on-chain cap of ${MAX_EXCLUDE_TAGS}; ` +
+              `only the first ${MAX_EXCLUDE_TAGS} are applied.`,
+          );
+        }
+        const defs = resolvedDefs.slice(0, MAX_EXCLUDE_TAGS);
+        // Stable-set comparison: only update state when the UID set actually
+        // changed, so a re-resolve to the same defs doesn't restart the cursor.
+        setExcludeTagDefUIDs(prev =>
+          prev.length === defs.length && prev.every((u, i) => u === defs[i]) ? prev : defs,
+        );
+        // Resolution complete (defs known — possibly empty if the tags don't
+        // exist under /tags/). Release the lens gate and reset the retry budget.
+        setExcludeResolved(true);
+        if (excludeRetry !== 0) setExcludeRetry(0);
+      } catch (e) {
+        console.error("Exclude tag def resolution failed", e);
+        if (!cancelled) {
+          // HOLD the gate — do NOT release to an unfiltered read. Excludes are
+          // active (the drawer requested them), so releasing with empty defs would
+          // run the unfiltered listing and leak system/nsfw. Leave `excludeResolved`
+          // false so the directory keeps holding, and schedule a bounded retry so a
+          // transient RPC blip self-heals (without retry it would wedge on
+          // "Loading…" until a manual filter toggle, since folder navigation is not
+          // a dep of this effect).
+          if (excludeRetry < 3) retryTimer = setTimeout(() => setExcludeRetry(n => n + 1), 1500);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
+    };
+    // `lensesKey` is deliberately NOT a dep: def UID resolution is lens-independent,
+    // and including it re-ran this effect (flashing "Loading…") on every lens
+    // change. The lens-scoped query refetches with the already-resolved defs via
+    // its own `depsKey`.
+    // `tagFilterVersion` IS a dep: a default-excluded tag whose DEFINITION doesn't
+    // exist yet (e.g. `nsfw` on the seed, which only creates `/tags/system`)
+    // resolves to nothing, so `excludeTagDefUIDs` omits it. When the user then
+    // creates that definition via TagModal (`onTagChange` bumps tagFilterVersion)
+    // without changing `drawerExcludeNamesKey`, we must re-resolve to pick up the
+    // new def — otherwise the just-tagged item stays visible (Codex P2). The
+    // stable-set comparison keeps this from restarting the cursor when the def set
+    // is unchanged. `excludeRetry` re-runs a bounded post-error retry.
+    // `excludeRefreshKey` re-runs after an Overview save that may have created
+    // `/tags/system` even when `tagsRoot` is unchanged (the real-deploy case where
+    // `/tags` exists but `/tags/system` is created on first save) — without it the
+    // exclude defs stay stale and the new system README renders (Codex P2). This
+    // sets excludeResolved=false (holds the directory) then re-resolves, so there's
+    // no unfiltered flash.
+  }, [
+    drawerExcludeNamesKey,
+    tagFilterVersion,
+    publicClient,
+    indexerInfo,
+    tagsRoot,
+    tagsRootSettled,
+    excludeRetry,
+    excludeRefreshKey,
+  ]);
+
+  // Parallel-array minWeights for getDirectoryPageFiltered — all 0n (ADR-0042
+  // effective-TAG threshold `weight >= 0`). One entry per resolved exclude def.
+  const excludeMinWeights = useMemo(() => excludeTagDefUIDs.map(() => 0n), [excludeTagDefUIDs]);
+
+  // SHOULD-FIX 1: excludes are EXPECTED (the drawer has active exclude tags) but
+  // their def UIDs haven't resolved yet. While true, HOLD the lens directory
+  // (file/folder) fetch — otherwise its first fetch fires with an empty
+  // `excludeTagDefUIDs`, takes the UNFILTERED
+  // `getDirectoryPageBySchemaAndAddressList` branch, and briefly renders
+  // system/nsfw items before the resolved def UIDs trigger a self-correcting
+  // refetch. The empty-excludes case (`drawerExcludeNamesKey === ""`) is NOT
+  // pending — there's nothing to resolve, so we never deadlock there.
+  const excludesPending = computeExcludesPending(drawerExcludeNamesKey, excludeResolved);
+
   const fetchFileContent = async (item: any) => {
     if (!efsRouter) {
       notification.error("EFSRouter not found. Please deploy.");
@@ -539,6 +705,7 @@ export const FileBrowser = ({
     const fetchId = ++fetchIdRef.current;
     setIsFileLoading(true);
     setFileContent(null);
+    setFileBytes(null);
     setFileContentType(null);
     setFileTransportType("onchain");
     setFetchError(null);
@@ -569,99 +736,31 @@ export const FileBrowser = ({
         throw new Error("Public client not available");
       }
 
-      const result: number[] = [];
-      let contentTypeStr = "text/plain";
+      // Router-read + chunk-reassembly + external-mirror logic now lives in the
+      // pure util (utils/efs/fetchFileContent.ts), shared with the Overview hook.
+      // Cancellation (fetchId) and all setState stay here in the component.
+      const { bytes, contentType, transport } = await fetchFileContentUtil({
+        routerAddress: efsRouter.address as `0x${string}`,
+        routerAbi: efsRouter.abi as Abi,
+        publicClient,
+        lensAddresses,
+        resourcePath: [...currentPathNames, item.name],
+      });
 
-      let hasMoreChunks = true;
-      let currentChunkHeader = "";
-
-      while (hasMoreChunks) {
-        const queryParams: any[] = [];
-        if (lensAddresses.length > 0) {
-          queryParams.push({ key: "lenses", value: lensAddresses.join(",") });
-        }
-
-        // Chunk pagination: after the first response, `web3-next-chunk` header
-        // carries the next chunk index (format "?chunk=N"); forward it back.
-        if (currentChunkHeader) {
-          const chunkIndex = currentChunkHeader.split("=")[1];
-          if (chunkIndex !== undefined) {
-            queryParams.push({ key: "chunk", value: chunkIndex });
-          }
-        }
-
-        const args: any[] = [[...currentPathNames, item.name], queryParams];
-
-        const response = (await publicClient.readContract({
-          address: efsRouter.address as `0x${string}`,
-          abi: efsRouter.abi,
-          functionName: "request",
-          args: args as any,
-        })) as any;
-
-        if (response[0] === 200n || response[0] === 200) {
-          const outHeaders = response[2] as any[];
-          const ctHeaders = outHeaders.filter((h: any) => h.key.toLowerCase() === "content-type");
-
-          // Detect external-body delegation (IPFS, Arweave, HTTPS mirrors)
-          const externalHeader = ctHeaders.find((h: any) => h.value.includes("message/external-body"));
-          if (externalHeader) {
-            // Extract the original URI from: message/external-body; access-type=URL; URL="ipfs://..."
-            const urlMatch = externalHeader.value.match(/URL="([^"]+)"/);
-            const externalUri = urlMatch?.[1];
-            // Extract the actual MIME type from the content-type= parameter in the
-            // message/external-body header (router embeds it as a quoted parameter).
-            const ctParam = externalHeader.value.match(/content-type="([^"]+)"/);
-            if (ctParam?.[1]) contentTypeStr = ctParam[1];
-
-            if (externalUri) {
-              setFileTransportType(detectTransport(externalUri));
-              const gatewayUrl = resolveGatewayUrl(externalUri);
-              if (gatewayUrl) {
-                // Fetch from gateway
-                const gatewayResp = await globalThis.fetch(gatewayUrl);
-                if (!gatewayResp.ok) throw new Error(`Gateway returned ${gatewayResp.status} for ${gatewayUrl}`);
-                const buf = await gatewayResp.arrayBuffer();
-                const bytes = new Uint8Array(buf);
-                for (let i = 0; i < bytes.length; i++) result.push(bytes[i]);
-                // Use gateway content-type as fallback if we didn't get one from the contract
-                if (contentTypeStr === "text/plain") {
-                  const gwCt = gatewayResp.headers.get("content-type");
-                  if (gwCt) contentTypeStr = gwCt.split(";")[0].trim();
-                }
-              }
-              hasMoreChunks = false;
-              break;
-            }
-          }
-
-          // On-chain body
-          const bodyHex = response[1] as `0x${string}`;
-          if (bodyHex && bodyHex !== "0x") {
-            const bodyBytes = ethers.getBytes(bodyHex);
-            for (let i = 0; i < bodyBytes.length; i++) {
-              result.push(bodyBytes[i]);
-            }
-          }
-          // Use first content-type header for on-chain responses
-          if (ctHeaders.length > 0) contentTypeStr = ctHeaders[0].value;
-
-          // Check for next chunk
-          const nextChunkHeader = outHeaders.find((h: any) => h.key.toLowerCase() === "web3-next-chunk");
-          if (nextChunkHeader) {
-            currentChunkHeader = nextChunkHeader.value;
-          } else {
-            hasMoreChunks = false;
-          }
-        } else {
-          throw new Error(`Router returned HTTP ${response[0]}`);
-        }
-      }
-
-      // Discard results from a superseded fetch (user clicked a different file)
+      // Discard results from a superseded fetch (user clicked a different file).
+      // This MUST come before any setState below — otherwise a slow fetch for File
+      // A resolving after File B was clicked would still overwrite the transport
+      // type with A's value (then bail), leaving B showing A's transport (Gemini).
       if (fetchId !== fetchIdRef.current) return;
 
+      // External mirrors set a specific transport (ipfs/arweave/https/…); on-chain
+      // bodies keep the default "onchain" set above. Matches the prior inline
+      // setFileTransportType(detectTransport(externalUri)) behavior.
+      if (transport !== "onchain") setFileTransportType(transport);
+
+      const contentTypeStr = contentType ?? "text/plain";
       setFileContentType(contentTypeStr);
+      setFileBytes(bytes);
 
       const useBlobUrl =
         (contentTypeStr.startsWith("image/") && !contentTypeStr.includes("svg")) ||
@@ -670,13 +769,12 @@ export const FileBrowser = ({
         contentTypeStr === "application/pdf";
 
       if (useBlobUrl) {
-        const bytes = new Uint8Array(result);
         const blob = new Blob([bytes], { type: contentTypeStr });
         const objectUrl = URL.createObjectURL(blob);
         setFileContent(objectUrl);
       } else {
         // parse as utf-8 string
-        const text = new TextDecoder().decode(new Uint8Array(result));
+        const text = new TextDecoder().decode(bytes);
         setFileContent(text);
       }
     } catch (e: unknown) {
@@ -684,6 +782,7 @@ export const FileBrowser = ({
       const err = e as Error;
       console.error("Failed to fetch file content", err);
       setFileContent(null);
+      setFileBytes(null);
       setFetchError(err.message || String(e));
     } finally {
       // Only clear the loading flag if this fetch is still the active one —
@@ -724,12 +823,7 @@ export const FileBrowser = ({
   });
 
   // ── Sort overlay integration ─────────────────────────────────────────────────
-  const {
-    sortedUIDs,
-    isLoading: isSortLoading,
-    hasMore: hasSortMore,
-    loadMore: loadMoreSorted,
-  } = useSortedData({
+  const { sortedUIDs, isLoading: isSortLoading } = useSortedData({
     sortInfoUID: activeSortInfoUID,
     parentAnchor: currentAnchorUID ?? undefined,
     sortOverlayAddress,
@@ -919,42 +1013,18 @@ export const FileBrowser = ({
     previewFetchKey,
   ]);
 
-  const hasLenses = lensAddresses && lensAddresses.length > 0;
-
-  // Once we've ever been in lens mode, stay there — prevents the standard (show-all) query
-  // from firing its cached result during the brief window when lensAddresses is transitioning
-  // to a new address (e.g. wallet account switch causes a momentary empty array).
-  // BUT: if lensAddresses is empty (wallet disconnect, no default set), fall through to the
-  // standard query rather than leaving both queries disabled — showing unfiltered data is better
-  // than an indefinitely blank directory.
-  //
-  // `explicitLenses` overrides that fallthrough: when the user passed
-  // `?lenses=…` but every token failed to resolve, we STAY in lens mode
-  // (against an empty address list → empty grid) rather than silently
-  // broadening the view to unscoped default content the URL never asked for.
-  // See Codex P2 on PR #9 and ADR-0031 (explicit param must not widen results).
-  const lockedToLenses = useRef(false);
-  if (hasLenses) lockedToLenses.current = true;
-  const useLensesQuery = explicitLenses || ((hasLenses || lockedToLenses.current) && lensAddresses.length > 0);
-
-  const {
-    data: standardItems,
-    isLoading: isStandardLoading,
-    refetch: refetchStandardItems,
-  } = useScaffoldReadContract({
-    contractName: "EFSFileView",
-    functionName: "getDirectoryPage",
-    args: [
-      (currentAnchorUID ? currentAnchorUID : undefined) as `0x${string}` | undefined,
-      0n,
-      pageSize,
-      dataSchemaUID as `0x${string}`,
-      propertySchemaUID as `0x${string}`,
-    ],
-    query: {
-      enabled: !useLensesQuery,
-    },
-  });
+  // Directory reads are ALWAYS lens-scoped — there is no unfiltered fallback.
+  // The previous `EFSFileView.getDirectoryPage` path (used when `lensAddresses`
+  // was empty) applied no exclusion filter and was the one read path that could
+  // leak `system`/`nsfw` items. It was also dead in practice: `systemLenses`
+  // always seeds at least the devnet constants, so `lensAddresses` is never
+  // empty on the default path. Removed so that an empty lens list fails SAFE —
+  // the lens hooks below are disabled (their `enabled` requires a non-empty
+  // address list), the grid renders empty, and no unfiltered content is shown.
+  // When mainnet introduces user-configurable lenses, the fix for "empty list"
+  // is a FILTERED listing, not a return of this unfiltered call. (Was: ADR-0031
+  // explicit-override + Codex P2 on PR #9 — the explicit-empty case already
+  // resolves to an empty grid via the disabled lens hooks.)
 
   // Lens-scoped directory listing iterates the opaque cursor (ADR-0036) across
   // pages. The contract's phase-0 folder scan can return zero items with a
@@ -975,12 +1045,20 @@ export const FileBrowser = ({
     fileViewAddress: efsFileViewInfo?.address as `0x${string}` | undefined,
     fileViewAbi: efsFileViewInfo?.abi as any,
     pageSize,
-    enabled: useLensesQuery && lensAddresses.length > 0,
+    // EXCLUDE tags applied on-chain (ADR-0048). Empty array ⇒ unfiltered read.
+    excludeTagDefs: excludeTagDefUIDs,
+    minWeights: excludeMinWeights,
+    // SHOULD-FIX 1: hold the fetch while excludes are expected but unresolved so
+    // the unfiltered branch never runs on first mount (no system/nsfw flash).
+    // Once resolved (with the real def UIDs, possibly empty), this re-enables and
+    // the filtered read fires. Empty-excludes is never pending → not gated.
+    // Empty `lensAddresses` (e.g. explicit `?lenses=` whose tokens all failed)
+    // disables the fetch → empty grid, never an unfiltered fallback.
+    enabled: lensAddresses.length > 0 && !excludesPending,
   });
 
   // Lens-scoped LIST anchors. Lists are placed as anchors with anchorType=LIST_SCHEMA_UID,
   // so the same schema-filtered directory walk surfaces them — just with the LIST schema.
-  // (The standard `getDirectoryPage` path already returns all anchor children, lists included.)
   const {
     items: lensListItems,
     hasMore: hasMoreLensList,
@@ -993,15 +1071,23 @@ export const FileBrowser = ({
     fileViewAddress: efsFileViewInfo?.address as `0x${string}` | undefined,
     fileViewAbi: efsFileViewInfo?.abi as any,
     pageSize,
-    enabled: useLensesQuery && lensAddresses.length > 0 && !!listSchemaUID,
+    // Apply the SAME excludes here as the file/folder query. The LIST walk's
+    // phase-0 returns the same generic qualifying folders, so without this an
+    // excluded (system/nsfw-tagged) folder surfaced via LIST visibility would
+    // re-enter the merged `rawItems` unfiltered. LIST anchors themselves carry no
+    // descriptive tag and have no placement PIN, so getDirectoryPageFiltered still
+    // passes them through per ADR-0048 — only phase-0 folders get filtered.
+    excludeTagDefs: excludeTagDefUIDs,
+    minWeights: excludeMinWeights,
+    // Gate on `!excludesPending` symmetrically with the file/folder query above so
+    // the merged page never renders half-resolved (list items present, file/folder
+    // items still held) on first mount.
+    enabled: lensAddresses.length > 0 && !!listSchemaUID && !excludesPending,
   });
 
   // Parent-driven refetch for out-of-component mutations (create file/folder).
   // Skip the initial render — the queries fire on their own when deps settle.
-  // Subsequent bumps route to whichever query is currently live. We snapshot
-  // `useLensesQuery` at call time so a mid-flight mode switch (e.g. wallet
-  // disconnect between the create and the refetch) still hits the right
-  // refetcher rather than racing the mode-flip.
+  // Subsequent bumps re-run both lens-scoped refetchers (file/folder + list).
   const firstRefreshRun = useRef(true);
   useEffect(() => {
     if (firstRefreshRun.current) {
@@ -1009,18 +1095,19 @@ export const FileBrowser = ({
       return;
     }
     if (directoryRefreshKey === 0) return;
-    if (useLensesQuery) {
-      refetchLensItems().catch(e => console.error("Directory refetch (lenses) failed", e));
-    } else {
-      refetchStandardItems();
-    }
-    if (useLensesQuery) refetchLensListItems().catch(e => console.error("List refetch (lenses) failed", e));
-    // refetch* identities are stable per query; useLensesQuery is the
-    // dispatch key and changes rarely. Intentionally scoped to the bump.
+    // Only create/delete/list mutations bump directoryRefreshKey — they don't touch
+    // /tags/system, so the exclude defs are never stale here and a normal refetch is
+    // correct (and filtered, since excludeTagDefUIDs is already resolved). Overview
+    // saves (which CAN create /tags/system) go through `excludeRefreshKey` →
+    // the exclude resolver instead, which holds + re-resolves + drives a filtered
+    // refetch via depsKey, so there's no unfiltered-flash race here.
+    refetchLensItems().catch(e => console.error("Directory refetch (lenses) failed", e));
+    refetchLensListItems().catch(e => console.error("List refetch (lenses) failed", e));
+    // refetch* identities are stable per query. Intentionally scoped to the bump.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [directoryRefreshKey]);
 
-  const isLoading = useLensesQuery ? isLensLoading : isStandardLoading;
+  const isLoading = isLensLoading;
   // When explicit-lenses requested an empty list (all tokens unresolved), the
   // lens hook is disabled and `lensItems` is undefined — without this
   // coercion, the grid would render neither items nor the "Topic is empty"
@@ -1029,32 +1116,30 @@ export const FileBrowser = ({
   // empty result instead of a silently-blank pane. Memoized so downstream
   // effects that depend on `rawItems` identity don't refire every render.
   const rawItems = useMemo(() => {
-    if (useLensesQuery) {
-      if (lensAddresses.length === 0) return [];
-      // Merge file/folder anchors with list anchors (the LIST-schema lens walk).
-      // `getDirectoryPageBySchemaAndAddressList` returns qualifying generic folders in
-      // phase 0 of BOTH walks, so every visible subfolder is in lensItems AND
-      // lensListItems — dedupe by UID to avoid duplicate cards / duplicate React keys.
-      const merged = [...(lensItems ?? []), ...(lensListItems ?? [])];
-      const seen = new Set<string>();
-      return merged.filter(it => {
-        const uid = (it.uid as string | undefined)?.toLowerCase();
-        if (!uid || seen.has(uid)) return false;
-        seen.add(uid);
-        return true;
-      });
-    }
-    // Standard `getDirectoryPage` already returns every anchor child, lists included.
-    return standardItems;
-  }, [useLensesQuery, lensAddresses.length, lensItems, lensListItems, standardItems]);
+    if (lensAddresses.length === 0) return [];
+    // Merge file/folder anchors with list anchors (the LIST-schema lens walk).
+    // `getDirectoryPageBySchemaAndAddressList` returns qualifying generic folders in
+    // phase 0 of BOTH walks, so every visible subfolder is in lensItems AND
+    // lensListItems — dedupe by UID to avoid duplicate cards / duplicate React keys.
+    const merged = [...(lensItems ?? []), ...(lensListItems ?? [])];
+    const seen = new Set<string>();
+    return merged.filter(it => {
+      const uid = (it.uid as string | undefined)?.toLowerCase();
+      if (!uid || seen.has(uid)) return false;
+      seen.add(uid);
+      return true;
+    });
+  }, [lensAddresses.length, lensItems, lensListItems]);
 
-  // When a tag filter is active, resolve DATA UIDs for each file item.
+  // When an INCLUDE tag filter is active, resolve DATA UIDs for each file item.
+  // (EXCLUDE filtering is on-chain now — ADR-0048 — so the map is only needed to
+  // back the client-side INCLUDE intersection in `matchesUID`.)
   // AGENT-NOTE (ADR-0041): file placement is now PIN (cardinality 1) — there's at
   // most one active DATA per (attester, anchor), so we use the O(1) `getActivePinTarget`
   // reader instead of the old TAG count → enumerate scan. We still build a Set per
   // anchor because multiple attesters can each have their own DATA at the same anchor.
   useEffect(() => {
-    if ((!tagFilteredUIDs && tagExcludedUIDs.size === 0) || !rawItems || !publicClient || !edgeResolverAddress) {
+    if (!tagFilteredUIDs || !rawItems || !publicClient || !edgeResolverAddress) {
       setDataUIDMap(new Map());
       setIsDataUIDMapLoading(false);
       return;
@@ -1111,19 +1196,11 @@ export const FileBrowser = ({
     return () => {
       cancelled = true;
     };
-  }, [
-    tagFilteredUIDs,
-    tagExcludedUIDs,
-    rawItems,
-    publicClient,
-    edgeResolverAddress,
-    dataSchemaUID,
-    connectedAddress,
-    lensAddresses,
-  ]);
+  }, [tagFilteredUIDs, rawItems, publicClient, edgeResolverAddress, dataSchemaUID, connectedAddress, lensAddresses]);
 
-  // Apply tag filters. Include filter (tagFilteredUIDs): item must be in set (null = no filter).
-  // Exclude filter (tagExcludedUIDs): item must NOT be in set (empty = no exclusions).
+  // Apply the INCLUDE tag filter. tagFilteredUIDs: item must be in set (null = no
+  // filter). EXCLUDE filtering happens on-chain now (ADR-0048) — see
+  // `excludeTagDefUIDs` → `getDirectoryPageFiltered`; nothing to do here.
   const matchesUID = (item: any, uidSet: Set<string>): boolean => {
     const anchorUID = item.uid.toLowerCase();
     if (isFile(item, dataSchemaUID)) {
@@ -1140,9 +1217,42 @@ export const FileBrowser = ({
 
   const items = rawItems?.filter((item: any) => {
     if (tagFilteredUIDs !== null && !matchesUID(item, tagFilteredUIDs)) return false;
-    if (tagExcludedUIDs.size > 0 && matchesUID(item, tagExcludedUIDs)) return false;
     return true;
   });
+
+  // `system`- and `nsfw`-tagged items are hidden ON-CHAIN (ADR-0048):
+  // `drawerTagFilters` carries `{nsfw, system}: "exclude"` as permanent defaults,
+  // their def UIDs flow into `excludeTagDefUIDs` → `getDirectoryPageFiltered`, so
+  // `rawItems` already excludes them. Toggling `system` off in the Tag Filters
+  // drawer drops it from `excludeTagDefUIDs` → the next fetch (cursor reset via
+  // the hook's depsKey) returns the README again. No client-side exclude pass is
+  // needed; downstream (sortedItems, fileItems, the grid, empty-state,
+  // pagination) reads `visibleItems`.
+  const visibleItems = items;
+
+  // Close the side/fullscreen preview if a filter change or refetch removed the
+  // open item from the visible (post-exclude) set — otherwise toggling `system`
+  // back on (or applying an exclude tag) would leave a now-hidden file still
+  // rendering in the preview, defeating the hide guarantee (Codex P2). Inlines the
+  // reset (rather than calling `closePreview`, defined below) so this hook can sit
+  // above the component's early returns, as rules-of-hooks requires.
+  useEffect(() => {
+    if (!visibleItems) return;
+    const openUID = (
+      (selectedFile?.uid as string | undefined) ?? (selectedList?.anchorUID as string | undefined)
+    )?.toLowerCase();
+    if (!openUID) return;
+    const stillVisible = visibleItems.some((it: any) => (it.uid as string | undefined)?.toLowerCase() === openUID);
+    if (!stillVisible) {
+      setSelectedFile(null);
+      setSelectedList(null);
+      setFileContent(null);
+      setFileBytes(null);
+      setFileContentType(null);
+      setFetchError(null);
+      setPreviewFullscreen(false);
+    }
+  }, [visibleItems, selectedFile, selectedList]);
 
   // Keyboard handler ref — lets the useEffect stay above early returns while
   // the actual handler logic (which depends on computed values) is set later.
@@ -1154,18 +1264,22 @@ export const FileBrowser = ({
   }, []);
 
   if (!currentAnchorUID) return <div>Select a topic</div>;
-  if (isLoading || isTagFilterLoading || isDataUIDMapLoading || isSortLoading) return <div>Loading items...</div>;
+  // `excludesPending` (SHOULD-FIX 1): the lens directory hook is held disabled
+  // while exclude defs resolve, so it reports neither loading nor items — show
+  // the loading state rather than a premature "Topic is empty" during the hold.
+  if (isLoading || isTagFilterLoading || isDataUIDMapLoading || isSortLoading || excludesPending)
+    return <div>Loading items...</div>;
 
   // When a sort is active, reorder rawItems by the sorted UIDs.
   // Items not yet in the sorted list appear at the end in their original order.
   // Falls back to client-side preview sort when on-chain sort has no data.
   const sortedItems: any[] | undefined = (() => {
-    if (!items) return items;
+    if (!visibleItems) return visibleItems;
 
     // Client-side preview sort: use locally-fetched sort keys
     if (isPreviewSort && previewSortKeys.size > 0 && (!sortedUIDs || sortedUIDs.length === 0)) {
       const dir = reverseOrder ? -1 : 1;
-      return [...items].sort((a: any, b: any) => {
+      return [...visibleItems].sort((a: any, b: any) => {
         const aKey = previewSortKeys.get(a.uid?.toLowerCase() ?? "");
         const bKey = previewSortKeys.get(b.uid?.toLowerCase() ?? "");
         if (aKey && bKey) {
@@ -1180,10 +1294,10 @@ export const FileBrowser = ({
     }
 
     // On-chain sorted data
-    if (!sortedUIDs) return items;
+    if (!sortedUIDs) return visibleItems;
     const sortIndexMap = new Map(sortedUIDs.map((uid, idx) => [uid.toLowerCase(), idx]));
     const dir = reverseOrder ? -1 : 1;
-    return [...items].sort((a: any, b: any) => {
+    return [...visibleItems].sort((a: any, b: any) => {
       const ai = sortIndexMap.get(a.uid?.toLowerCase() ?? "");
       const bi = sortIndexMap.get(b.uid?.toLowerCase() ?? "");
       if (ai !== undefined && bi !== undefined) return (ai - bi) * dir;
@@ -1219,14 +1333,31 @@ export const FileBrowser = ({
     setSelectedFile(null);
     setSelectedList(null);
     setFileContent(null);
+    setFileBytes(null);
     setFileContentType(null);
     setFetchError(null);
     setPreviewFullscreen(false);
   };
 
+  // Download the currently-previewed file from the raw fetched bytes — NOT from
+  // the preview string, which is a lossy text/blob decode for anything binary.
+  // Download-only anchor with a sanitized filename (anchor names are
+  // attacker-controlled — strip bidi/path tricks). The minted URL is revoked.
+  const handleDownload = () => {
+    if (!fileBytes || !selectedFile) return;
+    const href = URL.createObjectURL(new Blob([fileBytes], { type: fileContentType || "application/octet-stream" }));
+    const a = document.createElement("a");
+    a.href = href;
+    a.download = safeDownloadName(selectedFile.name);
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(href), 1000);
+  };
+
   // File-only items for gallery navigation
   const fileItems =
-    (sortedItems ?? items)?.filter(
+    (sortedItems ?? visibleItems)?.filter(
       (item: any) => isFile(item, dataSchemaUID) && item.uid !== tagsRoot && item.uid !== sortsAnchorUID,
     ) ?? [];
 
@@ -1494,12 +1625,8 @@ export const FileBrowser = ({
         opId,
       );
       ops.complete(opId, `Deleted list "${item.name || ""}".`);
-      // Suppress the now-unplaced anchor locally — the standard getDirectoryPage still
-      // returns it (the anchor is permanent), which would leave a dead card.
-      setDeletedListAnchors(prev => new Set(prev).add((item.uid as string).toLowerCase()));
       if (selectedList?.anchorUID === item.uid) closePreview();
-      if (useLensesQuery) await refetchLensListItems();
-      else await refetchStandardItems();
+      await refetchLensListItems();
     } catch (e: any) {
       ops.fail(opId, e?.shortMessage ?? e?.message ?? "Delete failed");
       notification.error(e?.shortMessage ?? e?.message ?? "Could not delete list.");
@@ -1556,11 +1683,7 @@ export const FileBrowser = ({
       );
       ops.complete(opId, `Deleted ${label}.`);
       if (selectedFile?.uid === item.uid) closePreview();
-      if (useLensesQuery) {
-        await refetchLensItems();
-      } else {
-        await refetchStandardItems();
-      }
+      await refetchLensItems();
     } catch (e: any) {
       console.error("Delete failed:", e);
       const msg = e?.shortMessage ?? e?.message ?? "Delete failed.";
@@ -1600,11 +1723,7 @@ export const FileBrowser = ({
         `Deleted ${label} — revoked ${pinUIDs.length} PIN${pinUIDs.length === 1 ? "" : "s"} and ${tagUIDs.length} TAG${tagUIDs.length === 1 ? "" : "s"}.`,
       );
       if (selectedFile?.uid === item.uid) closePreview();
-      if (useLensesQuery) {
-        await refetchLensItems();
-      } else {
-        await refetchStandardItems();
-      }
+      await refetchLensItems();
       setDeleteConfirm(null);
     } catch (e: any) {
       console.error("Folder delete failed:", e);
@@ -1658,18 +1777,17 @@ export const FileBrowser = ({
           </div>
         )}
         <div className="grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-4 p-4">
-          {(sortedItems ?? items)
+          {(sortedItems ?? visibleItems)
             ?.filter(
               (item: any) =>
                 (isTopic(item) || isFile(item, dataSchemaUID) || isList(item, listSchemaUID)) &&
                 item.uid !== tagsRoot &&
-                item.uid !== sortsAnchorUID &&
-                // Local delete-suppression applies ONLY to the standard unscoped view, where the
-                // permanent list anchor reappears via getDirectoryPage after you revoke your PIN.
-                // In a ?lenses= view the lens query is authoritative — if it still returns the card,
-                // another requested lens actively places the same anchor, so suppressing it would
-                // wrongly hide that lens's list until navigation. deleteList() only revokes YOUR PIN.
-                (useLensesQuery || !deletedListAnchors.has((item.uid as string)?.toLowerCase())),
+                item.uid !== sortsAnchorUID,
+              // The lens query is authoritative: if it still returns a deleted list
+              // card, another requested lens actively places the same anchor (your
+              // deleteList() only revokes YOUR PIN), so it should stay visible. No
+              // local delete-suppression — that only mattered for the removed
+              // unscoped getDirectoryPage view where permanent anchors reappeared.
             )
             .map((item: any) => {
               // isTopic = generic anchor (folder) · isFile = DATA anchor · isList = LIST anchor (ADR-0044 §1)
@@ -1752,54 +1870,38 @@ export const FileBrowser = ({
                     </div>
                     <h2 className="card-title text-sm break-all text-center leading-tight">{item.name || "Unnamed"}</h2>
                     <div className="text-xs text-base-content/40">
-                      {isItemList
-                        ? "List"
-                        : isItemTopic
-                          ? useLensesQuery
-                            ? "Folder"
-                            : item.childCount > 0
-                              ? `${item.childCount} items`
-                              : "Empty"
-                          : "File"}
+                      {isItemList ? "List" : isItemTopic ? "Folder" : "File"}
                     </div>
                   </div>
                 </div>
               );
             })}
 
-          {(sortedItems ?? items)?.length === 0 && (
+          {(sortedItems ?? visibleItems)?.length === 0 && (
             <div className="col-span-full text-center text-gray-500">
               {tagFilteredUIDs !== null
                 ? `No items match tag filter: "${tagFilter}"`
-                : tagExcludedUIDs.size > 0
+                : excludeTagDefUIDs.length > 0
                   ? "All items hidden by active exclusion filter"
                   : "Topic is empty"}
             </div>
           )}
         </div>
-        {/* Load more: lens-scoped mode keys on the opaque cursor (ADR-0036);
-            standard mode keys on the kernel page heuristic + sort overlay. */}
+        {/* Load more: lens-scoped reads iterate the opaque cursor (ADR-0036). */}
         {(() => {
-          const showLoadMore = useLensesQuery
-            ? hasMoreLenses || hasMoreLensList
-            : items && items.length > 0 && items.length >= Number(pageSize);
+          const showLoadMore = hasMoreLenses || hasMoreLensList;
           if (!showLoadMore) return null;
           return (
             <div className="flex justify-center py-4">
               <button
                 className="btn btn-sm btn-outline"
                 onClick={() => {
-                  if (useLensesQuery) {
-                    // Iterate the opaque cursor via the hook; `pageSize` is the
-                    // per-fetch target, not a cumulative cap. Advance BOTH the
-                    // file/folder walk and the list-anchor walk — either may have
-                    // more pages (a folder can have more lists than files, or vice versa).
-                    if (hasMoreLenses) loadMoreLenses();
-                    if (hasMoreLensList) loadMoreLensList();
-                  } else {
-                    setPageSize(prev => prev + 50n);
-                    if (hasSortMore) loadMoreSorted();
-                  }
+                  // Iterate the opaque cursor via the hook; `pageSize` is the
+                  // per-fetch target, not a cumulative cap. Advance BOTH the
+                  // file/folder walk and the list-anchor walk — either may have
+                  // more pages (a folder can have more lists than files, or vice versa).
+                  if (hasMoreLenses) loadMoreLenses();
+                  if (hasMoreLensList) loadMoreLensList();
                 }}
               >
                 Load more
@@ -1836,6 +1938,14 @@ export const FileBrowser = ({
               <h3 className="font-bold text-sm truncate">{selectedFile.name}</h3>
             </div>
             <div className="flex items-center gap-1 flex-shrink-0">
+              <button
+                className="btn btn-ghost btn-sm btn-circle"
+                onClick={handleDownload}
+                disabled={!fileBytes}
+                title="Download"
+              >
+                <ArrowDownTrayIcon className="w-4 h-4" />
+              </button>
               <button
                 className="btn btn-ghost btn-sm btn-circle"
                 onClick={() => setPreviewFullscreen(true)}
@@ -1888,7 +1998,16 @@ export const FileBrowser = ({
                   onClick={() => setPreviewFullscreen(true)}
                 />
               ) : fileContentType === "application/pdf" ? (
+                // Untrusted PDF bytes from a mirror, served through a blob: URL —
+                // which would otherwise inherit the app's origin. Sandbox it for
+                // the same reason as the HTML preview below: `allow-scripts` keeps
+                // the browser's PDF viewer (incl. pdf.js, which needs JS) working,
+                // but OMITTING `allow-same-origin` pins the frame to an opaque
+                // origin so embedded PDF JS can't reach the parent app's DOM /
+                // cookies / storage. A spoofed contentType only mislabels which
+                // viewer renders here; it can't escalate to a same-origin script.
                 <iframe
+                  sandbox="allow-scripts"
                   src={fileContent}
                   title={selectedFile.name}
                   className="w-full rounded cursor-pointer"
@@ -1907,6 +2026,19 @@ export const FileBrowser = ({
                 />
               ) : fileContentType?.startsWith("audio/") ? (
                 <audio src={fileContent} controls className="w-full" />
+              ) : fileContentType?.startsWith("text/html") || fileContentType === "application/xhtml+xml" ? (
+                // Untrusted HTML from a mirror. `allow-scripts` runs JS + WASM, but
+                // we deliberately OMIT `allow-same-origin`: that pairing lets the
+                // framed content rewrite its own iframe and escape the sandbox.
+                // Without it the iframe is an opaque origin — scripts run but can't
+                // reach the parent app's DOM / cookies / storage.
+                <iframe
+                  sandbox="allow-scripts"
+                  srcDoc={fileContent}
+                  title={selectedFile.name}
+                  className="w-full rounded border border-base-300 bg-white"
+                  style={{ height: "60vh" }}
+                />
               ) : fileContentType && !isTextViewable(fileContentType) ? (
                 <div className="text-center text-gray-500">
                   <p className="font-semibold mb-1">Binary file — cannot preview</p>
@@ -2014,7 +2146,10 @@ export const FileBrowser = ({
                     className="max-w-[90vw] max-h-[85vh] object-contain"
                   />
                 ) : fileContentType === "application/pdf" ? (
+                  // Untrusted PDF bytes via blob: URL — sandboxed to an opaque
+                  // origin (allow-scripts, no allow-same-origin), same as inline.
                   <iframe
+                    sandbox="allow-scripts"
                     src={fileContent}
                     title={selectedFile.name}
                     className="rounded"
@@ -2024,6 +2159,16 @@ export const FileBrowser = ({
                   <video src={fileContent} controls className="max-w-[90vw] max-h-[85vh] object-contain" />
                 ) : fileContentType?.startsWith("audio/") ? (
                   <audio src={fileContent} controls className="w-[60vw]" />
+                ) : fileContentType?.startsWith("text/html") || fileContentType === "application/xhtml+xml" ? (
+                  // Untrusted HTML — runs JS + WASM via allow-scripts, but no
+                  // allow-same-origin (opaque origin; can't reach the parent app).
+                  <iframe
+                    sandbox="allow-scripts"
+                    srcDoc={fileContent}
+                    title={selectedFile.name}
+                    className="rounded bg-white"
+                    style={{ width: "90vw", height: "85vh" }}
+                  />
                 ) : fileContentType && !isTextViewable(fileContentType) ? (
                   <div className="text-center text-white/50">
                     <p className="font-semibold mb-1">Binary file — cannot preview</p>
@@ -2094,7 +2239,18 @@ export const FileBrowser = ({
             setTagModalUID(null);
             setTagModalIsFile(false);
           }}
-          onTagChange={() => setTagFilterVersion(v => v + 1)}
+          onTagChange={() => {
+            setTagFilterVersion(v => v + 1);
+            // Applying/revoking an EXCLUDED tag changes the on-chain filter result,
+            // so the directory must re-query getDirectoryPageFiltered. The
+            // tagFilterVersion bump only re-resolves the def UID *set* — when an
+            // already-known def is applied the set is unchanged, so without an
+            // explicit refetch the newly-hidden item would linger until navigation
+            // (Codex P2). Refetch both lens queries; the include-filter path keys
+            // off tagFilterVersion separately.
+            refetchLensItems().catch(e => console.error("Directory refetch after tag change failed", e));
+            refetchLensListItems().catch(e => console.error("List refetch after tag change failed", e));
+          }}
         />
       )}
       {/* Folder delete confirmation */}

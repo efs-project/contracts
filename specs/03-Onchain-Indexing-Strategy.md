@@ -36,7 +36,7 @@ The bookkeeping is **schema-aware**: `_edgeHash(attester, targetID, definition, 
 Smart-contract readers split by cardinality:
 
 - **PIN** (Shape A — singular): `getActivePin(definition, attester, targetSchema) → bytes32 pinUID` and `getActivePinTarget(...) → bytes32 targetID`. O(1).
-- **TAG** (Shape B — list): `getActiveTagEntries(definition, attester, schema, start, length) → TagEntry[]` for full `(uid, weight)` tuples in one bulk SLOAD; `getActiveTags(...)` drops weights when not needed.
+- **TAG** (Shape B — list): `getActiveTagEntries(definition, attester, schema, start, length) → TagEntry[]` for full `(uid, weight)` tuples in one bulk SLOAD; `getActiveTags(...)` drops weights when not needed; `getActiveTagWeight(attester, target, definition, targetSchema) → (exists, weight)` for the O(1) weight of one specific target's active TAG (ADR-0048).
 
 ### Gas Limits, Spam, and Append-Only Storage
 Because EAS is permissionless, anyone can attest files to a folder. To prevent Out-Of-Gas (OOG) errors:
@@ -88,11 +88,12 @@ To support subjective file resolution natively onchain, two coordinated index sy
 **Do not use raw `_activeByAAS` queries for folder listing.** The index is keyed per file anchor, not per folder. Listing the files inside `/memes/` requires iterating the folder's child anchors. Use `EFSFileView` (next section) — it handles the iteration, pagination, lens merge, and revocation filtering for you.
 
 ### EFSFileView: High-level directory views
-EFSFileView is the read-side wrapper most client code should call rather than composing EFSIndexer + EdgeResolver queries by hand. Three variants:
+EFSFileView is the read-side wrapper most client code should call rather than composing EFSIndexer + EdgeResolver queries by hand. Four variants:
 
 - `getDirectoryPage(parent, start, length, dataSchemaUID, propertySchemaUID)` — all children, insertion order.
 - `getDirectoryPageByAddressList(parent, attesters, startingCursor, pageSize)` — attester-filtered directory listing.
 - `getDirectoryPageBySchemaAndAddressList(parent, anchorSchema, attesters, startingCursor, pageSize)` — schema + attester filtered (e.g. file anchors only).
+- `getDirectoryPageFiltered(parent, anchorSchema, attesters, excludeTagDefs[], minWeights[], cursor, maxItems)` — as above, but skips any item a lens has tagged with ANY `excludeTagDefs[k]` at `weight >= minWeights[k]` (union across the exclude pairs and across lenses; e.g. hide `nsfw`/`system` together). The two arrays are parallel — `require(excludeTagDefs.length == minWeights.length)` — and capped at `MAX_EXCLUDE_TAGS_PER_QUERY = 8`; empty arrays ⇒ no exclusion (degenerates to the unfiltered read). Thresholds are caller arguments; the per-item check resolves a file's DATA via its placement PIN (file labels target the DATA UID, folder labels target the ANCHOR UID) and reads the weight via `EdgeResolver.getActiveTagWeight`. A phase-1 scan budget bounds an all-excluded page. ADR-0048.
 
 Use `getDirectoryPageBySchemaAndAddressList(folderUID, DATA_SCHEMA_UID, [alice, bob], 0, 50)` to list files in `/memes/` from Alice and Bob's lenses. EFSFileView also exposes `getFilesAtPath(fileAnchorUID, attesters, schema, start, length)` for the narrower case of "what DATA attestations are on this specific anchor" — callers pass a file anchor, not a folder.
 

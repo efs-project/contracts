@@ -449,6 +449,124 @@ const deployedContracts = {
           inputs: [
             {
               internalType: "bytes32",
+              name: "parentAnchor",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "anchorSchema",
+              type: "bytes32",
+            },
+            {
+              internalType: "address[]",
+              name: "attesters",
+              type: "address[]",
+            },
+            {
+              internalType: "bytes32[]",
+              name: "excludeTagDefs",
+              type: "bytes32[]",
+            },
+            {
+              internalType: "int256[]",
+              name: "minWeights",
+              type: "int256[]",
+            },
+            {
+              internalType: "bytes",
+              name: "cursor",
+              type: "bytes",
+            },
+            {
+              internalType: "uint256",
+              name: "maxItems",
+              type: "uint256",
+            },
+          ],
+          name: "getDirectoryPageFiltered",
+          outputs: [
+            {
+              components: [
+                {
+                  components: [
+                    {
+                      internalType: "bytes32",
+                      name: "uid",
+                      type: "bytes32",
+                    },
+                    {
+                      internalType: "string",
+                      name: "name",
+                      type: "string",
+                    },
+                    {
+                      internalType: "bytes32",
+                      name: "parentUID",
+                      type: "bytes32",
+                    },
+                    {
+                      internalType: "bool",
+                      name: "isFolder",
+                      type: "bool",
+                    },
+                    {
+                      internalType: "bool",
+                      name: "hasData",
+                      type: "bool",
+                    },
+                    {
+                      internalType: "uint256",
+                      name: "childCount",
+                      type: "uint256",
+                    },
+                    {
+                      internalType: "uint256",
+                      name: "propertyCount",
+                      type: "uint256",
+                    },
+                    {
+                      internalType: "uint64",
+                      name: "timestamp",
+                      type: "uint64",
+                    },
+                    {
+                      internalType: "address",
+                      name: "attester",
+                      type: "address",
+                    },
+                    {
+                      internalType: "bytes32",
+                      name: "schema",
+                      type: "bytes32",
+                    },
+                    {
+                      internalType: "bytes32",
+                      name: "contentHash",
+                      type: "bytes32",
+                    },
+                  ],
+                  internalType: "struct EFSFileView.FileSystemItem[]",
+                  name: "items",
+                  type: "tuple[]",
+                },
+                {
+                  internalType: "bytes",
+                  name: "nextCursor",
+                  type: "bytes",
+                },
+              ],
+              internalType: "struct EFSFileView.DirectoryPage",
+              name: "page",
+              type: "tuple",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
               name: "anchorUID",
               type: "bytes32",
             },
@@ -2100,6 +2218,45 @@ const deployedContracts = {
               internalType: "struct EdgeResolver.TagEntry[]",
               name: "",
               type: "tuple[]",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+            {
+              internalType: "bytes32",
+              name: "target",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "definition",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "targetSchema",
+              type: "bytes32",
+            },
+          ],
+          name: "getActiveTagWeight",
+          outputs: [
+            {
+              internalType: "bool",
+              name: "exists",
+              type: "bool",
+            },
+            {
+              internalType: "int256",
+              name: "weight",
+              type: "int256",
             },
           ],
           stateMutability: "view",
@@ -5008,7 +5165,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     ListEntryResolver: {
-      address: "0x61363ac1c0f7B59c5F81bFd6d03216BF75aFFe7B",
+      address: "0x2205764731d3661442d4109A488DcCba36DFd999",
       abi: [
         {
           inputs: [
@@ -5711,7 +5868,7 @@ const deployedContracts = {
       },
     },
     ListReader: {
-      address: "0x47dc508dAf593D6839f2e4963Ea13A7E449b5138",
+      address: "0x0c6c659347174C19E19Dd3248E42B42FD3a9837a",
       abi: [
         {
           inputs: [
@@ -6110,7 +6267,7 @@ const deployedContracts = {
       },
     },
     ListResolver: {
-      address: "0xFb3B3Dea450Ee849f0FCaA268Ce160D32Ad933cd",
+      address: "0x37a381B82A921D3cd8F3a91B4A30cBc1de86028f",
       abi: [
         {
           inputs: [
