@@ -84,6 +84,18 @@ async function readProxyAdmin(proxy: string): Promise<string> {
   return ethers.getAddress("0x" + raw.slice(-40));
 }
 
+// EIP-1967 implementation slot: bytes32(uint256(keccak256("eip1967.proxy.implementation")) - 1).
+const EIP1967_IMPL_SLOT = "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc";
+
+/// Read the implementation address from a TransparentUpgradeableProxy's EIP-1967 impl slot. Used by
+/// the --after-freeze-gate resume to hand the verify gate the LIVE impl behind each re-bound proxy, so
+/// the gate's impl-direct `_disableInitializers` lock check runs on the register path too (mirrors the
+/// Safe path's buildDeploysFromOnchain).
+async function readImplementation(proxy: string): Promise<string> {
+  const raw = await ethers.provider.getStorage(proxy, EIP1967_IMPL_SLOT);
+  return ethers.getAddress("0x" + raw.slice(-40));
+}
+
 // ── Bootstrap scaffolding tree (root → tags/transports → 11 transport children) ───────────────────
 // The whole tree is authored by ONE timestamp-robust SystemAccount.bootstrap call (FIX 1, PR #24):
 // each child's refUID is threaded from the parent UID the prior EAS.attest returned in the same call,
@@ -170,9 +182,16 @@ export async function orchestrate(deployer: Signer, mode: RunMode, log = true): 
       if (code === "0x") {
         throw new Error(`after-freeze-gate: no proxy at predicted ${proxy} for ${r} — run --until-freeze-gate first`);
       }
+      // Read the LIVE impl from the proxy's EIP-1967 slot so the verify gate (run below, before the
+      // irreversible register) can assert the impl is initializer-locked — not just blank it. (P2,
+      // PR #24 50yr-review.)
+      const impl = await readImplementation(proxy);
+      if (impl === ZeroAddress) {
+        throw new Error(`after-freeze-gate: proxy ${proxy} for ${r} has a zero EIP-1967 implementation slot`);
+      }
       deploys[r] = {
         resolver: r,
-        impl: ZeroAddress, // impl not needed post-freeze; verify gate already ran pre-gate
+        impl,
         proxy,
         predicted: proxy,
         proxyAdmin: await readProxyAdmin(proxy),
@@ -186,14 +205,27 @@ export async function orchestrate(deployer: Signer, mode: RunMode, log = true): 
         `after-freeze-gate: no proxy at predicted ${systemAccountAddr} for SystemAccount — run --until-freeze-gate first`,
       );
     }
+    const saImpl = await readImplementation(systemAccountAddr);
+    if (saImpl === ZeroAddress) {
+      throw new Error(`after-freeze-gate: SystemAccount proxy ${systemAccountAddr} has a zero EIP-1967 implementation slot`);
+    }
     deploys.SystemAccount = {
       resolver: "SystemAccount",
-      impl: ZeroAddress,
+      impl: saImpl,
       proxy: systemAccountAddr,
       predicted: systemAccountAddr,
       proxyAdmin: await readProxyAdmin(systemAccountAddr),
       rawSalt: rawSalts.SystemAccount,
     };
+    // Run the FULL verify gate against the live re-bound proxies BEFORE the irreversible register
+    // (P2, PR #24 50yr-review). --until-freeze-gate and --after-freeze-gate are SEPARATE processes;
+    // if the operator rebases/updates the deploy code between them, a drifted Indexer/Edge config,
+    // EAS address, init-supplied cross-ref UID, or field-string could otherwise be registered
+    // permanently — registerAndTransfer's own pre-register check only re-asserts the two self-derived
+    // UID getters. This mirrors the Safe path (orchestrateSafe.ts: buildDeploysFromOnchain +
+    // runVerifyGate at Phase 1, before Batch 2). Throws on any drift → no schema is registered.
+    l("EFS deploy: --after-freeze-gate — running full verify gate against re-bound proxies (pre-register)...");
+    await runVerifyGate({ deploys, schemaUIDs, deployer });
     const result: OrchestrationResult = {
       deploys,
       proxies,

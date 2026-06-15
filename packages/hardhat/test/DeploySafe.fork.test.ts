@@ -443,6 +443,16 @@ describe("DeploySafe.fork — Safe-native deploy, born Safe-owned", function () 
       "no register legs proposed at Phase 0 (Batch 2 is not emitted until Phase 1)",
     ).to.equal(0);
 
+    // ── The five gas/refund SafeTx fields are surfaced AND zero (P2, PR #24 50yr-review) ────────────
+    // They are part of the EIP-712 SafeTx hash; the operator must import them at exactly these (zero)
+    // values or the signed/executed hash diverges from the recorded safeTxHash (freeze-ledger hash).
+    const b0 = res.batches[0];
+    expect(b0.safeTxGas, "safeTxGas zero").to.equal("0");
+    expect(b0.baseGas, "baseGas zero").to.equal("0");
+    expect(b0.gasPrice, "gasPrice zero").to.equal("0");
+    expect(b0.gasToken, "gasToken zero-address").to.equal(ethers.ZeroAddress);
+    expect(b0.refundReceiver, "refundReceiver zero-address").to.equal(ethers.ZeroAddress);
+
     // ── NOTHING was executed: the Safe nonce is still 0, and no Safe-keyed proxy has code ────────────
     expect(await safeContract.nonce(), "Safe nonce unchanged — execTransaction never called").to.equal(0n);
     expect(

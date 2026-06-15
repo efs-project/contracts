@@ -232,6 +232,17 @@ export interface ProposedBatch {
   operation: number;
   /// The Safe nonce this batch must execute at (sequential across the ceremony).
   nonce: string;
+  /// The five gas/refund SafeTx fields — all zero here — that are ALSO hashed into the EIP-712
+  /// SafeTx digest alongside to/value/data/operation/nonce. They are emitted explicitly so the
+  /// operator imports the EXACT transaction that was hashed: if Safe{Wallet} / the Safe Tx Service
+  /// estimates or fills any of these (it offers to), the signed+executed hash diverges from
+  /// `safeTxHash` — the freeze-ledger hash — and the ceremony record no longer matches what owners
+  /// signed. They MUST be set to these (zero) values when proposing.
+  safeTxGas: string;
+  baseGas: string;
+  gasPrice: string;
+  gasToken: string;
+  refundReceiver: string;
   /// The EIP-712 SafeTx hash the owners sign (matches the Safe's own getTransactionHash).
   safeTxHash: string;
   /// The inner MultiSend legs, decoded for the operator's review (to/value/dataLength + label).
@@ -267,6 +278,11 @@ export async function buildProposedBatch(
     data: tx.data,
     operation: tx.operation,
     nonce: nonce.toString(),
+    safeTxGas: tx.safeTxGas.toString(),
+    baseGas: tx.baseGas.toString(),
+    gasPrice: tx.gasPrice.toString(),
+    gasToken: tx.gasToken,
+    refundReceiver: tx.refundReceiver,
     safeTxHash: hash,
     legs,
   };
