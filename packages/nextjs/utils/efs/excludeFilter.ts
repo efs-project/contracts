@@ -1,5 +1,5 @@
 /**
- * excludeFilter — pure decision logic for the ADR-0048 on-chain tag-exclusion
+ * excludeFilter — pure decision logic for the ADR-0054 on-chain tag-exclusion
  * filter, extracted from the explorer wiring so the SAFETY-CRITICAL invariants
  * are unit-testable. The React hooks/effects that consume these (FileBrowser,
  * useLensesDirectoryPage) aren't reachable by the `utils/**` test runner, and

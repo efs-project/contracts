@@ -38,14 +38,14 @@ interface UseLensesDirectoryPageOptions {
   /** Target items per user-facing page. Default 50. */
   pageSize?: bigint;
   /**
-   * EXCLUDE tag definition UIDs applied on-chain (ADR-0048). When non-empty the
+   * EXCLUDE tag definition UIDs applied on-chain (ADR-0054). When non-empty the
    * hook calls `getDirectoryPageFiltered` so the listing returns already
    * filtered; when empty it falls back to the unfiltered
    * `getDirectoryPageBySchemaAndAddressList`. Parallel to `minWeights`.
    */
   excludeTagDefs?: string[];
   /**
-   * Per-tag weight thresholds (ADR-0048 / ADR-0042). Parallel to
+   * Per-tag weight thresholds (ADR-0054 / ADR-0042). Parallel to
    * `excludeTagDefs`; an item is excluded for tag k iff a viewed lens has an
    * active TAG with `weight >= minWeights[k]`. When omitted OR length-mismatched
    * with `excludeTagDefs`, it is derived as `excludeTagDefs.map(() => 0n)`
@@ -224,7 +224,7 @@ export function useLensesDirectoryPage({
 
       try {
         while (autoPages < MAX_AUTO_ADVANCE_PAGES) {
-          // ADR-0048: when EXCLUDE tags are active, push the exclusion on-chain
+          // ADR-0054: when EXCLUDE tags are active, push the exclusion on-chain
           // via getDirectoryPageFiltered so the page returns already filtered.
           // Otherwise keep the unfiltered read unchanged.
           const result = (
@@ -307,7 +307,7 @@ export function useLensesDirectoryPage({
       cancelled = true;
     };
     // cursorRef is mutable-ref; lensesKey stands in for lensAddresses equality,
-    // excludeKey/minWeightsKey stand in for the EXCLUDE filter arrays (ADR-0048).
+    // excludeKey/minWeightsKey stand in for the EXCLUDE filter arrays (ADR-0054).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     loadTrigger,

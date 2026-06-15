@@ -892,7 +892,7 @@ contract EdgeResolver is EFSUpgradeableResolver {
     ///         lookup followed by the struct read, never a list scan. No new storage, no write-path
     ///         change. The kernel stays weight-neutral (ADR-0041 §4): the raw `int256` weight is
     ///         returned verbatim, with no sign/magnitude interpretation. Callers that want a
-    ///         threshold policy (e.g. ADR-0042's `weight >= 0`, or ADR-0048's view-layer exclusion
+    ///         threshold policy (e.g. ADR-0042's `weight >= 0`, or ADR-0054's view-layer exclusion
     ///         filter) apply it themselves.
     ///
     ///         `targetSchema = bytes32(0)` is the canonical sentinel for an address-target TAG
@@ -910,7 +910,7 @@ contract EdgeResolver is EFSUpgradeableResolver {
         bytes32 definition,
         bytes32 targetSchema
     ) external view returns (bool exists, int256 weight) {
-        bytes32 edgeHash = _edgeHash(attester, target, definition, TAG_SCHEMA_UID);
+        bytes32 edgeHash = _edgeHash(attester, target, definition, TAG_SCHEMA_UID());
         uint256 indexPlusOne = _activeByAASIndex[definition][attester][targetSchema][edgeHash];
         if (indexPlusOne == 0) return (false, 0);
         return (true, _activeByAAS[definition][attester][targetSchema][indexPlusOne - 1].weight);

@@ -417,7 +417,7 @@ export async function seedDemoTree() {
     // Create the non-revocable file ANCHOR LAST, immediately before the placement
     // PIN (Codex P2). The anchor is a DATA-schema child, so `EFSFileView` phase 1
     // (`getAnchorsBySchemaAndAddressList`) lists it the instant it exists — but the
-    // ADR-0048 `system` exclude reaches a FILE item's tagged DATA only via
+    // ADR-0054 `system` exclude reaches a FILE item's tagged DATA only via
     // `getActivePinTarget`, so a bare anchor with no PIN cannot be hidden. The
     // anchor→PIN gap is the one irreducible window (the PIN's `definition` is the
     // anchor UID, which EAS can't precompute for an atomic batch), so we shrink it

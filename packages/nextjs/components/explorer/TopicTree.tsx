@@ -92,7 +92,7 @@ const TreeNode = ({
   // on empty pages until at least one page of children is collected or the
   // cursor is exhausted (ADR-0036). The tree is a navigation summary, not a
   // complete listing — `loadMore` is intentionally unused here.
-  // AGENT-NOTE (ADR-0048): this tree read is NOT exclude-filtered — it passes no
+  // AGENT-NOTE (ADR-0054): this tree read is NOT exclude-filtered — it passes no
   // `excludeTagDefs`, so `system`/`nsfw` folders the main grid hides still appear
   // in this sidebar. Partial break of the folder-hide guarantee, tracked in
   // docs/FUTURE_WORK.md ("TopicTree navigation pane is not exclude-filtered").

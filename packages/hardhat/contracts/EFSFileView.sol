@@ -45,7 +45,7 @@ interface IEdgeResolverForFileView {
     /// @notice O(1) read of the raw stored weight of the active TAG `(definition, attester,
     ///         targetSchema)` whose target is `target`, or `(false, 0)` if none. Kernel
     ///         weight-neutral — returns the raw weight; the caller applies any threshold
-    ///         policy (ADR-0048). Used by `getDirectoryPageFiltered` for tag-exclusion.
+    ///         policy (ADR-0054). Used by `getDirectoryPageFiltered` for tag-exclusion.
     function getActiveTagWeight(
         address attester,
         bytes32 target,
@@ -122,7 +122,7 @@ contract EFSFileView {
         uint64 timestamp;
     }
 
-    /// @notice Parallel-array tag-exclusion policy for `getDirectoryPageFiltered` (ADR-0048).
+    /// @notice Parallel-array tag-exclusion policy for `getDirectoryPageFiltered` (ADR-0054).
     /// @dev    Bundles the `(excludeTagDefs[k], minWeights[k])` pairs into one memory value so the
     ///         exclusion policy travels as a single stack slot through the phase walkers and into
     ///         `_isItemExcluded` (keeps `viaIR` under the EVM stack limit). `defs.length` must equal
@@ -194,7 +194,7 @@ contract EFSFileView {
     ///      Callers wanting more than this many lenses need a different aggregation model.
     uint256 private constant MAX_ATTESTERS_PER_QUERY = 20;
 
-    /// @dev Maximum exclude-tag predicates per `getDirectoryPageFiltered` call (ADR-0048).
+    /// @dev Maximum exclude-tag predicates per `getDirectoryPageFiltered` call (ADR-0054).
     ///      The per-item exclusion check loops over `excludeTagDefs`, so the per-item file branch
     ///      is O(dataUIDs × lenses × excludeTags); this cap keeps that product bounded alongside
     ///      `MAX_ATTESTERS_PER_QUERY`. 8 comfortably covers the explorer's `system` + `nsfw` policy
@@ -238,14 +238,14 @@ contract EFSFileView {
 
     /// @dev Per-call phase-0 (folder) scan budget. `internal view virtual` so a test-only
     ///      subclass can override it to a small value to exercise the budget guard
-    ///      (ADR-0048's headline safety mechanism). Returns the production constant by default.
+    ///      (ADR-0054's headline safety mechanism). Returns the production constant by default.
     function _folderScanBudgetPerCall() internal view virtual returns (uint256) {
         return _FOLDER_SCAN_BUDGET_PER_CALL;
     }
 
     /// @dev Per-call phase-1 (file) scan budget. `internal view virtual` so a test-only
     ///      subclass can override it to a small value to exercise the budget guard
-    ///      (ADR-0048's headline safety mechanism). Returns the production constant by default.
+    ///      (ADR-0054's headline safety mechanism). Returns the production constant by default.
     function _fileScanBudgetPerCall() internal view virtual returns (uint256) {
         return _FILE_SCAN_BUDGET_PER_CALL;
     }
@@ -398,10 +398,10 @@ contract EFSFileView {
     }
 
     /**
-     * @notice Tag-exclusion-filtered directory listing (ADR-0048). Identical walk, sources,
+     * @notice Tag-exclusion-filtered directory listing (ADR-0054). Identical walk, sources,
      *         budgets, and opaque cursor format (ADR-0036) to
      *         `getDirectoryPageBySchemaAndAddressList`, PLUS a per-item exclusion predicate over
-     *         a set of `(excludeTagDefs[k], minWeights[k])` pairs (parallel arrays, ADR-0048):
+     *         a set of `(excludeTagDefs[k], minWeights[k])` pairs (parallel arrays, ADR-0054):
      *
      *           **Skip an item if, for ANY pair k, ANY attester in `attesters` has an active TAG
      *           `excludeTagDefs[k]` on it with `weight >= minWeights[k]`.**
@@ -414,7 +414,7 @@ contract EFSFileView {
      *         conventional `minWeight = 0` a caller passes, not a baked-in rule). The kernel stays
      *         weight-neutral. Empty arrays ⇒ no exclusion (degenerates to the unfiltered page).
      *
-     *         **Tag-target asymmetry (load-bearing, ADR-0048).** A descriptive-label TAG targets
+     *         **Tag-target asymmetry (load-bearing, ADR-0054).** A descriptive-label TAG targets
      *         different UIDs for folders vs files, and the predicate is a UNION over the viewed
      *         lenses (mirroring the client's `FileBrowser.resolveTagSet`): an item is excluded iff
      *         ANY viewed lens has an active `excludeTagDef` TAG (weight >= minWeight) on ANY DATA
@@ -626,7 +626,7 @@ contract EFSFileView {
     /// @dev Per-item tag-exclusion predicate for `getDirectoryPageFiltered`. Decodes the item's
     ///      anchor once to determine folder-vs-file (anchorType == bytes32(0) ⇒ folder, the same
     ///      rule `_buildFileSystemItems` uses) and resolves the correct tag target(s) per the
-    ///      ADR-0048 asymmetry. The exclusion is a UNION across the exclude-tag pairs
+    ///      ADR-0054 asymmetry. The exclusion is a UNION across the exclude-tag pairs
     ///      (`excludeTagDefs[k]`, `minWeights[k]`) AND over the viewed lenses on both the
     ///      target-resolution side and the tag-attester side — each pair applies the EXACT
     ///      single-tag semantic, matching the client's `FileBrowser.resolveTagSet` (union of
@@ -694,7 +694,7 @@ contract EFSFileView {
         // (<= MAX_ATTESTERS_PER_QUERY), so a fixed-size memory array with linear dedup is
         // O(1)-class per read (no storage list scans).
         //
-        // Note (ADR-0048): this branch is reached by any non-folder anchor, including LIST
+        // Note (ADR-0054): this branch is reached by any non-folder anchor, including LIST
         // anchors (anchorType == LIST_SCHEMA_UID, non-zero). A LIST has no placement PIN under
         // `dataSchemaUID`, so no lens resolves any DATA, the set below stays empty, and a LIST is
         // never excluded — non-folder/non-file anchors pass through unfiltered. Intentional for v1

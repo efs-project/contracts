@@ -86,7 +86,7 @@ EFSIndexer emits events for off-chain indexing. Adding a field to an event later
 ### Empty lens list = "all data" (filtered + paged) — PRE-SEPOLIA, needs ADR + contract path
 Decision (James, 2026-06-14): the lens list is the answer to "whose data?" — `vitalik.eth`
 = only vitalik's, "me/my address" = only mine, and an EMPTY list = **all data from
-everyone**. The `system`/`nsfw` exclusion (ADR-0048) and pagination still apply; "all"
+everyone**. The `system`/`nsfw` exclusion (ADR-0054) and pagination still apply; "all"
 only widens *whose* content, not *what kind*. This is a pre-Sepolia gate (LAUNCH_CHECKLIST
 → Devnet → Frontend/Client), intentionally deferred from PR #27.
 
@@ -115,7 +115,7 @@ makes empty mean "all", which is the opposite default — so it needs:
   all-attesters path instead of disabling.
 
 ### TopicTree navigation pane is not exclude-filtered (system/nsfw folders show in the sidebar)
-The ADR-0048 exclusion filter is wired into the main FileBrowser grid but NOT into the `TopicTree` sidebar, which lists folders via its own `useLensesDirectoryPage` call without `excludeTagDefs`. So a folder tagged `system`/`nsfw` is hidden from the grid but still appears in the left navigation tree — a partial break of the folder-hide guarantee. Pre-existing (the tree was never filtered) and out of the on-chain-filter PR's grid scope. Fix: lift the exclude-def resolution (currently inside FileBrowser) to a shared hook / ExplorerClient and thread `excludeTagDefUIDs` + `excludeMinWeights` through TopicTree's directory read, so both panes route through `getDirectoryPageFiltered`. Mind TopicTree's own resolution-race gating when doing so.
+The ADR-0054 exclusion filter is wired into the main FileBrowser grid but NOT into the `TopicTree` sidebar, which lists folders via its own `useLensesDirectoryPage` call without `excludeTagDefs`. So a folder tagged `system`/`nsfw` is hidden from the grid but still appears in the left navigation tree — a partial break of the folder-hide guarantee. Pre-existing (the tree was never filtered) and out of the on-chain-filter PR's grid scope. Fix: lift the exclude-def resolution (currently inside FileBrowser) to a shared hook / ExplorerClient and thread `excludeTagDefUIDs` + `excludeMinWeights` through TopicTree's directory read, so both panes route through `getDirectoryPageFiltered`. Mind TopicTree's own resolution-race gating when doing so.
 
 ### Frontend exclude-filter fail-safes — unit coverage (mostly done)
 DONE: the pure decision logic was extracted to `utils/efs/excludeFilter.ts`
@@ -439,5 +439,5 @@ Defaulting `drawerTagFilters.system = "exclude"` (so Overviews are hidden from t
 
 ### Paged/batched chunk manager for uploads above ~24 MB
 **Partly resolved:** uploads are now capped by chunk count — `MAX_CHUNKS = 1000` in `lib/efs/sstore2.ts`, with `MAX_ONCHAIN_SIZE = MAX_CHUNKS * CHUNK_SIZE` (~24 MB), enforced up front in `uploadOnchainFile`, `CreateItemModal`, and `MirrorsPanel`. The cap exists because `MockChunkedFile`'s constructor stores every chunk address with one cold SSTORE in a single deploy tx (~22k gas each), so ~1,000 chunks ≈ 23 M gas sits safely under a 30 M block while ~1,250 (the old 30 MB) risked OOG *after* the user paid for all chunk deploys. The remaining work is to lift the ceiling: replace the single-constructor manager with a **paged/batched deploy** (e.g. an `addChunks(address[])` appender called in bounded batches, or an SSTORE2-pointer index) so >24 MB files become possible without a one-shot constructor that can exceed the block gas limit. `MAX_CHUNKS` is the single knob to raise once that lands. The `1000` figure is a conservative estimate, not a measured limit — gas-test the real manager-deploy budget when revisiting.
-### getDirectoryPageFiltered — minor follow-ups (ADR-0048 review, non-blocking)
+### getDirectoryPageFiltered — minor follow-ups (ADR-0054 review, non-blocking)
 Two P3s from the PR #26 review squad, both deliberately deferred: (1) `_isItemExcluded` and `_buildFileSystemItems` each `eas.getAttestation` + decode the same anchor for every *kept* item — bounded by `maxItems` so it never threatens the call, but the predicate could hand back the decoded `anchorType`/`isFolder` for the build step to reuse. (2) The view-level scan budget bounds the per-item exclusion loop but NOT the single underlying `EFSIndexer.getAnchorsBySchemaAndAddressList` call, which can scan up to `total` raw positions on a pathologically dense revoked/non-lens array — a pre-existing property shared with `getDirectoryPageBySchemaAndAddressList`, now inherited by a second public view. Worth a direct gas/fuzz test on the indexer page-fill before launch.

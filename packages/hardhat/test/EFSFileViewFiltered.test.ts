@@ -2,25 +2,27 @@ import { expect } from "chai";
 import { ethers } from "hardhat";
 import { EFSIndexer, EFSFileView, EdgeResolver, EAS, SchemaRegistry } from "../typechain-types";
 import { Signer, ZeroAddress } from "ethers";
+import { deployIndexerProxy } from "./helpers/deployIndexerProxy";
+import { deployResolverProxy } from "./helpers/deployResolverProxy";
 
 const ZERO_BYTES32 = "0x0000000000000000000000000000000000000000000000000000000000000000";
 const NO_EXPIRATION = 0n;
 const DEFAULT_TAG_WEIGHT = 1n;
 
 /**
- * EFSFileView.getDirectoryPageFiltered — view-layer tag-exclusion directory filter (ADR-0048).
+ * EFSFileView.getDirectoryPageFiltered — view-layer tag-exclusion directory filter (ADR-0054).
  *
  * The filter is getDirectoryPageBySchemaAndAddressList PLUS a per-item exclusion predicate:
  * skip an item if ANY lens has an active TAG `excludeTagDef` on it with `weight >= minWeight`.
  *
- * Tag-target asymmetry (load-bearing, ADR-0048):
+ * Tag-target asymmetry (load-bearing, ADR-0054):
  *   - folder item: the descriptive-label TAG targets the ANCHOR UID, bucket ANCHOR_SCHEMA_UID.
  *   - file item:   the TAG targets the DATA UID, reached via the placement PIN
  *                  getActivePinTarget(itemAnchor, lens, dataSchemaUID), bucket dataSchemaUID.
  *
  * getActiveTagWeight is also unit-tested here: O(1) raw-weight read over existing storage.
  */
-describe("EFSFileView — getDirectoryPageFiltered (ADR-0048)", function () {
+describe("EFSFileView — getDirectoryPageFiltered (ADR-0054)", function () {
   let indexer: EFSIndexer;
   let fileView: EFSFileView;
   let edgeResolver: EdgeResolver;
@@ -54,8 +56,14 @@ describe("EFSFileView — getDirectoryPageFiltered (ADR-0048)", function () {
     const ownerAddr = await owner.getAddress();
     const nonce = await ethers.provider.getTransactionCount(ownerAddr);
 
-    const futureEdgeResolverAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: nonce });
-    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: nonce + 7 });
+    // Deploy order (both EdgeResolver and EFSIndexer are proxied per ADR-0048):
+    //   nonce+0: EdgeResolver implementation
+    //   nonce+1: EdgeResolver proxy (the resolver baked into the PIN/TAG schema UIDs)
+    //   nonce+2..6: Anchor, Property, Data, PIN, TAG schema registrations (5 total)
+    //   nonce+7: Indexer implementation
+    //   nonce+8: Indexer proxy (the resolver)
+    const futureEdgeResolverAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: nonce + 1 });
+    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: nonce + 8 });
     const precomputedPinSchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
       ["bytes32 definition", futureEdgeResolverAddr, true],
@@ -65,15 +73,15 @@ describe("EFSFileView — getDirectoryPageFiltered (ADR-0048)", function () {
       ["bytes32 definition, int256 weight", futureEdgeResolverAddr, true],
     );
 
-    const EdgeResolverFactory = await ethers.getContractFactory("EdgeResolver");
-    edgeResolver = await EdgeResolverFactory.deploy(
-      await eas.getAddress(),
-      precomputedPinSchemaUID,
-      precomputedTagSchemaUID,
-      futureIndexerAddr,
-      await registry.getAddress(),
+    // Deploy EdgeResolver behind a proxy (ADR-0048): impl + proxy; initialize() sets the
+    // PIN/TAG schema UIDs + partner refs. The proxy address is baked into the PIN/TAG schema UIDs.
+    edgeResolver = await deployResolverProxy<EdgeResolver>(
+      "EdgeResolver",
+      [await eas.getAddress()],
+      [precomputedPinSchemaUID, precomputedTagSchemaUID, futureIndexerAddr, await registry.getAddress()],
+      owner,
     );
-    await edgeResolver.waitForDeployment();
+    expect(await edgeResolver.getAddress()).to.equal(futureEdgeResolverAddr);
 
     const tx1 = await registry.register("string name, bytes32 schemaUID", futureIndexerAddr, false);
     anchorSchemaUID = (await tx1.wait())!.logs[0].topics[1];
@@ -81,11 +89,9 @@ describe("EFSFileView — getDirectoryPageFiltered (ADR-0048)", function () {
     const tx2 = await registry.register("string value", futureIndexerAddr, false);
     propertySchemaUID = (await tx2.wait())!.logs[0].topics[1];
 
-    const tx3 = await registry.register("bytes32 contentHash, uint64 size", futureIndexerAddr, false);
+    // DATA is the empty schema — pure identity (ADR-0049). No fields.
+    const tx3 = await registry.register("", futureIndexerAddr, false);
     dataSchemaUID = (await tx3.wait())!.logs[0].topics[1];
-
-    const tx4 = await registry.register("string mimeType, uint8 storageType, bytes location", ZeroAddress, true);
-    const blobSchemaUID = (await tx4.wait())!.logs[0].topics[1];
 
     const tx5 = await registry.register("bytes32 definition", futureEdgeResolverAddr, true);
     pinSchemaUID = (await tx5.wait())!.logs[0].topics[1];
@@ -93,15 +99,14 @@ describe("EFSFileView — getDirectoryPageFiltered (ADR-0048)", function () {
     const tx6 = await registry.register("bytes32 definition, int256 weight", futureEdgeResolverAddr, true);
     tagSchemaUID = (await tx6.wait())!.logs[0].topics[1];
 
-    const IndexerFactory = await ethers.getContractFactory("EFSIndexer");
-    indexer = await IndexerFactory.deploy(
+    // Deploy Indexer behind a proxy (ADR-0048). No BLOB schema (dropped on schema-freeze).
+    indexer = await deployIndexerProxy(
       await eas.getAddress(),
       anchorSchemaUID,
       propertySchemaUID,
       dataSchemaUID,
-      blobSchemaUID,
+      owner,
     );
-    await indexer.waitForDeployment();
     expect(await indexer.getAddress()).to.equal(futureIndexerAddr);
 
     // A standalone schema UID used as the exclude-tag definition (a valid bytes32 definition,
@@ -159,8 +164,13 @@ describe("EFSFileView — getDirectoryPageFiltered (ADR-0048)", function () {
     return getUIDFromReceipt(await tx.wait());
   };
 
-  /** Create a DATA attestation (content identity) and return its UID. */
+  /**
+   * Create a DATA attestation (content identity) and return its UID. DATA is the empty schema —
+   * pure identity (ADR-0049), so the payload is empty (`"0x"`). The `label` only distinguishes
+   * call sites in the test; it does not encode into the attestation.
+   */
   const createData = async (label: string, signer: Signer = owner): Promise<string> => {
+    void label;
     const tx = await eas.connect(signer).attest({
       schema: dataSchemaUID,
       data: {
@@ -168,7 +178,7 @@ describe("EFSFileView — getDirectoryPageFiltered (ADR-0048)", function () {
         expirationTime: NO_EXPIRATION,
         revocable: false,
         refUID: ZERO_BYTES32,
-        data: enc.encode(["bytes32", "uint64"], [ethers.keccak256(ethers.toUtf8Bytes(label)), 1n]),
+        data: "0x", // DATA is an empty schema — pure identity (ADR-0049)
         value: 0n,
       },
     });
@@ -224,7 +234,7 @@ describe("EFSFileView — getDirectoryPageFiltered (ADR-0048)", function () {
 
   /**
    * Deploy a test-only EFSFileView subclass whose per-call scan budgets are shrunk to `budget`
-   * (default 4). Lets the phase-0 / phase-1 budget guards (ADR-0048's headline safety mechanism)
+   * (default 4). Lets the phase-0 / phase-1 budget guards (ADR-0054's headline safety mechanism)
    * trip with a handful of seeded items instead of thousands. Wired to the same indexer +
    * edgeResolver as the production `fileView`.
    */
@@ -443,7 +453,7 @@ describe("EFSFileView — getDirectoryPageFiltered (ADR-0048)", function () {
   });
 
   it("Cross-lens exclusion: lens A pins DATA, lens B tags it; viewed with [A,B] the file is excluded", async function () {
-    // ADR-0048 union semantic (matches FileBrowser.resolveTagSet × matchesUID): an item is
+    // ADR-0054 union semantic (matches FileBrowser.resolveTagSet × matchesUID): an item is
     // excluded iff ANY viewed lens tagged ANY DATA UID resolved at the item across the viewed
     // lenses — NOT just the DATA each lens itself pinned. Here Alice pins DATA_A and Bob (also a
     // viewed lens) tags DATA_A. The viewer trusts Bob's judgment, so the file must be excluded.
@@ -610,7 +620,7 @@ describe("EFSFileView — getDirectoryPageFiltered (ADR-0048)", function () {
   });
 
   it("Footgun guard: an exclude tag mistakenly placed on a file's ANCHOR excludes nothing", async function () {
-    // ADR-0048 known footgun: a file's descriptive-label TAG must target its DATA, not its
+    // ADR-0054 known footgun: a file's descriptive-label TAG must target its DATA, not its
     // anchor. If a tag is (wrongly) placed on the file ANCHOR, the filter — which resolves
     // files to their DATA — correctly ignores it and the file remains visible.
     const aliceAddr = await alice.getAddress();
@@ -636,7 +646,7 @@ describe("EFSFileView — getDirectoryPageFiltered (ADR-0048)", function () {
   // ─────────────────────── scan-budget guard (small-budget subclass) ───────────────────────
 
   it("Phase-1 budget trips: empty page + non-empty cursor, forward progress, no skip/dup, terminates", async function () {
-    // ADR-0048's headline safety mechanism: a 100%-excluded page must NOT loop the whole
+    // ADR-0054's headline safety mechanism: a 100%-excluded page must NOT loop the whole
     // source in one eth_call. With a small budget (4) and 6 all-excluded files under the lens,
     // the FIRST call must return zero items with a NON-EMPTY cursor (budget hit before maxItems,
     // source not exhausted). Resuming makes forward progress (fileIdx strictly increases) and the
@@ -906,7 +916,7 @@ describe("EFSFileView — getDirectoryPageFiltered (ADR-0048)", function () {
     expect(names(filtered.items)).to.deep.equal(["only.txt"]);
   });
 
-  // ─────────────────────────── multi-tag exclusion (ADR-0048) ───────────────────────────
+  // ─────────────────────────── multi-tag exclusion (ADR-0054) ───────────────────────────
 
   describe("multi-tag exclusion (parallel arrays)", function () {
     // A second exclude-tag definition, distinct from `excludeTagDef` (e.g. `system` + `nsfw`).
@@ -977,7 +987,7 @@ describe("EFSFileView — getDirectoryPageFiltered (ADR-0048)", function () {
     });
 
     it("Reverts when excludeTagDefs exceeds MAX_EXCLUDE_TAGS_PER_QUERY (9 > cap of 8)", async function () {
-      // ADR-0048 bounds per-query exclude tags at MAX_EXCLUDE_TAGS_PER_QUERY (8) so the
+      // ADR-0054 bounds per-query exclude tags at MAX_EXCLUDE_TAGS_PER_QUERY (8) so the
       // per-item exclusion loop stays cheap. Passing 9 valid, length-matched defs must revert
       // BEFORE any walk — this is the cap guard, distinct from the length-mismatch guard above.
       const aliceAddr = await alice.getAddress();
