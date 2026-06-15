@@ -126,8 +126,9 @@ What else we looked at and why it lost.
 ### View APIs
 - [ADR-0036 — Opaque-cursor pagination for multi-source views](./0036-opaque-cursor-pagination.md)
 - [ADR-0051 — Reads exclude revoked (and superseded) by default; full history is opt-in](./0051-reads-exclude-revoked-by-default.md)
+- [ADR-0048 — View-layer tag-exclusion directory filter](./0048-view-layer-tag-exclusion-filter.md) *(extends ADR-0042 into the view layer; kernel stays weight-neutral)*
 
 ### Frontend / Static Export
 - [ADR-0040 — Read dynamic route params from `usePathname`, not `useParams`, in static-exported dynamic routes](./0040-static-export-usepathname-over-useparams.md)
-- [ADR-0042 — Effective TAG as a client-layer weight filter for descriptive labels](./0042-effective-tag-weight-filter.md)
+- [ADR-0042 — Effective TAG as a client-layer weight filter for descriptive labels](./0042-effective-tag-weight-filter.md) *(Extended into the view layer by ADR-0048 — the same `weight >= threshold` projection is now also available on-chain via `EFSFileView.getDirectoryPageFiltered`; the kernel still never interprets weight)*
 

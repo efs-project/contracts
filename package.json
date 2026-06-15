@@ -38,6 +38,7 @@
     "hardhat:verify": "yarn workspace @se-2/hardhat verify",
     "postinstall": "husky install",
     "docs:check": "bash scripts/docs-check.sh",
+    "pr:intake": "bash scripts/pr-review-intake.sh",
     "lint": "yarn next:lint && yarn hardhat:lint",
     "next:build": "yarn workspace @se-2/nextjs build",
     "next:check-types": "yarn workspace @se-2/nextjs check-types",

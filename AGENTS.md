@@ -48,7 +48,11 @@ equivalent prompt that explicitly requires all of the following:
 - read the PR description first, including `Agents involved`
 - read the governing specs / ADRs before commenting
 - use GitHub's native Review feature, not loose PR comments
+- when reviewing from James's GitHub account, submit a native `COMMENT` review
+  with inline threads; do not use `APPROVE` or `REQUEST_CHANGES`
 - open resolvable inline review threads whenever the finding maps to a diff hunk
+- mark the review body `Same-account advisory review: BLOCKING` when any
+  unresolved P0/P1/P2 finding remains, or `NO BLOCKING FINDINGS` otherwise
 - prefix every review body, inline comment, and thread reply with
   `[<model-name> · <role>]`
 - avoid placeholder / probe / "testing anchor" comments
@@ -129,7 +133,7 @@ wagmi client. Set both to the same URL when running end-to-end.
 
 ### Seeding demo data (devnet + local first-run)
 
-Demo data is seeded as a hardhat-deploy step (`deploy/08_seed_demo_tree.ts`),
+Demo data is seeded as a hardhat-deploy step (`deploy/10_seed_demo_tree.ts`),
 so a fresh deploy populates a small demo tree (`/docs/`, `/images/`, `/shared/`)
 with a lenses demo on `shared/photo.png` automatically. The step runs as
 part of `hardhat deploy` itself, not as a chained-after-deploy script —

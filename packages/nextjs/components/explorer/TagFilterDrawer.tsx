@@ -66,7 +66,7 @@ export const TagFilterDrawer = ({ tagFilters, onUpdateFilter, onAddTag, onRemove
                 </button>
 
                 {/* Tag name */}
-                <span className="flex-grow text-sm truncate px-1">{name}</span>
+                <span className="flex-grow text-sm text-center truncate px-1">{name}</span>
 
                 {/* Include button */}
                 <button

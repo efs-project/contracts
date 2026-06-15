@@ -83,6 +83,111 @@ EFSIndexer emits events for off-chain indexing. Adding a field to an event later
 ### Dev-UI: TagModal edge-definition scan scales with lifetime churn
 `TagModal` paginates the full append-only `getEdgeDefinitions` set for a target, then does an active-edge lookup and ancestor walk per definition to classify it under `/tags/`. On a heavily-reused DATA UID this scales with all-time edge history, not active tags. Fix: expose a TAG-schema-specific reverse index or `/tags/` classification cache so modal-open cost is O(active tag count). Dev UI / Ephemeral tier.
 
+### Empty lens list = "all data" (filtered + paged) — PRE-SEPOLIA, needs ADR + contract path
+Decision (James, 2026-06-14): the lens list is the answer to "whose data?" — `vitalik.eth`
+= only vitalik's, "me/my address" = only mine, and an EMPTY list = **all data from
+everyone**. The `system`/`nsfw` exclusion (ADR-0048) and pagination still apply; "all"
+only widens *whose* content, not *what kind*. This is a pre-Sepolia gate (LAUNCH_CHECKLIST
+→ Devnet → Frontend/Client), intentionally deferred from PR #27.
+
+Current state (what this supersedes): PR #27 removed the unscoped `getDirectoryPage`
+fallback, so an empty `lensAddresses` currently renders BLANK (fail-safe). The new model
+makes empty mean "all", which is the opposite default — so it needs:
+
+- **ADR** superseding the relevant parts of ADR-0031 (viewer sovereignty / "nobody sees
+  foreign content unless opted in") and ADR-0039 (systemLenses tail fallback). Under the
+  new model, "fresh user sees content" is served by empty=all, not by the systemLenses
+  backfill — decide whether systemLenses stays, becomes opt-in, or is dropped.
+- **Contract path** for an unscoped-but-filtered page. Cleanest: let
+  `EFSFileView.getDirectoryPageFiltered` (and the schema/address variant) treat an EMPTY
+  `attesters[]` as "all attesters" — drop the `require(attesters.length > 0)` and add the
+  all-children enumeration (it already walks `_childrenBySchema`; the attester `qualifies`
+  check just becomes unconditional when the list is empty), keeping the exclude filter +
+  opaque cursor. EFSFileView is redeployable, but settle this before the Sepolia freeze.
+  No non-address sentinel needed — the empty `address[]` IS the signal.
+- **Client wiring:** representation is just `lensAddresses.length === 0` ⇒ all. The only
+  subtlety is distinguishing the empty cases. Today defaults are built in
+  `defaultLensesForContainer` (`utils/efs/containers.ts`): `connected → viewedAddress →
+  webOfTrust → systemLenses`. To get a genuine empty, the systemLenses backfill must be
+  removable (per the ADR). James leans toward: clearing the list (incl. an explicit
+  `?lenses=` with no value) means "all" — which would also supersede ADR-0031's "explicit
+  empty must not widen". Re-point the directory hooks so an empty list calls the
+  all-attesters path instead of disabling.
+
+### TopicTree navigation pane is not exclude-filtered (system/nsfw folders show in the sidebar)
+The ADR-0048 exclusion filter is wired into the main FileBrowser grid but NOT into the `TopicTree` sidebar, which lists folders via its own `useLensesDirectoryPage` call without `excludeTagDefs`. So a folder tagged `system`/`nsfw` is hidden from the grid but still appears in the left navigation tree — a partial break of the folder-hide guarantee. Pre-existing (the tree was never filtered) and out of the on-chain-filter PR's grid scope. Fix: lift the exclude-def resolution (currently inside FileBrowser) to a shared hook / ExplorerClient and thread `excludeTagDefUIDs` + `excludeMinWeights` through TopicTree's directory read, so both panes route through `getDirectoryPageFiltered`. Mind TopicTree's own resolution-race gating when doing so.
+
+### Frontend exclude-filter fail-safes — unit coverage (mostly done)
+DONE: the pure decision logic was extracted to `utils/efs/excludeFilter.ts`
+(`shouldUseFilteredQuery`, `reconcileMinWeights`, `computeExcludesPending`,
+`tagsRootGateDecision`) with `utils/efs/excludeFilter.test.ts` + the empty-lenses
+fail-safe in `utils/efs/containers.test.ts`; contract entry-guard reverts and the
+`getActiveTagWeight` address-target case were added to `EFSFileViewFiltered.test.ts`.
+REMAINING: the wiring itself (both directory queries receiving the same excludes;
+the place-before-tag ordering) isn't unit-testable without a React component-test
+harness (react-testing-library — a Tier-2 dev dependency). Add RTL and
+component-level tests if the explorer's exclude wiring keeps regressing.
+
+### Overview README anchor reachable before placement — mitigated; 1-tx residual is inherent
+EFSIndexer sets `_containsAttestations[anchorUID][creator]=true` at anchor
+creation, and `getDirectoryPageFiltered` phase 1 qualifies items on that flag — so
+a `README.md` file slot appears in the listing the moment its ANCHOR is attested,
+before any placement PIN exists; `_isItemExcluded` reaches the DATA via the PIN,
+so with no PIN it can't hide the slot against the pre-placement `system` tag
+(Codex). MITIGATED: `uploadOnchainFile` now creates the file ANCHOR last —
+immediately before the placement PIN (and after the DATA is system-tagged) —
+shrinking the visible-but-unhidden window from ~6 txs to ~1. The remaining 1-tx
+window (anchor mined, PIN not yet) is INHERENT and can't be closed: EAS UIDs
+aren't precomputable, so the anchor and the PIN that references its UID can't be
+batched atomically. Impact of the residual is minor: name-only (empty card, no
+content), only if a brand-new README's first save is interrupted in that 1-tx gap,
+self-healing on retry. A contract-level fix (phase-1 qualifying on active
+placement rather than `_containsAttestations`) would eliminate it but changes
+Durable listing semantics for all files — out of scope here.
+
+### Ancestor-visibility walk assumes a generic-folder parent (gated at source)
+`uploadOnchainFile`'s ancestor-visibility walk tags `current` (starting at
+`parentAnchorUID`) with `definition=dataSchemaUID`. If `parentAnchorUID` were a
+FILE anchor it would be mis-tagged as a visible folder and could re-surface via
+phase-0 folder visibility after its placement PIN is revoked (Codex). This IS
+reachable — a deep link like `/explorer/docs/readme.txt` resolves
+`currentAnchorUID` to a file leaf — so it is now FIXED at the source: ExplorerClient
+gates the Overview editor off on file leaves (`overviewEditable && !currentIsFileLeaf`),
+and OverviewEditorModal is the helper's sole caller, so `parentAnchorUID` only
+reaches the walk as a folder. Remaining (defensive, deferred): a belt-and-suspenders
+runtime guard inside the walk (skip tagging any node whose anchorType != bytes32(0))
+would need a client-side EAS getAttestation + decode per node — EFSIndexer can't
+expose an anchorType getter (its address is baked into the schema UIDs). Add it if
+the helper ever gains another caller.
+
+### Per-file Overviews need a router change (currently folder-scoped)
+Overviews are folder-scoped. A per-file Overview (`/docs/readme.txt/README.md`)
+doesn't work end to end: the UI gates creation off on file leaves, and the read
+path can't resolve it either — `EFSRouter.request` walks intermediate segments with
+generic `resolvePath`, which returns only generic (`bytes32(0)`) anchors, so the
+intermediate file anchor `readme.txt` 404s before the child README (Codex). The
+seeded file-README was removed (dead/unreachable data) and the Overview pane no
+longer probes on file leaves. To support per-file Overviews later: have the router
+(and the client resolver) try the DATA-schema `resolveAnchor` on intermediate
+segments too, then ungate creation with the file-anchor visibility-walk guard. Both
+are Durable changes; settle before the Sepolia freeze if file Overviews are wanted.
+
+### Deferred PR #27 review findings (non-blocking)
+- **EFSFileView exclusion gas (Gemini):** in `_isItemExcluded`, pre-check
+  `edgeResolver.hasActiveTagFromAny(target, def, attesters)` before the per-attester
+  `getActiveTagWeight` loop — for the common clean-item case this skips the inner
+  loop (`dataCount × defs × attesters`, worst case 20×8×20). Optimization only;
+  deferred because it changes a near-Etched view contract (needs re-pin + re-test)
+  and the current code is correct.
+- **Markdown structural guard (Codex):** an error boundary now catches render-time
+  blowups from untrusted Overviews (`MarkdownView`), but a cheap pre-parse
+  structural guard (max nesting depth / line count / token shape) would reject
+  pathological input before the parser runs. Add alongside the RTL work above.
+- **`sniffContent` 64 KB window (Gemini):** binary/invalid-UTF-8 after the first
+  64 KB is still classified as text (then rendered as markdown — safe, no raw HTML).
+  Consider a full-file NUL scan if perf permits. Add a >64 KB boundary test and an
+  empty-directory `getDirectoryPageFiltered` test (returns empty items + cursor).
+
 ### EFSFileView phase-0 folder pagination scales with append-only history
 `getDirectoryPageBySchemaAndAddressList` (phase 0) walks `getChildrenWithEdge` history under a fixed scan budget; a hot folder with many revoked or out-of-lens edges can exhaust the budget before returning a full page. Latency scales with historical churn, not live child count. Long-term: add a direct active-visibility index in EFSIndexer or EdgeResolver so phase-0 pagination is O(page) on active children. Tracked alongside ADR-0009 append-only implications.
 
@@ -304,6 +409,9 @@ Non-blocking items from the multi-reviewer pass (Gemini / Claude-4.7), parked fo
 ### Lists deploy — `ListEntryResolver` address mis-prediction on a persistent node (arg-change)
 `deploy/09_lists.ts` predicts `futureListEntryResolverAddress` as `existingListEntryResolver?.address ?? getCreateAddress(nonce+3)`. On a **persistent** node (long-lived anvil with a prior deployment) where the LIST constructor args change — e.g. the `uint32`→`uint256` `maxEntries` widening changed `LIST_SCHEMA_UID`, which *is* a `ListEntryResolver` constructor arg — the script keeps the **old** artifact address, but `redeployIfArgsChanged()` (~L190) then deletes that artifact and `deploy()` redeploys at the current (higher) nonce, so the deployed address ≠ the address baked into `listEntrySchemaUID`. The address assertion **aborts loud** (never registers a wrong/silent schema UID), but the deploy is wedged until the artifact is cleared. **Cannot fire on the pinned wipe-and-redeploy fork** (CI / devnet): `getOrNull` returns null on a fresh chain, so it nonce-predicts correctly — proven by `deploy-pin-check` passing on the `uint256` commit (`eb57f42`). Fix: detect the arg-change before choosing the predicted address and predict/register against the address `deploy()` will actually land at, or skip `redeployIfArgsChanged` for `ListEntryResolver`. Folds into the CREATE2 migration above (which rewrites this prediction/registration logic). Surfaced by the PR #20 adversarial deploy review + Codex (3331191025).
 
+### Demo seed runs *before* `09_lists` — demo-data edits churn List addresses — DONE
+**Resolved (markdown-for-items PR).** The demo seed was moved to run last (`deploy/10_seed_demo_tree.ts`, after `09_lists`, with a `Lists` dependency), so demo-data transactions can no longer shift the CREATE addresses of any contract-deploying step. Contract addresses are now deterministic for the commit independent of seed content (ADR-0037). The CREATE2 migration noted above is still the long-term fix for cross-network determinism, but the seed no longer perturbs anything regardless of order.
+
 ---
 
 ## Write-flow & future schemas (flagged 2026-05-28, PM + brainstorm swarm)
@@ -313,3 +421,23 @@ A single EFS write today detonates into ~8 wallet prompts (chunk SSTORE2 + DATA 
 
 ### EVENT / TRANSITION schema for state-transition edges
 The brainstorm swarm flagged a future need for a schema expressing **state-transition edges** — provenance, ownership handoff, synonymy-with-citation, "X superseded by Y," etc. This is a *directed transition* primitive, distinct from PIN/TAG (membership/placement edges) and from LIST/LIST_ENTRY (collection membership). **Explicitly NOT Lists' job** — noted here so it doesn't get shoehorned into the LIST primitive. If pursued, it gets its own ADR following the purpose-built-schema pattern (ADR-0041/0044 shape), not a generic mechanism (cf. ADR-0045's deferral).
+
+---
+
+## Overview pane — deferred hardening (markdown-for-items PR, codex-gpt-5 review)
+
+Non-blocking follow-ups for the per-item Overview markdown pane. The shipped v1 is a thin client orchestration over existing utils (the SDK is meant to own resolution/fetch/pagination later); these are the rough edges that review surfaced and we consciously deferred.
+
+### Exact `README.md` resolution instead of a directory-page scan — DONE
+**Resolved.** `useItemOverview` no longer lists+scans the directory page. It resolves `README.md` by exact path through the router (`EFSRouter.request` → `EFSIndexer.resolveAnchor` / `_nameToAnchor`, an O(1) lens-scoped lookup, first-lens-wins) and reads the router's `404` ("no such anchor" / "no content for the active lens") as "no Overview". This is pagination-proof and removes the per-pane O(page) scan. (Exact "is file/property X under folder Y?" resolution is a foundational on-chain API — `resolveAnchor(parent, name, schema)` for files, `resolvePath(parent, name)` for generic folders — not something to paper over in the SDK.)
+
+### System-tag hide filter does a global tag scan per load
+Defaulting `drawerTagFilters.system = "exclude"` (so Overviews are hidden from the file list like `nsfw`) routes every Explorer load through `FileBrowser.resolveTagSet`, which resolves `/tags/system` and paginates all active system-tag targets across all lenses before the page renders — O(all Overviews in the lens) rather than O(current page). It reuses the **exact** existing `nsfw` machinery (same accepted pattern), so it's not a new architecture, but the system set grows with one tag per Overview. Proper fix: hide system/README entries by batch-checking only the visible DATA UIDs after the page is known, rather than a global pre-scan — a shared refactor that improves the `nsfw` path too.
+
+### Optional: bound the main file preview's fetch too
+**Resolved for the Overview path:** `fetchFileContent` now takes an opt-in `maxBytes` — the mirror branch rejects an oversized `Content-Length` and otherwise streams with an early abort, and the on-chain branch stops accumulating past the cap, throwing `FileTooLargeError`. `useItemOverview` passes `MAX_RENDER_BYTES`, so a folder visit can't be forced to download an arbitrarily large external README. The remaining (lower-priority) gap is the **main file preview** (`FileBrowser`), which calls `fetchFileContent` without `maxBytes` — that's a *user-initiated* click on a specific file rather than an automatic load, so the unattended-DoS concern doesn't apply, but a sensible large-file guard there (with a "download instead of preview" affordance) would still be a nice hardening.
+
+### Paged/batched chunk manager for uploads above ~24 MB
+**Partly resolved:** uploads are now capped by chunk count — `MAX_CHUNKS = 1000` in `lib/efs/sstore2.ts`, with `MAX_ONCHAIN_SIZE = MAX_CHUNKS * CHUNK_SIZE` (~24 MB), enforced up front in `uploadOnchainFile`, `CreateItemModal`, and `MirrorsPanel`. The cap exists because `MockChunkedFile`'s constructor stores every chunk address with one cold SSTORE in a single deploy tx (~22k gas each), so ~1,000 chunks ≈ 23 M gas sits safely under a 30 M block while ~1,250 (the old 30 MB) risked OOG *after* the user paid for all chunk deploys. The remaining work is to lift the ceiling: replace the single-constructor manager with a **paged/batched deploy** (e.g. an `addChunks(address[])` appender called in bounded batches, or an SSTORE2-pointer index) so >24 MB files become possible without a one-shot constructor that can exceed the block gas limit. `MAX_CHUNKS` is the single knob to raise once that lands. The `1000` figure is a conservative estimate, not a measured limit — gas-test the real manager-deploy budget when revisiting.
+### getDirectoryPageFiltered — minor follow-ups (ADR-0048 review, non-blocking)
+Two P3s from the PR #26 review squad, both deliberately deferred: (1) `_isItemExcluded` and `_buildFileSystemItems` each `eas.getAttestation` + decode the same anchor for every *kept* item — bounded by `maxItems` so it never threatens the call, but the predicate could hand back the decoded `anchorType`/`isFolder` for the build step to reuse. (2) The view-level scan budget bounds the per-item exclusion loop but NOT the single underlying `EFSIndexer.getAnchorsBySchemaAndAddressList` call, which can scan up to `total` raw positions on a pathologically dense revoked/non-lens array — a pre-existing property shared with `getDirectoryPageBySchemaAndAddressList`, now inherited by a second public view. Worth a direct gas/fuzz test on the indexer page-fill before launch.

@@ -7,6 +7,7 @@ import { useAccount, usePublicClient, useWalletClient } from "wagmi";
 import { ArrowUpTrayIcon, LinkIcon, PlusIcon, TrashIcon } from "@heroicons/react/24/outline";
 import { useDeployedContractInfo, useScaffoldReadContract, useScaffoldWriteContract } from "~~/hooks/scaffold-eth";
 import { useTargetNetwork } from "~~/hooks/scaffold-eth/useTargetNetwork";
+import { CHUNK_SIZE, MAX_CHUNKS, MAX_ONCHAIN_SIZE } from "~~/lib/efs/sstore2";
 import { EDGE_RESOLVER_ABI } from "~~/utils/efs/edgeResolver";
 import { TRANSPORT_LABELS, detectTransport, resolveGatewayUrl } from "~~/utils/efs/transports";
 import { notification } from "~~/utils/scaffold-eth";
@@ -321,17 +322,15 @@ export const MirrorsPanel = ({ fileAnchorUID, lensAddresses }: { fileAnchorUID: 
         return;
       }
 
-      const MAX_ONCHAIN_SIZE = 24_000_000;
-      if (dataBytes.length > MAX_ONCHAIN_SIZE) {
+      if (dataBytes.length > MAX_ONCHAIN_SIZE || Math.ceil(dataBytes.length / CHUNK_SIZE) > MAX_CHUNKS) {
         notification.error(
           `File too large for on-chain upload (${Math.round(dataBytes.length / 1024 / 1024)}MB). ` +
-            `Maximum is ~${MAX_ONCHAIN_SIZE / 1_000_000}MB. Use IPFS or Arweave for large files.`,
+            `Maximum is ~${MAX_ONCHAIN_SIZE / 1_000_000}MB (${MAX_CHUNKS} chunks). Use IPFS or Arweave for large files.`,
         );
         return;
       }
 
       // SSTORE2 chunking
-      const CHUNK_SIZE = 24000;
       const totalChunks = Math.ceil(dataBytes.length / CHUNK_SIZE) || 1;
       notification.info(
         `Uploading ${Math.round(dataBytes.length / 1024) || 1}KB in ${totalChunks} chunk${totalChunks > 1 ? "s" : ""} via SSTORE2...`,

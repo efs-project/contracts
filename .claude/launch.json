@@ -7,6 +7,18 @@
       "runtimeArgs": ["preview"],
       "port": 3000,
       "autoPort": true
+    },
+    {
+      "name": "hardhat-fork",
+      "runtimeExecutable": "yarn",
+      "runtimeArgs": ["fork"],
+      "port": 8545
+    },
+    {
+      "name": "nextjs",
+      "runtimeExecutable": "yarn",
+      "runtimeArgs": ["start"],
+      "port": 3000
     }
   ]
 }

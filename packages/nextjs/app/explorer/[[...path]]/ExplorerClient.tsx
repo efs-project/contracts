@@ -7,6 +7,7 @@ import { useAccount, usePublicClient } from "wagmi";
 import { ContainerInfoPanel } from "~~/components/explorer/ContainerInfoPanel";
 import { FileActionsBar } from "~~/components/explorer/FileActionsBar";
 import { DrawerTagFilterState, FileBrowser } from "~~/components/explorer/FileBrowser";
+import { OverviewPane } from "~~/components/explorer/OverviewPane";
 import { PathBar } from "~~/components/explorer/PathBar";
 import { TagFilterDrawer } from "~~/components/explorer/TagFilterDrawer";
 import { TopicTree } from "~~/components/explorer/TopicTree";
@@ -26,6 +27,11 @@ import {
 export default function ExplorerClient() {
   const [currentPath, setCurrentPath] = useState<PathItem[]>([]);
   const [currentAnchorUID, setCurrentAnchorUID] = useState<string | null>(null);
+  // True when the resolved path's last segment is a DATA-schema FILE leaf (e.g.
+  // deep-linking to /explorer/docs/readme.txt), not a generic folder. Gates the
+  // Overview editor off: creating a README "inside" a file would tag the file
+  // anchor as a visible folder via the ancestor walk (Codex P2 / reachable via URL).
+  const [currentIsFileLeaf, setCurrentIsFileLeaf] = useState(false);
   const [currentContainer, setCurrentContainer] = useState<ClassifiedContainer | null>(null);
   const [isResolving, setIsResolving] = useState(false);
   const [pathError, setPathError] = useState<string | null>(null);
@@ -34,9 +40,15 @@ export default function ExplorerClient() {
   const [isResolvingLenses, setIsResolvingLenses] = useState(false);
 
   const [isFilterDrawerOpen, setIsFilterDrawerOpen] = useState(false);
-  const [drawerTagFilters, setDrawerTagFilters] = useState<Record<string, DrawerTagFilterState>>({ nsfw: "exclude" });
+  const [drawerTagFilters, setDrawerTagFilters] = useState<Record<string, DrawerTagFilterState>>({
+    nsfw: "exclude",
+    system: "exclude",
+  });
 
   const [sortRefreshKey, setSortRefreshKey] = useState(0);
+  // Bumped after the Overview editor saves; flows into useItemOverview (via
+  // OverviewPane's refreshKey) to force the pane to re-resolve the README.
+  const [overviewRefreshKey, setOverviewRefreshKey] = useState(0);
   // Bumped when out-of-FileBrowser mutations add items to the current directory
   // (file upload, folder create). `CreateItemModal` lives under FileActionsBar,
   // not FileBrowser, so it can't call FileBrowser's internal `refetch*` hooks
@@ -44,7 +56,11 @@ export default function ExplorerClient() {
   // parallel escape hatch for create. Without it, users had to hard-refresh to
   // see a newly-created file/folder appear.
   const [directoryRefreshKey, setDirectoryRefreshKey] = useState(0);
-  const [recreatedListAnchor, setRecreatedListAnchor] = useState<string | undefined>(undefined);
+  // Bumped by an Overview save to re-resolve the exclude tag DEFS (the save may
+  // create /tags/system on the fly). Separate from directoryRefreshKey so the
+  // exclude resolver re-runs (holding the directory) WITHOUT the parent-driven
+  // refetch racing an unfiltered read. See onOverviewSaved + FileBrowser.
+  const [excludeRefreshKey, setExcludeRefreshKey] = useState(0);
   const [reverseOrder, setReverseOrder] = useState(false);
   const [autoProcessKey, setAutoProcessKey] = useState(0);
   const [autoProcessSortUIDs, setAutoProcessSortUIDs] = useState<string[]>([]);
@@ -127,6 +143,18 @@ export default function ExplorerClient() {
   const { data: systemAccountInfo } = useDeployedContractInfo({ contractName: "SystemAccount" });
   const systemAccountAddress = systemAccountInfo?.address;
 
+  // AGENT-NOTE (ADR-0048): these two devnet constants make `systemLenses` (and
+  // therefore `lensAddresses`) permanently non-empty. There is no longer an
+  // unfiltered read path — the unfiltered `getDirectoryPage` listing fallback was
+  // removed, so every directory read is lens-scoped through
+  // `getDirectoryPageFiltered`. An empty `lensAddresses` now FAILS SAFE: the
+  // FileBrowser directory hooks are disabled and the grid renders empty rather
+  // than showing unfiltered content. The remaining work, when the mainnet TODO
+  // above replaces these constants with a user-configurable list, is to give the
+  // empty-list case a FILTERED listing (so the view isn't simply blank) — NOT to
+  // re-introduce an unfiltered path. (TopicTree's own lens read is not yet
+  // exclude-filtered — see docs/FUTURE_WORK.md.)
+  // See the matching note at `defaultLensesForContainer` in utils/efs/containers.ts.
   const systemLenses = useMemo(() => {
     const out: string[] = [DEVNET_BOOTSTRAP_CURATOR, DEVNET_DEV_ATTESTER];
     if (systemAccountAddress) out.push(systemAccountAddress);
@@ -178,6 +206,10 @@ export default function ExplorerClient() {
 
   const { data: indexerInfo } = useDeployedContractInfo({ contractName: "Indexer" });
   const { data: sortOverlayInfo } = useDeployedContractInfo({ contractName: "EFSSortOverlay" });
+  // OverviewPane (Task 13) reads file content via the router. This is a deployed
+  // contract whose address isn't known until after `yarn deploy`, so pull it the
+  // same way `indexerInfo`/`sortOverlayInfo` are pulled above.
+  const { data: routerInfo } = useDeployedContractInfo({ contractName: "EFSRouter" });
   const { data: easAddressRaw } = useScaffoldReadContract({
     contractName: "Indexer",
     functionName: "getEAS",
@@ -415,6 +447,9 @@ export default function ExplorerClient() {
           },
         ];
         let currentUID: `0x${string}` = seedUID;
+        // Tracks whether the LAST segment resolved as a DATA-schema file leaf (vs a
+        // generic folder), so the Overview editor can be gated off on files.
+        let lastSegmentIsFile = false;
 
         const ZERO_UID = "0x0000000000000000000000000000000000000000000000000000000000000000";
         for (let i = 0; i < walkSegments.length; i++) {
@@ -436,6 +471,9 @@ export default function ExplorerClient() {
               args: [currentUID, segment, dataSchemaUID as `0x${string}`],
             })) as `0x${string}`;
             if (cancelled) return;
+            // The DATA-schema lookup succeeding means the last segment is a file
+            // leaf (not a folder) — used below to gate the Overview editor.
+            lastSegmentIsFile = childUID !== ZERO_UID;
           }
           if (childUID === ZERO_UID) {
             childUID = (await publicClient.readContract({
@@ -451,31 +489,30 @@ export default function ExplorerClient() {
             // "Folder" in the error text kept deliberately for intermediate segments;
             // for the last segment we checked both folder and file so the user's path
             // is genuinely missing either way.
-            const errorMsg = `'${decodeURIComponent(segment)}' not found in path.`;
+            // `segment` is ALREADY decoded (pathSegmentsFromPathname maps
+            // decodeURIComponent). Do NOT decode again — a name with a literal
+            // percent (e.g. `10%` from `/explorer/10%25`) would throw URIError.
+            const errorMsg = `'${segment}' not found in path.`;
             console.warn(errorMsg);
             setPathError(errorMsg);
             setIsResolving(false);
             return;
           }
 
-          // `segment` is the ON-CHAIN anchor name (pathSegments were decodeURIComponent'd once at
-          // parse time). Store the RE-ENCODED form as urlSegment so rebuilding the URL round-trips:
-          // a name with reserved bytes as canonical %XX escapes (e.g. "a%2Fb", ADR-0025) must appear
-          // in the URL as "a%252Fb" so the next parse decodes back to "a%2Fb" — NOT the raw decoded
-          // segment, which would single-encode and resolve the wrong anchor on breadcrumb/refresh
-          // (PR #24 P2). encodeURIComponent is a no-op for plain ASCII and correctly re-encodes
-          // non-ASCII + percent escapes. `name` keeps the decoded human form for display.
-          resolvedPath.push({
-            uid: childUID,
-            name: decodeURIComponent(segment),
-            urlSegment: encodeURIComponent(segment),
-          });
+          // `name` is the decoded on-chain name (segment is already decoded).
+          // `urlSegment` must be the ENCODED form so URL builders (which use it
+          // verbatim) round-trip losslessly — re-encode the decoded segment rather
+          // than decoding it a second time (the old code double-decoded, throwing
+          // URIError on names with a literal `%`, and stored a decoded value in a
+          // field used raw in the URL).
+          resolvedPath.push({ uid: childUID, name: segment, urlSegment: encodeURIComponent(segment) });
           currentUID = childUID;
         }
 
         if (cancelled) return;
         setCurrentPath(resolvedPath);
         setCurrentAnchorUID(currentUID);
+        setCurrentIsFileLeaf(lastSegmentIsFile);
         setCurrentContainer(container);
 
         // localStorage writes are side-effects on global state; keep them
@@ -576,6 +613,33 @@ export default function ExplorerClient() {
 
   const containerKind = currentContainer?.kind ?? "anchor";
 
+  // Overview edit/create gate. The README is written under the connected wallet,
+  // and the pane renders first-lens-wins — so a write only becomes visible if the
+  // connected wallet is the *highest-priority* lens. A lower-priority writer's
+  // README stays hidden behind whoever already wins (e.g. `?lenses=bob,alice`
+  // with Alice connected and Bob's README rendered), so a save would spend the
+  // transactions yet never appear. Restrict authoring to `lensAddresses[0]` to
+  // guarantee the connected wallet's Overview is the one shown.
+  //
+  // It also requires a *real anchor* parent. Ordinary `/explorer/...` anchor
+  // walks leave `currentContainer` null (containerKind falls back to "anchor")
+  // with a real `currentAnchorUID` — those are writable. Only the synthetic
+  // container roots set `currentContainer`: address / schema / attestation seed
+  // `currentAnchorUID` with a synthetic-or-raw UID equal to `container.uid` (the
+  // bytes32 address, or the raw schema/attestation UID when no alias anchor
+  // exists), and the upload helper would deploy SSTORE2 chunks then revert on
+  // that invalid `refUID`. So: a real anchor unless we're at a container root
+  // whose anchor IS the raw container UID. Alias anchors and deeper paths (UID
+  // differs from container.uid) stay writable.
+  const writerIsTopLens = !!connectedAddress && lensAddresses[0]?.toLowerCase() === connectedAddress.toLowerCase();
+  const onRealAnchor =
+    !!currentAnchorUID && (!currentContainer || currentAnchorUID.toLowerCase() !== currentContainer.uid.toLowerCase());
+  // Overviews are folder-scoped. Block the editor when the current anchor is a
+  // DATA-schema file leaf (reachable by deep-linking a file URL) — saving there
+  // would pass the file anchor as parentAnchorUID and the ancestor walk would
+  // mis-tag it as a visible folder (Codex P2).
+  const overviewEditable = writerIsTopLens && onRealAnchor && !currentIsFileLeaf;
+
   return (
     <div className="flex flex-col h-screen w-full bg-base-100 p-4 gap-3">
       <div
@@ -652,9 +716,8 @@ export default function ExplorerClient() {
               selectedUID={currentAnchorUID}
               activeContainer={currentContainer}
               lensAddresses={lensAddresses}
-              // Same semantics as FileBrowser.explicitLenses — whenever the
-              // URL carries `?lenses=` (even empty), the sidebar must stay
-              // lens-scoped so it doesn't silently render the unscoped tree.
+              // Whenever the URL carries `?lenses=` (even empty), the sidebar must
+              // stay lens-scoped so it doesn't silently render the unscoped tree —
               // ADR-0031 "explicit param must not widen results".
               explicitLenses={hasLensesParam}
               activeSortInfoUID={activeSortInfoUID}
@@ -668,11 +731,57 @@ export default function ExplorerClient() {
             />
           </aside>
 
+          {/* Middle Pane — Overview (Task 13). Renders the directory's Overview
+              markdown/file when one exists; the pane itself returns null when
+              there's no Overview, so the layout naturally falls back to the
+              two-pane (tree + file) arrangement. Hidden below `lg` to mirror
+              how the tree `<aside>` collapses on narrow screens.
+              Overviews are FOLDER-SCOPED: skip the pane (and its README probe) on a
+              file leaf — the router can't resolve `<file>/README.md` (intermediate
+              file anchors 404 under generic resolvePath), so it would always probe
+              to a 404 (Codex P2). */}
+          {!pathError && !currentIsFileLeaf && (
+            <div className="hidden lg:block">
+              <OverviewPane
+                key={currentAnchorUID ?? "none"}
+                anchorUID={currentAnchorUID as `0x${string}` | null}
+                lensAddresses={lensAddresses}
+                resourcePathNames={buildRouterPathNames(currentContainer, currentPath)}
+                publicClient={publicClient}
+                routerAddress={routerInfo?.address as `0x${string}` | undefined}
+                routerAbi={routerInfo?.abi}
+                dataSchemaUID={dataSchemaUID as `0x${string}` | undefined}
+                refreshKey={overviewRefreshKey}
+                canEdit={overviewEditable}
+                editAnchorUID={currentAnchorUID as `0x${string}` | undefined}
+                anchorSchemaUID={anchorSchemaUID as `0x${string}` | undefined}
+                propertySchemaUID={propertySchemaUID as `0x${string}` | undefined}
+                pinSchemaUID={pinSchemaUID as `0x${string}` | undefined}
+                tagSchemaUID={tagSchemaUID as `0x${string}` | undefined}
+                mirrorSchemaUID={mirrorSchemaUID as `0x${string}` | undefined}
+                indexerAddress={indexerAddress}
+                onOverviewSaved={() => {
+                  setOverviewRefreshKey(k => k + 1);
+                  // Re-resolve excludes (NOT a plain directory refetch): an Overview
+                  // save creates /tags/system on the fly when it's absent — on a real
+                  // deploy /tags exists but /tags/system is only created on first save,
+                  // so the exclude defs go stale and the new system README would show.
+                  // A dedicated key drives the exclude resolver (which HOLDS via
+                  // excludesPending while re-resolving, then drives a FILTERED refetch
+                  // via depsKey) — decoupled from directoryRefreshKey so it can't race
+                  // an unfiltered refetch (Codex P2).
+                  setExcludeRefreshKey(k => k + 1);
+                }}
+              />
+            </div>
+          )}
+
           {/* Right Pane — file actions + browser + (optional) tag drawer */}
           <section className="flex-grow flex flex-col min-w-0">
             {!pathError && (
               <FileActionsBar
                 currentAnchorUID={currentAnchorUID}
+                currentIsFileLeaf={currentIsFileLeaf}
                 container={currentContainer}
                 anchorSchemaUID={anchorSchemaUID}
                 dataSchemaUID={dataSchemaUID}
@@ -702,10 +811,7 @@ export default function ExplorerClient() {
                   setSortRefreshKey(k => k + 1);
                   setDirectoryRefreshKey(k => k + 1);
                 }}
-                onListCreated={(uid: string) => {
-                  // Surface the (possibly reused) slot anchor so FileBrowser can lift any
-                  // delete-suppression on it — recreating a deleted list reuses its anchor.
-                  setRecreatedListAnchor(uid);
+                onListCreated={() => {
                   setDirectoryRefreshKey(k => k + 1);
                 }}
               />
@@ -719,17 +825,6 @@ export default function ExplorerClient() {
                     dataSchemaUID={dataSchemaUID}
                     anchorSchemaUID={anchorSchemaUID}
                     lensAddresses={lensAddresses}
-                    // True whenever the URL carries `?lenses=…`, INCLUDING
-                    // `?lenses=` with an empty value (explicit "scope to
-                    // nothing") and any failed-resolution case. FileBrowser
-                    // keeps the view lens-scoped so unresolved or
-                    // deliberately-empty explicit links render empty instead
-                    // of silently falling back to the unscoped default —
-                    // Codex P2 on PR #9, ADR-0031 "explicit param must not
-                    // widen results". `hasLensesParam` uses `!== null`
-                    // because `URLSearchParams.get` returns `""` for
-                    // `?lenses=` and `null` only for the absent case.
-                    explicitLenses={hasLensesParam}
                     tagFilter={searchParams.get("tags") || ""}
                     drawerTagFilters={drawerTagFilters}
                     currentPathNames={buildRouterPathNames(currentContainer, currentPath)}
@@ -737,7 +832,7 @@ export default function ExplorerClient() {
                     sortOverlayAddress={sortOverlayAddress}
                     sortRefreshKey={sortRefreshKey}
                     directoryRefreshKey={directoryRefreshKey}
-                    recreatedListAnchor={recreatedListAnchor}
+                    excludeRefreshKey={excludeRefreshKey}
                     reverseOrder={reverseOrder}
                     onNavigate={(uid, name) => navigateToPath([...currentPath, { uid, name }])}
                   />

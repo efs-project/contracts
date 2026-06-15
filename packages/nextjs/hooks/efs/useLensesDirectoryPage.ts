@@ -27,6 +27,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Abi } from "viem";
 import { usePublicClient } from "wagmi";
+import { reconcileMinWeights, shouldUseFilteredQuery } from "~~/utils/efs/excludeFilter";
 
 interface UseLensesDirectoryPageOptions {
   parentAnchor: `0x${string}` | undefined;
@@ -36,6 +37,23 @@ interface UseLensesDirectoryPageOptions {
   fileViewAbi: Abi | undefined;
   /** Target items per user-facing page. Default 50. */
   pageSize?: bigint;
+  /**
+   * EXCLUDE tag definition UIDs applied on-chain (ADR-0048). When non-empty the
+   * hook calls `getDirectoryPageFiltered` so the listing returns already
+   * filtered; when empty it falls back to the unfiltered
+   * `getDirectoryPageBySchemaAndAddressList`. Parallel to `minWeights`.
+   */
+  excludeTagDefs?: string[];
+  /**
+   * Per-tag weight thresholds (ADR-0048 / ADR-0042). Parallel to
+   * `excludeTagDefs`; an item is excluded for tag k iff a viewed lens has an
+   * active TAG with `weight >= minWeights[k]`. When omitted OR length-mismatched
+   * with `excludeTagDefs`, it is derived as `excludeTagDefs.map(() => 0n)`
+   * (ADR-0042's `weight >= 0`). The on-chain call requires equal-length parallel
+   * arrays, so a mismatched/empty `minWeights` alongside non-empty
+   * `excludeTagDefs` would `require`-revert — never pass it through raw.
+   */
+  minWeights?: bigint[];
   /** False disables the hook entirely (state cleared, no fetches). */
   enabled: boolean;
 }
@@ -69,9 +87,17 @@ export function useLensesDirectoryPage({
   fileViewAddress,
   fileViewAbi,
   pageSize = 50n,
+  excludeTagDefs = [],
+  minWeights = [],
   enabled,
 }: UseLensesDirectoryPageOptions): UseLensesDirectoryPageResult {
   const publicClient = usePublicClient();
+  // The on-chain `getDirectoryPageFiltered` requires `minWeights.length ===
+  // excludeTagDefs.length` (parallel arrays). A caller that omits `minWeights`
+  // (default `[]`) or passes a length-mismatched array alongside non-empty
+  // `excludeTagDefs` would otherwise `require`-revert. Derive an all-zero vector
+  // (ADR-0042 `weight >= 0`) whenever the lengths don't already match.
+  const effectiveMinWeights = reconcileMinWeights(excludeTagDefs, minWeights);
   const [items, setItems] = useState<any[] | undefined>(undefined);
   const [isLoading, setIsLoading] = useState(false);
   const [hasMore, setHasMore] = useState(false);
@@ -79,7 +105,12 @@ export function useLensesDirectoryPage({
   const cursorRef = useRef<`0x${string}`>(EMPTY_CURSOR);
 
   const lensesKey = lensAddresses.join(",").toLowerCase();
-  const depsKey = `${enabled ? "1" : "0"}|${parentAnchor ?? ""}|${dataSchemaUID ?? ""}|${lensesKey}|${pageSize.toString()}`;
+  // EXCLUDE filter identity — toggling a tag on/off in the drawer must restart
+  // the cursor from 0 (a different filter is a different result set), so it
+  // joins depsKey. Lowercased to keep the key stable across hex casing.
+  const excludeKey = excludeTagDefs.join(",").toLowerCase();
+  const minWeightsKey = effectiveMinWeights.map(w => w.toString()).join(",");
+  const depsKey = `${enabled ? "1" : "0"}|${parentAnchor ?? ""}|${dataSchemaUID ?? ""}|${lensesKey}|${pageSize.toString()}|${excludeKey}|${minWeightsKey}`;
   const lastDepsRef = useRef<string>("");
   // NOTE: There was previously an `inFlightRef` guard at the top of the fetch
   // effect (`if (inFlightRef.current) return;`) intended to prevent concurrent
@@ -193,12 +224,32 @@ export function useLensesDirectoryPage({
 
       try {
         while (autoPages < MAX_AUTO_ADVANCE_PAGES) {
-          const result = (await publicClient.readContract({
-            address: fileViewAddress,
-            abi: fileViewAbi,
-            functionName: "getDirectoryPageBySchemaAndAddressList",
-            args: [parentAnchor, dataSchemaUID, lensAddresses as `0x${string}`[], cursor, pageSize],
-          })) as any;
+          // ADR-0048: when EXCLUDE tags are active, push the exclusion on-chain
+          // via getDirectoryPageFiltered so the page returns already filtered.
+          // Otherwise keep the unfiltered read unchanged.
+          const result = (
+            shouldUseFilteredQuery(excludeTagDefs)
+              ? await publicClient.readContract({
+                  address: fileViewAddress,
+                  abi: fileViewAbi,
+                  functionName: "getDirectoryPageFiltered",
+                  args: [
+                    parentAnchor,
+                    dataSchemaUID,
+                    lensAddresses as `0x${string}`[],
+                    excludeTagDefs as `0x${string}`[],
+                    effectiveMinWeights,
+                    cursor,
+                    pageSize,
+                  ],
+                })
+              : await publicClient.readContract({
+                  address: fileViewAddress,
+                  abi: fileViewAbi,
+                  functionName: "getDirectoryPageBySchemaAndAddressList",
+                  args: [parentAnchor, dataSchemaUID, lensAddresses as `0x${string}`[], cursor, pageSize],
+                })
+          ) as any;
 
           if (cancelled) return;
 
@@ -255,7 +306,8 @@ export function useLensesDirectoryPage({
     return () => {
       cancelled = true;
     };
-    // cursorRef is mutable-ref; lensesKey stands in for lensAddresses equality.
+    // cursorRef is mutable-ref; lensesKey stands in for lensAddresses equality,
+    // excludeKey/minWeightsKey stand in for the EXCLUDE filter arrays (ADR-0048).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     loadTrigger,
@@ -267,6 +319,8 @@ export function useLensesDirectoryPage({
     dataSchemaUID,
     lensesKey,
     pageSize,
+    excludeKey,
+    minWeightsKey,
   ]);
 
   return { items, isLoading, hasMore, loadMore, refresh };

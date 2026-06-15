@@ -389,3 +389,174 @@ main,
 [data-theme="dark"] body::after {
   z-index: 2; /* Scanlines behind UI content */
 }
+
+/* Overview pane — map Tailwind typography to the active daisyUI theme (v4 oklch
+   vars), and override the global monospace body font for readable long-form. */
+.prose-efs {
+  --tw-prose-body: oklch(var(--bc));
+  --tw-prose-headings: oklch(var(--bc));
+  --tw-prose-links: oklch(var(--p));
+  --tw-prose-bold: oklch(var(--bc));
+  --tw-prose-code: oklch(var(--bc));
+  --tw-prose-quotes: oklch(var(--bc) / 0.8);
+  --tw-prose-quote-borders: oklch(var(--b3));
+  --tw-prose-bullets: oklch(var(--bc) / 0.5);
+  --tw-prose-counters: oklch(var(--bc) / 0.6);
+  --tw-prose-hr: oklch(var(--b3));
+  --tw-prose-th-borders: oklch(var(--b3));
+  --tw-prose-td-borders: oklch(var(--b3));
+  --tw-prose-pre-bg: oklch(var(--b2));
+  --tw-prose-pre-code: oklch(var(--bc));
+  font-family: ui-sans-serif, system-ui, sans-serif;
+}
+
+/* The global dark-mode neon glow on h1/h2 is tuned for chrome titles; inside
+   rendered prose (Overview pane + editor live preview) it overpowers the
+   long-form content and out-shouts the modal's own title. Dial it down to a
+   faint accent so headings read as calm document structure, not signage. */
+[data-theme="dark"] .prose-efs :is(h1, h2, h3, h4) {
+  text-shadow: 0 0 6px oklch(var(--p) / 0.18);
+}
+
+/* ──────────────────────────────────────────────
+   @uiw/react-md-editor — themed to the daisyUI palette
+   Scoped under `.efs-md-editor` (added on the MarkdownEditor wrapper) so the
+   override never leaks to any other consumer. Mirrors `.prose-efs`'s approach:
+   map @uiw's surfaces onto the active theme's oklch vars
+   (--b1 textarea, --b3 toolbar/borders, --bc text/icons, --p hover/active).
+   `!important` only where @uiw ships its own ID/element-level rules that would
+   otherwise win on specificity.
+   ────────────────────────────────────────────── */
+
+.efs-md-editor .w-md-editor {
+  background-color: oklch(var(--b1)) !important;
+  color: oklch(var(--bc)) !important;
+  box-shadow: none;
+  border-radius: 0;
+}
+
+/* Toolbar: elevated surface, mono affordance. Border uses a faint base-content
+   tint (not --b3, which equals the toolbar fill and renders invisible) so the
+   seam between toolbar and textarea stays crisp. */
+.efs-md-editor .w-md-editor-toolbar {
+  background-color: oklch(var(--b3)) !important;
+  border-bottom: 1px solid oklch(var(--bc) / 0.12) !important;
+  padding: 5px 6px;
+}
+
+.efs-md-editor .w-md-editor-toolbar ul > li > button {
+  color: oklch(var(--bc));
+}
+
+.efs-md-editor .w-md-editor-toolbar ul > li > button svg {
+  color: oklch(var(--bc));
+}
+
+/* Hover / active states use the primary (green) accent */
+.efs-md-editor .w-md-editor-toolbar ul > li > button:hover,
+.efs-md-editor .w-md-editor-toolbar ul > li > button:focus {
+  background-color: oklch(var(--p) / 0.15);
+  color: oklch(var(--p));
+}
+
+.efs-md-editor .w-md-editor-toolbar ul > li > button:hover svg,
+.efs-md-editor .w-md-editor-toolbar ul > li > button:focus svg {
+  color: oklch(var(--p));
+}
+
+.efs-md-editor .w-md-editor-toolbar li.active > button {
+  background-color: oklch(var(--p) / 0.2);
+  color: oklch(var(--p));
+}
+
+/* Toolbar group dividers */
+.efs-md-editor .w-md-editor-toolbar-divider {
+  background-color: oklch(var(--bc) / 0.15);
+}
+
+/* Text area: base surface, mono, themed caret/text */
+.efs-md-editor .w-md-editor-content,
+.efs-md-editor .w-md-editor-area,
+.efs-md-editor .w-md-editor-input {
+  background-color: oklch(var(--b1));
+}
+
+/* @uiw renders the editor as a transparent <textarea> (.w-md-editor-text-input)
+   overlaid pixel-for-pixel on a syntax-highlighted <pre> (.w-md-editor-text-pre).
+   The two layers MUST share identical font metrics AND lay text out identically,
+   or the typed text drifts off the highlighted text and reads as strikethrough /
+   ghosting that worsens down the document — most visibly on markdown TABLE
+   source lines (`| File | About |`).
+
+   ROOT CAUSE: a global utility class `.table` (DaisyUI/Tailwind, in layout.css)
+   leaks onto Prism's markdown token spans. The highlighter tags a table source
+   line as `class="token table"` with nested `.token.table-data` / `.table-line`
+   spans, and the bare global `.table` selector matches them inside the editor's
+   <pre>. That rule (and its kin) does two damaging things to those spans:
+     1. `display: table` — the span stretches to full width and its glyphs
+        re-flow as table cells, no longer overlaying the textarea text.
+     2. `font-size: 14px` — table cells render one pixel bigger than the editor's
+        13px, so each table-row glyph advances ~0.6px wider than the textarea's,
+        accumulating into visible horizontal ghosting across the line.
+   The non-table lines were always pixel-perfect; only the table-tokenized lines
+   drifted. The font was never the cause.
+
+   Fix: pin identical font metrics (family/size/line-height/letter-spacing/
+   tab-size) on EVERY editor token — including the nested table tokens — and
+   force them back to plain inline layout, so the highlighted text overlays the
+   textarea exactly. */
+.efs-md-editor .w-md-editor-text,
+.efs-md-editor .w-md-editor-text-input,
+.efs-md-editor .w-md-editor-text-pre,
+.efs-md-editor .w-md-editor-text-pre > code,
+.efs-md-editor .w-md-editor-text-pre .token {
+  font-family: "JetBrains Mono", "Share Tech Mono", monospace !important;
+  font-size: 13px !important;
+  line-height: 21px !important;
+  letter-spacing: normal !important;
+  tab-size: 2 !important;
+}
+
+/* Neutralize the leaked `.table` layout (display:table, table-cell flow) on
+   Prism token spans so each token is ordinary inline text. */
+.efs-md-editor .w-md-editor-text-pre .token {
+  display: inline !important;
+  width: auto !important;
+  border-collapse: initial !important;
+  border-spacing: 0 !important;
+}
+
+/* The <code> wrapper must be block (so its block code-line children don't get
+   an inline strut that shoves the highlighted text down ~one line), and each
+   code-line a strict 21px block so the <pre> shares the textarea's line grid. */
+.efs-md-editor .w-md-editor-text-pre > code {
+  display: block !important;
+}
+
+.efs-md-editor .w-md-editor-text-pre .code-line {
+  display: block !important;
+  height: 21px !important;
+  line-height: 21px !important;
+}
+
+.efs-md-editor .w-md-editor-text-input,
+.efs-md-editor .w-md-editor-text,
+.efs-md-editor .w-md-editor-text-pre > code,
+.efs-md-editor .w-md-editor-text-pre .token {
+  color: oklch(var(--bc)) !important;
+  -webkit-text-fill-color: oklch(var(--bc)) !important;
+  caret-color: oklch(var(--p));
+}
+
+/* Markdown syntax tokens: keep them legible against the dark base */
+.efs-md-editor .w-md-editor-text-pre .token.title,
+.efs-md-editor .w-md-editor-text-pre .token.bold,
+.efs-md-editor .w-md-editor-text-pre .token.url {
+  color: oklch(var(--p)) !important;
+  -webkit-text-fill-color: oklch(var(--p)) !important;
+}
+
+/* Selection inside the textarea */
+.efs-md-editor .w-md-editor-text-input::selection {
+  background: oklch(var(--p) / 0.25);
+}

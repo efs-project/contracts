@@ -13,7 +13,11 @@ Use a consistent mix of reviewers without over-reviewing every small change. The
 
 PR review output must follow the repo's GitHub conventions:
 - use GitHub's native Review feature, not plain PR comments, for review passes
+- same-account agents post native `COMMENT` reviews only; do not use
+  `APPROVE` or `REQUEST_CHANGES` from James's account
 - make inline findings resolvable review threads whenever the finding maps to a diff hunk
+- mark the top-level review body `Same-account advisory review: BLOCKING` when
+  unresolved P0/P1/P2 findings remain, or `NO BLOCKING FINDINGS` otherwise
 - start every review body, inline comment, and issue reply with `[<model-name> · <role>]` on its own line
 - use the stable persona role name, not a generated worker nickname
 - include model + version in the PR's `Agents involved` field and in agent-authored review summaries when relevant
@@ -146,11 +150,29 @@ the right permanence tier?", not "does the oldest text automatically win?"
 
 ## Output preference
 
-Prefer one merged dev-facing comment after all reviewers finish. Keep raw specialist comments when:
+For multi-agent reviews, subagents should return structured findings to the
+coordinator rather than posting directly. The coordinator de-duplicates findings
+and posts one merged native `COMMENT` Review with inline threads. Keep raw
+specialist comments when:
 
 - findings disagree
 - a specialist found something unusually subtle
 - the branch needs separate follow-up threads by concern type
+
+The coordinator must preserve high-severity or minority findings instead of
+smoothing them away. Use one inline thread per root cause; do not reopen resolved
+threads unless the current head regresses the same issue.
+
+## Severity semantics
+
+- **P0** — Stop. Do not merge. Data loss, security break,
+  Etched/permanent-invariant break, or branch state that invalidates review.
+- **P1** — Merge-blocking runtime/spec/test regression. Fix or get explicit
+  James override.
+- **P2** — Must be resolved before merge. Usually fix in this PR; may be
+  resolved by accepted pushback or explicit defer with durable follow-up.
+- **P3** — Non-blocking cleanup, clarity, optional test gap, or future
+  hardening. Prefer the review body unless an inline discussion is useful.
 
 ## After review: response and resolution
 
@@ -171,6 +193,9 @@ Before an agent posts review feedback, it should first:
 - read the governing specs / ADRs for the area it is reviewing
 - scan existing agent comments so it doesn't duplicate findings or miss active pushback
 - decide whether it can create native GitHub review threads cleanly
+- include a compact top-level preflight in the review body: base/head SHA,
+  reviewers/personas run, unresolved thread scan status, duplicate policy, and
+  verification commands/results or why verification was not run
 
 If it cannot create native review threads, it should stop and return one
 paste-ready structured review instead of posting ad hoc comments to the PR
@@ -202,8 +227,12 @@ this structure:
 ```text
 [model-name · role]
 
-Review mode: <reviewer or squad name>
+Same-account advisory review: <BLOCKING | NO BLOCKING FINDINGS>
+Review mode: <reviewer or squad name>, native COMMENT review
 Base/head: <base_ref>.. <head_sha>
+Reviewers/personas: <names>
+Preflight: PR description read; governing docs read; unresolved threads scanned: <yes/no>
+Duplicate policy: one thread per root cause; resolved threads not reopened
 
 Findings
 1. [P1] <short title>
@@ -237,9 +266,13 @@ Run review-squad on PR #<N>.
 Read the PR description first, including Agents involved.
 Read the governing specs / ADRs for the changed area before commenting.
 If unsure which reviewers to run, default to principal-merge-blocker + perf-quick-pass.
-Post findings using GitHub's native Review feature, not plain comments.
-Use resolvable inline review threads whenever the finding maps to a diff hunk.
-Put non-inline findings in the top-level review body.
+Run this as a same-account advisory review: do not use --approve or --request-changes.
+Use one native GitHub COMMENT review, not plain comments.
+Subagents/personas return structured findings to the coordinator; they do not post directly unless asked.
+Coordinator: de-duplicate findings, preserve high-severity dissent, and use one inline thread per root cause.
+Use resolvable inline review threads for P0/P1/P2 findings that map to a diff hunk.
+Put non-inline findings, P3 items, review metadata, and verification in the top-level review body.
+Mark the body Same-account advisory review: BLOCKING when unresolved P0/P1/P2 findings remain, otherwise NO BLOCKING FINDINGS.
 Prefix every review body, inline comment, and issue reply with [model · role].
 Follow docs/agent-workflow.md and the repo PR template conventions.
 Do not leave placeholder, probe, or praise-only comments.

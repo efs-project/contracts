@@ -16,6 +16,7 @@ import { Cog6ToothIcon, StopIcon } from "@heroicons/react/24/outline";
 import { useSortDiscovery } from "~~/hooks/efs/useSortDiscovery";
 import { useDeployedContractInfo, useScaffoldWriteContract } from "~~/hooks/scaffold-eth";
 import { useTargetNetwork } from "~~/hooks/scaffold-eth/useTargetNetwork";
+import { CHUNK_SIZE, MAX_CHUNKS, MAX_ONCHAIN_SIZE } from "~~/lib/efs/sstore2";
 import { useBackgroundOps } from "~~/services/store/backgroundOps";
 import type { ClassifiedContainer } from "~~/utils/efs/containers";
 import { EDGE_RESOLVER_ABI, getEdgeResolverAddress } from "~~/utils/efs/edgeResolver";
@@ -909,11 +910,10 @@ export const CreateItemModal = ({
           return;
         }
 
-        const MAX_ONCHAIN_SIZE = 24_000_000;
-        if (dataBytes.length > MAX_ONCHAIN_SIZE) {
+        if (dataBytes.length > MAX_ONCHAIN_SIZE || Math.ceil(dataBytes.length / CHUNK_SIZE) > MAX_CHUNKS) {
           const msg =
             `File too large for on-chain upload (${Math.round(dataBytes.length / 1024 / 1024)}MB). ` +
-            `Maximum is ~${MAX_ONCHAIN_SIZE / 1_000_000}MB. Use IPFS or Arweave for large files.`;
+            `Maximum is ~${MAX_ONCHAIN_SIZE / 1_000_000}MB (${MAX_CHUNKS} chunks). Use IPFS or Arweave for large files.`;
           notification.error(msg);
           ops.fail(opId, msg);
           setIsSubmitting(false);
@@ -923,7 +923,6 @@ export const CreateItemModal = ({
         contentHash = computeContentHash(dataBytes);
         fileSize = BigInt(dataBytes.length);
 
-        const CHUNK_SIZE = 24000;
         const totalChunks = Math.ceil(dataBytes.length / CHUNK_SIZE) || 1;
         ops.log(
           opId,
