@@ -72,7 +72,11 @@ const hex2 = (b: number): string => b.toString(16).toUpperCase().padStart(2, "0"
 // every other byte (including high-bit UTF-8) appears bare. Reserved characters are therefore typed
 // as their %XX escape (e.g. a literal "/" → "%2F"); auto-encoding is deliberately not done here so
 // the entered string is exactly what gets attested.
-function validateAnchorName(name: string): string | null {
+function validateAnchorName(rawName: string): string | null {
+  // NFC-normalize first (ADR-0025): the canonical on-chain name is NFC + percent-encoding, and the
+  // contract can't verify normalization, so the client MUST. Validating (and, at submit, attesting) the
+  // NFC form means precomposed "é" and decomposed "é" map to ONE permanent anchor, not two.
+  const name = rawName.normalize("NFC");
   if (name.length === 0) return "Name cannot be empty.";
   if (name === "." || name === "..") return "Name cannot be '.' or '..'.";
   const bytes = new TextEncoder().encode(name);
@@ -464,6 +468,11 @@ export const CreateItemModal = ({
       notification.error(nameError);
       return;
     }
+    // The on-chain list-slot anchor name MUST be the NFC-normalized form (ADR-0025), exactly as in
+    // handleSubmit — the contract can't verify normalization, so a precomposed vs decomposed Unicode
+    // name would mint two distinct permanent (ADR-0002) list-slot anchors for one human name. Attest
+    // (and resolve-existing against) the NFC form; display/op-title strings keep the raw `name`.
+    const nfcName = name.normalize("NFC");
     // SCHEMA mode: require a full 32-byte UID BEFORE attesting the (non-revocable)
     // list-slot anchor. A loose `0x…` check let `0x1` through, which then reverted at
     // the LIST attest — but only after the anchor was already created, leaving a
@@ -513,7 +522,7 @@ export const CreateItemModal = ({
             address: indexer.address as `0x${string}`,
             abi: indexer.abi,
             functionName: "resolveAnchor",
-            args: [currentAnchorUID as `0x${string}`, name, listSchemaUID as `0x${string}`],
+            args: [currentAnchorUID as `0x${string}`, nfcName, listSchemaUID as `0x${string}`],
           })) as `0x${string}`;
           if (existing && existing !== zeroHash) {
             // Parity with file creation: the slot already exists, so submitting places a new list
@@ -540,7 +549,7 @@ export const CreateItemModal = ({
             { name: "name", type: "string" },
             { name: "schemaUID", type: "bytes32" },
           ],
-          [name, listSchemaUID as `0x${string}`],
+          [nfcName, listSchemaUID as `0x${string}`],
         );
         const aTx = await attest(
           {
@@ -652,6 +661,10 @@ export const CreateItemModal = ({
       notification.error(nameError);
       return;
     }
+    // The on-chain anchor name MUST be the NFC-normalized form (ADR-0025) — the contract can't verify
+    // normalization, so precomposed/decomposed Unicode would otherwise mint two distinct permanent
+    // anchors for the same human name. Attest (and resolve-existing against) the NFC form everywhere.
+    const nfcName = newName.normalize("NFC");
     if (internalType === "File" && !fileToUpload) {
       notification.error("Please select a file to upload.");
       return;
@@ -693,7 +706,7 @@ export const CreateItemModal = ({
 
     try {
       if (internalType === "Folder") {
-        const encodedName = ethers.AbiCoder.defaultAbiCoder().encode(["string", "bytes32"], [newName, ethers.ZeroHash]);
+        const encodedName = ethers.AbiCoder.defaultAbiCoder().encode(["string", "bytes32"], [nfcName, ethers.ZeroHash]);
 
         let newAnchorUID: `0x${string}` | undefined;
         if (indexer) {
@@ -702,7 +715,7 @@ export const CreateItemModal = ({
               address: indexer.address as `0x${string}`,
               abi: indexer.abi,
               functionName: "resolveAnchor",
-              args: [currentAnchorUID as `0x${string}`, newName, ethers.ZeroHash as `0x${string}`],
+              args: [currentAnchorUID as `0x${string}`, nfcName, ethers.ZeroHash as `0x${string}`],
             })) as `0x${string}`;
             if (existingUID && existingUID !== ethers.ZeroHash) {
               newAnchorUID = existingUID;
@@ -853,7 +866,7 @@ export const CreateItemModal = ({
           }
         }
 
-        if (newAnchorUID) onFolderCreated?.(newAnchorUID, newName);
+        if (newAnchorUID) onFolderCreated?.(newAnchorUID, nfcName);
         ops.complete(opId, "Folder ready.");
         return;
       }
@@ -862,7 +875,7 @@ export const CreateItemModal = ({
       const fileAnchorSchemaUID = dataSchemaUID as `0x${string}`;
       const encodedName = ethers.AbiCoder.defaultAbiCoder().encode(
         ["string", "bytes32"],
-        [newName, fileAnchorSchemaUID],
+        [nfcName, fileAnchorSchemaUID],
       );
 
       let existingFileAnchorUID: `0x${string}` | undefined;
@@ -872,7 +885,7 @@ export const CreateItemModal = ({
             address: indexer.address as `0x${string}`,
             abi: indexer.abi,
             functionName: "resolveAnchor",
-            args: [currentAnchorUID as `0x${string}`, newName, fileAnchorSchemaUID],
+            args: [currentAnchorUID as `0x${string}`, nfcName, fileAnchorSchemaUID],
           })) as `0x${string}`;
           if (existingUID && existingUID !== ethers.ZeroHash) {
             if (!existingAnchorWarning) {
