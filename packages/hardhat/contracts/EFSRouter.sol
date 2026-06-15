@@ -403,7 +403,14 @@ contract EFSRouter is IDecentralizedApp {
         // than ever returning the raw URI as the response body.
         // Single Content-Type with the actual type embedded as a parameter,
         // avoiding duplicate headers that clients may collapse or mishandle.
-        // Sanitize contentType: strip quotes and control chars to prevent header injection.
+        // Sanitize BOTH interpolated values — strip quotes/backslashes/control bytes to prevent header
+        // injection (ADR-0024). The URI is attester-controlled (any lens can attest a MIRROR) and, with
+        // the widened off-chain allowlist (ftp/s3/gs/dat/rsync/bittorrent — ADR-0023), a stored value
+        // containing `"` or control bytes would otherwise break out of the URL="..." quoted-string and
+        // inject header parameters into every client served through that lens. A well-formed URI cannot
+        // contain those bytes raw (RFC 3986 requires percent-encoding), so sanitizing only ever affects
+        // a malformed/hostile URI — degrading it to a broken redirect, never an injection vector.
+        string memory safeUri = _sanitizeHeaderValue(uri);
         string memory safeContentType = _sanitizeHeaderValue(contentType);
         headers = new KeyValue[](1);
         headers[0] = KeyValue(
@@ -411,7 +418,7 @@ contract EFSRouter is IDecentralizedApp {
             string(
                 abi.encodePacked(
                     'message/external-body; access-type=URL; URL="',
-                    uri,
+                    safeUri,
                     '"',
                     bytes(safeContentType).length > 0
                         ? string(abi.encodePacked('; content-type="', safeContentType, '"'))

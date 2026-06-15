@@ -635,6 +635,33 @@ describe("EFSRouter Web3 Capabilities", function () {
       expect(ctHeader?.value).to.include("message/external-body");
       expect(ctHeader?.value).to.include('URL="ftp://ftp.example.com/pub/legacy.txt"');
     });
+
+    // P2 (PR #24, Codex): the MIRROR uri is attester-controlled and MirrorResolver validates only the
+    // scheme prefix + length (ADR-0023) — NOT the body. A uri carrying `"`, control bytes, or `\` would
+    // otherwise be interpolated verbatim into the URL="..." quoted-string and inject header parameters.
+    // The router must strip those bytes (ADR-0024) before emitting the header.
+    it("Should sanitize a hostile MIRROR uri (quote/control/backslash) out of the external-body header", async function () {
+      const fileAnchorUID = await createFileAnchor(ideasUID, "evil.bin");
+      const dataUID = await createData("evil-content");
+      await addProperty(dataUID, "contentType", "text/plain");
+      // Passes _isAllowedScheme (ipfs:// prefix) + length, so MirrorResolver stores it. Body carries a
+      // quote (breaks the URL param), CR/LF (header injection), and a backslash.
+      const hostileUri = 'ipfs://QmABC"\r\ninjected="evil\\x';
+      await addMirror(dataUID, ipfsTransportUID, hostileUri);
+      await pinAtPath(dataUID, fileAnchorUID);
+
+      const [statusCode, , headers] = await router.request(["ideas", "evil.bin"], ownerParams());
+      expect(statusCode).to.equal(200);
+      const ctHeader = headers.find((h: any) => h.key === "Content-Type");
+      expect(ctHeader?.value).to.include("message/external-body");
+      // The dangerous bytes are stripped, leaving a faithful (if mangled) redirect — no breakout.
+      expect(ctHeader?.value).to.include('URL="ipfs://QmABCinjected=evilx"');
+      expect(ctHeader?.value, "no CR").to.not.include("\r");
+      expect(ctHeader?.value, "no LF").to.not.include("\n");
+      expect(ctHeader?.value, "no backslash").to.not.include("\\");
+      // Exactly the structural quotes remain (2 for URL=, 2 for content-type=) — none injected.
+      expect((ctHeader!.value.match(/"/g) || []).length, "only structural quotes").to.equal(4);
+    });
   });
 
   describe("EIP-7617: Chunking", function () {
