@@ -207,7 +207,9 @@ export async function orchestrate(deployer: Signer, mode: RunMode, log = true): 
     }
     const saImpl = await readImplementation(systemAccountAddr);
     if (saImpl === ZeroAddress) {
-      throw new Error(`after-freeze-gate: SystemAccount proxy ${systemAccountAddr} has a zero EIP-1967 implementation slot`);
+      throw new Error(
+        `after-freeze-gate: SystemAccount proxy ${systemAccountAddr} has a zero EIP-1967 implementation slot`,
+      );
     }
     deploys.SystemAccount = {
       resolver: "SystemAccount",
