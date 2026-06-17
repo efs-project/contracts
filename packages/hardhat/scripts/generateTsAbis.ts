@@ -92,6 +92,12 @@ function getContractDataFromDeployments() {
       const { abi, address, metadata } = JSON.parse(
         fs.readFileSync(`${DEPLOYMENTS_DIR}/${chainName}/${contractName}.json`).toString(),
       );
+      // Skip non-deployment JSON files that share the deployments dir — notably the Safe-native
+      // build/propose artifact `safe-batches.json`, which carries MultiSend batches, not a contract
+      // address/abi. A real hardhat-deploy artifact always has both; without this guard such a file
+      // would land in deployedContracts.ts as a garbage `{ address: undefined, abi: undefined }` entry
+      // and break the frontend typecheck (Codex P2, PR #24).
+      if (!abi || !address) continue;
       const inheritedFunctions = metadata ? getInheritedFunctions(JSON.parse(metadata).sources, contractName) : {};
       contracts[contractName] = { address, abi, inheritedFunctions };
     }
