@@ -690,6 +690,14 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
     }
 
     // Generic Explorer
+    //
+    // ADR-0051: these referencing/discovery getters exclude revoked (and PIN-superseded) UIDs by
+    // DEFAULT. Full history is opt-in via a sibling `…IncludingRevoked` view (ADR-0051 §"opt-in read").
+    // Distinct names rather than an overloaded `bool showRevoked` arg are deliberate: overloaded
+    // functions collapse `args` to `never` in viem/wagmi/scaffold-eth, breaking every typed consumer
+    // (the Vite client, the SDK, subgraph codegen) — a 50-year ABI-ergonomics cost. This makes "reads
+    // exclude revoked by default" a contract guarantee, not a per-caller convention. The underlying
+    // arrays stay append-only (ADR-0009); filtering happens on read in _sliceUIDsFiltered.
 
     function getAttestationsBySchema(
         bytes32 schemaUID,
@@ -697,7 +705,16 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
         uint256 length,
         bool reverseOrder
     ) external view returns (bytes32[] memory) {
-        return _sliceUIDs(_schemaAttestations[schemaUID], start, length, reverseOrder);
+        return _sliceUIDsFiltered(_schemaAttestations[schemaUID], start, length, reverseOrder, false);
+    }
+
+    function getAttestationsBySchemaIncludingRevoked(
+        bytes32 schemaUID,
+        uint256 start,
+        uint256 length,
+        bool reverseOrder
+    ) external view returns (bytes32[] memory) {
+        return _sliceUIDsFiltered(_schemaAttestations[schemaUID], start, length, reverseOrder, true);
     }
 
     function getAttestationCountBySchema(bytes32 schemaUID) external view returns (uint256) {
@@ -711,7 +728,17 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
         uint256 length,
         bool reverseOrder
     ) external view returns (bytes32[] memory) {
-        return _sliceUIDs(_schemaAttesterAttestations[schemaUID][attester], start, length, reverseOrder);
+        return _sliceUIDsFiltered(_schemaAttesterAttestations[schemaUID][attester], start, length, reverseOrder, false);
+    }
+
+    function getAttestationsBySchemaAndAttesterIncludingRevoked(
+        bytes32 schemaUID,
+        address attester,
+        uint256 start,
+        uint256 length,
+        bool reverseOrder
+    ) external view returns (bytes32[] memory) {
+        return _sliceUIDsFiltered(_schemaAttesterAttestations[schemaUID][attester], start, length, reverseOrder, true);
     }
 
     function getAttestationCountBySchemaAndAttester(
@@ -728,7 +755,17 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
         uint256 length,
         bool reverseOrder
     ) external view returns (bytes32[] memory) {
-        return _sliceUIDs(_referencingAttestations[targetUID][schemaUID], start, length, reverseOrder);
+        return _sliceUIDsFiltered(_referencingAttestations[targetUID][schemaUID], start, length, reverseOrder, false);
+    }
+
+    function getReferencingAttestationsIncludingRevoked(
+        bytes32 targetUID,
+        bytes32 schemaUID,
+        uint256 start,
+        uint256 length,
+        bool reverseOrder
+    ) external view returns (bytes32[] memory) {
+        return _sliceUIDsFiltered(_referencingAttestations[targetUID][schemaUID], start, length, reverseOrder, true);
     }
 
     function getReferencingAttestationCount(bytes32 targetUID, bytes32 schemaUID) external view returns (uint256) {
@@ -742,7 +779,17 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
         uint256 length,
         bool reverseOrder
     ) external view returns (bytes32[] memory) {
-        return _sliceUIDs(_receivedAttestations[recipient][schemaUID], start, length, reverseOrder);
+        return _sliceUIDsFiltered(_receivedAttestations[recipient][schemaUID], start, length, reverseOrder, false);
+    }
+
+    function getIncomingAttestationsIncludingRevoked(
+        address recipient,
+        bytes32 schemaUID,
+        uint256 start,
+        uint256 length,
+        bool reverseOrder
+    ) external view returns (bytes32[] memory) {
+        return _sliceUIDsFiltered(_receivedAttestations[recipient][schemaUID], start, length, reverseOrder, true);
     }
 
     function getOutgoingAttestations(
@@ -752,7 +799,17 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
         uint256 length,
         bool reverseOrder
     ) external view returns (bytes32[] memory) {
-        return _sliceUIDs(_sentAttestations[attester][schemaUID], start, length, reverseOrder);
+        return _sliceUIDsFiltered(_sentAttestations[attester][schemaUID], start, length, reverseOrder, false);
+    }
+
+    function getOutgoingAttestationsIncludingRevoked(
+        address attester,
+        bytes32 schemaUID,
+        uint256 start,
+        uint256 length,
+        bool reverseOrder
+    ) external view returns (bytes32[] memory) {
+        return _sliceUIDsFiltered(_sentAttestations[attester][schemaUID], start, length, reverseOrder, true);
     }
 
     // ============================================================================================
@@ -767,7 +824,16 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
         uint256 length,
         bool reverseOrder
     ) external view returns (bytes32[] memory) {
-        return _sliceUIDs(_allReferencing[targetUID], start, length, reverseOrder);
+        return _sliceUIDsFiltered(_allReferencing[targetUID], start, length, reverseOrder, false);
+    }
+
+    function getAllReferencingIncludingRevoked(
+        bytes32 targetUID,
+        uint256 start,
+        uint256 length,
+        bool reverseOrder
+    ) external view returns (bytes32[] memory) {
+        return _sliceUIDsFiltered(_allReferencing[targetUID], start, length, reverseOrder, true);
     }
 
     function getReferencingByAttester(
@@ -777,7 +843,17 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
         uint256 length,
         bool reverseOrder
     ) external view returns (bytes32[] memory) {
-        return _sliceUIDs(_referencingByAttester[targetUID][attester], start, length, reverseOrder);
+        return _sliceUIDsFiltered(_referencingByAttester[targetUID][attester], start, length, reverseOrder, false);
+    }
+
+    function getReferencingByAttesterIncludingRevoked(
+        bytes32 targetUID,
+        address attester,
+        uint256 start,
+        uint256 length,
+        bool reverseOrder
+    ) external view returns (bytes32[] memory) {
+        return _sliceUIDsFiltered(_referencingByAttester[targetUID][attester], start, length, reverseOrder, true);
     }
 
     function getReferencingBySchemaAndAttester(
@@ -788,7 +864,32 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
         uint256 length,
         bool reverseOrder
     ) external view returns (bytes32[] memory) {
-        return _sliceUIDs(_referencingBySchemaAndAttester[targetUID][schemaUID][attester], start, length, reverseOrder);
+        return
+            _sliceUIDsFiltered(
+                _referencingBySchemaAndAttester[targetUID][schemaUID][attester],
+                start,
+                length,
+                reverseOrder,
+                false
+            );
+    }
+
+    function getReferencingBySchemaAndAttesterIncludingRevoked(
+        bytes32 targetUID,
+        bytes32 schemaUID,
+        address attester,
+        uint256 start,
+        uint256 length,
+        bool reverseOrder
+    ) external view returns (bytes32[] memory) {
+        return
+            _sliceUIDsFiltered(
+                _referencingBySchemaAndAttester[targetUID][schemaUID][attester],
+                start,
+                length,
+                reverseOrder,
+                true
+            );
     }
 
     // --- Directory Perspectives (ANCHOR Schema) ---
@@ -1104,13 +1205,19 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
                 _containsSchemaAttestations[currentUID][attester][schema] = true;
             }
 
-            // Propagate generic "active in this structure" flag all the way up the tree
+            // Propagate generic "active in this structure" flag all the way up the tree.
+            // Depth-capped at MAX_ANCHOR_DEPTH (symmetric with _propagateContains, ADR-0021): anchor
+            // creation already bounds _parents chains, but this guard makes the walk self-limiting
+            // regardless of how currentUID was reached (notably the permissionless index()/indexBatch()
+            // paths), so no chain can make this loop unbounded.
+            uint256 depth = 0;
             while (currentUID != bytes32(0)) {
                 // If this level is already flagged true, the rest of the chain above it must be too.
                 // Break early to save gas (amortized O(1) for repeat contributions by same user).
                 if (_containsAttestations[currentUID][attester]) {
                     break;
                 }
+                if (depth++ > MAX_ANCHOR_DEPTH) break;
 
                 _containsAttestations[currentUID][attester] = true;
 

@@ -360,7 +360,45 @@ describe("EdgeResolver — PIN", function () {
       const tagUID = getUID(await tx.wait());
       await expect(tx)
         .to.emit(edgeResolver, "TagSet")
-        .withArgs(definition, ownerAddr, dummySchemaUID, tagUID, target, 5n);
+        .withArgs(definition, ownerAddr, dummySchemaUID, tagUID, target, 5n, ZERO_BYTES32);
+    });
+
+    it("TagSet on a re-attest at the same edge surfaces the prior tagUID as supersededTagUID", async function () {
+      const ownerAddr = await owner.getAddress();
+      const target = await createTarget();
+      const definition = await createDefinition();
+      // First TAG at this (attester, target, definition) edge — supersededTagUID == 0.
+      const tx1 = await eas.connect(owner).attest({
+        schema: tagSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: NO_EXPIRATION,
+          revocable: true,
+          refUID: target,
+          data: encodeTag(definition, 1n),
+          value: 0n,
+        },
+      });
+      const tag1 = getUID(await tx1.wait());
+      await expect(tx1)
+        .to.emit(edgeResolver, "TagSet")
+        .withArgs(definition, ownerAddr, dummySchemaUID, tag1, target, 1n, ZERO_BYTES32);
+      // Re-attest the same edge with a new weight — updates in place; supersededTagUID == tag1.
+      const tx2 = await eas.connect(owner).attest({
+        schema: tagSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: NO_EXPIRATION,
+          revocable: true,
+          refUID: target,
+          data: encodeTag(definition, 9n),
+          value: 0n,
+        },
+      });
+      const tag2 = getUID(await tx2.wait());
+      await expect(tx2)
+        .to.emit(edgeResolver, "TagSet")
+        .withArgs(definition, ownerAddr, dummySchemaUID, tag2, target, 9n, tag1);
     });
 
     it("PinSet on a same-target re-attest reports supersededPinUID == 0 (no false supersede)", async function () {

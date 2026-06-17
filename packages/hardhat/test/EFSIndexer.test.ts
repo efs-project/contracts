@@ -1041,11 +1041,15 @@ describe("EFSIndexer", function () {
 
       await eas.connect(user1).revoke({ schema: tagSchemaUID, data: { uid: tagUID, value: 0n } });
 
-      // After revoke: still present in append-only array (kernel never removes)
+      // After revoke: the DEFAULT getter now excludes revoked (ADR-0051) → 0...
       const after = await indexer.getReferencingAttestations(parentUID, tagSchemaUID, 0, 10, false);
-      expect(after.length).to.equal(1);
+      expect(after.length).to.equal(0);
 
-      // But isRevoked is now true — callers use this to filter
+      // ...but the underlying array is still append-only — showRevoked=true surfaces the revoked entry.
+      const afterRaw = await indexer.getReferencingAttestationsIncludingRevoked(parentUID, tagSchemaUID, 0, 10, false);
+      expect(afterRaw.length).to.equal(1);
+
+      // And isRevoked reflects the revocation.
       expect(await indexer.isRevoked(tagUID)).to.equal(true);
     });
 
@@ -1073,10 +1077,13 @@ describe("EFSIndexer", function () {
 
       await eas.connect(user1).revoke({ schema: tagSchemaUID, data: { uid: tagUID, value: 0n } });
 
-      // After revoke: isRevoked is true (kernel array unchanged — caller filters via isRevoked)
+      // After revoke: isRevoked is true; the default getter excludes revoked (ADR-0051) → 0,
+      // while showRevoked=true still surfaces the append-only entry.
       expect(await indexer.isRevoked(tagUID)).to.equal(true);
       const after = await indexer.getReferencingAttestations(parentUID, tagSchemaUID, 0, 10, false);
-      expect(after.length).to.equal(1); // still in array — append-only kernel
+      expect(after.length).to.equal(0);
+      const afterRaw = await indexer.getReferencingAttestationsIncludingRevoked(parentUID, tagSchemaUID, 0, 10, false);
+      expect(afterRaw.length).to.equal(1); // still in array — append-only kernel
 
       // getChildrenByAttester with showRevoked=true/false also uses _isRevoked internally
       // (child1 and child2 are non-revocable anchors, so showRevoked has no visible effect here)
@@ -1532,9 +1539,12 @@ describe("EFSIndexer", function () {
         data: { uid: tagUID, value: 0n },
       });
 
-      // Verify the revoked item is NOT removed from these arrays
+      // After revoke: the default getter excludes revoked (ADR-0051) → empty...
       const allRefAfter = await indexer.getAllReferencing(fileAnchorUID, 0, 10, false);
-      expect(allRefAfter.length).to.equal(1);
+      expect(allRefAfter.length).to.equal(0);
+      // ...but the array is still append-only — showRevoked=true surfaces the revoked entry.
+      const allRefRaw = await indexer.getAllReferencingIncludingRevoked(fileAnchorUID, 0, 10, false);
+      expect(allRefRaw.length).to.equal(1);
     });
 
     // ──────────────────────────────────────────────────────────────────────────

@@ -54,7 +54,15 @@ contract MirrorResolver is EFSUpgradeableResolver, OwnableUpgradeable {
         bytes32 mirrorUID,
         string uri
     );
-    event MirrorCleared(bytes32 indexed dataUID, address indexed attester, bytes32 mirrorUID);
+    // Carries `transportDefinition` indexed so it presents the SAME (dataUID, attester,
+    // transportDefinition) key as MirrorSet — a log-only indexer can retire the exact transport slot
+    // without an eth_call to recover it from the mirrorUID.
+    event MirrorCleared(
+        bytes32 indexed dataUID,
+        address indexed attester,
+        bytes32 indexed transportDefinition,
+        bytes32 mirrorUID
+    );
 
     /// @notice Maximum allowed byte length for a MIRROR URI.
     uint256 public constant MAX_URI_LENGTH = 8192;
@@ -162,10 +170,11 @@ contract MirrorResolver is EFSUpgradeableResolver, OwnableUpgradeable {
 
     function onRevoke(Attestation calldata attestation, uint256 /*value*/) internal override returns (bool) {
         _cfg().indexer.indexRevocation(attestation.uid);
-        // refUID is the DATA this mirror referenced; attester is the lens. (No need to decode the
-        // payload on revoke — the indexer maps mirrorUID→entity, and the dataUID/attester here let a
-        // log indexer retire the mirror without an eth_call.)
-        emit MirrorCleared(attestation.refUID, attestation.attester, attestation.uid);
+        // Decode the transportDefinition (the first MIRROR field) so MirrorCleared carries the same
+        // (dataUID, attester, transportDefinition) key as MirrorSet. Just a calldata decode — no
+        // external call — and lets a log indexer retire the exact transport slot without an eth_call.
+        (bytes32 transportDefinition, ) = abi.decode(attestation.data, (bytes32, string));
+        emit MirrorCleared(attestation.refUID, attestation.attester, transportDefinition, attestation.uid);
         return true;
     }
 

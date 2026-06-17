@@ -871,9 +871,14 @@ contract EFSFileView {
 
             if (att.schema != dataSchemaUID) {
                 // Anchor: decode name. DATA carries no inline fields (ADR-0049), so there is
-                // nothing to decode in the DATA branch.
+                // nothing to decode in the DATA branch. Guard on non-empty data — matching the two other
+                // anchor-decode sites in this contract — because EAS permits a zero-length `data` field
+                // on any schema, and an unguarded abi.decode of empty bytes panics and would brick the
+                // whole listing page for one malformed item.
                 bytes32 anchorType;
-                (name, anchorType) = abi.decode(att.data, (string, bytes32));
+                if (att.data.length > 0) {
+                    (name, anchorType) = abi.decode(att.data, (string, bytes32));
+                }
             }
 
             items[i] = FileSystemItem({

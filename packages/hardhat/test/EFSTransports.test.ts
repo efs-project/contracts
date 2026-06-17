@@ -525,7 +525,9 @@ describe("EFS Transports & Data Model", function () {
       const ownerAddr = await owner.getAddress();
       const mirrorUID = await createMirror(testDataUID, ipfsTransportUID, "ipfs://QmEventClear");
       const tx = await eas.connect(owner).revoke({ schema: mirrorSchemaUID, data: { uid: mirrorUID, value: 0n } });
-      await expect(tx).to.emit(mirrorResolver, "MirrorCleared").withArgs(testDataUID, ownerAddr, mirrorUID);
+      await expect(tx)
+        .to.emit(mirrorResolver, "MirrorCleared")
+        .withArgs(testDataUID, ownerAddr, ipfsTransportUID, mirrorUID);
     });
 
     it("should reject a MIRROR with a nonzero expirationTime (HasExpiration)", async function () {

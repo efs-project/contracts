@@ -98,13 +98,18 @@ contract EdgeResolver is EFSUpgradeableResolver {
         bytes32 pinUID,
         bytes32 targetID
     );
+    // `supersededTagUID` carries the prior tagUID when a re-attestation updates an existing edge's
+    // UID/weight in place (no TagCleared fires for that silent replacement); it is bytes32(0) on a
+    // first attestation. Symmetric with PinSet.supersededPinUID — lets a log-only indexer retire the
+    // old UID and reconstruct weight-edit history without an eth_call.
     event TagSet(
         bytes32 indexed definition,
         address indexed attester,
         bytes32 indexed targetSchema,
         bytes32 tagUID,
         bytes32 targetID,
-        int256 weight
+        int256 weight,
+        bytes32 supersededTagUID
     );
     event TagCleared(
         bytes32 indexed definition,
@@ -359,8 +364,24 @@ contract EdgeResolver is EFSUpgradeableResolver {
             );
             emit PinSet(definition, attestation.attester, targetSchema, attestation.uid, targetID, supersededPinUID);
         } else {
-            _onAttestTag(definition, attestation.attester, attestation.uid, edgeHash, targetSchema, weight, wasActive);
-            emit TagSet(definition, attestation.attester, targetSchema, attestation.uid, targetID, weight);
+            bytes32 supersededTagUID = _onAttestTag(
+                definition,
+                attestation.attester,
+                attestation.uid,
+                edgeHash,
+                targetSchema,
+                weight,
+                wasActive
+            );
+            emit TagSet(
+                definition,
+                attestation.attester,
+                targetSchema,
+                attestation.uid,
+                targetID,
+                weight,
+                supersededTagUID
+            );
         }
 
         // Track discovery indices (append-only, never removed). Common to both schemas.
@@ -549,7 +570,7 @@ contract EdgeResolver is EFSUpgradeableResolver {
         bytes32 targetSchema,
         int256 weight,
         bool wasActive
-    ) private {
+    ) private returns (bytes32 supersededTagUID) {
         TagEntry[] storage arr = _activeByAAS[definition][attester][targetSchema];
         uint256 indexPlusOne = _activeByAASIndex[definition][attester][targetSchema][edgeHash];
 
@@ -574,8 +595,11 @@ contract EdgeResolver is EFSUpgradeableResolver {
                 _activeTotalByDefAndAttester[definition][attester]++;
             }
         } else {
-            // Re-attestation of the same edgeHash — update UID + weight in place.
+            // Re-attestation of the same edgeHash — update UID + weight in place. The prior tagUID is
+            // superseded silently (no TagCleared fires for an in-place update), so capture it before the
+            // overwrite and surface it via TagSet.supersededTagUID for log indexers.
             uint256 pos = indexPlusOne - 1;
+            supersededTagUID = arr[pos].tagUID;
             arr[pos].tagUID = tagUID;
             arr[pos].weight = weight;
             // wasActive is necessarily true here (entry already in arr); no count change.

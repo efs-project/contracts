@@ -65,8 +65,13 @@ contract AliasResolver is EFSUpgradeableResolver {
     error HasExpiration();
 
     // ── Events ──────────────────────────────────────────────────────────────────
-    event RedirectAttested(bytes32 indexed source, bytes32 indexed target, uint16 indexed kind, bytes32 redirectUID);
-    event RedirectRevoked(bytes32 indexed source, bytes32 indexed target, uint16 indexed kind, bytes32 redirectUID);
+    // Indexed topics: source, target, redirectUID. `redirectUID` (the attestation's own UID) is the
+    // join key for correlating with the native EAS `Attested`/`Revoked` logs and for "was THIS redirect
+    // retracted?" lookups, so it earns the 3rd indexed slot. `kind` is a low-cardinality discriminator
+    // (0..2 + reserved) that is always co-filtered with source/target, so it is left non-indexed —
+    // filtering it off the log data is free for a subgraph. (EVM caps non-anonymous events at 3 topics.)
+    event RedirectAttested(bytes32 indexed source, bytes32 indexed target, uint16 kind, bytes32 indexed redirectUID);
+    event RedirectRevoked(bytes32 indexed source, bytes32 indexed target, uint16 kind, bytes32 indexed redirectUID);
 
     // ── Constants ───────────────────────────────────────────────────────────────
     uint256 private constant EXPECTED_DATA_LEN = 64; // 32 (target) + 32 (kind padded to a word)

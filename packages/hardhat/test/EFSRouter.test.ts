@@ -1592,6 +1592,44 @@ describe("EFSRouter Web3 Capabilities", function () {
       expect(Buffer.from(ethers.getBytes(body)).toString()).to.equal("self-file");
     });
 
+    it("address-container browse with no ?lenses= consults the system tail (ADR-0039/0053)", async function () {
+      // The fix under test: address-container default lenses are now [caller, segmentAddr, system].
+      // The main fixture router has systemAccount=0 → _systemLens() collapses onto indexer.DEPLOYER()
+      // (= owner), hiding the tail. Deploy a SECOND router with _user2 as a DISTINCT systemAccount so
+      // the tail is genuinely exercised.
+      const RouterFactory = await ethers.getContractFactory("EFSRouter");
+      const router2 = await RouterFactory.deploy(
+        await indexer.getAddress(),
+        await eas.getAddress(),
+        await edgeResolver.getAddress(),
+        await registry.getAddress(),
+        dataSchemaUID,
+        await _user2.getAddress(), // distinct systemAccount — not owner, not the segment address
+      );
+      await router2.waitForDeployment();
+
+      // Address container = user1's address; neither caller (owner) nor segmentAddr (user1) has content
+      // here — only _user2 (the system) does.
+      const segAddr = await _user1.getAddress();
+      const fileAnchor = await createAnchorUnderAddress(segAddr, "sys.txt", dataSchemaUID);
+      const codeAddr = ethers.getAddress("0x0000000000000000000000000000000000000DE0");
+      await setCode(codeAddr, "0x00" + Buffer.from("from system").toString("hex"));
+      const dataUID = await createData("from system", _user2);
+      await addProperty(dataUID, "contentType", "text/plain", _user2);
+      await addMirror(dataUID, onchainTransportUID, `web3://${codeAddr}`, _user2);
+      await pinAtPath(dataUID, fileAnchor, _user2);
+
+      // router2 default lenses = [owner, user1, _user2]: owner→none, user1→none, _user2(system)→hit.
+      const [statusCode, body] = await router2.request([segAddr, "sys.txt"], []);
+      expect(statusCode).to.equal(200);
+      expect(Buffer.from(ethers.getBytes(body)).toString()).to.equal("from system");
+
+      // The main router (systemAccount=0 → system collapses to owner) resolves [owner, user1, owner]:
+      // nothing matches → 404. This is the pre-fix behavior — proves the system tail is load-bearing.
+      const [statusCode2] = await router.request([segAddr, "sys.txt"], []);
+      expect(statusCode2).to.equal(404);
+    });
+
     // ADR-0033 §2: schema & attestation URLs prefer the alias anchor at root
     // (name = UID in lowercase 0x-hex) over the raw UID for directory walks.
     describe("Alias anchors (ADR-0033 §2)", function () {

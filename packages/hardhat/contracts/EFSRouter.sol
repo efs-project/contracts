@@ -271,17 +271,23 @@ contract EFSRouter is IDecentralizedApp {
         }
 
         // Address-default lenses: when browsing an address container with no explicit
-        // `?lenses=`, default to `[caller, segmentAddr]` — "Vitalik's files, with my
-        // overrides on top". Consistent with ADR-0031 (explicit lenses always override).
+        // `?lenses=`, default to `[caller, segmentAddr, system]` — "Vitalik's files, with my
+        // overrides on top, then the system defaults". Consistent with ADR-0031 (explicit lenses always
+        // override). The `system` tail (ADR-0053/0039) is what every other container flavor gets via the
+        // `_findDataAtPath` fallback; including it here keeps address browsing from silently losing the
+        // canonical SystemAccount defaults. Explicit `?lenses=` still bypasses this block entirely.
         if (flavor == ContainerFlavor.Address && !lensesExplicit) {
             address segmentAddr = address(uint160(uint256(rawUID)));
+            address sys = _systemLens();
             if (caller != address(0) && caller != segmentAddr) {
-                lenses = new address[](2);
+                lenses = new address[](3);
                 lenses[0] = caller;
                 lenses[1] = segmentAddr;
+                lenses[2] = sys;
             } else {
-                lenses = new address[](1);
+                lenses = new address[](2);
                 lenses[0] = segmentAddr;
+                lenses[1] = sys;
             }
         }
 
