@@ -42,7 +42,7 @@ Smart-contract readers split by cardinality:
 Because EAS is permissionless, anyone can attest files to a folder. To prevent Out-Of-Gas (OOG) errors:
 - **Read Pagination**: All indexer read functions accept `start` and `length` parameters for cursor-based pagination through large directories.
 - **Append-Only Kernel**: EFSIndexer is the append-only kernel. Arrays are never modified after a write. When an attestation is revoked, `onRevoke` sets `_isRevoked[uid] = true` but leaves all arrays intact. This eliminates O(N) removal overhead and makes the storage model simpler and cheaper to write (deploy gas: ~2.35M vs ~3.8M for the old swap-and-pop design; revoke gas: ~90k vs ~200k).
-- **`showRevoked` filtering**: Every read function accepts a `bool showRevoked` parameter. When `false` (the default), the function scans forward and skips revoked UIDs, returning only active items. When `true`, revoked items are included — useful for history views and admin tooling.
+- **Revoked filtering** (ADR-0051 — every read excludes revoked by default): two shapes. (a) The directory/child-slice getters (`getChildren`, `getChildrenByAttester`, `getAnchorsBySchema`, `getChildrenByAddressList`, `getAnchorsBySchemaAndAddressList`) take a trailing `bool showRevoked` (false skips revoked, true includes them — for history/admin views). (b) The referencing/discovery getters (`getReferencingAttestations`, `getAllReferencing`, `getReferencingByAttester`, `getReferencingBySchemaAndAttester`, `getAttestationsBySchema`, `getAttestationsBySchemaAndAttester`, `getIncomingAttestations`, `getOutgoingAttestations`) exclude revoked **unconditionally by default** and expose full history via a sibling `…IncludingRevoked` view — their trailing bool is `reverseOrder`, not `showRevoked` (see the §"Referencing-index getters" note below for why distinct names, not an overload).
 
 ### Reads exclude revoked (and superseded) by default (ADR-0051)
 
@@ -59,7 +59,7 @@ Where this is enforced today (audited at the schema freeze):
 - **Directory children / anchor slices** (EFSIndexer, EFSFileView): `showRevoked` defaults false.
 - **List entries** (`ListReader.entries`, typed accessors): `ListEntryResolver` swap-and-pops a revoked entry out of its active array on `onRevoke`, so the stateless reader never sees it; typed accessors additionally reject `revocationTime != 0`.
 
-**Deferred (FUTURE_WORK, ADR-0051):** the generic referencing-index getters on EFSIndexer (`getReferencingAttestationCount`, `getAllReferencing`, `getReferencingByAttester`, `getReferencingBySchemaAndAttester`) return the raw append-only arrays with no `includeRevoked` opt-in. Bringing them under the uniform default is a multi-function additive ABI change and was kept out of the freeze PR; the serving/router path is fully covered.
+**Referencing-index getters (ADR-0051 follow-up — landed):** the generic referencing/discovery getters on EFSIndexer (`getReferencingAttestations`, `getAllReferencing`, `getReferencingByAttester`, `getReferencingBySchemaAndAttester`, `getAttestationsBySchema`, `getAttestationsBySchemaAndAttester`, `getIncomingAttestations`, `getOutgoingAttestations`) now exclude revoked by **default** like every other read; opt-in full history is a sibling `…IncludingRevoked` view (e.g. `getReferencingAttestationsIncludingRevoked`). Distinct names, not an overloaded `bool showRevoked` arg, because overloads collapse `args` to `never` in viem/wagmi/scaffold-eth and break every typed consumer (Vite client, SDK, subgraph codegen). The `…Count` getters still return the raw physical length — used only as a pagination bound, never as a logical item count.
 
 ### Kernel + resolver Events (Off-Chain Indexing)
 EFSIndexer and the edge/mirror resolvers emit structured events from their schema hooks, so a log-only indexer (The Graph / Ponder) reconstructs full state without per-attestation `eth_call`s and without scanning raw EAS `Attested` (which carries no field data):
@@ -76,17 +76,22 @@ event RevocationIndexed(bytes32 indexed uid);                              // ex
 // EdgeResolver — PIN/TAG edges. Indexed topics = the active-slot key (definition, attester, targetSchema).
 event PinSet(bytes32 indexed definition, address indexed attester, bytes32 indexed targetSchema, bytes32 pinUID, bytes32 targetID, bytes32 supersededPinUID);
 event PinCleared(bytes32 indexed definition, address indexed attester, bytes32 indexed targetSchema, bytes32 pinUID, bytes32 targetID);
-event TagSet(bytes32 indexed definition, address indexed attester, bytes32 indexed targetSchema, bytes32 tagUID, bytes32 targetID, int256 weight);
+event TagSet(bytes32 indexed definition, address indexed attester, bytes32 indexed targetSchema, bytes32 tagUID, bytes32 targetID, int256 weight, bytes32 supersededTagUID);
 event TagCleared(bytes32 indexed definition, address indexed attester, bytes32 indexed targetSchema, bytes32 tagUID, bytes32 targetID);
 
 // MirrorResolver — the URI-bearing mirror event (the kernel's MirrorCreated omits the URI).
 event MirrorSet(bytes32 indexed dataUID, address indexed attester, bytes32 indexed transportDefinition, bytes32 mirrorUID, string uri);
-event MirrorCleared(bytes32 indexed dataUID, address indexed attester, bytes32 mirrorUID);
+event MirrorCleared(bytes32 indexed dataUID, address indexed attester, bytes32 indexed transportDefinition, bytes32 mirrorUID);
+
+// AliasResolver — REDIRECT edges. Indexed topics: source, target, redirectUID (the join key for
+// correlating with the native EAS Attested/Revoked logs); `kind` stays non-indexed (low cardinality).
+event RedirectAttested(bytes32 indexed source, bytes32 indexed target, uint16 kind, bytes32 indexed redirectUID);
+event RedirectRevoked(bytes32 indexed source, bytes32 indexed target, uint16 kind, bytes32 indexed redirectUID);
 ```
 
 Subscribe to both revocation events. `AttestationRevoked` fires from the resolver hook on native schemas (ANCHOR, DATA, PROPERTY); `RevocationIndexed` fires when an external resolver calls `indexRevocation()`. For the edge/mirror layer the typed `PinCleared`/`TagCleared`/`MirrorCleared` events carry the slot/data keys, so an indexer retires the exact active entry without an `eth_call`.
 
-All events are indexed on the most useful lookup fields. The PIN/TAG topic triple `(definition, attester, targetSchema)` **is** the on-chain active-slot key (`_activeBySlot[definition][attester][targetSchema]`), so a subgraph keys an `ActivePin` entity on it directly. **PIN cardinality-1 supersession** is silent in storage (a re-pin replaces the slot in O(1)); `PinSet.supersededPinUID` makes it observable — it is `bytes32(0)` on a fresh slot or same-target re-attest, and the retired pinUID on a real different-target replacement, so a superseded PIN emits no `PinCleared` (its retirement is read from the next `PinSet`). `MirrorSet` carries the `uri` + `transportDefinition` the router ranks by (the generic `MirrorCreated` is retained as a kernel-index signal but omits the URI). `PropertyCreated`'s third topic `valueHash = keccak256(bytes(value))` is the interned value's **canonical content key** (ADR-0052) — the dedup lookup key. Because PIN events now carry `(definition, targetID, targetSchema)`, PROPERTY *bindings* (a PIN from a reserved-key anchor like `contentType`/`name`/`contentHash` to a PROPERTY value) and LIST_ENTRY order/label bindings are reconstructable from logs too. A Graph subgraph subscribing to these events can reconstruct full directory state — placement, supersession, tags, mirrors, property bindings, revocation — without any additional contract reads during sync.
+All events are indexed on the most useful lookup fields. The PIN/TAG topic triple `(definition, attester, targetSchema)` **is** the on-chain active-slot key (`_activeBySlot[definition][attester][targetSchema]`), so a subgraph keys an `ActivePin` entity on it directly. **PIN cardinality-1 supersession** is silent in storage (a re-pin replaces the slot in O(1)); `PinSet.supersededPinUID` makes it observable — it is `bytes32(0)` on a fresh slot or same-target re-attest, and the retired pinUID on a real different-target replacement, so a superseded PIN emits no `PinCleared` (its retirement is read from the next `PinSet`). `TagSet.supersededTagUID` is the symmetric signal for TAGs: a re-attest that updates an edge's weight/UID in place fires no `TagCleared`, so the prior tagUID is surfaced here (`bytes32(0)` on a first attest). `MirrorSet` carries the `uri` + `transportDefinition` the router ranks by, and `MirrorCleared` now carries the same `transportDefinition` so a log indexer retires the exact transport slot without an `eth_call` (the generic `MirrorCreated` is retained as a kernel-index signal but omits the URI). `RedirectAttested`/`RedirectRevoked` index `redirectUID` (the join key to the native EAS log) rather than the low-cardinality `kind`. `PropertyCreated`'s third topic `valueHash = keccak256(bytes(value))` is the interned value's **canonical content key** (ADR-0052) — the dedup lookup key. Because PIN events now carry `(definition, targetID, targetSchema)`, PROPERTY *bindings* (a PIN from a reserved-key anchor like `contentType`/`name`/`contentHash` to a PROPERTY value) and LIST_ENTRY order/label bindings are reconstructable from logs too. A Graph subgraph subscribing to these events can reconstruct full directory state — placement, supersession, tags, mirrors, property bindings, revocation — without any additional contract reads during sync.
 
 `EFSSortOverlay` emits `ItemSorted(sortInfoUID, parentAnchor, itemUID, leftNeighbour, rightNeighbour)` for each item inserted into a sorted list — enabling The Graph to reconstruct sorted order off-chain.
 
@@ -192,12 +197,14 @@ Descriptive label definitions (e.g. `#nsfw`) are stored as normal Anchors under 
 EdgeResolver is wired to EFSIndexer: `onAttest` calls `indexer.index(uid)` and `onRevoke` calls `indexer.indexRevocation(uid)`. PIN and TAG attestations are fully registered in EFSIndexer's generic discovery indices alongside other schemas:
 
 ```
+// 5th arg is `reverseOrder` (false = oldest-first); revoked are excluded by default (ADR-0051).
+// For full history including revoked, call the `…IncludingRevoked` sibling.
 indexer.getReferencingAttestations(targetUID, PIN_SCHEMA_UID, 0, 100, false)
-  → all PIN attestations targeting a given anchor or address
+  → active (non-revoked) PIN attestations targeting a given anchor or address
 indexer.getReferencingAttestations(targetUID, TAG_SCHEMA_UID, 0, 100, false)
-  → all TAG attestations targeting a given anchor or address
+  → active (non-revoked) TAG attestations targeting a given anchor or address
 indexer.getOutgoingAttestations(attester, PIN_SCHEMA_UID, 0, 100, false)
-  → all PINs made by a specific user
+  → active (non-revoked) PINs made by a specific user
 ```
 
 **Schema-aware queries are the correct pattern**: callers must specify the schema UID for schema-specific results. Mixing PIN and TAG in a generic query is intentional only when building a unified history view.
