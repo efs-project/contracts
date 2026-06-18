@@ -252,6 +252,54 @@ describe("EFSIndexer — public index() API", function () {
       expect(refs).to.include(uid);
     });
 
+    it("filtered pagination bounds the scan to [start, start+length) — no dup/miss when revoked precedes a page boundary", async function () {
+      // Regression for Codex P2 (comment 3432495291): with showRevoked=false the slice must stay within
+      // the physical window [start, start+length). If it scans PAST the window to "fill" `length` active
+      // items (the bug), a caller paging with `start += length` over the raw getReferencingAttestationCount
+      // re-reads the overscanned tail on the next page → duplicates (and can blow a fixed scan budget).
+      const rootTx = await eas.connect(owner).attest({
+        schema: anchorSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: NO_EXPIRATION,
+          revocable: false,
+          refUID: ZERO_BYTES32,
+          data: enc.encode(["string", "bytes32"], ["pageroot", ZERO_BYTES32]),
+          value: 0n,
+        },
+      });
+      const rootUID = getUID(await rootTx.wait());
+
+      // 5 referencing attestations, indexed in order → physical indices 0..4.
+      const uids: string[] = [];
+      for (let k = 0; k < 5; k++) {
+        const u = await attestThirdParty(alice, `ref-${k}`, rootUID);
+        await indexer.index(u);
+        uids.push(u);
+      }
+      // Revoke the one at physical index 1 (inside the first length-2 window) — the overscan trigger.
+      // The third-party schema has no resolver, so sync the revocation into the indexer's _isRevoked
+      // explicitly (indexRevocation), mirroring what a resolver's onRevoke does for EFS schemas.
+      await eas.connect(alice).revoke({ schema: thirdPartySchemaUID, data: { uid: uids[1], value: 0n } });
+      await indexer.indexRevocation(uids[1]);
+
+      const total = await indexer.getReferencingAttestationCount(rootUID, thirdPartySchemaUID);
+      expect(total).to.equal(5n); // append-only (ADR-0009): revoke does not shrink the physical array
+
+      // Page with length=2, advancing start += length over the physical total (the documented contract).
+      const collected: string[] = [];
+      for (let start = 0; start < Number(total); start += 2) {
+        const page = await indexer.getReferencingAttestations(rootUID, thirdPartySchemaUID, start, 2, false, false);
+        collected.push(...page);
+      }
+
+      // No duplicates across pages.
+      expect(new Set(collected).size).to.equal(collected.length);
+      // Exactly the four active UIDs (index 1 revoked), no misses.
+      const expectedActive = [uids[0], uids[2], uids[3], uids[4]].map(u => u.toLowerCase()).sort();
+      expect(collected.map(u => u.toLowerCase()).sort()).to.deep.equal(expectedActive);
+    });
+
     it("populates getReferencingSchemas for the target", async function () {
       const rootTx = await eas.connect(owner).attest({
         schema: anchorSchemaUID,

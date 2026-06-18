@@ -6713,6 +6713,11 @@ const deployedContracts = {
           type: "error",
         },
         {
+          inputs: [],
+          name: "WrongSchema",
+          type: "error",
+        },
+        {
           anonymous: false,
           inputs: [
             {

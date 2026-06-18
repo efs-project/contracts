@@ -690,7 +690,13 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
         bool showRevoked
     ) external view returns (bytes32[] memory) {
         return
-            _sliceUIDsFiltered(_schemaAttesterAttestations[schemaUID][attester], start, length, reverseOrder, showRevoked);
+            _sliceUIDsFiltered(
+                _schemaAttesterAttestations[schemaUID][attester],
+                start,
+                length,
+                reverseOrder,
+                showRevoked
+            );
     }
 
     function getAttestationCountBySchemaAndAttester(
@@ -709,7 +715,13 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
         bool showRevoked
     ) external view returns (bytes32[] memory) {
         return
-            _sliceUIDsFiltered(_referencingAttestations[targetUID][schemaUID], start, length, reverseOrder, showRevoked);
+            _sliceUIDsFiltered(
+                _referencingAttestations[targetUID][schemaUID],
+                start,
+                length,
+                reverseOrder,
+                showRevoked
+            );
     }
 
     function getReferencingAttestationCount(bytes32 targetUID, bytes32 schemaUID) external view returns (uint256) {
@@ -724,7 +736,8 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
         bool reverseOrder,
         bool showRevoked
     ) external view returns (bytes32[] memory) {
-        return _sliceUIDsFiltered(_receivedAttestations[recipient][schemaUID], start, length, reverseOrder, showRevoked);
+        return
+            _sliceUIDsFiltered(_receivedAttestations[recipient][schemaUID], start, length, reverseOrder, showRevoked);
     }
 
     function getOutgoingAttestations(
@@ -762,7 +775,8 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
         bool reverseOrder,
         bool showRevoked
     ) external view returns (bytes32[] memory) {
-        return _sliceUIDsFiltered(_referencingByAttester[targetUID][attester], start, length, reverseOrder, showRevoked);
+        return
+            _sliceUIDsFiltered(_referencingByAttester[targetUID][attester], start, length, reverseOrder, showRevoked);
     }
 
     function getReferencingBySchemaAndAttester(
@@ -1031,18 +1045,28 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
             return _sliceUIDs(uids, start, length, reverseOrder);
         }
 
-        bytes32[] memory temp = new bytes32[](length);
-        uint256 count = 0;
-        uint256 currentIndex = start;
+        // Bound the scan to the physical window [start, start+length). Filtering happens WITHIN the
+        // window: a page returns the active subset of its window (<= length items) and never scans
+        // past it to "fill" length. This keeps offset pagination correct — a caller advancing
+        // `start += length` over the raw count (getReferencingAttestationCount) walks DISJOINT physical
+        // windows, so it can never duplicate or skip active items (Codex P2, comment 3432495291). The
+        // examined window is identical to the showRevoked=true / _sliceUIDs path above; only revoked
+        // entries are dropped. (These getters return bytes32[] with no consumed cursor, so a
+        // fill-to-length scan could not report how far it actually read — the physical window is the
+        // only self-consistent contract.)
+        uint256 end = start + length;
+        if (end < start || end > totalLen) end = totalLen; // clamp to array end (and guard overflow)
 
-        while (count < length && currentIndex < totalLen) {
+        bytes32[] memory temp = new bytes32[](end - start);
+        uint256 count = 0;
+
+        for (uint256 currentIndex = start; currentIndex < end; currentIndex++) {
             uint256 actualIdx = reverseOrder ? totalLen - 1 - currentIndex : currentIndex;
             bytes32 uid = uids[actualIdx];
 
             if (!_isRevoked[uid]) {
                 temp[count++] = uid;
             }
-            currentIndex++;
         }
 
         // Truncate to actual count in-place — avoids a second allocation + copy loop.

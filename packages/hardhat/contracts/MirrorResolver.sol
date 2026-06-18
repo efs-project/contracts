@@ -10,6 +10,7 @@ import { EFSUpgradeableResolver } from "./base/EFSUpgradeableResolver.sol";
 interface IEFSIndexerForMirror {
     function index(bytes32 uid) external returns (bool);
     function indexRevocation(bytes32 uid) external;
+    function MIRROR_SCHEMA_UID() external view returns (bytes32);
     function DATA_SCHEMA_UID() external view returns (bytes32);
     function ANCHOR_SCHEMA_UID() external view returns (bytes32);
     function getParent(bytes32 anchorUID) external view returns (bytes32);
@@ -36,6 +37,7 @@ interface IEFSIndexerForMirror {
  */
 contract MirrorResolver is EFSUpgradeableResolver, OwnableUpgradeable {
     error InvalidData();
+    error WrongSchema();
     error InvalidTransport();
     error URITooLong();
     error InvalidURIScheme();
@@ -130,10 +132,18 @@ contract MirrorResolver is EFSUpgradeableResolver, OwnableUpgradeable {
     }
 
     function onAttest(Attestation calldata attestation, uint256 /*value*/) internal override returns (bool) {
+        IEFSIndexerForMirror idx = _cfg().indexer;
+
+        // Foreign-schema guard (matches AliasResolver/ListEntryResolver/EdgeResolver): EAS invokes this
+        // resolver for ANY schema registered against it. Only the canonical MIRROR schema may pass —
+        // otherwise a foreign schema with a valid DATA ref + transport + URI would index() and emit
+        // MirrorSet, polluting the event-reconstruction flow (specs/03) even though the router (which
+        // queries MIRROR_SCHEMA_UID) never serves it. The indexer stores MIRROR_SCHEMA_UID at wiring,
+        // before any real mirror is attested, so this read is always populated.
+        if (attestation.schema != idx.MIRROR_SCHEMA_UID()) revert WrongSchema();
+
         // MIRROR must reference a DATA attestation
         if (attestation.refUID == EMPTY_UID) return false;
-
-        IEFSIndexerForMirror idx = _cfg().indexer;
 
         Attestation memory target = _eas.getAttestation(attestation.refUID);
         if (target.schema != idx.DATA_SCHEMA_UID()) return false;

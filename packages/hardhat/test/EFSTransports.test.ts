@@ -495,6 +495,47 @@ describe("EFS Transports & Data Model", function () {
       expect(mirrorUID).to.not.equal(ZERO_BYTES32);
     });
 
+    it("rejects a FOREIGN schema pointed at MirrorResolver (WrongSchema) — no MirrorSet/index", async function () {
+      // Regression for Codex P2 (comment 3432672732): EAS invokes onAttest for ANY schema registered
+      // against this resolver. A foreign schema with an otherwise-valid DATA ref + transport + URI must
+      // NOT pass — it would emit MirrorSet and pollute the event-reconstruction flow (specs/03), even
+      // though the router (which queries MIRROR_SCHEMA_UID) never serves it. Sibling typed resolvers
+      // (AliasResolver/ListEntryResolver/EdgeResolver) all guard their own schema; MirrorResolver must too.
+      const mirrorResolverAddr = await mirrorResolver.getAddress();
+      // Foreign schema: leading fields match so onAttest's abi.decode((bytes32,string)) still succeeds,
+      // but the extra field makes the UID differ. Same resolver, revocable=true — so ONLY the schema
+      // guard (not NotRevocable / refUID / transport checks) can reject it.
+      const foreignDef = "bytes32 transportDefinition, string uri, uint256 salt";
+      await (await registry.register(foreignDef, mirrorResolverAddr, true)).wait();
+      const foreignSchemaUID = ethers.solidityPackedKeccak256(
+        ["string", "address", "bool"],
+        [foreignDef, mirrorResolverAddr, true],
+      );
+      expect(foreignSchemaUID).to.not.equal(mirrorSchemaUID);
+
+      const foreignData = enc.encode(
+        ["bytes32", "string", "uint256"],
+        [ipfsTransportUID, "ipfs://QmForeignInjection", 0n],
+      );
+      await expect(
+        eas.connect(owner).attest({
+          schema: foreignSchemaUID,
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: NO_EXPIRATION,
+            revocable: true,
+            refUID: testDataUID,
+            data: foreignData,
+            value: 0n,
+          },
+        }),
+      ).to.be.revertedWithCustomError(mirrorResolver, "WrongSchema");
+
+      // Control: the canonical MIRROR schema still works.
+      const realMirror = await createMirror(testDataUID, ipfsTransportUID, "ipfs://QmRealMirror");
+      expect(realMirror).to.not.equal(ZERO_BYTES32);
+    });
+
     it("should allow multiple mirrors on same DATA", async function () {
       const m1 = await createMirror(testDataUID, ipfsTransportUID, "ipfs://QmHash1");
       const m2 = await createMirror(testDataUID, arweaveTransportUID, "ar://ArHash1");
