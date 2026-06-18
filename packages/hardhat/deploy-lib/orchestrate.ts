@@ -8,9 +8,11 @@
 //   2. Deploy each resolver impl + its CREATE3 proxy (atomic initialize via the proxy constructor),
 //      passing the precomputed UIDs/partner refs as init args.
 //   3. VERIFY GATE (deploy-lib/verify.ts) — abort on any failure.
-//   4. Wire: EFSIndexer.wireContracts(...), MirrorResolver.setTransportsAnchor(...), /transports/*.
+//   4. Wire: EFSIndexer.wireContracts(...) ONLY — pure storage, no EAS call (safe pre-register). The
+//      /transports/* anchors + MirrorResolver.setTransportsAnchor need ANCHOR registered first → step 6.
 //   --- FREEZE GATE (human on real Sepolia; auto on fork) ---
-//   6. Register the 9 schemas LAST against the proxy addresses; assert getSchema(uid).resolver==proxy.
+//   6. Register the 9 schemas LAST; assert getSchema(uid).resolver==proxy. THEN SystemAccount.bootstrap
+//      authors root + /transports/* (then seal) and MirrorResolver.setTransportsAnchor binds the UID.
 //   7. Transfer every ProxyAdmin owner + resolver Ownable owner to the Safe; assert owner()==Safe.
 //   8. Per-schema smoke: push one attestation through each of the 9 schemas; assert no revert.
 
