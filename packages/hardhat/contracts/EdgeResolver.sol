@@ -74,6 +74,16 @@ contract EdgeResolver is EFSUpgradeableResolver {
     error UnknownEdgeSchema();
     error NotRevocable();
     error HasExpiration();
+    /// @dev PIN/TAG payload is decodable but not the exact frozen length — abi.decode tolerates
+    ///      trailing words, so `abi.encode(definition) || extraWord` would otherwise index as the
+    ///      same active edge while the permanent EAS record differs from the frozen shape. Reject it.
+    error NonCanonicalPayload();
+
+    /// @dev Canonical on-wire payload lengths. PIN = `abi.encode(bytes32 definition)` = 1 word; TAG =
+    ///      `abi.encode(bytes32 definition, int256 weight)` = 2 words. Any other length is rejected
+    ///      (matches the exact-length guards in ListResolver/ListEntryResolver/AliasResolver).
+    uint256 private constant PIN_PAYLOAD_LEN = 32;
+    uint256 private constant TAG_PAYLOAD_LEN = 64;
 
     // ── Edge events (subgraph indexability, PR #24) ─────────────────────────────────────────────
     // EAS's own `Attested` carries no field data, and the kernel's generic `AttestationIndexed` carries
@@ -307,9 +317,11 @@ contract EdgeResolver is EFSUpgradeableResolver {
         int256 weight;
         bool isPin = attestation.schema == pinSchema;
         if (isPin) {
+            if (attestation.data.length != PIN_PAYLOAD_LEN) revert NonCanonicalPayload();
             definition = abi.decode(attestation.data, (bytes32));
             // weight stays 0 — unused for PIN (cardinality 1 has no per-entry metadata).
         } else if (attestation.schema == $.tagSchemaUID) {
+            if (attestation.data.length != TAG_PAYLOAD_LEN) revert NonCanonicalPayload();
             (definition, weight) = abi.decode(attestation.data, (bytes32, int256));
         } else {
             // Defensive: if the resolver is wired into an unknown schema, fail loudly.
@@ -428,8 +440,10 @@ contract EdgeResolver is EFSUpgradeableResolver {
         bytes32 definition;
         bool isPin = attestation.schema == $.pinSchemaUID;
         if (isPin) {
+            if (attestation.data.length != PIN_PAYLOAD_LEN) revert NonCanonicalPayload();
             definition = abi.decode(attestation.data, (bytes32));
         } else if (attestation.schema == $.tagSchemaUID) {
+            if (attestation.data.length != TAG_PAYLOAD_LEN) revert NonCanonicalPayload();
             (definition, ) = abi.decode(attestation.data, (bytes32, int256));
         } else {
             revert UnknownEdgeSchema();

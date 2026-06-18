@@ -292,6 +292,46 @@ describe("EdgeResolver — PIN", function () {
         }),
       ).to.be.revertedWithCustomError(edgeResolver, "NotRevocable");
     });
+
+    // abi.decode tolerates trailing words, so a PIN/TAG with extra bytes appended would otherwise be
+    // accepted and indexed as the SAME active edge as the canonical payload — while the permanent EAS
+    // record's bytes differ from the frozen `bytes32 definition` shape. The exact-length guard rejects
+    // it (Codex PR #24 P2; matches the LIST/LIST_ENTRY/REDIRECT exact-length guards).
+    it("rejects a PIN with trailing bytes past the canonical 32 (NonCanonicalPayload)", async function () {
+      const targetUID = await createTarget();
+      const definition = await createDefinition();
+      await expect(
+        eas.attest({
+          schema: pinSchemaUID,
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: NO_EXPIRATION,
+            revocable: true,
+            refUID: targetUID,
+            data: encodePin(definition) + "00".repeat(32), // 32-byte definition + one trailing word = 64 bytes
+            value: 0n,
+          },
+        }),
+      ).to.be.revertedWithCustomError(edgeResolver, "NonCanonicalPayload");
+    });
+
+    it("rejects a TAG with trailing bytes past the canonical 64 (NonCanonicalPayload)", async function () {
+      const targetUID = await createTarget();
+      const definition = await createDefinition();
+      await expect(
+        eas.attest({
+          schema: tagSchemaUID,
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: NO_EXPIRATION,
+            revocable: true,
+            refUID: targetUID,
+            data: encodeTag(definition, 1n) + "00".repeat(32), // 64-byte (def,weight) + one trailing word = 96 bytes
+            value: 0n,
+          },
+        }),
+      ).to.be.revertedWithCustomError(edgeResolver, "NonCanonicalPayload");
+    });
   });
 
   // ─── Proxy / initialize (ADR-0048) ───────────────────────────────────────────
