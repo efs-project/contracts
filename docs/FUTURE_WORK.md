@@ -39,6 +39,9 @@ The on-chain `web3://` serving path depends on legacy `extcodecopy` semantics th
 ### MirrorResolver self-schema guard [upgrade-safe hardening]
 MirrorResolver is the only frozen resolver whose `onAttest`/`onRevoke` lack an `a.schema == ownMirrorUID` guard — it runs its DATA/transport validation on, and indexes, foreign-schema attestations. Not exploitable today (reads filter mirrors by `MIRROR_SCHEMA_UID`, and `index()` is permissionless anyway), but adding the guard for symmetry hardens it against a future upgrade that moves MIRROR state into the resolver.
 
+### Canonical-payload re-encode guards for dynamic-payload schemas [upgrade-safe hardening]
+EdgeResolver now rejects non-canonical PIN/TAG payloads by exact length (32/64 bytes; PR #24, the active-edge corruption vector) — matching LIST/LIST_ENTRY/REDIRECT. The dynamic-payload schemas still decode without a canonical check: **MIRROR** (`MirrorResolver.onAttest/onRevoke`), **PROPERTY** and **ANCHOR** (`EFSIndexer`). Because they carry a `string`, exact length is impossible — the robust guard is re-encode-and-compare (`keccak256(a.data) == keccak256(abi.encode(decoded...))`), the pattern `SystemAccount._requireCanonicalAnchor` already uses for bootstrap anchors. Lower-priority than PIN/TAG (no active-edge map to corrupt; mirror/property/anchor UIDs aren't baked into permanent identity), so deferred. Upgrade-safe (resolver/kernel logic, no schema-string change). Add before the mainnet burn if wanted.
+
 ### Burn-completeness integration test [test debt]
 Add a test that runs the full burn sequence (renounce all ProxyAdmins + EFSIndexer/MirrorResolver/SystemAccount owners + sealModules) then asserts *every* owner == 0 and *every* one-shot setter (`setSortsAnchor`, `setTransportsAnchor`, `wireContracts`, `upgradeAndCall`) reverts — so the burn-incompleteness class this review caught can't regress.
 
