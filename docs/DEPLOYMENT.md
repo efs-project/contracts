@@ -2,7 +2,7 @@
 
 **Status:** Plan. Execution is **human-gated** — James signs the FREEZE_LEDGER before any schema is registered. **Nothing is irreversible until registration.**
 **Owner of freeze + upgradability + deploy:** the schema-freeze agent line.
-**Governing decisions:** ADR-0048 (freeze set + proxy/burn), ADR-0049 (empty DATA), ADR-0050 (REDIRECT), ADR-0037 (pinned fork), `docs/SEPOLIA_FREEZE_TABLE.md`, `docs/plans/2026-06-02-sepolia-deployment-blueprint.md`.
+**Governing decisions:** ADR-0048 (freeze set + proxy/burn), ADR-0049 (empty DATA), ADR-0050 (REDIRECT), ADR-0037 (pinned fork), `docs/SEPOLIA_FREEZE_TABLE.md`. (Background: the schema-freeze deployment blueprint + build-plan/critique/review artifacts were moved to the planning vault — `efs-project/planning` → `Reviews/2026-06-02-*.md` — as transient build-process records.)
 
 This runbook produces a **mainnet-forward** Sepolia deployment: the Sepolia structure _is_ the mainnet structure (same CREATE3 addresses ⇒ same schema UIDs), so seed data persists and Sepolia→mainnet is a redeploy + re-attestation, not a rewrite.
 
