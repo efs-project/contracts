@@ -1,0 +1,52 @@
+# ADR-0055: WHITEOUT — cross-lens negative masking (overlay deletion)
+
+**Status:** Proposed
+**Date:** 2026-06-18
+**Deciders:** James (schema freeze is human-gated)
+**Permanence-tier:** Etched (the future WHITEOUT field string, once registered) + Durable (the negative-terminal resolution rule). Only the **pre-freeze reservation** in the Decision is binding now.
+**Related:** ADR-0031 (lens first-attester-wins), ADR-0050 (REDIRECT — the rejected encoding vehicle + its read-time resolution spec carries the reservation), ADR-0041 (TAG weight — a rejected vehicle), ADR-0048 (freeze set + proxy/burn), ADR-0054 (view-layer exclusion predicate — the read-side machinery a whiteout reuses), ADR-0042 (effective-TAG)
+
+## Context
+
+EFS lenses are overlay layers: a lens list `[L0, L1, …, system]` is an upper→lower stack and resolution is first-attester-wins (ADR-0031) — the first lens with content at a path wins; `system` fills gaps but never shadows. Lenses are **additive-only**: a lens can ADD content, or SHADOW a lower lens by placing its *own* content. There is no way to assert **"render this path empty in my view — stop the fall-through to lower lenses without substituting my own content."** That negative assertion is the one filesystem primitive EFS lacks: the overlayfs *whiteout* (a.k.a. `.wh.NAME`, the `(char,0,0)` marker). It is load-bearing for ordinary UX, not exotic: a lens-local *delete* of inherited content, and the other half of a lens-local *rename* (whiteout the old inherited name + place the new one — without it, a renamed-inherited file appears in both places).
+
+A pre-freeze review (multi-agent, 2026-06-18) asked whether whiteout could ride the already-frozen REDIRECT schema as a reserved `kind` value, or TAG `weight < 0`. Both were rejected (see Alternatives). The conclusion this ADR records: whiteout is a **first-class primitive deserving its own schema + resolver**, and — because a new schema orphans nothing — it is fully **additive after the freeze**. Nothing about it is freeze-blocking; the only pre-freeze act is a reservation so the clean path is not foreclosed.
+
+## Decision
+
+**WHITEOUT is a dedicated EAS schema, registered additively AFTER the Sepolia freeze — NOT added to the nine-schema freeze set now, NOT a REDIRECT kind, NOT TAG `weight < 0`.**
+
+Intended shape (to be finalized when it ships, not frozen by this ADR):
+
+- **Empty field string** (`""`) — a pure-identity negative marker, same idiom as DATA (ADR-0049). The assertion is "this source is suppressed in this lens"; it needs no payload.
+- **`refUID` = the suppressed source** — a path **ANCHOR** (per-name whiteout) or a **DATA** UID.
+- **`revocable = true`** — revoke == un-hide.
+- **Own `WhiteoutResolver`** (upgradeable proxy, ERC-7201 config, self-UID in `initialize()`, burn-to-immutable per ADR-0048) that write-guards: `a.schema == whiteoutSchemaUID`, empty payload, `refUID != 0`, `revocable`, no expiry, and **`getAttestation(refUID).schema ∈ {ANCHOR, DATA}`** (suppressing a PROPERTY / MIRROR / another whiteout is meaningless and rejected at write time). The frozen AliasResolver cannot enforce any of this for `kind >= 3`, which is why REDIRECT is the wrong vehicle.
+
+**Pre-freeze reservation (the only part binding now):**
+
+1. In the REDIRECT read-time resolution spec + conformance vectors (already required by ADR-0050 before any durable seeding), **reserve the concept that a future negative/whiteout assertion resolves as a "negative terminal" in the lens scan** — so the strictly positive-only resolution order being frozen now leaves room for a non-following terminal and does not contradict it later (the cycle / lowest-UID-in-SCC / kind-following rules must permit a terminal that *stops* rather than *follows*).
+2. **Do not seed any whiteout into durable data via a REDIRECT sentinel-kind or a `weight < 0` TAG** until the dedicated schema exists. Such a convention, once on permanent data, would be a fact every client must honor forever — foreclosing the clean schema and baking in the category error.
+
+## Required semantics (the future WHITEOUT resolver + resolution spec must satisfy)
+
+- **Negative terminal in first-attester-wins:** walking `L0…system`, the first lens at path P with EITHER a positive placement PIN OR a whiteout terminates the scan — positive ⇒ serve that DATA; whiteout ⇒ serve **empty** (404-equivalent) and **stop** (no fall-through, no `system` gap-fill). Today only positives terminate; whiteout adds negatives as terminals.
+- **Lens-scoped & non-propagating:** a whiteout by `Lk` suppresses only lenses strictly **below** `Lk`; it is transparent to any lens above `Lk` (which re-asserts and wins) and affects only viewers who voluntarily include `Lk`. It can **never** act as a global delete or mutate other viewers' state — viewer sovereignty must be *structural* (path-Anchor-sourced + lens-scoped), not client politeness.
+- **Two markers — per-name AND opaque-directory:** per-name whiteout (refUID = leaf/folder Anchor) hides one entry; an **opaque** marker on a folder ("show only my children here; suppress all lower-lens children, including ones added later") is required for completeness because "hide everything below" as one-whiteout-per-descendant is unbounded and races future additions. REDIRECT (singular source→target) structurally cannot express opaque. The dedicated schema must leave room to add the opaque variant additively (a read-time rule keyed off `refUID`, or a sibling schema).
+- **Idempotent / no-op-safe:** whiteout of a path with no lower content is legal and resolves to empty; the write guard must NOT require the suppressed target to exist or be non-empty (you whiteout pre-emptively).
+- **Re-create / override (pin in the conformance spec):** (a) un-whiteout via `eas.revoke()`; (b) same-lens override — a newer positive PIN at P by the same lens must win over that lens's own whiteout (deterministic, start-independent tiebreak, like REDIRECT's lowest-UID-in-SCC rule); (c) higher-lens override falls out of first-wins.
+- **Readdir participation:** directory listing drops whited-out children (a per-child negative predicate over the lens stack — the same shape as ADR-0054's `getDirectoryPageFiltered` exclusion: a resolved-excluded item advances the walker but consumes no result slot) and truncates lower-lens children under an opaque marker. Read-side only — kernel/EdgeResolver indices and weight-neutrality untouched.
+- **Self-describing at read time:** the negative is an explicit on-chain assertion (`getAttestation(uid).schema == WHITEOUT`), not the mere absence of a positive and not an out-of-band magic constant.
+
+## Consequences
+
+- **Fully additive — zero change to the nine frozen schemas, not freeze-blocking.** Registered post-freeze as a new schema + resolver (the freeze set's 6 resolvers become 7; the schema count grows from 9, which is exactly how SORT_INFO and any future primitive are added).
+- The **only pre-freeze cost is the one-paragraph reservation** above (a doc note + a seeding ban). No on-chain action, no reserved kind, no sentinel.
+- The opaque-directory variant is a **further additive step** (a read-time rule or sibling schema) and need not be designed now — only left room for.
+- Until WHITEOUT ships, a lens cannot suppress inherited content; lens-local delete/rename of inherited files is degraded (the pre-existing state). Acceptable: it is a curation feature, not a launch blocker.
+
+## Alternatives considered
+
+- **REDIRECT `kind = N` + a nonzero "VOID" sentinel target — REJECTED.** `kind >= 3` is AliasResolver's explicitly *non*-type-checked branch, so the resolver gives zero write-time safety (cannot constrain `refUID` to an ANCHOR). The natural "points at nothing" encoding `target = 0` is blocked by the `ZeroTarget` guard, forcing a magic sentinel whose "never a real UID" property is unverifiable (an unenforceable social promise, hashed into nothing). `kind = 3` is already taken (`relatedVersion`, ADR-0050). And a resolution-*terminating* marker living inside a *follow* vocabulary invites a naive client to follow it and teleport into the void (amplifying ADR-0050's confused-deputy risk). It also cannot express the opaque-directory variant. This fails the very test ADR-0050 used to choose a first-class REDIRECT schema over a convention: *identity-rerouting deserves resolver-enforced guards, not client politeness and a stringly-typed UID* — and a whiteout reroutes identity to *nothing*.
+- **TAG `weight < 0` as suppression — REJECTED.** Breaches the most-defended kernel invariant ("the kernel never interprets weight"; ADR-0054), which negative-weight-as-suppression was already rejected for three times (ADR-0041 §4) and reverted once on review (ADR-0038). Effective-TAG is OR-across-attesters and reviewer-relative (ADR-0042) — the inverse of a deterministic, lens-scoped deletion. Irreversible once any durable data encodes it.
+- **Add WHITEOUT to the freeze set now (a 10th frozen schema) — REJECTED.** Unnecessary: a new schema orphans nothing and is addable anytime, so freezing it now buys nothing and spends scarce freeze-review bandwidth on an unfinished design (the opaque variant in particular is not settled). Defer; reserve the concept only.
