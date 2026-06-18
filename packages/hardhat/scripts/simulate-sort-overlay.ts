@@ -50,7 +50,20 @@ async function main() {
 
   // ── Connect to deployed contracts ────────────────────────────────────────────
   const indexer = (await ethers.getContract("Indexer", deployer)) as unknown as EFSIndexer;
-  const overlay = (await ethers.getContract("EFSSortOverlay", deployer)) as unknown as EFSSortOverlay;
+
+  // SORT_INFO is DEFERRED from the Sepolia freeze set (ADR-0048; deploy-lib/schemas.ts) — the
+  // freeze ceremony (deploy/00_efs_core.ts) does not deploy EFSSortOverlay. When it isn't present
+  // (e.g. on the freeze branch / any freeze-set deploy), skip cleanly with exit 0 rather than
+  // hard-erroring, matching the fail-soft seed pattern. This simulation returns to life unchanged
+  // once SORT_INFO is registered and the overlay deployed additively.
+  let overlay: EFSSortOverlay;
+  try {
+    overlay = (await ethers.getContract("EFSSortOverlay", deployer)) as unknown as EFSSortOverlay;
+  } catch {
+    console.log("  ⏭️  EFSSortOverlay is not deployed — SORT_INFO is deferred from the freeze set");
+    console.log("      (deploy-lib/schemas.ts, ADR-0048). Sort-overlay simulation skipped (exit 0).\n");
+    return;
+  }
 
   const easAddress = await indexer.getEAS();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

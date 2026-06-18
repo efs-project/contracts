@@ -35,6 +35,8 @@
     "hardhat:simulate:sort": "yarn workspace @se-2/hardhat simulate:sort",
     "hardhat:simulate:lists": "yarn workspace @se-2/hardhat simulate:lists",
     "hardhat:simulate:transports": "yarn workspace @se-2/hardhat simulate:transports",
+    "hardhat:simulate:redirect": "yarn workspace @se-2/hardhat simulate:redirect",
+    "hardhat:simulate:freeze": "yarn workspace @se-2/hardhat simulate:freeze",
     "hardhat:verify": "yarn workspace @se-2/hardhat verify",
     "postinstall": "husky install",
     "docs:check": "bash scripts/docs-check.sh",

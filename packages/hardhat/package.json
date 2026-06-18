@@ -23,6 +23,8 @@
     "simulate:sort": "hardhat run scripts/simulate-sort-overlay.ts --network localhost",
     "simulate:lists": "hardhat run scripts/simulate-lists.ts --network localhost",
     "simulate:transports": "hardhat run scripts/simulate-transports.ts --network localhost",
+    "simulate:redirect": "hardhat run scripts/simulate-redirect.ts --network localhost",
+    "simulate:freeze": "hardhat run scripts/simulate-freeze-set.ts --network localhost",
     "test": "REPORT_GAS=true hardhat test --network hardhat",
     "verify": "hardhat etherscan-verify"
   },
