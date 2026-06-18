@@ -236,6 +236,13 @@ export const CreateItemModal = ({
   const [pasteSize, setPasteSize] = useState("");
   const [pasteContentHash, setPasteContentHash] = useState<`0x${string}` | null>(null);
   const [isFetchingInfo, setIsFetchingInfo] = useState(false);
+  // Mirror of the live pasteUri readable from inside an in-flight handleFetchInfo (whose closed-over
+  // `pasteUri` is frozen at call time). Lets a fetch detect a mid-flight URI edit and discard its now-
+  // stale HEAD/GET results instead of binding URI-A's hash/size/type onto URI-B's DATA (PR #24 P2).
+  const latestPasteUriRef = useRef(pasteUri);
+  useEffect(() => {
+    latestPasteUriRef.current = pasteUri;
+  }, [pasteUri]);
   const [showPasteDetails, setShowPasteDetails] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [existingAnchorWarning, setExistingAnchorWarning] = useState(false);
@@ -303,10 +310,14 @@ export const CreateItemModal = ({
       notification.error("Cannot fetch info for this URI type. Enter values manually.");
       return;
     }
+    // Capture the URI this fetch is for; discard results if the user edits the field mid-flight (P2).
+    const fetchedUri = pasteUri;
+    const stale = () => latestPasteUriRef.current !== fetchedUri;
     setIsFetchingInfo(true);
     setShowPasteDetails(true);
     try {
       const headResp = await fetch(gatewayUrl, { method: "HEAD" });
+      if (stale()) return; // URI edited mid-flight — don't write this URI's metadata onto another
       if (!headResp.ok) throw new Error(`HTTP ${headResp.status}`);
 
       const ct = headResp.headers.get("content-type");
@@ -321,6 +332,7 @@ export const CreateItemModal = ({
         const getResp = await fetch(gatewayUrl);
         if (!getResp.ok) throw new Error(`HTTP ${getResp.status}`);
         const bytes = new Uint8Array(await getResp.arrayBuffer());
+        if (stale()) return; // URI edited mid-flight — discard
         setPasteSize(String(bytes.length));
         setPasteContentHash(computeContentHash(bytes));
         notification.success("Content hash computed.");
@@ -353,6 +365,7 @@ export const CreateItemModal = ({
             if (err instanceof Error && err.name !== "AbortError") throw err;
           }
         }
+        if (stale()) return; // URI edited mid-flight — discard
         if (truncated) {
           notification.info("File exceeds 10 MB — hash not computed. Enter values manually.");
         } else if (totalBytes > 0) {
