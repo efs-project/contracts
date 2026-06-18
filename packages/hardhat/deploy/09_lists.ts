@@ -2,6 +2,7 @@ import { HardhatRuntimeEnvironment } from "hardhat/types";
 import { DeployFunction } from "hardhat-deploy/types";
 import { Contract } from "ethers";
 import { redeployIfArgsChanged } from "../deploy-utils";
+import { legacySuperseded } from "../deploy-lib/superseded";
 
 // EAS Addresses (Sepolia) — same as 01_indexer.ts
 const EAS_ADDRESS = "0xC2679fBD37d54388Ce493F1DB75320D236e1815e";
@@ -15,6 +16,11 @@ const LIST_DEFINITION =
 const LIST_ENTRY_DEFINITION = "bytes32 listUID, bytes32 target";
 
 const deployLists: DeployFunction = async function (hre: HardhatRuntimeEnvironment) {
+  // AGENT-NOTE (Phase D): List/ListEntry resolver deploy + LIST/LIST_ENTRY register are now done by
+  // deploy/00_efs_core.ts (orchestrated CREATE3, register-last; ADR-0048). Neutralized. ListReader
+  // (a stateless view, in no UID) is redeployable and its rebind to the proxies is deferred to D2.
+  if (await legacySuperseded(hre, "09_lists")) return;
+
   const { deployer } = await hre.getNamedAccounts();
   const { deploy, getOrNull } = hre.deployments;
   const ethers = hre.ethers;

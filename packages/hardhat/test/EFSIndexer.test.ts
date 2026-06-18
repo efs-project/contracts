@@ -1,7 +1,9 @@
 import { expect } from "chai";
+import { anyValue } from "@nomicfoundation/hardhat-chai-matchers/withArgs";
 import { ethers } from "hardhat";
 import { EFSIndexer, EAS, SchemaRegistry } from "../typechain-types";
 import { Signer, ZeroAddress } from "ethers";
+import { deployIndexerProxy } from "./helpers/deployIndexerProxy";
 
 // Constants
 const NO_EXPIRATION = 0n;
@@ -45,11 +47,14 @@ describe("EFSIndexer", function () {
     const nonce = await ethers.provider.getTransactionCount(ownerAddr);
     // Calculate the future address of the Indexer using the owner's nonce.
     // The Indexer is deployed after SchemaRegistry registration transactions.
-    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: nonce + 7 }); // Adjusted nonce for new schemas
+    // The PROXY is the resolver baked into the schema UIDs (ADR-0048). It is deployed after the
+    // 7 schema registrations AND after the EFSIndexer implementation, so it lands at nonce+8
+    // (impl = nonce+7, proxy = nonce+8). See deployIndexerProxy().
+    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: nonce + 8 });
 
     // Register Schemas with the future resolver address
-    // ANCHOR: string name, bytes32 schemaUID
-    const tx1 = await registry.register("string name, bytes32 schemaUID", futureIndexerAddr, true);
+    // ANCHOR: string name, bytes32 forSchema
+    const tx1 = await registry.register("string name, bytes32 forSchema", futureIndexerAddr, true);
     const rc1 = await tx1.wait();
     anchorSchemaUID = rc1!.logs[0].topics[1]; // Registered(bytes32 uid, ...)
 
@@ -58,8 +63,8 @@ describe("EFSIndexer", function () {
     const rc2 = await tx2.wait();
     propertySchemaUID = rc2!.logs[0].topics[1];
 
-    // DATA: bytes32 contentHash, uint64 size (standalone, non-revocable)
-    const tx3 = await registry.register("bytes32 contentHash, uint64 size", futureIndexerAddr, false);
+    // DATA: empty schema — pure identity (ADR-0049). No fields; payload is zero-length.
+    const tx3 = await registry.register("", futureIndexerAddr, false);
     const rc3 = await tx3.wait();
     dataSchemaUID = rc3!.logs[0].topics[1];
 
@@ -89,15 +94,13 @@ describe("EFSIndexer", function () {
     // not EFSIndexer. tagSchemaUID is still registered (with futureIndexerAddr as resolver) in tests
     // so that generic referencing tests still exercise the indexer's _allReferencing /
     // _referencingBySchema maps.
-    const IndexerFactory = await ethers.getContractFactory("EFSIndexer");
-    indexer = await IndexerFactory.deploy(
+    indexer = await deployIndexerProxy(
       await eas.getAddress(),
       anchorSchemaUID,
       propertySchemaUID,
       dataSchemaUID,
-      blobSchemaUID,
+      owner,
     );
-    await indexer.waitForDeployment();
 
     expect(await indexer.getAddress()).to.equal(futureIndexerAddr);
   });
@@ -153,6 +156,73 @@ describe("EFSIndexer", function () {
           ethers.ZeroAddress,
         ),
       ).to.be.revertedWith("EFSIndexer: already wired");
+    });
+  });
+
+  describe("Upgradeable proxy (ADR-0048)", function () {
+    it("exposes the constructor EAS via getEAS() through the proxy", async function () {
+      // getEAS() is inherited from EFSUpgradeableResolver and reads the impl's constructor
+      // immutable; it must resolve correctly under the proxy's delegatecall.
+      expect(await indexer.getEAS()).to.equal(await eas.getAddress());
+    });
+
+    it("initializes config + owner once and reverts on a second initialize()", async function () {
+      // The proxy was already initialized in beforeEach. Config getters read ERC-7201 storage.
+      expect(await indexer.ANCHOR_SCHEMA_UID()).to.equal(anchorSchemaUID);
+      expect(await indexer.PROPERTY_SCHEMA_UID()).to.equal(propertySchemaUID);
+      expect(await indexer.DATA_SCHEMA_UID()).to.equal(dataSchemaUID);
+      expect(await indexer.owner()).to.equal(await owner.getAddress());
+      // DEPLOYER() is preserved as an owner()-backed alias for ABI/consumer compatibility.
+      expect(await indexer.DEPLOYER()).to.equal(await owner.getAddress());
+
+      // A second initialize() must revert (OZ Initializable one-shot guard).
+      await expect(
+        indexer.initialize(anchorSchemaUID, propertySchemaUID, dataSchemaUID, await owner.getAddress()),
+      ).to.be.revertedWithCustomError(indexer, "InvalidInitialization");
+    });
+
+    it("indexes an ANCHOR identically through the proxy (attest → resolvePath)", async function () {
+      // The core kernel path must behave identically through the proxy: an ANCHOR attestation
+      // routes through onAttest (delegatecall) and writes the directory index in proxy storage.
+      const data = new ethers.AbiCoder().encode(["string", "bytes32"], ["root", ZERO_BYTES32]);
+      const tx = await eas.attest({
+        schema: anchorSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: NO_EXPIRATION,
+          revocable: false,
+          refUID: ZERO_BYTES32,
+          data,
+          value: 0n,
+        },
+      });
+      const uid = getUIDFromReceipt(await tx.wait());
+
+      // rootAnchorUID + the name→anchor directory index were written to PROXY storage.
+      expect(await indexer.rootAnchorUID()).to.equal(uid);
+      expect(await indexer.resolvePath(ZERO_BYTES32, "root")).to.equal(uid);
+    });
+
+    it("gates wireContracts() and setSortsAnchor() on the owner", async function () {
+      // user1 is not the owner → onlyOwner reverts (OZ OwnableUnauthorizedAccount).
+      await expect(indexer.connect(user1).setSortsAnchor(ZERO_BYTES32)).to.be.revertedWithCustomError(
+        indexer,
+        "OwnableUnauthorizedAccount",
+      );
+      await expect(
+        indexer
+          .connect(user1)
+          .wireContracts(
+            await user1.getAddress(),
+            ZERO_BYTES32,
+            ZERO_BYTES32,
+            ethers.ZeroAddress,
+            ZERO_BYTES32,
+            ethers.ZeroAddress,
+            ZERO_BYTES32,
+            ethers.ZeroAddress,
+          ),
+      ).to.be.revertedWithCustomError(indexer, "OwnableUnauthorizedAccount");
     });
   });
 
@@ -274,8 +344,7 @@ describe("EFSIndexer", function () {
 
   describe("Enforcement (Relationships)", function () {
     it("Should accept standalone DATA with refUID=0x0 and non-revocable", async function () {
-      const schemaEncoder = new ethers.AbiCoder();
-      const contentHash = ethers.keccak256(ethers.toUtf8Bytes("test"));
+      // DATA is an empty schema (ADR-0049) — zero-length payload.
       const tx = await eas.attest({
         schema: dataSchemaUID,
         data: {
@@ -283,13 +352,35 @@ describe("EFSIndexer", function () {
           expirationTime: NO_EXPIRATION,
           revocable: false,
           refUID: ZERO_BYTES32,
-          data: schemaEncoder.encode(["bytes32", "uint64"], [contentHash, 4n]),
+          data: "0x",
           value: 0n,
         },
       });
       const receipt = await tx.wait();
       const uid = getUIDFromReceipt(receipt);
       expect(uid).to.not.equal(ZERO_BYTES32);
+    });
+
+    it("Should accept and index empty (zero-length) DATA — pure identity (ADR-0049)", async function () {
+      // DATA is now an empty schema. A DATA attestation carries no fields; its payload is
+      // zero-length. The indexer must accept it (no abi.decode) and track its UID.
+      const tx = await eas.attest({
+        schema: dataSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: NO_EXPIRATION,
+          revocable: false,
+          refUID: ZERO_BYTES32,
+          data: "0x", // zero-length payload
+          value: 0n,
+        },
+      });
+      const uid = getUIDFromReceipt(await tx.wait());
+      expect(uid).to.not.equal(ZERO_BYTES32);
+
+      // Indexed in the global schema index (resolves / is tracked).
+      const atts = await indexer.getAttestationsBySchema(dataSchemaUID, 0, 10, false, false);
+      expect(atts).to.include(uid);
     });
 
     it("Should reject DATA with non-zero refUID", async function () {
@@ -309,7 +400,6 @@ describe("EFSIndexer", function () {
       });
       const rootUID = getUIDFromReceipt(await rootTx.wait());
 
-      const contentHash = ethers.keccak256(ethers.toUtf8Bytes("test"));
       await expect(
         eas.attest({
           schema: dataSchemaUID,
@@ -318,7 +408,27 @@ describe("EFSIndexer", function () {
             expirationTime: NO_EXPIRATION,
             revocable: false,
             refUID: rootUID, // Must be 0x0 for standalone DATA
-            data: schemaEncoder.encode(["bytes32", "uint64"], [contentHash, 4n]),
+            data: "0x",
+            value: 0n,
+          },
+        }),
+      ).to.be.revertedWithCustomError(eas, "InvalidAttestation");
+    });
+
+    it("Should reject DATA with a non-empty payload (empty-identity invariant, ADR-0049)", async function () {
+      // EAS does not enforce the registered schema's ABI on attestation.data — it stores
+      // whatever bytes are passed. The resolver must reject any non-zero-length DATA payload
+      // so arbitrary bytes can't be smuggled in and served as valid pure-identity DATA.
+      const schemaEncoder = new ethers.AbiCoder();
+      await expect(
+        eas.attest({
+          schema: dataSchemaUID,
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: NO_EXPIRATION,
+            revocable: false,
+            refUID: ZERO_BYTES32,
+            data: schemaEncoder.encode(["string"], ["smuggled"]), // non-empty — must be rejected
             value: 0n,
           },
         }),
@@ -340,6 +450,31 @@ describe("EFSIndexer", function () {
           },
         }),
       ).to.be.revertedWithCustomError(eas, "Irrevocable");
+    });
+
+    it("Should emit PropertyCreated with valueHash = keccak256(bytes(value)) (ADR-0052 dedup key)", async function () {
+      // ADR-0052: the PropertyCreated valueHash topic is the value's canonical content key —
+      // the lookup key clients use to find an existing value to dedup against. It is
+      // keccak256 of the UTF-8 value bytes, computed from the decoded `string value` field.
+      const schemaEncoder = new ethers.AbiCoder();
+      const value = "image/png";
+      const expectedValueHash = ethers.keccak256(ethers.toUtf8Bytes(value));
+      const attesterAddr = await owner.getAddress();
+      await expect(
+        eas.attest({
+          schema: propertySchemaUID,
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: NO_EXPIRATION,
+            revocable: false,
+            refUID: ZERO_BYTES32,
+            data: schemaEncoder.encode(["string"], [value]),
+            value: 0n,
+          },
+        }),
+      )
+        .to.emit(indexer, "PropertyCreated")
+        .withArgs(anyValue, attesterAddr, expectedValueHash);
     });
 
     it("Should reject PROPERTY with non-zero refUID (must be free-floating per ADR-0035)", async function () {
@@ -370,6 +505,123 @@ describe("EFSIndexer", function () {
           },
         }),
       ).to.be.revertedWithCustomError(eas, "InvalidAttestation");
+    });
+  });
+
+  describe("Canonical anchor-name encoding (NFC + percent-encode)", function () {
+    // The on-chain anchor `name` is the canonical encoding of a human name:
+    // client-side NFC normalization (not verifiable on-chain), then percent-encoding
+    // of the reserved byte set with UPPERCASE hex. The resolver enforces the
+    // byte-level canonical form so there is exactly ONE valid representation per name.
+    const enc = new ethers.AbiCoder();
+
+    const attestRootAnchor = (name: string) =>
+      eas.attest({
+        schema: anchorSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: NO_EXPIRATION,
+          revocable: false,
+          refUID: ZERO_BYTES32,
+          data: enc.encode(["string", "bytes32"], [name, ZERO_BYTES32]),
+          value: 0n,
+        },
+      });
+
+    it('accepts the canonical encoding of "Q&A: Episode 5" and round-trips', async function () {
+      // NFC("Q&A: Episode 5") percent-encoded = Q%26A%3A%20Episode%205
+      const canonical = "Q%26A%3A%20Episode%205";
+      const tx = await attestRootAnchor(canonical);
+      const uid = getUIDFromReceipt(await tx.wait());
+      // Round-trips: the stored anchor name resolves back to the same UID byte-for-byte.
+      expect(await indexer.resolvePath(ZERO_BYTES32, canonical)).to.equal(uid);
+    });
+
+    it("accepts a normal simple name (readme.txt)", async function () {
+      const tx = await attestRootAnchor("readme.txt");
+      const uid = getUIDFromReceipt(await tx.wait());
+      expect(await indexer.resolvePath(ZERO_BYTES32, "readme.txt")).to.equal(uid);
+    });
+
+    it("rejects a bare reserved byte (literal space)", async function () {
+      await expect(attestRootAnchor("Episode 5")).to.be.revertedWithCustomError(indexer, "InvalidAnchorName");
+    });
+
+    it("rejects a bare reserved byte (literal &)", async function () {
+      await expect(attestRootAnchor("Q&A")).to.be.revertedWithCustomError(indexer, "InvalidAnchorName");
+    });
+
+    it("rejects a truncated escape (%2)", async function () {
+      await expect(attestRootAnchor("a%2")).to.be.revertedWithCustomError(indexer, "InvalidAnchorName");
+    });
+
+    it("rejects a malformed escape (%ZZ)", async function () {
+      await expect(attestRootAnchor("a%ZZ")).to.be.revertedWithCustomError(indexer, "InvalidAnchorName");
+    });
+
+    it("rejects a lowercase-hex escape (%2f) as non-canonical", async function () {
+      await expect(attestRootAnchor("a%2fb")).to.be.revertedWithCustomError(indexer, "InvalidAnchorName");
+    });
+
+    it("accepts an uppercase-hex escape (%2F)", async function () {
+      const tx = await attestRootAnchor("a%2Fb");
+      const uid = getUIDFromReceipt(await tx.wait());
+      expect(await indexer.resolvePath(ZERO_BYTES32, "a%2Fb")).to.equal(uid);
+    });
+
+    it("accepts a single bare letter (A)", async function () {
+      const tx = await attestRootAnchor("A");
+      const uid = getUIDFromReceipt(await tx.wait());
+      expect(await indexer.resolvePath(ZERO_BYTES32, "A")).to.equal(uid);
+    });
+
+    it("accepts a space escape (%20)", async function () {
+      const tx = await attestRootAnchor("Episode%205");
+      const uid = getUIDFromReceipt(await tx.wait());
+      expect(await indexer.resolvePath(ZERO_BYTES32, "Episode%205")).to.equal(uid);
+    });
+
+    it("accepts a literal-percent escape (%25)", async function () {
+      const tx = await attestRootAnchor("100%25");
+      const uid = getUIDFromReceipt(await tx.wait());
+      expect(await indexer.resolvePath(ZERO_BYTES32, "100%25")).to.equal(uid);
+    });
+
+    it("accepts high-bit UTF-8 pass-through (café as caf%C3%A9 — reserved escape, raw UTF-8 bytes)", async function () {
+      // café NFC-encoded: the é is the two UTF-8 bytes 0xC3 0xA9; neither is reserved so both
+      // pass through bare. A reserved byte (e.g. %20) elsewhere is the canonical escape.
+      const name = "café%20edition"; // "café edition" → café raw UTF-8 + %20 for the space
+      const tx = await attestRootAnchor(name);
+      const uid = getUIDFromReceipt(await tx.wait());
+      expect(await indexer.resolvePath(ZERO_BYTES32, name)).to.equal(uid);
+    });
+
+    it("rejects a non-canonical escape of an unreserved letter (%41 ≡ A)", async function () {
+      await expect(attestRootAnchor("%41")).to.be.revertedWithCustomError(indexer, "InvalidAnchorName");
+    });
+
+    it("rejects a non-canonical escape of a dot (readme%2Etxt ≡ readme.txt)", async function () {
+      await expect(attestRootAnchor("readme%2Etxt")).to.be.revertedWithCustomError(indexer, "InvalidAnchorName");
+    });
+
+    it("rejects a non-canonical escape of a bare dot (%2E)", async function () {
+      await expect(attestRootAnchor("%2E")).to.be.revertedWithCustomError(indexer, "InvalidAnchorName");
+    });
+
+    it("rejects a non-canonical escape of dot-dot (%2E%2E)", async function () {
+      await expect(attestRootAnchor("%2E%2E")).to.be.revertedWithCustomError(indexer, "InvalidAnchorName");
+    });
+
+    it("rejects a bare slash (/)", async function () {
+      await expect(attestRootAnchor("a/b")).to.be.revertedWithCustomError(indexer, "InvalidAnchorName");
+    });
+
+    it('rejects the relative segment "."', async function () {
+      await expect(attestRootAnchor(".")).to.be.revertedWithCustomError(indexer, "InvalidAnchorName");
+    });
+
+    it('rejects the relative segment ".."', async function () {
+      await expect(attestRootAnchor("..")).to.be.revertedWithCustomError(indexer, "InvalidAnchorName");
     });
   });
 
@@ -505,12 +757,12 @@ describe("EFSIndexer", function () {
 
     it("Should paginate children (Forward)", async function () {
       // Updated signature: getChildren(uid, start, length, reverse, showRevoked)
-      const page1 = await indexer["getChildren(bytes32,uint256,uint256,bool,bool)"](parentUID, 0, 2, false, false);
+      const page1 = await indexer.getChildren(parentUID, 0, 2, false, false);
       expect(page1.length).to.equal(2);
       expect(page1[0]).to.equal(child1UID);
       expect(page1[1]).to.equal(child2UID);
 
-      const page2 = await indexer["getChildren(bytes32,uint256,uint256,bool,bool)"](parentUID, 2, 2, false, false);
+      const page2 = await indexer.getChildren(parentUID, 2, 2, false, false);
       expect(page2.length).to.equal(1);
       expect(page2[0]).to.equal(child3UID);
 
@@ -521,7 +773,7 @@ describe("EFSIndexer", function () {
     it("Should paginate children (Reverse)", async function () {
       // Updated signature: getChildren(uid, start, length, reverse, showRevoked)
       // Reverse: start 0 means "latest"
-      const page1 = await indexer["getChildren(bytes32,uint256,uint256,bool,bool)"](parentUID, 0, 2, true, false);
+      const page1 = await indexer.getChildren(parentUID, 0, 2, true, false);
       expect(page1.length).to.equal(2);
       expect(page1[0]).to.equal(child3UID); // Last added is first
       expect(page1[1]).to.equal(child2UID);
@@ -582,8 +834,7 @@ describe("EFSIndexer", function () {
       const rcFile = await txFile.wait();
       _fileUID = getUIDFromReceipt(rcFile);
 
-      // 4. Create standalone DATA (new model: refUID=0x0, non-revocable)
-      const contentHash = ethers.keccak256(ethers.toUtf8Bytes("my_video.mp4"));
+      // 4. Create standalone DATA (empty schema, ADR-0049: refUID=0x0, non-revocable)
       const dataTx = await eas.attest({
         schema: dataSchemaUID,
         data: {
@@ -591,7 +842,7 @@ describe("EFSIndexer", function () {
           expirationTime: NO_EXPIRATION,
           revocable: false,
           refUID: ZERO_BYTES32,
-          data: schemaEncoder.encode(["bytes32", "uint64"], [contentHash, 1024n]),
+          data: "0x",
           value: 0n,
         },
       });
@@ -631,26 +882,12 @@ describe("EFSIndexer", function () {
 
     it("Should filter by Attester", async function () {
       // Filter children of "files" by User A
-      const u1Files = await indexer["getChildrenByAttester(bytes32,address,uint256,uint256,bool,bool)"](
-        parentUID,
-        await user1.getAddress(),
-        0,
-        10,
-        false,
-        false,
-      );
+      const u1Files = await indexer.getChildrenByAttester(parentUID, await user1.getAddress(), 0, 10, false, false);
       expect(u1Files.length).to.equal(1);
       expect(u1Files[0]).to.equal(userFileUID);
 
       // Filter children of "files" by User B
-      const u2Files = await indexer["getChildrenByAttester(bytes32,address,uint256,uint256,bool,bool)"](
-        parentUID,
-        await user2.getAddress(),
-        0,
-        10,
-        false,
-        false,
-      );
+      const u2Files = await indexer.getChildrenByAttester(parentUID, await user2.getAddress(), 0, 10, false, false);
       expect(u2Files.length).to.equal(1);
       expect(u2Files[0]).to.equal(user2FileUID);
     });
@@ -740,8 +977,7 @@ describe("EFSIndexer", function () {
       });
       _child2UID = getUIDFromReceipt(await txChild2.wait());
 
-      // Create standalone DATA (new model)
-      const contentHash = ethers.keccak256(ethers.toUtf8Bytes("file1-content"));
+      // Create standalone DATA (empty schema, ADR-0049)
       const txData = await eas.connect(user1).attest({
         schema: dataSchemaUID,
         data: {
@@ -749,7 +985,7 @@ describe("EFSIndexer", function () {
           expirationTime: 0n,
           revocable: false,
           refUID: ZERO_BYTES32,
-          data: schemaEncoder.encode(["bytes32", "uint64"], [contentHash, 100n]),
+          data: "0x",
           value: 0n,
         },
       });
@@ -764,7 +1000,7 @@ describe("EFSIndexer", function () {
     });
 
     it("standalone DATA is indexed in schema attestations", async function () {
-      const atts = await indexer.getAttestationsBySchema(dataSchemaUID, 0, 10, false);
+      const atts = await indexer.getAttestationsBySchema(dataSchemaUID, 0, 10, false, false);
       expect(atts.length).to.be.greaterThan(0);
     });
 
@@ -785,17 +1021,21 @@ describe("EFSIndexer", function () {
       const tagUID = getUIDFromReceipt(await tagTx.wait());
 
       // Before revoke: appears in kernel
-      const before = await indexer.getReferencingAttestations(parentUID, tagSchemaUID, 0, 10, false);
+      const before = await indexer.getReferencingAttestations(parentUID, tagSchemaUID, 0, 10, false, false);
       expect(before.length).to.equal(1);
       expect(await indexer.isRevoked(tagUID)).to.equal(false);
 
       await eas.connect(user1).revoke({ schema: tagSchemaUID, data: { uid: tagUID, value: 0n } });
 
-      // After revoke: still present in append-only array (kernel never removes)
-      const after = await indexer.getReferencingAttestations(parentUID, tagSchemaUID, 0, 10, false);
-      expect(after.length).to.equal(1);
+      // After revoke: the DEFAULT getter now excludes revoked (ADR-0051) → 0...
+      const after = await indexer.getReferencingAttestations(parentUID, tagSchemaUID, 0, 10, false, false);
+      expect(after.length).to.equal(0);
 
-      // But isRevoked is now true — callers use this to filter
+      // ...but the underlying array is still append-only — showRevoked=true surfaces the revoked entry.
+      const afterRaw = await indexer.getReferencingAttestations(parentUID, tagSchemaUID, 0, 10, false, true);
+      expect(afterRaw.length).to.equal(1);
+
+      // And isRevoked reflects the revocation.
       expect(await indexer.isRevoked(tagUID)).to.equal(true);
     });
 
@@ -818,27 +1058,23 @@ describe("EFSIndexer", function () {
 
       // Before revoke: not revoked
       expect(await indexer.isRevoked(tagUID)).to.equal(false);
-      const before = await indexer.getReferencingAttestations(parentUID, tagSchemaUID, 0, 10, false);
+      const before = await indexer.getReferencingAttestations(parentUID, tagSchemaUID, 0, 10, false, false);
       expect(before.length).to.equal(1);
 
       await eas.connect(user1).revoke({ schema: tagSchemaUID, data: { uid: tagUID, value: 0n } });
 
-      // After revoke: isRevoked is true (kernel array unchanged — caller filters via isRevoked)
+      // After revoke: isRevoked is true; the default getter excludes revoked (ADR-0051) → 0,
+      // while showRevoked=true still surfaces the append-only entry.
       expect(await indexer.isRevoked(tagUID)).to.equal(true);
-      const after = await indexer.getReferencingAttestations(parentUID, tagSchemaUID, 0, 10, false);
-      expect(after.length).to.equal(1); // still in array — append-only kernel
+      const after = await indexer.getReferencingAttestations(parentUID, tagSchemaUID, 0, 10, false, false);
+      expect(after.length).to.equal(0);
+      const afterRaw = await indexer.getReferencingAttestations(parentUID, tagSchemaUID, 0, 10, false, true);
+      expect(afterRaw.length).to.equal(1); // still in array — append-only kernel
 
       // getChildrenByAttester with showRevoked=true/false also uses _isRevoked internally
       // (child1 and child2 are non-revocable anchors, so showRevoked has no visible effect here)
-      const withRevoked = await indexer["getChildrenByAttester(bytes32,address,uint256,uint256,bool,bool)"](
-        parentUID,
-        await user1.getAddress(),
-        0,
-        10,
-        false,
-        true,
-      );
-      const withoutRevoked = await indexer["getChildrenByAttester(bytes32,address,uint256,uint256,bool,bool)"](
+      const withRevoked = await indexer.getChildrenByAttester(parentUID, await user1.getAddress(), 0, 10, false, true);
+      const withoutRevoked = await indexer.getChildrenByAttester(
         parentUID,
         await user1.getAddress(),
         0,
@@ -851,14 +1087,7 @@ describe("EFSIndexer", function () {
 
     it("getChildrenByAttester with showRevoked=true includes all; COUNT is total physical length", async function () {
       // child1 and child2 are both added by user1 under parentUID
-      const all = await indexer["getChildrenByAttester(bytes32,address,uint256,uint256,bool,bool)"](
-        parentUID,
-        await user1.getAddress(),
-        0,
-        10,
-        true,
-        true,
-      );
+      const all = await indexer.getChildrenByAttester(parentUID, await user1.getAddress(), 0, 10, true, true);
       expect(all.length).to.equal(2);
 
       const count = await indexer.getChildrenByAttesterCount(parentUID, await user1.getAddress());
@@ -916,7 +1145,7 @@ describe("EFSIndexer", function () {
       });
 
       // Verify via Generic Index (getReferencingAttestations still works for any schema)
-      const referencing = await indexer.getReferencingAttestations(anchorUID, tagSchemaUID, 0, 10, false);
+      const referencing = await indexer.getReferencingAttestations(anchorUID, tagSchemaUID, 0, 10, false, false);
       expect(referencing.length).to.equal(2);
     });
 
@@ -952,7 +1181,7 @@ describe("EFSIndexer", function () {
       const tagUID = getUIDFromReceipt(tagReceipt);
 
       // Verify via Generic Index
-      const attestations = await indexer.getReferencingAttestations(anchorUID, tagSchemaUID, 0, 10, false);
+      const attestations = await indexer.getReferencingAttestations(anchorUID, tagSchemaUID, 0, 10, false, false);
       expect(attestations.length).to.equal(1);
       expect(attestations[0]).to.equal(tagUID);
 
@@ -1012,31 +1241,17 @@ describe("EFSIndexer", function () {
         const fileUID = getUIDFromReceipt(receiptFile);
 
         // 3. Verify getAnchorsBySchema(Property)
-        const props = await indexer["getAnchorsBySchema(bytes32,bytes32,uint256,uint256,bool,bool)"](
-          parentUID,
-          propertySchemaUID,
-          0,
-          10,
-          false,
-          false,
-        );
+        const props = await indexer.getAnchorsBySchema(parentUID, propertySchemaUID, 0, 10, false, false);
         expect(props.length).to.equal(1);
         expect(props[0]).to.equal(propUID);
 
         // 4. Verify getAnchorsBySchema(Data)
-        const files = await indexer["getAnchorsBySchema(bytes32,bytes32,uint256,uint256,bool,bool)"](
-          parentUID,
-          dataSchemaUID,
-          0,
-          10,
-          false,
-          false,
-        );
+        const files = await indexer.getAnchorsBySchema(parentUID, dataSchemaUID, 0, 10, false, false);
         expect(files.length).to.equal(1);
         expect(files[0]).to.equal(fileUID);
 
         // 5. Verify Generic Children contains ALL
-        const all = await indexer["getChildren(bytes32,uint256,uint256,bool,bool)"](parentUID, 0, 10, false, false);
+        const all = await indexer.getChildren(parentUID, 0, 10, false, false);
         expect(all.length).to.equal(2);
         expect(all).to.include(propUID);
         expect(all).to.include(fileUID);
@@ -1178,8 +1393,7 @@ describe("EFSIndexer", function () {
       const receiptBlob = await txBlob.wait();
       const _blobUID = getUIDFromReceipt(receiptBlob);
 
-      // 3. Create standalone DATA (new model)
-      const contentHash = ethers.keccak256(ethers.toUtf8Bytes("intro.mp4-content"));
+      // 3. Create standalone DATA (empty schema, ADR-0049)
       const txData = await eas.attest({
         schema: dataSchemaUID,
         data: {
@@ -1187,7 +1401,7 @@ describe("EFSIndexer", function () {
           expirationTime: NO_EXPIRATION,
           revocable: false,
           refUID: ZERO_BYTES32,
-          data: schemaEncoder.encode(["bytes32", "uint64"], [contentHash, 1024n]),
+          data: "0x",
           value: 0n,
         },
       });
@@ -1198,8 +1412,10 @@ describe("EFSIndexer", function () {
       const resolvedAnchor = await indexer.resolveAnchor(parentUID, "intro.mp4", dataSchemaUID);
       expect(resolvedAnchor).to.equal(anchorUID);
 
-      // 5. Verify DATA is indexed and dedup works
-      expect(await indexer.dataByContentKey(contentHash)).to.equal(dataUID);
+      // 5. Verify DATA is indexed (ADR-0049: dataByContentKey is no longer written;
+      //    the bare DATA UID is tracked in the global schema index).
+      const indexedData = await indexer.getAttestationsBySchema(dataSchemaUID, 0, 50, false, false);
+      expect(indexedData).to.include(dataUID);
     });
   });
 
@@ -1257,11 +1473,18 @@ describe("EFSIndexer", function () {
       const tagUID = getUIDFromReceipt(tagReceipt);
 
       // Check _allReferencing
-      const allRef = await indexer.getAllReferencing(fileAnchorUID, 0, 10, false);
+      const allRef = await indexer.getAllReferencing(fileAnchorUID, 0, 10, false, false);
       expect(allRef).to.include(tagUID);
 
       // Check _referencingByAttester
-      const attesterRef = await indexer.getReferencingByAttester(fileAnchorUID, await user1.getAddress(), 0, 10, false);
+      const attesterRef = await indexer.getReferencingByAttester(
+        fileAnchorUID,
+        await user1.getAddress(),
+        0,
+        10,
+        false,
+        false,
+      );
       expect(attesterRef).to.include(tagUID);
 
       // Check _referencingBySchemaAndAttester
@@ -1272,6 +1495,7 @@ describe("EFSIndexer", function () {
         0,
         10,
         false,
+        false,
       );
       expect(schemaAttesterRef).to.include(tagUID);
 
@@ -1281,9 +1505,12 @@ describe("EFSIndexer", function () {
         data: { uid: tagUID, value: 0n },
       });
 
-      // Verify the revoked item is NOT removed from these arrays
-      const allRefAfter = await indexer.getAllReferencing(fileAnchorUID, 0, 10, false);
-      expect(allRefAfter.length).to.equal(1);
+      // After revoke: the default getter excludes revoked (ADR-0051) → empty...
+      const allRefAfter = await indexer.getAllReferencing(fileAnchorUID, 0, 10, false, false);
+      expect(allRefAfter.length).to.equal(0);
+      // ...but the array is still append-only — showRevoked=true surfaces the revoked entry.
+      const allRefRaw = await indexer.getAllReferencing(fileAnchorUID, 0, 10, false, true);
+      expect(allRefRaw.length).to.equal(1);
     });
 
     // ──────────────────────────────────────────────────────────────────────────
@@ -1546,13 +1773,15 @@ describe("EFSIndexer", function () {
       });
       const childUID = getUIDFromReceipt(await tx.wait());
 
-      await expect(tx).to.emit(indexer, "AnchorCreated").withArgs(parentUID, childUID, ownerAddr, ZERO_BYTES32);
+      await expect(tx)
+        .to.emit(indexer, "AnchorCreated")
+        .withArgs(parentUID, childUID, ownerAddr, ZERO_BYTES32, "event-anchor");
     });
 
     it("emits DataCreated when standalone DATA is created", async function () {
       const ownerAddr = await owner.getAddress();
-      const contentHash = ethers.keccak256(ethers.toUtf8Bytes("event-test-content"));
 
+      // DATA is an empty schema (ADR-0049); DataCreated dropped the contentHash arg.
       const dataTx = await eas.connect(owner).attest({
         schema: dataSchemaUID,
         data: {
@@ -1560,13 +1789,13 @@ describe("EFSIndexer", function () {
           expirationTime: NO_EXPIRATION,
           revocable: false,
           refUID: ZERO_BYTES32,
-          data: enc.encode(["bytes32", "uint64"], [contentHash, 42]),
+          data: "0x",
           value: 0n,
         },
       });
       const dataUID = getUIDFromReceipt(await dataTx.wait());
 
-      await expect(dataTx).to.emit(indexer, "DataCreated").withArgs(dataUID, ownerAddr, contentHash);
+      await expect(dataTx).to.emit(indexer, "DataCreated").withArgs(dataUID, ownerAddr);
     });
   });
 

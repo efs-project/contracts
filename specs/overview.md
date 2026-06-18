@@ -15,7 +15,7 @@ The point is **permanent, credibly neutral archival**. Anyone can publish. Anyon
 **Anchors** (paths) → **DATA** (content identity) → **MIRRORs** (retrieval URIs)
 
 - **Anchors** are path nodes. Hierarchical (`refUID` points to the parent anchor). Permanent and non-revocable — once a folder exists, it exists forever.
-- **DATA** is standalone file identity: `contentHash` + `size`. It does NOT belong to any specific path; it's pure content identity. Multiple paths can reference the same DATA.
+- **DATA** is standalone file identity: an **empty** attestation (pure identity, ADR-0049) — its UID *is* the file's identity. It carries no fields; `contentHash` and `size` are reserved-key PROPERTYs bound to the DATA UID (lens-scoped per attester), not DATA fields. DATA does NOT belong to any specific path. Multiple paths can reference the same DATA.
 - **MIRRORs** are retrieval URIs. Each MIRROR references a DATA via `refUID` and carries one URI. Multiple MIRRORs per DATA (ipfs://, ar://, web3://, https://, magnet:) let the router pick the best available transport.
 
 **Edge attestations** (PIN, TAG) are the glue: `PIN(definition=anchorUID, refUID=dataUID, attester=alice)` means "Alice says this DATA lives at this path." Edges enable cross-referencing (same DATA at many paths) and per-attester **lenses** (next section). The two edge schemas differ only in cardinality (ADR-0041):
@@ -25,7 +25,7 @@ The point is **permanent, credibly neutral archival**. Anyone can publish. Anyon
 
 Removal is always via `eas.revoke()` — there is no `applies=false` mechanism (removed in ADR-0041). PIN supersession is automatic when re-attesting at the same slot with a different target.
 
-Content-addressed dedup: the first DATA attestation for a given `contentHash` is canonical. Subsequent uploads of identical bytes reuse the existing DATA — only a new PIN is needed to place it at a new path.
+Content-addressed dedup is no longer intrinsic (ADR-0049): DATA carries no hash, so identical bytes produce distinct DATA UIDs. Dedup *prevention* is best-effort client-side — query the property index for a trusted `contentHash` claim before upload and, if found, hardlink (a new PIN to the existing DATA) instead of minting a new DATA. Dedup *resolution* (point a duplicate at a canonical DATA) is the REDIRECT primitive (ADR-0050).
 
 ## Lenses (whose content are you looking at?)
 
@@ -42,9 +42,17 @@ path wins (first-attester-wins fallback, per ADR-0031). Alice's
 and configs, lenses compose — overrides cascade through the list.
 
 Without `?lenses=`, the router falls back to `?caller=` (the requesting
-address), then to the EFS deployer as a final default. **Nobody sees
-foreign content unless they explicitly opt in** — viewer sovereignty is
-a core design property.
+address), then to **`system`** as the final default lens. `system` is the
+`SystemAccount` contract (ADR-0053) — a neutral, code-governed identity
+that authors the canonical bootstrap structure (root, `/transports/*`) and
+official defaults. It is the **last default lens**, default-on but
+**user-removable and not reorderable**: a user can drop it (losing the
+fallback) but can never move it ahead of their own content, so it is purely
+additive (first-attester-wins, ADR-0031) — it fills gaps, never shadows
+your content. It **replaces the old deployer-EOA fallback** (ADR-0016/0039).
+EFS.eth is just-another-user: opinionated/curated data is a normal opt-in
+lens, with no special system power. **Nobody sees foreign content unless
+they explicitly opt in** — viewer sovereignty is a core design property.
 
 Reads are lens-scoped beyond just TAG resolution: mirrors and PROPERTYs
 on a DATA are also filtered to the winning attester. This prevents third
@@ -56,19 +64,22 @@ someone else's DATA.
 > name for this concept. ADR-0043 (2026-05-05) renamed it to "lenses" across
 > the entire codebase, including ADRs 0013, 0014, 0026, 0031, and 0039.*
 
-## Nine EAS schemas
+## Nine frozen EAS schemas
+
+The Sepolia freeze set is **nine** schemas: ANCHOR, DATA, MIRROR, PIN, TAG, PROPERTY, LIST, LIST_ENTRY, REDIRECT. SORT_INFO is **deferred** — not in the freeze set (see its row below); it remains a working overlay design (`07-Sort-Overlay-Architecture.md`) but is not registered as a frozen schema in this set.
 
 | Schema | Revocable | Purpose |
 |---|---|---|
 | ANCHOR | no | Paths. Hierarchical via `refUID = parentAnchor`. |
-| DATA | no | Content identity (`contentHash`, `size`). Standalone (`refUID = 0x0`). |
+| DATA | no | Content identity — **empty schema** (`""`, pure identity, ADR-0049). Standalone (`refUID = 0x0`). `contentHash`/`size` are reserved-key PROPERTYs bound to the DATA UID, not fields. |
 | MIRROR | yes | Retrieval URI for a DATA. Multiple allowed per DATA. |
 | **PIN** | yes | Cardinality-1 edge. Places one thing per `(attester, definition, targetSchema)` slot. File placement, PROPERTY value binding (`contentType`, `name`, …). Re-attesting supersedes in O(1). ADR-0041. |
-| **TAG** | yes | Cardinality-N edge. Accumulates entries per slot. Folder visibility (ADR-0038), descriptive labels (`#nsfw`, …), schema-alias discovery. Each entry carries an `int256 weight` for sort/score metadata. ADR-0041. Active = unrevoked (kernel). For the explorer label-filter, *effective* = active with `weight >= 0` (ADR-0042); on-chain consumers can apply a caller-chosen `weight >= minWeight` threshold via `EFSFileView.getDirectoryPageFiltered` (ADR-0048) — the kernel still never interprets weight. |
-| PROPERTY | no | Free-floating string value, placed on a container via PIN under a PROPERTY-typed "key" anchor (ADR-0035 → ADR-0041). Symmetric with DATA. Reserved key anchor names: `contentType` (ADR-0005), `name` (ADR-0034). |
-| SORT_INFO | yes | Declares a sort scheme for a folder (sort function + target schema). |
+| **TAG** | yes | Cardinality-N edge. Accumulates entries per slot. Folder visibility (ADR-0038), descriptive labels (`#nsfw`, …), schema-alias discovery. Each entry carries an `int256 weight` for sort/score metadata. ADR-0041. Active = unrevoked (kernel). For the explorer label-filter, *effective* = active with `weight >= 0` (ADR-0042); on-chain consumers can apply a caller-chosen `weight >= minWeight` threshold via `EFSFileView.getDirectoryPageFiltered` (ADR-0054) — the kernel still never interprets weight. |
+| PROPERTY | no | Free-floating string value, placed on a container via PIN under a PROPERTY-typed "key" anchor (ADR-0035 → ADR-0041). A non-revocable *interned value* — dumb shared content (an "anchor for a string"), not a claim (ADR-0052); the revocable claim is the PIN, so removal/change happens at the binding, never the value. Reserved key anchor names: `contentType` (ADR-0005), `name` (ADR-0034). |
+| SORT_INFO | yes | **Deferred — NOT in the Sepolia freeze set.** Declares a sort scheme for a folder (sort function + target schema). Working overlay design (`07-Sort-Overlay-Architecture.md`); not frozen in this set. |
 | **LIST** | no | Curated collection declaration. Permanent identity (like DATA). Fields: `bool allowsDuplicates, bool appendOnly, uint8 targetType, bytes32 targetSchema, uint256 maxEntries`. Three modes: ANY (0), ADDR (1), SCHEMA (2). Enforced by ListResolver. ADR-0044, ADR-0047. |
 | **LIST_ENTRY** | yes | Member entry in a LIST — pure membership identity. Fields: `bytes32 listUID, bytes32 target` (ADR-0046; order + free-text label are PIN-bound PROPERTYs on the stable entry UID, not fields). Per-attester lens storage with wide EntryRecord[] for O(N) on-chain iteration. Enforced by ListEntryResolver. ADR-0044, ADR-0046. |
+| **REDIRECT** | yes | Trust-scoped "this points at that" — canonical/dedup (`sameAs`), version supersession (`supersededBy`), path symlinks. Fields: `bytes32 target, uint16 kind` (FROZEN). `refUID` = source. Kinds `0=sameAs / 1=supersededBy / 2=symlink / 3+=reserved` (taxonomy is resolver+client logic, not in the UID). Write-time guards only (no self-loop, per-kind typing) by AliasResolver; read-time multi-hop resolution is client/spec. ADR-0050. |
 
 Full field definitions and resolver wiring: `02-Data-Models-and-Schemas.md`.
 
@@ -87,6 +98,7 @@ Full field definitions and resolver wiring: `02-Data-Models-and-Schemas.md`.
 | ListResolver | LIST schema hook. Validates shape; no state. | No | No — baked into LIST_SCHEMA_UID at registration |
 | ListEntryResolver | LIST_ENTRY schema hook. Wide EntryRecord[] storage, swap-and-pop removal, per-attester lens. | Yes | No — baked into LIST_ENTRY_SCHEMA_UID at registration |
 | ListReader | Stateless view over ListEntryResolver + EAS. getMode, length, entries, countOf, typed accessors. | No | Yes — address not baked into any schema UID |
+| AliasResolver | REDIRECT schema hook (ADR-0050). Write-time guards only: no self-loop, per-kind typing (sameAs/supersededBy → DATA↔DATA; symlink → Anchor source). No read-time resolution. | No | No — baked into REDIRECT_SCHEMA_UID at registration |
 
 "Not redeployable" means the contract's address is baked into one or more schema UIDs at registration. Replacing it breaks every attestation under those schemas.
 
@@ -95,9 +107,9 @@ Full field definitions and resolver wiring: `02-Data-Models-and-Schemas.md`.
 For a new file:
 
 1. **Chunk the bytes.** SSTORE2 — content split into ~24KB chunks, each deployed as a raw-bytecode contract. A chunk-manager contract is deployed that knows how to reassemble them.
-2. **Attest the DATA** (`contentHash`, `size`). If the hash already exists in `dataByContentKey`, reuse the canonical DATA — skip this step.
+2. **Attest the DATA** — an empty attestation (pure identity, ADR-0049). To dedup, the client may first query the property index for a trusted `contentHash` claim; if found, skip this step and hardlink the existing DATA via a new PIN (step 6).
 3. **Attest a MIRROR** pointing `web3://<chunkManager>:<chainId>` at the DATA. Additional MIRRORs (ipfs://, ar://, etc.) may be added for redundancy.
-4. **Attest contentType** — three attestations batched (ADR-0041 supersedes ADR-0035): `Anchor<PROPERTY>(refUID=DATA, name="contentType")` (skipped if already exists), a free-floating `PROPERTY(value="image/png")`, and a `PIN(definition=that anchor, refUID=that property)` that binds the value into the cardinality-1 slot.
+4. **Attest contentType / contentHash / size PROPERTYs** — each is three attestations batched (ADR-0041 supersedes ADR-0035; reserved keys per ADR-0049): `Anchor<PROPERTY>(refUID=DATA, name="<key>")` (skipped if already exists), a free-floating `PROPERTY(value=…)`, and a `PIN(definition=that anchor, refUID=that property)` that binds the value into the cardinality-1 slot. `contentHash` (e.g. keccak256) and `size` are computed locally; both are lens-scoped attester claims, not authenticated identity.
 5. **Attest an ANCHOR** for the filename under the target folder (if the name slot doesn't already exist).
 6. **Attest a PIN** linking the DATA to the file Anchor under the uploader's address. Cardinality 1 — re-attesting at the same `(attester, definition, targetSchema)` slot supersedes the prior placement in O(1).
 7. **Ancestor-walk visibility TAGs** (ADR-0006 revised, ADR-0038, ADR-0041) — for every generic folder on the path from the immediate parent up to root exclusive, if the uploader has no active `TAG(definition=dataSchemaUID, refUID=folder)` yet, emit one. Weight defaults to 1 by convention; the kernel treats any existing, non-revoked TAG as active regardless of weight (ADR-0041 §4). Ensures the uploader's lens listing shows the folders that contain their content. Steady-state zero cost (walk exits once an existing TAG is found); pays 1 TAG per untagged ancestor on the first upload into a new subtree.
@@ -107,9 +119,9 @@ Typical new upload: ~10 transactions. Gas-heavy by design — this is archival, 
 ## Read flow (what `web3://<router>/path/file.png` does)
 
 1. Router parses the URL: path segments + `?lenses=`, `?caller=`.
-2. **Top-level segment is classified** into one of four container flavors (ADR-0033): Ethereum address, EAS schema UID, EAS attestation UID, or anchor name. Address seeds `currentParent` with `bytes32(uint160(addr))`; anchor names seed `rootAnchorUID`. For schema and attestation UIDs, the router first checks for an **alias anchor** — a root-child anchor whose name is the UID in lowercase 0x-hex — and seeds `currentParent` with the alias if present; otherwise it seeds the raw UID. Alias anchors let schemas and attestations carry EFS-native metadata (human label PROPERTY, sub-anchors, TAGs) without conflating with the raw EAS record. When the container is an address and `?lenses=` wasn't given, the router defaults lenses to `[caller, segmentAddr]`.
+2. **Top-level segment is classified** into one of four container flavors (ADR-0033): Ethereum address, EAS schema UID, EAS attestation UID, or anchor name. Address seeds `currentParent` with `bytes32(uint160(addr))`; anchor names seed `rootAnchorUID`. For schema and attestation UIDs, the router first checks for an **alias anchor** — a root-child anchor whose name is the UID in lowercase 0x-hex — and seeds `currentParent` with the alias if present; otherwise it seeds the raw UID. Alias anchors let schemas and attestations carry EFS-native metadata (human label PROPERTY, sub-anchors, TAGs) without conflating with the raw EAS record. When the container is an address and `?lenses=` wasn't given, the router defaults lenses to `[caller, segmentAddr, system]` — the `system` tail (ADR-0053/0039) matches the default-lens fallback every other flavor gets, so address browsing still surfaces canonical defaults.
 3. Walks the remaining path segments using `EFSIndexer.resolvePath` — every flavor reduces to a bytes32 parent, so the walk is the same code path.
-4. For each lens attester in order, queries `EdgeResolver` for the active placement PIN at that Anchor → DATA (cardinality-1, O(1) read). First attester with a match wins. Returns the DATA UID plus that attester's address.
+4. For each lens attester in order, queries `EdgeResolver` for the active placement PIN at that Anchor → DATA (cardinality-1, O(1) read). First attester with a match wins. Returns the DATA UID plus that attester's address. With no `?lenses=`, the attester order is `[caller, system]` (or just `[system]` if no caller) — `system` = the `SystemAccount` address (ADR-0053), the default-lens tail, replacing the former deployer-EOA fallback.
 5. Finds the best MIRROR for the DATA **from the same attester**, by transport priority: `web3:// > ar:// > ipfs:// > magnet: > https://`. Skips revoked mirrors and invalid URIs. Capped at 500 mirror scans per request.
 6. Finds the `contentType` PROPERTY **from the same attester** on the DATA. Falls back to `application/octet-stream`.
 7. Serves:

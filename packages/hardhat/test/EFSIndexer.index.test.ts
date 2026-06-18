@@ -2,6 +2,7 @@ import { expect } from "chai";
 import { ethers } from "hardhat";
 import { EFSIndexer, EAS, SchemaRegistry } from "../typechain-types";
 import { Signer, ZeroAddress } from "ethers";
+import { deployIndexerProxy } from "./helpers/deployIndexerProxy";
 
 /**
  * Tests for EFSIndexer public index API:
@@ -29,7 +30,6 @@ describe("EFSIndexer — public index() API", function () {
   let anchorSchemaUID: string;
   let dataSchemaUID: string;
   let propertySchemaUID: string;
-  let blobSchemaUID: string;
 
   // Third-party schema (no resolver — simulates external developer)
   let thirdPartySchemaUID: string;
@@ -85,28 +85,25 @@ describe("EFSIndexer — public index() API", function () {
     // Nonce-predict EFSIndexer address
     const ownerAddr = await owner.getAddress();
     const baseNonce = await ethers.provider.getTransactionCount(ownerAddr);
+    // PROXY is the resolver (ADR-0048): impl = baseNonce+3, proxy = baseNonce+4. See deployIndexerProxy().
     const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: baseNonce + 4 });
 
-    // Register EFS schemas
-    const tx1 = await registry.register("string name, bytes32 schemaUID", futureIndexerAddr, false);
+    // Register EFS schemas. DATA is an empty schema — pure identity (ADR-0049).
+    const tx1 = await registry.register("string name, bytes32 forSchema", futureIndexerAddr, false);
     anchorSchemaUID = (await tx1.wait())!.logs[0].topics[1];
     const tx2 = await registry.register("string value", futureIndexerAddr, false);
     propertySchemaUID = (await tx2.wait())!.logs[0].topics[1];
-    const tx3 = await registry.register("bytes32 contentHash, uint64 size", futureIndexerAddr, false);
+    const tx3 = await registry.register("", futureIndexerAddr, false);
     dataSchemaUID = (await tx3.wait())!.logs[0].topics[1];
-    const tx4 = await registry.register("string mimeType, uint8 storageType, bytes location", ZeroAddress, true);
-    blobSchemaUID = (await tx4.wait())!.logs[0].topics[1];
 
-    // Deploy EFSIndexer
-    const IndexerFactory = await ethers.getContractFactory("EFSIndexer");
-    indexer = await IndexerFactory.deploy(
+    // Deploy EFSIndexer behind a proxy (ADR-0048)
+    indexer = await deployIndexerProxy(
       await eas.getAddress(),
       anchorSchemaUID,
       propertySchemaUID,
       dataSchemaUID,
-      blobSchemaUID,
+      owner,
     );
-    await indexer.waitForDeployment();
     expect(await indexer.getAddress()).to.equal(futureIndexerAddr);
 
     // Register two third-party schemas (no resolver, revocable)
@@ -197,7 +194,7 @@ describe("EFSIndexer — public index() API", function () {
     it("populates getAttestationsBySchema", async function () {
       const uid = await attestThirdParty(alice, "hello");
       await indexer.index(uid);
-      const results = await indexer.getAttestationsBySchema(thirdPartySchemaUID, 0, 10, false);
+      const results = await indexer.getAttestationsBySchema(thirdPartySchemaUID, 0, 10, false, false);
       expect(results).to.include(uid);
     });
 
@@ -205,7 +202,7 @@ describe("EFSIndexer — public index() API", function () {
       const aliceAddr = await alice.getAddress();
       const uid = await attestThirdParty(alice, "hello");
       await indexer.index(uid);
-      const sent = await indexer.getOutgoingAttestations(aliceAddr, thirdPartySchemaUID, 0, 10, false);
+      const sent = await indexer.getOutgoingAttestations(aliceAddr, thirdPartySchemaUID, 0, 10, false, false);
       expect(sent).to.include(uid);
     });
 
@@ -213,7 +210,14 @@ describe("EFSIndexer — public index() API", function () {
       const aliceAddr = await alice.getAddress();
       const uid = await attestThirdParty(alice, "hello");
       await indexer.index(uid);
-      const results = await indexer.getAttestationsBySchemaAndAttester(thirdPartySchemaUID, aliceAddr, 0, 10, false);
+      const results = await indexer.getAttestationsBySchemaAndAttester(
+        thirdPartySchemaUID,
+        aliceAddr,
+        0,
+        10,
+        false,
+        false,
+      );
       expect(results).to.include(uid);
     });
 
@@ -221,7 +225,7 @@ describe("EFSIndexer — public index() API", function () {
       const bobAddr = await bob.getAddress();
       const uid = await attestThirdParty(alice, "hello", ZERO_BYTES32, bobAddr);
       await indexer.index(uid);
-      const received = await indexer.getIncomingAttestations(bobAddr, thirdPartySchemaUID, 0, 10, false);
+      const received = await indexer.getIncomingAttestations(bobAddr, thirdPartySchemaUID, 0, 10, false, false);
       expect(received).to.include(uid);
     });
 
@@ -244,8 +248,56 @@ describe("EFSIndexer — public index() API", function () {
       const uid = await attestThirdParty(alice, "linked", rootUID);
       await indexer.index(uid);
 
-      const refs = await indexer.getReferencingAttestations(rootUID, thirdPartySchemaUID, 0, 10, false);
+      const refs = await indexer.getReferencingAttestations(rootUID, thirdPartySchemaUID, 0, 10, false, false);
       expect(refs).to.include(uid);
+    });
+
+    it("filtered pagination bounds the scan to [start, start+length) — no dup/miss when revoked precedes a page boundary", async function () {
+      // Regression for Codex P2 (comment 3432495291): with showRevoked=false the slice must stay within
+      // the physical window [start, start+length). If it scans PAST the window to "fill" `length` active
+      // items (the bug), a caller paging with `start += length` over the raw getReferencingAttestationCount
+      // re-reads the overscanned tail on the next page → duplicates (and can blow a fixed scan budget).
+      const rootTx = await eas.connect(owner).attest({
+        schema: anchorSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: NO_EXPIRATION,
+          revocable: false,
+          refUID: ZERO_BYTES32,
+          data: enc.encode(["string", "bytes32"], ["pageroot", ZERO_BYTES32]),
+          value: 0n,
+        },
+      });
+      const rootUID = getUID(await rootTx.wait());
+
+      // 5 referencing attestations, indexed in order → physical indices 0..4.
+      const uids: string[] = [];
+      for (let k = 0; k < 5; k++) {
+        const u = await attestThirdParty(alice, `ref-${k}`, rootUID);
+        await indexer.index(u);
+        uids.push(u);
+      }
+      // Revoke the one at physical index 1 (inside the first length-2 window) — the overscan trigger.
+      // The third-party schema has no resolver, so sync the revocation into the indexer's _isRevoked
+      // explicitly (indexRevocation), mirroring what a resolver's onRevoke does for EFS schemas.
+      await eas.connect(alice).revoke({ schema: thirdPartySchemaUID, data: { uid: uids[1], value: 0n } });
+      await indexer.indexRevocation(uids[1]);
+
+      const total = await indexer.getReferencingAttestationCount(rootUID, thirdPartySchemaUID);
+      expect(total).to.equal(5n); // append-only (ADR-0009): revoke does not shrink the physical array
+
+      // Page with length=2, advancing start += length over the physical total (the documented contract).
+      const collected: string[] = [];
+      for (let start = 0; start < Number(total); start += 2) {
+        const page = await indexer.getReferencingAttestations(rootUID, thirdPartySchemaUID, start, 2, false, false);
+        collected.push(...page);
+      }
+
+      // No duplicates across pages.
+      expect(new Set(collected).size).to.equal(collected.length);
+      // Exactly the four active UIDs (index 1 revoked), no misses.
+      const expectedActive = [uids[0], uids[2], uids[3], uids[4]].map(u => u.toLowerCase()).sort();
+      expect(collected.map(u => u.toLowerCase()).sort()).to.deep.equal(expectedActive);
     });
 
     it("populates getReferencingSchemas for the target", async function () {
@@ -286,10 +338,10 @@ describe("EFSIndexer — public index() API", function () {
       const uid = await attestThirdParty(alice, "linked", rootUID);
       await indexer.index(uid);
 
-      const all = await indexer.getAllReferencing(rootUID, 0, 10, false);
+      const all = await indexer.getAllReferencing(rootUID, 0, 10, false, false);
       expect(all).to.include(uid);
 
-      const byAttester = await indexer.getReferencingByAttester(rootUID, aliceAddr, 0, 10, false);
+      const byAttester = await indexer.getReferencingByAttester(rootUID, aliceAddr, 0, 10, false, false);
       expect(byAttester).to.include(uid);
     });
 
@@ -339,7 +391,7 @@ describe("EFSIndexer — public index() API", function () {
 
       await indexer.indexBatch([uid1, uid2, uid3]);
 
-      const all = await indexer.getAttestationsBySchema(thirdPartySchemaUID, 0, 10, false);
+      const all = await indexer.getAttestationsBySchema(thirdPartySchemaUID, 0, 10, false, false);
       expect(all).to.include(uid1);
       expect(all).to.include(uid2);
       expect(all).to.include(uid3);
@@ -471,8 +523,8 @@ describe("EFSIndexer — public index() API", function () {
 
       await indexer.indexBatch([uid1, uid2]);
 
-      const schema1Results = await indexer.getAttestationsBySchema(thirdPartySchemaUID, 0, 10, false);
-      const schema2Results = await indexer.getAttestationsBySchema(thirdPartySchemaUID2, 0, 10, false);
+      const schema1Results = await indexer.getAttestationsBySchema(thirdPartySchemaUID, 0, 10, false, false);
+      const schema2Results = await indexer.getAttestationsBySchema(thirdPartySchemaUID2, 0, 10, false, false);
 
       expect(schema1Results).to.include(uid1);
       expect(schema1Results).to.not.include(uid2);

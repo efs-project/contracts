@@ -56,6 +56,7 @@ const INDEXER_SORT_ABI = [
       { internalType: "uint256", name: "start", type: "uint256" },
       { internalType: "uint256", name: "length", type: "uint256" },
       { internalType: "bool", name: "reverseOrder", type: "bool" },
+      { internalType: "bool", name: "showRevoked", type: "bool" },
     ],
     name: "getReferencingBySchemaAndAttester",
     outputs: [{ internalType: "bytes32[]", name: "", type: "bytes32[]" }],
@@ -289,7 +290,9 @@ export function useSortDiscovery({
                 address: indexerAddress!,
                 abi: INDEXER_SORT_ABI,
                 functionName: "getReferencingBySchemaAndAttester",
-                args: [namingUID, sortInfoSchemaUID, attester as `0x${string}`, 0n, LOOKBACK, true],
+                // showRevoked=true preserves the prior behavior: the getter returns all matching
+                // SORT_INFO refs (revoked included) and the per-uid isRevoked check below filters them.
+                args: [namingUID, sortInfoSchemaUID, attester as `0x${string}`, 0n, LOOKBACK, true, true],
               })) as readonly `0x${string}`[];
               if (!uids || uids.length === 0) continue;
               for (const uid of uids) {

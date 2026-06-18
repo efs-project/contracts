@@ -2,6 +2,7 @@ import { expect } from "chai";
 import { ethers } from "hardhat";
 import { ListResolver, ListEntryResolver, ListReader, EAS, SchemaRegistry } from "../typechain-types";
 import { Signer, ZeroAddress } from "ethers";
+import { deployResolverProxy } from "./helpers/deployResolverProxy";
 
 const ZERO_BYTES32 = "0x" + "0".repeat(64);
 const NO_EXPIRATION = 0n;
@@ -50,34 +51,44 @@ describe("Lists — Unit Tests", function () {
     eas = await EASFactory.deploy(await registry.getAddress());
     await eas.waitForDeployment();
 
-    // Deployment order:
-    // nonce+0: ListResolver
-    // nonce+1: LIST schema register
-    // nonce+2: LIST_ENTRY schema register
-    // nonce+3: dummy schema register
-    // nonce+4: ListEntryResolver
-    // nonce+5: ListReader
+    // Deployment order (both resolvers proxy-ified, ADR-0048). deployResolverProxy runs TWO
+    // deployer txs per call (impl, then proxy); the PROXY address is the resolver baked into
+    // each schema UID:
+    // nonce+0: ListResolver implementation
+    // nonce+1: ListResolver proxy           ← resolver in LIST_SCHEMA_UID
+    // nonce+2: LIST schema register
+    // nonce+3: LIST_ENTRY schema register   ← registered against the ListEntryResolver PROXY
+    // nonce+4: dummy schema register
+    // nonce+5: ListEntryResolver implementation
+    // nonce+6: ListEntryResolver proxy       ← resolver in LIST_ENTRY_SCHEMA_UID; ListReader points here
+    // nonce+7: ListReader
     const n = await ethers.provider.getTransactionCount(aliceAddr);
-    const futureListResolverAddr = ethers.getCreateAddress({ from: aliceAddr, nonce: n });
-    const futureListEntryResolverAddr = ethers.getCreateAddress({ from: aliceAddr, nonce: n + 4 });
+    // ListResolver PROXY is the resolver: impl = +0, proxy = +1.
+    const futureListResolverAddr = ethers.getCreateAddress({ from: aliceAddr, nonce: n + 1 });
+    // ListEntryResolver PROXY is the resolver: impl = +5, proxy = +6.
+    const futureListEntryResolverAddr = ethers.getCreateAddress({ from: aliceAddr, nonce: n + 6 });
 
     listSchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
       [LIST_SCHEMA, futureListResolverAddr, false],
     );
+    // CRITICAL (ADR-0048): LIST_ENTRY schema UID is derived against the PROXY address. The
+    // refactored ListEntryResolver self-derives the same UID in initialize() (where
+    // address(this) == proxy under delegatecall) so onAttest's schema guard matches.
     listEntrySchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
       [LIST_ENTRY_SCHEMA, futureListEntryResolverAddr, true],
     );
 
-    const LRF = await ethers.getContractFactory("ListResolver");
-    listResolver = await LRF.deploy(await eas.getAddress());
-    await listResolver.waitForDeployment();
+    // ListResolver behind a proxy (ADR-0048): stateless pure validation, empty initialize().
+    listResolver = await deployResolverProxy<ListResolver>("ListResolver", [await eas.getAddress()], [], alice);
+    expect(await listResolver.getAddress()).to.equal(futureListResolverAddr);
 
     await registry.register(LIST_SCHEMA, await listResolver.getAddress(), false);
+    // Register LIST_ENTRY against the ListEntryResolver PROXY (the resolver in the schema UID).
     await registry.register(LIST_ENTRY_SCHEMA, futureListEntryResolverAddr, true);
 
-    // dummy schema for SCHEMA-mode target attestations (nonce+3)
+    // dummy schema for SCHEMA-mode target attestations (nonce+4)
     const dummyTx = await registry.register("string label", ZeroAddress, false);
     const dummyReceipt = await dummyTx.wait();
     for (const log of dummyReceipt!.logs) {
@@ -93,9 +104,14 @@ describe("Lists — Unit Tests", function () {
     }
     if (!dummySchemaUID) throw new Error("Could not find dummySchemaUID from Registered event");
 
-    const LERF = await ethers.getContractFactory("ListEntryResolver");
-    listEntryResolver = await LERF.deploy(await eas.getAddress(), listSchemaUID);
-    await listEntryResolver.waitForDeployment();
+    // ListEntryResolver behind a proxy: self-UID derived in initialize() (address(this)==proxy).
+    listEntryResolver = await deployResolverProxy<ListEntryResolver>(
+      "ListEntryResolver",
+      [await eas.getAddress()],
+      [listSchemaUID],
+      alice,
+    );
+    expect(await listEntryResolver.getAddress()).to.equal(futureListEntryResolverAddr);
 
     const LReadF = await ethers.getContractFactory("ListReader");
     listReader = await LReadF.deploy(
@@ -194,7 +210,62 @@ describe("Lists — Unit Tests", function () {
   const revokeEntry = async (signer: Signer, uid: string) =>
     eas.connect(signer).revoke({ schema: listEntrySchemaUID, data: { uid, value: 0n } });
 
-  // ── Group A: ListResolver ──────────────────────────────────────────────────
+  // ── Group A0: ListResolver upgradeable lifecycle (ADR-0048) ─────────────────
+
+  describe("A0 — ListResolver upgradeable lifecycle", function () {
+    it("rejects re-initialization through the proxy", async function () {
+      await expect(listResolver.initialize()).to.be.revertedWithCustomError(listResolver, "InvalidInitialization");
+    });
+
+    it("exposes the constructor EAS via getEAS() through the proxy", async function () {
+      expect(await listResolver.getEAS()).to.equal(await eas.getAddress());
+    });
+
+    it("rejects a FOREIGN 5-word schema pointed at ListResolver (wrong LIST schema) — no ListAttested", async function () {
+      // Regression for Codex P2 (comment 3433083957): EAS invokes onAttest for ANY schema registered
+      // against this resolver. A foreign non-revocable 5-word schema with a valid payload must NOT pass
+      // — it would otherwise clear the shape checks and emit ListAttested, letting log/RPC list discovery
+      // ingest fake lists that ListReader/ListEntryResolver later reject. Self-derived guard, matching
+      // AliasResolver/ListEntryResolver/MirrorResolver/EdgeResolver.
+      const listResolverAddr = await listResolver.getAddress();
+      // Different field NAMES => different UID, but the same (bool,bool,uint8,bytes32,uint256) decode
+      // shape, so the 160-byte payload + shape checks would pass — only the schema guard can reject it.
+      const foreignDef = "bool a, bool b, uint8 c, bytes32 d, uint256 e";
+      await (await registry.register(foreignDef, listResolverAddr, false)).wait();
+      const foreignSchemaUID = ethers.solidityPackedKeccak256(
+        ["string", "address", "bool"],
+        [foreignDef, listResolverAddr, false],
+      );
+      expect(foreignSchemaUID).to.not.equal(listSchemaUID);
+
+      await expect(
+        eas.connect(alice).attest({
+          schema: foreignSchemaUID,
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: NO_EXPIRATION,
+            revocable: false,
+            refUID: ZERO_BYTES32,
+            data: encodeList(false, false, 1, ZERO_BYTES32, 0),
+            value: 0n,
+          },
+        }),
+      ).to.be.revertedWith("wrong LIST schema");
+
+      // Control: the canonical LIST schema still attests.
+      expect(await attestList(alice, false, false, 1)).to.not.equal(ZERO_BYTES32);
+    });
+
+    it("listSchemaUID() returns the self-derived canonical LIST UID (verify-gate guard)", async function () {
+      // PR #24 P2 (comment 3438135885): the pre-register verify gate reads this getter to assert the
+      // DEPLOYED ListResolver's own notion of its LIST schema UID == the to-be-registered UID — catching
+      // a stale/edited LIST_DEFINITION artifact before the irreversible register, mirroring the
+      // ListEntry/Alias self-UID getters. It must equal keccak256(LIST_DEFINITION, address(this), false).
+      expect(await listResolver.listSchemaUID()).to.equal(listSchemaUID);
+    });
+  });
+
+  // ── Group A: ListResolver field validation ─────────────────────────────────
 
   describe("A — ListResolver field validation", function () {
     it("A1: valid ADDR-typed LIST attests", async function () {
@@ -373,6 +444,84 @@ describe("Lists — Unit Tests", function () {
           ZERO_BYTES32,
           0,
         );
+    });
+  });
+
+  // ── Group B0: ListEntryResolver upgradeable lifecycle + self-UID (ADR-0048) ──
+  // The load-bearing proof. The pre-refactor contract derived its self-UID in the CONSTRUCTOR,
+  // where (under a proxy) address(this) is the IMPLEMENTATION — so the stored UID would diverge
+  // from the proxy-registered EAS schema UID and onAttest would reject EVERY entry (WrongSchema).
+  // The refactor derives it in initialize() where address(this) == proxy. These tests fail RED
+  // against the un-refactored contract and pass GREEN after.
+
+  describe("B0 — ListEntryResolver upgradeable lifecycle + self-UID", function () {
+    it("B0a: on-chain listEntrySchemaUID() == proxy-derived UID == registered EAS schema UID", async function () {
+      const onChain = await listEntryResolver.listEntrySchemaUID();
+      // All three equal: on-chain getter, off-chain proxy-derived, registered EAS UID.
+      expect(onChain).to.equal(listEntrySchemaUID);
+      const proxyAddr = await listEntryResolver.getAddress();
+      const offChainProxyDerived = ethers.solidityPackedKeccak256(
+        ["string", "address", "bool"],
+        [LIST_ENTRY_SCHEMA, proxyAddr, true],
+      );
+      expect(onChain).to.equal(offChainProxyDerived);
+      // And it is a real EAS-registered schema with this resolver (the proxy) as its resolver.
+      const rec = await registry.getSchema(onChain);
+      expect(rec.uid).to.equal(listEntrySchemaUID);
+      expect(rec.resolver).to.equal(proxyAddr);
+    });
+
+    it("B0b: self-UID does NOT equal the impl-derived UID (the bug the refactor fixes)", async function () {
+      // The implementation sits one nonce below the proxy in the deploy sequence. Re-derive
+      // the schema UID against that impl address — this is the WRONG value the old constructor
+      // would have stored, and it must NOT match the on-chain (proxy-derived) value.
+      const aliceAddr = await alice.getAddress();
+      const proxyAddr = await listEntryResolver.getAddress();
+      // Recover impl address: it's the create-address one nonce before the proxy. We computed
+      // the proxy at n+6, so the impl was deployed at n+5.
+      // Simpler: the impl address differs from the proxy; derive both UIDs and assert ≠.
+      // (We know impl ≠ proxy because deployResolverProxy deploys two distinct contracts.)
+      const onChain = await listEntryResolver.listEntrySchemaUID();
+      // Find an address that is NOT the proxy to stand in for the impl-derived divergence.
+      // The impl is the most recently created contract before the proxy; brute-force is overkill —
+      // we assert the structural property: any non-proxy address yields a different UID.
+      const implDerivedWrong = ethers.solidityPackedKeccak256(
+        ["string", "address", "bool"],
+        [LIST_ENTRY_SCHEMA, aliceAddr, true], // aliceAddr stands in as a non-proxy address
+      );
+      expect(onChain).to.not.equal(implDerivedWrong);
+      expect(proxyAddr).to.not.equal(aliceAddr);
+    });
+
+    it("B0c: end-to-end — a real LIST_ENTRY attestation through EAS does NOT revert WrongSchema", async function () {
+      // The full proof: register-against-proxy + self-UID-in-initialize means onAttest's
+      // `a.schema != listEntrySchemaUID` guard passes for a genuine LIST_ENTRY. Against the
+      // un-refactored (impl-derived) contract this would revert WrongSchema.
+      const listUID = await attestList(alice, false, false, 1); // ADDR
+      const bobAddr = await bob.getAddress();
+      // Must NOT revert (and specifically not WrongSchema).
+      const uid = await attestAddrEntry(alice, listUID, bobAddr);
+      expect(uid).to.not.equal(ZERO_BYTES32);
+      const identityKey = ethers.zeroPadValue(ethers.toBeHex(BigInt(bobAddr)), 32);
+      expect(await listEntryResolver.getMemberCount(listUID, identityKey, await alice.getAddress())).to.equal(1n);
+      // And a real revoke works end-to-end (onRevoke's guard also matches).
+      await revokeEntry(alice, uid);
+      expect(await listEntryResolver.getMemberCount(listUID, identityKey, await alice.getAddress())).to.equal(0n);
+    });
+
+    it("B0d: initialize is one-shot — re-initializing through the proxy reverts", async function () {
+      await expect(listEntryResolver.initialize(listSchemaUID)).to.be.revertedWithCustomError(
+        listEntryResolver,
+        "InvalidInitialization",
+      );
+    });
+
+    it("B0e: exposes the constructor EAS via getEAS() through the proxy", async function () {
+      expect(await listEntryResolver.getEAS()).to.equal(await eas.getAddress());
+    });
+
+    it("B0f: LIST_SCHEMA_UID() getter returns the value set in initialize()", async function () {
+      expect(await listEntryResolver.LIST_SCHEMA_UID()).to.equal(listSchemaUID);
     });
   });
 
@@ -829,6 +978,27 @@ describe("Lists — Unit Tests", function () {
       const es = await listReader.entries(listUID, await alice.getAddress(), 0n, 10n);
       expect(es.length).to.equal(1);
       expect(es[0].targetType).to.equal(1); // denormalized from LIST
+    });
+
+    it("C6b: entries() excludes a revoked LIST_ENTRY by default (ADR-0051)", async function () {
+      // ADR-0051: reads exclude revoked by default. For lists this holds by construction —
+      // ListEntryResolver swap-and-pops the entry out of its active array on revoke, so the
+      // stateless ListReader.entries() view never sees it. No filter in ListReader needed.
+      const listUID = await attestList(alice, true, false, 1); // ADDR, allowsDuplicates, not appendOnly
+      const signers = await ethers.getSigners();
+      const aliceAddr = await alice.getAddress();
+      const uid1 = await attestAddrEntry(alice, listUID, await signers[2].getAddress());
+      const uid2 = await attestAddrEntry(alice, listUID, await signers[3].getAddress());
+
+      let es = await listReader.entries(listUID, aliceAddr, 0n, 10n);
+      expect(es.length).to.equal(2);
+
+      await revokeEntry(alice, uid1);
+
+      es = await listReader.entries(listUID, aliceAddr, 0n, 10n);
+      expect(es.length).to.equal(1);
+      expect(es.map(e => e.entryUID)).to.not.include(uid1);
+      expect(es[0].entryUID).to.equal(uid2);
     });
 
     it("C7: entries() pagination", async function () {

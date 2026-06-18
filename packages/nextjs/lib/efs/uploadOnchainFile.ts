@@ -316,14 +316,10 @@ export async function uploadOnchainFile(args: UploadOnchainFileArgs): Promise<Up
     }
   }
 
+  // DATA is an EMPTY attestation — pure identity (ADR-0049). contentHash/size are NOT DATA fields;
+  // they are bound below as reserved-key PROPERTYs (lens-scoped). EFSIndexer.onAttest rejects any
+  // non-empty DATA payload, so this MUST send "0x" — the old (contentHash,size) encoding now reverts.
   log("Creating DATA attestation...");
-  const encodedData = encodeAbiParameters(
-    [
-      { name: "contentHash", type: "bytes32" },
-      { name: "size", type: "uint64" },
-    ],
-    [contentHash, fileSize],
-  );
   const dataTxHash = await attest(
     {
       functionName: "attest",
@@ -335,7 +331,7 @@ export async function uploadOnchainFile(args: UploadOnchainFileArgs): Promise<Up
             expirationTime: 0n,
             revocable: false,
             refUID: zeroHash,
-            data: encodedData,
+            data: "0x",
             value: 0n,
           },
         },
@@ -350,36 +346,66 @@ export async function uploadOnchainFile(args: UploadOnchainFileArgs): Promise<Up
   log(`DATA created: ${dataUID.slice(0, 10)}...`);
   checkCancelled();
 
-  // ── contentType PROPERTY: key ANCHOR + free PROPERTY + PIN bind
-  //    (CreateItemModal ~lines 1034–1130, ADR-0035/ADR-0041) ──
-  log("Creating contentType key anchor...");
-  let contentTypeKeyAnchorUID = (await publicClient.readContract({
-    address: indexerAddress,
-    abi: indexerAbi,
-    functionName: "resolveAnchor",
-    args: [dataUID, "contentType", propertySchemaUID],
-  })) as `0x${string}`;
+  // ── Reserved-key PROPERTYs: contentType (always), contentHash + size (when real) ──
+  //    Each is a key ANCHOR + free PROPERTY + binding PIN (ADR-0041/ADR-0049). Mirrors
+  //    CreateItemModal.bindProperty so the two write paths produce identical reads.
+  const bindProperty = async (key: string, value: string) => {
+    log(`Creating ${key} key anchor...`);
+    let keyAnchorUID = (await publicClient.readContract({
+      address: indexerAddress,
+      abi: indexerAbi,
+      functionName: "resolveAnchor",
+      args: [dataUID, key, propertySchemaUID],
+    })) as `0x${string}`;
 
-  if (!contentTypeKeyAnchorUID || contentTypeKeyAnchorUID === zeroHash) {
-    const encodedKey = encodeAbiParameters(
-      [
-        { name: "name", type: "string" },
-        { name: "schemaUID", type: "bytes32" },
-      ],
-      ["contentType", propertySchemaUID],
-    );
-    const keyTx = await attest(
+    if (!keyAnchorUID || keyAnchorUID === zeroHash) {
+      const encodedKey = encodeAbiParameters(
+        [
+          { name: "name", type: "string" },
+          { name: "forSchema", type: "bytes32" },
+        ],
+        [key, propertySchemaUID],
+      );
+      const keyTx = await attest(
+        {
+          functionName: "attest",
+          args: [
+            {
+              schema: anchorSchemaUID,
+              data: {
+                recipient: zeroAddress,
+                expirationTime: 0n,
+                revocable: false,
+                refUID: dataUID,
+                data: encodedKey,
+                value: 0n,
+              },
+            },
+          ],
+        },
+        { silent: true },
+      );
+      if (!keyTx) throw new Error(`${key} key anchor attestation failed.`);
+      const keyReceipt = await publicClient.waitForTransactionReceipt({ hash: keyTx });
+      const extracted = extractUIDFromReceipt(keyReceipt);
+      if (!extracted) throw new Error(`Could not extract ${key} key anchor UID`);
+      keyAnchorUID = extracted;
+    }
+
+    log(`Attesting ${key} PROPERTY...`);
+    const encodedProperty = encodeAbiParameters([{ name: "value", type: "string" }], [value]);
+    const propTxHash = await attest(
       {
         functionName: "attest",
         args: [
           {
-            schema: anchorSchemaUID,
+            schema: propertySchemaUID,
             data: {
               recipient: zeroAddress,
               expirationTime: 0n,
               revocable: false,
-              refUID: dataUID,
-              data: encodedKey,
+              refUID: zeroHash,
+              data: encodedProperty,
               value: 0n,
             },
           },
@@ -387,68 +413,44 @@ export async function uploadOnchainFile(args: UploadOnchainFileArgs): Promise<Up
       },
       { silent: true },
     );
-    if (!keyTx) throw new Error("contentType key anchor attestation failed.");
-    const keyReceipt = await publicClient.waitForTransactionReceipt({ hash: keyTx });
-    const extracted = extractUIDFromReceipt(keyReceipt);
-    if (!extracted) throw new Error("Could not extract contentType key anchor UID");
-    contentTypeKeyAnchorUID = extracted;
-  }
+    if (!propTxHash) throw new Error(`${key} PROPERTY attestation failed.`);
+    const propReceipt = await publicClient.waitForTransactionReceipt({ hash: propTxHash });
+    const propertyUID = extractUIDFromReceipt(propReceipt);
+    if (!propertyUID) throw new Error(`Could not extract ${key} PROPERTY UID`);
 
-  log("Attesting content type PROPERTY...");
-  const encodedProperty = encodeAbiParameters([{ name: "value", type: "string" }], [contentType]);
-  const propTxHash = await attest(
-    {
-      functionName: "attest",
-      args: [
-        {
-          schema: propertySchemaUID,
-          data: {
-            recipient: zeroAddress,
-            expirationTime: 0n,
-            revocable: false,
-            refUID: zeroHash,
-            data: encodedProperty,
-            value: 0n,
+    log(`Binding ${key} PROPERTY via PIN...`);
+    // PROPERTY value binding is a PIN under ADR-0041 (cardinality 1); re-binding supersedes in O(1).
+    const encodedPin = encodeAbiParameters([{ name: "definition", type: "bytes32" }], [keyAnchorUID]);
+    const pinTxHash = await attest(
+      {
+        functionName: "attest",
+        args: [
+          {
+            schema: pinSchemaUID,
+            data: {
+              recipient: zeroAddress,
+              expirationTime: 0n,
+              revocable: true,
+              refUID: propertyUID,
+              data: encodedPin,
+              value: 0n,
+            },
           },
-        },
-      ],
-    },
-    { silent: true },
-  );
-  if (!propTxHash) throw new Error("contentType PROPERTY attestation failed.");
-  const propReceipt = await publicClient.waitForTransactionReceipt({ hash: propTxHash });
-  const contentTypePropertyUID = extractUIDFromReceipt(propReceipt);
-  if (!contentTypePropertyUID) throw new Error("Could not extract contentType PROPERTY UID");
+        ],
+      },
+      { silent: true },
+    );
+    if (!pinTxHash) throw new Error(`${key} PIN attestation did not return a transaction hash.`);
+    await publicClient.waitForTransactionReceipt({ hash: pinTxHash });
+    checkCancelled();
+  };
 
-  log("Binding contentType PROPERTY via PIN...");
-  // PROPERTY value binding is a PIN under ADR-0041 (cardinality 1). Re-binding at
-  // the same key anchor supersedes the prior PIN in O(1).
-  const encodedContentTypePin = encodeAbiParameters(
-    [{ name: "definition", type: "bytes32" }],
-    [contentTypeKeyAnchorUID],
-  );
-  const contentTypePinTxHash = await attest(
-    {
-      functionName: "attest",
-      args: [
-        {
-          schema: pinSchemaUID,
-          data: {
-            recipient: zeroAddress,
-            expirationTime: 0n,
-            revocable: true,
-            refUID: contentTypePropertyUID,
-            data: encodedContentTypePin,
-            value: 0n,
-          },
-        },
-      ],
-    },
-    { silent: true },
-  );
-  if (!contentTypePinTxHash) throw new Error("contentType PIN attestation did not return a transaction hash.");
-  await publicClient.waitForTransactionReceipt({ hash: contentTypePinTxHash });
-  checkCancelled();
+  await bindProperty("contentType", contentType);
+  // contentHash/size only when REAL — never the zero/failed-fetch sentinels. Binding those would
+  // publish bogus reserved-key claims grouping unrelated files under the zero hash/size (mirrors the
+  // modal's guard, CreateItemModal ~L1182-1183).
+  if (contentHash !== zeroHash) await bindProperty("contentHash", contentHash);
+  if (fileSize > 0n) await bindProperty("size", fileSize.toString());
 
   // ── MIRROR (refUID=DATA, /transports/onchain anchor, uri) (CreateItemModal ~lines 1132–1167) ──
   const transportAnchorUID = await resolveTransportAnchor(transportName);

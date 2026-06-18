@@ -2,8 +2,16 @@ import { HardhatRuntimeEnvironment } from "hardhat/types";
 import { DeployFunction } from "hardhat-deploy/types";
 import { Contract } from "ethers";
 import { redeployIfArgsChanged } from "../deploy-utils";
+import { legacySuperseded } from "../deploy-lib/superseded";
 
 const deployEFSFileView: DeployFunction = async function (hre: HardhatRuntimeEnvironment) {
+  // AGENT-NOTE (Phase D, I-3): EFSFileView is a stateless view (redeployable, in no UID). On the
+  // Sepolia freeze path the deploy is driven by `yarn deploy:efs` (EFSCore tag only); this script is
+  // not invoked there. But a plain `yarn deploy --network sepolia` would run it and bind via
+  // getContract("Indexer") — untested on the proxies. Neutralize wherever CreateX is present
+  // (Sepolia/mainnet/pinned fork), matching 01/04/05/09. Local/devnet (no CreateX) still deploys it.
+  if (await legacySuperseded(hre, "02_fileview")) return;
+
   const { deployer } = await hre.getNamedAccounts();
   const { deploy } = hre.deployments;
   const ethers = hre.ethers;

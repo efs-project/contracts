@@ -2,10 +2,11 @@
 pragma solidity 0.8.26;
 
 import { IEAS, Attestation } from "@ethereum-attestation-service/eas-contracts/contracts/IEAS.sol";
-import { SchemaResolver } from "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol";
 import { EMPTY_UID } from "@ethereum-attestation-service/eas-contracts/contracts/Common.sol";
+import { OwnableUpgradeable } from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import { EFSUpgradeableResolver } from "./base/EFSUpgradeableResolver.sol";
 
-contract EFSIndexer is SchemaResolver {
+contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
     error DuplicateFileName();
     error InvalidOffset();
     error MissingParent();
@@ -14,6 +15,14 @@ contract EFSIndexer is SchemaResolver {
     error AnchorTooDeep();
     error Unauthorized();
     error InvalidAnchorName();
+    /// @dev ANCHOR/PROPERTY payload decodes but is not the exact canonical `abi.encode(...)` — e.g.
+    ///      trailing bytes. abi.decode tolerates a canonical prefix with trailing words, so two
+    ///      byte-different payloads would decode to the same fields and mint two records under distinct
+    ///      permanent UIDs (an anchor name or interned value with multiple accepted encodings). The
+    ///      dynamic `string` rules out a fixed-length check, so re-encode the decoded fields and
+    ///      hash-compare (the SystemAccount._requireCanonicalAnchor pattern). Reject what doesn't
+    ///      round-trip. Enforced on the write (onAttest) path only — revocation needs no guard.
+    error NonCanonicalPayload();
 
     /// @notice Emitted when a new Anchor is created under a parent directory.
     ///         Enables off-chain indexers (The Graph) to track directory structure changes
@@ -22,19 +31,33 @@ contract EFSIndexer is SchemaResolver {
         bytes32 indexed parentUID,
         bytes32 indexed anchorUID,
         address indexed attester,
-        bytes32 anchorSchema
+        bytes32 anchorSchema,
+        string name
     );
 
     /// @notice Emitted when a standalone DATA attestation is created (file identity).
-    event DataCreated(bytes32 indexed dataUID, address indexed attester, bytes32 contentHash);
+    /// @dev    ADR-0049: DATA is now an empty (pure-identity) schema. The `contentHash`
+    ///         parameter was removed — content hash lives as a lens-scoped PROPERTY on the
+    ///         DATA UID, not as a DATA field. Downstream indexers binding to this event must
+    ///         re-bind to the new 2-arg signature.
+    event DataCreated(bytes32 indexed dataUID, address indexed attester);
 
     /// @notice Emitted when a MIRROR attestation is attached to a DATA (retrieval method).
     event MirrorCreated(bytes32 indexed dataUID, bytes32 indexed mirrorUID, address indexed attester);
 
-    /// @notice Emitted when a PROPERTY attestation is attached to an Anchor.
-    event PropertyCreated(bytes32 indexed propertyUID, address indexed attester);
+    /// @notice Emitted when a PROPERTY (interned value) attestation is created.
+    /// @dev    `valueHash = keccak256(bytes(value))` is the value's canonical content key (ties
+    ///         to the forthcoming canonical-hashing spec). It is the lookup key clients use to
+    ///         find an existing value to dedup against — off-chain via this indexed topic, and
+    ///         on-chain via the future opt-in intern registry (ADR-0052). PROPERTY is
+    ///         non-revocable interned content; the revocable claim is the PIN binding.
+    event PropertyCreated(bytes32 indexed propertyUID, address indexed attester, bytes32 indexed valueHash);
 
-    /// @notice Emitted when any EFS-native attestation (ANCHOR, DATA, PROPERTY, BLOB) is revoked.
+    /// @notice SchemaResolver onRevoke hook — flips the `_isRevoked` read-filter for an attestation
+    ///         under this indexer's schemas. NOTE: ANCHOR/DATA/PROPERTY are all non-revocable
+    ///         (their onAttest rejects `revocable`), so EAS never invokes this in practice; it
+    ///         remains as the resolver-interface contract. The revocable schemas
+    ///         (PIN/TAG/MIRROR/LIST_ENTRY/REDIRECT) are tracked by their own resolvers.
     event AttestationRevoked(bytes32 indexed uid, address indexed attester);
 
     /// @notice Emitted when an external attestation is indexed via the public index() API.
@@ -43,14 +66,48 @@ contract EFSIndexer is SchemaResolver {
     /// @notice Emitted when a revocation is synced for an externally-indexed attestation.
     event RevocationIndexed(bytes32 indexed uid);
 
+    // ============================================================================================
+    // ERC-7201 NAMESPACED CONFIG (per-deployment, set in initialize())
+    // ============================================================================================
+    // The schema UIDs and deployer were constructor immutables when EFSIndexer was deployed
+    // directly. Under the upgradeable-proxy pattern (ADR-0048) the implementation runs via the
+    // proxy's delegatecall, so immutables (which live in the impl's bytecode) would read the
+    // impl's construction-time values, not the proxy's. Per-deployment config therefore moves into
+    // ERC-7201 namespaced storage written once in initialize(). The namespaced slot sits far from
+    // slot 0, so it cannot collide with the existing sequential mapping layout below.
+
+    /// @custom:storage-location erc7201:efs.indexer.config
+    struct IndexerConfig {
+        bytes32 anchorSchemaUID;
+        bytes32 propertySchemaUID;
+        bytes32 dataSchemaUID;
+    }
+
+    // keccak256(abi.encode(uint256(keccak256("efs.indexer.config")) - 1)) & ~bytes32(uint256(0xff))
+    bytes32 private constant INDEXER_CONFIG_SLOT = 0x8236c748e6a502fa91232b6ce96a08db6ef6eb51d97817035831708b310c8900;
+
+    function _cfg() private pure returns (IndexerConfig storage $) {
+        assembly {
+            $.slot := INDEXER_CONFIG_SLOT
+        }
+    }
+
+    // Schema-UID public getters preserved by NAME for ABI/consumer compatibility — they now read
+    // the ERC-7201 config struct instead of construction-time immutables.
+    function ANCHOR_SCHEMA_UID() public view returns (bytes32) {
+        return _cfg().anchorSchemaUID;
+    }
+
+    function PROPERTY_SCHEMA_UID() public view returns (bytes32) {
+        return _cfg().propertySchemaUID;
+    }
+
+    function DATA_SCHEMA_UID() public view returns (bytes32) {
+        return _cfg().dataSchemaUID;
+    }
+
     // State Variables
     bytes32 public rootAnchorUID;
-
-    // Immutable Schema UIDs (set at construction, resolver = EFSIndexer)
-    bytes32 public immutable ANCHOR_SCHEMA_UID;
-    bytes32 public immutable PROPERTY_SCHEMA_UID;
-    bytes32 public immutable DATA_SCHEMA_UID;
-    bytes32 public immutable BLOB_SCHEMA_UID;
 
     // Partner contract references — set once via wireContracts() after full deployment
     // These are bytes32 storage (not immutable) because partner contracts deploy after EFSIndexer.
@@ -70,13 +127,27 @@ contract EFSIndexer is SchemaResolver {
     // Well-known /sorts/ anchor — set once via setSortsAnchor() after deployment
     bytes32 public sortsAnchorUID;
 
-    // Deployer — authorized to call wireContracts()
-    address public immutable DEPLOYER;
+    // Authorization for wireContracts()/setSortsAnchor() is now `onlyOwner` (OwnableUpgradeable),
+    // set in initialize(). The former `address public immutable DEPLOYER` is removed — immutables
+    // don't work under the proxy delegatecall. Its role (the system-provided-defaults attester and
+    // wiring authority) is subsumed by the owner. The `DEPLOYER()` getter is preserved by NAME for
+    // ABI/consumer compatibility (EFSRouter default-lens fallback; the nextjs explorer) and now
+    // simply returns `owner()`.
+    function DEPLOYER() external view returns (address) {
+        return owner();
+    }
 
     // Maximum anchor nesting depth — prevents gas griefing in propagateContains
     uint256 public constant MAX_ANCHOR_DEPTH = 32;
 
-    // Content-addressed deduplication: keccak256(contentHash) => first DATA UID
+    // Content-addressed deduplication: keccak256(contentHash) => first DATA UID.
+    // AGENT-NOTE: this is a RETAINED DEAD SLOT, kept for storage-layout stability, no longer
+    // written (ADR-0049). DATA is now empty (pure identity) and carries no contentHash, so
+    // nothing writes here. Do NOT remove the slot — deleting storage risks the layout snapshot
+    // / upgrade-safety gate. ADR-0049 prose was corrected to say "retained as a dead slot, no
+    // longer written" (it previously said "removed") so code and ADR agree. Dedup is now
+    // client-side prevention + REDIRECT resolution (ADR-0050). EFSFileView.getCanonicalData
+    // still reads it (returns bytes32(0)).
     mapping(bytes32 => bytes32) public dataByContentKey;
 
     // Revocation tracking (set in onRevoke, never cleared)
@@ -89,13 +160,13 @@ contract EFSIndexer is SchemaResolver {
     // STORAGE: FILE SYSTEM INDICES (EFS CORE)
     // ============================================================================================
 
-    // Directory Index (Path Resolution): parentAnchorUID => name => schemaUID => childAnchorUID
+    // Directory Index (Path Resolution): parentAnchorUID => name => forSchema => childAnchorUID
     mapping(bytes32 => mapping(string => mapping(bytes32 => bytes32))) private _nameToAnchor;
 
     // Hierarchy List: parentAnchorUID => childAnchorUIDs
     mapping(bytes32 => bytes32[]) private _children;
 
-    // Children By Schema: parentAnchorUID => schemaUID => childAnchorUIDs
+    // Children By Schema: parentAnchorUID => forSchema => childAnchorUIDs
     mapping(bytes32 => mapping(bytes32 => bytes32[])) private _childrenBySchema;
 
     // Parent Lookups: childAnchorUID => parentAnchorUID
@@ -159,18 +230,33 @@ contract EFSIndexer is SchemaResolver {
     // Stored at creation so parent-type checks are O(1) without re-decoding EAS attestation data.
     mapping(bytes32 => bytes32) private _anchorSchemaOf;
 
-    constructor(
-        IEAS eas,
+    /// @param eas The canonical EAS for the target chain. Stays a constructor immutable on the
+    ///            base (EAS is a per-chain constant; see EFSUpgradeableResolver NatSpec). The base
+    ///            constructor also runs `_disableInitializers()` so the implementation itself can
+    ///            never be initialized — only a proxy can.
+    constructor(IEAS eas) EFSUpgradeableResolver(eas) {}
+
+    /// @notice One-time per-deployment initialization, run behind the proxy.
+    /// @dev Guarded by `initializer` — callable exactly once per proxy. Sets the EFS schema UIDs
+    ///      (baked into the schema UIDs that name this proxy as resolver) and the owner authorized
+    ///      to wire partner contracts. The schema UIDs migrate here from former constructor
+    ///      immutables (ADR-0048).
+    /// @param anchorSchemaUID   ANCHOR schema UID resolved by this indexer.
+    /// @param propertySchemaUID PROPERTY schema UID resolved by this indexer.
+    /// @param dataSchemaUID     DATA schema UID resolved by this indexer.
+    /// @param owner_            Address authorized to call wireContracts()/setSortsAnchor().
+    function initialize(
         bytes32 anchorSchemaUID,
         bytes32 propertySchemaUID,
         bytes32 dataSchemaUID,
-        bytes32 blobSchemaUID
-    ) SchemaResolver(eas) {
-        ANCHOR_SCHEMA_UID = anchorSchemaUID;
-        PROPERTY_SCHEMA_UID = propertySchemaUID;
-        DATA_SCHEMA_UID = dataSchemaUID;
-        BLOB_SCHEMA_UID = blobSchemaUID;
-        DEPLOYER = msg.sender;
+        address owner_
+    ) external initializer {
+        require(owner_ != address(0), "EFSIndexer: owner is zero");
+        __Ownable_init(owner_);
+        IndexerConfig storage $ = _cfg();
+        $.anchorSchemaUID = anchorSchemaUID;
+        $.propertySchemaUID = propertySchemaUID;
+        $.dataSchemaUID = dataSchemaUID;
     }
 
     /**
@@ -178,7 +264,9 @@ contract EFSIndexer is SchemaResolver {
      *         Call once from the deploy script after EdgeResolver and EFSSortOverlay are deployed.
      *         After calling, PIN_SCHEMA_UID, TAG_SCHEMA_UID, SORT_INFO_SCHEMA_UID, edgeResolver,
      *         sortOverlay, and schemaRegistry are all queryable from a single entry point.
-     * @dev Can only be called by DEPLOYER and only once (edgeResolver address guards re-entry).
+     * @dev Can only be called by the owner and only once (edgeResolver address guards re-entry).
+     *      The one-shot `edgeResolver == address(0)` guard reads proxy storage and survives
+     *      implementation upgrades.
      */
     function wireContracts(
         address _edgeResolver,
@@ -189,8 +277,7 @@ contract EFSIndexer is SchemaResolver {
         address _mirrorResolver,
         bytes32 _mirrorSchemaUID,
         address _schemaRegistry
-    ) external {
-        require(msg.sender == DEPLOYER, "EFSIndexer: not deployer");
+    ) external onlyOwner {
         require(edgeResolver == address(0), "EFSIndexer: already wired");
         edgeResolver = _edgeResolver;
         PIN_SCHEMA_UID = _pinSchemaUID;
@@ -205,10 +292,10 @@ contract EFSIndexer is SchemaResolver {
     /**
      * @notice Set the well-known /sorts/ anchor UID.
      *         Called once from the deploy script after the sorts anchor is created.
-     * @dev Can only be called by DEPLOYER and only once.
+     * @dev Can only be called by the owner and only once. The one-shot
+     *      `sortsAnchorUID == bytes32(0)` guard reads proxy storage and survives upgrades.
      */
-    function setSortsAnchor(bytes32 _sortsAnchorUID) external {
-        require(msg.sender == DEPLOYER, "EFSIndexer: not deployer");
+    function setSortsAnchor(bytes32 _sortsAnchorUID) external onlyOwner {
         require(sortsAnchorUID == bytes32(0), "EFSIndexer: sorts anchor already set");
         sortsAnchorUID = _sortsAnchorUID;
     }
@@ -283,15 +370,26 @@ contract EFSIndexer is SchemaResolver {
 
         // 2. EFS CORE LOGIC (ANCHORS)
         bytes32 schema = attestation.schema;
-        if (schema == ANCHOR_SCHEMA_UID) {
+        IndexerConfig storage $ = _cfg();
+        if (schema == $.anchorSchemaUID) {
             // Anchors are permanent structural nodes — revocable anchors are rejected.
             if (attestation.revocable) return false;
+            // ...and non-expiring: a non-revocable *schema* doesn't stop EAS accepting a nonzero
+            // expirationTime, and EFS reads filter on revocation/index state, not EAS expiry — so an
+            // expiring anchor would keep resolving forever past its expiry. Reject it (PR #24 P2).
+            if (attestation.expirationTime != 0) return false;
 
             (string memory name, bytes32 anchorSchema) = abi.decode(attestation.data, (string, bytes32));
+            // Reject non-canonical encodings (e.g. trailing bytes) so one anchor has exactly one
+            // permanent UID — re-encode the decoded fields and require the bytes round-trip.
+            if (keccak256(attestation.data) != keccak256(abi.encode(name, anchorSchema))) {
+                revert NonCanonicalPayload();
+            }
 
-            // Validate name: must be IRI-segment safe (mirrors TopicResolver validation).
-            // Rejects empty, path-segment delimiters (/), null bytes, URI-special chars,
-            // and reserved path segments (. and ..) to prevent web3:// URI routing breaks.
+            // Validate name: must be the canonical anchor-name encoding (NFC + percent-encode,
+            // uppercase hex) — see _isValidAnchorName. Reserved bytes must be %XX-escaped; NFC
+            // normalization is the client's responsibility (not verifiable on-chain). This keeps
+            // exactly one valid encoding per name (the Schelling-point property).
             if (!_isValidAnchorName(name)) revert InvalidAnchorName();
 
             // Resolve Parent (Use refUID, else recipient cast to bytes32, else generic root if 0)
@@ -360,30 +458,48 @@ contract EFSIndexer is SchemaResolver {
                 }
             }
 
-            emit AnchorCreated(parentUID, attestation.uid, attestation.attester, anchorSchema);
+            emit AnchorCreated(parentUID, attestation.uid, attestation.attester, anchorSchema, name);
             return true;
-        } else if (schema == DATA_SCHEMA_UID) {
-            // DATA is standalone file identity: refUID must be 0x0, non-revocable
+        } else if (schema == $.dataSchemaUID) {
+            // DATA is pure file identity (ADR-0049): empty schema, standalone, non-revocable.
+            // The attestation carries no fields (zero-length payload) — its UID *is* the
+            // file's identity. contentHash/size now live as lens-scoped reserved-key
+            // PROPERTYs bound to this UID, not as DATA fields, so there is nothing to decode.
+            // EAS does not enforce the registered schema's ABI on attestation.data — it stores
+            // whatever bytes are passed — so the resolver must reject any non-empty payload to
+            // keep the empty-DATA canonical invariant (a DATA UID carrying arbitrary bytes would
+            // otherwise be indexed and served as valid pure-identity DATA).
             if (attestation.refUID != EMPTY_UID) return false;
             if (attestation.revocable) return false;
+            if (attestation.expirationTime != 0) return false; // permanent identity — no EAS expiry (PR #24 P2)
+            if (attestation.data.length != 0) return false;
 
-            (bytes32 contentHash, ) = abi.decode(attestation.data, (bytes32, uint64));
-
-            // Content-addressed deduplication: first DATA per contentHash is canonical
-            if (contentHash != bytes32(0) && dataByContentKey[contentHash] == bytes32(0)) {
-                dataByContentKey[contentHash] = attestation.uid;
-            }
-
-            emit DataCreated(attestation.uid, attestation.attester, contentHash);
+            // The bare DATA UID is already tracked by _indexGlobal above (step 1).
+            emit DataCreated(attestation.uid, attestation.attester);
             return true;
-        } else if (schema == PROPERTY_SCHEMA_UID) {
+        } else if (schema == $.propertySchemaUID) {
             // PROPERTY is a standalone value (ADR-0035): refUID must be 0x0, non-revocable.
-            // Placement lives in a TAG under an Anchor<PROPERTY>(name="<key>"), symmetric
-            // with DATA. The TAG's _validateDefinition handles container-kind validation.
+            // Placement lives in a PIN under an Anchor<PROPERTY>(name="<key>") (ADR-0041,
+            // superseding the original TAG framing). PROPERTY is NON-revocable interned content
+            // (ADR-0052): a value is dumb, shared content (many PINs can point at one value),
+            // not a claim — so the revocable *claim* lives in the PIN (the binding), not here.
+            // Non-revocability is what makes a value safely shareable: it can't be yanked out
+            // from under other bindings. Like ANCHOR and DATA, we reject revocable attestations.
             if (attestation.refUID != EMPTY_UID) return false;
             if (attestation.revocable) return false;
+            if (attestation.expirationTime != 0) return false; // interned value is permanent — no EAS expiry (PR #24 P2)
 
-            emit PropertyCreated(attestation.uid, attestation.attester);
+            // valueHash = keccak256(bytes(value)) is the value's canonical lookup key (ties to
+            // the forthcoming canonical-hashing spec). Clients use it as the content key to find
+            // an existing value to dedup against — off-chain via this event's indexed topic, and
+            // on-chain via the future opt-in intern registry (ADR-0052). Decode the sole field.
+            string memory value = abi.decode(attestation.data, (string));
+            // Reject non-canonical encodings (e.g. trailing bytes) so one interned value has exactly
+            // one permanent UID — re-encode the decoded field and require the bytes round-trip.
+            if (keccak256(attestation.data) != keccak256(abi.encode(value))) {
+                revert NonCanonicalPayload();
+            }
+            emit PropertyCreated(attestation.uid, attestation.attester, keccak256(bytes(value)));
             return true;
         }
 
@@ -422,16 +538,6 @@ contract EFSIndexer is SchemaResolver {
         return _sliceUIDsFiltered(_children[anchorUID], start, length, reverseOrder, showRevoked);
     }
 
-    /// @notice Convenience overload — showRevoked defaults to false.
-    function getChildren(
-        bytes32 anchorUID,
-        uint256 start,
-        uint256 length,
-        bool reverseOrder
-    ) external view returns (bytes32[] memory) {
-        return _sliceUIDsFiltered(_children[anchorUID], start, length, reverseOrder, false);
-    }
-
     function getChildrenCount(bytes32 anchorUID) external view returns (uint256) {
         return _children[anchorUID].length;
     }
@@ -445,17 +551,6 @@ contract EFSIndexer is SchemaResolver {
         bool showRevoked
     ) external view returns (bytes32[] memory) {
         return _sliceUIDsFiltered(_childrenByAttester[anchorUID][attester], start, length, reverseOrder, showRevoked);
-    }
-
-    /// @notice Convenience overload — showRevoked defaults to false.
-    function getChildrenByAttester(
-        bytes32 anchorUID,
-        address attester,
-        uint256 start,
-        uint256 length,
-        bool reverseOrder
-    ) external view returns (bytes32[] memory) {
-        return _sliceUIDsFiltered(_childrenByAttester[anchorUID][attester], start, length, reverseOrder, false);
     }
 
     function getChildrenByAttesterCount(bytes32 anchorUID, address attester) external view returns (uint256) {
@@ -516,17 +611,6 @@ contract EFSIndexer is SchemaResolver {
         bool showRevoked
     ) external view returns (bytes32[] memory) {
         return _sliceUIDsFiltered(_childrenBySchema[anchorUID][schema], start, length, reverseOrder, showRevoked);
-    }
-
-    /// @notice Convenience overload — showRevoked defaults to false.
-    function getAnchorsBySchema(
-        bytes32 anchorUID,
-        bytes32 schema,
-        uint256 start,
-        uint256 length,
-        bool reverseOrder
-    ) external view returns (bytes32[] memory) {
-        return _sliceUIDsFiltered(_childrenBySchema[anchorUID][schema], start, length, reverseOrder, false);
     }
 
     /**
@@ -592,14 +676,36 @@ contract EFSIndexer is SchemaResolver {
     }
 
     // Generic Explorer
+    //
+    // These are LOW-LEVEL, SCHEMA-LEVEL discovery getters — they enumerate the raw attestation set
+    // under a schema. The REQUIRED `bool showRevoked` (false = exclude EAS-revoked, the common path;
+    // true = full history) filters EAS *revocation* only — the one notion of "inactive" that exists at
+    // the EAS/schema layer and that the kernel can cheaply track (`_isRevoked`).
+    //
+    // They do NOT reflect PIN/TAG *supersession* (a cardinality-1 PIN replaced by re-attesting at the
+    // same slot, ADR-0041). Supersession is an EdgeResolver SLOT-OVERLAY concept, not an EAS/schema
+    // one, so a schema-level enumerator cannot meaningfully filter it. `showRevoked=false` therefore
+    // still returns superseded edge UIDs — by design: this is the raw, EAS-mirroring layer.
+    //
+    // For supersession-aware "current claims" reads (ADR-0051's default-current contract), use the
+    // active-edge getters — getActivePinTarget / isActiveEdge / getActiveEdgeUID — or the view
+    // contracts (EFSFileView, ListReader) / EFSRouter, which read EdgeResolver's active sets. That is
+    // the EFS *semantic* read layer; these generic getters are the raw layer beneath it.
+    //
+    // Single required arg (not an overloaded convenience twin): overloaded same-name functions collapse
+    // `args` to `never` in viem/wagmi/scaffold-eth and break every typed consumer (Vite client, SDK,
+    // subgraph codegen). Solidity has no default parameters, so callers pass `false` explicitly; the EFS
+    // SDK/client layer supplies that default so app devs rarely type it. Same uniform shape as
+    // getChildren*/getAnchorsBySchema*. Arrays stay append-only (ADR-0009); filter on read.
 
     function getAttestationsBySchema(
         bytes32 schemaUID,
         uint256 start,
         uint256 length,
-        bool reverseOrder
+        bool reverseOrder,
+        bool showRevoked
     ) external view returns (bytes32[] memory) {
-        return _sliceUIDs(_schemaAttestations[schemaUID], start, length, reverseOrder);
+        return _sliceUIDsFiltered(_schemaAttestations[schemaUID], start, length, reverseOrder, showRevoked);
     }
 
     function getAttestationCountBySchema(bytes32 schemaUID) external view returns (uint256) {
@@ -611,9 +717,17 @@ contract EFSIndexer is SchemaResolver {
         address attester,
         uint256 start,
         uint256 length,
-        bool reverseOrder
+        bool reverseOrder,
+        bool showRevoked
     ) external view returns (bytes32[] memory) {
-        return _sliceUIDs(_schemaAttesterAttestations[schemaUID][attester], start, length, reverseOrder);
+        return
+            _sliceUIDsFiltered(
+                _schemaAttesterAttestations[schemaUID][attester],
+                start,
+                length,
+                reverseOrder,
+                showRevoked
+            );
     }
 
     function getAttestationCountBySchemaAndAttester(
@@ -628,9 +742,17 @@ contract EFSIndexer is SchemaResolver {
         bytes32 schemaUID,
         uint256 start,
         uint256 length,
-        bool reverseOrder
+        bool reverseOrder,
+        bool showRevoked
     ) external view returns (bytes32[] memory) {
-        return _sliceUIDs(_referencingAttestations[targetUID][schemaUID], start, length, reverseOrder);
+        return
+            _sliceUIDsFiltered(
+                _referencingAttestations[targetUID][schemaUID],
+                start,
+                length,
+                reverseOrder,
+                showRevoked
+            );
     }
 
     function getReferencingAttestationCount(bytes32 targetUID, bytes32 schemaUID) external view returns (uint256) {
@@ -642,9 +764,11 @@ contract EFSIndexer is SchemaResolver {
         bytes32 schemaUID,
         uint256 start,
         uint256 length,
-        bool reverseOrder
+        bool reverseOrder,
+        bool showRevoked
     ) external view returns (bytes32[] memory) {
-        return _sliceUIDs(_receivedAttestations[recipient][schemaUID], start, length, reverseOrder);
+        return
+            _sliceUIDsFiltered(_receivedAttestations[recipient][schemaUID], start, length, reverseOrder, showRevoked);
     }
 
     function getOutgoingAttestations(
@@ -652,9 +776,10 @@ contract EFSIndexer is SchemaResolver {
         bytes32 schemaUID,
         uint256 start,
         uint256 length,
-        bool reverseOrder
+        bool reverseOrder,
+        bool showRevoked
     ) external view returns (bytes32[] memory) {
-        return _sliceUIDs(_sentAttestations[attester][schemaUID], start, length, reverseOrder);
+        return _sliceUIDsFiltered(_sentAttestations[attester][schemaUID], start, length, reverseOrder, showRevoked);
     }
 
     // ============================================================================================
@@ -667,9 +792,10 @@ contract EFSIndexer is SchemaResolver {
         bytes32 targetUID,
         uint256 start,
         uint256 length,
-        bool reverseOrder
+        bool reverseOrder,
+        bool showRevoked
     ) external view returns (bytes32[] memory) {
-        return _sliceUIDs(_allReferencing[targetUID], start, length, reverseOrder);
+        return _sliceUIDsFiltered(_allReferencing[targetUID], start, length, reverseOrder, showRevoked);
     }
 
     function getReferencingByAttester(
@@ -677,9 +803,11 @@ contract EFSIndexer is SchemaResolver {
         address attester,
         uint256 start,
         uint256 length,
-        bool reverseOrder
+        bool reverseOrder,
+        bool showRevoked
     ) external view returns (bytes32[] memory) {
-        return _sliceUIDs(_referencingByAttester[targetUID][attester], start, length, reverseOrder);
+        return
+            _sliceUIDsFiltered(_referencingByAttester[targetUID][attester], start, length, reverseOrder, showRevoked);
     }
 
     function getReferencingBySchemaAndAttester(
@@ -688,9 +816,17 @@ contract EFSIndexer is SchemaResolver {
         address attester,
         uint256 start,
         uint256 length,
-        bool reverseOrder
+        bool reverseOrder,
+        bool showRevoked
     ) external view returns (bytes32[] memory) {
-        return _sliceUIDs(_referencingBySchemaAndAttester[targetUID][schemaUID][attester], start, length, reverseOrder);
+        return
+            _sliceUIDsFiltered(
+                _referencingBySchemaAndAttester[targetUID][schemaUID][attester],
+                start,
+                length,
+                reverseOrder,
+                showRevoked
+            );
     }
 
     // --- Directory Perspectives (ANCHOR Schema) ---
@@ -758,9 +894,7 @@ contract EFSIndexer is SchemaResolver {
         return _referencingSchemas[targetUID];
     }
 
-    function getEAS() external view returns (IEAS) {
-        return _eas;
-    }
+    // getEAS() is inherited from EFSUpgradeableResolver (returns the constructor-immutable EAS).
 
     function getAllReferencingCount(bytes32 targetUID) external view returns (uint256) {
         return _allReferencing[targetUID].length;
@@ -794,40 +928,97 @@ contract EFSIndexer is SchemaResolver {
     // INTERNAL HELPERS
     // ============================================================================================
 
-    /// @notice Unfiltered slice — used by generic explorer functions that don't need revocation filtering.
-    /// @dev IRI-segment name validation ported from TopicResolver, with "."/".." guard added.
-    ///      Rejects: empty, NUL, space, and URI-special bytes that break web3:// routing.
+    /// @notice Validates the *canonical* on-chain encoding of an anchor name.
+    /// @dev Canonical anchor-name encoding (ADR-0048 / decisions.md): the human-facing name is
+    ///      Unicode-NFC-normalized **client-side** (NFC tables are too large to run on-chain — the
+    ///      resolver CANNOT verify normalization and does not try), then the reserved byte set is
+    ///      percent-encoded (`%XX`, UPPERCASE hex). This gives every name exactly ONE valid
+    ///      on-chain representation, preserving the Schelling-point property that independent
+    ///      clients resolve the same human name to the same anchor.
+    ///
+    ///      This function enforces the byte-level half of that contract — it accepts ONLY the
+    ///      canonical form and rejects every non-canonical variant:
+    ///        - empty, and the reserved relative segments "." / "..";
+    ///        - a *bare* reserved byte (must be percent-encoded): the C0 control range 0x00–0x1F,
+    ///          DEL 0x7F, space 0x20, and the URI/path-special set
+    ///          `" # % & / : = ? @ [ \ ] ^ \` { | }` (see RESERVED table below);
+    ///        - a malformed or truncated escape (`%`, `%2`, `%ZZ`);
+    ///        - a lowercase-hex escape (`%2f`) — only UPPERCASE hex (`%2F`) is canonical, so a
+    ///          single byte can't have two valid encodings.
+    ///        - a *non-canonical* escape — a well-formed uppercase `%XX` whose decoded byte did NOT
+    ///          have to be escaped. Canonicity requires the escape carry a byte that genuinely must
+    ///          be percent-encoded: the decoded byte must be `_isReservedByte(b) || b == 0x25` (`%`).
+    ///          So `%2F` (/), `%20` (space), `%25` (literal %) are accepted, but `%41` (A) and
+    ///          `%2E` (.) are rejected — those bytes are unreserved and must appear bare, giving each
+    ///          byte exactly ONE valid spelling.  (`%` itself is reserved-for-escaping but is
+    ///          deliberately excluded from `_isReservedByte`, so it is admitted explicitly here.)
+    ///      All other bytes — including high-bit (>= 0x80) UTF-8 bytes for non-ASCII names — pass
+    ///      through unescaped. `%` is legal ONLY as the lead byte of a well-formed `%XX` escape.
+    ///      Single byte-pass over the name (no allocation).
     function _isValidAnchorName(string memory _name) private pure returns (bool) {
         bytes memory nb = bytes(_name);
-        if (nb.length == 0) return false;
+        uint256 len = nb.length;
+        if (len == 0) return false;
         // Reject "." and ".." — reserved relative path segments
-        if (nb.length == 1 && nb[0] == 0x2E) return false;
-        if (nb.length == 2 && nb[0] == 0x2E && nb[1] == 0x2E) return false;
-        for (uint256 i = 0; i < nb.length; i++) {
+        if (len == 1 && nb[0] == 0x2E) return false;
+        if (len == 2 && nb[0] == 0x2E && nb[1] == 0x2E) return false;
+        for (uint256 i = 0; i < len; i++) {
             bytes1 c = nb[i];
-            if (
-                c == 0x00 || // NUL
-                c == 0x20 || // space
-                c == 0x22 || // "
-                c == 0x23 || // #
-                c == 0x25 || // %
-                c == 0x26 || // &
-                c == 0x2F || // /
-                c == 0x3A || // :
-                c == 0x3D || // =
-                c == 0x3F || // ?
-                c == 0x40 || // @
-                c == 0x5B || // [
-                c == 0x5C || // \
-                c == 0x5D || // ]
-                c == 0x5E || // ^
-                c == 0x60 || // `
-                c == 0x7B || // {
-                c == 0x7C || // |
-                c == 0x7D // }
-            ) return false;
+            if (c == 0x25) {
+                // "%" — must introduce a canonical uppercase %XX escape.
+                if (i + 2 >= len) return false; // truncated (need two more bytes)
+                if (!_isUpperHex(nb[i + 1]) || !_isUpperHex(nb[i + 2])) return false;
+                // Canonicity: the escape must carry a byte that genuinely had to be encoded.
+                // Decode the two uppercase-hex nibbles and reject the escape unless the byte is
+                // reserved (or `%` itself, which is reserved-for-escaping but excluded from
+                // _isReservedByte). This blocks aliases like %41 (A) / %2E (.) — they must be bare.
+                bytes1 decoded = bytes1((_hexNibble(nb[i + 1]) << 4) | _hexNibble(nb[i + 2]));
+                if (!_isReservedByte(decoded) && decoded != 0x25) return false;
+                i += 2; // consume the two hex digits
+            } else if (_isReservedByte(c)) {
+                // Bare reserved byte — must have been percent-encoded client-side.
+                return false;
+            }
         }
         return true;
+    }
+
+    /// @dev Reserved bytes that MUST be percent-encoded in a canonical anchor name.
+    ///      = the C0 control range (0x00–0x1F) + DEL (0x7F) + space (0x20) + the URI/path-special
+    ///      set. `%` (0x25) is handled separately by the escape parser and is NOT listed here.
+    function _isReservedByte(bytes1 c) private pure returns (bool) {
+        if (uint8(c) < 0x20 || c == 0x7F) return true; // C0 controls + DEL
+        return (c == 0x20 || // space
+            c == 0x22 || // "
+            c == 0x23 || // #
+            c == 0x26 || // &
+            c == 0x2F || // /
+            c == 0x3A || // :
+            c == 0x3D || // =
+            c == 0x3F || // ?
+            c == 0x40 || // @
+            c == 0x5B || // [
+            c == 0x5C || // \
+            c == 0x5D || // ]
+            c == 0x5E || // ^
+            c == 0x60 || // `
+            c == 0x7B || // {
+            c == 0x7C || // |
+            c == 0x7D); // }
+    }
+
+    /// @dev True for an UPPERCASE hex digit: 0-9 or A-F. Lowercase a-f is rejected so each byte
+    ///      has exactly one canonical %XX escape.
+    function _isUpperHex(bytes1 c) private pure returns (bool) {
+        return (c >= 0x30 && c <= 0x39) || (c >= 0x41 && c <= 0x46);
+    }
+
+    /// @dev Decodes one UPPERCASE hex digit (0-9 or A-F) to its 0–15 nibble value. Caller must have
+    ///      already confirmed the byte via `_isUpperHex`; behavior for other bytes is unspecified.
+    function _hexNibble(bytes1 c) private pure returns (uint8) {
+        uint8 v = uint8(c);
+        // '0'..'9' → 0..9 ; 'A'..'F' → 10..15
+        return v <= 0x39 ? v - 0x30 : v - 0x41 + 10;
     }
 
     function _sliceUIDs(
@@ -885,18 +1076,28 @@ contract EFSIndexer is SchemaResolver {
             return _sliceUIDs(uids, start, length, reverseOrder);
         }
 
-        bytes32[] memory temp = new bytes32[](length);
-        uint256 count = 0;
-        uint256 currentIndex = start;
+        // Bound the scan to the physical window [start, start+length). Filtering happens WITHIN the
+        // window: a page returns the active subset of its window (<= length items) and never scans
+        // past it to "fill" length. This keeps offset pagination correct — a caller advancing
+        // `start += length` over the raw count (getReferencingAttestationCount) walks DISJOINT physical
+        // windows, so it can never duplicate or skip active items (Codex P2, comment 3432495291). The
+        // examined window is identical to the showRevoked=true / _sliceUIDs path above; only revoked
+        // entries are dropped. (These getters return bytes32[] with no consumed cursor, so a
+        // fill-to-length scan could not report how far it actually read — the physical window is the
+        // only self-consistent contract.)
+        uint256 end = start + length;
+        if (end < start || end > totalLen) end = totalLen; // clamp to array end (and guard overflow)
 
-        while (count < length && currentIndex < totalLen) {
+        bytes32[] memory temp = new bytes32[](end - start);
+        uint256 count = 0;
+
+        for (uint256 currentIndex = start; currentIndex < end; currentIndex++) {
             uint256 actualIdx = reverseOrder ? totalLen - 1 - currentIndex : currentIndex;
             bytes32 uid = uids[actualIdx];
 
             if (!_isRevoked[uid]) {
                 temp[count++] = uid;
             }
-            currentIndex++;
         }
 
         // Truncate to actual count in-place — avoids a second allocation + copy loop.
@@ -951,13 +1152,19 @@ contract EFSIndexer is SchemaResolver {
                 _containsSchemaAttestations[currentUID][attester][schema] = true;
             }
 
-            // Propagate generic "active in this structure" flag all the way up the tree
+            // Propagate generic "active in this structure" flag all the way up the tree.
+            // Depth-capped at MAX_ANCHOR_DEPTH (symmetric with _propagateContains, ADR-0021): anchor
+            // creation already bounds _parents chains, but this guard makes the walk self-limiting
+            // regardless of how currentUID was reached (notably the permissionless index()/indexBatch()
+            // paths), so no chain can make this loop unbounded.
+            uint256 depth = 0;
             while (currentUID != bytes32(0)) {
                 // If this level is already flagged true, the rest of the chain above it must be too.
                 // Break early to save gas (amortized O(1) for repeat contributions by same user).
                 if (_containsAttestations[currentUID][attester]) {
                     break;
                 }
+                if (depth++ > MAX_ANCHOR_DEPTH) break;
 
                 _containsAttestations[currentUID][attester] = true;
 
@@ -1016,7 +1223,7 @@ contract EFSIndexer is SchemaResolver {
      *   - getReferencingSchemas(refUID)
      *
      * Reverts if the UID does not exist in EAS (uid == bytes32(0) on the returned attestation).
-     * Silently skips EFS-native schemas (ANCHOR, DATA, PROPERTY, BLOB) — those are indexed
+     * Silently skips EFS-native schemas (ANCHOR, DATA, PROPERTY) — those are indexed
      * atomically in onAttest and must not be double-indexed.
      *
      * @param uid The attestation UID to index.
@@ -1030,12 +1237,8 @@ contract EFSIndexer is SchemaResolver {
 
         // EFS-native schemas are indexed atomically in onAttest — skip them here.
         bytes32 schema = att.schema;
-        if (
-            schema == ANCHOR_SCHEMA_UID ||
-            schema == DATA_SCHEMA_UID ||
-            schema == PROPERTY_SCHEMA_UID ||
-            schema == BLOB_SCHEMA_UID
-        ) {
+        IndexerConfig storage $ = _cfg();
+        if (schema == $.anchorSchemaUID || schema == $.dataSchemaUID || schema == $.propertySchemaUID) {
             return false;
         }
 
@@ -1067,6 +1270,7 @@ contract EFSIndexer is SchemaResolver {
      * @return count Number of UIDs newly indexed (excludes already-indexed and skipped).
      */
     function indexBatch(bytes32[] calldata uids) external returns (uint256 count) {
+        IndexerConfig storage $ = _cfg();
         for (uint256 i = 0; i < uids.length; i++) {
             bytes32 uid = uids[i];
             if (_indexed[uid]) continue;
@@ -1075,12 +1279,7 @@ contract EFSIndexer is SchemaResolver {
             if (att.uid == bytes32(0)) revert InvalidAttestation();
 
             bytes32 schema = att.schema;
-            if (
-                schema == ANCHOR_SCHEMA_UID ||
-                schema == DATA_SCHEMA_UID ||
-                schema == PROPERTY_SCHEMA_UID ||
-                schema == BLOB_SCHEMA_UID
-            ) {
+            if (schema == $.anchorSchemaUID || schema == $.dataSchemaUID || schema == $.propertySchemaUID) {
                 continue;
             }
 

@@ -1,6 +1,6 @@
 # ADR-0004: Content dedup via `dataByContentKey`
 
-**Status:** Accepted
+**Status:** Accepted (superseded in part by ADR-0049 — `dataByContentKey` on-chain canonical removed; dedup is now client-side prevention + REDIRECT resolution)
 **Date:** 2026-04-16 (formalized retroactively)
 **Related:** ADR-0001, ADR-0002
 

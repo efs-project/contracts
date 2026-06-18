@@ -2,6 +2,8 @@ import { expect } from "chai";
 import { ethers } from "hardhat";
 import { setCode } from "@nomicfoundation/hardhat-network-helpers";
 import { Signer, ZeroAddress, ZeroHash } from "ethers";
+import { deployIndexerProxy } from "./helpers/deployIndexerProxy";
+import { deployResolverProxy } from "./helpers/deployResolverProxy";
 
 const ZERO_BYTES32 = ZeroHash;
 const NO_EXPIRATION = 0n;
@@ -23,7 +25,6 @@ describe("EFSRouter Web3 Capabilities", function () {
   let pinSchemaUID: string;
   let tagSchemaUID: string;
   let mirrorSchemaUID: string;
-  let blobSchemaUID: string;
 
   let rootUID: string;
   let ideasUID: string;
@@ -33,6 +34,8 @@ describe("EFSRouter Web3 Capabilities", function () {
   let arweaveTransportUID: string;
   let httpsTransportUID: string;
   let magnetTransportUID: string;
+  let s3TransportUID: string;
+  let ftpTransportUID: string;
 
   // Per-test active-edge index. Routes file placements / PROPERTY bindings (PIN, cardinality 1)
   // separately from descriptive labels (TAG, cardinality N). The router exercises both reads.
@@ -69,29 +72,34 @@ describe("EFSRouter Web3 Capabilities", function () {
     eas = await EASFactory.deploy(await registry.getAddress());
     await eas.waitForDeployment();
 
-    // Nonce prediction. Deployment order:
-    //   currentNonce+0: EdgeResolver
-    //   currentNonce+1: MirrorResolver
-    //   currentNonce+2..8: 7 schema registrations (anchor, property, data, PIN, TAG, mirror, blob)
-    //   currentNonce+9: EFSIndexer
+    // Nonce prediction (EdgeResolver, MirrorResolver, and EFSIndexer are all proxy-ified, ADR-0048):
+    //   currentNonce+0:  EdgeResolver implementation
+    //   currentNonce+1:  EdgeResolver proxy (the resolver baked into the PIN/TAG schema UIDs)
+    //   currentNonce+2:  MirrorResolver implementation
+    //   currentNonce+3:  MirrorResolver proxy (the resolver baked into the MIRROR schema UID)
+    //   currentNonce+4..9: 6 schema registrations (anchor, property, data, PIN, TAG, mirror)
+    //   currentNonce+10: EFSIndexer implementation
+    //   currentNonce+11: EFSIndexer proxy (the resolver baked into the EFS schema UIDs)
     const currentNonce = await ethers.provider.getTransactionCount(ownerAddr);
-    const futureEdgeResolverAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce });
-    const futureMirrorResolverAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce + 1 });
-    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce + 9 });
+    // EdgeResolver PROXY is the resolver (ADR-0048): impl = +0, proxy = +1. See deployResolverProxy().
+    const futureEdgeResolverAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce + 1 });
+    // MirrorResolver PROXY is the resolver (ADR-0048): impl = +2, proxy = +3.
+    const futureMirrorResolverAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce + 3 });
+    // EFSIndexer PROXY is the resolver (ADR-0048): impl = +10, proxy = +11. See deployIndexerProxy().
+    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce + 11 });
 
     // Pre-compute schema UIDs
     anchorSchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
-      ["string name, bytes32 schemaUID", futureIndexerAddr, false],
+      ["string name, bytes32 forSchema", futureIndexerAddr, false],
     );
+    // PROPERTY is non-revocable interned content (ADR-0052) — matches deploy-lib/schemas.ts + golden vector.
     propertySchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
       ["string value", futureIndexerAddr, false],
     );
-    dataSchemaUID = ethers.solidityPackedKeccak256(
-      ["string", "address", "bool"],
-      ["bytes32 contentHash, uint64 size", futureIndexerAddr, false],
-    );
+    // DATA is an empty schema — pure identity (ADR-0049).
+    dataSchemaUID = ethers.solidityPackedKeccak256(["string", "address", "bool"], ["", futureIndexerAddr, false]);
     pinSchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
       ["bytes32 definition", futureEdgeResolverAddr, true],
@@ -104,44 +112,44 @@ describe("EFSRouter Web3 Capabilities", function () {
       ["string", "address", "bool"],
       ["bytes32 transportDefinition, string uri", futureMirrorResolverAddr, true],
     );
-    blobSchemaUID = ethers.solidityPackedKeccak256(
-      ["string", "address", "bool"],
-      ["string mimeType, uint8 storageType, bytes location", ZeroAddress, true],
-    );
 
-    // Deploy EdgeResolver (handles both PIN and TAG schemas, dispatched by attestation.schema)
-    const EdgeResolverFactory = await ethers.getContractFactory("EdgeResolver");
-    edgeResolver = await EdgeResolverFactory.deploy(
-      await eas.getAddress(),
-      pinSchemaUID,
-      tagSchemaUID,
-      futureIndexerAddr,
-      await registry.getAddress(),
+    // Deploy EdgeResolver behind a proxy (ADR-0048): impl + proxy, initialize() sets the PIN/TAG
+    // schema UIDs + partner refs. The proxy address is baked into the PIN/TAG schema UIDs.
+    edgeResolver = await deployResolverProxy(
+      "EdgeResolver",
+      [await eas.getAddress()],
+      [pinSchemaUID, tagSchemaUID, futureIndexerAddr, await registry.getAddress()],
+      owner,
     );
+    expect(await edgeResolver.getAddress()).to.equal(futureEdgeResolverAddr);
 
-    // Deploy MirrorResolver
-    const MirrorResolverFactory = await ethers.getContractFactory("MirrorResolver");
-    mirrorResolver = await MirrorResolverFactory.deploy(await eas.getAddress(), futureIndexerAddr);
+    // Deploy MirrorResolver behind a proxy (ADR-0048): impl + proxy, initialize() wires the
+    // (predicted) indexer proxy address + owner. The proxy address is baked into the MIRROR UID.
+    mirrorResolver = await deployResolverProxy(
+      "MirrorResolver",
+      [await eas.getAddress()],
+      [futureIndexerAddr, ownerAddr],
+      owner,
+    );
+    expect(await mirrorResolver.getAddress()).to.equal(futureMirrorResolverAddr);
 
     // Register schemas
-    await (await registry.register("string name, bytes32 schemaUID", futureIndexerAddr, false)).wait();
-    await (await registry.register("string value", futureIndexerAddr, false)).wait();
-    await (await registry.register("bytes32 contentHash, uint64 size", futureIndexerAddr, false)).wait();
+    await (await registry.register("string name, bytes32 forSchema", futureIndexerAddr, false)).wait();
+    await (await registry.register("string value", futureIndexerAddr, false)).wait(); // PROPERTY non-revocable (ADR-0052)
+    await (await registry.register("", futureIndexerAddr, false)).wait(); // DATA: empty schema (ADR-0049)
     await (await registry.register("bytes32 definition", await edgeResolver.getAddress(), true)).wait();
     await (await registry.register("bytes32 definition, int256 weight", await edgeResolver.getAddress(), true)).wait();
     await (
       await registry.register("bytes32 transportDefinition, string uri", await mirrorResolver.getAddress(), true)
     ).wait();
-    await (await registry.register("string mimeType, uint8 storageType, bytes location", ZeroAddress, true)).wait();
 
-    // Deploy EFSIndexer
-    const IndexerFactory = await ethers.getContractFactory("EFSIndexer");
-    indexer = await IndexerFactory.deploy(
+    // Deploy EFSIndexer behind a proxy (ADR-0048)
+    indexer = await deployIndexerProxy(
       await eas.getAddress(),
       anchorSchemaUID,
       propertySchemaUID,
       dataSchemaUID,
-      blobSchemaUID,
+      owner,
     );
     expect(await indexer.getAddress()).to.equal(futureIndexerAddr);
 
@@ -166,6 +174,9 @@ describe("EFSRouter Web3 Capabilities", function () {
       await edgeResolver.getAddress(),
       await registry.getAddress(),
       dataSchemaUID,
+      // ADR-0053 systemAccount: zero here → router falls back to indexer.DEPLOYER() (= owner =
+      // deployer in these unit tests), preserving the pre-ADR-0053 default-lens behavior.
+      ethers.ZeroAddress,
     );
     await router.waitForDeployment();
 
@@ -242,6 +253,8 @@ describe("EFSRouter Web3 Capabilities", function () {
     arweaveTransportUID = await createTransport("arweave");
     httpsTransportUID = await createTransport("https");
     magnetTransportUID = await createTransport("magnet");
+    s3TransportUID = await createTransport("s3");
+    ftpTransportUID = await createTransport("ftp");
 
     // Wire /transports/ ancestry into MirrorResolver
     await mirrorResolver.setTransportsAnchor(transportsUID);
@@ -285,9 +298,10 @@ describe("EFSRouter Web3 Capabilities", function () {
     );
   }
 
-  async function createData(content: string, signer: Signer = owner): Promise<string> {
-    const contentHash = ethers.keccak256(Buffer.from(content));
-    const size = BigInt(Buffer.from(content).length);
+  // DATA is an empty schema — pure identity (ADR-0049). The `content` arg is retained only
+  // so callers can label what the DATA stands for in MIRRORs/PROPERTYs; the DATA itself
+  // carries no inline payload.
+  async function createData(_content: string, signer: Signer = owner): Promise<string> {
     return getUID(
       await (
         await eas.connect(signer).attest({
@@ -297,7 +311,7 @@ describe("EFSRouter Web3 Capabilities", function () {
             expirationTime: NO_EXPIRATION,
             revocable: false,
             refUID: ZERO_BYTES32,
-            data: enc.encode(["bytes32", "uint64"], [contentHash, size]),
+            data: "0x",
             value: 0n,
           },
         })
@@ -345,6 +359,8 @@ describe("EFSRouter Web3 Capabilities", function () {
           data: {
             recipient: ZeroAddress,
             expirationTime: NO_EXPIRATION,
+            // PROPERTY is non-revocable interned content (ADR-0052) — the value is shared
+            // dumb content; the revocable claim is the PIN binding, not the value.
             revocable: false,
             refUID: ZERO_BYTES32,
             data: enc.encode(["string"], [value]),
@@ -584,6 +600,67 @@ describe("EFSRouter Web3 Capabilities", function () {
       expect(statusCode).to.equal(200);
       const ctHeader = headers.find((h: any) => h.key === "Content-Type");
       expect(ctHeader?.value).to.include('URL="magnet:?xt=urn:btih:ABCDEF123456"');
+    });
+
+    // Newly-allowlisted schemes (this PR widened MirrorResolver to ftp/s3/gs/dat/
+    // rsync/bittorrent). The router must serve them as external-body redirects too —
+    // not fall through and return the raw URI string as the response body.
+    it("Should return message/external-body for s3:// URIs (newly-allowlisted scheme)", async function () {
+      const fileAnchorUID = await createFileAnchor(ideasUID, "bucket.bin");
+      const dataUID = await createData("s3-content");
+      await addProperty(dataUID, "contentType", "application/octet-stream");
+      await addMirror(dataUID, s3TransportUID, "s3://my-bucket/path/object.bin");
+      await pinAtPath(dataUID, fileAnchorUID);
+
+      const [statusCode, body, headers] = await router.request(["ideas", "bucket.bin"], ownerParams());
+      expect(statusCode).to.equal(200);
+      // Body must be empty (a redirect), NOT the raw URI string.
+      expect(body).to.equal("0x");
+      const ctHeader = headers.find((h: any) => h.key === "Content-Type");
+      expect(ctHeader?.value).to.include("message/external-body");
+      expect(ctHeader?.value).to.include('URL="s3://my-bucket/path/object.bin"');
+    });
+
+    it("Should return message/external-body for ftp:// URIs (newly-allowlisted scheme)", async function () {
+      const fileAnchorUID = await createFileAnchor(ideasUID, "legacy.txt");
+      const dataUID = await createData("ftp-content");
+      await addProperty(dataUID, "contentType", "text/plain");
+      await addMirror(dataUID, ftpTransportUID, "ftp://ftp.example.com/pub/legacy.txt");
+      await pinAtPath(dataUID, fileAnchorUID);
+
+      const [statusCode, body, headers] = await router.request(["ideas", "legacy.txt"], ownerParams());
+      expect(statusCode).to.equal(200);
+      expect(body).to.equal("0x");
+      const ctHeader = headers.find((h: any) => h.key === "Content-Type");
+      expect(ctHeader?.value).to.include("message/external-body");
+      expect(ctHeader?.value).to.include('URL="ftp://ftp.example.com/pub/legacy.txt"');
+    });
+
+    // P2 (PR #24, Codex): the MIRROR uri is attester-controlled and MirrorResolver validates only the
+    // scheme prefix + length (ADR-0023) — NOT the body. A uri carrying `"`, control bytes, or `\` would
+    // otherwise be interpolated verbatim into the URL="..." quoted-string and inject header parameters.
+    // The router must strip those bytes (ADR-0024) before emitting the header.
+    it("Should sanitize a hostile MIRROR uri (quote/control/backslash) out of the external-body header", async function () {
+      const fileAnchorUID = await createFileAnchor(ideasUID, "evil.bin");
+      const dataUID = await createData("evil-content");
+      await addProperty(dataUID, "contentType", "text/plain");
+      // Passes _isAllowedScheme (ipfs:// prefix) + length, so MirrorResolver stores it. Body carries a
+      // quote (breaks the URL param), CR/LF (header injection), and a backslash.
+      const hostileUri = 'ipfs://QmABC"\r\ninjected="evil\\x';
+      await addMirror(dataUID, ipfsTransportUID, hostileUri);
+      await pinAtPath(dataUID, fileAnchorUID);
+
+      const [statusCode, , headers] = await router.request(["ideas", "evil.bin"], ownerParams());
+      expect(statusCode).to.equal(200);
+      const ctHeader = headers.find((h: any) => h.key === "Content-Type");
+      expect(ctHeader?.value).to.include("message/external-body");
+      // The dangerous bytes are stripped, leaving a faithful (if mangled) redirect — no breakout.
+      expect(ctHeader?.value).to.include('URL="ipfs://QmABCinjected=evilx"');
+      expect(ctHeader?.value, "no CR").to.not.include("\r");
+      expect(ctHeader?.value, "no LF").to.not.include("\n");
+      expect(ctHeader?.value, "no backslash").to.not.include("\\");
+      // Exactly the structural quotes remain (2 for URL=, 2 for content-type=) — none injected.
+      expect((ctHeader!.value.match(/"/g) || []).length, "only structural quotes").to.equal(4);
     });
   });
 
@@ -900,6 +977,52 @@ describe("EFSRouter Web3 Capabilities", function () {
       expect(headers.find((h: any) => h.key === "Content-Type")?.value).to.equal("application/octet-stream");
     });
 
+    it("Should reject a revocable PROPERTY attestation at the resolver (ADR-0052)", async function () {
+      // ADR-0052: PROPERTY is NON-revocable interned content — a value is dumb shared content,
+      // not a claim. EFSIndexer.onAttest rejects a revocable PROPERTY (`attestation.revocable`),
+      // exactly as it does for ANCHOR and DATA. The revocable claim lives in the PIN, not here.
+      await expect(
+        eas.attest({
+          schema: propertySchemaUID,
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: NO_EXPIRATION,
+            revocable: true, // <- rejected: PROPERTY must be non-revocable
+            refUID: ZERO_BYTES32,
+            data: enc.encode(["string"], ["image/png"]),
+            value: 0n,
+          },
+        }),
+      ).to.be.reverted;
+    });
+
+    it("Should remove/change a contentType by revoking the binding PIN; value untouched (ADR-0052)", async function () {
+      // PROPERTY values are non-revocable (ADR-0052): removal/change of a property is done by
+      // revoking or superseding the PIN (the binding), never the value. Revoke the binding PIN —
+      // getActivePinTarget returns 0x0, so the lookup short-circuits and the value is left intact.
+      const targetAddress = ethers.getAddress("0x0000000000000000000000000000000000000091");
+      await setCode(targetAddress, "0x00" + Buffer.from("revoke-pin").toString("hex"));
+
+      const fileAnchorUID = await createFileAnchor(ideasUID, "revoke_pin.png");
+      const dataUID = await createData("revoke-pin-content");
+      const propertyUID = await addProperty(dataUID, "contentType", "image/png");
+      await addMirror(dataUID, onchainTransportUID, `web3://${targetAddress}`);
+      await pinAtPath(dataUID, fileAnchorUID);
+
+      const [, , headersBefore] = await router.request(["ideas", "revoke_pin.png"], ownerParams());
+      expect(headersBefore.find((h: any) => h.key === "Content-Type")?.value).to.equal("image/png");
+
+      // Revoke the contentType binding PIN (target=propertyUID, definition=keyAnchorUID).
+      // addProperty recorded it in activePinIndex under `${target}|${definition}|${attester}`.
+      const keyAnchorUID = await indexer.resolveAnchor(dataUID, "contentType", propertySchemaUID);
+      const bindingPinUID = activePinIndex.get(`${propertyUID}|${keyAnchorUID}|${ownerAddr}`);
+      await eas.revoke({ schema: pinSchemaUID, data: { uid: bindingPinUID!, value: 0n } });
+
+      const [statusAfter, , headersAfter] = await router.request(["ideas", "revoke_pin.png"], ownerParams());
+      expect(statusAfter).to.equal(200);
+      expect(headersAfter.find((h: any) => h.key === "Content-Type")?.value).to.equal("application/octet-stream");
+    });
+
     it("Should serve content with no ?lenses= param (falls back to EFS deployer)", async function () {
       // When no lenses param is supplied, _findDataAtPath falls back to
       // indexer.DEPLOYER(). In tests owner IS the deployer, so owner's DATA
@@ -938,6 +1061,50 @@ describe("EFSRouter Web3 Capabilities", function () {
       expect(statusCode).to.equal(200);
       const ct = headers.find((h: any) => h.key === "Content-Type")?.value ?? "";
       expect(ct).to.include("ipfs://QmCallerTest");
+    });
+
+    it("Should return no data for an explicit empty ?lenses= even when caller/system have content", async function () {
+      // Viewer sovereignty (specs/overview.md §Lenses, ADR-0039/0053): the `system` lens is
+      // default-on but USER-REMOVABLE. An explicit empty `?lenses=` means the user has removed
+      // every lens (including system), so the router must return NO data — it must NOT fall back
+      // to caller/system. This is distinct from an ABSENT ?lenses= param (next test), which DOES
+      // keep the caller→system fallback. The distinction is the presence of the `lenses` key in
+      // the parsed query params, not the emptiness of its value.
+      //
+      // owner is both the caller (msg.sender on the eth_call) and the system lens
+      // (systemAccount is unset in these unit tests, so _systemLens() == indexer.DEPLOYER() == owner).
+      // So absent the fix, owner's placement below WOULD be served. With the fix, explicit empty
+      // ?lenses= short-circuits to no data.
+      const fileAnchorUID = await createFileAnchor(ideasUID, "explicit_empty.txt");
+      const dataUID = await createData("explicit empty lens content");
+      await addProperty(dataUID, "contentType", "text/plain");
+      await addMirror(dataUID, ipfsTransportUID, "ipfs://QmExplicitEmpty");
+      await pinAtPath(dataUID, fileAnchorUID);
+
+      // Sanity: with owner as an explicit lens, the file resolves (200).
+      const [okStatus] = await router.request(["ideas", "explicit_empty.txt"], ownerParams());
+      expect(okStatus).to.equal(200);
+
+      // Explicit empty ?lenses= → user removed all lenses → 404, no fallback to caller/system.
+      const [statusCode] = await router.request(["ideas", "explicit_empty.txt"], [{ key: "lenses", value: "" }]);
+      expect(statusCode).to.equal(404);
+    });
+
+    it("Should keep the caller→system fallback when ?lenses= is absent entirely", async function () {
+      // Absent ?lenses= (no `lenses` key in params at all) preserves the documented
+      // caller→system fallback. owner == caller == system lens here, so owner's placement
+      // resolves. Contrast with the explicit-empty case above, which returns 404.
+      const fileAnchorUID = await createFileAnchor(ideasUID, "absent_lenses.txt");
+      const dataUID = await createData("absent lens content");
+      await addProperty(dataUID, "contentType", "text/plain");
+      await addMirror(dataUID, ipfsTransportUID, "ipfs://QmAbsentLenses");
+      await pinAtPath(dataUID, fileAnchorUID);
+
+      // No `lenses` key at all → fallback applies → 200.
+      const [statusCode, , headers] = await router.request(["ideas", "absent_lenses.txt"], []);
+      expect(statusCode).to.equal(200);
+      const ct = headers.find((h: any) => h.key === "Content-Type")?.value ?? "";
+      expect(ct).to.include("ipfs://QmAbsentLenses");
     });
 
     it("Should prefer ar:// over ipfs:// when both mirrors exist", async function () {
@@ -1290,7 +1457,7 @@ describe("EFSRouter Web3 Capabilities", function () {
       expect(ct?.value).to.equal("application/json");
       const json = JSON.parse(Buffer.from(ethers.getBytes(body)).toString());
       expect(json.uid.toLowerCase()).to.equal(dataSchemaUID.toLowerCase());
-      expect(json.schema).to.equal("bytes32 contentHash, uint64 size");
+      expect(json.schema).to.equal(""); // DATA is an empty schema — pure identity (ADR-0049)
       expect(json.revocable).to.equal(false);
     });
 
@@ -1423,6 +1590,44 @@ describe("EFSRouter Web3 Capabilities", function () {
       const [statusCode, body] = await router.request([ownerAddr, "self.txt"], []);
       expect(statusCode).to.equal(200);
       expect(Buffer.from(ethers.getBytes(body)).toString()).to.equal("self-file");
+    });
+
+    it("address-container browse with no ?lenses= consults the system tail (ADR-0039/0053)", async function () {
+      // The fix under test: address-container default lenses are now [caller, segmentAddr, system].
+      // The main fixture router has systemAccount=0 → _systemLens() collapses onto indexer.DEPLOYER()
+      // (= owner), hiding the tail. Deploy a SECOND router with _user2 as a DISTINCT systemAccount so
+      // the tail is genuinely exercised.
+      const RouterFactory = await ethers.getContractFactory("EFSRouter");
+      const router2 = await RouterFactory.deploy(
+        await indexer.getAddress(),
+        await eas.getAddress(),
+        await edgeResolver.getAddress(),
+        await registry.getAddress(),
+        dataSchemaUID,
+        await _user2.getAddress(), // distinct systemAccount — not owner, not the segment address
+      );
+      await router2.waitForDeployment();
+
+      // Address container = user1's address; neither caller (owner) nor segmentAddr (user1) has content
+      // here — only _user2 (the system) does.
+      const segAddr = await _user1.getAddress();
+      const fileAnchor = await createAnchorUnderAddress(segAddr, "sys.txt", dataSchemaUID);
+      const codeAddr = ethers.getAddress("0x0000000000000000000000000000000000000DE0");
+      await setCode(codeAddr, "0x00" + Buffer.from("from system").toString("hex"));
+      const dataUID = await createData("from system", _user2);
+      await addProperty(dataUID, "contentType", "text/plain", _user2);
+      await addMirror(dataUID, onchainTransportUID, `web3://${codeAddr}`, _user2);
+      await pinAtPath(dataUID, fileAnchor, _user2);
+
+      // router2 default lenses = [owner, user1, _user2]: owner→none, user1→none, _user2(system)→hit.
+      const [statusCode, body] = await router2.request([segAddr, "sys.txt"], []);
+      expect(statusCode).to.equal(200);
+      expect(Buffer.from(ethers.getBytes(body)).toString()).to.equal("from system");
+
+      // The main router (systemAccount=0 → system collapses to owner) resolves [owner, user1, owner]:
+      // nothing matches → 404. This is the pre-fix behavior — proves the system tail is load-bearing.
+      const [statusCode2] = await router.request([segAddr, "sys.txt"], []);
+      expect(statusCode2).to.equal(404);
     });
 
     // ADR-0033 §2: schema & attestation URLs prefer the alias anchor at root

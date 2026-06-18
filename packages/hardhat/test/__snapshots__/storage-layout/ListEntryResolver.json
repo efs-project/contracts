@@ -1,0 +1,38 @@
+[
+  {
+    "slot": "0",
+    "offset": 0,
+    "label": "_decl",
+    "type": "mapping(bytes32 => struct ListEntryResolver.CachedListDecl)"
+  },
+  {
+    "slot": "1",
+    "offset": 0,
+    "label": "_entries",
+    "type": "mapping(bytes32 => mapping(address => struct ListEntryResolver.EntryRecord[]))"
+  },
+  {
+    "slot": "2",
+    "offset": 0,
+    "label": "_entryCount",
+    "type": "mapping(bytes32 => mapping(bytes32 => mapping(address => uint256)))"
+  },
+  {
+    "slot": "3",
+    "offset": 0,
+    "label": "_entryPosPlusOne",
+    "type": "mapping(bytes32 => uint256)"
+  },
+  {
+    "slot": "4",
+    "offset": 0,
+    "label": "_listAttesters",
+    "type": "mapping(bytes32 => address[])"
+  },
+  {
+    "slot": "5",
+    "offset": 0,
+    "label": "_isListAttester",
+    "type": "mapping(bytes32 => mapping(address => bool))"
+  }
+]

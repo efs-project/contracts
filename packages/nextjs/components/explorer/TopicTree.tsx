@@ -92,7 +92,7 @@ const TreeNode = ({
   // on empty pages until at least one page of children is collected or the
   // cursor is exhausted (ADR-0036). The tree is a navigation summary, not a
   // complete listing — `loadMore` is intentionally unused here.
-  // AGENT-NOTE (ADR-0048): this tree read is NOT exclude-filtered — it passes no
+  // AGENT-NOTE (ADR-0054): this tree read is NOT exclude-filtered — it passes no
   // `excludeTagDefs`, so `system`/`nsfw` folders the main grid hides still appear
   // in this sidebar. Partial break of the folder-hide guarantee, tracked in
   // docs/FUTURE_WORK.md ("TopicTree navigation pane is not exclude-filtered").
@@ -253,14 +253,14 @@ const shortUid = (a: string) => `${a.slice(0, 8)}…${a.slice(-6)}`;
 const AddressEntry = ({
   address,
   connectedAddress,
-  deployerAddress,
+  systemAccountAddress,
   isYou,
   isActive,
   onSelect,
 }: {
   address: string;
   connectedAddress: string | undefined;
-  deployerAddress: string | undefined;
+  systemAccountAddress: string | undefined;
   isYou?: boolean;
   isActive?: boolean;
   onSelect: (addr: string) => void;
@@ -277,9 +277,9 @@ const AddressEntry = ({
     };
     push(connectedAddress);
     push(address);
-    push(deployerAddress);
+    push(systemAccountAddress);
     return out;
-  }, [connectedAddress, address, deployerAddress]);
+  }, [connectedAddress, address, systemAccountAddress]);
 
   const { displayName } = useDisplayName({ target: address as `0x${string}`, lenses });
   const label = isYou ? "You" : displayName;
@@ -306,10 +306,11 @@ const AddressEntry = ({
 const AddressesBranch = ({ activeAddress }: { activeAddress?: string | null }) => {
   const router = useRouter();
   const { address: connectedAddress } = useAccount();
-  const { data: deployerAddress } = useScaffoldReadContract({
-    contractName: "Indexer",
-    functionName: "DEPLOYER",
-  });
+  // System default lens = SystemAccount (ADR-0053), the bootstrap/system author.
+  // Not `Indexer.DEPLOYER()` (which now returns `owner()` — the Safe post-transfer,
+  // which authors nothing). Read from the named deployment (deployedContracts.ts).
+  const { data: systemAccountInfo } = useDeployedContractInfo({ contractName: "SystemAccount" });
+  const systemAccountAddress = systemAccountInfo?.address;
   const [recent, setRecent] = useState<string[]>([]);
   const [input, setInput] = useState("");
 
@@ -366,7 +367,7 @@ const AddressesBranch = ({ activeAddress }: { activeAddress?: string | null }) =
         <AddressEntry
           address={connectedAddress}
           connectedAddress={connectedAddress}
-          deployerAddress={deployerAddress as string | undefined}
+          systemAccountAddress={systemAccountAddress}
           isYou
           isActive={activeLower === connectedLower}
           onSelect={go}
@@ -377,7 +378,7 @@ const AddressesBranch = ({ activeAddress }: { activeAddress?: string | null }) =
           key={addr}
           address={addr}
           connectedAddress={connectedAddress}
-          deployerAddress={deployerAddress as string | undefined}
+          systemAccountAddress={systemAccountAddress}
           isActive={addr.toLowerCase() === activeLower}
           onSelect={go}
         />
@@ -453,13 +454,13 @@ const SchemasBranch = ({ activeUID }: { activeUID?: string | null }) => {
 const AttestationEntry = ({
   uid,
   connectedAddress,
-  deployerAddress,
+  systemAccountAddress,
   isActive,
   onSelect,
 }: {
   uid: string;
   connectedAddress: string | undefined;
-  deployerAddress: string | undefined;
+  systemAccountAddress: string | undefined;
   isActive?: boolean;
   onSelect: (uid: string) => void;
 }) => {
@@ -474,9 +475,9 @@ const AttestationEntry = ({
       out.push(a);
     };
     push(connectedAddress);
-    push(deployerAddress);
+    push(systemAccountAddress);
     return out;
-  }, [connectedAddress, deployerAddress]);
+  }, [connectedAddress, systemAccountAddress]);
 
   const { displayName, source } = useDisplayName({ target: uid as `0x${string}`, lenses, skipEns: true });
   // Show the resolved `name` PROPERTY on top when available; otherwise fall
@@ -508,10 +509,10 @@ const AttestationEntry = ({
 const AttestationsBranch = ({ activeUID }: { activeUID?: string | null }) => {
   const router = useRouter();
   const { address: connectedAddress } = useAccount();
-  const { data: deployerAddress } = useScaffoldReadContract({
-    contractName: "Indexer",
-    functionName: "DEPLOYER",
-  });
+  // System default lens = SystemAccount (ADR-0053), not `Indexer.DEPLOYER()`
+  // (now `owner()` — the Safe, which authors nothing). See AddressesBranch.
+  const { data: systemAccountInfo } = useDeployedContractInfo({ contractName: "SystemAccount" });
+  const systemAccountAddress = systemAccountInfo?.address;
   const [recent, setRecent] = useState<string[]>([]);
   const [input, setInput] = useState("");
 
@@ -574,7 +575,7 @@ const AttestationsBranch = ({ activeUID }: { activeUID?: string | null }) => {
             key={uid}
             uid={uid}
             connectedAddress={connectedAddress}
-            deployerAddress={deployerAddress as string | undefined}
+            systemAccountAddress={systemAccountAddress}
             isActive={uid.toLowerCase() === activeLower}
             onSelect={go}
           />

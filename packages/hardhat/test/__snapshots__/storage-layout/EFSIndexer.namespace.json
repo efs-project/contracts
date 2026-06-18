@@ -1,0 +1,19 @@
+[
+  {
+    "struct": "IndexerConfig",
+    "fields": [
+      {
+        "name": "anchorSchemaUID",
+        "type": "bytes32"
+      },
+      {
+        "name": "propertySchemaUID",
+        "type": "bytes32"
+      },
+      {
+        "name": "dataSchemaUID",
+        "type": "bytes32"
+      }
+    ]
+  }
+]

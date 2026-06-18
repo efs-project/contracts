@@ -50,7 +50,20 @@ async function main() {
 
   // ── Connect to deployed contracts ────────────────────────────────────────────
   const indexer = (await ethers.getContract("Indexer", deployer)) as unknown as EFSIndexer;
-  const overlay = (await ethers.getContract("EFSSortOverlay", deployer)) as unknown as EFSSortOverlay;
+
+  // SORT_INFO is DEFERRED from the Sepolia freeze set (ADR-0048; deploy-lib/schemas.ts) — the
+  // freeze ceremony (deploy/00_efs_core.ts) does not deploy EFSSortOverlay. When it isn't present
+  // (e.g. on the freeze branch / any freeze-set deploy), skip cleanly with exit 0 rather than
+  // hard-erroring, matching the fail-soft seed pattern. This simulation returns to life unchanged
+  // once SORT_INFO is registered and the overlay deployed additively.
+  let overlay: EFSSortOverlay;
+  try {
+    overlay = (await ethers.getContract("EFSSortOverlay", deployer)) as unknown as EFSSortOverlay;
+  } catch {
+    console.log("  ⏭️  EFSSortOverlay is not deployed — SORT_INFO is deferred from the freeze set");
+    console.log("      (deploy-lib/schemas.ts, ADR-0048). Sort-overlay simulation skipped (exit 0).\n");
+    return;
+  }
 
   const easAddress = await indexer.getEAS();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -133,11 +146,13 @@ async function main() {
     return getUID(tx);
   };
 
-  /** Create a standalone DATA attestation (contentHash + size, non-revocable, standalone) */
+  // AGENT-NOTE: DATA is an empty schema — pure identity (ADR-0049). It carries no inline fields;
+  // contentHash/size are reserved-key PROPERTYs bound to the DATA UID. `contentHash` below is a
+  // local convenience (the value a client would attach as a PROPERTY) — it is NOT encoded into
+  // the DATA payload. Attaching it as a PROPERTY is future PROPERTY/SDK work.
+  /** Create a standalone DATA attestation (empty per ADR-0049, non-revocable, standalone) */
   const createData = async (signer: any, content: string): Promise<{ uid: string; contentHash: string }> => {
-    const contentBytes = ethers.toUtf8Bytes(content);
-    const contentHash = ethers.keccak256(contentBytes);
-    const size = contentBytes.length;
+    const contentHash = ethers.keccak256(ethers.toUtf8Bytes(content));
     const tx = await eas.connect(signer).attest({
       schema: dataSchemaUID,
       data: {
@@ -145,7 +160,7 @@ async function main() {
         expirationTime: 0n,
         revocable: false,
         refUID: ethers.ZeroHash,
-        data: encode.encode(["bytes32", "uint64"], [contentHash, size]),
+        data: "0x",
         value: 0n,
       },
     });
@@ -349,7 +364,7 @@ async function main() {
       const dataUID = await edgeResolver.getActivePinTarget(anchorUID, attester, dataSchemaUID);
       if (dataUID !== ethers.ZeroHash) {
         // Resolve the MIRROR URI for this DATA
-        const mirrors = await indexer.getReferencingAttestations(dataUID, mirrorSchemaUID, 0, 1, false);
+        const mirrors = await indexer.getReferencingAttestations(dataUID, mirrorSchemaUID, 0, 1, false, false);
         if (mirrors.length > 0) {
           const mirrorAtt = await eas.getAttestation(mirrors[0]);
           const [, uri] = encode.decode(["bytes32", "string"], mirrorAtt.data);
@@ -842,13 +857,7 @@ async function main() {
   // ════════════════════════════════════════════════════════════════════════════════
   console.log("\n── Phase 13: Sort discovery ──\n");
 
-  const sortNamingAnchors = await indexer["getAnchorsBySchema(bytes32,bytes32,uint256,uint256,bool)"](
-    musicUID,
-    sortInfoSchemaUID,
-    0,
-    10,
-    false,
-  );
+  const sortNamingAnchors = await indexer.getAnchorsBySchema(musicUID, sortInfoSchemaUID, 0, 10, false, false);
   assert(
     "getAnchorsBySchema finds 1 sort naming anchor in /music/",
     sortNamingAnchors.length === 1 && sortNamingAnchors[0] === alphaNameUID,
@@ -860,6 +869,7 @@ async function main() {
     sortInfoSchemaUID,
     0,
     10,
+    false,
     false,
   );
   assert(

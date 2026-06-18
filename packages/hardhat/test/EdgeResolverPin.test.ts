@@ -2,6 +2,8 @@ import { expect } from "chai";
 import { ethers } from "hardhat";
 import { EdgeResolver, EFSIndexer, EAS, SchemaRegistry } from "../typechain-types";
 import { Signer, ZeroAddress } from "ethers";
+import { deployIndexerProxy } from "./helpers/deployIndexerProxy";
+import { deployResolverProxy } from "./helpers/deployResolverProxy";
 
 const ZERO_BYTES32 = "0x0000000000000000000000000000000000000000000000000000000000000000";
 const NO_EXPIRATION = 0n;
@@ -53,16 +55,21 @@ describe("EdgeResolver — PIN", function () {
     eas = await EASFactory.deploy(await registry.getAddress());
     await eas.waitForDeployment();
 
-    // Pre-compute addresses. Deployment order:
-    //   resolverNonce+0: EdgeResolver
-    //   resolverNonce+1: PIN schema registration
-    //   resolverNonce+2: TAG schema registration
-    //   resolverNonce+3: DUMMY schema registration
-    //   resolverNonce+4: EFSIndexer (placeholder schema UIDs — only index() is exercised)
+    // Pre-compute addresses. Deployment order (both EdgeResolver and EFSIndexer are now proxied
+    // per ADR-0048 — the PROXY address is what the schema UIDs reference and what gets wired):
+    //   resolverNonce+0: EdgeResolver implementation
+    //   resolverNonce+1: EdgeResolver proxy (the resolver — baked into PIN/TAG schema UIDs)
+    //   resolverNonce+2: PIN schema registration
+    //   resolverNonce+3: TAG schema registration
+    //   resolverNonce+4: DUMMY schema registration
+    //   resolverNonce+5: EFSIndexer implementation
+    //   resolverNonce+6: EFSIndexer proxy (placeholder schema UIDs; only index() is exercised)
     const ownerAddr = await owner.getAddress();
     const resolverNonce = await ethers.provider.getTransactionCount(ownerAddr);
-    const futureEdgeResolverAddress = ethers.getCreateAddress({ from: ownerAddr, nonce: resolverNonce });
-    const futureIndexerAddress = ethers.getCreateAddress({ from: ownerAddr, nonce: resolverNonce + 4 });
+    // PROXY is the resolver (ADR-0048): Edge impl = +0, Edge proxy = +1. See deployResolverProxy().
+    const futureEdgeResolverAddress = ethers.getCreateAddress({ from: ownerAddr, nonce: resolverNonce + 1 });
+    // PROXY is the resolver (ADR-0048): Indexer impl = +5, proxy = +6. See deployIndexerProxy().
+    const futureIndexerAddress = ethers.getCreateAddress({ from: ownerAddr, nonce: resolverNonce + 6 });
     const precomputedPinSchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
       ["bytes32 definition", futureEdgeResolverAddress, true],
@@ -72,15 +79,14 @@ describe("EdgeResolver — PIN", function () {
       ["bytes32 definition, int256 weight", futureEdgeResolverAddress, true],
     );
 
-    const EdgeResolverFactory = await ethers.getContractFactory("EdgeResolver");
-    edgeResolver = await EdgeResolverFactory.deploy(
-      await eas.getAddress(),
-      precomputedPinSchemaUID,
-      precomputedTagSchemaUID,
-      futureIndexerAddress,
-      await registry.getAddress(),
+    // EdgeResolver behind an ERC1967 proxy (ADR-0048): impl + proxy, config set via initialize().
+    edgeResolver = await deployResolverProxy<EdgeResolver>(
+      "EdgeResolver",
+      [await eas.getAddress()],
+      [precomputedPinSchemaUID, precomputedTagSchemaUID, futureIndexerAddress, await registry.getAddress()],
+      owner,
     );
-    await edgeResolver.waitForDeployment();
+    expect(await edgeResolver.getAddress()).to.equal(futureEdgeResolverAddress);
 
     // PIN schema: registered with EdgeResolver
     const pinSchemaTx = await registry.register("bytes32 definition", await edgeResolver.getAddress(), true);
@@ -98,16 +104,14 @@ describe("EdgeResolver — PIN", function () {
     const dummySchemaTx = await registry.register("string label", ZeroAddress, false);
     dummySchemaUID = (await dummySchemaTx.wait())!.logs[0].topics[1];
 
-    // EFSIndexer: placeholder schema UIDs (only index() is called by EdgeResolver)
-    const IndexerFactory = await ethers.getContractFactory("EFSIndexer");
-    indexer = await IndexerFactory.deploy(
+    // EFSIndexer behind a proxy (ADR-0048): placeholder schema UIDs (only index() is exercised)
+    indexer = await deployIndexerProxy(
       await eas.getAddress(),
       ZERO_BYTES32, // anchorSchemaUID (placeholder)
       ZERO_BYTES32, // propertySchemaUID (placeholder)
       ZERO_BYTES32, // dataSchemaUID (placeholder)
-      ZERO_BYTES32, // blobSchemaUID (placeholder)
+      owner,
     );
-    await indexer.waitForDeployment();
     expect(await indexer.getAddress()).to.equal(futureIndexerAddress);
 
     // Wire EdgeResolver into the indexer so propagateContains calls are authorized.
@@ -211,6 +215,358 @@ describe("EdgeResolver — PIN", function () {
     const tx = await eas.connect(signer).revoke({ schema: pinSchemaUID, data: { uid, value: 0n } });
     await tx.wait();
   };
+
+  // ─── Lifecycle guard (active-until-revoked; no applies=false, no expiry) ──────
+
+  const FUTURE_EXPIRY = 9_999_999_999n; // far-future; passes EAS's expiry check → reaches resolver
+
+  describe("lifecycle guard", function () {
+    it("rejects a PIN with a nonzero expirationTime (HasExpiration)", async function () {
+      const targetUID = await createTarget();
+      const definition = await createDefinition();
+      await expect(
+        eas.attest({
+          schema: pinSchemaUID,
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: FUTURE_EXPIRY,
+            revocable: true,
+            refUID: targetUID,
+            data: encodePin(definition),
+            value: 0n,
+          },
+        }),
+      ).to.be.revertedWithCustomError(edgeResolver, "HasExpiration");
+    });
+
+    it("rejects a TAG with a nonzero expirationTime (HasExpiration)", async function () {
+      const targetUID = await createTarget();
+      const definition = await createDefinition();
+      await expect(
+        eas.attest({
+          schema: tagSchemaUID,
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: FUTURE_EXPIRY,
+            revocable: true,
+            refUID: targetUID,
+            data: encodeTag(definition, 1n),
+            value: 0n,
+          },
+        }),
+      ).to.be.revertedWithCustomError(edgeResolver, "HasExpiration");
+    });
+
+    it("rejects a non-revocable PIN (NotRevocable)", async function () {
+      const targetUID = await createTarget();
+      const definition = await createDefinition();
+      await expect(
+        eas.attest({
+          schema: pinSchemaUID,
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: NO_EXPIRATION,
+            revocable: false,
+            refUID: targetUID,
+            data: encodePin(definition),
+            value: 0n,
+          },
+        }),
+      ).to.be.revertedWithCustomError(edgeResolver, "NotRevocable");
+    });
+
+    it("rejects a non-revocable TAG (NotRevocable)", async function () {
+      const targetUID = await createTarget();
+      const definition = await createDefinition();
+      await expect(
+        eas.attest({
+          schema: tagSchemaUID,
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: NO_EXPIRATION,
+            revocable: false,
+            refUID: targetUID,
+            data: encodeTag(definition, 1n),
+            value: 0n,
+          },
+        }),
+      ).to.be.revertedWithCustomError(edgeResolver, "NotRevocable");
+    });
+
+    // abi.decode tolerates trailing words, so a PIN/TAG with extra bytes appended would otherwise be
+    // accepted and indexed as the SAME active edge as the canonical payload — while the permanent EAS
+    // record's bytes differ from the frozen `bytes32 definition` shape. The exact-length guard rejects
+    // it (Codex PR #24 P2; matches the LIST/LIST_ENTRY/REDIRECT exact-length guards).
+    it("rejects a PIN with trailing bytes past the canonical 32 (NonCanonicalPayload)", async function () {
+      const targetUID = await createTarget();
+      const definition = await createDefinition();
+      await expect(
+        eas.attest({
+          schema: pinSchemaUID,
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: NO_EXPIRATION,
+            revocable: true,
+            refUID: targetUID,
+            data: encodePin(definition) + "00".repeat(32), // 32-byte definition + one trailing word = 64 bytes
+            value: 0n,
+          },
+        }),
+      ).to.be.revertedWithCustomError(edgeResolver, "NonCanonicalPayload");
+    });
+
+    it("rejects a TAG with trailing bytes past the canonical 64 (NonCanonicalPayload)", async function () {
+      const targetUID = await createTarget();
+      const definition = await createDefinition();
+      await expect(
+        eas.attest({
+          schema: tagSchemaUID,
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: NO_EXPIRATION,
+            revocable: true,
+            refUID: targetUID,
+            data: encodeTag(definition, 1n) + "00".repeat(32), // 64-byte (def,weight) + one trailing word = 96 bytes
+            value: 0n,
+          },
+        }),
+      ).to.be.revertedWithCustomError(edgeResolver, "NonCanonicalPayload");
+    });
+  });
+
+  // ─── Proxy / initialize (ADR-0048) ───────────────────────────────────────────
+
+  // ─── Subgraph events (PR #24) ────────────────────────────────────────────────
+  describe("subgraph events", function () {
+    it("PinSet on a fresh slot reports supersededPinUID == 0", async function () {
+      const ownerAddr = await owner.getAddress();
+      const target = await createTarget();
+      const definition = await createDefinition();
+      const tx = await eas.connect(owner).attest({
+        schema: pinSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: NO_EXPIRATION,
+          revocable: true,
+          refUID: target,
+          data: encodePin(definition),
+          value: 0n,
+        },
+      });
+      const pinUID = getUID(await tx.wait());
+      await expect(tx)
+        .to.emit(edgeResolver, "PinSet")
+        .withArgs(definition, ownerAddr, dummySchemaUID, pinUID, target, ZERO_BYTES32);
+    });
+
+    it("PinSet on a cardinality-1 supersede reports the prior pinUID", async function () {
+      const ownerAddr = await owner.getAddress();
+      const targetA = await createTarget("A");
+      const targetB = await createTarget("B");
+      const definition = await createDefinition();
+      const pin1 = await pinByRef(owner, targetA, definition);
+      const tx2 = await eas.connect(owner).attest({
+        schema: pinSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: NO_EXPIRATION,
+          revocable: true,
+          refUID: targetB,
+          data: encodePin(definition),
+          value: 0n,
+        },
+      });
+      const pin2 = getUID(await tx2.wait());
+      await expect(tx2)
+        .to.emit(edgeResolver, "PinSet")
+        .withArgs(definition, ownerAddr, dummySchemaUID, pin2, targetB, pin1);
+    });
+
+    it("TagSet carries the weight", async function () {
+      const ownerAddr = await owner.getAddress();
+      const target = await createTarget();
+      const definition = await createDefinition();
+      const tx = await eas.connect(owner).attest({
+        schema: tagSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: NO_EXPIRATION,
+          revocable: true,
+          refUID: target,
+          data: encodeTag(definition, 5n),
+          value: 0n,
+        },
+      });
+      const tagUID = getUID(await tx.wait());
+      await expect(tx)
+        .to.emit(edgeResolver, "TagSet")
+        .withArgs(definition, ownerAddr, dummySchemaUID, tagUID, target, 5n, ZERO_BYTES32);
+    });
+
+    it("TagSet on a re-attest at the same edge surfaces the prior tagUID as supersededTagUID", async function () {
+      const ownerAddr = await owner.getAddress();
+      const target = await createTarget();
+      const definition = await createDefinition();
+      // First TAG at this (attester, target, definition) edge — supersededTagUID == 0.
+      const tx1 = await eas.connect(owner).attest({
+        schema: tagSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: NO_EXPIRATION,
+          revocable: true,
+          refUID: target,
+          data: encodeTag(definition, 1n),
+          value: 0n,
+        },
+      });
+      const tag1 = getUID(await tx1.wait());
+      await expect(tx1)
+        .to.emit(edgeResolver, "TagSet")
+        .withArgs(definition, ownerAddr, dummySchemaUID, tag1, target, 1n, ZERO_BYTES32);
+      // Re-attest the same edge with a new weight — updates in place; supersededTagUID == tag1.
+      const tx2 = await eas.connect(owner).attest({
+        schema: tagSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: NO_EXPIRATION,
+          revocable: true,
+          refUID: target,
+          data: encodeTag(definition, 9n),
+          value: 0n,
+        },
+      });
+      const tag2 = getUID(await tx2.wait());
+      await expect(tx2)
+        .to.emit(edgeResolver, "TagSet")
+        .withArgs(definition, ownerAddr, dummySchemaUID, tag2, target, 9n, tag1);
+    });
+
+    it("PinSet on a same-target re-attest reports supersededPinUID == 0 (no false supersede)", async function () {
+      const ownerAddr = await owner.getAddress();
+      const target = await createTarget();
+      const definition = await createDefinition();
+      await pinByRef(owner, target, definition); // first pin at the slot
+      const tx2 = await eas.connect(owner).attest({
+        schema: pinSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: NO_EXPIRATION,
+          revocable: true,
+          refUID: target, // SAME target → not a supersede
+          data: encodePin(definition),
+          value: 0n,
+        },
+      });
+      const pin2 = getUID(await tx2.wait());
+      await expect(tx2)
+        .to.emit(edgeResolver, "PinSet")
+        .withArgs(definition, ownerAddr, dummySchemaUID, pin2, target, ZERO_BYTES32);
+    });
+
+    it("revoking an already-superseded (stale) PIN emits NO PinCleared", async function () {
+      const targetA = await createTarget("A");
+      const targetB = await createTarget("B");
+      const definition = await createDefinition();
+      const pin1 = await pinByRef(owner, targetA, definition); // active
+      await pinByRef(owner, targetB, definition); // supersedes pin1 (different target, same slot)
+      // pin1 is now stale; revoking it must not emit a clear (it's no longer the active edge).
+      const tx = await eas.connect(owner).revoke({ schema: pinSchemaUID, data: { uid: pin1, value: 0n } });
+      await expect(tx).to.not.emit(edgeResolver, "PinCleared");
+    });
+
+    it("PinCleared on revoke of the active PIN", async function () {
+      const ownerAddr = await owner.getAddress();
+      const target = await createTarget();
+      const definition = await createDefinition();
+      const pinUID = await pinByRef(owner, target, definition);
+      const tx = await eas.connect(owner).revoke({ schema: pinSchemaUID, data: { uid: pinUID, value: 0n } });
+      await expect(tx)
+        .to.emit(edgeResolver, "PinCleared")
+        .withArgs(definition, ownerAddr, dummySchemaUID, pinUID, target);
+    });
+
+    it("TagCleared on revoke of the active TAG", async function () {
+      const ownerAddr = await owner.getAddress();
+      const target = await createTarget();
+      const definition = await createDefinition();
+      const tagUID = await tagByRef(owner, target, definition, 1n);
+      const tx = await eas.connect(owner).revoke({ schema: tagSchemaUID, data: { uid: tagUID, value: 0n } });
+      await expect(tx)
+        .to.emit(edgeResolver, "TagCleared")
+        .withArgs(definition, ownerAddr, dummySchemaUID, tagUID, target);
+    });
+  });
+
+  describe("Proxy / initialize (ADR-0048)", function () {
+    it("Should reject a second initialize() on the proxy (initialize-once)", async function () {
+      // The proxy was already initialized in setup via deployResolverProxy. A second call must
+      // revert with OZ Initializable's InvalidInitialization — config is write-once.
+      await expect(
+        edgeResolver.initialize(pinSchemaUID, tagSchemaUID, await indexer.getAddress(), await registry.getAddress()),
+      ).to.be.revertedWithCustomError(edgeResolver, "InvalidInitialization");
+    });
+
+    it("Should lock the implementation's initializer (constructor ran _disableInitializers)", async function () {
+      // The bare implementation (not the proxy) can never be initialized — the base constructor
+      // runs _disableInitializers(). Deploy a fresh impl and confirm initialize() reverts.
+      const Factory = await ethers.getContractFactory("EdgeResolver");
+      const impl = await Factory.deploy(await eas.getAddress());
+      await impl.waitForDeployment();
+      await expect(
+        impl.initialize(pinSchemaUID, tagSchemaUID, await indexer.getAddress(), await registry.getAddress()),
+      ).to.be.revertedWithCustomError(impl, "InvalidInitialization");
+    });
+
+    it("Should expose the constructor EAS via getEAS() through the proxy", async function () {
+      // _eas stays a base constructor immutable (per-chain constant); it resolves correctly under
+      // the proxy's delegatecall because immutables live in the impl bytecode.
+      expect(await edgeResolver.getEAS()).to.equal(await eas.getAddress());
+    });
+
+    it("Should read the four former immutables from namespaced config through the proxy", async function () {
+      // The four constructor immutables migrated into ERC-7201 efs.edge.config, set in initialize().
+      // The public getter NAMES are preserved for ABI compatibility — assert they read the config.
+      expect(await edgeResolver.PIN_SCHEMA_UID()).to.equal(pinSchemaUID);
+      expect(await edgeResolver.TAG_SCHEMA_UID()).to.equal(tagSchemaUID);
+      expect(await edgeResolver.indexer()).to.equal(await indexer.getAddress());
+      expect(await edgeResolver.schemaRegistry()).to.equal(await registry.getAddress());
+    });
+
+    // The three cardinality-split invariants were constructor `require`s when EdgeResolver was
+    // deployed directly; they moved INTO initialize(). Deploying a proxy with bad args delegatecalls
+    // initialize() in the proxy constructor, so the require fires and the proxy deploy reverts.
+    const deployProxyWithInit = async (pin: string, tag: string) => {
+      const Factory = await ethers.getContractFactory("EdgeResolver");
+      const impl = await Factory.deploy(await eas.getAddress());
+      await impl.waitForDeployment();
+      const initData = impl.interface.encodeFunctionData("initialize", [
+        pin,
+        tag,
+        await indexer.getAddress(),
+        await registry.getAddress(),
+      ]);
+      const ProxyFactory = await ethers.getContractFactory("TestERC1967Proxy");
+      return ProxyFactory.deploy(await impl.getAddress(), initData);
+    };
+
+    it("Should revert initialize() when pinSchemaUID is zero", async function () {
+      await expect(deployProxyWithInit(ZERO_BYTES32, tagSchemaUID)).to.be.revertedWith(
+        "EdgeResolver: pinSchemaUID is zero",
+      );
+    });
+
+    it("Should revert initialize() when tagSchemaUID is zero", async function () {
+      await expect(deployProxyWithInit(pinSchemaUID, ZERO_BYTES32)).to.be.revertedWith(
+        "EdgeResolver: tagSchemaUID is zero",
+      );
+    });
+
+    it("Should revert initialize() when PIN and TAG schema UIDs are equal", async function () {
+      await expect(deployProxyWithInit(pinSchemaUID, pinSchemaUID)).to.be.revertedWith(
+        "EdgeResolver: PIN and TAG schemas must differ",
+      );
+    });
+  });
 
   // ─── Basic attesting ───────────────────────────────────────────────────────
 
@@ -454,7 +810,7 @@ describe("EdgeResolver — PIN", function () {
   describe("Cross-attester isolation", function () {
     it("Should let two attesters hold independent PINs at the same (def, schema) slot", async function () {
       const definition = await createDefinition("two-attesters");
-      const targetA = await createTarget("alice-target");
+      const targetA = await createTarget("owner-target");
       const targetB = await createTarget("bob-target");
       const u1Addr = await user1.getAddress();
       const u2Addr = await user2.getAddress();
@@ -472,9 +828,9 @@ describe("EdgeResolver — PIN", function () {
     });
 
     it("Should not affect Bob's PIN when Alice supersedes hers", async function () {
-      const definition = await createDefinition("alice-rebinds");
-      const aliceA = await createTarget("alice-A");
-      const aliceB = await createTarget("alice-B");
+      const definition = await createDefinition("owner-rebinds");
+      const aliceA = await createTarget("owner-A");
+      const aliceB = await createTarget("owner-B");
       const bobX = await createTarget("bob-X");
       const u1Addr = await user1.getAddress();
       const u2Addr = await user2.getAddress();

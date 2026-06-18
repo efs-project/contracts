@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
-import { SchemaResolver } from "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol";
 import { IEAS, Attestation } from "@ethereum-attestation-service/eas-contracts/contracts/IEAS.sol";
 import { ISchemaRegistry, SchemaRecord } from "@ethereum-attestation-service/eas-contracts/contracts/ISchemaRegistry.sol";
 import { EMPTY_UID } from "@ethereum-attestation-service/eas-contracts/contracts/Common.sol";
+import { EFSUpgradeableResolver } from "./base/EFSUpgradeableResolver.sol";
 
 /// @dev Minimal interface for the EFSIndexer functions EdgeResolver needs.
 interface IEFSIndexerForEdges {
@@ -54,25 +54,132 @@ interface IEFSIndexerForEdges {
  *      Targeting uses native EAS fields (refUID → target attestation; recipient → target address).
  *
  *      ADR-0041 supersedes ADR-0035 on the cardinality story.
+ *
+ *      Upgradeable (ADR-0048): runs behind an ERC1967 proxy whose ADDRESS is the EAS resolver
+ *      baked into both the PIN and TAG schema UIDs. The four former constructor immutables
+ *      (PIN_SCHEMA_UID, TAG_SCHEMA_UID, indexer, schemaRegistry) moved into ERC-7201 namespaced
+ *      storage (`efs.edge.config`) set once via initialize() — immutables live in the impl's
+ *      bytecode and would read the impl's construction-time values, not the proxy's, under
+ *      delegatecall. The three constructor invariants (pin≠0, tag≠0, pin≠tag) moved into
+ *      initialize(). The heavy PIN/TAG state mappings keep their exact sequential slots (0–11):
+ *      they are append-only, consensus-critical index state (ADR-0009) and are NOT migrated.
+ *      The namespaced config slot lives high (away from the sequential mappings), so it cannot
+ *      collide. EdgeResolver has no deployer/owner-gated functions, so it does NOT inherit
+ *      OwnableUpgradeable — config is set exactly once in initialize() and never mutated after.
  */
-contract EdgeResolver is SchemaResolver {
+contract EdgeResolver is EFSUpgradeableResolver {
     error MustTargetSomething();
     error InvalidDefinition();
     error InvalidTarget();
     error UnknownEdgeSchema();
+    error NotRevocable();
+    error HasExpiration();
+    /// @dev PIN/TAG payload is decodable but not the exact frozen length — abi.decode tolerates
+    ///      trailing words, so `abi.encode(definition) || extraWord` would otherwise index as the
+    ///      same active edge while the permanent EAS record differs from the frozen shape. Reject it.
+    error NonCanonicalPayload();
+
+    /// @dev Canonical on-wire payload lengths. PIN = `abi.encode(bytes32 definition)` = 1 word; TAG =
+    ///      `abi.encode(bytes32 definition, int256 weight)` = 2 words. Any other length is rejected
+    ///      (matches the exact-length guards in ListResolver/ListEntryResolver/AliasResolver).
+    uint256 private constant PIN_PAYLOAD_LEN = 32;
+    uint256 private constant TAG_PAYLOAD_LEN = 64;
+
+    // ── Edge events (subgraph indexability, PR #24) ─────────────────────────────────────────────
+    // EAS's own `Attested` carries no field data, and the kernel's generic `AttestationIndexed` carries
+    // only (uid, schema, attester) — so without these a log-only indexer cannot see the PIN/TAG edge
+    // (definition, target, weight) or PIN supersession. Indexed topics are the active-slot key readers
+    // use: (definition, attester, targetSchema). `supersededPinUID` makes cardinality-1 PIN replacement
+    // observable (bytes32(0) when the slot was empty or the same target was re-attested). A superseded
+    // PIN emits NO PinCleared — its retirement is signalled by the next PinSet's `supersededPinUID`;
+    // PinCleared fires only on an explicit revoke of the still-active PIN.
+    event PinSet(
+        bytes32 indexed definition,
+        address indexed attester,
+        bytes32 indexed targetSchema,
+        bytes32 pinUID,
+        bytes32 targetID,
+        bytes32 supersededPinUID
+    );
+    event PinCleared(
+        bytes32 indexed definition,
+        address indexed attester,
+        bytes32 indexed targetSchema,
+        bytes32 pinUID,
+        bytes32 targetID
+    );
+    // `supersededTagUID` carries the prior tagUID when a re-attestation updates an existing edge's
+    // UID/weight in place (no TagCleared fires for that silent replacement); it is bytes32(0) on a
+    // first attestation. Symmetric with PinSet.supersededPinUID — lets a log-only indexer retire the
+    // old UID and reconstruct weight-edit history without an eth_call.
+    event TagSet(
+        bytes32 indexed definition,
+        address indexed attester,
+        bytes32 indexed targetSchema,
+        bytes32 tagUID,
+        bytes32 targetID,
+        int256 weight,
+        bytes32 supersededTagUID
+    );
+    event TagCleared(
+        bytes32 indexed definition,
+        address indexed attester,
+        bytes32 indexed targetSchema,
+        bytes32 tagUID,
+        bytes32 targetID
+    );
+
+    // ============================================================================================
+    // ERC-7201 NAMESPACED CONFIG (per-deployment, set in initialize())
+    // ============================================================================================
+    // The two schema UIDs, the indexer, and the schemaRegistry were constructor immutables when
+    // EdgeResolver was deployed directly. Under the upgradeable-proxy pattern (ADR-0048) the
+    // implementation runs via the proxy's delegatecall, so immutables (which live in the impl's
+    // bytecode) would read the impl's construction-time values, not the proxy's. They therefore
+    // move into ERC-7201 namespaced storage written once in initialize(). Its OWN unique namespace
+    // (NOT efs.indexer.config / efs.mirror.config). The namespaced slot sits far from slot 0, so it
+    // cannot collide with the consensus-critical sequential mapping layout below (ADR-0009).
+
+    /// @custom:storage-location erc7201:efs.edge.config
+    struct EdgeConfig {
+        bytes32 pinSchemaUID;
+        bytes32 tagSchemaUID;
+        IEFSIndexerForEdges indexer;
+        ISchemaRegistry schemaRegistry;
+    }
+
+    // keccak256(abi.encode(uint256(keccak256("efs.edge.config")) - 1)) & ~bytes32(uint256(0xff))
+    bytes32 private constant EDGE_CONFIG_SLOT = 0xa7006bf19fd32b664fa0a26984d3f000dbb27df471e5d0cacd76f128f9d5e600;
+
+    function _cfg() private pure returns (EdgeConfig storage $) {
+        assembly {
+            $.slot := EDGE_CONFIG_SLOT
+        }
+    }
+
+    // Public getters preserved by NAME for ABI/consumer compatibility — they now read the ERC-7201
+    // config struct instead of construction-time immutables.
 
     /// @notice The EAS schema UID for the PIN (cardinality 1) schema registered with this resolver.
-    bytes32 public immutable PIN_SCHEMA_UID;
+    function PIN_SCHEMA_UID() public view returns (bytes32) {
+        return _cfg().pinSchemaUID;
+    }
 
     /// @notice The EAS schema UID for the TAG (cardinality N) schema registered with this resolver.
-    bytes32 public immutable TAG_SCHEMA_UID;
+    function TAG_SCHEMA_UID() public view returns (bytes32) {
+        return _cfg().tagSchemaUID;
+    }
 
     /// @notice EFSIndexer reference — edge attestations are indexed so they are
     ///         discoverable via getReferencingAttestations like any other schema.
-    IEFSIndexerForEdges public immutable indexer;
+    function indexer() public view returns (IEFSIndexerForEdges) {
+        return _cfg().indexer;
+    }
 
     /// @notice SchemaRegistry reference — used to validate schema UID definitions.
-    ISchemaRegistry public immutable schemaRegistry;
+    function schemaRegistry() public view returns (ISchemaRegistry) {
+        return _cfg().schemaRegistry;
+    }
 
     // ============================================================================================
     // STORAGE: SHARED ACTIVE-EDGE TRACKING (PIN and TAG, no cross-schema interference)
@@ -144,20 +251,34 @@ contract EdgeResolver is SchemaResolver {
     // every key carries TAG_SCHEMA_UID baked in.
     mapping(bytes32 => mapping(address => mapping(bytes32 => mapping(bytes32 => uint256)))) private _activeByAASIndex;
 
-    constructor(
-        IEAS eas,
+    /// @param eas The canonical EAS for the target chain. Stays a constructor immutable on the
+    ///            base (EAS is a per-chain constant; see EFSUpgradeableResolver NatSpec). The base
+    ///            constructor also runs `_disableInitializers()` so the implementation itself can
+    ///            never be initialized — only a proxy can.
+    constructor(IEAS eas) EFSUpgradeableResolver(eas) {}
+
+    /// @notice One-time per-deployment initialization, run behind the proxy.
+    /// @dev Guarded by `initializer` — callable exactly once per proxy. Sets the two schema UIDs
+    ///      and the partner references, and enforces the three cardinality-split invariants that
+    ///      were constructor `require`s when EdgeResolver was deployed directly.
+    /// @param pinSchemaUID    The EAS schema UID for the PIN (cardinality 1) schema.
+    /// @param tagSchemaUID    The EAS schema UID for the TAG (cardinality N) schema.
+    /// @param indexer_        The EFSIndexer (proxy) this resolver indexes edges into.
+    /// @param schemaRegistry_ The EAS SchemaRegistry, used to validate schema-UID definitions.
+    function initialize(
         bytes32 pinSchemaUID,
         bytes32 tagSchemaUID,
-        IEFSIndexerForEdges _indexer,
-        ISchemaRegistry _schemaRegistry
-    ) SchemaResolver(eas) {
+        IEFSIndexerForEdges indexer_,
+        ISchemaRegistry schemaRegistry_
+    ) external initializer {
         require(pinSchemaUID != bytes32(0), "EdgeResolver: pinSchemaUID is zero");
         require(tagSchemaUID != bytes32(0), "EdgeResolver: tagSchemaUID is zero");
         require(pinSchemaUID != tagSchemaUID, "EdgeResolver: PIN and TAG schemas must differ");
-        PIN_SCHEMA_UID = pinSchemaUID;
-        TAG_SCHEMA_UID = tagSchemaUID;
-        indexer = _indexer;
-        schemaRegistry = _schemaRegistry;
+        EdgeConfig storage $ = _cfg();
+        $.pinSchemaUID = pinSchemaUID;
+        $.tagSchemaUID = tagSchemaUID;
+        $.indexer = indexer_;
+        $.schemaRegistry = schemaRegistry_;
     }
 
     // ============================================================================================
@@ -186,19 +307,34 @@ contract EdgeResolver is SchemaResolver {
     // ============================================================================================
 
     function onAttest(Attestation calldata attestation, uint256 /*value*/) internal override returns (bool) {
+        EdgeConfig storage $ = _cfg();
+        bytes32 pinSchema = $.pinSchemaUID;
+        IEFSIndexerForEdges idx = $.indexer;
+
         // Branch on schema BEFORE decoding — PIN and TAG have different on-wire shapes
         // (PIN = `bytes32 definition`; TAG = `bytes32 definition, int256 weight`).
         bytes32 definition;
         int256 weight;
-        if (attestation.schema == PIN_SCHEMA_UID) {
+        bool isPin = attestation.schema == pinSchema;
+        if (isPin) {
+            if (attestation.data.length != PIN_PAYLOAD_LEN) revert NonCanonicalPayload();
             definition = abi.decode(attestation.data, (bytes32));
             // weight stays 0 — unused for PIN (cardinality 1 has no per-entry metadata).
-        } else if (attestation.schema == TAG_SCHEMA_UID) {
+        } else if (attestation.schema == $.tagSchemaUID) {
+            if (attestation.data.length != TAG_PAYLOAD_LEN) revert NonCanonicalPayload();
             (definition, weight) = abi.decode(attestation.data, (bytes32, int256));
         } else {
             // Defensive: if the resolver is wired into an unknown schema, fail loudly.
             revert UnknownEdgeSchema();
         }
+
+        // Lifecycle invariants — PIN/TAG edges are "active until explicitly revoked", with no
+        // applies=false and no expiry (matches ListEntryResolver). A revocable *schema* only PERMITS
+        // revocable attestations; EAS still accepts revocable=false (welds the edge on permanently)
+        // and nonzero expirationTime (the edge silently expires but EFS reads filter on revocation,
+        // not expiry, so it stays "active" forever). Reject both at write time.
+        if (!attestation.revocable) revert NotRevocable();
+        if (attestation.expirationTime != 0) revert HasExpiration();
 
         _validateDefinition(definition);
 
@@ -228,11 +364,36 @@ contract EdgeResolver is SchemaResolver {
         // Set the latest UID for this (attester, target, def, schema) entry.
         _activeEdge[edgeHash] = attestation.uid;
 
-        // Dispatch to the per-schema active-set storage.
-        if (attestation.schema == PIN_SCHEMA_UID) {
-            _onAttestPin(definition, attestation.attester, attestation.uid, targetID, targetSchema, wasActive);
+        // Dispatch to the per-schema active-set storage, then emit the indexable edge event.
+        if (isPin) {
+            bytes32 supersededPinUID = _onAttestPin(
+                definition,
+                attestation.attester,
+                attestation.uid,
+                targetID,
+                targetSchema,
+                wasActive
+            );
+            emit PinSet(definition, attestation.attester, targetSchema, attestation.uid, targetID, supersededPinUID);
         } else {
-            _onAttestTag(definition, attestation.attester, attestation.uid, edgeHash, targetSchema, weight, wasActive);
+            bytes32 supersededTagUID = _onAttestTag(
+                definition,
+                attestation.attester,
+                attestation.uid,
+                edgeHash,
+                targetSchema,
+                weight,
+                wasActive
+            );
+            emit TagSet(
+                definition,
+                attestation.attester,
+                targetSchema,
+                attestation.uid,
+                targetID,
+                weight,
+                supersededTagUID
+            );
         }
 
         // Track discovery indices (append-only, never removed). Common to both schemas.
@@ -247,7 +408,7 @@ contract EdgeResolver is SchemaResolver {
 
         // Build children-with-edge index (append-only). Both PIN and TAG contribute.
         if (attestation.refUID != EMPTY_UID) {
-            bytes32 parent = indexer.getParent(attestation.refUID);
+            bytes32 parent = idx.getParent(attestation.refUID);
             if (parent != bytes32(0) && !_isChildWithEdge[parent][definition][attestation.refUID]) {
                 _childrenWithEdge[parent][definition].push(attestation.refUID);
                 _isChildWithEdge[parent][definition][attestation.refUID] = true;
@@ -260,27 +421,34 @@ contract EdgeResolver is SchemaResolver {
         // cleared, which is acceptable per the design.
         if (attestation.refUID != EMPTY_UID) {
             Attestation memory defAtt = _eas.getAttestation(definition);
-            if (defAtt.schema == indexer.ANCHOR_SCHEMA_UID()) {
-                indexer.propagateContains(definition, attestation.attester);
+            if (defAtt.schema == idx.ANCHOR_SCHEMA_UID()) {
+                idx.propagateContains(definition, attestation.attester);
             }
         }
 
         // Register so this edge is discoverable via the indexer's generic queries.
-        indexer.index(attestation.uid);
+        idx.index(attestation.uid);
 
         return true;
     }
 
     function onRevoke(Attestation calldata attestation, uint256 /*value*/) internal override returns (bool) {
+        EdgeConfig storage $ = _cfg();
+        IEFSIndexerForEdges idx = $.indexer;
+
         // Branch on schema BEFORE decoding (same shape rationale as onAttest).
         bytes32 definition;
-        if (attestation.schema == PIN_SCHEMA_UID) {
+        bool isPin = attestation.schema == $.pinSchemaUID;
+        if (isPin) {
             definition = abi.decode(attestation.data, (bytes32));
-        } else if (attestation.schema == TAG_SCHEMA_UID) {
+        } else if (attestation.schema == $.tagSchemaUID) {
             (definition, ) = abi.decode(attestation.data, (bytes32, int256));
         } else {
             revert UnknownEdgeSchema();
         }
+        // No canonical-length guard on revoke: any stored edge already passed the onAttest length
+        // check, so its payload is canonical by construction — and a revocation (a user withdrawing
+        // their own edge) should never be blocked by a write-shape check.
 
         bytes32 targetID = _resolveTargetID(attestation.refUID, attestation.recipient);
         bytes32 edgeHash = _edgeHash(attestation.attester, targetID, definition, attestation.schema);
@@ -304,10 +472,15 @@ contract EdgeResolver is SchemaResolver {
 
             // Slot/AAS cleanup is unconditional — address-target edges live in
             // `_activeBySlot[def][attester][bytes32(0)]` and need their slot cleared too.
-            if (attestation.schema == PIN_SCHEMA_UID) {
+            // We're inside `_activeEdge[edgeHash] == attestation.uid`, so this UID is still the active
+            // edge (a superseded PIN would have had its _activeEdge entry deleted in _onAttestPin) — the
+            // cleared event therefore reflects a real active→inactive transition for the indexer.
+            if (isPin) {
                 _clearPinSlot(definition, attestation.attester, targetSchema, attestation.uid);
+                emit PinCleared(definition, attestation.attester, targetSchema, attestation.uid, targetID);
             } else {
                 _swapAndPopTag(definition, attestation.attester, targetSchema, edgeHash);
+                emit TagCleared(definition, attestation.attester, targetSchema, attestation.uid, targetID);
             }
 
             // The contains-flag bookkeeping (`_activeTotalByDefAndAttester` +
@@ -325,8 +498,8 @@ contract EdgeResolver is SchemaResolver {
                 }
                 if (_activeTotalByDefAndAttester[definition][attestation.attester] == 0) {
                     Attestation memory defAtt = _eas.getAttestation(definition);
-                    if (defAtt.schema == indexer.ANCHOR_SCHEMA_UID()) {
-                        indexer.clearContains(definition, attestation.attester);
+                    if (defAtt.schema == idx.ANCHOR_SCHEMA_UID()) {
+                        idx.clearContains(definition, attestation.attester);
                     }
                 }
             }
@@ -335,7 +508,7 @@ contract EdgeResolver is SchemaResolver {
         }
 
         // Mirror revocation into EFSIndexer so isRevoked() stays in sync.
-        indexer.indexRevocation(attestation.uid);
+        idx.indexRevocation(attestation.uid);
 
         return true;
     }
@@ -362,13 +535,15 @@ contract EdgeResolver is SchemaResolver {
         bytes32 targetID,
         bytes32 targetSchema,
         bool wasActive
-    ) private {
+    ) private returns (bytes32 supersededPinUID) {
         SlotEntry storage slot = _activeBySlot[definition][attester][targetSchema];
 
-        // If a different prior PIN occupied this slot, supersede it.
+        // If a different prior PIN occupied this slot, supersede it. Capture the retired UID so onAttest
+        // can surface it in PinSet (cardinality-1 replacement is otherwise invisible to a log indexer).
         if (slot.pinUID != bytes32(0) && slot.targetID != targetID) {
+            supersededPinUID = slot.pinUID;
             // Schema-aware: the prior edge lived at the PIN slot for the prior targetID.
-            bytes32 priorEdgeHash = _edgeHash(attester, slot.targetID, definition, PIN_SCHEMA_UID);
+            bytes32 priorEdgeHash = _edgeHash(attester, slot.targetID, definition, PIN_SCHEMA_UID());
             // Only clean up counts if the prior edge entry hasn't already been cleared
             // (defensive — ordinarily it matches because we wrote it ourselves earlier).
             if (_activeEdge[priorEdgeHash] == slot.pinUID) {
@@ -410,7 +585,7 @@ contract EdgeResolver is SchemaResolver {
         bytes32 targetSchema,
         int256 weight,
         bool wasActive
-    ) private {
+    ) private returns (bytes32 supersededTagUID) {
         TagEntry[] storage arr = _activeByAAS[definition][attester][targetSchema];
         uint256 indexPlusOne = _activeByAASIndex[definition][attester][targetSchema][edgeHash];
 
@@ -435,8 +610,11 @@ contract EdgeResolver is SchemaResolver {
                 _activeTotalByDefAndAttester[definition][attester]++;
             }
         } else {
-            // Re-attestation of the same edgeHash — update UID + weight in place.
+            // Re-attestation of the same edgeHash — update UID + weight in place. The prior tagUID is
+            // superseded silently (no TagCleared fires for an in-place update), so capture it before the
+            // overwrite and surface it via TagSet.supersededTagUID for log indexers.
             uint256 pos = indexPlusOne - 1;
+            supersededTagUID = arr[pos].tagUID;
             arr[pos].tagUID = tagUID;
             arr[pos].weight = weight;
             // wasActive is necessarily true here (entry already in arr); no count change.
@@ -488,7 +666,7 @@ contract EdgeResolver is SchemaResolver {
             if (moved.uid == bytes32(0)) revert InvalidTarget();
             (bytes32 movedDef, ) = abi.decode(moved.data, (bytes32, int256));
             bytes32 movedTargetID = _resolveTargetID(moved.refUID, moved.recipient);
-            bytes32 movedHash = _edgeHash(moved.attester, movedTargetID, movedDef, TAG_SCHEMA_UID);
+            bytes32 movedHash = _edgeHash(moved.attester, movedTargetID, movedDef, TAG_SCHEMA_UID());
             indexMap[movedHash] = pos + 1;
         }
 
@@ -507,7 +685,7 @@ contract EdgeResolver is SchemaResolver {
         if (uint256(definition) <= type(uint160).max) return;
 
         // 2. Registered schema? (fewer schemas than attestations; schemas win on conflict)
-        SchemaRecord memory sr = schemaRegistry.getSchema(definition);
+        SchemaRecord memory sr = schemaRegistry().getSchema(definition);
         if (sr.uid != bytes32(0)) return;
 
         // 3. Existing attestation?
@@ -558,8 +736,8 @@ contract EdgeResolver is SchemaResolver {
         bytes32 definition
     ) external view returns (bool) {
         return
-            _activeEdge[_edgeHash(attester, targetID, definition, PIN_SCHEMA_UID)] != bytes32(0) ||
-            _activeEdge[_edgeHash(attester, targetID, definition, TAG_SCHEMA_UID)] != bytes32(0);
+            _activeEdge[_edgeHash(attester, targetID, definition, PIN_SCHEMA_UID())] != bytes32(0) ||
+            _activeEdge[_edgeHash(attester, targetID, definition, TAG_SCHEMA_UID())] != bytes32(0);
     }
 
     /// @notice True iff anyone currently has an active edge (PIN or TAG) on (targetID, definition).
@@ -579,8 +757,8 @@ contract EdgeResolver is SchemaResolver {
     ) external view returns (bool) {
         for (uint256 i = 0; i < attesters.length; i++) {
             if (
-                _activeEdge[_edgeHash(attesters[i], targetID, definition, PIN_SCHEMA_UID)] != bytes32(0) ||
-                _activeEdge[_edgeHash(attesters[i], targetID, definition, TAG_SCHEMA_UID)] != bytes32(0)
+                _activeEdge[_edgeHash(attesters[i], targetID, definition, PIN_SCHEMA_UID())] != bytes32(0) ||
+                _activeEdge[_edgeHash(attesters[i], targetID, definition, TAG_SCHEMA_UID())] != bytes32(0)
             ) return true;
         }
         return false;
@@ -598,7 +776,7 @@ contract EdgeResolver is SchemaResolver {
         address[] calldata attesters
     ) external view returns (bool) {
         for (uint256 i = 0; i < attesters.length; i++) {
-            if (_activeEdge[_edgeHash(attesters[i], targetID, definition, TAG_SCHEMA_UID)] != bytes32(0)) return true;
+            if (_activeEdge[_edgeHash(attesters[i], targetID, definition, TAG_SCHEMA_UID())] != bytes32(0)) return true;
         }
         return false;
     }
@@ -610,7 +788,7 @@ contract EdgeResolver is SchemaResolver {
     ///         in `getFilesAtPath` (ADR-0041): file placement is PIN-only (Shape A); a TAG from
     ///         an earlier attester must NOT suppress a later attester's valid PIN placement.
     function isActivePinEdge(address attester, bytes32 targetID, bytes32 definition) external view returns (bool) {
-        return _activeEdge[_edgeHash(attester, targetID, definition, PIN_SCHEMA_UID)] != bytes32(0);
+        return _activeEdge[_edgeHash(attester, targetID, definition, PIN_SCHEMA_UID())] != bytes32(0);
     }
 
     /// @notice Append-only discovery: definitions ever attested against a target (PIN or TAG).
@@ -753,7 +931,7 @@ contract EdgeResolver is SchemaResolver {
     ///         lookup followed by the struct read, never a list scan. No new storage, no write-path
     ///         change. The kernel stays weight-neutral (ADR-0041 §4): the raw `int256` weight is
     ///         returned verbatim, with no sign/magnitude interpretation. Callers that want a
-    ///         threshold policy (e.g. ADR-0042's `weight >= 0`, or ADR-0048's view-layer exclusion
+    ///         threshold policy (e.g. ADR-0042's `weight >= 0`, or ADR-0054's view-layer exclusion
     ///         filter) apply it themselves.
     ///
     ///         `targetSchema = bytes32(0)` is the canonical sentinel for an address-target TAG
@@ -771,7 +949,7 @@ contract EdgeResolver is SchemaResolver {
         bytes32 definition,
         bytes32 targetSchema
     ) external view returns (bool exists, int256 weight) {
-        bytes32 edgeHash = _edgeHash(attester, target, definition, TAG_SCHEMA_UID);
+        bytes32 edgeHash = _edgeHash(attester, target, definition, TAG_SCHEMA_UID());
         uint256 indexPlusOne = _activeByAASIndex[definition][attester][targetSchema][edgeHash];
         if (indexPlusOne == 0) return (false, 0);
         return (true, _activeByAAS[definition][attester][targetSchema][indexPlusOne - 1].weight);

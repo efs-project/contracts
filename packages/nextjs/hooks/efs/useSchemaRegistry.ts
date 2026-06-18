@@ -24,7 +24,7 @@ export const useSchemaRegistry = () => {
     functionName: "PROPERTY_SCHEMA_UID",
   });
   const { data: dataUID } = useScaffoldReadContract({ contractName: "Indexer", functionName: "DATA_SCHEMA_UID" });
-  const { data: blobUID } = useScaffoldReadContract({ contractName: "Indexer", functionName: "BLOB_SCHEMA_UID" });
+  // BLOB schema was dropped (ADR-0049) — no BLOB_SCHEMA_UID read.
 
   // PIN_SCHEMA_UID and TAG_SCHEMA_UID live on EdgeResolver (not Indexer) — they
   // were registered with the EdgeResolver address as their resolver (ADR-0041).
@@ -39,11 +39,10 @@ export const useSchemaRegistry = () => {
       ANCHOR: anchorUID,
       PROPERTY: propertyUID,
       DATA: dataUID,
-      BLOB: blobUID,
       PIN: pinUID,
       TAG: tagUID,
     };
-  }, [anchorUID, propertyUID, dataUID, blobUID, pinUID, tagUID]);
+  }, [anchorUID, propertyUID, dataUID, pinUID, tagUID]);
 
   return {
     schemas,

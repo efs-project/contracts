@@ -17,7 +17,7 @@ awaiting James's review before implementation.
 > "collapsed state persisted in localStorage." (3) The README is resolved by an
 > EXACT router-path lookup (`<container>/<path>/README.md`), NOT the list/scan
 > resolver described in the resolution sections below; and on-chain exclusion is
-> done by `EFSFileView.getDirectoryPageFiltered` (ADR-0048), independent of the
+> done by `EFSFileView.getDirectoryPageFiltered` (ADR-0054), independent of the
 > Overview resolver (a system-hidden README still renders in the pane). (4)
 > Overviews are FOLDER-SCOPED — the "any EFS item works / **file anchor**" claims
 > below (§Goal and §"Every item type works") are SUPERSEDED. A file-leaf Overview

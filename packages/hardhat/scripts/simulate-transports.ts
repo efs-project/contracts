@@ -1,5 +1,8 @@
 import { ethers } from "hardhat";
-import { EFSIndexer, EdgeResolver, EFSFileView, EFSRouter } from "../typechain-types";
+// chai matchers (e.g. revertedWithCustomError) auto-load via hardhat.config's
+// `@nomicfoundation/hardhat-chai-matchers` import — see EFSTransports.test.ts.
+import { expect } from "chai";
+import { EFSIndexer, EdgeResolver, EFSFileView, EFSRouter, MirrorResolver } from "../typechain-types";
 
 /**
  * EFS Transports & Mirrors Simulation
@@ -45,6 +48,28 @@ async function main() {
     }
   };
 
+  // Negative-assertion counterpart to assert(): pass iff `promise` reverts with the
+  // named custom error on `contract`. Wraps chai's revertedWithCustomError matcher in
+  // try/catch so a missed/mismatched revert increments `failed` rather than throwing
+  // out of main() (keeping the PASS/FAIL tally intact, same as assert()).
+  const assertReverts = async (
+    label: string,
+    promise: Promise<unknown>,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    contract: any,
+    errorName: string,
+  ) => {
+    try {
+      await expect(promise).to.be.revertedWithCustomError(contract, errorName);
+      console.log(`  ${PASS} ${label} \u2014 reverted ${errorName}`);
+      passed++;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message.split("\n")[0] : String(e);
+      console.log(`  ${FAIL} ${label} \u2014 expected revert ${errorName}: ${msg}`);
+      failed++;
+    }
+  };
+
   console.log(
     "\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550",
   );
@@ -81,6 +106,13 @@ async function main() {
   const tagSchemaUID = await indexer.TAG_SCHEMA_UID();
   const edgeResolverAddr = await indexer.edgeResolver();
   const edgeResolver = (await ethers.getContractAt("EdgeResolver", edgeResolverAddr)) as unknown as EdgeResolver;
+  // MirrorResolver proxy address from the kernel (ADR-0048) — used by the write-time
+  // guard assertions (Phase [18]) to match the exact custom errors it reverts with.
+  const mirrorResolverAddr = await indexer.mirrorResolver();
+  const mirrorResolver = (await ethers.getContractAt(
+    "MirrorResolver",
+    mirrorResolverAddr,
+  )) as unknown as MirrorResolver;
   void tagSchemaUID; // file placement uses PIN here; TAG schema unused in these tests
   const rootUID = await indexer.rootAnchorUID();
 
@@ -126,11 +158,13 @@ async function main() {
     return getUID(tx);
   };
 
+  // AGENT-NOTE: DATA is an empty schema — pure identity (ADR-0049). It carries no inline fields;
+  // contentHash/size are reserved-key PROPERTYs bound to the DATA UID. `contentHash` below is a
+  // local convenience (the value a client would attach as a PROPERTY) — it is NOT encoded into
+  // the DATA payload. Attaching it as a PROPERTY is future PROPERTY/SDK work.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const createData = async (signer: any, content: string) => {
-    const contentBytes = ethers.toUtf8Bytes(content);
-    const contentHash = ethers.keccak256(contentBytes);
-    const size = contentBytes.length;
+    const contentHash = ethers.keccak256(ethers.toUtf8Bytes(content));
     const tx = await eas.connect(signer).attest({
       schema: dataSchemaUID,
       data: {
@@ -138,7 +172,7 @@ async function main() {
         expirationTime: 0n,
         revocable: false,
         refUID: ethers.ZeroHash,
-        data: encode.encode(["bytes32", "uint64"], [contentHash, size]),
+        data: "0x",
         value: 0n,
       },
     });
@@ -231,6 +265,53 @@ async function main() {
     await tx.wait();
   };
 
+  /**
+   * Deploy one SSTORE2-style data contract whose runtime is `0x00 || bytes` and
+   * return its address. Ported from seed-impl.ts `deployOnchainMirrorURI` (the
+   * inner data-contract deploy): the router's web3:// branch skips the first
+   * runtime byte (the SSTORE2 STOP-opcode convention), so the payload must be
+   * `0x00 || content`. Minimal SSTORE2 init code:
+   *   61 LLLL PUSH2 runtimeLen | 80 DUP1 | 60 0c PUSH1 0x0c | 60 00 PUSH1 0 |
+   *   39 CODECOPY | 60 00 PUSH1 0 | f3 RETURN  (12-byte prefix, runtime follows).
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const deploySSTORE2Chunk = async (signer: any, bytes: Uint8Array): Promise<string> => {
+    const runtime = ethers.concat(["0x00", bytes]);
+    const runtimeLen = ethers.dataLength(runtime);
+    const initCode = ethers.concat([
+      "0x61",
+      ethers.zeroPadValue(ethers.toBeHex(runtimeLen), 2),
+      "0x80600c6000396000f3",
+      runtime,
+    ]);
+    const tx = await signer.sendTransaction({ data: initCode });
+    const receipt = await tx.wait();
+    return receipt.contractAddress as string;
+  };
+
+  /**
+   * Deploy multi-chunk on-chain content: split `bytes` into `chunkSize`-byte
+   * SSTORE2 chunks, wrap their addresses in a MockChunkedFile (chunkCount /
+   * chunkAddress, the EIP-7617 interface the router probes), and return a
+   * `web3://<chunkManager>` URI plus the chunk byte slices for byte-compare.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const deployChunkedOnchainURI = async (signer: any, bytes: Uint8Array, chunkSize: number) => {
+    const chunkSlices: Uint8Array[] = [];
+    for (let off = 0; off < bytes.length; off += chunkSize) {
+      chunkSlices.push(bytes.slice(off, off + chunkSize));
+    }
+    const chunkAddrs: string[] = [];
+    for (const slice of chunkSlices) {
+      chunkAddrs.push(await deploySSTORE2Chunk(signer, slice));
+    }
+    const MockChunkedFile = await ethers.getContractFactory("MockChunkedFile", signer);
+    const chunked = await MockChunkedFile.deploy(chunkAddrs);
+    await chunked.waitForDeployment();
+    const chunkedAddr = await chunked.getAddress();
+    return { uri: `web3://${chunkedAddr}`, chunkSlices, chunkManager: chunkedAddr };
+  };
+
   // Resolve all transport definition anchors
   const transportsUID = await indexer.resolvePath(rootUID, "transports");
   const onchainTransportUID = await indexer.resolvePath(transportsUID, "onchain");
@@ -238,7 +319,6 @@ async function main() {
   const arweaveTransportUID = await indexer.resolvePath(transportsUID, "arweave");
   const magnetTransportUID = await indexer.resolvePath(transportsUID, "magnet");
   const httpsTransportUID = await indexer.resolvePath(transportsUID, "https");
-  void onchainTransportUID; // /transports/onchain exists but isn't exercised in this script
 
   // ======================================================================
   // TEST 1: Transport Definition Anchor Discovery
@@ -252,9 +332,9 @@ async function main() {
   assert("/transports/magnet exists", magnetTransportUID !== ethers.ZeroHash);
   assert("/transports/https exists", httpsTransportUID !== ethers.ZeroHash);
 
-  // Verify all 5 transport types are children of /transports/
-  const transportChildren = await indexer["getChildren(bytes32,uint256,uint256,bool)"](transportsUID, 0, 10, false);
-  assert("5 transport children", transportChildren.length === 5, `got ${transportChildren.length}`);
+  // Verify all 11 transport types are children of /transports/
+  const transportChildren = await indexer.getChildren(transportsUID, 0, 20, false, false);
+  assert("11 transport children", transportChildren.length === 11, `got ${transportChildren.length}`);
 
   // ======================================================================
   // TEST 2: Single-Transport File Upload (IPFS)
@@ -270,7 +350,7 @@ async function main() {
   await pin(owner, photo1Data.uid, photo1UID);
 
   // Verify mirror is discoverable via getReferencingAttestations
-  const photo1Mirrors = await indexer.getReferencingAttestations(photo1Data.uid, mirrorSchemaUID, 0, 10, false);
+  const photo1Mirrors = await indexer.getReferencingAttestations(photo1Data.uid, mirrorSchemaUID, 0, 10, false, false);
   assert("MIRROR indexed on DATA", photo1Mirrors.length === 1);
   assert("MIRROR UID matches", photo1Mirrors[0] === photo1Mirror);
 
@@ -297,7 +377,7 @@ async function main() {
   const docMirrorHTTPS = await createMirror(owner, docData.uid, httpsTransportUID, "https://example.com/paper.pdf");
   await pin(owner, docData.uid, docUID);
 
-  const docMirrors = await indexer.getReferencingAttestations(docData.uid, mirrorSchemaUID, 0, 10, false);
+  const docMirrors = await indexer.getReferencingAttestations(docData.uid, mirrorSchemaUID, 0, 10, false, false);
   assert("3 mirrors on paper.pdf DATA", docMirrors.length === 3, `got ${docMirrors.length}`);
 
   // Verify each mirror's transport definition
@@ -370,20 +450,21 @@ async function main() {
   assert("user1's mirror URI correct", u1Mirror!.uri === "ar://user1-sunset-backup");
 
   // ======================================================================
-  // TEST 7: Content-Addressed Dedup + Shared Mirrors
+  // TEST 7: No intrinsic content dedup (ADR-0049) + Shared Mirrors
   // ======================================================================
-  console.log("\n[7] Content-Addressed Dedup\n");
+  // AGENT-NOTE: DATA is empty (ADR-0049) — no contentHash field, no `dataByContentKey` index.
+  // Identical bytes mint DISTINCT DATA UIDs; canonical-by-hash resolution is gone on chain.
+  // Dedup prevention is best-effort client-side (property-index query before upload); dedup
+  // resolution is the REDIRECT primitive (ADR-0050). Both are future PROPERTY/SDK work.
+  console.log("\n[7] No intrinsic content dedup (ADR-0049)\n");
 
   // user2 creates a DATA with the same content as sunset.jpg
   const dupData = await createData(user2, "sunset-jpeg-bytes-content");
-  assert("same content produces same contentHash", dupData.contentHash === photo1Data.contentHash);
 
-  // Canonical DATA lookup returns the original
-  const canonical = await indexer.dataByContentKey(photo1Data.contentHash);
-  assert("canonical DATA is owner's (first)", canonical === photo1Data.uid);
-
-  // Both DATA UIDs are distinct attestations
-  assert("duplicate DATA gets its own UID", dupData.uid !== photo1Data.uid);
+  // Identical bytes still produce the same *local* contentHash (a client would attach it as a
+  // PROPERTY), but the DATA UIDs are distinct — there is no on-chain dedup.
+  assert("same content produces same local contentHash", dupData.contentHash === photo1Data.contentHash);
+  assert("duplicate DATA gets its own UID (no dedup)", dupData.uid !== photo1Data.uid);
 
   // user2 can add mirrors to their own DATA
   await createMirror(user2, dupData.uid, ipfsTransportUID, "ipfs://QmSunsetDup");
@@ -427,7 +508,9 @@ async function main() {
   const galleryPage = await fileView.getFilesAtPath(photo1UID, [ownerAddr], dataSchemaUID, "0x", 10);
   const galleryFiles = galleryPage.items;
   assert("getFilesAtPath returns 1 DATA at sunset.jpg anchor", galleryFiles.length === 1, `got ${galleryFiles.length}`);
-  assert("returned item has correct contentHash", galleryFiles[0].contentHash === photo1Data.contentHash);
+  // AGENT-NOTE: DATA is empty (ADR-0049); contentHash is no longer an inline field, so the
+  // listing surfaces bytes32(0). Surfacing the hash PROPERTY is future property-index work.
+  assert("returned item has zero contentHash (empty DATA, ADR-0049)", galleryFiles[0].contentHash === ethers.ZeroHash);
   assert("returned item hasData=true", galleryFiles[0].hasData);
 
   // Multi-attester query: owner + user2 at sunset anchor (owner pinned, user2 didn't)
@@ -474,12 +557,10 @@ async function main() {
   const _headerStr = new TextDecoder().decode(ethers.getBytes(routerRes[1]));
   // Body is empty for external URIs; check headers
   const headers = routerRes[2];
-  const contentTypeHeader = headers.find(
-    (h: { key: string; value: string }) => h.key === "Content-Type" && !h.value.startsWith("message/"),
-  );
+  const contentTypeHeader = headers.find((h: { key: string; value: string }) => h.key === "Content-Type");
   assert(
     "Router resolves contentType from PROPERTY",
-    contentTypeHeader?.value === "text/plain",
+    contentTypeHeader?.value.includes('content-type="text/plain"') ?? false,
     `got: ${contentTypeHeader?.value}`,
   );
 
@@ -540,6 +621,274 @@ async function main() {
     [{ key: "lenses", value: ownerAddr }],
   );
   assert("Router returns 404 for mirrorless DATA", orphanRouterRes[0] === 404n);
+
+  // ======================================================================
+  // TEST 15: REAL web3:// Byte Serving + Multi-Chunk Byte-Compare (P0)
+  // ======================================================================
+  // Proves the router's web3:// branch actually reassembles SSTORE2 bytes via
+  // extcodecopy and that EIP-7617 multi-chunk pagination concatenates back to the
+  // exact original content. Unlike the smoke tests above (status-only), this
+  // deploys real on-chain content, attests a web3:// MIRROR, and walks the
+  // ?chunk=N pagination headers the router emits, reassembling client-side.
+  console.log("\n[15] REAL web3:// Byte Serving + Multi-Chunk Byte-Compare\n");
+
+  // Build content guaranteed to span >1 chunk. Chunk at 24_000 bytes (just under
+  // the ~24KB SSTORE2 ceiling); 50_000 bytes of deterministic, byte-varied data
+  // (mod-256 ramp) → 3 chunks, exercising both the "next chunk" and "last chunk"
+  // header branches and the cross-chunk byte boundary.
+  const CHUNK_SIZE = 24_000;
+  const onchainBytes = new Uint8Array(50_000);
+  for (let i = 0; i < onchainBytes.length; i++) onchainBytes[i] = i % 256;
+
+  const onchainUID = await anchor(owner, `onchain_${S}.bin`, galleryUID, dataSchemaUID);
+  const onchainData = await createData(owner, `onchain-content-${S}`);
+  await property(owner, onchainData.uid, "contentType", "application/octet-stream");
+  const { uri: web3URI, chunkSlices } = await deployChunkedOnchainURI(owner, onchainBytes, CHUNK_SIZE);
+  await createMirror(owner, onchainData.uid, onchainTransportUID, web3URI);
+  await pin(owner, onchainData.uid, onchainUID);
+  assert("content spans >1 chunk", chunkSlices.length > 1, `${chunkSlices.length} chunks`);
+
+  // Walk the chunk pagination: request ?chunk=0,1,… reassembling the body and
+  // following the router's `web3-next-chunk` header until it's absent (last chunk).
+  const onchainPath = [`gallery_${S}`, `onchain_${S}.bin`];
+  const reassembled: Uint8Array[] = [];
+  let chunkIdx = 0;
+  let onchainStatusOk = true;
+  let onchainCtOk = true;
+  let sawNextHeaderOnNonLast = true;
+  let lastChunkHadNoNextHeader = true;
+  // Hard cap the loop to chunk count + 1 so a router bug can't spin it forever.
+  for (let guard = 0; guard <= chunkSlices.length; guard++) {
+    const res = await router.request(onchainPath, [
+      { key: "lenses", value: ownerAddr },
+      { key: "chunk", value: chunkIdx.toString() },
+    ]);
+    if (res[0] !== 200n) onchainStatusOk = false;
+    const ct = res[2].find((h: { key: string; value: string }) => h.key === "Content-Type");
+    if (ct?.value !== "application/octet-stream") onchainCtOk = false;
+    reassembled.push(ethers.getBytes(res[1]));
+    const nextHeader = res[2].find((h: { key: string; value: string }) => h.key === "web3-next-chunk");
+    const isLast = chunkIdx === chunkSlices.length - 1;
+    if (isLast) {
+      if (nextHeader !== undefined) lastChunkHadNoNextHeader = false;
+      break;
+    } else {
+      if (nextHeader === undefined) sawNextHeaderOnNonLast = false;
+      else if (nextHeader.value !== `?chunk=${chunkIdx + 1}`) sawNextHeaderOnNonLast = false;
+      chunkIdx++;
+    }
+  }
+
+  assert("web3:// chunked serving status==200 for every chunk", onchainStatusOk);
+  assert("Content-Type header == resolved contentType PROPERTY", onchainCtOk, "application/octet-stream");
+  assert("web3-next-chunk present on every non-last chunk (correct ?chunk=N+1)", sawNextHeaderOnNonLast);
+  assert("web3-next-chunk absent on last chunk", lastChunkHadNoNextHeader);
+  assert("client walked exactly chunkSlices.length chunks", reassembled.length === chunkSlices.length);
+
+  // EXACT byte-compare: concatenated reassembly must equal the original content
+  // (proves extcodecopy reassembly + multi-chunk concat with no off-by-one /
+  // missing-STOP-byte drift at the chunk boundaries).
+  const reassembledFull = ethers.getBytes(ethers.concat(reassembled));
+  assert(
+    "reassembled length == original",
+    reassembledFull.length === onchainBytes.length,
+    `${reassembledFull.length} vs ${onchainBytes.length}`,
+  );
+  assert(
+    "reassembled bytes EXACTLY equal original (extcodecopy + 7617 concat)",
+    ethers.hexlify(reassembledFull) === ethers.hexlify(onchainBytes),
+  );
+
+  // ======================================================================
+  // TEST 16: Mirror Priority WINNER — served transport, not just status (P0)
+  // ======================================================================
+  // Attach {https, ipfs, web3} mirrors to ONE DATA from ONE attester (in
+  // non-preferred order) and assert the Router SERVES the web3 mirror — by the
+  // actual served bytes/transport, not merely a 200. Then revoke the web3 mirror
+  // and assert it falls back to ipfs (the next-highest surviving priority).
+  console.log("\n[16] Mirror Priority WINNER (served transport asserted)\n");
+
+  const winUID = await anchor(owner, `winner_${S}.txt`, galleryUID, dataSchemaUID);
+  const winData = await createData(owner, `winner-content-${S}`);
+  await property(owner, winData.uid, "contentType", "text/plain");
+
+  // Real on-chain content for the web3 mirror so the WIN is provable by bytes.
+  const winText = `WEB3-WINNER-${S}`;
+  const winBytes = ethers.toUtf8Bytes(winText);
+  const { uri: winWeb3URI } = await deployChunkedOnchainURI(owner, winBytes, CHUNK_SIZE);
+
+  // Add in NON-preferred order: https first, ipfs second, web3 last. Priority
+  // (web3 > ipfs > https) must override insertion order.
+  await createMirror(owner, winData.uid, httpsTransportUID, "https://cdn.example.com/winner.txt");
+  await createMirror(owner, winData.uid, ipfsTransportUID, "ipfs://QmWinner");
+  const winWeb3Mirror = await createMirror(owner, winData.uid, onchainTransportUID, winWeb3URI);
+  await pin(owner, winData.uid, winUID);
+
+  const winPath = [`gallery_${S}`, `winner_${S}.txt`];
+  const winRes = await router.request(winPath, [{ key: "lenses", value: ownerAddr }]);
+  // web3 winner → router serves real bytes inline (not a redirect). The served
+  // body decoded as UTF-8 must equal the web3 content — proving web3 won, since
+  // the https/ipfs mirrors would have produced an empty body + redirect header.
+  assert("priority winner returns 200", winRes[0] === 200n, `got ${winRes[0]}`);
+  const winBody = new TextDecoder().decode(ethers.getBytes(winRes[1]));
+  assert("WEB3 mirror wins over https+ipfs (served on-chain bytes)", winBody === winText, `got "${winBody}"`);
+  const winCt = winRes[2].find((h: { key: string; value: string }) => h.key === "Content-Type");
+  assert("web3 winner Content-Type is the raw MIME (not external-body)", winCt?.value === "text/plain", winCt?.value);
+
+  // ──────────────────────────────────────────────────────────────────────
+  // TEST 17: Revoked-Mirror Skip During Selection (P0) — explicit
+  // ──────────────────────────────────────────────────────────────────────
+  // Revoke the web3 mirror and assert selection now skips it and serves the
+  // next-highest surviving priority (ipfs), returning a message/external-body
+  // redirect with the resolved contentType embedded.
+  console.log("\n[17] Revoked-Mirror Skip During Selection\n");
+
+  await revoke(owner, mirrorSchemaUID, winWeb3Mirror);
+  assert("web3 winner mirror revoked", await indexer.isRevoked(winWeb3Mirror));
+
+  const afterRevokeRes = await router.request(winPath, [{ key: "lenses", value: ownerAddr }]);
+  assert("post-revoke still 200 (falls back, doesn't 404)", afterRevokeRes[0] === 200n, `got ${afterRevokeRes[0]}`);
+  // ipfs (priority 2) beats https (priority 4) among survivors → ipfs redirect.
+  const afterRevokeBody = new TextDecoder().decode(ethers.getBytes(afterRevokeRes[1]));
+  assert("post-revoke body empty (non-web3 winner = redirect)", afterRevokeBody.length === 0);
+  const afterRevokeCt = afterRevokeRes[2].find((h: { key: string; value: string }) => h.key === "Content-Type");
+  assert(
+    "post-revoke serves IPFS mirror (skips revoked web3)",
+    afterRevokeCt?.value.includes('URL="ipfs://QmWinner"') ?? false,
+    afterRevokeCt?.value,
+  );
+  assert(
+    "non-web3 winner Content-Type is message/external-body w/ embedded contentType",
+    (afterRevokeCt?.value.includes("message/external-body") &&
+      afterRevokeCt?.value.includes('content-type="text/plain"')) ??
+      false,
+    afterRevokeCt?.value,
+  );
+
+  // ======================================================================
+  // TEST 18: MirrorResolver Write-Time Guards (P0)
+  // ======================================================================
+  // Negative assertions via assertReverts: each MIRROR attest must revert with
+  // the EXACT custom error from MirrorResolver.sol. The DATA for these is the
+  // existing onchainData (a valid DATA refUID); only the field under test is bad.
+  console.log("\n[18] MirrorResolver Write-Time Guards (negative)\n");
+
+  const guardData = onchainData.uid;
+
+  // (a) Disallowed URI scheme → InvalidURIScheme. javascript:/data: are the only
+  //     schemes explicitly excluded (active-content / XSS) from the allowlist.
+  await assertReverts(
+    "disallowed scheme (javascript:) rejected",
+    createMirror(owner, guardData, ipfsTransportUID, "javascript:alert(1)"),
+    mirrorResolver,
+    "InvalidURIScheme",
+  );
+
+  // (b) URI longer than MAX_URI_LENGTH (8192) → URITooLong. Use an allowlisted
+  //     scheme so length is the sole trigger (8193 chars = "ipfs://" + filler).
+  const tooLongURI = "ipfs://" + "Q".repeat(8193 - "ipfs://".length);
+  await assertReverts(
+    "URI longer than MAX_URI_LENGTH (8192) rejected",
+    createMirror(owner, guardData, ipfsTransportUID, tooLongURI),
+    mirrorResolver,
+    "URITooLong",
+  );
+
+  // (c) transportDefinition NOT a descendant of /transports/ → InvalidTransport.
+  //     galleryUID is a real Anchor (passes the ANCHOR_SCHEMA check) but lives
+  //     under root, not under /transports/ — isolating the ancestry guard from
+  //     the "not an anchor at all" path.
+  await assertReverts(
+    "transport not descended from /transports/ rejected",
+    createMirror(owner, guardData, galleryUID, "ipfs://QmBadTransport"),
+    mirrorResolver,
+    "InvalidTransport",
+  );
+
+  // ======================================================================
+  // TEST 19: Lens Cross-Attester INJECTION DEFENSE (P0 security invariant)
+  // ======================================================================
+  // alice (user1) places a DATA at an anchor with NO contentType. carol (user2)
+  // attests BOTH a MIRROR and a contentType PROPERTY that reference alice's DATA
+  // UID. Reads are lens-scoped to dataAttester (overview.md §Lenses): under
+  // lenses=[alice] the router must serve NEITHER carol's mirror NOR her
+  // contentType (alice's DATA has no mirror → 404). Under lenses=[carol], the
+  // SAME DATA UID surfaces carol's mirror+contentType — proving real per-attester
+  // scoping (the difference is the lens, not mere absence of data).
+  console.log("\n[19] Lens Cross-Attester Injection Defense\n");
+
+  const alice = user1;
+  const carol = user2;
+  const aliceAddr = u1Addr;
+  const carolAddr = u2Addr;
+
+  // alice's file anchor + DATA (no contentType, no mirror of her own).
+  const injUID = await anchor(alice, `inject_${S}.txt`, galleryUID, dataSchemaUID);
+  const aliceData = await createData(alice, `alice-data-${S}`);
+  await pin(alice, aliceData.uid, injUID);
+
+  // carol injects a mirror + contentType PROPERTY onto ALICE's DATA UID. Both are
+  // valid attestations (EAS/resolvers allow permissionless mirrors & properties);
+  // the defense is at READ time, not write time.
+  await createMirror(carol, aliceData.uid, ipfsTransportUID, "ipfs://QmCarolInjection");
+  await property(carol, aliceData.uid, "contentType", "text/x-carol-injected");
+
+  const injPath = [`gallery_${S}`, `inject_${S}.txt`];
+
+  // Under lenses=[alice]: alice authored the placement PIN, so the router resolves
+  // alice as dataAttester and scopes mirror+contentType to her. alice has no
+  // mirror → 404 (carol's injected mirror must NOT be served).
+  const aliceLensRes = await router.request(injPath, [{ key: "lenses", value: aliceAddr }]);
+  assert(
+    "lenses=[alice]: carol's injected mirror NOT served (404, no alice mirror)",
+    aliceLensRes[0] === 404n,
+    `got ${aliceLensRes[0]}`,
+  );
+
+  // Under lenses=[carol]: carol has no placement PIN at alice's anchor, so the
+  // router finds no DATA for carol there → 404. This confirms the placement edge
+  // itself is lens-scoped (carol can't surface a file at alice's path).
+  const carolLensRes = await router.request(injPath, [{ key: "lenses", value: carolAddr }]);
+  assert(
+    "lenses=[carol]: no placement at alice's anchor for carol (404)",
+    carolLensRes[0] === 404n,
+    `got ${carolLensRes[0]}`,
+  );
+
+  // To prove carol's mirror+contentType DO surface under HER lens (real scoping,
+  // not blanket suppression), carol places the SAME DATA UID at her OWN anchor.
+  // Now lenses=[carol] resolves carol as dataAttester → her injected mirror +
+  // contentType are served; lenses=[alice] at carol's anchor stays 404.
+  const carolAnchorUID = await anchor(carol, `carol_view_${S}.txt`, galleryUID, dataSchemaUID);
+  await pin(carol, aliceData.uid, carolAnchorUID);
+  const carolViewPath = [`gallery_${S}`, `carol_view_${S}.txt`];
+
+  const carolOwnRes = await router.request(carolViewPath, [{ key: "lenses", value: carolAddr }]);
+  assert(
+    "lenses=[carol] at carol's anchor: serves carol's mirror (200)",
+    carolOwnRes[0] === 200n,
+    `got ${carolOwnRes[0]}`,
+  );
+  const carolOwnCt = carolOwnRes[2].find((h: { key: string; value: string }) => h.key === "Content-Type");
+  assert(
+    "lenses=[carol]: carol's injected mirror surfaced (ipfs redirect)",
+    carolOwnCt?.value.includes('URL="ipfs://QmCarolInjection"') ?? false,
+    carolOwnCt?.value,
+  );
+  assert(
+    "lenses=[carol]: carol's injected contentType surfaced",
+    carolOwnCt?.value.includes('content-type="text/x-carol-injected"') ?? false,
+    carolOwnCt?.value,
+  );
+
+  // Same DATA UID, alice's lens at carol's anchor: alice has no PIN there → 404,
+  // confirming the surfacing above is the LENS doing the work, not the DATA.
+  const carolAnchorAliceLens = await router.request(carolViewPath, [{ key: "lenses", value: aliceAddr }]);
+  assert(
+    "lenses=[alice] at carol's anchor: 404 (scoping is the lens, not the DATA)",
+    carolAnchorAliceLens[0] === 404n,
+    `got ${carolAnchorAliceLens[0]}`,
+  );
 
   // ======================================================================
   // Summary

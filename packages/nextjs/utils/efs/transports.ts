@@ -1,14 +1,42 @@
 import { keccak256 } from "viem";
 
-export type TransportType = "onchain" | "ipfs" | "arweave" | "magnet" | "https" | "unknown";
+export type TransportType =
+  | "onchain"
+  | "ipfs"
+  | "arweave"
+  | "magnet"
+  | "https"
+  | "ftp"
+  | "s3"
+  | "gs"
+  | "dat"
+  | "rsync"
+  | "bittorrent"
+  | "unknown";
 
 /**
- * Ordered by preference for display/resolution.
+ * Ordered by preference for display/resolution. Mirrors the on-chain router's tiering: the
+ * content-addressed / permanent transports rank highest, and the lowest tier (priority 4 on-chain)
+ * is the mutable / off-chain / peer-dependent group — https:// plus the additional off-chain schemes
+ * the MirrorResolver allowlist accepts (ftp/s3/gs/dat/rsync/bittorrent). Within that bottom tier the
+ * order here is just display ordering; the router treats them as one priority class.
  * web3:// (on-chain, permanent) > ar:// (permanent, content-addressed) >
  * ipfs:// (content-addressed, requires pinning) > magnet: (peer-dependent) >
- * https:// (mutable, centralized — least reliable)
+ * https:// and the other off-chain schemes (mutable / centralized / peer-dependent — least reliable)
  */
-export const TRANSPORT_PREFERENCE: TransportType[] = ["onchain", "arweave", "ipfs", "magnet", "https"];
+export const TRANSPORT_PREFERENCE: TransportType[] = [
+  "onchain",
+  "arweave",
+  "ipfs",
+  "magnet",
+  "https",
+  "ftp",
+  "s3",
+  "gs",
+  "dat",
+  "rsync",
+  "bittorrent",
+];
 
 /**
  * Gateway bases for content-addressed transports. Both defaults are public third-party
@@ -31,7 +59,17 @@ export function detectTransport(uri: string): TransportType {
   if (uri.startsWith("ipfs://")) return "ipfs";
   if (uri.startsWith("ar://")) return "arweave";
   if (uri.startsWith("magnet:")) return "magnet";
-  if (uri.startsWith("https://") || uri.startsWith("http://")) return "https";
+  if (uri.startsWith("https://")) return "https";
+  // http:// is intentionally rejected — MirrorResolver._isAllowedScheme only permits https://.
+  // Accepting http:// here would pass early validation but cause MIRROR attestation to revert.
+  // (ADR-0023 scheme safety)
+  // Additional off-chain schemes the MirrorResolver allowlist accepts (bottom priority tier).
+  if (uri.startsWith("ftp://")) return "ftp";
+  if (uri.startsWith("s3://")) return "s3";
+  if (uri.startsWith("gs://")) return "gs";
+  if (uri.startsWith("dat://")) return "dat";
+  if (uri.startsWith("rsync://")) return "rsync";
+  if (uri.startsWith("bittorrent://")) return "bittorrent";
   return "unknown";
 }
 
@@ -75,5 +113,11 @@ export const TRANSPORT_LABELS: Record<TransportType, string> = {
   arweave: "Arweave",
   magnet: "Magnet",
   https: "HTTPS",
+  ftp: "FTP",
+  s3: "S3",
+  gs: "GCS",
+  dat: "Dat",
+  rsync: "rsync",
+  bittorrent: "BitTorrent",
   unknown: "Unknown",
 };

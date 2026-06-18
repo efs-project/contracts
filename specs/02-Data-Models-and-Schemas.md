@@ -1,6 +1,6 @@
 # Data Models and Schemas
 
-EFS uses nine core EAS schemas arranged in three conceptual layers, adhering to the principles outlined in [System Architecture](./01-System-Architecture.md). These schemas interact through `refUID` links and edge attestations (PIN / TAG) to create a hierarchical, permissionless filesystem state natively on Ethereum. For details on how these are tracked, refer to the [Onchain Indexing Strategy](./03-Onchain-Indexing-Strategy.md).
+EFS arranges its EAS schemas in three conceptual layers, adhering to the principles outlined in [System Architecture](./01-System-Architecture.md). The **Sepolia freeze set is nine schemas** — ANCHOR, DATA, MIRROR, PIN, TAG, PROPERTY, LIST, LIST_ENTRY, REDIRECT (SORT_INFO is documented below but **deferred / not in the freeze set**). These schemas interact through `refUID` links and edge attestations (PIN / TAG) to create a hierarchical, permissionless filesystem state natively on Ethereum. For details on how these are tracked, refer to the [Onchain Indexing Strategy](./03-Onchain-Indexing-Strategy.md).
 
 **Three-layer architecture:**
 - **Paths** (Anchors) — Schelling points for names and locations
@@ -21,9 +21,38 @@ A use case picks PIN or TAG based on the nature of its predicate. Smart-contract
 **Structure**:
 `refUID = Parent Anchor UID (or User Address / bytes32(0))`
 - `name` (string)
-- `schemaUID` (bytes32) - Enforces what type of data can be attached to this anchor (e.g., Folder vs File vs Property).
+- `forSchema` (bytes32) - Enforces what type of data can be attached to this anchor (e.g., Folder vs File vs Property).
+
+**Write-time guards** (`EFSIndexer.onAttest`): `revocable` must be `false`; `expirationTime` must be `0` (anchors are permanent — EAS expiry is never honored); the payload must be the exact canonical `abi.encode(name, forSchema)` with no trailing bytes (else `NonCanonicalPayload`); `name` must pass canonical-name validation (below); names are unique per `(parent, name, forSchema)`.
 
 **Details**: An Anchor represents a name (like a folder name or a file name) within a specific context. It references (is a child of) an attestation in its EAS `refUID` field. Other attestations reference these Anchors in their `refUID` fields when they need to be associated with that specific name. Names are considered unique within their direct hierarchy level relative to the parent entity.
+
+### Canonical anchor-name encoding (NFC + percent-encode)
+
+The `name` field carries the **canonical encoding** of a human-facing name, never the raw human string. The encoding is fixed so that independent clients deterministically resolve the same human name to the same anchor UID — the Schelling-point property. A name is encoded in two steps (ADR-0048, supersedes ADR-0025's reject-only rule):
+
+1. **Unicode NFC normalization (client-side).** The human name is normalized to Unicode Normalization Form C. This collapses canonically-equivalent code-point sequences (e.g. precomposed `é` U+00E9 vs `e`+combining-acute U+0065 U+0301) to one form. **NFC is the client's responsibility** — the full NFC tables are far too large to run in Solidity, so the on-chain resolver does **not** and **cannot** verify normalization. Clients MUST normalize before encoding; a non-normalized input produces a different (still byte-valid) anchor that silently misses the intended Schelling point.
+2. **Percent-encoding of the reserved set (client-side, then resolver-validated).** Every byte in the **reserved set** is replaced with `%XX` using **UPPERCASE** hex. All other bytes — including high-bit (≥ `0x80`) UTF-8 bytes for non-ASCII names — are left as-is.
+
+**Reserved set** (must be percent-encoded):
+
+- the C0 control range `0x00`–`0x1F` and DEL `0x7F`;
+- space `0x20`;
+- `%` (`0x25`) — itself, so an escape is unambiguous;
+- the URI/path-special bytes: `"` `#` `&` `/` `:` `=` `?` `@` `[` `\` `]` `^` `` ` `` `{` `|` `}`.
+
+**Unreserved set**: every other byte, used literally (ASCII letters, digits, `.` `-` `_` `~`, sub-delims like `!` `$` `'` `(` `)` `*` `+` `,` `;`, and all `≥ 0x80` UTF-8 bytes).
+
+**Canonicalization rules enforced on-chain** (`EFSIndexer._isValidAnchorName`, single byte-pass, cheap): there is exactly **one** valid representation per name. The resolver **rejects**:
+
+- empty names, and the reserved relative segments `.` and `..`;
+- a **bare reserved byte** (it must be percent-encoded) — e.g. a literal space or `&`;
+- a malformed or truncated escape — `%`, `%2`, `%ZZ`;
+- a **lowercase-hex** escape — `%2f` is rejected; only `%2F` is canonical, so `%2f` and `%2F` can never both exist.
+
+The resolver validates only the byte-level canonical form (percent-encoding + uppercase hex); NFC is trusted from the client per step 1.
+
+**Worked example.** Human name `Q&A: Episode 5` → NFC (no change, already normalized) → percent-encode `&`, `:`, and the two spaces → on-chain `name` = `Q%26A%3A%20Episode%205`. A simple name like `readme.txt` has no reserved bytes and encodes to itself.
 
 ## 2. Property Schema
 **Purpose**: Free-floating value attached to a container via PIN placement under a *key anchor*. Symmetric with DATA (see §3) — both are standalone values placed via an edge attestation, not via `refUID`.
@@ -31,22 +60,24 @@ A use case picks PIN or TAG based on the nature of its predicate. Smart-contract
 `refUID = 0x0 (standalone — no parent reference)`
 - `value` (string)
 
-**Revocable**: `false` — PROPERTY is permanent, like DATA. The *binding* (which container the value applies to, from which attester) lives in the PIN and is the only thing that can move.
+**Revocable**: `false` (ADR-0052) — a PROPERTY value is dumb, shared, *interned* content (an "anchor for a string"), not a claim. Many PINs can point at one value (best-effort dedup); nobody owns the value. Non-revocability is what makes a value safely shareable — a shared value can't be yanked out from under the other bindings that point at it. This is symmetric with DATA (§3): value = content, claim = edge. The revocable *claim* is the **PIN** (the binding): which container the value applies to, from which attester. Removal or change of a property is done by revoking or superseding the PIN, never the value (see Removal below). The reserved-key `contentHash`/`size` claims (ADR-0049) are likewise interned values bound by a PIN; retracting one means revoking its PIN.
+
+**Write-time guards** (`EFSIndexer.onAttest`): `revocable` must be `false`; `expirationTime` must be `0`; `refUID` must be zero (standalone); the payload must be the exact canonical `abi.encode(value)` with no trailing bytes (else `NonCanonicalPayload`).
 
 **Details**: Per ADR-0035 (superseded by ADR-0041 for the cardinality story), PROPERTY no longer carries a `key` field and no longer targets a container via `refUID`. Instead:
 
-1. The **key** is the `name` of a PROPERTY-typed anchor (`schemaUID = PROPERTY_SCHEMA_UID`) under the target container.
+1. The **key** is the `name` of a PROPERTY-typed anchor (`forSchema = PROPERTY_SCHEMA_UID`) under the target container.
 2. The **value** is the PROPERTY attestation's sole field.
 3. The **binding** is a **PIN** with `definition = keyAnchorUID`, `refUID = propertyUID`. PIN is cardinality-1 (ADR-0041) — re-PINning the same key anchor from the same attester supersedes the previous binding in O(1).
 
-`EFSIndexer.onAttest` enforces only that PROPERTY is standalone (`refUID = 0x0`) and non-revocable — no target-kind validation. Per-attester singleton is a hard guarantee from `EdgeResolver._activeBySlot[keyAnchor][attester][PROPERTY_SCHEMA_UID]`. Reads are lens-scoped per ADR-0014.
+`EFSIndexer.onAttest` enforces that PROPERTY is standalone (`refUID = 0x0`) and non-revocable (rejects `attestation.revocable`, exactly like ANCHOR and DATA) — no target-kind validation. On a successful attest it emits `PropertyCreated(propertyUID, attester, valueHash)` where `valueHash = keccak256(bytes(value))` is the value's canonical content key (ADR-0052; ties to the forthcoming canonical-hashing spec) — the indexed topic clients use to find an existing value to dedup against. The binding's per-attester singleton is a hard guarantee from `EdgeResolver._activeBySlot[keyAnchor][attester][PROPERTY_SCHEMA_UID]`; a revoked PIN is excluded from reads by default (ADR-0051), which is how a property is removed. Reads are lens-scoped per ADR-0014.
 
 ### Example — contentType on a DATA
 
 ```
-DATA(contentHash = …, size = 42)                            // free-floating content identity
+DATA()                                                      // free-floating content identity (empty, ADR-0049)
   ↑ refUID
-Anchor<PROPERTY>(name = "contentType", schemaUID = PROPERTY) // key anchor under the DATA
+Anchor<PROPERTY>(name = "contentType", forSchema = PROPERTY) // key anchor under the DATA
   ↑ definition
 PIN(refUID = propertyUID, attester = alice)                  // binding (cardinality 1)
   ↓
@@ -58,7 +89,7 @@ PROPERTY(value = "image/jpeg")                               // free-floating va
 For address containers the key anchor is created with `recipient = addr` instead of `refUID` (specs/02 §1 permits this; ADR-0033 relies on it):
 
 ```
-Anchor<PROPERTY>(recipient = 0xAbC…, name = "name", schemaUID = PROPERTY)
+Anchor<PROPERTY>(recipient = 0xAbC…, name = "name", forSchema = PROPERTY)
   ↑ definition
 PIN(refUID = propertyUID, attester = alice)
   ↓
@@ -74,22 +105,33 @@ Other common (non-reserved) key anchors: `"previousVersion"` (value is a DATA UI
 
 ### Removal
 
-Revoke the PIN with `eas.revoke(pinUID)`. The PROPERTY value itself is non-revocable (permanent), but the binding is gone — the key anchor's slot becomes empty for that attester until a new PIN is attested. Replacing the value is just a new PIN at the same slot pointing at a new PROPERTY; the old PIN is superseded automatically (no extra revoke needed).
+The PROPERTY value is non-revocable interned content (ADR-0052) — removal and change happen at the **PIN** (the binding), never the value:
+
+- **Unbind a slot:** revoke the PIN with `eas.revoke(pinUID)`. The binding is gone — the key anchor's slot becomes empty for that attester until a new PIN is attested, and the slot is excluded from default reads (ADR-0051). The shared value attestation is untouched and other bindings that point at it are unaffected.
+- **Change a value:** attest a new PIN at the same slot pointing at a (new or existing, interned) PROPERTY; the old PIN is superseded automatically in O(1) (no extra revoke needed, ADR-0041).
+
+A single value attestation may be shared across many bindings (best-effort dedup — the upload flow can hardlink an existing value rather than mint a new one). Because the value is non-revocable, sharing is safe: unbinding one PIN never withdraws the value from the others.
 
 ## 3. Data Schema
-**Purpose**: Standalone file identity — content-addressed, non-revocable, location-independent.
+**Purpose**: Standalone file identity — pure, empty, non-revocable, location-independent.
+**Field string**: `""` (empty — no fields)
 **Structure**:
 `refUID = 0x0 (standalone — no parent reference)`
-- `contentHash` (bytes32) — keccak256 of the canonical file bytes
-- `size` (uint64) — byte count
+- *(no fields)* — a DATA attestation's payload is zero-length.
 
 **Revocable**: `false` — DATA is permanent. Once a file identity exists, it cannot be removed.
 
-**Details**: DATA attestations are standalone (refUID = 0x0). They represent file identity, not file location. A DATA is placed at a path via a PIN attestation (see Pin Schema below). The same DATA can be pinned into multiple paths by different attesters without duplication.
+**Write-time guards** (`EFSIndexer.onAttest`): `revocable` must be `false`; `expirationTime` must be `0`; `refUID` must be zero (standalone); the payload must be **empty** (zero-length) — any bytes are rejected, keeping the empty-DATA canonical invariant.
 
-Content-addressed deduplication: `EFSIndexer.dataByContentKey[contentHash]` stores the first DATA UID per content hash as the canonical entry. Subsequent DATAs with the same hash still get created (different UIDs) but the canonical lookup returns the first.
+**Details**: DATA is **pure identity** (ADR-0049). A DATA attestation asserts only "a file identity exists"; its EAS UID *is* the file's identity. DATA carries no fields — the on-wire payload is empty (zero-length). MIRRORs, folder placements (PIN), and metadata (PROPERTY) all reference the DATA **UID**, never a content hash. EFS is **not** content-addressed at the identity layer: two uploads of the same bytes get two distinct DATA UIDs.
 
-Metadata (content type, description, version history) is stored as PROPERTY attestations referencing the DATA UID. Retrieval URIs are stored as MIRROR attestations referencing the DATA UID.
+DATA attestations are standalone (refUID = 0x0) and non-revocable. They represent file identity, not file location. A DATA is placed at a path via a PIN attestation (see Pin Schema below). The same DATA can be pinned into multiple paths by different attesters without duplication.
+
+**`contentHash` and `size` are reserved-key PROPERTYs** (ADR-0049), not DATA fields. A content hash is client-supplied and unverifiable on-chain, so it is an attester *claim*, not authenticated identity. Each is bound to the DATA UID via the standard key-anchor + cardinality-1 PIN pattern (see §2), **lens-scoped per attester** — a reader trusts the hash/size from an attester they trust, and multiple coexisting claims (keccak, sha2-256, CID) may coexist. Reserved key anchor names: `contentHash`, `size` (and optionally `cid`). Hash values are self-describing (multibase multihash / CID) per the conventions spec.
+
+Content-addressed *dedup* is therefore no longer an intrinsic on-chain index. Prevention is best-effort client-side (query the property index for a trusted `contentHash` claim before upload, then hardlink via a new PIN instead of a new DATA); resolution of an existing duplicate to a canonical DATA is the REDIRECT primitive (ADR-0050). The legacy `EFSIndexer.dataByContentKey` mapping is retained as a declared (storage-order-preserving) but unused/advisory slot — it is no longer written.
+
+Other metadata (content type, description, version history) is likewise stored as PROPERTY attestations bound to the DATA UID. Retrieval URIs are stored as MIRROR attestations referencing the DATA UID.
 
 ## 3a. Mirror Schema
 **Purpose**: Retrieval method for a DATA attestation — maps a transport type to a URI.
@@ -100,17 +142,27 @@ Metadata (content type, description, version history) is stored as PROPERTY atte
 
 **Revocable**: `true`
 
+**Write-time guards** (`MirrorResolver.onAttest`): `revocable` must be `true` (`NotRevocable`); `expirationTime` must be `0` (`HasExpiration`); the payload must be the exact canonical `abi.encode(transportDefinition, uri)` with no trailing bytes (else `NonCanonicalPayload`); `uri` must pass the scheme allowlist (below) and be ≤ `MAX_URI_LENGTH`; `transportDefinition` must be a `/transports` descendant; only the canonical MIRROR schema is accepted (foreign schemas → `WrongSchema`).
+
 **Details**: MIRRORs attach retrieval methods to a DATA. The `MirrorResolver` contract validates that `refUID` points to a valid DATA attestation and `transportDefinition` points to a valid Anchor. No singleton enforcement — multiple mirrors per transport type per attester are allowed.
 
+**URI scheme allowlist** (write-time, in `MirrorResolver._isAllowedScheme`): `web3://`, `ipfs://`, `ar://`, `https://`, `ftp://`, `s3://`, `gs://`, `dat://`, `rsync://`, `magnet:`, `bittorrent://`. Scheme safety is a *client-render* concern, not a write-time one — the router never executes a URI — so the allowlist is permissive about transport/storage schemes and rejects only active-content / inline-payload schemes (`javascript:`, `data:`) that enable XSS when a client renders a mirror in an `<a href>`. This widened set supersedes the original ADR-0023 set (`web3/ipfs/ar/https/magnet` only) in part; the XSS-rejection intent of ADR-0023 is preserved.
+
 ### Transport Definition Anchors
-Well-known transport types are created at deploy time under `/transports/`:
+Well-known transport types are created at deploy time under `/transports/` — all **eleven** allowed schemes get a canonical, un-squattable definition anchor (bootstrap seeds them via `SystemAccount`, so a later writer can't claim the canonical transport name):
 - `/transports/onchain` — `web3://` URIs pointing to SSTORE2 chunk managers
-- `/transports/ipfs` — `ipfs://` URIs
 - `/transports/arweave` — `ar://` URIs
+- `/transports/ipfs` — `ipfs://` URIs
 - `/transports/magnet` — `magnet:` URIs
 - `/transports/https` — `https://` URIs
+- `/transports/ftp` — `ftp://` URIs
+- `/transports/s3` — `s3://` URIs
+- `/transports/gs` — `gs://` URIs
+- `/transports/dat` — `dat://` URIs
+- `/transports/rsync` — `rsync://` URIs
+- `/transports/bittorrent` — `bittorrent://` URIs
 
-The transport preference order for serving is: `web3://` (onchain) > `ar://` > `ipfs://` > `magnet:` > `https://`. See ADR-0012 for rationale.
+The transport preference order for serving keeps the original five ranked per ADR-0012: `web3://` (onchain) > `ar://` > `ipfs://` > `magnet:` > `https://`. The six newly-allowed off-chain schemes (`ftp/s3/gs/dat/rsync/bittorrent`) share the lowest priority tier with `https://` (router `_getBestMirrorURI` priority 4). All non-`web3://` schemes are served as `message/external-body` redirects; only `web3://` is read on-chain (SSTORE2). The widened allowlist is the ADR-0023→ADR-0048 supersession; see ADR-0012 for the priority rationale.
 
 ## 4. Pin Schema (cardinality 1)
 **Purpose**: Singleton edge — at most one active PIN per `(attester, definition, targetSchema)` slot. Used for file placement, PROPERTY value binding, and any predicate where "this slot holds exactly one thing" is the right semantic. ADR-0041.
@@ -119,6 +171,8 @@ The transport preference order for serving is: `web3://` (onchain) > `ar://` > `
 - `definition` (bytes32) — The Anchor UID that names the slot. For file placement, this is the path Anchor (e.g., the `cat.jpg` Anchor under `/memes/`). For PROPERTY value binding, this is the key anchor (e.g., the `contentType` anchor under a DATA).
 
 **Revocable**: `true`
+
+**Write-time guards** (`EdgeResolver.onAttest`): `revocable` must be `true` (`NotRevocable`); `expirationTime` must be `0` (`HasExpiration`); the payload must be exactly 32 bytes — `abi.encode(bytes32 definition)` — any other length is rejected (`NonCanonicalPayload`).
 
 **Cardinality**: 1. Re-PINning the same `(attester, definition, targetSchema)` slot supersedes the prior PIN in O(1) — `EdgeResolver._activeBySlot` updates atomically and the prior PIN's edge entry is cleared from the active map.
 
@@ -144,6 +198,8 @@ Call `eas.revoke(pinUID)`. `EdgeResolver.onRevoke` clears the slot if the revoke
 - `weight` (int256) — Generic per-entry metadata. Sort key, score, ranking, vote weight, recency — the kernel does not interpret it; consumers and sort overlays (see [07-Sort-Overlay-Architecture.md](./07-Sort-Overlay-Architecture.md)) read it inline alongside the entry's UID.
 
 **Revocable**: `true`
+
+**Write-time guards** (`EdgeResolver.onAttest`): `revocable` must be `true` (`NotRevocable`); `expirationTime` must be `0` (`HasExpiration`); the payload must be exactly 64 bytes — `abi.encode(bytes32 definition, int256 weight)` — any other length is rejected (`NonCanonicalPayload`).
 
 **Cardinality**: N. Each `(attester, target, definition)` is a distinct edge; re-attesting the same triple updates the entry's UID and weight in place (no new entry, no duplication). Different targets under the same `(attester, definition)` accumulate as independent entries.
 
@@ -178,7 +234,7 @@ Complex aggregation logic (Sybil resistance, reputation weighting, running avera
 Two distinct concepts used in the codebase:
 
 - **Active TAG** — kernel concept (ADR-0041 §4). A TAG is active if and only if it exists on-chain and is not EAS-revoked. Weight does not affect activity; `weight = -999` is still active.
-- **Effective TAG** — client-layer projection (ADR-0042). For the explorer's descriptive-label include/exclude filter (`FileBrowser.resolveTagSet`), an active TAG is *effective* iff `weight >= 0`. Negative-weight TAGs remain active on-chain but are suppressed for filter sets. `weight = 0` is effective. The same projection is also available to on-chain consumers with caller-chosen thresholds via `EFSFileView.getDirectoryPageFiltered(... excludeTagDefs[], minWeights[] ...)` (ADR-0048) — parallel arrays (one threshold per exclude tag, union across them), the view layer compares `weight >= minWeights[k]`; the kernel still never interprets weight (ADR-0041 §4).
+- **Effective TAG** — client-layer projection (ADR-0042). For the explorer's descriptive-label include/exclude filter (`FileBrowser.resolveTagSet`), an active TAG is *effective* iff `weight >= 0`. Negative-weight TAGs remain active on-chain but are suppressed for filter sets. `weight = 0` is effective. The same projection is also available to on-chain consumers with caller-chosen thresholds via `EFSFileView.getDirectoryPageFiltered(... excludeTagDefs[], minWeights[] ...)` (ADR-0054) — parallel arrays (one threshold per exclude tag, union across them), the view layer compares `weight >= minWeights[k]`; the kernel still never interprets weight (ADR-0041 §4).
 
 This distinction applies only to the descriptive-label filter path. Folder visibility (ADR-0038), `hasActiveTagFromAny`, sort overlays, and all contract helpers use the kernel "active = unrevoked" definition unchanged.
 
@@ -192,6 +248,9 @@ This distinction applies only to the descriptive-label filter path. Folder visib
 If you write a PIN where a TAG is correct, the slot can only hold one value (subsequent writes supersede instead of accumulating). If you write a TAG where a PIN is correct, on-chain consumers can't read "the value" without ambiguity (which entry is canonical?). The schema choice is the API selector — pick deliberately.
 
 ## 5. Sort Info Schema
+
+> **Deferred — NOT in the Sepolia freeze set.** SORT_INFO remains a working overlay design (see `07-Sort-Overlay-Architecture.md`); it is documented here but is not registered as a frozen schema in the nine-schema freeze set.
+
 **Purpose**: Declares a named sort overlay attached to a directory or list.
 **Structure**:
 `refUID = Naming Anchor UID — the Anchor is a child of the directory being sorted (anchorSchema = SORT_INFO_SCHEMA)`
@@ -267,12 +326,49 @@ See [Lists and Collections](./06-Lists-and-Collections.md) for the full architec
 
 See [ADR-0044](../docs/adr/0044-list-and-list-entry-schemas.md) and [Lists and Collections](./06-Lists-and-Collections.md) for full design rationale.
 
+## Schema 10: REDIRECT
+
+**Purpose**: The trust-scoped "this points at that" primitive (ADR-0050): canonical/dedup-resolution for duplicate DATA, version supersession, and path symlinks. Because DATA is pure identity (ADR-0049), identical bytes mint distinct DATA UIDs; REDIRECT is how an attester asserts "B is the same as / redirects to A."
+**Field string** (FROZEN): `"bytes32 target, uint16 kind"`
+**Resolver**: `AliasResolver` (write-time guards only)
+**Revocable**: `true` (a redirect can be retracted)
+
+**Fields**:
+- `target` (bytes32) — destination DATA or Anchor UID (must be nonzero, must not equal the source).
+- `kind` (uint16) — redirect-class discriminator. `uint16` (not `uint8`) per ADR-0050: `kind` is an open-ended relationship *vocabulary*, not a counter, and widening is free (both pad to one ABI word). **Only the field string is frozen; the kind taxonomy is resolver logic + client convention (versioned/upgradeable), NOT part of the UID.**
+
+`refUID` = the **source**: the duplicate DATA for `sameAs`/`supersededBy`; the source path Anchor for `symlink`.
+
+**Kinds taxonomy** (initial — evolvable, not in the UID):
+- `0 = sameAs` — strong dedup. Source + target both DATA. Followed at read time.
+- `1 = supersededBy` — version replacement. Source + target both DATA. Followed at read time.
+- `2 = symlink` — path → target. Source ANCHOR; target ANCHOR or DATA. Followed one hop.
+- `3+ = reserved` — recorded but **not type-checked** by the resolver (e.g. `relatedVersion`: a weak discovery hint that is **never** auto-followed). Follow rules for these are decided by the read-time resolution spec, not the resolver.
+
+**Write-time guards enforced by `AliasResolver`** (correctness before any mainnet burn):
+- `a.schema == redirectSchemaUID` (self-derived in `initialize()` against the proxy address; rejects foreign schemas pointed at the resolver) else `WrongSchema`.
+- payload exactly 64 bytes else `BadPayload`.
+- `target != 0` else `ZeroTarget`.
+- `target != source` (no trivial self-loop) else `SelfLoop`.
+- Per-kind typing (source/target schemas read via `eas.getAttestation(uid).schema`):
+  - `sameAs` (0) / `supersededBy` (1): both source and target must be DATA (`SourceNotData` / `TargetNotData`).
+  - `symlink` (2): source must be an ANCHOR (`SourceNotAnchor`); target must be ANCHOR or DATA (`TargetNotAnchorOrData`).
+  - `kind >= 3`: no typing (reserved); only the `target != 0` / `target != source` guards apply.
+
+**Read-time resolution is client/spec, not the resolver.** The resolver enforces only **write-time** correctness (direct self-loops, typing). **Multi-hop cycle handling** (resolve to the lowest UID in the strongly-connected component — start-independent), **chain following**, **depth caps** (`D_MAX`), **lens precedence** (ADR-0031), and **kind-following rules** all live in the client/router + a later Durable resolution spec (ADR-0050 §"Write-time guards vs read-time resolution"). The resolver cannot afford to walk the graph on each write.
+
+**Reverse fan-in** ("what points at me?") is intentionally not indexed on-chain by `AliasResolver` — it is the off-chain indexer's job (a future on-chain advisory index is addable as upgradeable logic; ADR-0050 §4).
+
+**Symlink / hardlink mapping**: a *hardlink* (one DATA PINned at many path Anchors) is native and untouched — no follow, no cycle. A *symlink* is `REDIRECT kind=2`. *Canonical/dedup* is `REDIRECT kind=0` (`sameAs`).
+
+See [ADR-0050](../docs/adr/0050-redirect-canonical-symlink-schema.md) for full design rationale.
+
 ## Schema Hierarchy
 To represent a standard filesystem interaction where a file has a name within a folder:
 1. **Parent Folder** (e.g., Anchor "memes") →
 2. **File Anchor** (name: "vitalik.jpg", `refUID` points to Parent Folder) →
-3. **DATA** (standalone, `refUID = 0x0`, holds `contentHash` and `size`) — placed at the file Anchor via a **PIN** (cardinality 1 per ADR-0041).
-4. **contentType key anchor + PROPERTY + PIN** (ADR-0035 + ADR-0041): `Anchor<PROPERTY>(refUID=DATA UID, name="contentType")` + `PROPERTY(value="image/jpeg")` + `PIN(definition=that anchor, refUID=that property)`.
+3. **DATA** (standalone, `refUID = 0x0`, empty payload — pure identity per ADR-0049) — placed at the file Anchor via a **PIN** (cardinality 1 per ADR-0041).
+4. **contentType / contentHash / size key anchors + PROPERTY + PIN** (ADR-0035 + ADR-0041 + ADR-0049): e.g. `Anchor<PROPERTY>(refUID=DATA UID, name="contentType")` + `PROPERTY(value="image/jpeg")` + `PIN(definition=that anchor, refUID=that property)`. `contentHash` and `size` are reserved-key PROPERTYs bound the same way (ADR-0049), lens-scoped per attester.
 5. **MIRROR** (`refUID` = DATA UID, `transportDefinition = /transports/onchain`, `uri = web3://0xABC`) — retrieval method.
 6. **Folder-visibility TAGs** (ADR-0038) — for every generic ancestor folder on the path from the file's parent up to root exclusive, if the uploader has no active `TAG(definition=DATA_SCHEMA_UID, refUID=ancestor)` yet, emit one. Cardinality N (an attester contains many such folders).
 

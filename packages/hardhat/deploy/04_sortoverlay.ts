@@ -2,11 +2,16 @@ import { HardhatRuntimeEnvironment } from "hardhat/types";
 import { DeployFunction } from "hardhat-deploy/types";
 import { Contract } from "ethers";
 import { redeployIfArgsChanged } from "../deploy-utils";
+import { legacySuperseded } from "../deploy-lib/superseded";
 
 // EAS Addresses (Sepolia) — same as 01_indexer.ts
 const EAS_ADDRESS = "0xC2679fBD37d54388Ce493F1DB75320D236e1815e";
 
 const deployEFSSortOverlay: DeployFunction = async function (hre: HardhatRuntimeEnvironment) {
+  // AGENT-NOTE (Phase D): SORT_INFO + EFSSortOverlay are DEFERRED (not in the 9-schema freeze set).
+  // Superseded by deploy/00_efs_core.ts; neutralized. Re-added additively in a later effort.
+  if (await legacySuperseded(hre, "04_sortoverlay")) return;
+
   const { deployer } = await hre.getNamedAccounts();
   const { deploy } = hre.deployments;
   const ethers = hre.ethers;

@@ -19,6 +19,8 @@ import { expect } from "chai";
 import { ethers } from "hardhat";
 import { EFSIndexer, EdgeResolver, MirrorResolver, EFSFileView, EAS, SchemaRegistry } from "../typechain-types";
 import { Signer, ZeroAddress, ZeroHash } from "ethers";
+import { deployIndexerProxy } from "./helpers/deployIndexerProxy";
+import { deployResolverProxy } from "./helpers/deployResolverProxy";
 
 const ZERO_BYTES32 = ZeroHash;
 const NO_EXPIRATION = 0n;
@@ -42,7 +44,6 @@ describe("EFS Data Model — E2E Integration", function () {
   let pinSchemaUID: string;
   let tagSchemaUID: string;
   let mirrorSchemaUID: string;
-  let blobSchemaUID: string;
 
   let rootUID: string;
 
@@ -65,8 +66,6 @@ describe("EFS Data Model — E2E Integration", function () {
 
   const encodeAnchor = (name: string, schema: string = ZERO_BYTES32) =>
     enc.encode(["string", "bytes32"], [name, schema]);
-
-  const encodeData = (contentHash: string, size: bigint) => enc.encode(["bytes32", "uint64"], [contentHash, size]);
 
   const encodePropertyValue = (value: string) => enc.encode(["string"], [value]);
 
@@ -112,7 +111,10 @@ describe("EFS Data Model — E2E Integration", function () {
     return getUID(await tx.wait());
   }
 
-  async function createData(contentHash: string, size: bigint, signer: Signer = owner): Promise<string> {
+  // DATA is an empty schema — pure identity (ADR-0049). The `_contentHash`/`_size` params are
+  // ignored (kept so call sites read clearly about what the DATA stands for); the DATA itself
+  // carries no inline payload.
+  async function createData(_contentHash: string, _size: bigint, signer: Signer = owner): Promise<string> {
     const tx = await eas.connect(signer).attest({
       schema: dataSchemaUID,
       data: {
@@ -120,7 +122,7 @@ describe("EFS Data Model — E2E Integration", function () {
         expirationTime: NO_EXPIRATION,
         revocable: false,
         refUID: ZERO_BYTES32,
-        data: encodeData(contentHash, size),
+        data: "0x",
         value: 0n,
       },
     });
@@ -333,29 +335,33 @@ describe("EFS Data Model — E2E Integration", function () {
     eas = await EASFactory.deploy(await registry.getAddress());
     await eas.waitForDeployment();
 
-    // Nonce prediction. Deployment order:
-    //   nonce+0: EdgeResolver deploy
-    //   nonce+1: MirrorResolver deploy
-    //   nonce+2..8: 7 schema registrations (anchor, property, data, PIN, TAG, mirror, blob)
-    //   nonce+9: EFSIndexer deploy
+    // Nonce prediction (EdgeResolver, MirrorResolver, and EFSIndexer are all proxy-ified, ADR-0048):
+    //   nonce+0:  EdgeResolver implementation deploy
+    //   nonce+1:  EdgeResolver proxy deploy (the resolver baked into the PIN/TAG schema UIDs)
+    //   nonce+2:  MirrorResolver implementation deploy
+    //   nonce+3:  MirrorResolver proxy deploy (the resolver baked into the MIRROR schema UID)
+    //   nonce+4..9: 6 schema registrations (anchor, property, data, PIN, TAG, mirror)
+    //   nonce+10: EFSIndexer implementation deploy
+    //   nonce+11: EFSIndexer proxy deploy (the resolver baked into the EFS schema UIDs)
     const currentNonce = await ethers.provider.getTransactionCount(ownerAddr);
-    const futureEdgeResolverAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce });
-    const futureMirrorResolverAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce + 1 });
-    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce + 9 });
+    // EdgeResolver PROXY is the resolver (ADR-0048): impl = +0, proxy = +1. See deployResolverProxy().
+    const futureEdgeResolverAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce + 1 });
+    // MirrorResolver PROXY is the resolver (ADR-0048): impl = +2, proxy = +3.
+    const futureMirrorResolverAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce + 3 });
+    // EFSIndexer PROXY is the resolver (ADR-0048): impl = +10, proxy = +11. See deployIndexerProxy().
+    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce + 11 });
 
     // Pre-compute schema UIDs
     anchorSchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
-      ["string name, bytes32 schemaUID", futureIndexerAddr, false],
+      ["string name, bytes32 forSchema", futureIndexerAddr, false],
     );
     propertySchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
       ["string value", futureIndexerAddr, false],
     );
-    dataSchemaUID = ethers.solidityPackedKeccak256(
-      ["string", "address", "bool"],
-      ["bytes32 contentHash, uint64 size", futureIndexerAddr, false],
-    );
+    // DATA is an empty schema — pure identity (ADR-0049).
+    dataSchemaUID = ethers.solidityPackedKeccak256(["string", "address", "bool"], ["", futureIndexerAddr, false]);
     pinSchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
       ["bytes32 definition", futureEdgeResolverAddr, true],
@@ -368,43 +374,44 @@ describe("EFS Data Model — E2E Integration", function () {
       ["string", "address", "bool"],
       ["bytes32 transportDefinition, string uri", futureMirrorResolverAddr, true],
     );
-    blobSchemaUID = ethers.solidityPackedKeccak256(
-      ["string", "address", "bool"],
-      ["string mimeType, uint8 storageType, bytes location", ZeroAddress, true],
-    );
 
-    // Deploy resolvers
-    const EdgeResolverFactory = await ethers.getContractFactory("EdgeResolver");
-    edgeResolver = await EdgeResolverFactory.deploy(
-      await eas.getAddress(),
-      pinSchemaUID,
-      tagSchemaUID,
-      futureIndexerAddr,
-      await registry.getAddress(),
+    // Deploy resolvers. EdgeResolver behind a proxy (ADR-0048): impl + proxy; initialize() sets the
+    // PIN/TAG schema UIDs + partner refs. The proxy address is baked into the PIN/TAG schema UIDs.
+    edgeResolver = await deployResolverProxy<EdgeResolver>(
+      "EdgeResolver",
+      [await eas.getAddress()],
+      [pinSchemaUID, tagSchemaUID, futureIndexerAddr, await registry.getAddress()],
+      owner,
     );
+    expect(await edgeResolver.getAddress()).to.equal(futureEdgeResolverAddr);
 
-    const MirrorResolverFactory = await ethers.getContractFactory("MirrorResolver");
-    mirrorResolver = await MirrorResolverFactory.deploy(await eas.getAddress(), futureIndexerAddr);
+    // MirrorResolver behind a proxy (ADR-0048): impl + proxy; initialize() wires the (predicted)
+    // indexer proxy address + owner. The proxy address is baked into the MIRROR schema UID.
+    mirrorResolver = await deployResolverProxy<MirrorResolver>(
+      "MirrorResolver",
+      [await eas.getAddress()],
+      [futureIndexerAddr, ownerAddr],
+      owner,
+    );
+    expect(await mirrorResolver.getAddress()).to.equal(futureMirrorResolverAddr);
 
     // Register schemas
-    await (await registry.register("string name, bytes32 schemaUID", futureIndexerAddr, false)).wait();
+    await (await registry.register("string name, bytes32 forSchema", futureIndexerAddr, false)).wait();
     await (await registry.register("string value", futureIndexerAddr, false)).wait();
-    await (await registry.register("bytes32 contentHash, uint64 size", futureIndexerAddr, false)).wait();
+    await (await registry.register("", futureIndexerAddr, false)).wait(); // DATA: empty schema (ADR-0049)
     await (await registry.register("bytes32 definition", await edgeResolver.getAddress(), true)).wait();
     await (await registry.register("bytes32 definition, int256 weight", await edgeResolver.getAddress(), true)).wait();
     await (
       await registry.register("bytes32 transportDefinition, string uri", await mirrorResolver.getAddress(), true)
     ).wait();
-    await (await registry.register("string mimeType, uint8 storageType, bytes location", ZeroAddress, true)).wait();
 
-    // Deploy Indexer
-    const IndexerFactory = await ethers.getContractFactory("EFSIndexer");
-    indexer = await IndexerFactory.deploy(
+    // Deploy Indexer behind a proxy (ADR-0048)
+    indexer = await deployIndexerProxy(
       await eas.getAddress(),
       anchorSchemaUID,
       propertySchemaUID,
       dataSchemaUID,
-      blobSchemaUID,
+      owner,
     );
     expect(await indexer.getAddress()).to.equal(futureIndexerAddr);
 
@@ -462,7 +469,7 @@ describe("EFS Data Model — E2E Integration", function () {
     });
 
     it("on-chain upload: DATA + contentType PROPERTY + onchain MIRROR + PIN placement", async function () {
-      const { dataUID, fileSlotUID, contentHash } = await uploadFile(
+      const { dataUID, fileSlotUID } = await uploadFile(
         "# Hello World\nSome markdown content.",
         "text/markdown",
         onchainTransportUID,
@@ -472,13 +479,14 @@ describe("EFS Data Model — E2E Integration", function () {
         "hello.md",
       );
 
-      // Verify DATA is standalone
+      // Verify DATA is standalone and empty (ADR-0049 — pure identity, no inline fields)
       const att = await eas.getAttestation(dataUID);
       expect(att.refUID).to.equal(ZERO_BYTES32);
       expect(att.revocable).to.equal(false);
+      expect(att.data).to.equal("0x");
 
-      // Verify dedup key
-      expect(await indexer.dataByContentKey(contentHash)).to.equal(dataUID);
+      // AGENT-NOTE: dropped the `dataByContentKey` dedup-key assertion — DATA is empty (ADR-0049)
+      // and carries no contentHash; dedup is now property-index + REDIRECT work (ADR-0050).
 
       // Verify contentType PROPERTY exists (PIN-bound under key anchor — ADR-0041)
       const ctKeyAnchor = await indexer.resolveAnchor(dataUID, "contentType", propertySchemaUID);
@@ -514,7 +522,8 @@ describe("EFS Data Model — E2E Integration", function () {
       expect(slotItems.length).to.equal(1);
       expect(slotItems[0].uid).to.equal(dataUID);
       expect(slotItems[0].hasData).to.equal(true);
-      expect(slotItems[0].contentHash).to.equal(contentHash);
+      // DATA is empty (ADR-0049); contentHash is no longer an inline field → listing surfaces 0.
+      expect(slotItems[0].contentHash).to.equal(ZERO_BYTES32);
     });
 
     it("IPFS paste: DATA + contentType + ipfs MIRROR + PIN placement", async function () {
@@ -1002,33 +1011,25 @@ describe("EFS Data Model — E2E Integration", function () {
   });
 
   // =========================================================================
-  // 7. DEDUP (dataByContentKey)
+  // 7. CONTENT DEDUP — removed at the DATA layer (ADR-0049)
   // =========================================================================
 
-  describe("Content Dedup", function () {
-    it("canonical DATA for a contentHash is the first created", async function () {
+  // AGENT-NOTE: the old "Content Dedup" block tested `indexer.dataByContentKey` canonicalization
+  // (first-created-wins) and `fileView.getCanonicalData` returning that canonical UID. DATA is
+  // now an empty schema (ADR-0049) carrying no contentHash, so there is no intrinsic content-hash
+  // index and `dataByContentKey` is no longer written. Dedup *prevention* is best-effort
+  // client-side (query the property index before upload); dedup *resolution* is the REDIRECT
+  // primitive (ADR-0050). Both are future PROPERTY/SDK work, out of scope here.
+  describe("Content Dedup (deprecated, ADR-0049)", function () {
+    it("getCanonicalData is a deprecated no-op returning bytes32(0)", async function () {
+      // Even for content that has been "uploaded", the reverse lookup no longer resolves —
+      // identical bytes now mint distinct DATA UIDs and there is no canonical index.
       const contentHash = hash("identical bytes");
       const first = await createData(contentHash, 15n);
       const second = await createData(contentHash, 15n);
 
-      expect(first).to.not.equal(second);
-      expect(await indexer.dataByContentKey(contentHash)).to.equal(first);
-      expect(await fileView.getCanonicalData(contentHash)).to.equal(first);
-    });
-
-    it("different content produces different canonical entries", async function () {
-      const h1 = hash("content A");
-      const h2 = hash("content B");
-      const d1 = await createData(h1, 9n);
-      const d2 = await createData(h2, 9n);
-
-      expect(await indexer.dataByContentKey(h1)).to.equal(d1);
-      expect(await indexer.dataByContentKey(h2)).to.equal(d2);
-    });
-
-    it("getCanonicalData returns zero for unknown content hash", async function () {
-      const unknownHash = hash("never uploaded");
-      expect(await fileView.getCanonicalData(unknownHash)).to.equal(ZERO_BYTES32);
+      expect(first).to.not.equal(second); // identical bytes → distinct DATA UIDs (no dedup)
+      expect(await fileView.getCanonicalData(contentHash)).to.equal(ZERO_BYTES32);
     });
   });
 
@@ -1396,14 +1397,7 @@ describe("EFS Data Model — E2E Integration", function () {
 
       // After first placement, folder is in alice's root children-by-attester exactly once.
       expect(await indexer.getChildrenByAttesterCount(rootUID, aliceAddr)).to.equal(1n);
-      let children = await indexer["getChildrenByAttester(bytes32,address,uint256,uint256,bool,bool)"](
-        rootUID,
-        aliceAddr,
-        0,
-        10,
-        false,
-        false,
-      );
+      let children = await indexer.getChildrenByAttester(rootUID, aliceAddr, 0, 10, false, false);
       expect(children).to.deep.equal([folderUID]);
 
       // Revoke the only PIN. EdgeResolver will fire clearContains(folder, alice), flipping
@@ -1420,14 +1414,7 @@ describe("EFS Data Model — E2E Integration", function () {
 
       // Count and contents must remain 1/[folder] — the fix's guard prevents the second push.
       expect(await indexer.getChildrenByAttesterCount(rootUID, aliceAddr)).to.equal(1n);
-      children = await indexer["getChildrenByAttester(bytes32,address,uint256,uint256,bool,bool)"](
-        rootUID,
-        aliceAddr,
-        0,
-        10,
-        false,
-        false,
-      );
+      children = await indexer.getChildrenByAttester(rootUID, aliceAddr, 0, 10, false, false);
       expect(children).to.deep.equal([folderUID]);
 
       // Sanity: folder's flag is restored so it shows up in lens-filtered views again.
@@ -1863,8 +1850,10 @@ describe("EFS Data Model — E2E Integration", function () {
       // (Bob's NSFW TAG is at /tags/nsfw, not /photos/vacation/)
       expect(await indexer.containsAttestations(vacationUID, bobAddr)).to.equal(false);
 
-      // ── Dedup: re-uploading same beach photo returns same canonical ──
-      expect(await fileView.getCanonicalData(photo1.contentHash)).to.equal(photo1.dataUID);
+      // AGENT-NOTE: dropped the dedup re-upload sub-assertion — DATA is empty (ADR-0049), so
+      // `getCanonicalData` is a deprecated no-op (always bytes32(0)). Content dedup is now
+      // best-effort client-side via the property index + REDIRECT (ADR-0050); future work.
+      expect(await fileView.getCanonicalData(photo1.contentHash)).to.equal(ZERO_BYTES32);
     });
   });
 });

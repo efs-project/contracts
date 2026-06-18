@@ -196,7 +196,7 @@ export const FileBrowser = ({
 
   // Tag filter state: null = no filter active; Set<string> = allowed DATA/anchor UIDs
   const [tagFilteredUIDs, setTagFilteredUIDs] = useState<Set<string> | null>(null);
-  // EXCLUDE filtering is applied on-chain (ADR-0048): the active exclude tags'
+  // EXCLUDE filtering is applied on-chain (ADR-0054): the active exclude tags'
   // definition UIDs are resolved below and passed to `getDirectoryPageFiltered`,
   // so the lens-scoped listing comes back already filtered. No client-side
   // exclude scan / exclude UID set is kept.
@@ -367,7 +367,7 @@ export const FileBrowser = ({
   // Resolve INCLUDE tag filter names → definition UIDs → tagged target sets.
   // Sources: tagFilter (URL, include), drawerTagFilters include entries.
   // EXCLUDE filtering is no longer resolved here — it is pushed on-chain via
-  // `getDirectoryPageFiltered` (ADR-0048); see the `excludeTagDefUIDs` effect
+  // `getDirectoryPageFiltered` (ADR-0054); see the `excludeTagDefUIDs` effect
   // below. This effect only scans full target sets for INCLUDE tags.
   useEffect(() => {
     const urlIncludeNames = tagFilter
@@ -545,7 +545,7 @@ export const FileBrowser = ({
     [drawerTagFilters],
   );
 
-  // Resolve the EXCLUDE tags' DEFINITION UIDs (ADR-0048). Unlike the INCLUDE
+  // Resolve the EXCLUDE tags' DEFINITION UIDs (ADR-0054). Unlike the INCLUDE
   // path we do NOT paginate each tag's full target set — the on-chain filter in
   // `getDirectoryPageFiltered` does the per-item exclusion. We only need the def
   // UID per active exclude tag. Def UIDs that resolve to zero (tag not yet
@@ -1045,7 +1045,7 @@ export const FileBrowser = ({
     fileViewAddress: efsFileViewInfo?.address as `0x${string}` | undefined,
     fileViewAbi: efsFileViewInfo?.abi as any,
     pageSize,
-    // EXCLUDE tags applied on-chain (ADR-0048). Empty array ⇒ unfiltered read.
+    // EXCLUDE tags applied on-chain (ADR-0054). Empty array ⇒ unfiltered read.
     excludeTagDefs: excludeTagDefUIDs,
     minWeights: excludeMinWeights,
     // SHOULD-FIX 1: hold the fetch while excludes are expected but unresolved so
@@ -1076,7 +1076,7 @@ export const FileBrowser = ({
     // excluded (system/nsfw-tagged) folder surfaced via LIST visibility would
     // re-enter the merged `rawItems` unfiltered. LIST anchors themselves carry no
     // descriptive tag and have no placement PIN, so getDirectoryPageFiltered still
-    // passes them through per ADR-0048 — only phase-0 folders get filtered.
+    // passes them through per ADR-0054 — only phase-0 folders get filtered.
     excludeTagDefs: excludeTagDefUIDs,
     minWeights: excludeMinWeights,
     // Gate on `!excludesPending` symmetrically with the file/folder query above so
@@ -1132,7 +1132,7 @@ export const FileBrowser = ({
   }, [lensAddresses.length, lensItems, lensListItems]);
 
   // When an INCLUDE tag filter is active, resolve DATA UIDs for each file item.
-  // (EXCLUDE filtering is on-chain now — ADR-0048 — so the map is only needed to
+  // (EXCLUDE filtering is on-chain now — ADR-0054 — so the map is only needed to
   // back the client-side INCLUDE intersection in `matchesUID`.)
   // AGENT-NOTE (ADR-0041): file placement is now PIN (cardinality 1) — there's at
   // most one active DATA per (attester, anchor), so we use the O(1) `getActivePinTarget`
@@ -1199,7 +1199,7 @@ export const FileBrowser = ({
   }, [tagFilteredUIDs, rawItems, publicClient, edgeResolverAddress, dataSchemaUID, connectedAddress, lensAddresses]);
 
   // Apply the INCLUDE tag filter. tagFilteredUIDs: item must be in set (null = no
-  // filter). EXCLUDE filtering happens on-chain now (ADR-0048) — see
+  // filter). EXCLUDE filtering happens on-chain now (ADR-0054) — see
   // `excludeTagDefUIDs` → `getDirectoryPageFiltered`; nothing to do here.
   const matchesUID = (item: any, uidSet: Set<string>): boolean => {
     const anchorUID = item.uid.toLowerCase();
@@ -1220,7 +1220,7 @@ export const FileBrowser = ({
     return true;
   });
 
-  // `system`- and `nsfw`-tagged items are hidden ON-CHAIN (ADR-0048):
+  // `system`- and `nsfw`-tagged items are hidden ON-CHAIN (ADR-0054):
   // `drawerTagFilters` carries `{nsfw, system}: "exclude"` as permanent defaults,
   // their def UIDs flow into `excludeTagDefUIDs` → `getDirectoryPageFiltered`, so
   // `rawItems` already excludes them. Toggling `system` off in the Tag Filters

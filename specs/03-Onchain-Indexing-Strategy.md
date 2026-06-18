@@ -22,7 +22,7 @@ To make fast directory browsing possible, two resolver contracts maintain comple
 
 **EFSIndexer** (resolver for ANCHOR, DATA, PROPERTY schemas):
 1. When an Anchor is created, EAS calls `onAttest` → the indexer records parent–child relationships, name lookups, and schema-filtered child lists.
-2. When a standalone DATA is created (`refUID = 0x0`), the indexer records content-addressed deduplication via `dataByContentKey[contentHash]`.
+2. When a standalone DATA is created (`refUID = 0x0`), the indexer records its UID and attester. DATA is an **empty schema** (pure identity, ADR-0049); `contentHash` and `size` are reserved-key PROPERTYs bound to the DATA UID via PIN, not DATA fields. Content-addressed dedup is best-effort client-side (see ADR-0049/0050).
 3. When a PROPERTY or MIRROR references a DATA, the indexer records it in referencing indices.
 
 **EdgeResolver** (resolver for PIN and TAG schemas — ADR-0041):
@@ -36,29 +36,62 @@ The bookkeeping is **schema-aware**: `_edgeHash(attester, targetID, definition, 
 Smart-contract readers split by cardinality:
 
 - **PIN** (Shape A — singular): `getActivePin(definition, attester, targetSchema) → bytes32 pinUID` and `getActivePinTarget(...) → bytes32 targetID`. O(1).
-- **TAG** (Shape B — list): `getActiveTagEntries(definition, attester, schema, start, length) → TagEntry[]` for full `(uid, weight)` tuples in one bulk SLOAD; `getActiveTags(...)` drops weights when not needed; `getActiveTagWeight(attester, target, definition, targetSchema) → (exists, weight)` for the O(1) weight of one specific target's active TAG (ADR-0048).
+- **TAG** (Shape B — list): `getActiveTagEntries(definition, attester, schema, start, length) → TagEntry[]` for full `(uid, weight)` tuples in one bulk SLOAD; `getActiveTags(...)` drops weights when not needed; `getActiveTagWeight(attester, target, definition, targetSchema) → (exists, weight)` for the O(1) weight of one specific target's active TAG (ADR-0054).
 
 ### Gas Limits, Spam, and Append-Only Storage
 Because EAS is permissionless, anyone can attest files to a folder. To prevent Out-Of-Gas (OOG) errors:
 - **Read Pagination**: All indexer read functions accept `start` and `length` parameters for cursor-based pagination through large directories.
 - **Append-Only Kernel**: EFSIndexer is the append-only kernel. Arrays are never modified after a write. When an attestation is revoked, `onRevoke` sets `_isRevoked[uid] = true` but leaves all arrays intact. This eliminates O(N) removal overhead and makes the storage model simpler and cheaper to write (deploy gas: ~2.35M vs ~3.8M for the old swap-and-pop design; revoke gas: ~90k vs ~200k).
-- **`showRevoked` filtering**: Every read function accepts a `bool showRevoked` parameter. When `false` (the default), the function scans forward and skips revoked UIDs, returning only active items. When `true`, revoked items are included — useful for history views and admin tooling.
+- **Revoked filtering** (ADR-0051 — every read excludes revoked by default): every list-returning read getter takes a REQUIRED trailing `bool showRevoked` (false = skip revoked, the common path; true = include them, for history/admin views). Uniform across the directory/child-slice getters (`getChildren`, `getChildrenByAttester`, `getAnchorsBySchema`, `getChildrenByAddressList`, `getAnchorsBySchemaAndAddressList`) and the referencing/discovery getters (`getReferencingAttestations`, `getAllReferencing`, `getReferencingByAttester`, `getReferencingBySchemaAndAttester`, `getAttestationsBySchema`, `getAttestationsBySchemaAndAttester`, `getIncomingAttestations`, `getOutgoingAttestations`). Required, not defaulted (Solidity has no default params, and an overloaded convenience twin breaks typed clients — see §below); the SDK/client supplies the `false` default so app devs rarely type it.
 
-### Kernel Events (Off-Chain Indexing)
-EFSIndexer emits structured events from its native schema resolver hooks, enabling efficient off-chain indexing without scanning all EAS `Attested` events:
+### Reads exclude revoked (and superseded) by default (ADR-0051)
+
+The single, system-wide rule: **every EFS read excludes revoked and superseded attestations by default; a consumer that wants the full history opts in** (pass `showRevoked: true`). Two layers, kept distinct:
+
+- **Storage = tombstone.** Append-only and immutable (above). `onRevoke` flags `_isRevoked[uid]`; nothing is erased or compacted. A "superseded" entry (e.g. a cardinality-1 PIN replaced by re-attestation at the same slot, §PIN) is likewise retained but inactive.
+- **Default read = "deleted."** Revoked/superseded items are skipped in loops, absent from listings, and not served by the router. The default view shows each attester's **current** claims, per-attester / per-lens (you can only revoke your own attestations, so default-hide is always the author withdrawing their own claim — credible neutrality holds, since the withdrawal is itself a permanent, opt-in-visible record).
+
+Where this is enforced today (audited at the schema freeze):
+
+- **Placement** (`EFSRouter._findDataAtPath`, `EFSFileView`): `EdgeResolver.getActivePinTarget` returns only the unrevoked PIN — active-only by construction.
+- **Mirrors** (`EFSRouter._getBestMirrorURI`, `EFSFileView`): skip `indexer.isRevoked(uid)`.
+- **PROPERTY values** (`EFSRouter._getContentType`, ADR-0014): the PROPERTY value is non-revocable interned content (ADR-0052) — the revocable claim is the **PIN** binding. `getActivePinTarget` returns only the unrevoked binding PIN, so revoking the PIN removes the value from the default view (no separate value-revocation check is needed or possible).
+- **Directory children / anchor slices** (EFSIndexer, EFSFileView): `showRevoked` defaults false.
+- **List entries** (`ListReader.entries`, typed accessors): `ListEntryResolver` swap-and-pops a revoked entry out of its active array on `onRevoke`, so the stateless reader never sees it; typed accessors additionally reject `revocationTime != 0`.
+
+**Referencing-index getters (ADR-0051 follow-up — landed):** the generic referencing/discovery getters on EFSIndexer (`getReferencingAttestations`, `getAllReferencing`, `getReferencingByAttester`, `getReferencingBySchemaAndAttester`, `getAttestationsBySchema`, `getAttestationsBySchemaAndAttester`, `getIncomingAttestations`, `getOutgoingAttestations`) take a required trailing `bool showRevoked` like every other read getter — `false` excludes revoked (the behavior callers want), `true` returns full history. A single required arg, **not** an overloaded convenience twin: overloaded same-name functions collapse `args` to `never` in viem/wagmi/scaffold-eth and break every typed consumer (Vite client, SDK, subgraph codegen). Solidity has no default parameters, so the SDK/client layer supplies the `false` default. The `…Count` getters still return the raw physical length — used only as a pagination bound, never as a logical item count.
+
+### Kernel + resolver Events (Off-Chain Indexing)
+EFSIndexer and the edge/mirror resolvers emit structured events from their schema hooks, so a log-only indexer (The Graph / Ponder) reconstructs full state without per-attestation `eth_call`s and without scanning raw EAS `Attested` (which carries no field data):
 
 ```solidity
-event AnchorCreated(bytes32 indexed parentUID, bytes32 indexed anchorUID, address indexed attester, bytes32 anchorSchema);
-event DataCreated(bytes32 indexed dataUID, address indexed attester, bytes32 contentHash);
-event MirrorCreated(bytes32 indexed dataUID, bytes32 indexed mirrorUID, address indexed attester);
-event PropertyCreated(bytes32 indexed anchorUID, bytes32 indexed propertyUID, address indexed attester);
+// EFSIndexer — kernel-native schemas
+event AnchorCreated(bytes32 indexed parentUID, bytes32 indexed anchorUID, address indexed attester, bytes32 anchorSchema, string name);
+event DataCreated(bytes32 indexed dataUID, address indexed attester);
+event MirrorCreated(bytes32 indexed dataUID, bytes32 indexed mirrorUID, address indexed attester); // generic kernel-index signal (no URI)
+event PropertyCreated(bytes32 indexed propertyUID, address indexed attester, bytes32 indexed valueHash);
 event AttestationRevoked(bytes32 indexed uid, address indexed attester);  // native-schema revocations
 event RevocationIndexed(bytes32 indexed uid);                              // externally-resolved schemas indexed via indexRevocation()
+
+// EdgeResolver — PIN/TAG edges. Indexed topics = the active-slot key (definition, attester, targetSchema).
+event PinSet(bytes32 indexed definition, address indexed attester, bytes32 indexed targetSchema, bytes32 pinUID, bytes32 targetID, bytes32 supersededPinUID);
+event PinCleared(bytes32 indexed definition, address indexed attester, bytes32 indexed targetSchema, bytes32 pinUID, bytes32 targetID);
+event TagSet(bytes32 indexed definition, address indexed attester, bytes32 indexed targetSchema, bytes32 tagUID, bytes32 targetID, int256 weight, bytes32 supersededTagUID);
+event TagCleared(bytes32 indexed definition, address indexed attester, bytes32 indexed targetSchema, bytes32 tagUID, bytes32 targetID);
+
+// MirrorResolver — the URI-bearing mirror event (the kernel's MirrorCreated omits the URI).
+event MirrorSet(bytes32 indexed dataUID, address indexed attester, bytes32 indexed transportDefinition, bytes32 mirrorUID, string uri);
+event MirrorCleared(bytes32 indexed dataUID, address indexed attester, bytes32 indexed transportDefinition, bytes32 mirrorUID);
+
+// AliasResolver — REDIRECT edges. Indexed topics: source, target, redirectUID (the join key for
+// correlating with the native EAS Attested/Revoked logs); `kind` stays non-indexed (low cardinality).
+event RedirectAttested(bytes32 indexed source, bytes32 indexed target, uint16 kind, bytes32 indexed redirectUID);
+event RedirectRevoked(bytes32 indexed source, bytes32 indexed target, uint16 kind, bytes32 indexed redirectUID);
 ```
 
-Subscribe to both revocation events. `AttestationRevoked` fires from the resolver hook on native schemas (ANCHOR, DATA, PROPERTY); `RevocationIndexed` fires when an external resolver calls `indexRevocation()` to surface a TAG/MIRROR/SORT_INFO revocation into the kernel.
+Subscribe to both revocation events. `AttestationRevoked` fires from the resolver hook on native schemas (ANCHOR, DATA, PROPERTY); `RevocationIndexed` fires when an external resolver calls `indexRevocation()`. For the edge/mirror layer the typed `PinCleared`/`TagCleared`/`MirrorCleared` events carry the slot/data keys, so an indexer retires the exact active entry without an `eth_call`.
 
-All events are indexed on the most useful lookup fields. `DataCreated` includes `contentHash` for off-chain dedup tracking. `MirrorCreated` links mirrors to their parent DATA. A Graph subgraph subscribing to these events can reconstruct full directory state without any additional contract reads during sync.
+All events are indexed on the most useful lookup fields. The PIN/TAG topic triple `(definition, attester, targetSchema)` **is** the on-chain active-slot key (`_activeBySlot[definition][attester][targetSchema]`), so a subgraph keys an `ActivePin` entity on it directly. **PIN cardinality-1 supersession** is silent in storage (a re-pin replaces the slot in O(1)); `PinSet.supersededPinUID` makes it observable — it is `bytes32(0)` on a fresh slot or same-target re-attest, and the retired pinUID on a real different-target replacement, so a superseded PIN emits no `PinCleared` (its retirement is read from the next `PinSet`). `TagSet.supersededTagUID` is the symmetric signal for TAGs: a re-attest that updates an edge's weight/UID in place fires no `TagCleared`, so the prior tagUID is surfaced here (`bytes32(0)` on a first attest). `MirrorSet` carries the `uri` + `transportDefinition` the router ranks by, and `MirrorCleared` now carries the same `transportDefinition` so a log indexer retires the exact transport slot without an `eth_call` (the generic `MirrorCreated` is retained as a kernel-index signal but omits the URI). `RedirectAttested`/`RedirectRevoked` index `redirectUID` (the join key to the native EAS log) rather than the low-cardinality `kind`. `PropertyCreated`'s third topic `valueHash = keccak256(bytes(value))` is the interned value's **canonical content key** (ADR-0052) — the dedup lookup key. Because PIN events now carry `(definition, targetID, targetSchema)`, PROPERTY *bindings* (a PIN from a reserved-key anchor like `contentType`/`name`/`contentHash` to a PROPERTY value) and LIST_ENTRY order/label bindings are reconstructable from logs too. A Graph subgraph subscribing to these events can reconstruct full directory state — placement, supersession, tags, mirrors, property bindings, revocation — without any additional contract reads during sync.
 
 `EFSSortOverlay` emits `ItemSorted(sortInfoUID, parentAnchor, itemUID, leftNeighbour, rightNeighbour)` for each item inserted into a sorted list — enabling The Graph to reconstruct sorted order off-chain.
 
@@ -72,7 +105,7 @@ To support subjective file resolution natively onchain, two coordinated index sy
 - **Core Referencing History**: `_allReferencing` and `_referencingByAttester` track immutable history, ensuring revocations do not break the chain of edits.
 - **Deduplicated Directory Listings**: `getChildrenByAddressList` walks the global `_children` array (unique, insertion order) and includes only items where any of the provided attesters has contributed — no duplicates possible. Pass the returned cursor to get the next page.
 - **Schema + Attester Filtered Listings**: `getAnchorsBySchemaAndAddressList(parentUID, anchorSchema, attesters, startCursor, pageSize, reverseOrder, showRevoked)` intersects `_childrenBySchema[anchorSchema]` with `_containsAttestations` per attester. Use this when the caller wants a specific anchor type (e.g. `DATA_SCHEMA_UID` for file anchors, `SORT_INFO_SCHEMA_UID` for sort anchors) from a multi-attester directory without interleaving unrelated anchor types.
-- **Content-Addressed Dedup**: `dataByContentKey[contentHash]` maps content hashes to the first (canonical) DATA UID.
+- **Content-addressed dedup (client-side)**: `dataByContentKey` is no longer written — it's retained as a declared but unused/advisory storage slot (ADR-0049), not deleted. Dedup is best-effort client-side: query the PROPERTY index for a trusted `contentHash` claim before upload; if found, hardlink the existing DATA via a new PIN rather than minting a new DATA. Dedup resolution for existing duplicates uses the REDIRECT primitive (ADR-0050).
 
 ### EdgeResolver: PIN and TAG storage (per-cardinality indices)
 
@@ -93,7 +126,7 @@ EFSFileView is the read-side wrapper most client code should call rather than co
 - `getDirectoryPage(parent, start, length, dataSchemaUID, propertySchemaUID)` — all children, insertion order.
 - `getDirectoryPageByAddressList(parent, attesters, startingCursor, pageSize)` — attester-filtered directory listing.
 - `getDirectoryPageBySchemaAndAddressList(parent, anchorSchema, attesters, startingCursor, pageSize)` — schema + attester filtered (e.g. file anchors only).
-- `getDirectoryPageFiltered(parent, anchorSchema, attesters, excludeTagDefs[], minWeights[], cursor, maxItems)` — as above, but skips any item a lens has tagged with ANY `excludeTagDefs[k]` at `weight >= minWeights[k]` (union across the exclude pairs and across lenses; e.g. hide `nsfw`/`system` together). The two arrays are parallel — `require(excludeTagDefs.length == minWeights.length)` — and capped at `MAX_EXCLUDE_TAGS_PER_QUERY = 8`; empty arrays ⇒ no exclusion (degenerates to the unfiltered read). Thresholds are caller arguments; the per-item check resolves a file's DATA via its placement PIN (file labels target the DATA UID, folder labels target the ANCHOR UID) and reads the weight via `EdgeResolver.getActiveTagWeight`. A phase-1 scan budget bounds an all-excluded page. ADR-0048.
+- `getDirectoryPageFiltered(parent, anchorSchema, attesters, excludeTagDefs[], minWeights[], cursor, maxItems)` — as above, but skips any item a lens has tagged with ANY `excludeTagDefs[k]` at `weight >= minWeights[k]` (union across the exclude pairs and across lenses; e.g. hide `nsfw`/`system` together). The two arrays are parallel — `require(excludeTagDefs.length == minWeights.length)` — and capped at `MAX_EXCLUDE_TAGS_PER_QUERY = 8`; empty arrays ⇒ no exclusion (degenerates to the unfiltered read). Thresholds are caller arguments; the per-item check resolves a file's DATA via its placement PIN (file labels target the DATA UID, folder labels target the ANCHOR UID) and reads the weight via `EdgeResolver.getActiveTagWeight`. A phase-1 scan budget bounds an all-excluded page. ADR-0054.
 
 Use `getDirectoryPageBySchemaAndAddressList(folderUID, DATA_SCHEMA_UID, [alice, bob], 0, 50)` to list files in `/memes/` from Alice and Bob's lenses. EFSFileView also exposes `getFilesAtPath(fileAnchorUID, attesters, schema, start, length)` for the narrower case of "what DATA attestations are on this specific anchor" — callers pass a file anchor, not a folder.
 
@@ -164,12 +197,14 @@ Descriptive label definitions (e.g. `#nsfw`) are stored as normal Anchors under 
 EdgeResolver is wired to EFSIndexer: `onAttest` calls `indexer.index(uid)` and `onRevoke` calls `indexer.indexRevocation(uid)`. PIN and TAG attestations are fully registered in EFSIndexer's generic discovery indices alongside other schemas:
 
 ```
-indexer.getReferencingAttestations(targetUID, PIN_SCHEMA_UID, 0, 100, false)
-  → all PIN attestations targeting a given anchor or address
-indexer.getReferencingAttestations(targetUID, TAG_SCHEMA_UID, 0, 100, false)
-  → all TAG attestations targeting a given anchor or address
-indexer.getOutgoingAttestations(attester, PIN_SCHEMA_UID, 0, 100, false)
-  → all PINs made by a specific user
+// args end in (reverseOrder, showRevoked). showRevoked=false excludes revoked (ADR-0051);
+// pass true for full history including revoked.
+indexer.getReferencingAttestations(targetUID, PIN_SCHEMA_UID, 0, 100, false, false)
+  → active (non-revoked) PIN attestations targeting a given anchor or address
+indexer.getReferencingAttestations(targetUID, TAG_SCHEMA_UID, 0, 100, false, false)
+  → active (non-revoked) TAG attestations targeting a given anchor or address
+indexer.getOutgoingAttestations(attester, PIN_SCHEMA_UID, 0, 100, false, false)
+  → active (non-revoked) PINs made by a specific user
 ```
 
 **Schema-aware queries are the correct pattern**: callers must specify the schema UID for schema-specific results. Mixing PIN and TAG in a generic query is intentional only when building a unified history view.
@@ -233,6 +268,8 @@ For a responsive web UI, off-chain indexers should expose these additional query
 
 ## Sort Overlay Indexing via EFSSortOverlay
 
+> **⚠️ Deferred — NOT in the Sepolia freeze set.** SORT_INFO and its `EFSSortOverlay` resolver are **not** registered by the freeze ceremony (the freeze set is nine schemas: ANCHOR, DATA, MIRROR, PIN, TAG, PROPERTY, LIST, LIST_ENTRY, REDIRECT — see `specs/overview.md` and `docs/SEPOLIA_FREEZE_TABLE.md`). The design below remains valid future work (authoritative in `07-Sort-Overlay-Architecture.md`) but `EFSSortOverlay` is **not deployed** and SORT_INFO is **not registered** in this set — it must **not** be added to the freeze as a tenth schema. `sortsAnchorUID` stays unset and no `setSortsAnchor()` step runs (`SEPOLIA_FREEZE_TABLE.md`).
+
 The SORT_INFO schema is handled by `EFSSortOverlay`. It is registered in EAS with `EFSSortOverlay` as its resolver.
 
 Sort overlays are **not populated in the resolver hook** — they are populated lazily off-hook by `processItems` calls. The resolver hook only validates and caches the sort config.
@@ -274,7 +311,7 @@ The kernel (EFSIndexer) remains the source of truth. The sort overlay is a secon
 
 **Kernel discovery** (used by clients to find sorts under a directory):
 - `EFSIndexer.getAnchorsBySchema(parentUID, SORT_INFO_SCHEMA_UID, 0, 100, false, false)` — returns all sort naming Anchor UIDs under a directory. Sort naming Anchors are regular kernel children; no separate discovery index needed.
-- `EFSIndexer.getReferencingAttestations(namingAnchorUID, SORT_INFO_SCHEMA_UID, 0, 10, false)` — returns SORT_INFO UIDs pointing at a naming anchor. Works because `EFSSortOverlay.onAttest` calls `indexer.index(attestation.uid)` after caching the sort config, registering every SORT_INFO attestation into EFSIndexer's generic referencing indices.
+- `EFSIndexer.getReferencingAttestations(namingAnchorUID, SORT_INFO_SCHEMA_UID, 0, 10, false, false)` — returns SORT_INFO UIDs pointing at a naming anchor. Works because `EFSSortOverlay.onAttest` calls `indexer.index(attestation.uid)` after caching the sort config, registering every SORT_INFO attestation into EFSIndexer's generic referencing indices.
 
 ### Public Index API
 

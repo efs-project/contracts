@@ -2,6 +2,7 @@ import { expect } from "chai";
 import { ethers } from "hardhat";
 import { EFSIndexer, EFSSortOverlay, NameSort, TimestampSort, EAS, SchemaRegistry } from "../typechain-types";
 import { Signer, ZeroAddress } from "ethers";
+import { deployIndexerProxy } from "./helpers/deployIndexerProxy";
 
 const NO_EXPIRATION = 0n;
 const ZERO_BYTES32 = "0x0000000000000000000000000000000000000000000000000000000000000000";
@@ -20,7 +21,6 @@ describe("EFSSortOverlay", function () {
   let anchorSchemaUID: string;
   let dataSchemaUID: string;
   let propertySchemaUID: string;
-  let blobSchemaUID: string;
   let sortInfoSchemaUID: string;
 
   const enc = ethers.AbiCoder.defaultAbiCoder();
@@ -43,9 +43,9 @@ describe("EFSSortOverlay", function () {
     // Deployment order:
     //   +0: Register ANCHOR schema
     //   +1: Register PROPERTY schema
-    //   +2: Register DATA schema
-    //   +3: Register BLOB schema (no resolver)
-    //   +4: Deploy EFSIndexer
+    //   +2: Register DATA schema (empty — ADR-0049)
+    //   +3: Deploy EFSIndexer implementation
+    //   +4: Deploy EFSIndexer proxy (the resolver)
     //   +5: Deploy NameSort
     //   +6: Deploy TimestampSort
     //   +7: Register SORT_INFO schema (with futureOverlayAddr as resolver)
@@ -53,32 +53,29 @@ describe("EFSSortOverlay", function () {
     const ownerAddr = await owner.getAddress();
     const baseNonce = await ethers.provider.getTransactionCount(ownerAddr);
 
+    // PROXY is the resolver (ADR-0048): impl = +3, proxy = +4; everything after shifts +1.
     const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: baseNonce + 4 });
     const futureOverlayAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: baseNonce + 8 });
 
     // 3. Register EFS schemas with futureIndexerAddr as resolver
-    const tx1 = await registry.register("string name, bytes32 schemaUID", futureIndexerAddr, false);
+    const tx1 = await registry.register("string name, bytes32 forSchema", futureIndexerAddr, false);
     anchorSchemaUID = (await tx1.wait())!.logs[0].topics[1];
 
     const tx2 = await registry.register("string value", futureIndexerAddr, false);
     propertySchemaUID = (await tx2.wait())!.logs[0].topics[1];
 
-    const tx3 = await registry.register("bytes32 contentHash, uint64 size", futureIndexerAddr, false);
+    // DATA is an empty schema — pure identity (ADR-0049).
+    const tx3 = await registry.register("", futureIndexerAddr, false);
     dataSchemaUID = (await tx3.wait())!.logs[0].topics[1];
 
-    const tx4 = await registry.register("string mimeType, uint8 storageType, bytes location", ZeroAddress, true);
-    blobSchemaUID = (await tx4.wait())!.logs[0].topics[1];
-
-    // 4. Deploy EFSIndexer
-    const IndexerFactory = await ethers.getContractFactory("EFSIndexer");
-    indexer = await IndexerFactory.deploy(
+    // 4. Deploy EFSIndexer behind a proxy (ADR-0048)
+    indexer = await deployIndexerProxy(
       await eas.getAddress(),
       anchorSchemaUID,
       propertySchemaUID,
       dataSchemaUID,
-      blobSchemaUID,
+      owner,
     );
-    await indexer.waitForDeployment();
     expect(await indexer.getAddress()).to.equal(futureIndexerAddr);
 
     // 5. Deploy sort implementations
@@ -1095,7 +1092,7 @@ describe("EFSSortOverlay", function () {
       const namingUID = await createAnchor(owner, "alpha", dirUID, sortInfoSchemaUID);
       const sortInfoUID = await createSortInfo(owner, namingUID, await nameSort.getAddress());
 
-      const refs = await indexer.getReferencingAttestations(namingUID, sortInfoSchemaUID, 0, 10, false);
+      const refs = await indexer.getReferencingAttestations(namingUID, sortInfoSchemaUID, 0, 10, false, false);
       expect(refs.length).to.equal(1);
       expect(refs[0]).to.equal(sortInfoUID);
     });
@@ -1105,7 +1102,7 @@ describe("EFSSortOverlay", function () {
       const namingUID = await createAnchor(owner, "ts", dirUID, sortInfoSchemaUID);
       const sortInfoUID = await createSortInfo(owner, namingUID, await tsSort.getAddress());
 
-      const all = await indexer.getAttestationsBySchema(sortInfoSchemaUID, 0, 10, false);
+      const all = await indexer.getAttestationsBySchema(sortInfoSchemaUID, 0, 10, false, false);
       expect(all).to.include(sortInfoUID);
     });
 
@@ -1115,7 +1112,7 @@ describe("EFSSortOverlay", function () {
       const sortInfoUID = await createSortInfo(alice, namingUID, await tsSort.getAddress());
 
       const aliceAddr = await alice.getAddress();
-      const outgoing = await indexer.getOutgoingAttestations(aliceAddr, sortInfoSchemaUID, 0, 10, false);
+      const outgoing = await indexer.getOutgoingAttestations(aliceAddr, sortInfoSchemaUID, 0, 10, false, false);
       expect(outgoing).to.include(sortInfoUID);
     });
 
@@ -1145,23 +1142,16 @@ describe("EFSSortOverlay", function () {
       const tsInfoUID = await createSortInfo(owner, tsNameUID, await tsSort.getAddress());
 
       // Step 1: discover naming anchors
-      const namingAnchors = await indexer["getAnchorsBySchema(bytes32,bytes32,uint256,uint256,bool,bool)"](
-        dirUID,
-        sortInfoSchemaUID,
-        0,
-        10,
-        false,
-        false,
-      );
+      const namingAnchors = await indexer.getAnchorsBySchema(dirUID, sortInfoSchemaUID, 0, 10, false, false);
       expect(namingAnchors.length).to.equal(2);
       expect(namingAnchors).to.include(alphaNameUID);
       expect(namingAnchors).to.include(tsNameUID);
 
       // Step 2: for each naming anchor, find SORT_INFO UIDs
-      const alphaRefs = await indexer.getReferencingAttestations(alphaNameUID, sortInfoSchemaUID, 0, 10, false);
+      const alphaRefs = await indexer.getReferencingAttestations(alphaNameUID, sortInfoSchemaUID, 0, 10, false, false);
       expect(alphaRefs[0]).to.equal(alphaInfoUID);
 
-      const tsRefs = await indexer.getReferencingAttestations(tsNameUID, sortInfoSchemaUID, 0, 10, false);
+      const tsRefs = await indexer.getReferencingAttestations(tsNameUID, sortInfoSchemaUID, 0, 10, false, false);
       expect(tsRefs[0]).to.equal(tsInfoUID);
 
       // Step 3: read sort config
@@ -1180,7 +1170,7 @@ describe("EFSSortOverlay", function () {
       const aliceSortUID = await createSortInfo(alice, namingUID, await nameSort.getAddress());
       const bobSortUID = await createSortInfo(bob, namingUID, await tsSort.getAddress());
 
-      const refs = await indexer.getReferencingAttestations(namingUID, sortInfoSchemaUID, 0, 10, false);
+      const refs = await indexer.getReferencingAttestations(namingUID, sortInfoSchemaUID, 0, 10, false, false);
       expect(refs.length).to.equal(2);
       expect(refs).to.include(aliceSortUID);
       expect(refs).to.include(bobSortUID);

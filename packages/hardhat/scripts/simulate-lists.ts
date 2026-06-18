@@ -1,5 +1,8 @@
 import { ethers } from "hardhat";
+import { expect } from "chai";
 import { EFSIndexer, ListEntryResolver, ListReader } from "../typechain-types";
+// chai matchers (revertedWithCustomError / revertedWith) are registered via hardhat.config's
+// "@nomicfoundation/hardhat-chai-matchers" import when this script runs under `hardhat run`.
 
 /**
  * EFS Lists Simulation
@@ -22,6 +25,35 @@ function assert(label: string, condition: boolean, detail = "") {
     passed++;
   } else {
     console.log(`  ${FAIL} ${label}${detail ? ` — ${detail}` : ""}`);
+    failed++;
+  }
+}
+
+// Reason-CHECKED negative assertion folded into the PASS/FAIL tally. A bare try/catch->boolean
+// passes when the call reverts for the WRONG reason (a new guard, OOG, bad UID) — false confidence
+// on exactly the guard logic a freeze must lock. Pass `{ customError, contract }` for a custom
+// error or `{ reason }` for a require-string revert.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function assertReverts(
+  label: string,
+  promise: Promise<unknown>,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  opts: { customError?: string; contract?: any; reason?: string },
+) {
+  try {
+    if (opts.customError) {
+      await expect(promise).to.be.revertedWithCustomError(opts.contract, opts.customError);
+      console.log(`  ${PASS} ${label} — reverts ${opts.customError}`);
+    } else if (opts.reason !== undefined) {
+      await expect(promise).to.be.revertedWith(opts.reason);
+      console.log(`  ${PASS} ${label} — reverts "${opts.reason}"`);
+    } else {
+      await expect(promise).to.be.reverted;
+      console.log(`  ${PASS} ${label} — reverted`);
+    }
+    passed++;
+  } catch (e) {
+    console.log(`  ${FAIL} ${label} — ${(e as Error).message}`);
     failed++;
   }
 }
@@ -58,7 +90,6 @@ async function main() {
   console.log(`LIST_ENTRY_SCHEMA_UID: ${listEntrySchemaUID}\n`);
 
   const enc = new ethers.AbiCoder();
-  const S = Date.now().toString(36); // session suffix for uniqueness
 
   const encodeList = (ad: boolean, ao: boolean, tt: number, ts: string, me: number) =>
     enc.encode(["bool", "bool", "uint8", "bytes32", "uint32"], [ad, ao, tt, ts, me]);
@@ -167,7 +198,8 @@ async function main() {
   });
   const filmListUID = getUID(await filmListTx.wait());
 
-  // Mint a DATA attestation to use as a film
+  // Mint a DATA attestation to use as a film. DATA is an empty schema — pure identity (ADR-0049);
+  // it carries no inline fields, so the payload is zero-length.
   const filmTx = await eas.connect(alice).attest({
     schema: dataSchemaUID,
     data: {
@@ -175,7 +207,7 @@ async function main() {
       expirationTime: 0n,
       revocable: false,
       refUID: ethers.ZeroHash,
-      data: enc.encode(["bytes32", "uint64"], [ethers.keccak256(ethers.toUtf8Bytes(`film-${S}`)), 1000n]),
+      data: "0x",
       value: 0n,
     },
   });
@@ -371,16 +403,14 @@ async function main() {
     (await listEntryResolver.getListAttesterCount(openListUID)) === 2n,
   );
 
-  // 4-e: Typed accessor with wrong lens reverts
+  // 4-e: Typed accessor with wrong lens reverts (reason-checked: ListReader require "wrong lens")
   console.log("  4-e: Wrong-lens revert on typed accessor");
-  let wrongLensReverted = false;
-  try {
-    // aliceAddsBobUID was attested by alice; passing bob as lens should revert "wrong lens"
-    await listReader.targetAsAddress(openListUID, bobAddr, aliceAddsBobUID);
-  } catch {
-    wrongLensReverted = true;
-  }
-  assert("4-e targetAsAddress with wrong lens reverts", wrongLensReverted);
+  // aliceAddsBobUID was attested by alice; passing bob as lens must revert with "wrong lens".
+  await assertReverts(
+    "4-e targetAsAddress with wrong lens reverts",
+    listReader.targetAsAddress(openListUID, bobAddr, aliceAddsBobUID),
+    { reason: "wrong lens" },
+  );
 
   // 4-f: maxEntries cap is per-attester, not global
   console.log("  4-f: maxEntries cap is per-attester");
@@ -444,10 +474,10 @@ async function main() {
     },
   });
   assert("4-f Bob fills 2 slots (independent cap)", (await listReader.length(cappedListUID, bobAddr)) === 2n);
-  // Alice cannot add a 3rd
-  let aliceCapped = false;
-  try {
-    await eas.connect(alice).attest({
+  // Alice cannot add a 3rd (reason-checked: ListEntryResolver ListFull)
+  await assertReverts(
+    "4-f Alice's 3rd entry rejected (per-attester cap)",
+    eas.connect(alice).attest({
       schema: listEntrySchemaUID,
       data: {
         recipient: bobAddr,
@@ -457,11 +487,9 @@ async function main() {
         data: encodeEntry(cappedListUID, ethers.ZeroHash),
         value: 0n,
       },
-    });
-  } catch {
-    aliceCapped = true;
-  }
-  assert("4-f Alice's 3rd entry rejected (per-attester cap)", aliceCapped);
+    }),
+    { customError: "ListFull", contract: listEntryResolver },
+  );
 
   // 4-g: Non-curator attester can add entries (open curation)
   console.log("  4-g: Non-curator can add entries");

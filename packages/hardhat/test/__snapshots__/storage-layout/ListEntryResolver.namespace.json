@@ -1,0 +1,15 @@
+[
+  {
+    "struct": "ListEntryConfig",
+    "fields": [
+      {
+        "name": "listSchemaUID",
+        "type": "bytes32"
+      },
+      {
+        "name": "listEntrySchemaUID",
+        "type": "bytes32"
+      }
+    ]
+  }
+]

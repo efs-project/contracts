@@ -1,12 +1,18 @@
 import { HardhatRuntimeEnvironment } from "hardhat/types";
 import { DeployFunction } from "hardhat-deploy/types";
 import { Contract } from "ethers";
+import { legacySuperseded } from "../deploy-lib/superseded";
 
 // EAS Addresses (Sepolia) - Assuming forking or consistent addresses
 const EAS_ADDRESS = "0xC2679fBD37d54388Ce493F1DB75320D236e1815e";
 const SCHEMA_REGISTRY_ADDRESS = "0x0a7E2Ff54e76B8E6659aedc9103FB21c038050D0";
 
 const deployEFSIndexer: DeployFunction = async function (hre: HardhatRuntimeEnvironment) {
+  // AGENT-NOTE (Phase D): this nonce-prediction + TestERC1967Proxy + inline-register path is
+  // superseded by deploy/00_efs_core.ts (orchestrated CREATE3 deploy, register-last; ADR-0048).
+  // Neutralized to keep the orchestrated core the single source. D2 removes/rebinds it.
+  if (await legacySuperseded(hre, "01_indexer")) return;
+
   const { deployer } = await hre.getNamedAccounts();
   const { deploy } = hre.deployments;
   const ethers = hre.ethers;
@@ -44,31 +50,38 @@ const deployEFSIndexer: DeployFunction = async function (hre: HardhatRuntimeEnvi
   //                                weight in place; revoke removes. No supersede-via-weight.
   //    See ADR-0041.
   const schemas = [
-    { name: "ANCHOR", definition: "string name, bytes32 schemaUID", revocable: false },
+    { name: "ANCHOR", definition: "string name, bytes32 forSchema", revocable: false },
+    // PROPERTY is NON-revocable (ADR-0052) — dumb, shared, interned content (an "anchor for a
+    // string"); the revocable claim is the PIN, not the value. Must match deploy-lib/schemas.ts
+    // and the golden vector.
     { name: "PROPERTY", definition: "string value", revocable: false },
-    { name: "DATA", definition: "bytes32 contentHash, uint64 size", revocable: false },
-    {
-      name: "BLOB",
-      definition: "string mimeType, uint8 storageType, bytes location",
-      revocable: true,
-      noResolver: true,
-    },
+    // DATA is an empty schema — pure file identity (ADR-0049). No fields; contentHash/size
+    // now live as lens-scoped reserved-key PROPERTYs bound to the DATA UID.
+    { name: "DATA", definition: "", revocable: false },
     { name: "PIN", definition: "bytes32 definition", revocable: true, useEdgeResolver: true },
     { name: "TAG", definition: "bytes32 definition, int256 weight", revocable: true, useEdgeResolver: true },
-    { name: "NAMING", definition: "bytes32 schemaId, string name", revocable: true, noResolver: true },
   ];
 
   // 3. Calculate Future Addresses
+  // AGENT-NOTE: Phase D — deploy EFSIndexer behind a CREATE3 proxy + register-last + atomic-init.
+  // This transitional path deploys the EFSIndexer implementation, then a plain ERC1967 proxy
+  // (TestERC1967Proxy) at the resolver-predicted nonce slot, and calls initialize() through it.
+  // The schema UIDs are computed against the PROXY address (the proxy is the EAS resolver under
+  // the upgradeable pattern, ADR-0048). Phase D will replace this CREATE-nonce prediction with a
+  // CREATE3-derived address so the resolver address is independent of deploy ordering.
+  //
   // Deployment order:
   //   nonce+0: Deploy EdgeResolver
-  //   nonce+1 through nonce+7: Register 7 schemas (ANCHOR, PROPERTY, DATA, BLOB, PIN, TAG, NAMING)
-  //   nonce+8: Deploy EFSIndexer
+  //   nonce+1 through nonce+5: Register 5 schemas (ANCHOR, PROPERTY, DATA, PIN, TAG)
+  //   nonce+6: Deploy EFSIndexer implementation
+  //   nonce+7: Deploy ERC1967 proxy (the resolver address baked into the schema UIDs)
 
   const currentNonce = await ethers.provider.getTransactionCount(deployer);
   console.log("Current Nonce:", currentNonce);
 
   const futureEdgeResolverAddress = ethers.getCreateAddress({ from: deployer, nonce: currentNonce });
-  const futureIndexerAddress = ethers.getCreateAddress({ from: deployer, nonce: currentNonce + 8 });
+  // The PROXY is the resolver — its address (nonce+7) is what schemas must reference.
+  const futureIndexerAddress = ethers.getCreateAddress({ from: deployer, nonce: currentNonce + 7 });
   console.log("Predicted EdgeResolver Address:", futureEdgeResolverAddress);
   console.log("Predicted EFSIndexer Address:", futureIndexerAddress);
 
@@ -110,9 +123,7 @@ const deployEFSIndexer: DeployFunction = async function (hre: HardhatRuntimeEnvi
 
   for (const schema of schemas) {
     let resolver: string;
-    if (schema.noResolver) {
-      resolver = ethers.ZeroAddress;
-    } else if (schema.useEdgeResolver) {
+    if (schema.useEdgeResolver) {
       resolver = futureEdgeResolverAddress;
     } else {
       resolver = futureIndexerAddress;
@@ -136,17 +147,43 @@ const deployEFSIndexer: DeployFunction = async function (hre: HardhatRuntimeEnvi
     }
   }
 
-  // 6. Deploy EFSIndexer
-  await deploy("Indexer", {
+  // 6. Deploy EFSIndexer implementation (nonce+6). Constructor takes only the EAS now;
+  //    per-deployment config (schema UIDs + owner) is set via initialize() behind the proxy.
+  await deploy("IndexerImpl", {
     contract: "EFSIndexer",
     from: deployer,
-    args: [EAS_ADDRESS, schemaUIDs["ANCHOR"], schemaUIDs["PROPERTY"], schemaUIDs["DATA"], schemaUIDs["BLOB"]],
+    args: [EAS_ADDRESS],
+    log: true,
+    autoMine: true,
+  });
+  const indexerImpl = await hre.ethers.getContract<Contract>("IndexerImpl", deployer);
+  console.log("EFSIndexer implementation deployed at:", indexerImpl.target);
+
+  // 6b. Deploy the ERC1967 proxy (nonce+7 — the resolver address baked into the schema UIDs),
+  //     initializing it atomically with the schema UIDs and the deployer as owner.
+  //     AGENT-NOTE: Phase D replaces TestERC1967Proxy with a production CREATE3 proxy.
+  const initData = indexerImpl.interface.encodeFunctionData("initialize", [
+    schemaUIDs["ANCHOR"],
+    schemaUIDs["PROPERTY"],
+    schemaUIDs["DATA"],
+    deployer,
+  ]);
+  await deploy("Indexer", {
+    contract: "TestERC1967Proxy",
+    from: deployer,
+    args: [indexerImpl.target, initData],
     log: true,
     autoMine: true,
   });
 
-  const indexer = await hre.ethers.getContract<Contract>("Indexer", deployer);
-  console.log("EFSIndexer deployed at:", indexer.target);
+  // Bind the EFSIndexer ABI to the proxy address so downstream calls go through the proxy.
+  const proxy = await hre.ethers.getContract<Contract>("Indexer", deployer);
+  const indexer = await hre.ethers.getContractAt(
+    "EFSIndexer",
+    proxy.target as string,
+    await ethers.getSigner(deployer),
+  );
+  console.log("EFSIndexer (proxy) deployed at:", indexer.target);
 
   if (indexer.target !== futureIndexerAddress) {
     throw new Error(
@@ -157,65 +194,7 @@ const deployEFSIndexer: DeployFunction = async function (hre: HardhatRuntimeEnvi
     );
   }
 
-  // 7. Deploy SchemaNameIndex
-  const namingSchemaUID = schemaUIDs["NAMING"];
-  await deploy("SchemaNameIndex", {
-    contract: "SchemaNameIndex",
-    from: deployer,
-    args: [EAS_ADDRESS, namingSchemaUID],
-    log: true,
-    autoMine: true,
-  });
-  const schemaNameIndex = await hre.ethers.getContract<Contract>("SchemaNameIndex", deployer);
-  console.log("SchemaNameIndex deployed at:", schemaNameIndex.target);
-
-  // 8. Attest Names for Schemas and Index them
-  console.log("Attesting and Indexing Schema Names...");
-  for (const schema of schemas) {
-    const name = `EFS ${schema.name.charAt(0).toUpperCase() + schema.name.slice(1).toLowerCase()} Schema`;
-    const targetSchemaUID = schemaUIDs[schema.name];
-
-    try {
-      const encodedData = ethers.AbiCoder.defaultAbiCoder().encode(["bytes32", "string"], [targetSchemaUID, name]);
-
-      const tx = await eas.attest({
-        schema: namingSchemaUID,
-        data: {
-          recipient: ethers.ZeroAddress,
-          expirationTime: 0n,
-          revocable: true,
-          refUID: ethers.ZeroHash,
-          data: encodedData,
-          value: 0n,
-        },
-      });
-      const receipt = await tx.wait();
-
-      const log = receipt?.logs.find((l: any) => {
-        try {
-          return eas.interface.parseLog(l)?.name === "Attested";
-        } catch {
-          return false;
-        }
-      });
-
-      if (log) {
-        const parsedLog = eas.interface.parseLog(log);
-        const attestationUID = parsedLog?.args.uid;
-        console.log(`Attested Name for ${schema.name}: ${attestationUID}`);
-
-        const indexTx = await schemaNameIndex.indexAttestation(attestationUID);
-        await indexTx.wait();
-        console.log(`Indexed Name for ${schema.name}`);
-      } else {
-        console.log(`Failed to find Attested event for ${schema.name}`);
-      }
-    } catch (e) {
-      console.error(`Failed to name ${schema.name}:`, e);
-    }
-  }
-
-  // 9. Create Root Anchor and "tags" Anchor
+  // 7. Create Root Anchor and "tags" Anchor
   //    Tag definitions (e.g. "favorites") are normal anchors under "tags", which is
   //    itself a normal anchor under root. One tree, uniform anchors throughout.
   const anchorSchemaUID = schemaUIDs["ANCHOR"];

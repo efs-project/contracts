@@ -6,7 +6,7 @@ Authoritative description of how EFS works today. If specs and code disagree, th
 
 - **`overview.md`** — **EFS at a glance.** One-screen canonical reference: three-layer model, nine schemas, core contracts, load-bearing invariants. Start here for any non-trivial task. Auto-loaded at session start.
 - **`01-System-Architecture.md`** — high-level vision, kernel/overlay model, the three-layer separation. Read first when orienting on EFS conceptually.
-- **`02-Data-Models-and-Schemas.md`** — the nine EAS schemas (ANCHOR, DATA, MIRROR, PIN, TAG, PROPERTY, SORT_INFO, LIST, LIST_ENTRY), their fields, resolvers, and how they relate. Required reading for any contract work.
+- **`02-Data-Models-and-Schemas.md`** — the EAS schemas (ANCHOR, DATA, MIRROR, PIN, TAG, PROPERTY, LIST, LIST_ENTRY, REDIRECT — plus SORT_INFO, which is deferred / not in the Sepolia freeze set), their fields, resolvers, and how they relate. Required reading for any contract work.
 - **`03-Onchain-Indexing-Strategy.md`** — how EFSIndexer maintains lookup indices, the append-only kernel pattern, lens filtering. Read before modifying any index in EFSIndexer or EdgeResolver.
 - **`04-Core-Workflows.md`** — step-by-step execution for common operations (upload a file, browse a directory, etc.). Useful for understanding the full chain of attestations behind any user action.
 - **`05-Extensibility-and-Web-UI.md`** — how EFS is meant to be extended; conventions for client interfaces. Read when designing new contracts that integrate with EFS or new client patterns.

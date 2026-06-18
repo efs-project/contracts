@@ -9,8 +9,11 @@ import "solidity-coverage";
 import "@nomicfoundation/hardhat-verify";
 import "hardhat-deploy";
 import "hardhat-deploy-ethers";
+import "@openzeppelin/hardhat-upgrades";
 import { task } from "hardhat/config";
 import generateTsAbis from "./scripts/generateTsAbis";
+import "./tasks/deployEfs";
+import "./tasks/deployEfsViews";
 
 // If not set, it uses Scaffold-ETH-2's public default Alchemy API key.
 // You can get your own at https://dashboard.alchemyapi.io.

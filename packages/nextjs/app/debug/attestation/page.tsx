@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { decodeAbiParameters, hexToString, parseAbiParameters, zeroHash } from "viem";
+import { decodeAbiParameters, parseAbiParameters, zeroHash } from "viem";
 import { useReadContract } from "wagmi";
 import { Address } from "~~/components/scaffold-eth";
 import { useSchemaRegistry } from "~~/hooks/efs/useSchemaRegistry";
@@ -270,55 +270,19 @@ function DecodedData({ schemaUID, data, schemas }: { schemaUID: string; data: st
       );
     }
     if (schemaUID === schemas.DATA) {
-      // DATA schema (registered in deploy/01_indexer.ts): "bytes32 contentHash, uint64 size".
-      // It is pure content identity — the actual bytes live in MIRRORs. The retrievable
-      // payload is keyed by `contentHash` via `dataByContentKey` for cross-uploader dedup.
-      const [contentHash, size] = decodeAbiParameters(
-        parseAbiParameters("bytes32 contentHash, uint64 size"),
-        data as `0x${string}`,
-      );
+      // DATA is an empty schema — pure file identity (ADR-0049). It carries no inline fields;
+      // contentHash/size are reserved-key PROPERTYs bound to the DATA UID, and the bytes live
+      // in MIRRORs. There is nothing to decode from the (zero-length) payload.
       return (
         <div className="p-4 bg-accent/10 rounded-lg border border-accent/20">
           <div className="text-xs font-bold uppercase mb-1">Data</div>
-          <div className="flex flex-col gap-2">
-            <div className="badge badge-neutral">Size: {size.toString()} bytes</div>
-            <div className="text-xs font-mono break-all bg-base-100 p-1 rounded">contentHash: {contentHash}</div>
+          <div className="text-xs italic opacity-70">
+            Empty schema — pure identity (ADR-0049). contentHash / size are PROPERTYs on this UID.
           </div>
         </div>
       );
     }
-    if (schemaUID === schemas.BLOB) {
-      // BLOB schema (registered in deploy/01_indexer.ts):
-      //   "string mimeType, uint8 storageType, bytes location"
-      // BLOB attestations carry the storage-pointer envelope; `location` is mimeType-typed
-      // bytes whose interpretation depends on `storageType` (e.g. URL for off-chain,
-      // raw bytes for tiny inline payloads).
-      const [mimeType, storageType, location] = decodeAbiParameters(
-        parseAbiParameters("string mimeType, uint8 storageType, bytes location"),
-        data as `0x${string}`,
-      );
-      const isText = mimeType.includes("text") || mimeType.includes("json") || mimeType.includes("javascript");
-      let displayText: string = location;
-      if (isText) {
-        try {
-          displayText = hexToString(location);
-        } catch {}
-      }
-      return (
-        <div className="p-4 bg-info/10 rounded-lg border border-info/20">
-          <div className="text-xs font-bold uppercase mb-1">
-            Blob ({mimeType}) — storageType {storageType.toString()}
-          </div>
-          {isText ? (
-            <pre className="text-xs overflow-auto max-h-[300px] p-2 bg-base-100 rounded">{displayText}</pre>
-          ) : (
-            <div className="text-xs italic opacity-70">
-              {Number(location.length) / 2 - 1} bytes of binary location data
-            </div>
-          )}
-        </div>
-      );
-    }
+    // BLOB schema was dropped (ADR-0049) — no BLOB decoder.
   } catch (e) {
     return <div className="alert alert-warning text-xs">Failed to decode: {(e as Error).message}</div>;
   }
@@ -356,9 +320,7 @@ function ReferencingAttestations({
         {registry.schemas.DATA && (
           <ReferencingList title="Data" schema={registry.schemas.DATA} target={uid} onNavigate={onNavigate} />
         )}
-        {registry.schemas.BLOB && (
-          <ReferencingList title="Blobs" schema={registry.schemas.BLOB} target={uid} onNavigate={onNavigate} />
-        )}
+        {/* BLOB schema was dropped (ADR-0049) — no Blobs referencing list. */}
       </div>
     </div>
   );
@@ -378,7 +340,7 @@ function ReferencingList({
   const { data: uids, isLoading } = useScaffoldReadContract({
     contractName: "Indexer",
     functionName: "getReferencingAttestations",
-    args: [target as `0x${string}`, schema as `0x${string}`, 0n, 50n, true], // fetch last 50, reversed
+    args: [target as `0x${string}`, schema as `0x${string}`, 0n, 50n, true, false], // fetch last 50, reversed
   });
 
   return (

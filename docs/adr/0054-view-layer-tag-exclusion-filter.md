@@ -1,4 +1,4 @@
-# ADR-0048: View-layer tag-exclusion directory filter
+# ADR-0054: View-layer tag-exclusion directory filter
 
 **Status:** Accepted
 **Date:** 2026-06-12

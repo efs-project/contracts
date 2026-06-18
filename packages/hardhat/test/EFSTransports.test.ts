@@ -2,6 +2,8 @@ import { expect } from "chai";
 import { ethers } from "hardhat";
 import { EFSIndexer, EdgeResolver, MirrorResolver, EFSFileView, EAS, SchemaRegistry } from "../typechain-types";
 import { Signer, ZeroAddress, ZeroHash } from "ethers";
+import { deployIndexerProxy } from "./helpers/deployIndexerProxy";
+import { deployResolverProxy } from "./helpers/deployResolverProxy";
 
 const ZERO_BYTES32 = ZeroHash;
 const NO_EXPIRATION = 0n;
@@ -35,7 +37,6 @@ describe("EFS Transports & Data Model", function () {
   let pinSchemaUID: string;
   let tagSchemaUID: string;
   let mirrorSchemaUID: string;
-  let blobSchemaUID: string;
 
   let rootUID: string;
   let transportsUID: string;
@@ -53,8 +54,6 @@ describe("EFS Transports & Data Model", function () {
 
   const encodeAnchor = (name: string, schema: string = ZERO_BYTES32) =>
     enc.encode(["string", "bytes32"], [name, schema]);
-
-  const encodeData = (contentHash: string, size: bigint) => enc.encode(["bytes32", "uint64"], [contentHash, size]);
 
   const encodePropertyValue = (value: string) => enc.encode(["string"], [value]);
 
@@ -86,37 +85,40 @@ describe("EFS Transports & Data Model", function () {
     eas = await EASFactory.deploy(await registry.getAddress());
     await eas.waitForDeployment();
 
-    // Nonce prediction:
-    //   nonce+0: EdgeResolver
-    //   nonce+1: MirrorResolver
-    //   nonce+2: ANCHOR schema
-    //   nonce+3: PROPERTY schema
-    //   nonce+4: DATA schema
-    //   nonce+5: PIN schema
-    //   nonce+6: TAG schema
-    //   nonce+7: MIRROR schema
-    //   nonce+8: BLOB schema
-    //   nonce+9: EFSIndexer
-    //   nonce+10: EFSFileView
+    // Nonce prediction (EdgeResolver, MirrorResolver, and EFSIndexer are all proxy-ified, ADR-0048):
+    //   nonce+0:  EdgeResolver implementation
+    //   nonce+1:  EdgeResolver proxy (the resolver baked into the PIN/TAG schema UIDs)
+    //   nonce+2:  MirrorResolver implementation
+    //   nonce+3:  MirrorResolver proxy (the resolver baked into the MIRROR schema UID)
+    //   nonce+4:  ANCHOR schema
+    //   nonce+5:  PROPERTY schema
+    //   nonce+6:  DATA schema (empty — ADR-0049)
+    //   nonce+7:  PIN schema
+    //   nonce+8:  TAG schema
+    //   nonce+9:  MIRROR schema
+    //   nonce+10: EFSIndexer implementation
+    //   nonce+11: EFSIndexer proxy (the resolver baked into the EFS schema UIDs)
+    //   nonce+12: EFSFileView
     const currentNonce = await ethers.provider.getTransactionCount(ownerAddr);
 
-    const futureEdgeResolverAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce });
-    const futureMirrorResolverAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce + 1 });
-    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce + 9 });
+    // EdgeResolver PROXY is the resolver (ADR-0048): impl = +0, proxy = +1. See deployResolverProxy().
+    const futureEdgeResolverAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce + 1 });
+    // MirrorResolver PROXY is the resolver (ADR-0048): impl = +2, proxy = +3.
+    const futureMirrorResolverAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce + 3 });
+    // EFSIndexer PROXY is the resolver (ADR-0048): impl = +10, proxy = +11. See deployIndexerProxy().
+    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: currentNonce + 11 });
 
     // Pre-compute schema UIDs
     anchorSchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
-      ["string name, bytes32 schemaUID", futureIndexerAddr, false],
+      ["string name, bytes32 forSchema", futureIndexerAddr, false],
     );
     propertySchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
       ["string value", futureIndexerAddr, false],
     );
-    dataSchemaUID = ethers.solidityPackedKeccak256(
-      ["string", "address", "bool"],
-      ["bytes32 contentHash, uint64 size", futureIndexerAddr, false],
-    );
+    // DATA is an empty schema — pure identity (ADR-0049).
+    dataSchemaUID = ethers.solidityPackedKeccak256(["string", "address", "bool"], ["", futureIndexerAddr, false]);
     pinSchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
       ["bytes32 definition", futureEdgeResolverAddr, true],
@@ -129,44 +131,44 @@ describe("EFS Transports & Data Model", function () {
       ["string", "address", "bool"],
       ["bytes32 transportDefinition, string uri", futureMirrorResolverAddr, true],
     );
-    blobSchemaUID = ethers.solidityPackedKeccak256(
-      ["string", "address", "bool"],
-      ["string mimeType, uint8 storageType, bytes location", ZeroAddress, true],
-    );
 
-    // Deploy EdgeResolver (PIN + TAG combined under one resolver)
-    const EdgeResolverFactory = await ethers.getContractFactory("EdgeResolver");
-    edgeResolver = await EdgeResolverFactory.deploy(
-      await eas.getAddress(),
-      pinSchemaUID,
-      tagSchemaUID,
-      futureIndexerAddr,
-      await registry.getAddress(),
+    // Deploy EdgeResolver behind a proxy (ADR-0048): impl + proxy; initialize() sets the PIN/TAG
+    // schema UIDs + partner refs. The proxy address is baked into the PIN/TAG schema UIDs.
+    edgeResolver = await deployResolverProxy<EdgeResolver>(
+      "EdgeResolver",
+      [await eas.getAddress()],
+      [pinSchemaUID, tagSchemaUID, futureIndexerAddr, await registry.getAddress()],
+      owner,
     );
+    expect(await edgeResolver.getAddress()).to.equal(futureEdgeResolverAddr);
 
-    // Deploy MirrorResolver
-    const MirrorResolverFactory = await ethers.getContractFactory("MirrorResolver");
-    mirrorResolver = await MirrorResolverFactory.deploy(await eas.getAddress(), futureIndexerAddr);
+    // Deploy MirrorResolver behind a proxy (ADR-0048). initialize() wires the (predicted) indexer
+    // proxy address + owner; the proxy address is what's baked into the MIRROR schema UID.
+    mirrorResolver = await deployResolverProxy<MirrorResolver>(
+      "MirrorResolver",
+      [await eas.getAddress()],
+      [futureIndexerAddr, ownerAddr],
+      owner,
+    );
+    expect(await mirrorResolver.getAddress()).to.equal(futureMirrorResolverAddr);
 
     // Register schemas
-    await (await registry.register("string name, bytes32 schemaUID", futureIndexerAddr, false)).wait();
+    await (await registry.register("string name, bytes32 forSchema", futureIndexerAddr, false)).wait();
     await (await registry.register("string value", futureIndexerAddr, false)).wait();
-    await (await registry.register("bytes32 contentHash, uint64 size", futureIndexerAddr, false)).wait();
+    await (await registry.register("", futureIndexerAddr, false)).wait(); // DATA: empty schema (ADR-0049)
     await (await registry.register("bytes32 definition", await edgeResolver.getAddress(), true)).wait();
     await (await registry.register("bytes32 definition, int256 weight", await edgeResolver.getAddress(), true)).wait();
     await (
       await registry.register("bytes32 transportDefinition, string uri", await mirrorResolver.getAddress(), true)
     ).wait();
-    await (await registry.register("string mimeType, uint8 storageType, bytes location", ZeroAddress, true)).wait();
 
-    // Deploy EFSIndexer
-    const IndexerFactory = await ethers.getContractFactory("EFSIndexer");
-    indexer = await IndexerFactory.deploy(
+    // Deploy EFSIndexer behind a proxy (ADR-0048)
+    indexer = await deployIndexerProxy(
       await eas.getAddress(),
       anchorSchemaUID,
       propertySchemaUID,
       dataSchemaUID,
-      blobSchemaUID,
+      owner,
     );
     expect(await indexer.getAddress()).to.equal(futureIndexerAddr);
 
@@ -249,7 +251,10 @@ describe("EFS Transports & Data Model", function () {
     return getUID(await tx.wait());
   }
 
-  async function createData(contentHash: string, size: bigint, signer: Signer = owner): Promise<string> {
+  // DATA is an empty schema — pure identity (ADR-0049). The `_contentHash`/`_size` params are
+  // ignored (kept so existing call sites read clearly about what the DATA stands for); the DATA
+  // attestation itself carries no inline payload.
+  async function createData(_contentHash: string, _size: bigint, signer: Signer = owner): Promise<string> {
     const tx = await eas.connect(signer).attest({
       schema: dataSchemaUID,
       data: {
@@ -257,7 +262,7 @@ describe("EFS Transports & Data Model", function () {
         expirationTime: NO_EXPIRATION,
         revocable: false,
         refUID: ZERO_BYTES32,
-        data: encodeData(contentHash, size),
+        data: "0x",
         value: 0n,
       },
     });
@@ -367,7 +372,7 @@ describe("EFS Transports & Data Model", function () {
   // ─── DATA Tests ───────────────────────────────────────────────────────────
 
   describe("Standalone DATA", function () {
-    it("should create standalone DATA with contentHash and size", async function () {
+    it("should create standalone DATA — empty, pure identity (ADR-0049)", async function () {
       const contentHash = ethers.keccak256(ethers.toUtf8Bytes("hello world"));
       const dataUID = await createData(contentHash, 11n);
 
@@ -376,25 +381,15 @@ describe("EFS Transports & Data Model", function () {
       expect(att.schema).to.equal(dataSchemaUID);
       expect(att.refUID).to.equal(ZERO_BYTES32); // standalone
       expect(att.revocable).to.equal(false);
+      expect(att.data).to.equal("0x"); // empty schema — no inline fields
     });
 
-    it("should populate dataByContentKey on first DATA", async function () {
-      const contentHash = ethers.keccak256(ethers.toUtf8Bytes("unique content"));
-      const dataUID = await createData(contentHash, 14n);
-      expect(await indexer.dataByContentKey(contentHash)).to.equal(dataUID);
-    });
-
-    it("should not overwrite dataByContentKey for duplicate contentHash", async function () {
-      const contentHash = ethers.keccak256(ethers.toUtf8Bytes("same content"));
-      const first = await createData(contentHash, 12n);
-      const second = await createData(contentHash, 12n);
-
-      expect(first).to.not.equal(second); // different UIDs
-      expect(await indexer.dataByContentKey(contentHash)).to.equal(first); // canonical = first
-    });
+    // AGENT-NOTE: removed "should populate dataByContentKey on first DATA" and "should not
+    // overwrite dataByContentKey for duplicate contentHash" — DATA is empty (ADR-0049), carries
+    // no contentHash, and `dataByContentKey` is no longer written. Content-hash dedup moves to
+    // the property index + REDIRECT primitive (ADR-0050); that's future PROPERTY/SDK work.
 
     it("should reject DATA with refUID (must be standalone)", async function () {
-      const contentHash = ethers.keccak256(ethers.toUtf8Bytes("test"));
       // Create an anchor to use as refUID
       const anchorUID = await createAnchor(rootUID, "test-folder");
 
@@ -407,11 +402,106 @@ describe("EFS Transports & Data Model", function () {
             expirationTime: NO_EXPIRATION,
             revocable: false,
             refUID: anchorUID,
-            data: encodeData(contentHash, 4n),
+            data: "0x", // empty DATA (ADR-0049)
             value: 0n,
           },
         }),
       ).to.be.reverted;
+    });
+  });
+
+  // ─── Lifecycle: permanent content schemas reject EAS expiry (PR #24 P2) ─────
+  // ANCHOR/DATA/PROPERTY are non-revocable permanent structure; EFS reads filter on revocation/index
+  // state, not EAS expiry, so an expiring one would resolve forever past expiry. The kernel rejects a
+  // nonzero expirationTime alongside the existing non-revocable checks. Far-future expiry passes EAS's
+  // own check and reaches EFSIndexer.onAttest (which returns false → EAS reverts the attestation).
+  describe("permanent content rejects EAS expiry", function () {
+    const FUTURE_EXPIRY = 9_999_999_999n;
+
+    it("rejects an ANCHOR with a nonzero expirationTime", async function () {
+      await expect(
+        eas.attest({
+          schema: anchorSchemaUID,
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: FUTURE_EXPIRY,
+            revocable: false,
+            refUID: rootUID,
+            data: encodeAnchor("expiring-folder"),
+            value: 0n,
+          },
+        }),
+      ).to.be.reverted;
+    });
+
+    it("rejects a DATA with a nonzero expirationTime", async function () {
+      await expect(
+        eas.attest({
+          schema: dataSchemaUID,
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: FUTURE_EXPIRY,
+            revocable: false,
+            refUID: ZERO_BYTES32,
+            data: "0x",
+            value: 0n,
+          },
+        }),
+      ).to.be.reverted;
+    });
+
+    it("rejects a PROPERTY with a nonzero expirationTime", async function () {
+      await expect(
+        eas.attest({
+          schema: propertySchemaUID,
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: FUTURE_EXPIRY,
+            revocable: false,
+            refUID: ZERO_BYTES32,
+            data: encodePropertyValue("x"),
+            value: 0n,
+          },
+        }),
+      ).to.be.reverted;
+    });
+  });
+
+  describe("canonical-payload guard (NonCanonicalPayload)", function () {
+    // abi.decode tolerates trailing words, so `abi.encode(fields) || extraWord` decodes to the SAME
+    // fields and would mint a second record under a distinct permanent UID (an anchor name / interned
+    // value with multiple accepted encodings). EFSIndexer re-encodes and hash-compares on onAttest.
+    // Parent/name/value are all valid here, so ONLY the canonical-payload guard can reject these.
+    it("rejects an ANCHOR with trailing bytes past the canonical encoding", async function () {
+      await expect(
+        eas.attest({
+          schema: anchorSchemaUID,
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: NO_EXPIRATION,
+            revocable: false,
+            refUID: rootUID,
+            data: encodeAnchor("canon-folder") + "00".repeat(32),
+            value: 0n,
+          },
+        }),
+      ).to.be.revertedWithCustomError(indexer, "NonCanonicalPayload");
+    });
+
+    it("rejects a PROPERTY with trailing bytes past the canonical encoding", async function () {
+      await expect(
+        eas.attest({
+          schema: propertySchemaUID,
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: NO_EXPIRATION,
+            revocable: false,
+            refUID: ZERO_BYTES32,
+            data: encodePropertyValue("text/plain") + "00".repeat(32),
+            value: 0n,
+          },
+        }),
+      ).to.be.revertedWithCustomError(indexer, "NonCanonicalPayload");
     });
   });
 
@@ -443,10 +533,140 @@ describe("EFS Transports & Data Model", function () {
       expect(mirrorUID).to.not.equal(ZERO_BYTES32);
     });
 
+    it("rejects a MIRROR with non-canonical (trailing-byte) payload (NonCanonicalPayload)", async function () {
+      // Regression for Codex P2 (comment 3433701055): abi.decode tolerates a canonical prefix with
+      // trailing words, so `abi.encode(transportDefinition, uri) || extraWord` decodes to the SAME
+      // (transportDefinition, uri) and would mint a second mirror under a distinct permanent UID, while
+      // an SDK/subgraph reconstructing the UID from the decoded fields sees only one. The dynamic
+      // `string uri` rules out a fixed-length check, so MirrorResolver re-encodes and hash-compares.
+      // Transport + uri + DATA are all valid here, so ONLY the canonical-payload guard can reject it.
+      const canonical = encodeMirror(ipfsTransportUID, "ipfs://QmCanonical");
+      await expect(
+        eas.connect(owner).attest({
+          schema: mirrorSchemaUID,
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: NO_EXPIRATION,
+            revocable: true,
+            refUID: testDataUID,
+            data: canonical + "00".repeat(32), // one trailing word past the canonical encoding
+            value: 0n,
+          },
+        }),
+      ).to.be.revertedWithCustomError(mirrorResolver, "NonCanonicalPayload");
+    });
+
+    it("rejects a FOREIGN schema pointed at MirrorResolver (WrongSchema) — no MirrorSet/index", async function () {
+      // Regression for Codex P2 (comment 3432672732): EAS invokes onAttest for ANY schema registered
+      // against this resolver. A foreign schema with an otherwise-valid DATA ref + transport + URI must
+      // NOT pass — it would emit MirrorSet and pollute the event-reconstruction flow (specs/03), even
+      // though the router (which queries MIRROR_SCHEMA_UID) never serves it. Sibling typed resolvers
+      // (AliasResolver/ListEntryResolver/EdgeResolver) all guard their own schema; MirrorResolver must too.
+      const mirrorResolverAddr = await mirrorResolver.getAddress();
+      // Foreign schema: leading fields match so onAttest's abi.decode((bytes32,string)) still succeeds,
+      // but the extra field makes the UID differ. Same resolver, revocable=true — so ONLY the schema
+      // guard (not NotRevocable / refUID / transport checks) can reject it.
+      const foreignDef = "bytes32 transportDefinition, string uri, uint256 salt";
+      await (await registry.register(foreignDef, mirrorResolverAddr, true)).wait();
+      const foreignSchemaUID = ethers.solidityPackedKeccak256(
+        ["string", "address", "bool"],
+        [foreignDef, mirrorResolverAddr, true],
+      );
+      expect(foreignSchemaUID).to.not.equal(mirrorSchemaUID);
+
+      const foreignData = enc.encode(
+        ["bytes32", "string", "uint256"],
+        [ipfsTransportUID, "ipfs://QmForeignInjection", 0n],
+      );
+      await expect(
+        eas.connect(owner).attest({
+          schema: foreignSchemaUID,
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: NO_EXPIRATION,
+            revocable: true,
+            refUID: testDataUID,
+            data: foreignData,
+            value: 0n,
+          },
+        }),
+      ).to.be.revertedWithCustomError(mirrorResolver, "WrongSchema");
+
+      // Control: the canonical MIRROR schema still works.
+      const realMirror = await createMirror(testDataUID, ipfsTransportUID, "ipfs://QmRealMirror");
+      expect(realMirror).to.not.equal(ZERO_BYTES32);
+    });
+
     it("should allow multiple mirrors on same DATA", async function () {
       const m1 = await createMirror(testDataUID, ipfsTransportUID, "ipfs://QmHash1");
       const m2 = await createMirror(testDataUID, arweaveTransportUID, "ar://ArHash1");
       expect(m1).to.not.equal(m2);
+    });
+
+    it("emits MirrorSet with the uri + transportDefinition (subgraph events, PR #24)", async function () {
+      const ownerAddr = await owner.getAddress();
+      const uri = "ipfs://QmEventTestHash";
+      const tx = await eas.attest({
+        schema: mirrorSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: NO_EXPIRATION,
+          revocable: true,
+          refUID: testDataUID,
+          data: encodeMirror(ipfsTransportUID, uri),
+          value: 0n,
+        },
+      });
+      const mirrorUID = getUID(await tx.wait());
+      await expect(tx)
+        .to.emit(mirrorResolver, "MirrorSet")
+        .withArgs(testDataUID, ownerAddr, ipfsTransportUID, mirrorUID, uri);
+    });
+
+    it("emits MirrorCleared on revoke (subgraph events, PR #24)", async function () {
+      const ownerAddr = await owner.getAddress();
+      const mirrorUID = await createMirror(testDataUID, ipfsTransportUID, "ipfs://QmEventClear");
+      const tx = await eas.connect(owner).revoke({ schema: mirrorSchemaUID, data: { uid: mirrorUID, value: 0n } });
+      await expect(tx)
+        .to.emit(mirrorResolver, "MirrorCleared")
+        .withArgs(testDataUID, ownerAddr, ipfsTransportUID, mirrorUID);
+    });
+
+    it("should reject a MIRROR with a nonzero expirationTime (HasExpiration)", async function () {
+      // A MIRROR is active-until-revoked with no expiry; an expiring mirror would read as live
+      // forever (reads filter on revocation, not expiry). Far-future expiry passes EAS → resolver.
+      await expect(
+        eas.attest({
+          schema: mirrorSchemaUID,
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: 9_999_999_999n,
+            revocable: true,
+            refUID: testDataUID,
+            data: encodeMirror(ipfsTransportUID, "ipfs://QmTestHash123"),
+            value: 0n,
+          },
+        }),
+      ).to.be.revertedWithCustomError(mirrorResolver, "HasExpiration");
+    });
+
+    it("should reject a non-revocable MIRROR (NotRevocable)", async function () {
+      // A MIRROR must stay retractable (removal is via eas.revoke()). The revocable *schema* only
+      // permits revocable attestations; EAS still accepts revocable=false, which the resolver rejects
+      // so a dead/hostile mirror URI can't be welded on permanently.
+      await expect(
+        eas.attest({
+          schema: mirrorSchemaUID,
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: NO_EXPIRATION,
+            revocable: false,
+            refUID: testDataUID,
+            data: encodeMirror(ipfsTransportUID, "ipfs://QmTestHash123"),
+            value: 0n,
+          },
+        }),
+      ).to.be.revertedWithCustomError(mirrorResolver, "NotRevocable");
     });
 
     it("should reject MIRROR without refUID", async function () {
@@ -500,12 +720,59 @@ describe("EFS Transports & Data Model", function () {
       expect(mirrorUID).to.not.equal(ZERO_BYTES32);
     });
 
+    it("should accept MIRROR with an s3:// URI (widened scheme allowlist, supersedes ADR-0023)", async function () {
+      // ADR-0048 MIRROR change: scheme safety is a client-render concern, not a write-time one
+      // (the router never executes URIs). s3:// (and ftp://, gs://, dat://, bittorrent://) are now
+      // accepted; only active-content schemes (javascript:, data:) remain rejected.
+      const mirrorUID = await createMirror(testDataUID, ipfsTransportUID, "s3://my-bucket/cat.jpg");
+      expect(mirrorUID).to.not.equal(ZERO_BYTES32);
+    });
+
+    it("should accept MIRROR with an ftp:// URI (widened scheme allowlist)", async function () {
+      const mirrorUID = await createMirror(testDataUID, ipfsTransportUID, "ftp://ftp.example.com/cat.jpg");
+      expect(mirrorUID).to.not.equal(ZERO_BYTES32);
+    });
+
+    it("should still reject MIRROR with a javascript: URI (XSS scheme stays blocked)", async function () {
+      await expect(createMirror(testDataUID, ipfsTransportUID, "javascript:alert(1)")).to.be.reverted;
+    });
+
     it("should be discoverable via getReferencingAttestations", async function () {
       await createMirror(testDataUID, ipfsTransportUID, "ipfs://QmHash1");
       await createMirror(testDataUID, arweaveTransportUID, "ar://ArHash1");
 
-      const mirrors = await indexer.getReferencingAttestations(testDataUID, mirrorSchemaUID, 0, 10, false);
+      const mirrors = await indexer.getReferencingAttestations(testDataUID, mirrorSchemaUID, 0, 10, false, false);
       expect(mirrors.length).to.equal(2);
+    });
+  });
+
+  // ─── MirrorResolver upgradeable lifecycle (ADR-0048) ──────────────────────
+  describe("MirrorResolver upgradeable lifecycle", function () {
+    it("rejects re-initialization through the proxy", async function () {
+      await expect(
+        mirrorResolver.initialize(await indexer.getAddress(), await owner.getAddress()),
+      ).to.be.revertedWithCustomError(mirrorResolver, "InvalidInitialization");
+    });
+
+    it("exposes the constructor EAS via getEAS() through the proxy", async function () {
+      expect(await mirrorResolver.getEAS()).to.equal(await eas.getAddress());
+    });
+
+    it("reads the indexer ref from ERC-7201 config (set in initialize)", async function () {
+      expect(await mirrorResolver.indexer()).to.equal(await indexer.getAddress());
+    });
+
+    it("gates setTransportsAnchor behind onlyOwner (former msg.sender==_deployer)", async function () {
+      // transportsAnchorUID is already set in beforeEach; a non-owner call must revert on the
+      // ownership check before reaching the one-shot guard.
+      await expect(mirrorResolver.connect(alice).setTransportsAnchor(transportsUID)).to.be.revertedWithCustomError(
+        mirrorResolver,
+        "OwnableUnauthorizedAccount",
+      );
+    });
+
+    it("keeps the one-shot guard: owner cannot re-set transportsAnchorUID", async function () {
+      await expect(mirrorResolver.setTransportsAnchor(transportsUID)).to.be.revertedWith("already set");
     });
   });
 
@@ -643,7 +910,9 @@ describe("EFS Transports & Data Model", function () {
 
       expect(items.length).to.equal(1);
       expect(items[0].uid).to.equal(dataUID);
-      expect(items[0].contentHash).to.equal(contentHash);
+      // DATA is empty (ADR-0049); contentHash is no longer an inline DATA field, so the
+      // listing surfaces bytes32(0). Surfacing the hash PROPERTY is future property-index work.
+      expect(items[0].contentHash).to.equal(ZERO_BYTES32);
       expect(items[0].hasData).to.equal(true);
     });
   });
@@ -662,11 +931,13 @@ describe("EFS Transports & Data Model", function () {
   });
 
   describe("EFSFileView.getCanonicalData", function () {
-    it("should return canonical DATA for contentHash", async function () {
+    it("getCanonicalData is a deprecated no-op returning bytes32(0) (ADR-0049)", async function () {
+      // DATA is empty/pure-identity; there is no intrinsic content-hash index. Canonical/dedup
+      // resolution moves to the property index + REDIRECT primitive (ADR-0050) — future work.
       const contentHash = ethers.keccak256(ethers.toUtf8Bytes("canonical test"));
-      const dataUID = await createData(contentHash, 50n);
+      await createData(contentHash, 50n);
 
-      expect(await fileView.getCanonicalData(contentHash)).to.equal(dataUID);
+      expect(await fileView.getCanonicalData(contentHash)).to.equal(ZERO_BYTES32);
     });
   });
 
@@ -695,11 +966,11 @@ describe("EFS Transports & Data Model", function () {
       expect(await edgeResolver.getActivePinTarget(docsUID, ownerAddr, dataSchemaUID)).to.equal(dataUID);
 
       // Verify: mirrors on DATA
-      const mirrors = await indexer.getReferencingAttestations(dataUID, mirrorSchemaUID, 0, 10, false);
+      const mirrors = await indexer.getReferencingAttestations(dataUID, mirrorSchemaUID, 0, 10, false, false);
       expect(mirrors.length).to.equal(1);
 
-      // Verify: dedup
-      expect(await indexer.dataByContentKey(contentHash)).to.equal(dataUID);
+      // AGENT-NOTE: dropped the dedup assertion (`dataByContentKey`) — DATA is empty (ADR-0049)
+      // and carries no contentHash; dedup is now property-index + REDIRECT work (ADR-0050).
     });
   });
 });

@@ -36,7 +36,8 @@ interface IEFSIndexer {
         bytes32 schemaUID,
         uint256 start,
         uint256 length,
-        bool reverseOrder
+        bool reverseOrder,
+        bool showRevoked
     ) external view returns (bytes32[] memory);
 
     function getReferencingBySchemaAndAttester(
@@ -45,7 +46,8 @@ interface IEFSIndexer {
         address attester,
         uint256 start,
         uint256 length,
-        bool reverseOrder
+        bool reverseOrder,
+        bool showRevoked
     ) external view returns (bytes32[] memory);
 
     function getReferencingBySchemaAndAttesterCount(
@@ -97,6 +99,14 @@ contract EFSRouter is IDecentralizedApp {
     ISchemaRegistry public schemaRegistry;
     bytes32 public dataSchemaUID;
 
+    /// @notice The SystemAccount (ADR-0053) — the neutral, code-governed `system` lens. Used as
+    ///         the tail of the default-lens chain (ADR-0039): when no `?lenses=` is given, content
+    ///         falls back to `system` (the bootstrap scaffolding / official defaults author), not
+    ///         the throwaway deployer EOA. The router is a redeployable view (its address is in no
+    ///         schema UID), so pointing the fallback here is a view-config change, not a frozen one
+    ///         — it does NOT touch the kernel's immutable `DEPLOYER`/owner or the auto-tag path.
+    address public systemAccount;
+
     /// @dev Top-level URL segment can resolve to four container flavors.
     ///      Resolution precedence at classification: Address (40-hex) →
     ///      Schema (64-hex registered) → Attestation (64-hex existing) → Anchor (name).
@@ -114,13 +124,24 @@ contract EFSRouter is IDecentralizedApp {
         address _eas,
         address _edgeResolver,
         address _schemaRegistry,
-        bytes32 _dataSchemaUID
+        bytes32 _dataSchemaUID,
+        address _systemAccount
     ) {
         indexer = IEFSIndexer(_indexer);
         eas = IEAS(_eas);
         edgeResolver = IEdgeResolverForRouter(_edgeResolver);
         schemaRegistry = ISchemaRegistry(_schemaRegistry);
         dataSchemaUID = _dataSchemaUID;
+        // ADR-0053: the default-lens fallback points at SystemAccount, not the deployer EOA. Falls
+        // back to indexer.DEPLOYER() only if a zero address is passed (pre-ADR-0053 deploys / tests
+        // that don't wire a SystemAccount), preserving the old behavior in that degenerate case.
+        systemAccount = _systemAccount != address(0) ? _systemAccount : indexer.DEPLOYER();
+    }
+
+    /// @dev The system-lens address used as the default-lens fallback (ADR-0053 / ADR-0039).
+    function _systemLens() private view returns (address) {
+        address sa = systemAccount;
+        return sa != address(0) ? sa : indexer.DEPLOYER();
     }
 
     // EIP-6944: Manual Resolve Mode
@@ -252,22 +273,28 @@ contract EFSRouter is IDecentralizedApp {
         }
 
         // Address-default lenses: when browsing an address container with no explicit
-        // `?lenses=`, default to `[caller, segmentAddr]` — "Vitalik's files, with my
-        // overrides on top". Consistent with ADR-0031 (explicit lenses always override).
+        // `?lenses=`, default to `[caller, segmentAddr, system]` — "Vitalik's files, with my
+        // overrides on top, then the system defaults". Consistent with ADR-0031 (explicit lenses always
+        // override). The `system` tail (ADR-0053/0039) is what every other container flavor gets via the
+        // `_findDataAtPath` fallback; including it here keeps address browsing from silently losing the
+        // canonical SystemAccount defaults. Explicit `?lenses=` still bypasses this block entirely.
         if (flavor == ContainerFlavor.Address && !lensesExplicit) {
             address segmentAddr = address(uint160(uint256(rawUID)));
+            address sys = _systemLens();
             if (caller != address(0) && caller != segmentAddr) {
-                lenses = new address[](2);
+                lenses = new address[](3);
                 lenses[0] = caller;
                 lenses[1] = segmentAddr;
+                lenses[2] = sys;
             } else {
-                lenses = new address[](1);
+                lenses = new address[](2);
                 lenses[0] = segmentAddr;
+                lenses[1] = sys;
             }
         }
 
         // 2. Find DATA via TAG query: resolve lenses → TAG → DATA → MIRROR
-        (bytes32 dataUID, address dataAttester) = _findDataAtPath(targetAnchor, lenses, caller);
+        (bytes32 dataUID, address dataAttester) = _findDataAtPath(targetAnchor, lenses, caller, lensesExplicit);
         if (dataUID == bytes32(0)) {
             // Schema/Attestation containers with no DATA attached fall back to raw-info JSON
             // instead of 404. Only fires when the user typed the container itself (no sub-path)
@@ -296,33 +323,7 @@ contract EFSRouter is IDecentralizedApp {
             return (404, bytes("Not Found: No mirror available"), new KeyValue[](0));
         }
 
-        if (
-            _startsWith(uri, "ipfs://") ||
-            _startsWith(uri, "ar://") ||
-            _startsWith(uri, "https://") ||
-            _startsWith(uri, "magnet:")
-        ) {
-            // External URI Delegation (message/external-body)
-            // Single Content-Type with the actual type embedded as a parameter,
-            // avoiding duplicate headers that clients may collapse or mishandle.
-            // Sanitize contentType: strip quotes and control chars to prevent header injection.
-            string memory safeContentType = _sanitizeHeaderValue(contentType);
-            headers = new KeyValue[](1);
-            headers[0] = KeyValue(
-                "Content-Type",
-                string(
-                    abi.encodePacked(
-                        'message/external-body; access-type=URL; URL="',
-                        uri,
-                        '"',
-                        bytes(safeContentType).length > 0
-                            ? string(abi.encodePacked('; content-type="', safeContentType, '"'))
-                            : ""
-                    )
-                )
-            );
-            return (200, bytes(""), headers);
-        } else if (_startsWith(uri, "web3://")) {
+        if (_startsWith(uri, "web3://")) {
             // On-chain fetch via SSTORE2 or similar.
             // In a real deployed version, web3:// contract addresses are queried.
             // For now, if uri is internal or points to contract, pull bytes. (Mocking EXTCODECOPY)
@@ -402,10 +403,38 @@ contract EFSRouter is IDecentralizedApp {
             return (200, rawData, headers);
         }
 
-        // Fallback for raw byte URIs / encoded data
+        // Any other non-empty allowlisted scheme (ipfs://, ar://, https://, magnet:,
+        // ftp://, s3://, gs://, dat://, rsync://, bittorrent://, and any future
+        // MirrorResolver allowlist addition) is served as an external-body redirect.
+        // web3:// is handled above; the only other non-web3 case is an off-chain URI,
+        // so the retrieval is transport-agnostic — we delegate to the client rather
+        // than ever returning the raw URI as the response body.
+        // Single Content-Type with the actual type embedded as a parameter,
+        // avoiding duplicate headers that clients may collapse or mishandle.
+        // Sanitize BOTH interpolated values — strip quotes/backslashes/control bytes to prevent header
+        // injection (ADR-0024). The URI is attester-controlled (any lens can attest a MIRROR) and, with
+        // the widened off-chain allowlist (ftp/s3/gs/dat/rsync/bittorrent — ADR-0023), a stored value
+        // containing `"` or control bytes would otherwise break out of the URL="..." quoted-string and
+        // inject header parameters into every client served through that lens. A well-formed URI cannot
+        // contain those bytes raw (RFC 3986 requires percent-encoding), so sanitizing only ever affects
+        // a malformed/hostile URI — degrading it to a broken redirect, never an injection vector.
+        string memory safeUri = _sanitizeHeaderValue(uri);
+        string memory safeContentType = _sanitizeHeaderValue(contentType);
         headers = new KeyValue[](1);
-        headers[0] = KeyValue("Content-Type", contentType);
-        return (200, bytes(uri), headers);
+        headers[0] = KeyValue(
+            "Content-Type",
+            string(
+                abi.encodePacked(
+                    'message/external-body; access-type=URL; URL="',
+                    safeUri,
+                    '"',
+                    bytes(safeContentType).length > 0
+                        ? string(abi.encodePacked('; content-type="', safeContentType, '"'))
+                        : ""
+                )
+            )
+        );
+        return (200, bytes(""), headers);
     }
 
     // ---------- HELPER FUNCTIONS ------------
@@ -818,25 +847,40 @@ contract EFSRouter is IDecentralizedApp {
     //
     // Fallback priority when no ?lenses= is specified:
     //   1. caller (from ?caller= param or msg.sender if non-zero) — user sees their own files
-    //   2. EFS deployer — system-provided defaults (settings, docs, etc.)
+    //   2. SystemAccount — the `system` lens, the neutral system-provided-defaults author
+    //      (ADR-0053; replaces the throwaway deployer EOA of ADR-0016/0039).
+    //
+    // The `system` lens is default-on but USER-REMOVABLE (ADR-0039/0053, specs/overview.md
+    // §Lenses). `lensesExplicit` distinguishes "no ?lenses= param" (apply the caller→system
+    // fallback above) from "explicit ?lenses= that parsed to zero valid lenses" (the user has
+    // removed every lens, including system, so we must return no data — never silently fall
+    // back to caller/system). Without this flag an empty `?lenses=` would be indistinguishable
+    // from an absent one, violating viewer sovereignty.
     function _findDataAtPath(
         bytes32 targetAnchor,
         address[] memory lenses,
-        address caller
+        address caller,
+        bool lensesExplicit
     ) private view returns (bytes32, address) {
         bytes32 dataSchema = indexer.DATA_SCHEMA_UID();
+        address systemLens = _systemLens();
 
         address[] memory attesters;
         if (lenses.length > 0) {
             attesters = lenses;
+        } else if (lensesExplicit) {
+            // User supplied `?lenses=` but it parsed to zero valid lenses — every lens
+            // (including the system default) has been removed. Return no data rather than
+            // falling back to caller/system.
+            return (bytes32(0), address(0));
         } else if (caller != address(0)) {
-            // Try caller first, then EFS deployer as fallback
+            // Try caller first, then the system lens as fallback
             attesters = new address[](2);
             attesters[0] = caller;
-            attesters[1] = indexer.DEPLOYER();
+            attesters[1] = systemLens;
         } else {
             attesters = new address[](1);
-            attesters[0] = indexer.DEPLOYER();
+            attesters[0] = systemLens;
         }
 
         // File placement is Shape A — a file Anchor holds at most one DATA per attester.
@@ -891,7 +935,8 @@ contract EFSRouter is IDecentralizedApp {
                 attester,
                 offset,
                 chunk,
-                true
+                true, // reverseOrder
+                false // showRevoked — router serves active mirrors (revoked re-skipped below)
             );
 
             for (uint256 i = 0; i < mirrors.length; i++) {

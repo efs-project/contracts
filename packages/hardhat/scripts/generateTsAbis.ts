@@ -77,7 +77,12 @@ function getInheritedFunctions(sources: Record<string, any>, contractName: strin
 
 function getContractDataFromDeployments() {
   if (!fs.existsSync(DEPLOYMENTS_DIR)) {
-    throw Error("At least one other deployment script should exist to generate an actual contract.");
+    // The in-memory `hardhat` network persists no deployments dir, so `deploy:efs --network hardhat`
+    // (the fork rehearsal) reaches here with nothing on disk. That's not an error — the rehearsal is
+    // throwaway and writes no deployedContracts.ts. Return empty so the run exits 0. Networks that DO
+    // persist deployments (localhost, sepolia, …) still produce the file as before.
+    console.log("[generateTsAbis] no deployments dir — skipping deployedContracts.ts (in-memory run).");
+    return {} as Record<string, any>;
   }
   const output = {} as Record<string, any>;
   for (const chainName of getDirectories(DEPLOYMENTS_DIR)) {
@@ -87,9 +92,20 @@ function getContractDataFromDeployments() {
       const { abi, address, metadata } = JSON.parse(
         fs.readFileSync(`${DEPLOYMENTS_DIR}/${chainName}/${contractName}.json`).toString(),
       );
+      // Skip non-deployment JSON files that share the deployments dir — notably the Safe-native
+      // build/propose artifact `safe-batches.json`, which carries MultiSend batches, not a contract
+      // address/abi. A real hardhat-deploy artifact always has both; without this guard such a file
+      // would land in deployedContracts.ts as a garbage `{ address: undefined, abi: undefined }` entry
+      // and break the frontend typecheck (Codex P2, PR #24).
+      if (!abi || !address) continue;
       const inheritedFunctions = metadata ? getInheritedFunctions(JSON.parse(metadata).sources, contractName) : {};
       contracts[contractName] = { address, abi, inheritedFunctions };
     }
+    // Skip a chain that has a `.chainId` marker but NO contract artifacts. The CI Lint job's BARE
+    // hardhat node (no CreateX → core skips, 07/08 skip) can leave an empty `deployments/localhost`
+    // dir; without this guard the output would be `{ 31337: {} }`, which is non-empty and would
+    // CLOBBER the committed deployedContracts.ts to empty. An empty chain contributes nothing.
+    if (Object.keys(contracts).length === 0) continue;
     output[chainId] = contracts;
   }
   return output;
@@ -102,6 +118,10 @@ function getContractDataFromDeployments() {
 const generateTsAbis: DeployFunction = async function () {
   const TARGET_DIR = "../nextjs/contracts/";
   const allContractsData = getContractDataFromDeployments();
+
+  // No persisted deployments (e.g. `deploy:efs --network hardhat` fork rehearsal): do NOT write — that
+  // would clobber the committed deployedContracts.ts with `{}`. Leave the pinned file untouched.
+  if (Object.keys(allContractsData).length === 0) return;
 
   const fileContent = Object.entries(allContractsData).reduce((content, [chainId, chainConfig]) => {
     return `${content}${parseInt(chainId).toFixed(0)}:${JSON.stringify(chainConfig, null, 2)},`;

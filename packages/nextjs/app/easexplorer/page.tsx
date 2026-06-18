@@ -95,7 +95,7 @@ const ReferencingAttestationsList = ({
   const { data: uids } = useScaffoldReadContract({
     contractName: "Indexer",
     functionName: "getReferencingAttestations",
-    args: [(uid as `0x${string}`) || zeroHash, (schemaUid as `0x${string}`) || zeroHash, 0n, 20n, true],
+    args: [(uid as `0x${string}`) || zeroHash, (schemaUid as `0x${string}`) || zeroHash, 0n, 20n, true, false],
     query: {
       enabled: !!uid && !!schemaUid && uid !== zeroHash,
     },
@@ -156,10 +156,7 @@ function EASExplorerContent() {
     contractName: "Indexer",
     functionName: "DATA_SCHEMA_UID",
   });
-  const { data: blobSchemaUid } = useScaffoldReadContract({
-    contractName: "Indexer",
-    functionName: "BLOB_SCHEMA_UID",
-  });
+  // BLOB schema was dropped (ADR-0049): no BLOB_SCHEMA_UID read here anymore.
   // Edge schemas (PIN + TAG, ADR-0041) live on the EdgeResolver — they were
   // registered with EdgeResolver as their resolver address, not the Indexer.
   const { data: pinSchemaUid } = useScaffoldReadContract({
@@ -246,7 +243,14 @@ function EASExplorerContent() {
   const { data: referencingAttestations } = useScaffoldReadContract({
     contractName: "Indexer",
     functionName: "getReferencingAttestations",
-    args: [(uidParam as `0x${string}`) || zeroHash, (relevantSchema as `0x${string}`) || zeroHash, 0n, 20n, true],
+    args: [
+      (uidParam as `0x${string}`) || zeroHash,
+      (relevantSchema as `0x${string}`) || zeroHash,
+      0n,
+      20n,
+      true,
+      false,
+    ],
     query: {
       enabled: !!isAttestationFound && !!relevantSchema && !!uidParam,
     },
@@ -350,7 +354,6 @@ function EASExplorerContent() {
     if (schemaUid === anchorSchemaUid) return "Referencing Anchors (Children)";
     if (schemaUid === propertySchemaUid) return "Referencing Properties";
     if (schemaUid === dataSchemaUid) return "Linked Data";
-    if (schemaUid === blobSchemaUid) return "Linked Blobs";
     if (schemaUid === pinSchemaUid) return "Pins";
     if (schemaUid === tagSchemaUid) return "Tags";
 
@@ -367,7 +370,7 @@ function EASExplorerContent() {
   const { data: schemaAttestations } = useScaffoldReadContract({
     contractName: "Indexer",
     functionName: "getAttestationsBySchema",
-    args: [uidParam as `0x${string}`, 0n, 20n, true],
+    args: [uidParam as `0x${string}`, 0n, 20n, true, false],
     query: {
       enabled: !!isSchemaView,
     },

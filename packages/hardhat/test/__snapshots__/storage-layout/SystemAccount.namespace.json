@@ -1,0 +1,23 @@
+[
+  {
+    "struct": "SystemAccountConfig",
+    "fields": [
+      {
+        "name": "authorizedModule",
+        "type": "mapping(address => bool)"
+      },
+      {
+        "name": "bootstrapSealed",
+        "type": "bool"
+      },
+      {
+        "name": "_modulesSealed",
+        "type": "bool"
+      },
+      {
+        "name": "authorizedModuleList",
+        "type": "address[]"
+      }
+    ]
+  }
+]

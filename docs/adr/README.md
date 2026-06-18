@@ -19,6 +19,10 @@ ADRs are **immutable** once `Status: Accepted`. To change a decision:
 
 This preserves the chain of reasoning. Future agents can see *why* we tried X, *why* we moved to Y, and *what we learned*.
 
+### Partial supersession / amendment (Status-line note)
+
+When a later ADR changes only *part* of an earlier decision (e.g. ADR-0049 moved DATA's fields out but left "standalone + non-revocable" intact; ADR-0050 amended ADR-0048's freeze count from 8 to 9 schemas), record it as a **parenthetical on the old ADR's Status or Related line only** — e.g. `Accepted (superseded in part by ADR-0049 — …; standalone + non-revocable still hold)`. The body stays untouched; the new ADR's Context explains the amendment. This is the house pattern (human-approved 2026-06-11): the Status line is the ADR's one mutable slot, so a reader landing on the old ADR sees immediately which parts still bind without the historical record being rewritten. Do **not** route these through a separate tombstone log — the pointer belongs on the document itself.
+
 ### Grace period for retroactive ADRs
 
 ADRs marked `formalized retroactively` capture a decision made *before* the ADR was written, so the first readers may catch prose-level errors (wrong cross-reference, miscounted schemas, stale function name, inaccurate gas estimate) that don't reflect the decision itself.
@@ -63,6 +67,9 @@ What else we looked at and why it lost.
 - [ADR-0005 — ContentType moved from DATA to PROPERTY](./0005-content-type-moved-to-property.md)
 - [ADR-0006 — Folders don't need TAGs for visibility](./0006-folders-no-tags-for-visibility.md) *(Superseded by ADR-0038)*
 - [ADR-0038 — Tag-only folder visibility (single-source)](./0038-tag-only-folder-visibility.md)
+- [ADR-0049 — DATA is pure identity; hash and size are data, not identity](./0049-file-content-identity-hash-as-data.md)
+- [ADR-0050 — REDIRECT: first-class canonical / sameAs / symlink edge](./0050-redirect-canonical-symlink-schema.md)
+- [ADR-0052 — PROPERTY is non-revocable (interned shared value)](./0052-property-is-non-revocable.md)
 
 ### Index Design
 - [ADR-0007 — `_activeByAttesterAndSchema`: swap-and-pop compact index](./0007-activeByAttesterAndSchema-swap-and-pop.md) *(Swap-and-pop decision intact; array element type widened from `bytes32` to `TagEntry { tagUID, weight }` per ADR-0041)*
@@ -97,11 +104,13 @@ What else we looked at and why it lost.
 - [ADR-0028 — CI graceful degradation](./0028-ci-graceful-degradation.md)
 - [ADR-0029 — MIT license for EFS contracts (web client license deferred)](./0029-dual-licensing-mit-agpl.md)
 - [ADR-0037 — Pinned Sepolia fork for cross-environment determinism](./0037-pinned-sepolia-fork.md)
+- [ADR-0048 — Sepolia freeze set + proxy-ready resolvers (burn to immutable)](./0048-sepolia-freeze-set-and-proxy-ready-resolvers.md)
 
 ### Architectural Foundations
 - [ADR-0030 — Mainnet permanence (no upgradeability)](./0030-mainnet-permanence.md)
 - [ADR-0031 — Lenses as URL query param with first-wins fallback](./0031-lenses-url-param-model.md)
 - [ADR-0032 — EAS as foundational dependency](./0032-eas-as-foundation.md)
+- [ADR-0053 — SystemAccount: the neutral system write-identity](./0053-system-account-write-identity.md)
 
 ### Navigation & Containers
 - [ADR-0033 — Root containers and schema alias anchors](./0033-root-containers-and-schema-alias-anchors.md)
@@ -110,6 +119,7 @@ What else we looked at and why it lost.
 - [ADR-0039 — Default lenses priority chain](./0039-default-lenses-priority-chain.md)
 - [ADR-0041 — PIN/TAG schema split for cardinality, with weighted edges](./0041-pin-tag-schema-split-for-cardinality.md)
 - [ADR-0043 — Rename "editions" to "lenses"](./0043-rename-editions-to-lenses.md)
+- [ADR-0055 — WHITEOUT: cross-lens negative masking (overlay deletion)](./0055-whiteout-cross-lens-negative-mask.md) *(Accepted — dedicated schema, additive post-freeze; NOT a REDIRECT kind / TAG weight<0. Pre-freeze: reserve the negative-terminal concept; `kind >= 3` stays open per ADR-0050.)*
 
 ### Lists & Collections
 - [ADR-0044 — LIST + LIST_ENTRY schemas for curated, shape-enforced collections](./0044-list-and-list-entry-schemas.md) *(LIST_ENTRY shape partly revised by ADR-0046; LIST `maxEntries` widened by ADR-0047)*
@@ -119,9 +129,10 @@ What else we looked at and why it lost.
 
 ### View APIs
 - [ADR-0036 — Opaque-cursor pagination for multi-source views](./0036-opaque-cursor-pagination.md)
-- [ADR-0048 — View-layer tag-exclusion directory filter](./0048-view-layer-tag-exclusion-filter.md) *(extends ADR-0042 into the view layer; kernel stays weight-neutral)*
+- [ADR-0051 — Reads exclude revoked (and superseded) by default; full history is opt-in](./0051-reads-exclude-revoked-by-default.md)
+- [ADR-0054 — View-layer tag-exclusion directory filter](./0054-view-layer-tag-exclusion-filter.md) *(extends ADR-0042 into the view layer; kernel stays weight-neutral)*
 
 ### Frontend / Static Export
 - [ADR-0040 — Read dynamic route params from `usePathname`, not `useParams`, in static-exported dynamic routes](./0040-static-export-usepathname-over-useparams.md)
-- [ADR-0042 — Effective TAG as a client-layer weight filter for descriptive labels](./0042-effective-tag-weight-filter.md) *(Extended into the view layer by ADR-0048 — the same `weight >= threshold` projection is now also available on-chain via `EFSFileView.getDirectoryPageFiltered`; the kernel still never interprets weight)*
+- [ADR-0042 — Effective TAG as a client-layer weight filter for descriptive labels](./0042-effective-tag-weight-filter.md) *(Extended into the view layer by ADR-0054 — the same `weight >= threshold` projection is now also available on-chain via `EFSFileView.getDirectoryPageFiltered`; the kernel still never interprets weight)*
 

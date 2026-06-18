@@ -8,7 +8,6 @@ import {
   hexToString,
   parseAbiParameters,
   stringToHex,
-  toHex,
   zeroAddress,
   zeroHash,
 } from "viem";
@@ -103,15 +102,12 @@ export default function DebugSchemas() {
   const [propName, setPropName] = useState("");
   const [propVal, setPropVal] = useState("");
 
-  const [dataContentHash, setDataContentHash] = useState("");
-  const [dataSize, setDataSize] = useState("0");
+  // DATA is an empty schema (ADR-0049) — no contentHash/size form inputs.
 
   const [anchorRef, setAnchorRef] = useState("");
   const [anchorName, setAnchorName] = useState("");
 
-  const [blobRef, setBlobRef] = useState("");
-  const [blobType, setBlobType] = useState("text/plain");
-  const [blobData, setBlobData] = useState("");
+  // BLOB schema was dropped (ADR-0049) — no blob form state.
 
   const [lastTxHash, setLastTxHash] = useState("");
 
@@ -121,7 +117,6 @@ export default function DebugSchemas() {
       if (!pinRef || pinRef === zeroHash) setPinRef(registry.rootTopicUid);
       if (!tagRef || tagRef === zeroHash) setTagRef(registry.rootTopicUid);
       if (!propRef || propRef === zeroHash) setPropRef(registry.rootTopicUid);
-      if (!blobRef || blobRef === zeroHash) setBlobRef(registry.rootTopicUid);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [registry.rootTopicUid]);
@@ -535,127 +530,34 @@ export default function DebugSchemas() {
           </div>
         </div>
 
-        {/* DATA FORM — standalone non-revocable content identity (ADR-0002) */}
+        {/* DATA FORM — standalone, non-revocable, EMPTY schema (pure identity, ADR-0049) */}
         <div className="card w-96 bg-base-100 shadow-xl border border-base-200">
           <div className="card-body">
             <h2 className="card-title">Data Schema</h2>
             <div className="text-xs opacity-50 mb-2">
-              Standalone, non-revocable content identity. refUID=0x0. Schema: bytes32 contentHash, uint64 size.
-            </div>
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text">Content Hash (bytes32)</span>
-              </label>
-              <input
-                type="text"
-                value={dataContentHash}
-                onChange={e => setDataContentHash(e.target.value)}
-                className="input input-bordered font-mono text-xs"
-                placeholder="0x..."
-              />
-            </div>
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text">Size (uint64, bytes)</span>
-              </label>
-              <input
-                type="number"
-                value={dataSize}
-                onChange={e => setDataSize(e.target.value)}
-                className="input input-bordered"
-                placeholder="0"
-              />
+              Standalone, non-revocable, empty schema — pure content identity (ADR-0049). refUID=0x0, no inline fields.
+              contentHash / size are reserved-key PROPERTYs bound to the DATA UID (future PROPERTY/SDK work).
             </div>
             <div className="card-actions justify-end mt-4">
               <button
                 className="btn btn-primary"
                 disabled={isPending}
                 onClick={() => {
-                  if (!dataContentHash.startsWith("0x")) {
-                    notification.error("Content hash must be 0x hex");
-                    return;
-                  }
-                  let size: bigint;
-                  try {
-                    size = BigInt(dataSize);
-                  } catch {
-                    notification.error("Size must be a valid integer");
-                    return;
-                  }
                   if (!schemas.DATA) {
                     notification.error("DATA schema not available.");
                     return;
                   }
-                  // Schema: bytes32 contentHash, uint64 size — standalone, non-revocable (ADR-0002)
-                  const encoded = encodeAbiParameters(parseAbiParameters("bytes32, uint64"), [
-                    dataContentHash as `0x${string}`,
-                    size,
-                  ]);
-                  attest(schemas.DATA, zeroHash, encoded, false);
+                  // DATA is an empty schema (ADR-0049) — zero-length payload.
+                  attest(schemas.DATA, zeroHash, "0x", false);
                 }}
               >
-                Attest Data
+                Attest Data (empty)
               </button>
             </div>
           </div>
         </div>
 
-        {/* BLOB FORM */}
-        <div className="card w-96 bg-base-100 shadow-xl border border-base-200">
-          <div className="card-body">
-            <h2 className="card-title">Blob Schema</h2>
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text">Ref UID (Self/None)</span>
-              </label>
-              <input
-                type="text"
-                value={blobRef}
-                onChange={e => setBlobRef(e.target.value)}
-                className="input input-bordered"
-              />
-            </div>
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text">Content Type</span>
-              </label>
-              <input
-                type="text"
-                value={blobType}
-                onChange={e => setBlobType(e.target.value)}
-                className="input input-bordered"
-              />
-            </div>
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text">Data (Text -&gt; Bytes)</span>
-              </label>
-              <textarea
-                value={blobData}
-                onChange={e => setBlobData(e.target.value)}
-                className="textarea textarea-bordered h-24"
-              />
-            </div>
-            <div className="card-actions justify-end mt-4">
-              <button
-                className="btn btn-primary"
-                disabled={isPending}
-                onClick={() => {
-                  const bytes = toHex(blobData);
-                  // Schema: string mimeType, uint8 storageType, bytes location (ADR-0041)
-                  // storageType 0 = inline; location = raw bytes of the content
-                  attest(
-                    schemas.BLOB as string,
-                    blobRef,
-                    encodeAbiParameters(parseAbiParameters("string, uint8, bytes"), [blobType, 0, bytes]),
-                  );
-                }}
-              >
-                Attest Blob
-              </button>
-            </div>
-          </div>
-        </div>
+        {/* BLOB schema was dropped (ADR-0049) — no BLOB form. */}
       </div>
 
       {/* VIEWER SECTION */}
@@ -730,13 +632,7 @@ function AttestationViewer({ rootUid, schemas, easAddress }: { rootUid: string; 
           easAddress={easAddress}
           onFocus={setTargetUID}
         />
-        <SchemaList
-          title="Blobs"
-          schemaUID={schemas.BLOB}
-          targetRef={targetUID}
-          easAddress={easAddress}
-          onFocus={setTargetUID}
-        />
+        {/* BLOB schema was dropped (ADR-0049) — no Blobs column. */}
       </div>
     </div>
   );
@@ -759,7 +655,7 @@ function SchemaList({
   const { data: uids } = useScaffoldReadContract({
     contractName: "Indexer",
     functionName: "getReferencingAttestations",
-    args: [targetRef as `0x${string}`, schemaUID as `0x${string}`, 0n, 10n, false],
+    args: [targetRef as `0x${string}`, schemaUID as `0x${string}`, 0n, 10n, false, false],
   });
 
   return (
@@ -825,14 +721,8 @@ function AttestationItem({
       const [val] = decodeAbiParameters(parseAbiParameters("string"), attestation.data);
       decodedValue = <span>{val}</span>;
     } else if (title === "Data") {
-      // bytes32 contentHash, uint64 size (standalone non-revocable, ADR-0002)
-      const [contentHash, size] = decodeAbiParameters(parseAbiParameters("bytes32, uint64"), attestation.data);
-      decodedValue = (
-        <div className="flex flex-col gap-1">
-          <div className="badge badge-sm badge-neutral">Size: {size.toString()} bytes</div>
-          <div className="text-xs break-all font-mono bg-base-300 p-1 rounded">Hash: {contentHash.slice(0, 14)}…</div>
-        </div>
-      );
+      // DATA is an empty schema — pure identity (ADR-0049). No inline fields to decode.
+      decodedValue = <span className="text-xs italic opacity-60">empty — pure identity (ADR-0049)</span>;
     } else if (title === "Pins") {
       // bytes32 definition (cardinality-1 edge, ADR-0041)
       const [definition] = decodeAbiParameters(parseAbiParameters("bytes32"), attestation.data);
@@ -847,23 +737,6 @@ function AttestationItem({
       } catch {
         decodedValue = <span className="font-mono text-xs">{definition.slice(0, 14)}…</span>;
       }
-    } else if (title === "Blobs") {
-      // string mimeType, uint8 storageType, bytes location (ADR-0041)
-      const [mimeType, storageType, location] = decodeAbiParameters(
-        parseAbiParameters("string, uint8, bytes"),
-        attestation.data,
-      );
-      decodedValue = (
-        <div className="flex flex-col gap-1">
-          <div className="badge badge-sm badge-info">{mimeType}</div>
-          <div className="text-xs opacity-50">
-            storageType: {storageType}, {(location.length - 2) / 2} bytes
-          </div>
-          <div className="text-xs break-all font-mono bg-base-300 p-1 rounded max-h-20 overflow-auto">
-            {mimeType.includes("text") ? hexToString(location) : location.slice(0, 50) + "…"}
-          </div>
-        </div>
-      );
     } else if (title === "Anchors") {
       // string name, bytes32 schemaUID
       const [name, anchorSchema] = decodeAbiParameters(parseAbiParameters("string, bytes32"), attestation.data);

@@ -1,8 +1,9 @@
 // packages/hardhat/test/Lists.conformance.test.ts
 import { expect } from "chai";
 import { ethers } from "hardhat";
-import { EAS, SchemaRegistry, ListEntryResolver } from "../typechain-types";
+import { EAS, SchemaRegistry, ListEntryResolver, ListResolver } from "../typechain-types";
 import { Signer, ZeroAddress } from "ethers";
+import { deployResolverProxy } from "./helpers/deployResolverProxy";
 
 const ZERO_BYTES32 = "0x" + "0".repeat(64);
 const NO_EXPIRATION = 0n;
@@ -62,32 +63,49 @@ describe("Lists — Conformance (worked example lifecycle)", function () {
     eas = await EASFactory.deploy(await registry.getAddress());
     await eas.waitForDeployment();
 
-    // nonce+0: ListResolver, nonce+1: LIST reg, nonce+2: LIST_ENTRY reg, nonce+3: ListEntryResolver
+    // Both resolvers are proxy-ified (ADR-0048). The resolver baked into each schema UID is
+    // the PROXY address, not the implementation — so we predict and register against the proxy.
+    // deployResolverProxy runs TWO deployer txs per call (impl, then proxy), so:
+    //   nonce+0: ListResolver impl
+    //   nonce+1: ListResolver proxy        ← resolver in LIST_SCHEMA_UID
+    //   nonce+2: LIST schema register
+    //   nonce+3: LIST_ENTRY schema register
+    //   nonce+4: ListEntryResolver impl
+    //   nonce+5: ListEntryResolver proxy   ← resolver in LIST_ENTRY_SCHEMA_UID
     const n = await ethers.provider.getTransactionCount(aliceAddr);
-    const futureListResolverAddr = ethers.getCreateAddress({ from: aliceAddr, nonce: n });
-    listEntryResolverAddr = ethers.getCreateAddress({ from: aliceAddr, nonce: n + 3 });
+    const futureListResolverAddr = ethers.getCreateAddress({ from: aliceAddr, nonce: n + 1 });
+    listEntryResolverAddr = ethers.getCreateAddress({ from: aliceAddr, nonce: n + 5 });
 
     listSchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
       [LIST_SCHEMA, futureListResolverAddr, false],
     );
+    // CRITICAL (ADR-0048): the LIST_ENTRY schema UID is derived against the PROXY address. The
+    // refactored ListEntryResolver self-derives the SAME value in initialize() (where
+    // address(this) == proxy under delegatecall), so onAttest's schema guard matches.
     listEntrySchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
       [LIST_ENTRY_SCHEMA, listEntryResolverAddr, true],
     );
 
-    const LR = await ethers.getContractFactory("ListResolver");
-    const listResolver = await LR.deploy(await eas.getAddress());
-    await listResolver.waitForDeployment();
+    // ListResolver behind a proxy (ADR-0048): stateless pure validation, empty initialize().
+    const listResolver = await deployResolverProxy<ListResolver>("ListResolver", [await eas.getAddress()], [], alice);
     expect(await listResolver.getAddress()).to.equal(futureListResolverAddr);
 
     await registry.register(LIST_SCHEMA, await listResolver.getAddress(), false);
+    // Register LIST_ENTRY against the PROXY address (the resolver in the schema UID).
     await registry.register(LIST_ENTRY_SCHEMA, listEntryResolverAddr, true);
 
-    const LER = await ethers.getContractFactory("ListEntryResolver");
-    const listEntryResolverContract = await LER.deploy(await eas.getAddress(), listSchemaUID);
-    await listEntryResolverContract.waitForDeployment();
+    // ListEntryResolver behind a proxy: self-UID derived in initialize() (address(this)==proxy).
+    const listEntryResolverContract = await deployResolverProxy<ListEntryResolver>(
+      "ListEntryResolver",
+      [await eas.getAddress()],
+      [listSchemaUID],
+      alice,
+    );
     expect(await listEntryResolverContract.getAddress()).to.equal(listEntryResolverAddr);
+    // The self-derived UID (computed against the proxy) must equal the registered schema UID.
+    expect(await listEntryResolverContract.listEntrySchemaUID()).to.equal(listEntrySchemaUID);
 
     ler = listEntryResolverContract;
   });

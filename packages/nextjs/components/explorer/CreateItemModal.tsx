@@ -51,22 +51,52 @@ const MOCK_CHUNKED_FILE_ABI = [
 const MOCK_CHUNKED_FILE_BYTECODE =
   "0x60806040523461013f57610274803803806100198161015a565b92833981019060208183031261013f578051906001600160401b03821161013f570181601f8201121561013f578051916001600160401b038311610144578260051b9160208061006a81860161015a565b80968152019382010191821161013f57602001915b81831061011f576000845b80518210156101115760009160018060a01b0360208260051b84010151168354680100000000000000008110156100fd57600181018086558110156100e957602085806001969752200190838060a01b0319825416179055019061008a565b634e487b7160e01b85526032600452602485fd5b634e487b7160e01b85526041600452602485fd5b60405160f490816101808239f35b82516001600160a01b038116810361013f5781526020928301920161007f565b600080fd5b634e487b7160e01b600052604160045260246000fd5b6040519190601f01601f191682016001600160401b038111838210176101445760405256fe6080806040526004361015601257600080fd5b60003560e01c9081632bfedae0146053575063f91f093714603257600080fd5b34604e576000366003190112604e576020600054604051908152f35b600080fd5b34604e576020366003190112604e576004359060005482101560a857600080527f290decd9548b62a8d60345a988386fc84ba6bc95484008f6362f93160ef3e563909101546001600160a01b03168152602090f35b634e487b7160e01b600052603260045260246000fdfea26469706673582212206ea2dc51d432b7722a3857f0e86c67aaa8fa760e9dee9a8bbd7f8fac66eade7f64736f6c634300081c0033";
 
-// Mirrors EFSIndexer.sol::_isValidAnchorName so we fail fast with a friendly
-// message instead of waiting for the on-chain revert. Reject the same byte set
-// the contract rejects: NUL, space, " # % & / : = ? @ [ \ ] ^ ` { | }, plus the
-// reserved relative segments "." and "..".
-const FORBIDDEN_ANCHOR_NAME_CHARS = new Set([
-  0x00, 0x20, 0x22, 0x23, 0x25, 0x26, 0x2f, 0x3a, 0x3d, 0x3f, 0x40, 0x5b, 0x5c, 0x5d, 0x5e, 0x60, 0x7b, 0x7c, 0x7d,
-]);
+// Reserved bytes that MUST be percent-encoded (UPPERCASE %XX) in a canonical
+// anchor name — mirrors EFSIndexer.sol::_isReservedByte. NOTE: '%' (0x25) is
+// deliberately NOT here; the escape parser in validateAnchorName handles it.
+function isReservedAnchorByte(b: number): boolean {
+  if (b < 0x20 || b === 0x7f) return true; // C0 controls + DEL
+  // space " # & / : = ? @ [ \ ] ^ ` { | }
+  return [
+    0x20, 0x22, 0x23, 0x26, 0x2f, 0x3a, 0x3d, 0x3f, 0x40, 0x5b, 0x5c, 0x5d, 0x5e, 0x60, 0x7b, 0x7c, 0x7d,
+  ].includes(b);
+}
 
-function validateAnchorName(name: string): string | null {
+const isUpperHex = (b: number): boolean => (b >= 0x30 && b <= 0x39) || (b >= 0x41 && b <= 0x46); // 0-9 A-F
+const hexNibble = (b: number): number => (b <= 0x39 ? b - 0x30 : b - 0x41 + 10);
+const hex2 = (b: number): string => b.toString(16).toUpperCase().padStart(2, "0");
+
+// Mirrors EFSIndexer.sol::_isValidAnchorName exactly so the client precheck and the on-chain rule
+// agree: a name accepted here is accepted on-chain, and vice versa. The canonical form (ADR-0025)
+// gives every name ONE on-chain spelling — reserved bytes appear ONLY as UPPERCASE %XX escapes,
+// every other byte (including high-bit UTF-8) appears bare. Reserved characters are therefore typed
+// as their %XX escape (e.g. a literal "/" → "%2F"); auto-encoding is deliberately not done here so
+// the entered string is exactly what gets attested.
+function validateAnchorName(rawName: string): string | null {
+  // NFC-normalize first (ADR-0025): the canonical on-chain name is NFC + percent-encoding, and the
+  // contract can't verify normalization, so the client MUST. Validating (and, at submit, attesting) the
+  // NFC form means precomposed "é" and decomposed "é" map to ONE permanent anchor, not two.
+  const name = rawName.normalize("NFC");
   if (name.length === 0) return "Name cannot be empty.";
   if (name === "." || name === "..") return "Name cannot be '.' or '..'.";
   const bytes = new TextEncoder().encode(name);
-  for (const b of bytes) {
-    if (FORBIDDEN_ANCHOR_NAME_CHARS.has(b)) {
-      const ch = b === 0x20 ? "space" : b === 0x00 ? "NUL" : `'${String.fromCharCode(b)}'`;
-      return `Name cannot contain ${ch}.`;
+  for (let i = 0; i < bytes.length; i++) {
+    const c = bytes[i];
+    if (c === 0x25) {
+      // '%' must introduce a canonical UPPERCASE %XX escape carrying a reserved byte (or '%' itself).
+      if (i + 2 >= bytes.length)
+        return "Incomplete escape: '%' must be followed by two uppercase hex digits (e.g. %2F).";
+      const h1 = bytes[i + 1];
+      const h2 = bytes[i + 2];
+      if (!isUpperHex(h1) || !isUpperHex(h2)) return "Percent-escapes must use UPPERCASE hex (e.g. %2F, not %2f).";
+      const decoded = (hexNibble(h1) << 4) | hexNibble(h2);
+      if (!isReservedAnchorByte(decoded) && decoded !== 0x25)
+        return `%${String.fromCharCode(h1)}${String.fromCharCode(h2)} is not allowed: only reserved characters may be percent-encoded; write unreserved bytes bare.`;
+      i += 2; // consume the two hex digits
+    } else if (isReservedAnchorByte(c)) {
+      const label =
+        c === 0x20 ? "space" : c < 0x20 || c === 0x7f ? `control byte 0x${hex2(c)}` : `'${String.fromCharCode(c)}'`;
+      return `Name cannot contain a bare ${label}; percent-encode it as %${hex2(c)}.`;
     }
   }
   return null;
@@ -206,6 +236,13 @@ export const CreateItemModal = ({
   const [pasteSize, setPasteSize] = useState("");
   const [pasteContentHash, setPasteContentHash] = useState<`0x${string}` | null>(null);
   const [isFetchingInfo, setIsFetchingInfo] = useState(false);
+  // Mirror of the live pasteUri readable from inside an in-flight handleFetchInfo (whose closed-over
+  // `pasteUri` is frozen at call time). Lets a fetch detect a mid-flight URI edit and discard its now-
+  // stale HEAD/GET results instead of binding URI-A's hash/size/type onto URI-B's DATA (PR #24 P2).
+  const latestPasteUriRef = useRef(pasteUri);
+  useEffect(() => {
+    latestPasteUriRef.current = pasteUri;
+  }, [pasteUri]);
   const [showPasteDetails, setShowPasteDetails] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [existingAnchorWarning, setExistingAnchorWarning] = useState(false);
@@ -273,10 +310,14 @@ export const CreateItemModal = ({
       notification.error("Cannot fetch info for this URI type. Enter values manually.");
       return;
     }
+    // Capture the URI this fetch is for; discard results if the user edits the field mid-flight (P2).
+    const fetchedUri = pasteUri;
+    const stale = () => latestPasteUriRef.current !== fetchedUri;
     setIsFetchingInfo(true);
     setShowPasteDetails(true);
     try {
       const headResp = await fetch(gatewayUrl, { method: "HEAD" });
+      if (stale()) return; // URI edited mid-flight — don't write this URI's metadata onto another
       if (!headResp.ok) throw new Error(`HTTP ${headResp.status}`);
 
       const ct = headResp.headers.get("content-type");
@@ -291,6 +332,7 @@ export const CreateItemModal = ({
         const getResp = await fetch(gatewayUrl);
         if (!getResp.ok) throw new Error(`HTTP ${getResp.status}`);
         const bytes = new Uint8Array(await getResp.arrayBuffer());
+        if (stale()) return; // URI edited mid-flight — discard
         setPasteSize(String(bytes.length));
         setPasteContentHash(computeContentHash(bytes));
         notification.success("Content hash computed.");
@@ -323,6 +365,7 @@ export const CreateItemModal = ({
             if (err instanceof Error && err.name !== "AbortError") throw err;
           }
         }
+        if (stale()) return; // URI edited mid-flight — discard
         if (truncated) {
           notification.info("File exceeds 10 MB — hash not computed. Enter values manually.");
         } else if (totalBytes > 0) {
@@ -438,6 +481,11 @@ export const CreateItemModal = ({
       notification.error(nameError);
       return;
     }
+    // The on-chain list-slot anchor name MUST be the NFC-normalized form (ADR-0025), exactly as in
+    // handleSubmit — the contract can't verify normalization, so a precomposed vs decomposed Unicode
+    // name would mint two distinct permanent (ADR-0002) list-slot anchors for one human name. Attest
+    // (and resolve-existing against) the NFC form; display/op-title strings keep the raw `name`.
+    const nfcName = name.normalize("NFC");
     // SCHEMA mode: require a full 32-byte UID BEFORE attesting the (non-revocable)
     // list-slot anchor. A loose `0x…` check let `0x1` through, which then reverted at
     // the LIST attest — but only after the anchor was already created, leaving a
@@ -487,7 +535,7 @@ export const CreateItemModal = ({
             address: indexer.address as `0x${string}`,
             abi: indexer.abi,
             functionName: "resolveAnchor",
-            args: [currentAnchorUID as `0x${string}`, name, listSchemaUID as `0x${string}`],
+            args: [currentAnchorUID as `0x${string}`, nfcName, listSchemaUID as `0x${string}`],
           })) as `0x${string}`;
           if (existing && existing !== zeroHash) {
             // Parity with file creation: the slot already exists, so submitting places a new list
@@ -512,9 +560,9 @@ export const CreateItemModal = ({
         const anchorData = encodeAbiParameters(
           [
             { name: "name", type: "string" },
-            { name: "schemaUID", type: "bytes32" },
+            { name: "forSchema", type: "bytes32" },
           ],
-          [name, listSchemaUID as `0x${string}`],
+          [nfcName, listSchemaUID as `0x${string}`],
         );
         const aTx = await attest(
           {
@@ -626,6 +674,10 @@ export const CreateItemModal = ({
       notification.error(nameError);
       return;
     }
+    // The on-chain anchor name MUST be the NFC-normalized form (ADR-0025) — the contract can't verify
+    // normalization, so precomposed/decomposed Unicode would otherwise mint two distinct permanent
+    // anchors for the same human name. Attest (and resolve-existing against) the NFC form everywhere.
+    const nfcName = newName.normalize("NFC");
     if (internalType === "File" && !fileToUpload) {
       notification.error("Please select a file to upload.");
       return;
@@ -667,7 +719,7 @@ export const CreateItemModal = ({
 
     try {
       if (internalType === "Folder") {
-        const encodedName = ethers.AbiCoder.defaultAbiCoder().encode(["string", "bytes32"], [newName, ethers.ZeroHash]);
+        const encodedName = ethers.AbiCoder.defaultAbiCoder().encode(["string", "bytes32"], [nfcName, ethers.ZeroHash]);
 
         let newAnchorUID: `0x${string}` | undefined;
         if (indexer) {
@@ -676,7 +728,7 @@ export const CreateItemModal = ({
               address: indexer.address as `0x${string}`,
               abi: indexer.abi,
               functionName: "resolveAnchor",
-              args: [currentAnchorUID as `0x${string}`, newName, ethers.ZeroHash as `0x${string}`],
+              args: [currentAnchorUID as `0x${string}`, nfcName, ethers.ZeroHash as `0x${string}`],
             })) as `0x${string}`;
             if (existingUID && existingUID !== ethers.ZeroHash) {
               newAnchorUID = existingUID;
@@ -827,7 +879,7 @@ export const CreateItemModal = ({
           }
         }
 
-        if (newAnchorUID) onFolderCreated?.(newAnchorUID, newName);
+        if (newAnchorUID) onFolderCreated?.(newAnchorUID, nfcName);
         ops.complete(opId, "Folder ready.");
         return;
       }
@@ -836,7 +888,7 @@ export const CreateItemModal = ({
       const fileAnchorSchemaUID = dataSchemaUID as `0x${string}`;
       const encodedName = ethers.AbiCoder.defaultAbiCoder().encode(
         ["string", "bytes32"],
-        [newName, fileAnchorSchemaUID],
+        [nfcName, fileAnchorSchemaUID],
       );
 
       let existingFileAnchorUID: `0x${string}` | undefined;
@@ -846,7 +898,7 @@ export const CreateItemModal = ({
             address: indexer.address as `0x${string}`,
             abi: indexer.abi,
             functionName: "resolveAnchor",
-            args: [currentAnchorUID as `0x${string}`, newName, fileAnchorSchemaUID],
+            args: [currentAnchorUID as `0x${string}`, nfcName, fileAnchorSchemaUID],
           })) as `0x${string}`;
           if (existingUID && existingUID !== ethers.ZeroHash) {
             if (!existingAnchorWarning) {
@@ -956,54 +1008,32 @@ export const CreateItemModal = ({
         fileSize = pasteSize ? BigInt(pasteSize) : 0n;
       }
 
+      // AGENT-NOTE (Codex P2): the file ANCHOR is non-revocable (permanent). Its
+      // CREATION is deliberately deferred to just before the placement PIN (see
+      // below) — NOT done here. Creating the file-slot ANCHOR sets
+      // `_containsAttestations[anchorUID][attester]` in EFSIndexer, which makes the
+      // slot appear in `getDirectoryPageFiltered` phase 1 immediately, before any
+      // placement PIN exists. A cancel / rejected wallet prompt / MIRROR failure
+      // anywhere in the DATA→PROPERTY→MIRROR steps below would then leave a
+      // permanent file slot with no PIN — and the filtered directory view reaches
+      // the DATA (and its `system`-tag exclusion) only through the PIN, so it can
+      // neither show nor hide the orphan. Minting the ANCHOR last (immediately
+      // before the PIN, with no cancellation checkpoint between them) shrinks that
+      // visible-but-unreachable window to ~1 tx. The window can't be fully closed:
+      // EAS UIDs aren't precomputable, so the ANCHOR and the PIN that references it
+      // can't be batched atomically. The read-only reuse check above
+      // (`existingFileAnchorUID`) stays where it is — it sets no on-chain state.
+      // This mirrors the proven ordering in lib/efs/uploadOnchainFile.ts.
       let fileAnchorUID: `0x${string}` | undefined = existingFileAnchorUID;
-      if (!fileAnchorUID) {
-        const parent = anchorParent();
-        const txHash = await attest(
-          {
-            functionName: "attest",
-            args: [
-              {
-                schema: anchorSchemaUID as `0x${string}`,
-                data: {
-                  recipient: parent.recipient,
-                  expirationTime: 0n,
-                  revocable: false,
-                  refUID: parent.refUID,
-                  data: encodedName as `0x${string}`,
-                  value: 0n,
-                },
-              },
-            ],
-          },
-          { silent: true },
-        );
-        if (!txHash) throw new Error("No txHash returned for file ANCHOR creation.");
-        const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
-        fileAnchorUID = extractUIDFromReceipt(receipt);
-        if (!fileAnchorUID) throw new Error("Could not extract file Anchor UID");
-        ops.log(opId, "File anchor created.");
-        checkCancelled();
-      }
 
-      if (contentHash !== ethers.ZeroHash && indexer && publicClient) {
-        try {
-          const canonical = (await publicClient.readContract({
-            address: indexer.address as `0x${string}`,
-            abi: indexer.abi,
-            functionName: "dataByContentKey",
-            args: [contentHash as `0x${string}`],
-          })) as `0x${string}`;
-          if (canonical && canonical !== ethers.ZeroHash) {
-            ops.log(opId, "Note: DATA for this content already exists. A new one will still be created and tagged.");
-          }
-        } catch {
-          // non-fatal
-        }
-      }
+      // AGENT-NOTE: DATA is an empty schema — pure identity (ADR-0049). The prior best-effort
+      // dedup read (`indexer.dataByContentKey`) was removed: DATA carries no contentHash, that
+      // index is no longer written, and identical bytes now mint distinct DATA UIDs. Client-side
+      // dedup prevention (query the property index for a trusted contentHash claim before upload
+      // and hardlink instead of minting) remains future PROPERTY/SDK upload-flow work. The
+      // reserved-key contentHash/size PROPERTYs are now attached below alongside contentType.
 
-      ops.log(opId, "Creating DATA attestation...");
-      const encodedData = ethers.AbiCoder.defaultAbiCoder().encode(["bytes32", "uint64"], [contentHash, fileSize]);
+      ops.log(opId, "Creating DATA attestation (empty — pure identity, ADR-0049)...");
       const dataTxHash = await attest(
         {
           functionName: "attest",
@@ -1015,7 +1045,7 @@ export const CreateItemModal = ({
                 expirationTime: 0n,
                 revocable: false,
                 refUID: ethers.ZeroHash as `0x${string}`,
-                data: encodedData as `0x${string}`,
+                data: "0x",
                 value: 0n,
               },
             },
@@ -1030,38 +1060,65 @@ export const CreateItemModal = ({
       ops.log(opId, `DATA created: ${dataUID.slice(0, 10)}...`);
       checkCancelled();
 
-      // contentType PROPERTY (ADR-0035 / ADR-0005-superseded) uses the unified
-      // free-floating model: key anchor under the DATA, free-floating PROPERTY
-      // with value, then a PIN binding them. Three transactions; only the PIN
-      // is revocable, so flipping a MIME type is a PIN re-attest (which supersedes
-      // the prior PIN in O(1)), not a PROPERTY revoke.
-      ops.log(opId, "Creating contentType key anchor...");
-      let contentTypeKeyAnchorUID: `0x${string}` | undefined;
-      if (indexer && publicClient) {
-        contentTypeKeyAnchorUID = (await publicClient.readContract({
-          address: indexer.address as `0x${string}`,
-          abi: indexer.abi,
-          functionName: "resolveAnchor",
-          args: [dataUID, "contentType", propertySchemaUID as `0x${string}`],
-        })) as `0x${string}`;
-      }
-      if (!contentTypeKeyAnchorUID || contentTypeKeyAnchorUID === (ethers.ZeroHash as `0x${string}`)) {
-        const encodedKey = ethers.AbiCoder.defaultAbiCoder().encode(
-          ["string", "bytes32"],
-          ["contentType", propertySchemaUID],
-        );
-        const keyTx = await attest(
+      // Reserved-key PROPERTYs bound to the DATA UID (ADR-0049, specs/02 §Property).
+      // Each uses the unified free-floating model (ADR-0035 / ADR-0041): a key anchor
+      // under the DATA, a free-floating PROPERTY carrying the value, then a PIN binding
+      // them. Three transactions per key; only the PIN is revocable, so changing a value
+      // is a PIN re-attest (which supersedes the prior PIN in O(1)), not a PROPERTY revoke.
+      // All values are string-encoded: contentType is the MIME type, contentHash is the
+      // 0x-prefixed keccak hex computed above, size is the decimal byte count.
+      const bindProperty = async (key: string, value: string) => {
+        ops.log(opId, `Creating ${key} key anchor...`);
+        let keyAnchorUID: `0x${string}` | undefined;
+        if (indexer && publicClient) {
+          keyAnchorUID = (await publicClient.readContract({
+            address: indexer.address as `0x${string}`,
+            abi: indexer.abi,
+            functionName: "resolveAnchor",
+            args: [dataUID, key, propertySchemaUID as `0x${string}`],
+          })) as `0x${string}`;
+        }
+        if (!keyAnchorUID || keyAnchorUID === (ethers.ZeroHash as `0x${string}`)) {
+          const encodedKey = ethers.AbiCoder.defaultAbiCoder().encode(["string", "bytes32"], [key, propertySchemaUID]);
+          const keyTx = await attest(
+            {
+              functionName: "attest",
+              args: [
+                {
+                  schema: anchorSchemaUID as `0x${string}`,
+                  data: {
+                    recipient: ethers.ZeroAddress,
+                    expirationTime: 0n,
+                    revocable: false,
+                    refUID: dataUID,
+                    data: encodedKey as `0x${string}`,
+                    value: 0n,
+                  },
+                },
+              ],
+            },
+            { silent: true },
+          );
+          if (!keyTx) throw new Error(`${key} key anchor attestation failed.`);
+          const keyReceipt = await publicClient.waitForTransactionReceipt({ hash: keyTx });
+          keyAnchorUID = extractUIDFromReceipt(keyReceipt);
+          if (!keyAnchorUID) throw new Error(`Could not extract ${key} key anchor UID`);
+        }
+
+        ops.log(opId, `Attesting ${key} PROPERTY...`);
+        const encodedProperty = ethers.AbiCoder.defaultAbiCoder().encode(["string"], [value]);
+        const propTxHash = await attest(
           {
             functionName: "attest",
             args: [
               {
-                schema: anchorSchemaUID as `0x${string}`,
+                schema: propertySchemaUID as `0x${string}`,
                 data: {
                   recipient: ethers.ZeroAddress,
                   expirationTime: 0n,
                   revocable: false,
-                  refUID: dataUID,
-                  data: encodedKey as `0x${string}`,
+                  refUID: ethers.ZeroHash as `0x${string}`,
+                  data: encodedProperty as `0x${string}`,
                   value: 0n,
                 },
               },
@@ -1069,64 +1126,49 @@ export const CreateItemModal = ({
           },
           { silent: true },
         );
-        if (!keyTx) throw new Error("contentType key anchor attestation failed.");
-        const keyReceipt = await publicClient.waitForTransactionReceipt({ hash: keyTx });
-        contentTypeKeyAnchorUID = extractUIDFromReceipt(keyReceipt);
-        if (!contentTypeKeyAnchorUID) throw new Error("Could not extract contentType key anchor UID");
-      }
+        if (!propTxHash) throw new Error(`${key} PROPERTY attestation failed.`);
+        const propReceipt = await publicClient.waitForTransactionReceipt({ hash: propTxHash });
+        const propertyUID = extractUIDFromReceipt(propReceipt);
+        if (!propertyUID) throw new Error(`Could not extract ${key} PROPERTY UID`);
 
-      ops.log(opId, "Attesting content type PROPERTY...");
-      const encodedProperty = ethers.AbiCoder.defaultAbiCoder().encode(["string"], [contentType]);
-      const propTxHash = await attest(
-        {
-          functionName: "attest",
-          args: [
-            {
-              schema: propertySchemaUID as `0x${string}`,
-              data: {
-                recipient: ethers.ZeroAddress,
-                expirationTime: 0n,
-                revocable: false,
-                refUID: ethers.ZeroHash as `0x${string}`,
-                data: encodedProperty as `0x${string}`,
-                value: 0n,
+        ops.log(opId, `Binding ${key} PROPERTY via PIN...`);
+        // AGENT-NOTE: PROPERTY value binding is a PIN under ADR-0041 (cardinality 1).
+        // Re-binding at the same key anchor supersedes the prior PIN in O(1) — no
+        // revoke-then-attest dance.
+        const encodedPin = ethers.AbiCoder.defaultAbiCoder().encode(["bytes32"], [keyAnchorUID]);
+        const pinTxHash = await attest(
+          {
+            functionName: "attest",
+            args: [
+              {
+                schema: pinSchemaUID as `0x${string}`,
+                data: {
+                  recipient: ethers.ZeroAddress,
+                  expirationTime: 0n,
+                  revocable: true,
+                  refUID: propertyUID,
+                  data: encodedPin as `0x${string}`,
+                  value: 0n,
+                },
               },
-            },
-          ],
-        },
-        { silent: true },
-      );
-      if (!propTxHash) throw new Error("contentType PROPERTY attestation failed.");
-      const propReceipt = await publicClient.waitForTransactionReceipt({ hash: propTxHash });
-      const contentTypePropertyUID = extractUIDFromReceipt(propReceipt);
-      if (!contentTypePropertyUID) throw new Error("Could not extract contentType PROPERTY UID");
+            ],
+          },
+          { silent: true },
+        );
+        if (pinTxHash) await publicClient.waitForTransactionReceipt({ hash: pinTxHash });
+        checkCancelled();
+      };
 
-      ops.log(opId, "Binding contentType PROPERTY via PIN...");
-      // AGENT-NOTE: PROPERTY value binding is a PIN under ADR-0041 (cardinality 1).
-      // Re-binding (changing contentType) at the same key anchor supersedes the prior PIN
-      // in O(1) — no revoke-then-attest dance.
-      const encodedContentTypePin = ethers.AbiCoder.defaultAbiCoder().encode(["bytes32"], [contentTypeKeyAnchorUID]);
-      const contentTypePinTxHash = await attest(
-        {
-          functionName: "attest",
-          args: [
-            {
-              schema: pinSchemaUID as `0x${string}`,
-              data: {
-                recipient: ethers.ZeroAddress,
-                expirationTime: 0n,
-                revocable: true,
-                refUID: contentTypePropertyUID,
-                data: encodedContentTypePin as `0x${string}`,
-                value: 0n,
-              },
-            },
-          ],
-        },
-        { silent: true },
-      );
-      if (contentTypePinTxHash) await publicClient.waitForTransactionReceipt({ hash: contentTypePinTxHash });
-      checkCancelled();
+      await bindProperty("contentType", contentType);
+      // Only bind contentHash/size when they're REAL (a computed hash / measured size), never the
+      // skipped-or-failed-fetch sentinels. For a pasted link where the fetch was skipped/failed or the
+      // file was too large to hash, contentHash falls back to ZeroHash (L956) and/or size to 0n (L957);
+      // binding those would publish bogus reserved-key claims that group unrelated unknown files under
+      // the zero hash / zero size for dedup/integrity reads. Skip the PROPERTY entirely when unknown —
+      // no "unknown" sentinel attestation. The two are independent: a too-large paste link has a known
+      // size (from Content-Length) but no hash.
+      if (contentHash !== (ethers.ZeroHash as `0x${string}`)) await bindProperty("contentHash", contentHash);
+      if (fileSize > 0n) await bindProperty("size", fileSize.toString());
 
       const transportAnchorUID = await resolveTransportAnchor(transportName);
       if (!transportAnchorUID) {
@@ -1165,6 +1207,47 @@ export const CreateItemModal = ({
         if (mirrorTxHash) await publicClient.waitForTransactionReceipt({ hash: mirrorTxHash });
       }
       checkCancelled();
+
+      // File ANCHOR — created LAST, immediately before the placement PIN (Codex P2).
+      // Deferred here from the read-only reuse check above so the non-revocable slot
+      // is reachable in the filtered directory listing for the shortest possible
+      // window before its placement PIN makes the DATA reachable. The checkCancelled()
+      // immediately above is the LAST cancellation checkpoint of the upload: there is
+      // deliberately NO checkpoint (and no awaitable failure point that isn't the PIN
+      // itself) between this ANCHOR mint and the PIN below. Cancelling between them
+      // would leave a permanent DATA-schema file slot with no PIN — and the filtered
+      // directory view reaches the DATA only through the PIN, so it could neither show
+      // nor hide that orphan. Mirrors lib/efs/uploadOnchainFile.ts.
+      if (!fileAnchorUID) {
+        const parent = anchorParent();
+        const anchorTxHash = await attest(
+          {
+            functionName: "attest",
+            args: [
+              {
+                schema: anchorSchemaUID as `0x${string}`,
+                data: {
+                  recipient: parent.recipient,
+                  expirationTime: 0n,
+                  revocable: false,
+                  refUID: parent.refUID,
+                  data: encodedName as `0x${string}`,
+                  value: 0n,
+                },
+              },
+            ],
+          },
+          { silent: true },
+        );
+        if (!anchorTxHash) throw new Error("No txHash returned for file ANCHOR creation.");
+        const anchorReceipt = await publicClient.waitForTransactionReceipt({ hash: anchorTxHash });
+        fileAnchorUID = extractUIDFromReceipt(anchorReceipt);
+        if (!fileAnchorUID) throw new Error("Could not extract file Anchor UID");
+        ops.log(opId, "File anchor created.");
+        // NO checkCancelled() here: once the ANCHOR is broadcast, the placement PIN
+        // MUST follow (see the note above). The cancellation checkpoint is the
+        // checkCancelled() before this block, after the MIRROR step.
+      }
 
       ops.log(opId, "Placing file in folder via PIN...");
       // AGENT-NOTE: File placement is a PIN under ADR-0041 (cardinality 1). Re-uploading
@@ -1494,6 +1577,15 @@ export const CreateItemModal = ({
                   let val = e.target.value.trim();
                   if (/^(Qm[1-9A-HJ-NP-Za-km-z]{44,}|bafy[a-z2-7]{50,})$/.test(val)) {
                     val = `ipfs://${val}`;
+                  }
+                  if (val !== pasteUri) {
+                    // Fetched/entered content metadata describes the PREVIOUS URI — editing the URI must
+                    // invalidate it. Otherwise a "Fetch Info" for URI A followed by editing to URI B would
+                    // bind A's contentHash/size/type as permanent reserved-key PROPERTY claims on B's DATA
+                    // (PR #24 P2). Re-fetch (or re-enter) after changing the URI.
+                    setPasteContentHash(null);
+                    setPasteSize("");
+                    setPasteContentType("");
                   }
                   setPasteUri(val);
                 }}

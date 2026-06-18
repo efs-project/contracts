@@ -4,12 +4,13 @@ This document maps the step-by-step execution for specific developer and user in
 
 ### 1. Upload a file to `/memes/cat.jpg` (on-chain)
 - **Action**: Atomic upload via EAS `multiAttest` — all attestations in a single transaction.
-- **Step 1**: Read file bytes → compute `keccak256(bytes)` for `contentHash`, measure `size`.
-- **Step 2**: Check `dataByContentKey[contentHash]` — if DATA exists, reuse it (dedup).
+- **Step 1**: Read file bytes → compute `keccak256(bytes)` locally for `contentHash`; measure `size`. These are attester-supplied claims, not DATA fields (ADR-0049).
+- **Step 2**: Query the PROPERTY index for a trusted `contentHash` claim to check for an existing DATA (best-effort client-side dedup, ADR-0049). If a matching DATA UID is found from a trusted attester, skip DATA attestation and hardlink the existing DATA with a new PIN (step 4.1 below). To resolve an existing duplicate to a canonical, use the REDIRECT primitive (ADR-0050).
 - **Step 3**: Walk the ancestor chain from `/memes/` up to root exclusive (ADR-0006 revised 2026-04-18, ADR-0038, ADR-0041). For each generic folder the attester hasn't already covered with an active `TAG(definition=DATA_SCHEMA_UID, refUID=folder)`, queue a visibility TAG for that folder. A TAG is active iff it exists and is not EAS-revoked; weight is opaque metadata (ADR-0041 §4). The walk short-circuits the first time an existing active TAG is found — steady-state cost is zero. Bounded by `MAX_ANCHOR_DEPTH = 32` (ADR-0021).
 - **Step 4**: Build `multiAttest` batch:
-  1. `DATA(contentHash, size)` — standalone, non-revocable, `refUID = 0x0`
+  1. `DATA()` — **empty schema** (pure identity, ADR-0049), standalone, non-revocable, `refUID = 0x0`. No `contentHash` or `size` fields.
   2. **contentType binding** (ADR-0041 supersedes ADR-0035): three sub-attestations — (a) `Anchor(refUID=DATA, anchorSchema=PROPERTY_SCHEMA_UID, name="contentType")` (skipped if already exists from a prior upload of this DATA), (b) `PROPERTY(value="image/jpeg")` — free-floating, `refUID = 0x0`, (c) `PIN(definition=contentType keyAnchor, refUID=PROPERTY UID)` — binds the value into the cardinality-1 slot.
+  2a. **contentHash + size bindings** (ADR-0049): same three-sub-attestation pattern for `contentHash` (e.g. `keccak256(bytes)`) and `size` (byte count as decimal string) — each is a reserved-key PROPERTY bound to the DATA UID via PIN, lens-scoped per attester.
   3. `MIRROR(transportDef=/transports/onchain, uri=web3://0xABC)` — `refUID = DATA UID`
   4. `PIN(definition=cat.jpg Anchor)` — `refUID = DATA UID` (places DATA at path; cardinality-1 — re-PIN at the same `(attester, definition, targetSchema)` slot supersedes the prior placement in O(1))
   5. One visibility TAG per queued ancestor from Step 3: `TAG(definition=DATA_SCHEMA_UID, refUID=ancestorFolder, weight=1)`. Weight=1 is the conventional default; any existing non-revoked TAG makes the folder appear in the attester's lens listing.
@@ -17,10 +18,11 @@ This document maps the step-by-step execution for specific developer and user in
 
 ### 2. Paste an IPFS link to `/docs/paper.pdf`
 - **Action**: Same as upload but MIRROR uses a different transport.
-- **Step 1**: Client fetches `ipfs://QmXxx` via gateway to compute `keccak256(bytes)` for `contentHash`. For large files, user provides hash manually (attester's claim, client can verify on display).
+- **Step 1**: Client fetches `ipfs://QmXxx` via gateway to compute `keccak256(bytes)` for `contentHash` (attester's claim, client can verify on display). For large files, user provides hash manually.
 - **Step 2**: Build `multiAttest` batch:
-  1. `DATA(contentHash, size)`
+  1. `DATA()` — empty schema (pure identity, ADR-0049); no `contentHash` or `size` fields.
   2. contentType binding triplet (Anchor + PROPERTY + PIN — see workflow 1 step 4 for the breakdown)
+  2a. contentHash + size binding triplets (reserved-key PROPERTYs bound to the DATA UID via PIN — see workflow 1 step 4a)
   3. `MIRROR(transportDef=/transports/ipfs, uri=ipfs://QmXxx)`
   4. `PIN(definition=paper.pdf Anchor, refUID=DATA UID)`
 - **Result**: File appears in `/docs/` with IPFS retrieval. Client resolves via gateway URL.
@@ -125,6 +127,8 @@ EFS files are modified by issuing new attestations.
 - **Sorted directories** — ordering the children of an ordinary directory Anchor via `SORT_INFO` + the shared `EFSSortOverlay` (a kernel overlay keyed by `(sortInfoUID, parentAnchor)`; lens filtering applied at read time). No dedicated list contract is involved here. Workflows 16–21 below; authoritative API in [Sort Overlay Architecture](./07-Sort-Overlay-Architecture.md).
 
 The two compose — a curator can keep a `LIST` *and* expose a sort over a directory — but they are separate primitives with separate contracts.
+
+> **⚠️ Sorted-directory workflows (16–21) are deferred — SORT_INFO is NOT in the Sepolia freeze set.** The freeze registers nine schemas (ANCHOR, DATA, MIRROR, PIN, TAG, PROPERTY, LIST, LIST_ENTRY, REDIRECT); SORT_INFO and `EFSSortOverlay` are **not** registered/deployed by the freeze ceremony (see `specs/overview.md` and `docs/SEPOLIA_FREEZE_TABLE.md`). Workflows 16–21 below describe valid future behavior (authoritative design in [Sort Overlay Architecture](./07-Sort-Overlay-Architecture.md)), but until SORT_INFO is registered post-freeze there is **no `SORT_INFO_SCHEMA_UID` to attest against** — do not treat these as live, and do **not** add SORT_INFO to the freeze as a tenth schema. The curated-list workflows (22–24) are unaffected. (Workflows 22–24 are the live list path.)
 
 ### 16. Create a New Sort and Add Items
 

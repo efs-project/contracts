@@ -2,6 +2,8 @@ import { expect } from "chai";
 import { ethers } from "hardhat";
 import { EFSIndexer, EFSFileView, EdgeResolver, EAS, SchemaRegistry } from "../typechain-types";
 import { Signer, ZeroAddress } from "ethers";
+import { deployIndexerProxy } from "./helpers/deployIndexerProxy";
+import { deployResolverProxy } from "./helpers/deployResolverProxy";
 
 const ZERO_BYTES32 = "0x0000000000000000000000000000000000000000000000000000000000000000";
 const NO_EXPIRATION = 0n;
@@ -59,12 +61,16 @@ describe("EFSFileView", function () {
     const ownerAddr = await owner.getAddress();
     const nonce = await ethers.provider.getTransactionCount(ownerAddr);
 
-    // Deploy order:
-    //   nonce+0: EdgeResolver
-    //   nonce+1..5: Anchor, Property, Data, Blob, PIN, TAG schema registrations (5 total)
-    //   nonce+7: Indexer
-    const futureEdgeResolverAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: nonce });
-    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: nonce + 7 });
+    // Deploy order (both EdgeResolver and EFSIndexer are proxied per ADR-0048):
+    //   nonce+0: EdgeResolver implementation
+    //   nonce+1: EdgeResolver proxy (the resolver baked into the PIN/TAG schema UIDs)
+    //   nonce+2..6: Anchor, Property, Data, PIN, TAG schema registrations (5 total)
+    //   nonce+7: Indexer implementation
+    //   nonce+8: Indexer proxy (the resolver)
+    // EdgeResolver PROXY is the resolver (ADR-0048): impl = nonce+0, proxy = nonce+1.
+    const futureEdgeResolverAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: nonce + 1 });
+    // PROXY is the resolver (ADR-0048): impl = nonce+7, proxy = nonce+8. See deployIndexerProxy().
+    const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: nonce + 8 });
     const precomputedPinSchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
       ["bytes32 definition", futureEdgeResolverAddr, true],
@@ -74,19 +80,18 @@ describe("EFSFileView", function () {
       ["bytes32 definition, int256 weight", futureEdgeResolverAddr, true],
     );
 
-    // Deploy EdgeResolver first
-    const EdgeResolverFactory = await ethers.getContractFactory("EdgeResolver");
-    edgeResolver = await EdgeResolverFactory.deploy(
-      await eas.getAddress(),
-      precomputedPinSchemaUID,
-      precomputedTagSchemaUID,
-      futureIndexerAddr,
-      await registry.getAddress(),
+    // Deploy EdgeResolver first, behind a proxy (ADR-0048): impl + proxy; initialize() sets the
+    // PIN/TAG schema UIDs + partner refs. The proxy address is baked into the PIN/TAG schema UIDs.
+    edgeResolver = await deployResolverProxy<EdgeResolver>(
+      "EdgeResolver",
+      [await eas.getAddress()],
+      [precomputedPinSchemaUID, precomputedTagSchemaUID, futureIndexerAddr, await registry.getAddress()],
+      owner,
     );
-    await edgeResolver.waitForDeployment();
+    expect(await edgeResolver.getAddress()).to.equal(futureEdgeResolverAddr);
 
     // Register Schemas (aligned with canonical EFSIndexer and EFSRouter schemas)
-    const tx1 = await registry.register("string name, bytes32 schemaUID", futureIndexerAddr, false);
+    const tx1 = await registry.register("string name, bytes32 forSchema", futureIndexerAddr, false);
     const rc1 = await tx1.wait();
     anchorSchemaUID = rc1!.logs[0].topics[1];
 
@@ -95,15 +100,10 @@ describe("EFSFileView", function () {
     const rc2 = await tx2.wait();
     propertySchemaUID = rc2!.logs[0].topics[1];
 
-    // Data (non-revocable, content-addressed — matches EFSIndexer DATA_SCHEMA_UID)
-    const tx3 = await registry.register("bytes32 contentHash, uint64 size", futureIndexerAddr, false);
+    // Data (empty schema — pure identity, ADR-0049; matches EFSIndexer DATA_SCHEMA_UID)
+    const tx3 = await registry.register("", futureIndexerAddr, false);
     const rc3 = await tx3.wait();
     dataSchemaUID = rc3!.logs[0].topics[1];
-
-    // Blob (No resolver)
-    const tx4 = await registry.register("string mimeType, uint8 storageType, bytes location", ZeroAddress, true);
-    const rc4 = await tx4.wait();
-    const blobSchemaUID = rc4!.logs[0].topics[1];
 
     // PIN schema
     const tx5 = await registry.register("bytes32 definition", futureEdgeResolverAddr, true);
@@ -115,16 +115,14 @@ describe("EFSFileView", function () {
     const rc6 = await tx6.wait();
     tagSchemaUID = rc6!.logs[0].topics[1];
 
-    // Deploy Indexer
-    const IndexerFactory = await ethers.getContractFactory("EFSIndexer");
-    indexer = await IndexerFactory.deploy(
+    // Deploy Indexer behind a proxy (ADR-0048)
+    indexer = await deployIndexerProxy(
       await eas.getAddress(),
       anchorSchemaUID,
       propertySchemaUID,
       dataSchemaUID,
-      blobSchemaUID,
+      owner,
     );
-    await indexer.waitForDeployment();
 
     expect(await indexer.getAddress()).to.equal(futureIndexerAddr);
 
@@ -650,7 +648,7 @@ describe("EFSFileView", function () {
         expirationTime: NO_EXPIRATION,
         revocable: false,
         refUID: ZERO_BYTES32,
-        data: enc.encode(["bytes32", "uint64"], [ethers.keccak256(ethers.toUtf8Bytes("alice payload")), 7n]),
+        data: "0x", // DATA is an empty schema — pure identity (ADR-0049)
         value: 0n,
       },
     });
@@ -664,7 +662,7 @@ describe("EFSFileView", function () {
         expirationTime: NO_EXPIRATION,
         revocable: false,
         refUID: ZERO_BYTES32,
-        data: enc.encode(["bytes32", "uint64"], [ethers.keccak256(ethers.toUtf8Bytes("bob payload")), 11n]),
+        data: "0x", // DATA is an empty schema — pure identity (ADR-0049)
         value: 0n,
       },
     });
@@ -715,7 +713,7 @@ describe("EFSFileView", function () {
         expirationTime: NO_EXPIRATION,
         revocable: false,
         refUID: ZERO_BYTES32,
-        data: enc.encode(["bytes32", "uint64"], [ethers.keccak256(ethers.toUtf8Bytes("bob adversarial")), 42n]),
+        data: "0x", // DATA is an empty schema — pure identity (ADR-0049)
         value: 0n,
       },
     });
@@ -740,6 +738,49 @@ describe("EFSFileView", function () {
     const page = await fileView.getFilesAtPath(slotUID, [aliceAddr, bobAddr], dataSchemaUID, "0x", 10);
     expect(page.items.length).to.equal(1, "bob's file must appear despite alice's TAG on the same target");
     expect(page.items[0].uid).to.equal(bobData);
+  });
+
+  it("getFilesAtPath: FileSystemItem.attester is the placement (lens) attester, not the DATA author (hardlink/dedup)", async function () {
+    // Codex P1 regression: with hardlinks/dedup, the placement attester whose active PIN won
+    // the walk can differ from the DATA attestation author. Alice can hardlink Bob's DATA into
+    // her own lens by emitting a PIN(definition=slot, refUID=bobData, attester=alice). The
+    // listed item's `attester` must be the WINNING PLACEMENT attester (Alice) — not the DATA
+    // author (Bob) — so clients can scope follow-up PROPERTY/MIRROR reads to the winning lens,
+    // matching EFSRouter._findDataAtPath's (target, placementAttester) return shape.
+    const aliceAddr = await alice.getAddress();
+    const bobAddr = await bob.getAddress();
+
+    const rootUID = await createAnchor("root", ZERO_BYTES32, ZERO_BYTES32);
+    const folderUID = await createAnchor("folder", rootUID, ZERO_BYTES32);
+    const slotUID = await createAnchor("doc.txt", folderUID, dataSchemaUID, alice);
+
+    // Bob authors the DATA (he is `att.attester` on the DATA attestation).
+    const bobDataTx = await eas.connect(bob).attest({
+      schema: dataSchemaUID,
+      data: {
+        recipient: ZeroAddress,
+        expirationTime: NO_EXPIRATION,
+        revocable: false,
+        refUID: ZERO_BYTES32,
+        data: "0x", // DATA is an empty schema — pure identity (ADR-0049)
+        value: 0n,
+      },
+    });
+    const bobData = getUIDFromReceipt(await bobDataTx.wait());
+    const bobDataAtt = await eas.getAttestation(bobData);
+    expect(bobDataAtt.attester).to.equal(bobAddr); // precondition: Bob is the DATA author
+
+    // Alice hardlinks Bob's DATA into HER lens: she emits the placement PIN.
+    await createPin(bobData, slotUID, alice);
+    expect(await edgeResolver.getActivePinTarget(slotUID, aliceAddr, dataSchemaUID)).to.equal(bobData);
+
+    // Listing with Alice's lens: the item targets Bob's DATA, but the placement attester is Alice.
+    const page = await fileView.getFilesAtPath(slotUID, [aliceAddr], dataSchemaUID, "0x", 10);
+    expect(page.items.length).to.equal(1);
+    expect(page.items[0].uid).to.equal(bobData);
+    // The fix: attester is the winning lens (Alice), NOT the DATA author (Bob).
+    expect(page.items[0].attester).to.equal(aliceAddr);
+    expect(page.items[0].attester).to.not.equal(bobAddr);
   });
 
   it("Surfaces >10k tagged folders without silent truncation (ADR-0036)", async function () {

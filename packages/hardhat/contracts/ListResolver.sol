@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
-import { SchemaResolver } from "@ethereum-attestation-service/eas-contracts/contracts/resolver/SchemaResolver.sol";
 import { IEAS, Attestation } from "@ethereum-attestation-service/eas-contracts/contracts/IEAS.sol";
+import { EFSUpgradeableResolver } from "./base/EFSUpgradeableResolver.sol";
 
 /**
  * @title ListResolver
@@ -11,9 +11,22 @@ import { IEAS, Attestation } from "@ethereum-attestation-service/eas-contracts/c
  *
  *      LIST schema: "bool allowsDuplicates, bool appendOnly, uint8 targetType, bytes32 targetSchema, uint256 maxEntries"
  *      revocable: false (LIST is permanent — identity of a list, like DATA)
+ *
+ *      Upgradeable (ADR-0048): runs behind an ERC1967 proxy whose ADDRESS is the EAS resolver
+ *      baked into the LIST schema UID. Stateless pure validation — no per-deployment config or
+ *      owner, so initialize() is empty; only the impl's _disableInitializers() (in the base
+ *      constructor) is load-bearing, locking the implementation against direct initialization.
  */
-contract ListResolver is SchemaResolver {
+contract ListResolver is EFSUpgradeableResolver {
     uint256 private constant EXPECTED_LIST_DATA_LEN = 160; // 5 × 32
+
+    // The LIST field string — FROZEN (ADR-0044) and MUST match the deploy registration exactly (it is
+    // hashed into the LIST schema UID). Used to self-derive this resolver's own LIST schema UID so
+    // onAttest can reject attestations from any OTHER schema an attacker registers against this
+    // resolver — which would otherwise pass the shape checks and emit ListAttested (polluting
+    // event/RPC list discovery with fake lists that ListReader/ListEntryResolver later reject).
+    string private constant LIST_DEFINITION =
+        "bool allowsDuplicates, bool appendOnly, uint8 targetType, bytes32 targetSchema, uint256 maxEntries";
 
     event ListAttested(
         bytes32 indexed listUID,
@@ -25,17 +38,42 @@ contract ListResolver is SchemaResolver {
         uint256 maxEntries
     );
 
-    constructor(IEAS eas) SchemaResolver(eas) {}
+    constructor(IEAS eas) EFSUpgradeableResolver(eas) {}
+
+    /// @notice One-time per-deployment initialization, run behind the proxy.
+    /// @dev Guarded by `initializer` — callable exactly once per proxy. ListResolver is pure
+    ///      validation with no config or owner, so this is intentionally empty; it exists only
+    ///      to consume the proxy's one-shot initializer slot symmetrically with the other EFS
+    ///      resolvers.
+    function initialize() external initializer {}
+
+    /// @notice The LIST schema UID this resolver enforces — self-derived from the frozen LIST_DEFINITION,
+    ///         this resolver's (proxy) address, and `revocable = false`. Mirrors
+    ///         `ListEntryResolver.listEntrySchemaUID()` / `AliasResolver.redirectSchemaUID()` so the
+    ///         pre-register verify gate can read the DEPLOYED contract's own notion of its schema UID and
+    ///         assert it equals the to-be-registered `schemaUIDs.LIST` (PR #24 P2). Without this getter a
+    ///         stale/edited `LIST_DEFINITION` artifact in Batch 1 passes the gate, the current UID is
+    ///         registered, and every canonical LIST attestation then reverts `wrong LIST schema`.
+    function listSchemaUID() public view returns (bytes32) {
+        return keccak256(abi.encodePacked(LIST_DEFINITION, address(this), false));
+    }
 
     function onAttest(Attestation calldata a, uint256) internal override returns (bool) {
+        // Foreign-schema guard (matches AliasResolver/ListEntryResolver/MirrorResolver/EdgeResolver):
+        // EAS invokes this resolver for ANY schema registered against it. Only the canonical LIST
+        // schema may pass — else a foreign 5-word non-revocable schema would clear the shape checks
+        // below and emit ListAttested. Self-derived: address(this) under the proxy delegatecall IS the
+        // resolver baked into the LIST schema UID; LIST is non-revocable (the `false`). Derived inline
+        // (no stored config) — LIST attestations are infrequent, so the keccak cost is negligible.
+        require(a.schema == listSchemaUID(), "wrong LIST schema");
         require(a.data.length == EXPECTED_LIST_DATA_LEN, "bad LIST payload");
         require(!a.revocable, "LIST must be non-revocable");
         require(a.expirationTime == 0, "LIST must not expire");
         require(a.refUID == bytes32(0), "LIST must be free-floating");
         require(a.recipient == address(0), "LIST must not be directed");
 
-        (bool allowsDuplicates, bool appendOnly, uint8 targetType, bytes32 targetSchema, uint256 maxEntries) =
-            abi.decode(a.data, (bool, bool, uint8, bytes32, uint256));
+        (bool allowsDuplicates, bool appendOnly, uint8 targetType, bytes32 targetSchema, uint256 maxEntries) = abi
+            .decode(a.data, (bool, bool, uint8, bytes32, uint256));
 
         require(targetType <= 2, "invalid targetType");
 

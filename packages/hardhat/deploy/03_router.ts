@@ -2,11 +2,18 @@ import { HardhatRuntimeEnvironment } from "hardhat/types";
 import { DeployFunction } from "hardhat-deploy/types";
 import { Contract } from "ethers";
 import { redeployIfArgsChanged } from "../deploy-utils";
+import { legacySuperseded } from "../deploy-lib/superseded";
 
 const EAS_ADDRESS = "0xC2679fBD37d54388Ce493F1DB75320D236e1815e";
 const SCHEMA_REGISTRY_ADDRESS = "0x0a7E2Ff54e76B8E6659aedc9103FB21c038050D0";
 
 const deployEFSRouter: DeployFunction = async function (hre: HardhatRuntimeEnvironment) {
+  // AGENT-NOTE (Phase D, I-3): EFSRouter is a stateless view (redeployable, in no UID). Not on the
+  // Sepolia freeze path (`yarn deploy:efs` runs the EFSCore tag only). A plain `yarn deploy` would
+  // bind via getContract("Indexer") + indexer.DATA_SCHEMA_UID() against the proxies, untested.
+  // Neutralize wherever CreateX is present, matching 01/04/05/09. Local/devnet still deploys it.
+  if (await legacySuperseded(hre, "03_router")) return;
+
   const { deployer } = await hre.getNamedAccounts();
   const { deploy } = hre.deployments;
   const ethers = hre.ethers;
@@ -37,12 +44,15 @@ const deployEFSRouter: DeployFunction = async function (hre: HardhatRuntimeEnvir
     schemaRegistryAddress = SCHEMA_REGISTRY_ADDRESS;
   }
 
+  // Legacy/devnet path: no SystemAccount (ADR-0053) here — pass zero so the router falls back to
+  // indexer.DEPLOYER() for the default lens, preserving the pre-ADR-0053 devnet behavior exactly.
   const routerArgs = [
     indexer.target,
     EAS_ADDRESS,
     edgeResolverDeployment.address,
     schemaRegistryAddress,
     dataSchemaUID,
+    ethers.ZeroAddress,
   ];
   await redeployIfArgsChanged(hre, "EFSRouter", routerArgs);
 

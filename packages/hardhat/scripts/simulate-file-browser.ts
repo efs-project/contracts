@@ -1,5 +1,6 @@
+import { expect } from "chai";
 import { ethers } from "hardhat";
-import { EFSIndexer, EdgeResolver } from "../typechain-types";
+import { EFSIndexer, EdgeResolver, EFSFileView } from "../typechain-types";
 
 /**
  * EFS File Browser Simulation
@@ -28,6 +29,29 @@ async function main() {
       passed++;
     } else {
       console.log(`  ${FAIL} ${label}${detail ? ` — ${detail}` : ""}`);
+      failed++;
+    }
+  };
+
+  /**
+   * Negative assertion: `promise` must revert with the named custom error on `contract`.
+   * Chai matchers (revertedWithCustomError) auto-load via hardhat.config, so `expect` works
+   * without an explicit chai-matchers import here. Counts toward the same PASS/FAIL tally as
+   * `assert`, so a missing revert (or the wrong error name) shows up as a FAIL, not a throw.
+   */
+  const assertReverts = async (
+    label: string,
+    promise: Promise<unknown>,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    contract: any,
+    errorName: string,
+  ) => {
+    try {
+      await expect(promise).to.be.revertedWithCustomError(contract, errorName);
+      console.log(`  ${PASS} ${label} — reverts with ${errorName}`);
+      passed++;
+    } catch (err) {
+      console.log(`  ${FAIL} ${label} — expected revert ${errorName}: ${(err as Error).message}`);
       failed++;
     }
   };
@@ -63,6 +87,11 @@ async function main() {
   const edgeResolverAddr = await indexer.edgeResolver();
   const edgeResolver = (await ethers.getContractAt("EdgeResolver", edgeResolverAddr)) as unknown as EdgeResolver;
   const rootUID = await indexer.rootAnchorUID();
+
+  // EFSFileView — stateless directory-listing view (redeployable, in no schema UID). Deployed by
+  // deploy/02_fileview.ts under the name "EFSFileView". Used below for the TAG-visibility merge and
+  // showRevoked opt-in phases via getDirectoryPageBySchemaAndAddressList(...).
+  const fileView = (await ethers.getContract("EFSFileView", owner)) as unknown as EFSFileView;
 
   console.log(`Indexer:      ${indexer.target}`);
   console.log(`EAS:          ${eas.target}`);
@@ -118,11 +147,13 @@ async function main() {
     return getUID(tx);
   };
 
-  /** Create a standalone DATA attestation (contentHash + size, non-revocable, standalone) */
+  // AGENT-NOTE: DATA is an empty schema — pure identity (ADR-0049). It carries no inline fields;
+  // contentHash/size are reserved-key PROPERTYs bound to the DATA UID. `contentHash` below is a
+  // local convenience (the value a client would attach as a PROPERTY) — it is NOT encoded into
+  // the DATA payload. Attaching it as a PROPERTY is future PROPERTY/SDK work.
+  /** Create a standalone DATA attestation (empty per ADR-0049, non-revocable, standalone) */
   const createData = async (signer: any, content: string) => {
-    const contentBytes = ethers.toUtf8Bytes(content);
-    const contentHash = ethers.keccak256(contentBytes);
-    const size = contentBytes.length;
+    const contentHash = ethers.keccak256(ethers.toUtf8Bytes(content));
     const tx = await eas.connect(signer).attest({
       schema: dataSchemaUID,
       data: {
@@ -130,7 +161,7 @@ async function main() {
         expirationTime: 0n,
         revocable: false,
         refUID: ethers.ZeroHash,
-        data: encode.encode(["bytes32", "uint64"], [contentHash, size]),
+        data: "0x",
         value: 0n,
       },
     });
@@ -337,7 +368,7 @@ async function main() {
 
   // ── Test 2: List Children (global) ──
   console.log("\n[2] Children Listing");
-  const petsChildren = await indexer["getChildren(bytes32,uint256,uint256,bool)"](petsUID, 0n, 10, false);
+  const petsChildren = await indexer.getChildren(petsUID, 0n, 10, false, false);
   assert(
     "getChildren(/pets/) returns 3 (best.jpg, cats, dogs)",
     petsChildren.length === 3,
@@ -379,7 +410,14 @@ async function main() {
   // ── Test 5: MIRROR Resolution ──
   console.log("\n[5] MIRROR Resolution");
   // MIRRORs are indexed via indexer.index() — discoverable via getReferencingAttestations
-  const ownerMirrors = await indexer.getReferencingAttestations(ownerBestData.uid, mirrorSchemaUID, 0, 10, false);
+  const ownerMirrors = await indexer.getReferencingAttestations(
+    ownerBestData.uid,
+    mirrorSchemaUID,
+    0,
+    10,
+    false,
+    false,
+  );
   assert("Owner's DATA has 1 MIRROR", ownerMirrors.length === 1, `got ${ownerMirrors.length}`);
 
   // Decode MIRROR to get URI
@@ -388,16 +426,14 @@ async function main() {
   assert("MIRROR transport is ipfs", mirrorTransport === ipfsTransportUID);
   assert("MIRROR URI is correct", mirrorUri === "ipfs://owner-best", `got: ${mirrorUri}`);
 
-  // ── Test 6: Content-Addressed Dedup ──
-  console.log("\n[6] Content-Addressed Dedup (dataByContentKey)");
-  const canonicalUID = await indexer.dataByContentKey(ownerBestData.contentHash);
-  assert("dataByContentKey returns first DATA for this hash", canonicalUID === ownerBestData.uid);
-
-  // Create a second DATA with the same content — different UID but same contentHash
-  const dupData = await createData(owner, "owner-best-jpeg-bytes"); // same content
-  const dupCanonical = await indexer.dataByContentKey(dupData.contentHash);
-  assert("Canonical still points to first DATA (dedup)", dupCanonical === ownerBestData.uid);
-  assert("Duplicate DATA has different UID", dupData.uid !== ownerBestData.uid);
+  // ── Test 6: No intrinsic content-addressed dedup (ADR-0049) ──
+  // AGENT-NOTE: DATA is empty (ADR-0049) — no contentHash field, no `dataByContentKey` index.
+  // Identical bytes now mint DISTINCT DATA UIDs; there is no canonical-by-hash resolution on
+  // chain. Dedup prevention is best-effort client-side (query the property index before upload);
+  // dedup resolution is the REDIRECT primitive (ADR-0050). Both are future PROPERTY/SDK work.
+  console.log("\n[6] No intrinsic content dedup (ADR-0049) — identical bytes → distinct DATA UIDs");
+  const dupData = await createData(owner, "owner-best-jpeg-bytes"); // same content as ownerBestData
+  assert("Duplicate content mints a distinct DATA UID (no dedup)", dupData.uid !== ownerBestData.uid);
 
   // ── Test 7: PIN Removal (eas.revoke under ADR-0041) ──
   console.log("\n[7] PIN Removal (eas.revoke)");
@@ -436,15 +472,15 @@ async function main() {
   // Add a second mirror (onchain) to owner's best DATA
   await mirror(owner, ownerBestData.uid, onchainTransportUID, "web3://0xABCDEF");
 
-  const allMirrors = await indexer.getReferencingAttestations(ownerBestData.uid, mirrorSchemaUID, 0, 10, false);
+  const allMirrors = await indexer.getReferencingAttestations(ownerBestData.uid, mirrorSchemaUID, 0, 10, false, false);
   assert("DATA now has 2 MIRRORs (ipfs + onchain)", allMirrors.length === 2, `got ${allMirrors.length}`);
 
   // ── Test 10: Subdirectory Navigation ──
   console.log("\n[10] Subdirectory Navigation");
-  const catsChildren = await indexer["getChildren(bytes32,uint256,uint256,bool)"](catsUID, 0, 10, false);
+  const catsChildren = await indexer.getChildren(catsUID, 0, 10, false, false);
   assert("/pets/cats/ has 2 files", catsChildren.length === 2);
 
-  const dogsChildren = await indexer["getChildren(bytes32,uint256,uint256,bool)"](dogsUID, 0, 10, false);
+  const dogsChildren = await indexer.getChildren(dogsUID, 0, 10, false, false);
   assert("/pets/dogs/ has 1 file", dogsChildren.length === 1);
 
   // ── Test 11: Tagging (labels — cardinality N) ──
@@ -482,13 +518,7 @@ async function main() {
   // ── Test 13: Schema-filtered Anchor listing ──
   console.log("\n[13] Schema-filtered Anchor Listing");
   // getAnchorsBySchema with dataSchemaUID should only return file anchors, not sub-folders
-  const fileAnchorsInPets = await indexer["getAnchorsBySchema(bytes32,bytes32,uint256,uint256,bool)"](
-    petsUID,
-    dataSchemaUID,
-    0,
-    10,
-    false,
-  );
+  const fileAnchorsInPets = await indexer.getAnchorsBySchema(petsUID, dataSchemaUID, 0, 10, false, false);
   assert(
     "DATA-schema anchors in /pets/ = 1 (best.jpg only, cats and dogs are folders)",
     fileAnchorsInPets.length === 1,
@@ -586,6 +616,323 @@ async function main() {
   const propAtt = await eas.getAttestation(propUID);
   const [propValue] = encode.decode(["string"], propAtt.data);
   assert("PROPERTY value is image/jpeg", propValue === "image/jpeg");
+
+  // ══════════════════════════════════════════════════════════════
+  // PHASE 18: TAG-visibility directory merge (exclude AND include)
+  //           — MEMBERSHIP assertions, not just counts (P0, ADR-0038)
+  // ══════════════════════════════════════════════════════════════
+  // A sub-folder is only visible in a lens-scoped directory listing once a LISTED attester
+  // has placed a folder-visibility TAG(definition=dataSchemaUID) on it (ADR-0038, single-source
+  // tag-only folder visibility). We build a sub-folder that *contains* alice's (user1's) file —
+  // so containsAttestations is true — but carries NO visibility TAG from any listed attester, then
+  // assert it's EXCLUDED from the [alice, bob] listing. Adding the TAG must flip it to INCLUDED.
+  //
+  // Crucially we assert the IDENTITY/SET of returned children (their UIDs), not just the count —
+  // the existing phases only check counts/booleans, which would pass even if the WRONG child were
+  // returned at the right cardinality.
+  console.log("\n── Phase 18: TAG-visibility directory merge (membership) ──\n");
+
+  // Parent dir for this phase, and a sub-folder (generic anchor, schema=0) inside it.
+  const visParent = await anchor(owner, `vis_${S}`, rootUID);
+  const hiddenSub = await anchor(owner, "hiddenSub", visParent); // generic folder, no visibility TAG yet
+
+  // user1 (alice) places a file under hiddenSub → hiddenSub.containsAttestations[user1] becomes true,
+  // but there is still no folder-visibility TAG, so the folder must NOT surface in the lens listing.
+  const hiddenFileAnchor = await anchor(user1, "alicefile.txt", hiddenSub, dataSchemaUID);
+  const hiddenFileData = await createData(user1, "alice-hidden-bytes");
+  await placeData(user1, hiddenFileData.uid, hiddenFileAnchor);
+
+  // A control sibling folder that IS visibility-tagged by user1 from the start — it must appear in
+  // both the "before" and "after" listings, anchoring the membership-set assertion.
+  const shownSub = await anchor(owner, "shownSub", visParent);
+  await tagLabel(user1, shownSub, dataSchemaUID); // folder-visibility TAG (definition = dataSchemaUID)
+
+  // helper: collect the full set of child UIDs the schema-scoped lens view returns, paging the
+  // opaque cursor (ADR-0036) to exhaustion. getDirectoryPageBySchemaAndAddressList signature:
+  //   (parentAnchor, anchorSchema, attesters[], cursor:bytes, maxItems) → (items[], nextCursor:bytes)
+  // anchorSchema=dataSchemaUID: phase-0 surfaces folders TAG-visible under dataSchemaUID, phase-1
+  // surfaces direct DATA-schema file anchors. No trailing showRevoked arg on this view (the view
+  // hardcodes showRevoked=false into its underlying indexer/edgeResolver reads).
+  const listDirChildren = async (parent: string, schema: string, attesters: string[]): Promise<Set<string>> => {
+    const acc = new Set<string>();
+    let cursor = "0x";
+    let guard = 0;
+    do {
+      if (guard++ > 50) throw new Error("directory paging did not terminate");
+      const page = await fileView.getDirectoryPageBySchemaAndAddressList(parent, schema, attesters, cursor, 50);
+      for (const it of page.items) acc.add(it.uid);
+      cursor = page.nextCursor;
+    } while (cursor !== "0x");
+    return acc;
+  };
+
+  const lensAB = [u1Addr, u2Addr];
+
+  // BEFORE: hiddenSub has no visibility TAG → excluded; shownSub (tagged) → included.
+  const beforeSet = await listDirChildren(visParent, dataSchemaUID, lensAB);
+  assert(
+    "Untagged sub-folder is EXCLUDED from [alice,bob] listing",
+    !beforeSet.has(hiddenSub),
+    `hiddenSub ${hiddenSub.slice(0, 10)}… present=${beforeSet.has(hiddenSub)}`,
+  );
+  assert("Visibility-tagged control sub-folder IS included (before)", beforeSet.has(shownSub));
+  assert(
+    "Listing identity-set is exactly {shownSub} before tagging hiddenSub",
+    beforeSet.size === 1 && beforeSet.has(shownSub),
+    `got ${[...beforeSet].map(u => u.slice(0, 8)).join(",")}`,
+  );
+
+  // Add the folder-visibility TAG on hiddenSub from a LISTED attester (alice/user1).
+  await tagLabel(user1, hiddenSub, dataSchemaUID);
+
+  // AFTER: hiddenSub now visible; set is exactly {hiddenSub, shownSub} — identity, not just count.
+  const afterSet = await listDirChildren(visParent, dataSchemaUID, lensAB);
+  assert(
+    "Newly tagged sub-folder is now INCLUDED in [alice,bob] listing",
+    afterSet.has(hiddenSub),
+    `hiddenSub ${hiddenSub.slice(0, 10)}…`,
+  );
+  assert("Control sub-folder still included (after)", afterSet.has(shownSub));
+  assert(
+    "Listing identity-set is exactly {hiddenSub, shownSub} after tagging",
+    afterSet.size === 2 && afterSet.has(hiddenSub) && afterSet.has(shownSub),
+    `got ${[...afterSet].map(u => u.slice(0, 8)).join(",")}`,
+  );
+
+  // ══════════════════════════════════════════════════════════════
+  // PHASE 19: showRevoked=true opt-in (P0, ADR-0051)
+  // ══════════════════════════════════════════════════════════════
+  // After revoking a placement PIN, the DEFAULT read (showRevoked=false) must exclude it, while a
+  // showRevoked=true read must STILL surface it (full-history opt-in). We exercise this on the
+  // indexer's getReferencingAttestations(target, schema, start, len, reverseOrder, showRevoked)
+  // — same view family the script already uses — over a fresh DATA + MIRROR pair (MIRROR is the
+  // revocable referencing attestation; PIN/DATA are tracked separately).
+  //
+  // We ALSO assert the containsAttestations BOOLEAN flip (true→false) via the clearContains
+  // transition: revoking an attester's LAST structural edge whose definition is an ANCHOR drops
+  // _activeTotalByDefAndAttester to 0, which calls indexer.clearContains(anchor, attester). The
+  // realisable "last visibility edge on an anchor" in this model is the placement PIN
+  // (definition = file anchor); folder-visibility TAGs use definition=dataSchemaUID where
+  // clearContains is intentionally a no-op (a schema UID has no _containsAttestations flag).
+  console.log("\n── Phase 19: showRevoked=true opt-in + containsAttestations flip ──\n");
+
+  // 19a. showRevoked opt-in on a revocable MIRROR.
+  const revDir = await anchor(owner, `rev_${S}`, rootUID);
+  const revFileAnchor = await anchor(owner, "revfile.bin", revDir, dataSchemaUID);
+  const revData = await createData(owner, "revoke-optin-bytes");
+  const revMirrorUID = await mirror(owner, revData.uid, ipfsTransportUID, "ipfs://to-be-revoked");
+  await placeData(owner, revData.uid, revFileAnchor);
+
+  // Default read sees the mirror before revoke.
+  const mirrorsBeforeRevoke = await indexer.getReferencingAttestations(
+    revData.uid,
+    mirrorSchemaUID,
+    0,
+    10,
+    false,
+    false, // showRevoked=false (default path)
+  );
+  assert(
+    "Default read surfaces the MIRROR before revoke",
+    mirrorsBeforeRevoke.includes(revMirrorUID),
+    `got ${mirrorsBeforeRevoke.length} mirror(s)`,
+  );
+
+  // Revoke the MIRROR.
+  await eas.connect(owner).revoke({ schema: mirrorSchemaUID, data: { uid: revMirrorUID, value: 0n } });
+
+  // Default read (showRevoked=false) EXCLUDES it.
+  const mirrorsDefaultAfter = await indexer.getReferencingAttestations(
+    revData.uid,
+    mirrorSchemaUID,
+    0,
+    10,
+    false,
+    false,
+  );
+  assert(
+    "Default read (showRevoked=false) EXCLUDES revoked MIRROR",
+    !mirrorsDefaultAfter.includes(revMirrorUID),
+    `got ${mirrorsDefaultAfter.length} mirror(s)`,
+  );
+
+  // showRevoked=true read STILL surfaces it (full history opt-in).
+  const mirrorsHistory = await indexer.getReferencingAttestations(revData.uid, mirrorSchemaUID, 0, 10, false, true);
+  assert(
+    "showRevoked=true read STILL surfaces revoked MIRROR",
+    mirrorsHistory.includes(revMirrorUID),
+    `got ${mirrorsHistory.length} mirror(s)`,
+  );
+
+  // 19b. containsAttestations BOOLEAN flip via clearContains (last anchor-defined edge revoked).
+  // Use a dedicated attester/anchor pair so no other edge keeps the contains flag set. user2 (bob)
+  // places exactly one PIN whose definition is the file anchor; revoking it is the last structural
+  // edge under (definition=anchor, attester=bob) → clearContains(anchor, bob).
+  const flipAnchor = await anchor(owner, "flipfile.bin", revDir, dataSchemaUID);
+  const flipData = await createData(user2, "bob-contains-flip-bytes");
+  await placeData(user2, flipData.uid, flipAnchor);
+
+  assert(
+    "containsAttestations(flipAnchor, bob) TRUE after sole PIN placement",
+    (await indexer.containsAttestations(flipAnchor, u2Addr)) === true,
+  );
+
+  await unpin(user2, flipData.uid, flipAnchor); // revoke bob's only edge under (def=flipAnchor)
+
+  assert(
+    "containsAttestations(flipAnchor, bob) flips FALSE after last edge revoked (clearContains)",
+    (await indexer.containsAttestations(flipAnchor, u2Addr)) === false,
+  );
+
+  // ══════════════════════════════════════════════════════════════
+  // PHASE 20: Reserved-key PROPERTY bind + read-back (P0)
+  //           name, contentHash, size (real triplet + on-chain decode)
+  // ══════════════════════════════════════════════════════════════
+  // ADR-0049/ADR-0034: for EACH reserved key we run the full property() triplet (Anchor<PROPERTY>
+  // key anchor + free-floating PROPERTY value + binding PIN), then READ IT BACK on-chain via
+  // getActivePinTarget(keyAnchor, attester, PROPERTY_SCHEMA) and decode the bound PROPERTY's value,
+  // asserting it equals what we wrote. Unlike the existing contentHash-vs-itself check, the asserted
+  // value is the *literal we passed in*, decoded from the on-chain attestation — not recomputed.
+  console.log("\n── Phase 20: Reserved-key PROPERTY bind+read (name, contentHash, size) ──\n");
+
+  // A fresh DATA to hang the reserved-key PROPERTYs on.
+  const propData = await createData(owner, "reserved-key-property-bytes");
+
+  // Reserved-key values we intend to write. contentHash/size are lens-scoped attester CLAIMS
+  // (ADR-0049) — computed locally and attached as PROPERTY strings, not authenticated identity.
+  const reservedValues: Record<string, string> = {
+    name: "My Reserved File.txt",
+    contentHash: ethers.keccak256(ethers.toUtf8Bytes("reserved-key-property-bytes")),
+    size: "27", // bytes; stored as a decimal string PROPERTY value
+  };
+
+  // Helper: read the value bound to (container, key) under `attester` and decode the string.
+  const readBoundProperty = async (containerUID: string, key: string, attesterAddr: string): Promise<string> => {
+    const keyAnchor = await indexer.resolveAnchor(containerUID, key, propertySchemaUID);
+    if (keyAnchor === ethers.ZeroHash) throw new Error(`no key anchor for ${key}`);
+    const boundPropUID = await edgeResolver.getActivePinTarget(keyAnchor, attesterAddr, propertySchemaUID);
+    if (boundPropUID === ethers.ZeroHash) throw new Error(`no bound PROPERTY for ${key}`);
+    const att = await eas.getAttestation(boundPropUID);
+    const [decoded] = encode.decode(["string"], att.data);
+    return decoded as string;
+  };
+
+  for (const key of ["name", "contentHash", "size"]) {
+    const want = reservedValues[key];
+    await property(owner, propData.uid, key, want); // real triplet via existing helper
+    const got = await readBoundProperty(propData.uid, key, ownerAddr);
+    assert(`Reserved PROPERTY "${key}" reads back the written value`, got === want, `wrote "${want}", read "${got}"`);
+  }
+
+  // ADR-0034: a `name` key anchor created WITH a recipient address, resolvable for that address
+  // container. The existing property() helper always uses recipient=ZeroAddress, so we build the
+  // recipient-keyed key anchor inline here. The container is the address itself
+  // (bytes32(uint160(addr)) — the address-root container, ADR-0033). We then bind a `name`
+  // PROPERTY value into that anchor and read it back, asserting the display-name fallback path.
+  // AGENT-NOTE: property() does NOT support a recipient param — this block is intentionally inline.
+  const addrContainer = ethers.zeroPadValue(u1Addr, 32); // bytes32(uint160(user1)) — address-root container
+  // Create the `name` key anchor under the address container WITH recipient=user1 (ADR-0034).
+  // Anchor parent resolution accepts recipient cast to bytes32 when refUID is empty (EFSIndexer
+  // onAttest), so we pass refUID=0 + recipient=user1 to root the key anchor at the address container.
+  let addrNameKeyAnchor = await indexer.resolveAnchor(addrContainer, "name", propertySchemaUID);
+  if (addrNameKeyAnchor === ethers.ZeroHash) {
+    const keyTx = await eas.connect(owner).attest({
+      schema: anchorSchemaUID,
+      data: {
+        recipient: u1Addr, // address container target (ADR-0033/0034) — cast to bytes32 parent
+        expirationTime: 0n,
+        revocable: false,
+        refUID: ethers.ZeroHash,
+        data: encode.encode(["string", "bytes32"], ["name", propertySchemaUID]),
+        value: 0n,
+      },
+    });
+    addrNameKeyAnchor = await getUID(keyTx);
+  }
+  // Free-floating PROPERTY(value) + binding PIN into the recipient-keyed anchor.
+  const addrNameValue = "Alice's Display Name";
+  const addrNameProp = await eas.connect(owner).attest({
+    schema: propertySchemaUID,
+    data: {
+      recipient: ethers.ZeroAddress,
+      expirationTime: 0n,
+      revocable: false,
+      refUID: ethers.ZeroHash,
+      data: encode.encode(["string"], [addrNameValue]),
+      value: 0n,
+    },
+  });
+  const addrNamePropUID = await getUID(addrNameProp);
+  await pin(owner, addrNamePropUID, addrNameKeyAnchor);
+
+  // Resolve the name key anchor for the address container and read its bound value back.
+  const resolvedAddrNameAnchor = await indexer.resolveAnchor(addrContainer, "name", propertySchemaUID);
+  assert(
+    "name key anchor resolves under the address container (ADR-0034)",
+    resolvedAddrNameAnchor === addrNameKeyAnchor && resolvedAddrNameAnchor !== ethers.ZeroHash,
+    `got ${resolvedAddrNameAnchor.slice(0, 10)}…`,
+  );
+  const addrNameReadBack = await readBoundProperty(addrContainer, "name", ownerAddr);
+  assert(
+    "Recipient-keyed name PROPERTY reads back on the address container",
+    addrNameReadBack === addrNameValue,
+    `wrote "${addrNameValue}", read "${addrNameReadBack}"`,
+  );
+
+  // ══════════════════════════════════════════════════════════════
+  // PHASE 21: EFSIndexer PROPERTY write-time rejections (P0)
+  // ══════════════════════════════════════════════════════════════
+  // The PROPERTY write path has two distinct write-time rejections, surfaced by TWO different
+  // contracts:
+  //   21a. refUID != 0 — EFSIndexer.onAttest's PROPERTY branch RETURNS `false` (no bespoke revert).
+  //        EAS's SchemaResolver forwards that false and EAS reverts with `InvalidAttestation()`
+  //        (EAS.sol L604).
+  //   21b. revocable == true — the PROPERTY schema is registered non-revocable (ADR-0052), so EAS's
+  //        OWN pre-resolver check fires first: `if (!schema.revocable && request.revocable) revert
+  //        Irrevocable()` (EAS.sol L434). The resolver is never reached; the error is `Irrevocable`.
+  //
+  // Both errors are owned by the EAS contract, but the IEAS typechain interface ABI does not declare
+  // EAS's custom errors, so `revertedWithCustomError(eas, ...)` can't resolve the selector. Attach a
+  // minimal error-only ABI at the EAS address to give the matcher the error fragments.
+  console.log("\n── Phase 21: PROPERTY write-time rejections (EFSIndexer + EAS) ──\n");
+
+  const easErrors = new ethers.Contract(easAddress, ["error InvalidAttestation()", "error Irrevocable()"], owner);
+
+  // 21a. PROPERTY with refUID != 0 → EFSIndexer returns false → EAS InvalidAttestation.
+  await assertReverts(
+    "PROPERTY with refUID != 0 is rejected (InvalidAttestation)",
+    eas.connect(owner).attest({
+      schema: propertySchemaUID,
+      data: {
+        recipient: ethers.ZeroAddress,
+        expirationTime: 0n,
+        revocable: false,
+        refUID: propData.uid, // non-zero refUID — illegal for a free-floating PROPERTY
+        data: encode.encode(["string"], ["illegal-ref"]),
+        value: 0n,
+      },
+    }),
+    easErrors,
+    "InvalidAttestation",
+  );
+
+  // 21b. Revocable PROPERTY → EAS Irrevocable (pre-resolver; schema is non-revocable).
+  await assertReverts(
+    "Revocable PROPERTY is rejected (Irrevocable)",
+    eas.connect(owner).attest({
+      schema: propertySchemaUID,
+      data: {
+        recipient: ethers.ZeroAddress,
+        expirationTime: 0n,
+        revocable: true, // illegal — PROPERTY is non-revocable interned content (ADR-0052)
+        refUID: ethers.ZeroHash,
+        data: encode.encode(["string"], ["illegal-revocable"]),
+        value: 0n,
+      },
+    }),
+    easErrors,
+    "Irrevocable",
+  );
 
   // ══════════════════════════════════════════════════════════════
   // Summary

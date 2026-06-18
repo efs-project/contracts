@@ -1,6 +1,6 @@
 # ADR-0025: Anchor name validation
 
-**Status:** Accepted
+**Status:** Accepted — superseded in part by ADR-0048 (the reject-only IRI-segment rule below is replaced by the canonical NFC + percent-encode encoding; reserved bytes are now percent-encoded client-side rather than rejected, and the resolver validates the canonical `%XX`/uppercase-hex form — see `specs/02-Data-Models-and-Schemas.md` §1 and `docs/decisions.md`). The empty / `.` / `..` rejections are preserved.
 **Date:** 2026-04-16
 **Related:** PR #8 commit f687b57
 

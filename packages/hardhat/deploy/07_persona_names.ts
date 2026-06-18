@@ -60,6 +60,18 @@ const deployPersonaNames: DeployFunction = async function (hre: HardhatRuntimeEn
   const { deployer } = await hre.getNamedAccounts();
   const ethers = hre.ethers;
 
+  // Fail-soft (ADR-0028 graceful degradation): if the core foundation wasn't deployed — e.g. the CI
+  // Lint job's BARE hardhat node has no CreateX, so deploy/00_efs_core.ts skips and never registers
+  // `Indexer`/`EdgeResolver` — skip cleanly so a plain `yarn deploy` exits 0 instead of throwing
+  // `No Contract deployed with name: Indexer`. Mirrors the localhost/hardhat-only gate above and the
+  // fail-soft pattern in 08_seed_demo_tree / scripts/seed-impl.
+  const indexerDeployment = await hre.deployments.getOrNull("Indexer");
+  const edgeResolverDeployment = await hre.deployments.getOrNull("EdgeResolver");
+  if (!indexerDeployment || !edgeResolverDeployment) {
+    console.log("⏭️  Skipping persona name seeding — core not deployed (no CreateX on this network).");
+    return;
+  }
+
   console.log("Seeding persona name bindings with account:", deployer);
 
   const eas = await ethers.getContractAt(

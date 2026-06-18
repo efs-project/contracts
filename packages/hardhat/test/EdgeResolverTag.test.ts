@@ -2,6 +2,8 @@ import { expect } from "chai";
 import { ethers } from "hardhat";
 import { EdgeResolver, EFSIndexer, EAS, SchemaRegistry } from "../typechain-types";
 import { Signer, ZeroAddress } from "ethers";
+import { deployIndexerProxy } from "./helpers/deployIndexerProxy";
+import { deployResolverProxy } from "./helpers/deployResolverProxy";
 
 const ZERO_BYTES32 = "0x0000000000000000000000000000000000000000000000000000000000000000";
 const NO_EXPIRATION = 0n;
@@ -57,8 +59,10 @@ describe("EdgeResolver — TAG", function () {
 
     const ownerAddr = await owner.getAddress();
     const resolverNonce = await ethers.provider.getTransactionCount(ownerAddr);
-    const futureEdgeResolverAddress = ethers.getCreateAddress({ from: ownerAddr, nonce: resolverNonce });
-    const futureIndexerAddress = ethers.getCreateAddress({ from: ownerAddr, nonce: resolverNonce + 4 });
+    // PROXY is the resolver (ADR-0048): Edge impl = +0, Edge proxy = +1. See deployResolverProxy().
+    const futureEdgeResolverAddress = ethers.getCreateAddress({ from: ownerAddr, nonce: resolverNonce + 1 });
+    // PROXY is the resolver (ADR-0048): Indexer impl = +5, proxy = +6. See deployIndexerProxy().
+    const futureIndexerAddress = ethers.getCreateAddress({ from: ownerAddr, nonce: resolverNonce + 6 });
     const precomputedPinSchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
       ["bytes32 definition", futureEdgeResolverAddress, true],
@@ -68,15 +72,14 @@ describe("EdgeResolver — TAG", function () {
       ["bytes32 definition, int256 weight", futureEdgeResolverAddress, true],
     );
 
-    const EdgeResolverFactory = await ethers.getContractFactory("EdgeResolver");
-    edgeResolver = await EdgeResolverFactory.deploy(
-      await eas.getAddress(),
-      precomputedPinSchemaUID,
-      precomputedTagSchemaUID,
-      futureIndexerAddress,
-      await registry.getAddress(),
+    // EdgeResolver behind an ERC1967 proxy (ADR-0048): impl + proxy, config set via initialize().
+    edgeResolver = await deployResolverProxy<EdgeResolver>(
+      "EdgeResolver",
+      [await eas.getAddress()],
+      [precomputedPinSchemaUID, precomputedTagSchemaUID, futureIndexerAddress, await registry.getAddress()],
+      owner,
     );
-    await edgeResolver.waitForDeployment();
+    expect(await edgeResolver.getAddress()).to.equal(futureEdgeResolverAddress);
 
     const pinSchemaTx = await registry.register("bytes32 definition", await edgeResolver.getAddress(), true);
     pinSchemaUID = (await pinSchemaTx.wait())!.logs[0].topics[1];
@@ -91,15 +94,7 @@ describe("EdgeResolver — TAG", function () {
     const dummySchemaTx = await registry.register("string label", ZeroAddress, false);
     dummySchemaUID = (await dummySchemaTx.wait())!.logs[0].topics[1];
 
-    const IndexerFactory = await ethers.getContractFactory("EFSIndexer");
-    indexer = await IndexerFactory.deploy(
-      await eas.getAddress(),
-      ZERO_BYTES32,
-      ZERO_BYTES32,
-      ZERO_BYTES32,
-      ZERO_BYTES32,
-    );
-    await indexer.waitForDeployment();
+    indexer = await deployIndexerProxy(await eas.getAddress(), ZERO_BYTES32, ZERO_BYTES32, ZERO_BYTES32, owner);
     expect(await indexer.getAddress()).to.equal(futureIndexerAddress);
 
     await indexer.wireContracts(

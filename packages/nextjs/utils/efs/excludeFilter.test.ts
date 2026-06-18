@@ -11,7 +11,7 @@ const DEF_A = "0xaaaa00000000000000000000000000000000000000000000000000000000000
 const DEF_B = "0xbbbb000000000000000000000000000000000000000000000000000000000000";
 
 // ── shouldUseFilteredQuery — the load-bearing "never read unfiltered when
-//    excludes are active" invariant (ADR-0048). ───────────────────────────────
+//    excludes are active" invariant (ADR-0054). ───────────────────────────────
 test("shouldUseFilteredQuery: empty excludes → unfiltered call is allowed", () => {
   assert.equal(shouldUseFilteredQuery([]), false);
 });
