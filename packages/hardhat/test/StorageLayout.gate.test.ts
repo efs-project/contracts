@@ -1,6 +1,17 @@
 import { expect } from "chai";
 import { run } from "hardhat";
-import { readLiveLayout, readSnapshot, diffLayout, snapshotPath, LayoutFingerprint } from "./helpers/storageLayout";
+import {
+  readLiveLayout,
+  readSnapshot,
+  diffLayout,
+  snapshotPath,
+  LayoutFingerprint,
+  readLiveNamespaceLayout,
+  readNamespaceSnapshot,
+  diffNamespaceLayout,
+  namespaceSnapshotPath,
+  NamespaceLayoutFingerprint,
+} from "./helpers/storageLayout";
 import * as fs from "fs";
 
 /**
@@ -27,6 +38,16 @@ import * as fs from "fs";
  */
 
 const GUARDED = ["EFSIndexer", "EdgeResolver", "ListEntryResolver", "MirrorResolver", "SystemAccount"] as const;
+
+// Contracts whose per-deployment authority state lives in an ERC-7201 NAMESPACED config struct
+// (`efs.*.config`). The sequential gate above is BLIND to these — the struct fields sit at a hashed
+// slot far from slot 0 and never appear in `storageLayout.storage` (SystemAccount's sequential
+// snapshot is literally `[]` even though all its authority state is namespaced). A V2 that reorders,
+// retypes, or removes a field inside one of these structs would pass the sequential gate while
+// proxies read schema UIDs / partner refs / owners / seal flags / the module list from the WRONG
+// offsets. The namespace gate below closes that gap. Superset of GUARDED: AliasResolver keeps ALL
+// its state namespaced (zero sequential slots), so it is namespace-guarded but not sequential-guarded.
+const NAMESPACE_GUARDED = [...GUARDED, "AliasResolver"] as const;
 
 describe("StorageLayout gate — append-only kernel slots are frozen (ADR-0009, ADR-0048)", function () {
   before(async function () {
@@ -102,6 +123,83 @@ describe("StorageLayout gate — append-only kernel slots are frozen (ADR-0009, 
     it("ALLOWS appending a new sequential slot at the end (additive storage is safe)", function () {
       const problems = corrupt("ListEntryResolver", l => {
         l.push({ slot: String(l.length), offset: 0, label: "_v2NewMapping", type: "mapping(bytes32 => uint256)" });
+        return l;
+      });
+      expect(problems).to.deep.equal([]);
+    });
+  });
+
+  // ============================================================================================
+  // NAMESPACE LAYOUT GATE — the ERC-7201 config-struct half (the gap the sequential gate misses).
+  // ============================================================================================
+  //
+  // The sequential gate above can't see `efs.*.config` fields (they're at a hashed slot, not in
+  // `storageLayout.storage`). This gate fingerprints those structs from the AST and applies the
+  // SAME additive-only rule: a field reordered / retyped / removed inside a config struct FAILS in
+  // CI; appending a field at the END of a struct is allowed (additive namespaced storage is safe).
+
+  for (const name of NAMESPACE_GUARDED) {
+    it(`${name}: live ERC-7201 config-struct layout matches the committed namespace snapshot`, function () {
+      expect(
+        fs.existsSync(namespaceSnapshotPath(name)),
+        `missing namespace snapshot for ${name} — run scripts/snapshot-storage-layout.ts`,
+      ).to.equal(true);
+      const snapshot = readNamespaceSnapshot(name);
+      const live = readLiveNamespaceLayout(name);
+      const problems = diffNamespaceLayout(snapshot, live);
+      expect(problems, `namespace layout drift in ${name}:\n  ${problems.join("\n  ")}`).to.deep.equal([]);
+    });
+  }
+
+  describe("the namespace gate REJECTS incompatible config-struct changes (negative proof)", function () {
+    // Mirror of the sequential negative proofs, on the real config-struct fingerprints. We perturb a
+    // *copy* of the committed namespace snapshot to simulate a bad future edit to an efs.*.config
+    // struct and assert each flavor of corruption is flagged by the exact comparator that gates CI.
+
+    function corruptNs(name: string, mutate: (l: NamespaceLayoutFingerprint) => NamespaceLayoutFingerprint): string[] {
+      const snapshot = readNamespaceSnapshot(name);
+      const mutated = mutate(structuredClone(snapshot));
+      return diffNamespaceLayout(snapshot, mutated);
+    }
+
+    it("rejects a REORDERED config field (two adjacent struct members swapped)", function () {
+      // EFSIndexer.IndexerConfig = [anchorSchemaUID, propertySchemaUID, dataSchemaUID]. Swap the
+      // first two — a proxy reading anchorSchemaUID would now hit the propertySchemaUID value.
+      const problems = corruptNs("EFSIndexer", l => {
+        const f = l[0].fields;
+        [f[0], f[1]] = [f[1], f[0]];
+        return l;
+      });
+      expect(problems.some(p => /RENAMED\/REORDERED/.test(p))).to.equal(true);
+    });
+
+    it("rejects a RETYPED config field (e.g. bytes32 pinSchemaUID -> uint256)", function () {
+      const problems = corruptNs("EdgeResolver", l => {
+        const i = l[0].fields.findIndex(x => x.name === "pinSchemaUID");
+        l[0].fields[i] = { ...l[0].fields[i], type: "uint256" };
+        return l;
+      });
+      expect(problems.some(p => /RETYPED/.test(p))).to.equal(true);
+    });
+
+    it("rejects a REMOVED config field (existing namespaced storage truncated)", function () {
+      // SystemAccount.SystemAccountConfig ends with the just-added authorizedModuleList; dropping
+      // any field (here the last) must be caught — removal corrupts every subsequent offset.
+      const problems = corruptNs("SystemAccount", l => {
+        l[0].fields = l[0].fields.slice(0, -1);
+        return l;
+      });
+      expect(problems.some(p => /REMOVED/.test(p))).to.equal(true);
+    });
+
+    it("rejects a REMOVED config struct entirely (namespace truncated)", function () {
+      const problems = corruptNs("MirrorResolver", () => []);
+      expect(problems.some(p => /config struct .* was REMOVED/.test(p))).to.equal(true);
+    });
+
+    it("ALLOWS appending a new config field at the end of a struct (additive namespaced storage is safe)", function () {
+      const problems = corruptNs("AliasResolver", l => {
+        l[0].fields.push({ name: "_v2NewRef", type: "address" });
         return l;
       });
       expect(problems).to.deep.equal([]);

@@ -1,0 +1,19 @@
+[
+  {
+    "struct": "AliasConfig",
+    "fields": [
+      {
+        "name": "redirectSchemaUID",
+        "type": "bytes32"
+      },
+      {
+        "name": "dataSchemaUID",
+        "type": "bytes32"
+      },
+      {
+        "name": "anchorSchemaUID",
+        "type": "bytes32"
+      }
+    ]
+  }
+]

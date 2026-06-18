@@ -1,0 +1,11 @@
+[
+  {
+    "struct": "MirrorConfig",
+    "fields": [
+      {
+        "name": "indexer",
+        "type": "contract IEFSIndexerForMirror"
+      }
+    ]
+  }
+]

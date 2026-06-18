@@ -1,0 +1,23 @@
+[
+  {
+    "struct": "EdgeConfig",
+    "fields": [
+      {
+        "name": "pinSchemaUID",
+        "type": "bytes32"
+      },
+      {
+        "name": "tagSchemaUID",
+        "type": "bytes32"
+      },
+      {
+        "name": "indexer",
+        "type": "contract IEFSIndexerForEdges"
+      },
+      {
+        "name": "schemaRegistry",
+        "type": "contract ISchemaRegistry"
+      }
+    ]
+  }
+]
