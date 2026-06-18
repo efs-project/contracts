@@ -2919,6 +2919,11 @@ const deployedContracts = {
         },
         {
           inputs: [],
+          name: "NonCanonicalPayload",
+          type: "error",
+        },
+        {
+          inputs: [],
           name: "NotInitializing",
           type: "error",
         },
