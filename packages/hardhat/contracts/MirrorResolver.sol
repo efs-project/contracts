@@ -43,6 +43,14 @@ contract MirrorResolver is EFSUpgradeableResolver, OwnableUpgradeable {
     error InvalidURIScheme();
     error NotRevocable();
     error HasExpiration();
+    /// @dev MIRROR payload decodes but is not the exact canonical `abi.encode(bytes32, string)` — e.g.
+    ///      extra trailing bytes. abi.decode tolerates a canonical prefix with trailing words, so two
+    ///      byte-different payloads would decode to the SAME (transportDefinition, uri) and mint two
+    ///      mirrors under distinct permanent UIDs, while an SDK/subgraph reconstructing the UID from the
+    ///      decoded fields sees only one. The dynamic `string uri` rules out a fixed-length check, so we
+    ///      re-encode the decoded fields and hash-compare (the SystemAccount._requireCanonicalAnchor
+    ///      pattern). Reject anything that does not round-trip.
+    error NonCanonicalPayload();
 
     // ── Mirror events (subgraph indexability, PR #24) ───────────────────────────────────────────
     // The kernel's generic MirrorCreated(dataUID, mirrorUID, attester) omits the URI — the whole point
@@ -158,6 +166,11 @@ contract MirrorResolver is EFSUpgradeableResolver, OwnableUpgradeable {
 
         // Validate transportDefinition is a valid Anchor and URI passes scheme/length checks
         (bytes32 transportDefinition, string memory uri) = abi.decode(attestation.data, (bytes32, string));
+        // Reject non-canonical encodings (e.g. trailing bytes) so one semantic mirror has exactly one
+        // permanent UID — re-encode the decoded fields and require the bytes round-trip.
+        if (keccak256(attestation.data) != keccak256(abi.encode(transportDefinition, uri))) {
+            revert NonCanonicalPayload();
+        }
         if (bytes(uri).length > MAX_URI_LENGTH) revert URITooLong();
         if (!_isAllowedScheme(uri)) revert InvalidURIScheme();
         if (transportDefinition == EMPTY_UID) revert InvalidTransport();
@@ -183,7 +196,12 @@ contract MirrorResolver is EFSUpgradeableResolver, OwnableUpgradeable {
         // Decode the transportDefinition (the first MIRROR field) so MirrorCleared carries the same
         // (dataUID, attester, transportDefinition) key as MirrorSet. Just a calldata decode — no
         // external call — and lets a log indexer retire the exact transport slot without an eth_call.
-        (bytes32 transportDefinition, ) = abi.decode(attestation.data, (bytes32, string));
+        (bytes32 transportDefinition, string memory uri) = abi.decode(attestation.data, (bytes32, string));
+        // Symmetric canonical-payload guard (belt-and-suspenders: a non-canonical mirror never passed
+        // onAttest, so it can't be an active mirror, but enforce the same invariant on both paths).
+        if (keccak256(attestation.data) != keccak256(abi.encode(transportDefinition, uri))) {
+            revert NonCanonicalPayload();
+        }
         emit MirrorCleared(attestation.refUID, attestation.attester, transportDefinition, attestation.uid);
         return true;
     }

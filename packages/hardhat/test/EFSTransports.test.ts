@@ -495,6 +495,29 @@ describe("EFS Transports & Data Model", function () {
       expect(mirrorUID).to.not.equal(ZERO_BYTES32);
     });
 
+    it("rejects a MIRROR with non-canonical (trailing-byte) payload (NonCanonicalPayload)", async function () {
+      // Regression for Codex P2 (comment 3433701055): abi.decode tolerates a canonical prefix with
+      // trailing words, so `abi.encode(transportDefinition, uri) || extraWord` decodes to the SAME
+      // (transportDefinition, uri) and would mint a second mirror under a distinct permanent UID, while
+      // an SDK/subgraph reconstructing the UID from the decoded fields sees only one. The dynamic
+      // `string uri` rules out a fixed-length check, so MirrorResolver re-encodes and hash-compares.
+      // Transport + uri + DATA are all valid here, so ONLY the canonical-payload guard can reject it.
+      const canonical = encodeMirror(ipfsTransportUID, "ipfs://QmCanonical");
+      await expect(
+        eas.connect(owner).attest({
+          schema: mirrorSchemaUID,
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: NO_EXPIRATION,
+            revocable: true,
+            refUID: testDataUID,
+            data: canonical + "00".repeat(32), // one trailing word past the canonical encoding
+            value: 0n,
+          },
+        }),
+      ).to.be.revertedWithCustomError(mirrorResolver, "NonCanonicalPayload");
+    });
+
     it("rejects a FOREIGN schema pointed at MirrorResolver (WrongSchema) — no MirrorSet/index", async function () {
       // Regression for Codex P2 (comment 3432672732): EAS invokes onAttest for ANY schema registered
       // against this resolver. A foreign schema with an otherwise-valid DATA ref + transport + URI must
