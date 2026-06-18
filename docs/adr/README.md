@@ -116,7 +116,7 @@ What else we looked at and why it lost.
 - [ADR-0039 — Default lenses priority chain](./0039-default-lenses-priority-chain.md)
 - [ADR-0041 — PIN/TAG schema split for cardinality, with weighted edges](./0041-pin-tag-schema-split-for-cardinality.md)
 - [ADR-0043 — Rename "editions" to "lenses"](./0043-rename-editions-to-lenses.md)
-- [ADR-0055 — WHITEOUT: cross-lens negative masking (overlay deletion)](./0055-whiteout-cross-lens-negative-mask.md) *(Proposed — dedicated schema, additive post-freeze; NOT a REDIRECT kind / TAG weight<0. Pre-freeze: reserve the negative-terminal concept only.)*
+- [ADR-0055 — WHITEOUT: cross-lens negative masking (overlay deletion)](./0055-whiteout-cross-lens-negative-mask.md) *(Accepted — dedicated schema, additive post-freeze; NOT a REDIRECT kind / TAG weight<0. Pre-freeze: reserve the negative-terminal concept; `kind >= 3` stays open per ADR-0050.)*
 
 ### Lists & Collections
 - [ADR-0044 — LIST + LIST_ENTRY schemas for curated, shape-enforced collections](./0044-list-and-list-entry-schemas.md) *(LIST_ENTRY shape partly revised by ADR-0046; LIST `maxEntries` widened by ADR-0047)*
