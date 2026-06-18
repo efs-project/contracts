@@ -1008,35 +1008,23 @@ export const CreateItemModal = ({
         fileSize = pasteSize ? BigInt(pasteSize) : 0n;
       }
 
+      // AGENT-NOTE (Codex P2): the file ANCHOR is non-revocable (permanent). Its
+      // CREATION is deliberately deferred to just before the placement PIN (see
+      // below) — NOT done here. Creating the file-slot ANCHOR sets
+      // `_containsAttestations[anchorUID][attester]` in EFSIndexer, which makes the
+      // slot appear in `getDirectoryPageFiltered` phase 1 immediately, before any
+      // placement PIN exists. A cancel / rejected wallet prompt / MIRROR failure
+      // anywhere in the DATA→PROPERTY→MIRROR steps below would then leave a
+      // permanent file slot with no PIN — and the filtered directory view reaches
+      // the DATA (and its `system`-tag exclusion) only through the PIN, so it can
+      // neither show nor hide the orphan. Minting the ANCHOR last (immediately
+      // before the PIN, with no cancellation checkpoint between them) shrinks that
+      // visible-but-unreachable window to ~1 tx. The window can't be fully closed:
+      // EAS UIDs aren't precomputable, so the ANCHOR and the PIN that references it
+      // can't be batched atomically. The read-only reuse check above
+      // (`existingFileAnchorUID`) stays where it is — it sets no on-chain state.
+      // This mirrors the proven ordering in lib/efs/uploadOnchainFile.ts.
       let fileAnchorUID: `0x${string}` | undefined = existingFileAnchorUID;
-      if (!fileAnchorUID) {
-        const parent = anchorParent();
-        const txHash = await attest(
-          {
-            functionName: "attest",
-            args: [
-              {
-                schema: anchorSchemaUID as `0x${string}`,
-                data: {
-                  recipient: parent.recipient,
-                  expirationTime: 0n,
-                  revocable: false,
-                  refUID: parent.refUID,
-                  data: encodedName as `0x${string}`,
-                  value: 0n,
-                },
-              },
-            ],
-          },
-          { silent: true },
-        );
-        if (!txHash) throw new Error("No txHash returned for file ANCHOR creation.");
-        const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
-        fileAnchorUID = extractUIDFromReceipt(receipt);
-        if (!fileAnchorUID) throw new Error("Could not extract file Anchor UID");
-        ops.log(opId, "File anchor created.");
-        checkCancelled();
-      }
 
       // AGENT-NOTE: DATA is an empty schema — pure identity (ADR-0049). The prior best-effort
       // dedup read (`indexer.dataByContentKey`) was removed: DATA carries no contentHash, that
@@ -1219,6 +1207,47 @@ export const CreateItemModal = ({
         if (mirrorTxHash) await publicClient.waitForTransactionReceipt({ hash: mirrorTxHash });
       }
       checkCancelled();
+
+      // File ANCHOR — created LAST, immediately before the placement PIN (Codex P2).
+      // Deferred here from the read-only reuse check above so the non-revocable slot
+      // is reachable in the filtered directory listing for the shortest possible
+      // window before its placement PIN makes the DATA reachable. The checkCancelled()
+      // immediately above is the LAST cancellation checkpoint of the upload: there is
+      // deliberately NO checkpoint (and no awaitable failure point that isn't the PIN
+      // itself) between this ANCHOR mint and the PIN below. Cancelling between them
+      // would leave a permanent DATA-schema file slot with no PIN — and the filtered
+      // directory view reaches the DATA only through the PIN, so it could neither show
+      // nor hide that orphan. Mirrors lib/efs/uploadOnchainFile.ts.
+      if (!fileAnchorUID) {
+        const parent = anchorParent();
+        const anchorTxHash = await attest(
+          {
+            functionName: "attest",
+            args: [
+              {
+                schema: anchorSchemaUID as `0x${string}`,
+                data: {
+                  recipient: parent.recipient,
+                  expirationTime: 0n,
+                  revocable: false,
+                  refUID: parent.refUID,
+                  data: encodedName as `0x${string}`,
+                  value: 0n,
+                },
+              },
+            ],
+          },
+          { silent: true },
+        );
+        if (!anchorTxHash) throw new Error("No txHash returned for file ANCHOR creation.");
+        const anchorReceipt = await publicClient.waitForTransactionReceipt({ hash: anchorTxHash });
+        fileAnchorUID = extractUIDFromReceipt(anchorReceipt);
+        if (!fileAnchorUID) throw new Error("Could not extract file Anchor UID");
+        ops.log(opId, "File anchor created.");
+        // NO checkCancelled() here: once the ANCHOR is broadcast, the placement PIN
+        // MUST follow (see the note above). The cancellation checkpoint is the
+        // checkCancelled() before this block, after the MIRROR step.
+      }
 
       ops.log(opId, "Placing file in folder via PIN...");
       // AGENT-NOTE: File placement is a PIN under ADR-0041 (cardinality 1). Re-uploading
