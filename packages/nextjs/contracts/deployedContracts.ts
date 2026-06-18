@@ -1534,6 +1534,11 @@ const deployedContracts = {
         },
         {
           inputs: [],
+          name: "NonCanonicalPayload",
+          type: "error",
+        },
+        {
+          inputs: [],
           name: "NotInitializing",
           type: "error",
         },
@@ -7291,6 +7296,11 @@ const deployedContracts = {
         },
         {
           inputs: [],
+          name: "NotAContract",
+          type: "error",
+        },
+        {
+          inputs: [],
           name: "NotAuthorized",
           type: "error",
         },
@@ -7516,6 +7526,19 @@ const deployedContracts = {
               internalType: "bool",
               name: "",
               type: "bool",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "getAuthorizedModules",
+          outputs: [
+            {
+              internalType: "address[]",
+              name: "",
+              type: "address[]",
             },
           ],
           stateMutability: "view",
