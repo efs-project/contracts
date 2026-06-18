@@ -65,8 +65,10 @@ contract SystemAccount is Initializable, OwnableUpgradeable, ReentrancyGuardUpgr
     /// @notice An authorized module must be a contract, not an EOA (PR #24 P2 fix). ADR-0053 is
     ///         "humans choose programs, never payloads" — an EOA is not a program, so an EOA (or the
     ///         Safe itself) authorized pre-seal could author arbitrary `system` payloads forever after
-    ///         the burn. `setModuleAuthorization` rejects any address with no code so the permanent
-    ///         `system` writer set is code-governed by construction. (Defense-in-depth, not a complete
+    ///         the burn. `setModuleAuthorization` rejects GRANTING authorization to any address with no
+    ///         code, so the permanent `system` writer set is code-governed by construction. Revocations
+    ///         are never blocked (including for a no-code address), so the Safe can always scrub an
+    ///         unsafe writer before sealing — see the function. (Defense-in-depth, not a complete
     ///         guarantee — a thin relay contract can still forward an EOA's calls — but it closes the
     ///         obvious footgun and makes the sealed set auditable as code via getAuthorizedModules.)
     error NotAContract();
@@ -368,9 +370,12 @@ contract SystemAccount is Initializable, OwnableUpgradeable, ReentrancyGuardUpgr
         SystemAccountConfig storage $ = _cfg();
         if ($._modulesSealed) revert ModulesSealed();
         if (module == address(0)) revert ZeroAddress();
-        // ADR-0053 "programs, never payloads": only a contract may be authorized (PR #24 P2). An EOA
-        // (or the Safe) authorized pre-seal could author arbitrary `system` payloads forever post-burn.
-        if (module.code.length == 0) revert NotAContract();
+        // ADR-0053 "programs, never payloads": only a contract may be GRANTED authorization (PR #24
+        // P2). Enforced on the grant path ONLY — a revocation must always be able to clear an already-
+        // authorized address, including a no-code one (an EOA authorized before this guard landed, or a
+        // contract that later lost its code). Blocking that would strand the exact arbitrary-`system`
+        // writer this check exists to remove, since the Safe could never scrub it before sealModules().
+        if (ok && module.code.length == 0) revert NotAContract();
         if ($.authorizedModule[module] == ok) return; // no-op: state unchanged, keep the list exact
         $.authorizedModule[module] = ok;
         if (ok) {

@@ -117,6 +117,14 @@ describe("SystemAccount (ADR-0053)", function () {
         systemAccount.setModuleAuthorization(await stranger.getAddress(), true),
       ).to.be.revertedWithCustomError(systemAccount, "NotAContract");
     });
+
+    it("setModuleAuthorization allows REVOKING a no-code address (grant-only guard)", async function () {
+      // PR #24 P2 (round 2): the NotAContract guard is grant-only. A revocation must never be blocked
+      // by it — otherwise an EOA authorized before this guard landed could never be scrubbed before
+      // sealModules(), stranding the exact arbitrary-`system` path the guard exists to remove. Clearing
+      // an EOA must therefore NOT revert NotAContract (here it is a clean no-op: never authorized).
+      await expect(systemAccount.setModuleAuthorization(await stranger.getAddress(), false)).to.not.be.reverted;
+    });
   });
 
   describe("module-authorization seal (FIX A, PR #24 P1)", function () {
