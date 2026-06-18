@@ -83,7 +83,7 @@ describe("EFSFileView — getDirectoryPageFiltered (ADR-0054)", function () {
     );
     expect(await edgeResolver.getAddress()).to.equal(futureEdgeResolverAddr);
 
-    const tx1 = await registry.register("string name, bytes32 schemaUID", futureIndexerAddr, false);
+    const tx1 = await registry.register("string name, bytes32 forSchema", futureIndexerAddr, false);
     anchorSchemaUID = (await tx1.wait())!.logs[0].topics[1];
 
     const tx2 = await registry.register("string value", futureIndexerAddr, false);

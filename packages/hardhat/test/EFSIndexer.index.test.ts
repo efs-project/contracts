@@ -89,7 +89,7 @@ describe("EFSIndexer — public index() API", function () {
     const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: baseNonce + 4 });
 
     // Register EFS schemas. DATA is an empty schema — pure identity (ADR-0049).
-    const tx1 = await registry.register("string name, bytes32 schemaUID", futureIndexerAddr, false);
+    const tx1 = await registry.register("string name, bytes32 forSchema", futureIndexerAddr, false);
     anchorSchemaUID = (await tx1.wait())!.logs[0].topics[1];
     const tx2 = await registry.register("string value", futureIndexerAddr, false);
     propertySchemaUID = (await tx2.wait())!.logs[0].topics[1];
@@ -194,7 +194,7 @@ describe("EFSIndexer — public index() API", function () {
     it("populates getAttestationsBySchema", async function () {
       const uid = await attestThirdParty(alice, "hello");
       await indexer.index(uid);
-      const results = await indexer.getAttestationsBySchema(thirdPartySchemaUID, 0, 10, false);
+      const results = await indexer.getAttestationsBySchema(thirdPartySchemaUID, 0, 10, false, false);
       expect(results).to.include(uid);
     });
 
@@ -202,7 +202,7 @@ describe("EFSIndexer — public index() API", function () {
       const aliceAddr = await alice.getAddress();
       const uid = await attestThirdParty(alice, "hello");
       await indexer.index(uid);
-      const sent = await indexer.getOutgoingAttestations(aliceAddr, thirdPartySchemaUID, 0, 10, false);
+      const sent = await indexer.getOutgoingAttestations(aliceAddr, thirdPartySchemaUID, 0, 10, false, false);
       expect(sent).to.include(uid);
     });
 
@@ -210,7 +210,14 @@ describe("EFSIndexer — public index() API", function () {
       const aliceAddr = await alice.getAddress();
       const uid = await attestThirdParty(alice, "hello");
       await indexer.index(uid);
-      const results = await indexer.getAttestationsBySchemaAndAttester(thirdPartySchemaUID, aliceAddr, 0, 10, false);
+      const results = await indexer.getAttestationsBySchemaAndAttester(
+        thirdPartySchemaUID,
+        aliceAddr,
+        0,
+        10,
+        false,
+        false,
+      );
       expect(results).to.include(uid);
     });
 
@@ -218,7 +225,7 @@ describe("EFSIndexer — public index() API", function () {
       const bobAddr = await bob.getAddress();
       const uid = await attestThirdParty(alice, "hello", ZERO_BYTES32, bobAddr);
       await indexer.index(uid);
-      const received = await indexer.getIncomingAttestations(bobAddr, thirdPartySchemaUID, 0, 10, false);
+      const received = await indexer.getIncomingAttestations(bobAddr, thirdPartySchemaUID, 0, 10, false, false);
       expect(received).to.include(uid);
     });
 
@@ -241,7 +248,7 @@ describe("EFSIndexer — public index() API", function () {
       const uid = await attestThirdParty(alice, "linked", rootUID);
       await indexer.index(uid);
 
-      const refs = await indexer.getReferencingAttestations(rootUID, thirdPartySchemaUID, 0, 10, false);
+      const refs = await indexer.getReferencingAttestations(rootUID, thirdPartySchemaUID, 0, 10, false, false);
       expect(refs).to.include(uid);
     });
 
@@ -283,10 +290,10 @@ describe("EFSIndexer — public index() API", function () {
       const uid = await attestThirdParty(alice, "linked", rootUID);
       await indexer.index(uid);
 
-      const all = await indexer.getAllReferencing(rootUID, 0, 10, false);
+      const all = await indexer.getAllReferencing(rootUID, 0, 10, false, false);
       expect(all).to.include(uid);
 
-      const byAttester = await indexer.getReferencingByAttester(rootUID, aliceAddr, 0, 10, false);
+      const byAttester = await indexer.getReferencingByAttester(rootUID, aliceAddr, 0, 10, false, false);
       expect(byAttester).to.include(uid);
     });
 
@@ -336,7 +343,7 @@ describe("EFSIndexer — public index() API", function () {
 
       await indexer.indexBatch([uid1, uid2, uid3]);
 
-      const all = await indexer.getAttestationsBySchema(thirdPartySchemaUID, 0, 10, false);
+      const all = await indexer.getAttestationsBySchema(thirdPartySchemaUID, 0, 10, false, false);
       expect(all).to.include(uid1);
       expect(all).to.include(uid2);
       expect(all).to.include(uid3);
@@ -468,8 +475,8 @@ describe("EFSIndexer — public index() API", function () {
 
       await indexer.indexBatch([uid1, uid2]);
 
-      const schema1Results = await indexer.getAttestationsBySchema(thirdPartySchemaUID, 0, 10, false);
-      const schema2Results = await indexer.getAttestationsBySchema(thirdPartySchemaUID2, 0, 10, false);
+      const schema1Results = await indexer.getAttestationsBySchema(thirdPartySchemaUID, 0, 10, false, false);
+      const schema2Results = await indexer.getAttestationsBySchema(thirdPartySchemaUID2, 0, 10, false, false);
 
       expect(schema1Results).to.include(uid1);
       expect(schema1Results).to.not.include(uid2);

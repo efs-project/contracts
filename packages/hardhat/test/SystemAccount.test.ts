@@ -263,10 +263,10 @@ describe("SystemAccount (ADR-0053)", function () {
   describe("registerAnchor typed sugar", function () {
     // Register an ANCHOR-shaped schema (no resolver) to exercise the typed ANCHOR encoding.
     it("builds the ANCHOR request and authors it under SystemAccount (module-only)", async function () {
-      await (await registry.register("string name, bytes32 schemaUID", ZeroAddress, false)).wait();
+      await (await registry.register("string name, bytes32 forSchema", ZeroAddress, false)).wait();
       const anchorSchemaUID = ethers.solidityPackedKeccak256(
         ["string", "address", "bool"],
-        ["string name, bytes32 schemaUID", ZeroAddress, false],
+        ["string name, bytes32 forSchema", ZeroAddress, false],
       );
 
       // registerAnchor is part of the steady-state relay → module-only (PR #24 P1 fix). Authorize a
@@ -319,10 +319,10 @@ describe("SystemAccount (ADR-0053)", function () {
     };
 
     beforeEach(async function () {
-      await (await registry.register("string name, bytes32 schemaUID", ZeroAddress, false)).wait();
+      await (await registry.register("string name, bytes32 forSchema", ZeroAddress, false)).wait();
       anchorSchemaUID = ethers.solidityPackedKeccak256(
         ["string", "address", "bool"],
-        ["string name, bytes32 schemaUID", ZeroAddress, false],
+        ["string name, bytes32 forSchema", ZeroAddress, false],
       );
       const MockFactory = await ethers.getContractFactory("MockAnchorIndex");
       mockIndex = await MockFactory.deploy();
@@ -490,10 +490,10 @@ describe("SystemAccount (ADR-0053)", function () {
         // schema (a different schema UID, and revocable != the canonical non-revocable shape). bootstrap
         // validates `schema == anchorSchemaUID` AND `revocable == false`, so an anchor that drifts on
         // either is rejected rather than adopted — proving the immutable-shape gate, not just attester.
-        await (await registry.register("string name, bytes32 schemaUID", ZeroAddress, true)).wait();
+        await (await registry.register("string name, bytes32 forSchema", ZeroAddress, true)).wait();
         const revocableAnchorSchema = ethers.solidityPackedKeccak256(
           ["string", "address", "bool"],
-          ["string name, bytes32 schemaUID", ZeroAddress, true],
+          ["string name, bytes32 forSchema", ZeroAddress, true],
         );
         const tx = await eas.connect(stranger).attest({
           schema: revocableAnchorSchema,

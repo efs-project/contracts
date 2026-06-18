@@ -95,7 +95,8 @@ interface IEFSIndexer {
         bytes32 schemaUID,
         uint256 start,
         uint256 length,
-        bool reverseOrder
+        bool reverseOrder,
+        bool showRevoked
     ) external view returns (bytes32[] memory);
 }
 
@@ -926,7 +927,8 @@ contract EFSFileView {
             mirrorSchemaUID,
             start,
             length,
-            false
+            false, // reverseOrder
+            false // showRevoked — getDataMirrors serves active mirrors (also re-checked below)
         );
 
         // First pass: count non-revoked mirrors

@@ -42,11 +42,11 @@ Smart-contract readers split by cardinality:
 Because EAS is permissionless, anyone can attest files to a folder. To prevent Out-Of-Gas (OOG) errors:
 - **Read Pagination**: All indexer read functions accept `start` and `length` parameters for cursor-based pagination through large directories.
 - **Append-Only Kernel**: EFSIndexer is the append-only kernel. Arrays are never modified after a write. When an attestation is revoked, `onRevoke` sets `_isRevoked[uid] = true` but leaves all arrays intact. This eliminates O(N) removal overhead and makes the storage model simpler and cheaper to write (deploy gas: ~2.35M vs ~3.8M for the old swap-and-pop design; revoke gas: ~90k vs ~200k).
-- **Revoked filtering** (ADR-0051 — every read excludes revoked by default): two shapes. (a) The directory/child-slice getters (`getChildren`, `getChildrenByAttester`, `getAnchorsBySchema`, `getChildrenByAddressList`, `getAnchorsBySchemaAndAddressList`) take a trailing `bool showRevoked` (false skips revoked, true includes them — for history/admin views). (b) The referencing/discovery getters (`getReferencingAttestations`, `getAllReferencing`, `getReferencingByAttester`, `getReferencingBySchemaAndAttester`, `getAttestationsBySchema`, `getAttestationsBySchemaAndAttester`, `getIncomingAttestations`, `getOutgoingAttestations`) exclude revoked **unconditionally by default** and expose full history via a sibling `…IncludingRevoked` view — their trailing bool is `reverseOrder`, not `showRevoked` (see the §"Referencing-index getters" note below for why distinct names, not an overload).
+- **Revoked filtering** (ADR-0051 — every read excludes revoked by default): every list-returning read getter takes a REQUIRED trailing `bool showRevoked` (false = skip revoked, the common path; true = include them, for history/admin views). Uniform across the directory/child-slice getters (`getChildren`, `getChildrenByAttester`, `getAnchorsBySchema`, `getChildrenByAddressList`, `getAnchorsBySchemaAndAddressList`) and the referencing/discovery getters (`getReferencingAttestations`, `getAllReferencing`, `getReferencingByAttester`, `getReferencingBySchemaAndAttester`, `getAttestationsBySchema`, `getAttestationsBySchemaAndAttester`, `getIncomingAttestations`, `getOutgoingAttestations`). Required, not defaulted (Solidity has no default params, and an overloaded convenience twin breaks typed clients — see §below); the SDK/client supplies the `false` default so app devs rarely type it.
 
 ### Reads exclude revoked (and superseded) by default (ADR-0051)
 
-The single, system-wide rule: **every EFS read excludes revoked and superseded attestations by default; a consumer that wants the full history opts in** (`showRevoked: true`, an `includeRevoked` flag, or a sibling `…IncludingRevoked` view). Two layers, kept distinct:
+The single, system-wide rule: **every EFS read excludes revoked and superseded attestations by default; a consumer that wants the full history opts in** (pass `showRevoked: true`). Two layers, kept distinct:
 
 - **Storage = tombstone.** Append-only and immutable (above). `onRevoke` flags `_isRevoked[uid]`; nothing is erased or compacted. A "superseded" entry (e.g. a cardinality-1 PIN replaced by re-attestation at the same slot, §PIN) is likewise retained but inactive.
 - **Default read = "deleted."** Revoked/superseded items are skipped in loops, absent from listings, and not served by the router. The default view shows each attester's **current** claims, per-attester / per-lens (you can only revoke your own attestations, so default-hide is always the author withdrawing their own claim — credible neutrality holds, since the withdrawal is itself a permanent, opt-in-visible record).
@@ -59,7 +59,7 @@ Where this is enforced today (audited at the schema freeze):
 - **Directory children / anchor slices** (EFSIndexer, EFSFileView): `showRevoked` defaults false.
 - **List entries** (`ListReader.entries`, typed accessors): `ListEntryResolver` swap-and-pops a revoked entry out of its active array on `onRevoke`, so the stateless reader never sees it; typed accessors additionally reject `revocationTime != 0`.
 
-**Referencing-index getters (ADR-0051 follow-up — landed):** the generic referencing/discovery getters on EFSIndexer (`getReferencingAttestations`, `getAllReferencing`, `getReferencingByAttester`, `getReferencingBySchemaAndAttester`, `getAttestationsBySchema`, `getAttestationsBySchemaAndAttester`, `getIncomingAttestations`, `getOutgoingAttestations`) now exclude revoked by **default** like every other read; opt-in full history is a sibling `…IncludingRevoked` view (e.g. `getReferencingAttestationsIncludingRevoked`). Distinct names, not an overloaded `bool showRevoked` arg, because overloads collapse `args` to `never` in viem/wagmi/scaffold-eth and break every typed consumer (Vite client, SDK, subgraph codegen). The `…Count` getters still return the raw physical length — used only as a pagination bound, never as a logical item count.
+**Referencing-index getters (ADR-0051 follow-up — landed):** the generic referencing/discovery getters on EFSIndexer (`getReferencingAttestations`, `getAllReferencing`, `getReferencingByAttester`, `getReferencingBySchemaAndAttester`, `getAttestationsBySchema`, `getAttestationsBySchemaAndAttester`, `getIncomingAttestations`, `getOutgoingAttestations`) take a required trailing `bool showRevoked` like every other read getter — `false` excludes revoked (the behavior callers want), `true` returns full history. A single required arg, **not** an overloaded convenience twin: overloaded same-name functions collapse `args` to `never` in viem/wagmi/scaffold-eth and break every typed consumer (Vite client, SDK, subgraph codegen). Solidity has no default parameters, so the SDK/client layer supplies the `false` default. The `…Count` getters still return the raw physical length — used only as a pagination bound, never as a logical item count.
 
 ### Kernel + resolver Events (Off-Chain Indexing)
 EFSIndexer and the edge/mirror resolvers emit structured events from their schema hooks, so a log-only indexer (The Graph / Ponder) reconstructs full state without per-attestation `eth_call`s and without scanning raw EAS `Attested` (which carries no field data):
@@ -197,13 +197,13 @@ Descriptive label definitions (e.g. `#nsfw`) are stored as normal Anchors under 
 EdgeResolver is wired to EFSIndexer: `onAttest` calls `indexer.index(uid)` and `onRevoke` calls `indexer.indexRevocation(uid)`. PIN and TAG attestations are fully registered in EFSIndexer's generic discovery indices alongside other schemas:
 
 ```
-// 5th arg is `reverseOrder` (false = oldest-first); revoked are excluded by default (ADR-0051).
-// For full history including revoked, call the `…IncludingRevoked` sibling.
-indexer.getReferencingAttestations(targetUID, PIN_SCHEMA_UID, 0, 100, false)
+// args end in (reverseOrder, showRevoked). showRevoked=false excludes revoked (ADR-0051);
+// pass true for full history including revoked.
+indexer.getReferencingAttestations(targetUID, PIN_SCHEMA_UID, 0, 100, false, false)
   → active (non-revoked) PIN attestations targeting a given anchor or address
-indexer.getReferencingAttestations(targetUID, TAG_SCHEMA_UID, 0, 100, false)
+indexer.getReferencingAttestations(targetUID, TAG_SCHEMA_UID, 0, 100, false, false)
   → active (non-revoked) TAG attestations targeting a given anchor or address
-indexer.getOutgoingAttestations(attester, PIN_SCHEMA_UID, 0, 100, false)
+indexer.getOutgoingAttestations(attester, PIN_SCHEMA_UID, 0, 100, false, false)
   → active (non-revoked) PINs made by a specific user
 ```
 
@@ -309,7 +309,7 @@ The kernel (EFSIndexer) remains the source of truth. The sort overlay is a secon
 
 **Kernel discovery** (used by clients to find sorts under a directory):
 - `EFSIndexer.getAnchorsBySchema(parentUID, SORT_INFO_SCHEMA_UID, 0, 100, false, false)` — returns all sort naming Anchor UIDs under a directory. Sort naming Anchors are regular kernel children; no separate discovery index needed.
-- `EFSIndexer.getReferencingAttestations(namingAnchorUID, SORT_INFO_SCHEMA_UID, 0, 10, false)` — returns SORT_INFO UIDs pointing at a naming anchor. Works because `EFSSortOverlay.onAttest` calls `indexer.index(attestation.uid)` after caching the sort config, registering every SORT_INFO attestation into EFSIndexer's generic referencing indices.
+- `EFSIndexer.getReferencingAttestations(namingAnchorUID, SORT_INFO_SCHEMA_UID, 0, 10, false, false)` — returns SORT_INFO UIDs pointing at a naming anchor. Works because `EFSSortOverlay.onAttest` calls `indexer.index(attestation.uid)` after caching the sort config, registering every SORT_INFO attestation into EFSIndexer's generic referencing indices.
 
 ### Public Index API
 

@@ -3457,6 +3457,11 @@ const deployedContracts = {
               name: "reverseOrder",
               type: "bool",
             },
+            {
+              internalType: "bool",
+              name: "showRevoked",
+              type: "bool",
+            },
           ],
           name: "getAllReferencing",
           outputs: [
@@ -3492,40 +3497,6 @@ const deployedContracts = {
           inputs: [
             {
               internalType: "bytes32",
-              name: "targetUID",
-              type: "bytes32",
-            },
-            {
-              internalType: "uint256",
-              name: "start",
-              type: "uint256",
-            },
-            {
-              internalType: "uint256",
-              name: "length",
-              type: "uint256",
-            },
-            {
-              internalType: "bool",
-              name: "reverseOrder",
-              type: "bool",
-            },
-          ],
-          name: "getAllReferencingIncludingRevoked",
-          outputs: [
-            {
-              internalType: "bytes32[]",
-              name: "",
-              type: "bytes32[]",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              internalType: "bytes32",
               name: "anchorUID",
               type: "bytes32",
             },
@@ -3552,45 +3523,6 @@ const deployedContracts = {
             {
               internalType: "bool",
               name: "showRevoked",
-              type: "bool",
-            },
-          ],
-          name: "getAnchorsBySchema",
-          outputs: [
-            {
-              internalType: "bytes32[]",
-              name: "",
-              type: "bytes32[]",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              internalType: "bytes32",
-              name: "anchorUID",
-              type: "bytes32",
-            },
-            {
-              internalType: "bytes32",
-              name: "schema",
-              type: "bytes32",
-            },
-            {
-              internalType: "uint256",
-              name: "start",
-              type: "uint256",
-            },
-            {
-              internalType: "uint256",
-              name: "length",
-              type: "uint256",
-            },
-            {
-              internalType: "bool",
-              name: "reverseOrder",
               type: "bool",
             },
           ],
@@ -3724,6 +3656,11 @@ const deployedContracts = {
               name: "reverseOrder",
               type: "bool",
             },
+            {
+              internalType: "bool",
+              name: "showRevoked",
+              type: "bool",
+            },
           ],
           name: "getAttestationsBySchema",
           outputs: [
@@ -3763,81 +3700,13 @@ const deployedContracts = {
               name: "reverseOrder",
               type: "bool",
             },
+            {
+              internalType: "bool",
+              name: "showRevoked",
+              type: "bool",
+            },
           ],
           name: "getAttestationsBySchemaAndAttester",
-          outputs: [
-            {
-              internalType: "bytes32[]",
-              name: "",
-              type: "bytes32[]",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              internalType: "bytes32",
-              name: "schemaUID",
-              type: "bytes32",
-            },
-            {
-              internalType: "address",
-              name: "attester",
-              type: "address",
-            },
-            {
-              internalType: "uint256",
-              name: "start",
-              type: "uint256",
-            },
-            {
-              internalType: "uint256",
-              name: "length",
-              type: "uint256",
-            },
-            {
-              internalType: "bool",
-              name: "reverseOrder",
-              type: "bool",
-            },
-          ],
-          name: "getAttestationsBySchemaAndAttesterIncludingRevoked",
-          outputs: [
-            {
-              internalType: "bytes32[]",
-              name: "",
-              type: "bytes32[]",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              internalType: "bytes32",
-              name: "schemaUID",
-              type: "bytes32",
-            },
-            {
-              internalType: "uint256",
-              name: "start",
-              type: "uint256",
-            },
-            {
-              internalType: "uint256",
-              name: "length",
-              type: "uint256",
-            },
-            {
-              internalType: "bool",
-              name: "reverseOrder",
-              type: "bool",
-            },
-          ],
-          name: "getAttestationsBySchemaIncludingRevoked",
           outputs: [
             {
               internalType: "bytes32[]",
@@ -3968,40 +3837,6 @@ const deployedContracts = {
           inputs: [
             {
               internalType: "bytes32",
-              name: "anchorUID",
-              type: "bytes32",
-            },
-            {
-              internalType: "uint256",
-              name: "start",
-              type: "uint256",
-            },
-            {
-              internalType: "uint256",
-              name: "length",
-              type: "uint256",
-            },
-            {
-              internalType: "bool",
-              name: "reverseOrder",
-              type: "bool",
-            },
-          ],
-          name: "getChildren",
-          outputs: [
-            {
-              internalType: "bytes32[]",
-              name: "",
-              type: "bytes32[]",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              internalType: "bytes32",
               name: "parentUID",
               type: "bytes32",
             },
@@ -4077,45 +3912,6 @@ const deployedContracts = {
             {
               internalType: "bool",
               name: "showRevoked",
-              type: "bool",
-            },
-          ],
-          name: "getChildrenByAttester",
-          outputs: [
-            {
-              internalType: "bytes32[]",
-              name: "",
-              type: "bytes32[]",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              internalType: "bytes32",
-              name: "anchorUID",
-              type: "bytes32",
-            },
-            {
-              internalType: "address",
-              name: "attester",
-              type: "address",
-            },
-            {
-              internalType: "uint256",
-              name: "start",
-              type: "uint256",
-            },
-            {
-              internalType: "uint256",
-              name: "length",
-              type: "uint256",
-            },
-            {
-              internalType: "bool",
-              name: "reverseOrder",
               type: "bool",
             },
           ],
@@ -4242,6 +4038,11 @@ const deployedContracts = {
               name: "reverseOrder",
               type: "bool",
             },
+            {
+              internalType: "bool",
+              name: "showRevoked",
+              type: "bool",
+            },
           ],
           name: "getIncomingAttestations",
           outputs: [
@@ -4258,7 +4059,7 @@ const deployedContracts = {
           inputs: [
             {
               internalType: "address",
-              name: "recipient",
+              name: "attester",
               type: "address",
             },
             {
@@ -4281,86 +4082,13 @@ const deployedContracts = {
               name: "reverseOrder",
               type: "bool",
             },
-          ],
-          name: "getIncomingAttestationsIncludingRevoked",
-          outputs: [
-            {
-              internalType: "bytes32[]",
-              name: "",
-              type: "bytes32[]",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              internalType: "address",
-              name: "attester",
-              type: "address",
-            },
-            {
-              internalType: "bytes32",
-              name: "schemaUID",
-              type: "bytes32",
-            },
-            {
-              internalType: "uint256",
-              name: "start",
-              type: "uint256",
-            },
-            {
-              internalType: "uint256",
-              name: "length",
-              type: "uint256",
-            },
             {
               internalType: "bool",
-              name: "reverseOrder",
+              name: "showRevoked",
               type: "bool",
             },
           ],
           name: "getOutgoingAttestations",
-          outputs: [
-            {
-              internalType: "bytes32[]",
-              name: "",
-              type: "bytes32[]",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              internalType: "address",
-              name: "attester",
-              type: "address",
-            },
-            {
-              internalType: "bytes32",
-              name: "schemaUID",
-              type: "bytes32",
-            },
-            {
-              internalType: "uint256",
-              name: "start",
-              type: "uint256",
-            },
-            {
-              internalType: "uint256",
-              name: "length",
-              type: "uint256",
-            },
-            {
-              internalType: "bool",
-              name: "reverseOrder",
-              type: "bool",
-            },
-          ],
-          name: "getOutgoingAttestationsIncludingRevoked",
           outputs: [
             {
               internalType: "bytes32[]",
@@ -4470,47 +4198,13 @@ const deployedContracts = {
               name: "reverseOrder",
               type: "bool",
             },
-          ],
-          name: "getReferencingAttestations",
-          outputs: [
-            {
-              internalType: "bytes32[]",
-              name: "",
-              type: "bytes32[]",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              internalType: "bytes32",
-              name: "targetUID",
-              type: "bytes32",
-            },
-            {
-              internalType: "bytes32",
-              name: "schemaUID",
-              type: "bytes32",
-            },
-            {
-              internalType: "uint256",
-              name: "start",
-              type: "uint256",
-            },
-            {
-              internalType: "uint256",
-              name: "length",
-              type: "uint256",
-            },
             {
               internalType: "bool",
-              name: "reverseOrder",
+              name: "showRevoked",
               type: "bool",
             },
           ],
-          name: "getReferencingAttestationsIncludingRevoked",
+          name: "getReferencingAttestations",
           outputs: [
             {
               internalType: "bytes32[]",
@@ -4546,6 +4240,11 @@ const deployedContracts = {
             {
               internalType: "bool",
               name: "reverseOrder",
+              type: "bool",
+            },
+            {
+              internalType: "bool",
+              name: "showRevoked",
               type: "bool",
             },
           ],
@@ -4592,45 +4291,6 @@ const deployedContracts = {
               type: "bytes32",
             },
             {
-              internalType: "address",
-              name: "attester",
-              type: "address",
-            },
-            {
-              internalType: "uint256",
-              name: "start",
-              type: "uint256",
-            },
-            {
-              internalType: "uint256",
-              name: "length",
-              type: "uint256",
-            },
-            {
-              internalType: "bool",
-              name: "reverseOrder",
-              type: "bool",
-            },
-          ],
-          name: "getReferencingByAttesterIncludingRevoked",
-          outputs: [
-            {
-              internalType: "bytes32[]",
-              name: "",
-              type: "bytes32[]",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              internalType: "bytes32",
-              name: "targetUID",
-              type: "bytes32",
-            },
-            {
               internalType: "bytes32",
               name: "schemaUID",
               type: "bytes32",
@@ -4653,6 +4313,11 @@ const deployedContracts = {
             {
               internalType: "bool",
               name: "reverseOrder",
+              type: "bool",
+            },
+            {
+              internalType: "bool",
+              name: "showRevoked",
               type: "bool",
             },
           ],
@@ -4691,50 +4356,6 @@ const deployedContracts = {
               internalType: "uint256",
               name: "",
               type: "uint256",
-            },
-          ],
-          stateMutability: "view",
-          type: "function",
-        },
-        {
-          inputs: [
-            {
-              internalType: "bytes32",
-              name: "targetUID",
-              type: "bytes32",
-            },
-            {
-              internalType: "bytes32",
-              name: "schemaUID",
-              type: "bytes32",
-            },
-            {
-              internalType: "address",
-              name: "attester",
-              type: "address",
-            },
-            {
-              internalType: "uint256",
-              name: "start",
-              type: "uint256",
-            },
-            {
-              internalType: "uint256",
-              name: "length",
-              type: "uint256",
-            },
-            {
-              internalType: "bool",
-              name: "reverseOrder",
-              type: "bool",
-            },
-          ],
-          name: "getReferencingBySchemaAndAttesterIncludingRevoked",
-          outputs: [
-            {
-              internalType: "bytes32[]",
-              name: "",
-              type: "bytes32[]",
             },
           ],
           stateMutability: "view",

@@ -655,7 +655,7 @@ function SchemaList({
   const { data: uids } = useScaffoldReadContract({
     contractName: "Indexer",
     functionName: "getReferencingAttestations",
-    args: [targetRef as `0x${string}`, schemaUID as `0x${string}`, 0n, 10n, false],
+    args: [targetRef as `0x${string}`, schemaUID as `0x${string}`, 0n, 10n, false, false],
   });
 
   return (

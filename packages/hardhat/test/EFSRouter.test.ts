@@ -91,7 +91,7 @@ describe("EFSRouter Web3 Capabilities", function () {
     // Pre-compute schema UIDs
     anchorSchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
-      ["string name, bytes32 schemaUID", futureIndexerAddr, false],
+      ["string name, bytes32 forSchema", futureIndexerAddr, false],
     );
     // PROPERTY is non-revocable interned content (ADR-0052) — matches deploy-lib/schemas.ts + golden vector.
     propertySchemaUID = ethers.solidityPackedKeccak256(
@@ -134,7 +134,7 @@ describe("EFSRouter Web3 Capabilities", function () {
     expect(await mirrorResolver.getAddress()).to.equal(futureMirrorResolverAddr);
 
     // Register schemas
-    await (await registry.register("string name, bytes32 schemaUID", futureIndexerAddr, false)).wait();
+    await (await registry.register("string name, bytes32 forSchema", futureIndexerAddr, false)).wait();
     await (await registry.register("string value", futureIndexerAddr, false)).wait(); // PROPERTY non-revocable (ADR-0052)
     await (await registry.register("", futureIndexerAddr, false)).wait(); // DATA: empty schema (ADR-0049)
     await (await registry.register("bytes32 definition", await edgeResolver.getAddress(), true)).wait();

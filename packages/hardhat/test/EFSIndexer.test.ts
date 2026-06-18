@@ -53,8 +53,8 @@ describe("EFSIndexer", function () {
     const futureIndexerAddr = ethers.getCreateAddress({ from: ownerAddr, nonce: nonce + 8 });
 
     // Register Schemas with the future resolver address
-    // ANCHOR: string name, bytes32 schemaUID
-    const tx1 = await registry.register("string name, bytes32 schemaUID", futureIndexerAddr, true);
+    // ANCHOR: string name, bytes32 forSchema
+    const tx1 = await registry.register("string name, bytes32 forSchema", futureIndexerAddr, true);
     const rc1 = await tx1.wait();
     anchorSchemaUID = rc1!.logs[0].topics[1]; // Registered(bytes32 uid, ...)
 
@@ -379,7 +379,7 @@ describe("EFSIndexer", function () {
       expect(uid).to.not.equal(ZERO_BYTES32);
 
       // Indexed in the global schema index (resolves / is tracked).
-      const atts = await indexer.getAttestationsBySchema(dataSchemaUID, 0, 10, false);
+      const atts = await indexer.getAttestationsBySchema(dataSchemaUID, 0, 10, false, false);
       expect(atts).to.include(uid);
     });
 
@@ -1014,7 +1014,7 @@ describe("EFSIndexer", function () {
     });
 
     it("standalone DATA is indexed in schema attestations", async function () {
-      const atts = await indexer.getAttestationsBySchema(dataSchemaUID, 0, 10, false);
+      const atts = await indexer.getAttestationsBySchema(dataSchemaUID, 0, 10, false, false);
       expect(atts.length).to.be.greaterThan(0);
     });
 
@@ -1035,18 +1035,18 @@ describe("EFSIndexer", function () {
       const tagUID = getUIDFromReceipt(await tagTx.wait());
 
       // Before revoke: appears in kernel
-      const before = await indexer.getReferencingAttestations(parentUID, tagSchemaUID, 0, 10, false);
+      const before = await indexer.getReferencingAttestations(parentUID, tagSchemaUID, 0, 10, false, false);
       expect(before.length).to.equal(1);
       expect(await indexer.isRevoked(tagUID)).to.equal(false);
 
       await eas.connect(user1).revoke({ schema: tagSchemaUID, data: { uid: tagUID, value: 0n } });
 
       // After revoke: the DEFAULT getter now excludes revoked (ADR-0051) → 0...
-      const after = await indexer.getReferencingAttestations(parentUID, tagSchemaUID, 0, 10, false);
+      const after = await indexer.getReferencingAttestations(parentUID, tagSchemaUID, 0, 10, false, false);
       expect(after.length).to.equal(0);
 
       // ...but the underlying array is still append-only — showRevoked=true surfaces the revoked entry.
-      const afterRaw = await indexer.getReferencingAttestationsIncludingRevoked(parentUID, tagSchemaUID, 0, 10, false);
+      const afterRaw = await indexer.getReferencingAttestations(parentUID, tagSchemaUID, 0, 10, false, true);
       expect(afterRaw.length).to.equal(1);
 
       // And isRevoked reflects the revocation.
@@ -1072,7 +1072,7 @@ describe("EFSIndexer", function () {
 
       // Before revoke: not revoked
       expect(await indexer.isRevoked(tagUID)).to.equal(false);
-      const before = await indexer.getReferencingAttestations(parentUID, tagSchemaUID, 0, 10, false);
+      const before = await indexer.getReferencingAttestations(parentUID, tagSchemaUID, 0, 10, false, false);
       expect(before.length).to.equal(1);
 
       await eas.connect(user1).revoke({ schema: tagSchemaUID, data: { uid: tagUID, value: 0n } });
@@ -1080,9 +1080,9 @@ describe("EFSIndexer", function () {
       // After revoke: isRevoked is true; the default getter excludes revoked (ADR-0051) → 0,
       // while showRevoked=true still surfaces the append-only entry.
       expect(await indexer.isRevoked(tagUID)).to.equal(true);
-      const after = await indexer.getReferencingAttestations(parentUID, tagSchemaUID, 0, 10, false);
+      const after = await indexer.getReferencingAttestations(parentUID, tagSchemaUID, 0, 10, false, false);
       expect(after.length).to.equal(0);
-      const afterRaw = await indexer.getReferencingAttestationsIncludingRevoked(parentUID, tagSchemaUID, 0, 10, false);
+      const afterRaw = await indexer.getReferencingAttestations(parentUID, tagSchemaUID, 0, 10, false, true);
       expect(afterRaw.length).to.equal(1); // still in array — append-only kernel
 
       // getChildrenByAttester with showRevoked=true/false also uses _isRevoked internally
@@ -1173,7 +1173,7 @@ describe("EFSIndexer", function () {
       });
 
       // Verify via Generic Index (getReferencingAttestations still works for any schema)
-      const referencing = await indexer.getReferencingAttestations(anchorUID, tagSchemaUID, 0, 10, false);
+      const referencing = await indexer.getReferencingAttestations(anchorUID, tagSchemaUID, 0, 10, false, false);
       expect(referencing.length).to.equal(2);
     });
 
@@ -1209,7 +1209,7 @@ describe("EFSIndexer", function () {
       const tagUID = getUIDFromReceipt(tagReceipt);
 
       // Verify via Generic Index
-      const attestations = await indexer.getReferencingAttestations(anchorUID, tagSchemaUID, 0, 10, false);
+      const attestations = await indexer.getReferencingAttestations(anchorUID, tagSchemaUID, 0, 10, false, false);
       expect(attestations.length).to.equal(1);
       expect(attestations[0]).to.equal(tagUID);
 
@@ -1456,7 +1456,7 @@ describe("EFSIndexer", function () {
 
       // 5. Verify DATA is indexed (ADR-0049: dataByContentKey is no longer written;
       //    the bare DATA UID is tracked in the global schema index).
-      const indexedData = await indexer.getAttestationsBySchema(dataSchemaUID, 0, 50, false);
+      const indexedData = await indexer.getAttestationsBySchema(dataSchemaUID, 0, 50, false, false);
       expect(indexedData).to.include(dataUID);
     });
   });
@@ -1515,11 +1515,18 @@ describe("EFSIndexer", function () {
       const tagUID = getUIDFromReceipt(tagReceipt);
 
       // Check _allReferencing
-      const allRef = await indexer.getAllReferencing(fileAnchorUID, 0, 10, false);
+      const allRef = await indexer.getAllReferencing(fileAnchorUID, 0, 10, false, false);
       expect(allRef).to.include(tagUID);
 
       // Check _referencingByAttester
-      const attesterRef = await indexer.getReferencingByAttester(fileAnchorUID, await user1.getAddress(), 0, 10, false);
+      const attesterRef = await indexer.getReferencingByAttester(
+        fileAnchorUID,
+        await user1.getAddress(),
+        0,
+        10,
+        false,
+        false,
+      );
       expect(attesterRef).to.include(tagUID);
 
       // Check _referencingBySchemaAndAttester
@@ -1529,6 +1536,7 @@ describe("EFSIndexer", function () {
         await user1.getAddress(),
         0,
         10,
+        false,
         false,
       );
       expect(schemaAttesterRef).to.include(tagUID);
@@ -1540,10 +1548,10 @@ describe("EFSIndexer", function () {
       });
 
       // After revoke: the default getter excludes revoked (ADR-0051) → empty...
-      const allRefAfter = await indexer.getAllReferencing(fileAnchorUID, 0, 10, false);
+      const allRefAfter = await indexer.getAllReferencing(fileAnchorUID, 0, 10, false, false);
       expect(allRefAfter.length).to.equal(0);
       // ...but the array is still append-only — showRevoked=true surfaces the revoked entry.
-      const allRefRaw = await indexer.getAllReferencingIncludingRevoked(fileAnchorUID, 0, 10, false);
+      const allRefRaw = await indexer.getAllReferencing(fileAnchorUID, 0, 10, false, true);
       expect(allRefRaw.length).to.equal(1);
     });
 

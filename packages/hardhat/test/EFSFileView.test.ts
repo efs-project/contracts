@@ -91,7 +91,7 @@ describe("EFSFileView", function () {
     expect(await edgeResolver.getAddress()).to.equal(futureEdgeResolverAddr);
 
     // Register Schemas (aligned with canonical EFSIndexer and EFSRouter schemas)
-    const tx1 = await registry.register("string name, bytes32 schemaUID", futureIndexerAddr, false);
+    const tx1 = await registry.register("string name, bytes32 forSchema", futureIndexerAddr, false);
     const rc1 = await tx1.wait();
     anchorSchemaUID = rc1!.logs[0].topics[1];
 

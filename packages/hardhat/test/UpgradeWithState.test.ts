@@ -69,7 +69,7 @@ describe("UpgradeWithState — storage-corruption guard (ADR-0048, ADR-0009)", f
       // Order: register ANCHOR(+0) PROPERTY(+1) DATA(+2), impl(+3), proxy(+4).
       const futureProxy = ethers.getCreateAddress({ from: ownerAddr, nonce: nonce + 4 });
 
-      const a = await registry.register("string name, bytes32 schemaUID", futureProxy, true);
+      const a = await registry.register("string name, bytes32 forSchema", futureProxy, true);
       const anchorSchemaUID = (await a.wait())!.logs[0].topics[1];
       const p = await registry.register("string value", futureProxy, false);
       const propertySchemaUID = (await p.wait())!.logs[0].topics[1];
@@ -112,8 +112,8 @@ describe("UpgradeWithState — storage-corruption guard (ADR-0048, ADR-0009)", f
         resolveDocsReadme: await indexer.resolvePath(docsUID, "readme"),
         resolveRootImages: await indexer.resolvePath(rootUID, "images"),
         rootChildrenCount: await indexer.getChildrenCount(rootUID),
-        rootChildren: await indexer.getChildren(rootUID, 0, 10, false),
-        docsChildren: await indexer.getChildren(docsUID, 0, 10, false),
+        rootChildren: await indexer.getChildren(rootUID, 0, 10, false, false),
+        docsChildren: await indexer.getChildren(docsUID, 0, 10, false, false),
         parentOfDocs: await indexer.getParent(docsUID),
         parentOfReadme: await indexer.getParent(readmeUID),
         // config + immutable
@@ -143,10 +143,10 @@ describe("UpgradeWithState — storage-corruption guard (ADR-0048, ADR-0009)", f
       expect(await v2.getChildrenCount(rootUID)).to.equal(before.rootChildrenCount);
       // `getChildren` is overloaded (4-arg and 5-arg), so ethers-v6/typechain drops the bare
       // property — address it via the explicit signature key.
-      expect(await v2["getChildren(bytes32,uint256,uint256,bool)"](rootUID, 0, 10, false)).to.deep.equal(
+      expect(await v2["getChildren(bytes32,uint256,uint256,bool,bool)"](rootUID, 0, 10, false, false)).to.deep.equal(
         before.rootChildren,
       );
-      expect(await v2["getChildren(bytes32,uint256,uint256,bool)"](docsUID, 0, 10, false)).to.deep.equal(
+      expect(await v2["getChildren(bytes32,uint256,uint256,bool,bool)"](docsUID, 0, 10, false, false)).to.deep.equal(
         before.docsChildren,
       );
       expect(await v2.getParent(docsUID)).to.equal(before.parentOfDocs);

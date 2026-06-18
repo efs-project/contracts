@@ -101,7 +101,7 @@ describe("EdgeResolver — contains-flag bookkeeping (address-target safety)", f
 
     // ANCHOR: registered with the (future) indexer so anchor attestations route through it
     // and `_containsAttestations[anchor][creator]` actually gets set on create.
-    const anchorTx = await registry.register("string name, bytes32 schemaUID", futureIndexerAddress, false);
+    const anchorTx = await registry.register("string name, bytes32 forSchema", futureIndexerAddress, false);
     anchorSchemaUID = (await anchorTx.wait())!.logs[0].topics[1];
 
     // PROPERTY / DATA are not exercised here, but EFSIndexer's constructor wants their UIDs.

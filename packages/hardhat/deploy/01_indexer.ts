@@ -50,7 +50,7 @@ const deployEFSIndexer: DeployFunction = async function (hre: HardhatRuntimeEnvi
   //                                weight in place; revoke removes. No supersede-via-weight.
   //    See ADR-0041.
   const schemas = [
-    { name: "ANCHOR", definition: "string name, bytes32 schemaUID", revocable: false },
+    { name: "ANCHOR", definition: "string name, bytes32 forSchema", revocable: false },
     // PROPERTY is NON-revocable (ADR-0052) — dumb, shared, interned content (an "anchor for a
     // string"); the revocable claim is the PIN, not the value. Must match deploy-lib/schemas.ts
     // and the golden vector.

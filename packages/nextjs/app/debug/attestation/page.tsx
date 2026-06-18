@@ -340,7 +340,7 @@ function ReferencingList({
   const { data: uids, isLoading } = useScaffoldReadContract({
     contractName: "Indexer",
     functionName: "getReferencingAttestations",
-    args: [target as `0x${string}`, schema as `0x${string}`, 0n, 50n, true], // fetch last 50, reversed
+    args: [target as `0x${string}`, schema as `0x${string}`, 0n, 50n, true, false], // fetch last 50, reversed
   });
 
   return (

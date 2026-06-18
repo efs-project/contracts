@@ -45,7 +45,8 @@ interface IEFSIndexer {
         address attester,
         uint256 start,
         uint256 length,
-        bool reverseOrder
+        bool reverseOrder,
+        bool showRevoked
     ) external view returns (bytes32[] memory);
 
     function getReferencingBySchemaAndAttesterCount(
@@ -933,7 +934,8 @@ contract EFSRouter is IDecentralizedApp {
                 attester,
                 offset,
                 chunk,
-                true
+                true, // reverseOrder
+                false // showRevoked — router serves active mirrors (revoked re-skipped below)
             );
 
             for (uint256 i = 0; i < mirrors.length; i++) {

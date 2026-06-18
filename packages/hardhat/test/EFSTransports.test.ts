@@ -111,7 +111,7 @@ describe("EFS Transports & Data Model", function () {
     // Pre-compute schema UIDs
     anchorSchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
-      ["string name, bytes32 schemaUID", futureIndexerAddr, false],
+      ["string name, bytes32 forSchema", futureIndexerAddr, false],
     );
     propertySchemaUID = ethers.solidityPackedKeccak256(
       ["string", "address", "bool"],
@@ -153,7 +153,7 @@ describe("EFS Transports & Data Model", function () {
     expect(await mirrorResolver.getAddress()).to.equal(futureMirrorResolverAddr);
 
     // Register schemas
-    await (await registry.register("string name, bytes32 schemaUID", futureIndexerAddr, false)).wait();
+    await (await registry.register("string name, bytes32 forSchema", futureIndexerAddr, false)).wait();
     await (await registry.register("string value", futureIndexerAddr, false)).wait();
     await (await registry.register("", futureIndexerAddr, false)).wait(); // DATA: empty schema (ADR-0049)
     await (await registry.register("bytes32 definition", await edgeResolver.getAddress(), true)).wait();
@@ -639,7 +639,7 @@ describe("EFS Transports & Data Model", function () {
       await createMirror(testDataUID, ipfsTransportUID, "ipfs://QmHash1");
       await createMirror(testDataUID, arweaveTransportUID, "ar://ArHash1");
 
-      const mirrors = await indexer.getReferencingAttestations(testDataUID, mirrorSchemaUID, 0, 10, false);
+      const mirrors = await indexer.getReferencingAttestations(testDataUID, mirrorSchemaUID, 0, 10, false, false);
       expect(mirrors.length).to.equal(2);
     });
   });
@@ -864,7 +864,7 @@ describe("EFS Transports & Data Model", function () {
       expect(await edgeResolver.getActivePinTarget(docsUID, ownerAddr, dataSchemaUID)).to.equal(dataUID);
 
       // Verify: mirrors on DATA
-      const mirrors = await indexer.getReferencingAttestations(dataUID, mirrorSchemaUID, 0, 10, false);
+      const mirrors = await indexer.getReferencingAttestations(dataUID, mirrorSchemaUID, 0, 10, false, false);
       expect(mirrors.length).to.equal(1);
 
       // AGENT-NOTE: dropped the dedup assertion (`dataByContentKey`) — DATA is empty (ADR-0049)

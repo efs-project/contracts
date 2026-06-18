@@ -520,16 +520,6 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
         return _sliceUIDsFiltered(_children[anchorUID], start, length, reverseOrder, showRevoked);
     }
 
-    /// @notice Convenience overload — showRevoked defaults to false.
-    function getChildren(
-        bytes32 anchorUID,
-        uint256 start,
-        uint256 length,
-        bool reverseOrder
-    ) external view returns (bytes32[] memory) {
-        return _sliceUIDsFiltered(_children[anchorUID], start, length, reverseOrder, false);
-    }
-
     function getChildrenCount(bytes32 anchorUID) external view returns (uint256) {
         return _children[anchorUID].length;
     }
@@ -543,17 +533,6 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
         bool showRevoked
     ) external view returns (bytes32[] memory) {
         return _sliceUIDsFiltered(_childrenByAttester[anchorUID][attester], start, length, reverseOrder, showRevoked);
-    }
-
-    /// @notice Convenience overload — showRevoked defaults to false.
-    function getChildrenByAttester(
-        bytes32 anchorUID,
-        address attester,
-        uint256 start,
-        uint256 length,
-        bool reverseOrder
-    ) external view returns (bytes32[] memory) {
-        return _sliceUIDsFiltered(_childrenByAttester[anchorUID][attester], start, length, reverseOrder, false);
     }
 
     function getChildrenByAttesterCount(bytes32 anchorUID, address attester) external view returns (uint256) {
@@ -614,17 +593,6 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
         bool showRevoked
     ) external view returns (bytes32[] memory) {
         return _sliceUIDsFiltered(_childrenBySchema[anchorUID][schema], start, length, reverseOrder, showRevoked);
-    }
-
-    /// @notice Convenience overload — showRevoked defaults to false.
-    function getAnchorsBySchema(
-        bytes32 anchorUID,
-        bytes32 schema,
-        uint256 start,
-        uint256 length,
-        bool reverseOrder
-    ) external view returns (bytes32[] memory) {
-        return _sliceUIDsFiltered(_childrenBySchema[anchorUID][schema], start, length, reverseOrder, false);
     }
 
     /**
@@ -691,30 +659,22 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
 
     // Generic Explorer
     //
-    // ADR-0051: these referencing/discovery getters exclude revoked (and PIN-superseded) UIDs by
-    // DEFAULT. Full history is opt-in via a sibling `…IncludingRevoked` view (ADR-0051 §"opt-in read").
-    // Distinct names rather than an overloaded `bool showRevoked` arg are deliberate: overloaded
-    // functions collapse `args` to `never` in viem/wagmi/scaffold-eth, breaking every typed consumer
-    // (the Vite client, the SDK, subgraph codegen) — a 50-year ABI-ergonomics cost. This makes "reads
-    // exclude revoked by default" a contract guarantee, not a per-caller convention. The underlying
-    // arrays stay append-only (ADR-0009); filtering happens on read in _sliceUIDsFiltered.
+    // ADR-0051: these referencing/discovery getters take a REQUIRED `bool showRevoked` (false =
+    // exclude revoked + PIN-superseded, the common path; true = full history). A single required arg,
+    // not an overloaded convenience twin, because overloaded same-name functions collapse `args` to
+    // `never` in viem/wagmi/scaffold-eth and break every typed consumer (Vite client, SDK, subgraph
+    // codegen). Solidity has no default parameters, so callers pass `false` explicitly; the EFS
+    // SDK/client layer supplies that default so app devs rarely type it. This is the same uniform
+    // shape as getChildren*/getAnchorsBySchema*. Arrays stay append-only (ADR-0009); filter on read.
 
     function getAttestationsBySchema(
         bytes32 schemaUID,
         uint256 start,
         uint256 length,
-        bool reverseOrder
+        bool reverseOrder,
+        bool showRevoked
     ) external view returns (bytes32[] memory) {
-        return _sliceUIDsFiltered(_schemaAttestations[schemaUID], start, length, reverseOrder, false);
-    }
-
-    function getAttestationsBySchemaIncludingRevoked(
-        bytes32 schemaUID,
-        uint256 start,
-        uint256 length,
-        bool reverseOrder
-    ) external view returns (bytes32[] memory) {
-        return _sliceUIDsFiltered(_schemaAttestations[schemaUID], start, length, reverseOrder, true);
+        return _sliceUIDsFiltered(_schemaAttestations[schemaUID], start, length, reverseOrder, showRevoked);
     }
 
     function getAttestationCountBySchema(bytes32 schemaUID) external view returns (uint256) {
@@ -726,19 +686,11 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
         address attester,
         uint256 start,
         uint256 length,
-        bool reverseOrder
+        bool reverseOrder,
+        bool showRevoked
     ) external view returns (bytes32[] memory) {
-        return _sliceUIDsFiltered(_schemaAttesterAttestations[schemaUID][attester], start, length, reverseOrder, false);
-    }
-
-    function getAttestationsBySchemaAndAttesterIncludingRevoked(
-        bytes32 schemaUID,
-        address attester,
-        uint256 start,
-        uint256 length,
-        bool reverseOrder
-    ) external view returns (bytes32[] memory) {
-        return _sliceUIDsFiltered(_schemaAttesterAttestations[schemaUID][attester], start, length, reverseOrder, true);
+        return
+            _sliceUIDsFiltered(_schemaAttesterAttestations[schemaUID][attester], start, length, reverseOrder, showRevoked);
     }
 
     function getAttestationCountBySchemaAndAttester(
@@ -753,19 +705,11 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
         bytes32 schemaUID,
         uint256 start,
         uint256 length,
-        bool reverseOrder
+        bool reverseOrder,
+        bool showRevoked
     ) external view returns (bytes32[] memory) {
-        return _sliceUIDsFiltered(_referencingAttestations[targetUID][schemaUID], start, length, reverseOrder, false);
-    }
-
-    function getReferencingAttestationsIncludingRevoked(
-        bytes32 targetUID,
-        bytes32 schemaUID,
-        uint256 start,
-        uint256 length,
-        bool reverseOrder
-    ) external view returns (bytes32[] memory) {
-        return _sliceUIDsFiltered(_referencingAttestations[targetUID][schemaUID], start, length, reverseOrder, true);
+        return
+            _sliceUIDsFiltered(_referencingAttestations[targetUID][schemaUID], start, length, reverseOrder, showRevoked);
     }
 
     function getReferencingAttestationCount(bytes32 targetUID, bytes32 schemaUID) external view returns (uint256) {
@@ -777,19 +721,10 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
         bytes32 schemaUID,
         uint256 start,
         uint256 length,
-        bool reverseOrder
+        bool reverseOrder,
+        bool showRevoked
     ) external view returns (bytes32[] memory) {
-        return _sliceUIDsFiltered(_receivedAttestations[recipient][schemaUID], start, length, reverseOrder, false);
-    }
-
-    function getIncomingAttestationsIncludingRevoked(
-        address recipient,
-        bytes32 schemaUID,
-        uint256 start,
-        uint256 length,
-        bool reverseOrder
-    ) external view returns (bytes32[] memory) {
-        return _sliceUIDsFiltered(_receivedAttestations[recipient][schemaUID], start, length, reverseOrder, true);
+        return _sliceUIDsFiltered(_receivedAttestations[recipient][schemaUID], start, length, reverseOrder, showRevoked);
     }
 
     function getOutgoingAttestations(
@@ -797,19 +732,10 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
         bytes32 schemaUID,
         uint256 start,
         uint256 length,
-        bool reverseOrder
+        bool reverseOrder,
+        bool showRevoked
     ) external view returns (bytes32[] memory) {
-        return _sliceUIDsFiltered(_sentAttestations[attester][schemaUID], start, length, reverseOrder, false);
-    }
-
-    function getOutgoingAttestationsIncludingRevoked(
-        address attester,
-        bytes32 schemaUID,
-        uint256 start,
-        uint256 length,
-        bool reverseOrder
-    ) external view returns (bytes32[] memory) {
-        return _sliceUIDsFiltered(_sentAttestations[attester][schemaUID], start, length, reverseOrder, true);
+        return _sliceUIDsFiltered(_sentAttestations[attester][schemaUID], start, length, reverseOrder, showRevoked);
     }
 
     // ============================================================================================
@@ -822,18 +748,10 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
         bytes32 targetUID,
         uint256 start,
         uint256 length,
-        bool reverseOrder
+        bool reverseOrder,
+        bool showRevoked
     ) external view returns (bytes32[] memory) {
-        return _sliceUIDsFiltered(_allReferencing[targetUID], start, length, reverseOrder, false);
-    }
-
-    function getAllReferencingIncludingRevoked(
-        bytes32 targetUID,
-        uint256 start,
-        uint256 length,
-        bool reverseOrder
-    ) external view returns (bytes32[] memory) {
-        return _sliceUIDsFiltered(_allReferencing[targetUID], start, length, reverseOrder, true);
+        return _sliceUIDsFiltered(_allReferencing[targetUID], start, length, reverseOrder, showRevoked);
     }
 
     function getReferencingByAttester(
@@ -841,19 +759,10 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
         address attester,
         uint256 start,
         uint256 length,
-        bool reverseOrder
+        bool reverseOrder,
+        bool showRevoked
     ) external view returns (bytes32[] memory) {
-        return _sliceUIDsFiltered(_referencingByAttester[targetUID][attester], start, length, reverseOrder, false);
-    }
-
-    function getReferencingByAttesterIncludingRevoked(
-        bytes32 targetUID,
-        address attester,
-        uint256 start,
-        uint256 length,
-        bool reverseOrder
-    ) external view returns (bytes32[] memory) {
-        return _sliceUIDsFiltered(_referencingByAttester[targetUID][attester], start, length, reverseOrder, true);
+        return _sliceUIDsFiltered(_referencingByAttester[targetUID][attester], start, length, reverseOrder, showRevoked);
     }
 
     function getReferencingBySchemaAndAttester(
@@ -862,7 +771,8 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
         address attester,
         uint256 start,
         uint256 length,
-        bool reverseOrder
+        bool reverseOrder,
+        bool showRevoked
     ) external view returns (bytes32[] memory) {
         return
             _sliceUIDsFiltered(
@@ -870,25 +780,7 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
                 start,
                 length,
                 reverseOrder,
-                false
-            );
-    }
-
-    function getReferencingBySchemaAndAttesterIncludingRevoked(
-        bytes32 targetUID,
-        bytes32 schemaUID,
-        address attester,
-        uint256 start,
-        uint256 length,
-        bool reverseOrder
-    ) external view returns (bytes32[] memory) {
-        return
-            _sliceUIDsFiltered(
-                _referencingBySchemaAndAttester[targetUID][schemaUID][attester],
-                start,
-                length,
-                reverseOrder,
-                true
+                showRevoked
             );
     }
 

@@ -95,7 +95,7 @@ const ReferencingAttestationsList = ({
   const { data: uids } = useScaffoldReadContract({
     contractName: "Indexer",
     functionName: "getReferencingAttestations",
-    args: [(uid as `0x${string}`) || zeroHash, (schemaUid as `0x${string}`) || zeroHash, 0n, 20n, true],
+    args: [(uid as `0x${string}`) || zeroHash, (schemaUid as `0x${string}`) || zeroHash, 0n, 20n, true, false],
     query: {
       enabled: !!uid && !!schemaUid && uid !== zeroHash,
     },
@@ -243,7 +243,14 @@ function EASExplorerContent() {
   const { data: referencingAttestations } = useScaffoldReadContract({
     contractName: "Indexer",
     functionName: "getReferencingAttestations",
-    args: [(uidParam as `0x${string}`) || zeroHash, (relevantSchema as `0x${string}`) || zeroHash, 0n, 20n, true],
+    args: [
+      (uidParam as `0x${string}`) || zeroHash,
+      (relevantSchema as `0x${string}`) || zeroHash,
+      0n,
+      20n,
+      true,
+      false,
+    ],
     query: {
       enabled: !!isAttestationFound && !!relevantSchema && !!uidParam,
     },
@@ -363,7 +370,7 @@ function EASExplorerContent() {
   const { data: schemaAttestations } = useScaffoldReadContract({
     contractName: "Indexer",
     functionName: "getAttestationsBySchema",
-    args: [uidParam as `0x${string}`, 0n, 20n, true],
+    args: [uidParam as `0x${string}`, 0n, 20n, true, false],
     query: {
       enabled: !!isSchemaView,
     },
