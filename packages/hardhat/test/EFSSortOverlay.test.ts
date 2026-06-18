@@ -1142,7 +1142,7 @@ describe("EFSSortOverlay", function () {
       const tsInfoUID = await createSortInfo(owner, tsNameUID, await tsSort.getAddress());
 
       // Step 1: discover naming anchors
-      const namingAnchors = await indexer["getAnchorsBySchema(bytes32,bytes32,uint256,uint256,bool,bool)"](
+      const namingAnchors = await indexer.getAnchorsBySchema(
         dirUID,
         sortInfoSchemaUID,
         0,

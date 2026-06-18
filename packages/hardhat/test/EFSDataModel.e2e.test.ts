@@ -1397,7 +1397,7 @@ describe("EFS Data Model — E2E Integration", function () {
 
       // After first placement, folder is in alice's root children-by-attester exactly once.
       expect(await indexer.getChildrenByAttesterCount(rootUID, aliceAddr)).to.equal(1n);
-      let children = await indexer["getChildrenByAttester(bytes32,address,uint256,uint256,bool,bool)"](
+      let children = await indexer.getChildrenByAttester(
         rootUID,
         aliceAddr,
         0,
@@ -1421,7 +1421,7 @@ describe("EFS Data Model — E2E Integration", function () {
 
       // Count and contents must remain 1/[folder] — the fix's guard prevents the second push.
       expect(await indexer.getChildrenByAttesterCount(rootUID, aliceAddr)).to.equal(1n);
-      children = await indexer["getChildrenByAttester(bytes32,address,uint256,uint256,bool,bool)"](
+      children = await indexer.getChildrenByAttester(
         rootUID,
         aliceAddr,
         0,

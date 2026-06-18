@@ -143,10 +143,10 @@ describe("UpgradeWithState — storage-corruption guard (ADR-0048, ADR-0009)", f
       expect(await v2.getChildrenCount(rootUID)).to.equal(before.rootChildrenCount);
       // `getChildren` is overloaded (4-arg and 5-arg), so ethers-v6/typechain drops the bare
       // property — address it via the explicit signature key.
-      expect(await v2["getChildren(bytes32,uint256,uint256,bool,bool)"](rootUID, 0, 10, false, false)).to.deep.equal(
+      expect(await v2.getChildren(rootUID, 0, 10, false, false)).to.deep.equal(
         before.rootChildren,
       );
-      expect(await v2["getChildren(bytes32,uint256,uint256,bool,bool)"](docsUID, 0, 10, false, false)).to.deep.equal(
+      expect(await v2.getChildren(docsUID, 0, 10, false, false)).to.deep.equal(
         before.docsChildren,
       );
       expect(await v2.getParent(docsUID)).to.equal(before.parentOfDocs);

@@ -857,7 +857,7 @@ async function main() {
   // ════════════════════════════════════════════════════════════════════════════════
   console.log("\n── Phase 13: Sort discovery ──\n");
 
-  const sortNamingAnchors = await indexer["getAnchorsBySchema(bytes32,bytes32,uint256,uint256,bool,bool)"](
+  const sortNamingAnchors = await indexer.getAnchorsBySchema(
     musicUID,
     sortInfoSchemaUID,
     0,

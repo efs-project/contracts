@@ -757,12 +757,12 @@ describe("EFSIndexer", function () {
 
     it("Should paginate children (Forward)", async function () {
       // Updated signature: getChildren(uid, start, length, reverse, showRevoked)
-      const page1 = await indexer["getChildren(bytes32,uint256,uint256,bool,bool)"](parentUID, 0, 2, false, false);
+      const page1 = await indexer.getChildren(parentUID, 0, 2, false, false);
       expect(page1.length).to.equal(2);
       expect(page1[0]).to.equal(child1UID);
       expect(page1[1]).to.equal(child2UID);
 
-      const page2 = await indexer["getChildren(bytes32,uint256,uint256,bool,bool)"](parentUID, 2, 2, false, false);
+      const page2 = await indexer.getChildren(parentUID, 2, 2, false, false);
       expect(page2.length).to.equal(1);
       expect(page2[0]).to.equal(child3UID);
 
@@ -773,7 +773,7 @@ describe("EFSIndexer", function () {
     it("Should paginate children (Reverse)", async function () {
       // Updated signature: getChildren(uid, start, length, reverse, showRevoked)
       // Reverse: start 0 means "latest"
-      const page1 = await indexer["getChildren(bytes32,uint256,uint256,bool,bool)"](parentUID, 0, 2, true, false);
+      const page1 = await indexer.getChildren(parentUID, 0, 2, true, false);
       expect(page1.length).to.equal(2);
       expect(page1[0]).to.equal(child3UID); // Last added is first
       expect(page1[1]).to.equal(child2UID);
@@ -882,7 +882,7 @@ describe("EFSIndexer", function () {
 
     it("Should filter by Attester", async function () {
       // Filter children of "files" by User A
-      const u1Files = await indexer["getChildrenByAttester(bytes32,address,uint256,uint256,bool,bool)"](
+      const u1Files = await indexer.getChildrenByAttester(
         parentUID,
         await user1.getAddress(),
         0,
@@ -894,7 +894,7 @@ describe("EFSIndexer", function () {
       expect(u1Files[0]).to.equal(userFileUID);
 
       // Filter children of "files" by User B
-      const u2Files = await indexer["getChildrenByAttester(bytes32,address,uint256,uint256,bool,bool)"](
+      const u2Files = await indexer.getChildrenByAttester(
         parentUID,
         await user2.getAddress(),
         0,
@@ -1087,7 +1087,7 @@ describe("EFSIndexer", function () {
 
       // getChildrenByAttester with showRevoked=true/false also uses _isRevoked internally
       // (child1 and child2 are non-revocable anchors, so showRevoked has no visible effect here)
-      const withRevoked = await indexer["getChildrenByAttester(bytes32,address,uint256,uint256,bool,bool)"](
+      const withRevoked = await indexer.getChildrenByAttester(
         parentUID,
         await user1.getAddress(),
         0,
@@ -1095,7 +1095,7 @@ describe("EFSIndexer", function () {
         false,
         true,
       );
-      const withoutRevoked = await indexer["getChildrenByAttester(bytes32,address,uint256,uint256,bool,bool)"](
+      const withoutRevoked = await indexer.getChildrenByAttester(
         parentUID,
         await user1.getAddress(),
         0,
@@ -1108,7 +1108,7 @@ describe("EFSIndexer", function () {
 
     it("getChildrenByAttester with showRevoked=true includes all; COUNT is total physical length", async function () {
       // child1 and child2 are both added by user1 under parentUID
-      const all = await indexer["getChildrenByAttester(bytes32,address,uint256,uint256,bool,bool)"](
+      const all = await indexer.getChildrenByAttester(
         parentUID,
         await user1.getAddress(),
         0,
@@ -1269,7 +1269,7 @@ describe("EFSIndexer", function () {
         const fileUID = getUIDFromReceipt(receiptFile);
 
         // 3. Verify getAnchorsBySchema(Property)
-        const props = await indexer["getAnchorsBySchema(bytes32,bytes32,uint256,uint256,bool,bool)"](
+        const props = await indexer.getAnchorsBySchema(
           parentUID,
           propertySchemaUID,
           0,
@@ -1281,7 +1281,7 @@ describe("EFSIndexer", function () {
         expect(props[0]).to.equal(propUID);
 
         // 4. Verify getAnchorsBySchema(Data)
-        const files = await indexer["getAnchorsBySchema(bytes32,bytes32,uint256,uint256,bool,bool)"](
+        const files = await indexer.getAnchorsBySchema(
           parentUID,
           dataSchemaUID,
           0,
@@ -1293,7 +1293,7 @@ describe("EFSIndexer", function () {
         expect(files[0]).to.equal(fileUID);
 
         // 5. Verify Generic Children contains ALL
-        const all = await indexer["getChildren(bytes32,uint256,uint256,bool,bool)"](parentUID, 0, 10, false, false);
+        const all = await indexer.getChildren(parentUID, 0, 10, false, false);
         expect(all.length).to.equal(2);
         expect(all).to.include(propUID);
         expect(all).to.include(fileUID);

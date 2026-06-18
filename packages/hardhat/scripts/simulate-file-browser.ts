@@ -368,7 +368,7 @@ async function main() {
 
   // ── Test 2: List Children (global) ──
   console.log("\n[2] Children Listing");
-  const petsChildren = await indexer["getChildren(bytes32,uint256,uint256,bool,bool)"](petsUID, 0n, 10, false, false);
+  const petsChildren = await indexer.getChildren(petsUID, 0n, 10, false, false);
   assert(
     "getChildren(/pets/) returns 3 (best.jpg, cats, dogs)",
     petsChildren.length === 3,
@@ -477,10 +477,10 @@ async function main() {
 
   // ── Test 10: Subdirectory Navigation ──
   console.log("\n[10] Subdirectory Navigation");
-  const catsChildren = await indexer["getChildren(bytes32,uint256,uint256,bool,bool)"](catsUID, 0, 10, false, false);
+  const catsChildren = await indexer.getChildren(catsUID, 0, 10, false, false);
   assert("/pets/cats/ has 2 files", catsChildren.length === 2);
 
-  const dogsChildren = await indexer["getChildren(bytes32,uint256,uint256,bool,bool)"](dogsUID, 0, 10, false, false);
+  const dogsChildren = await indexer.getChildren(dogsUID, 0, 10, false, false);
   assert("/pets/dogs/ has 1 file", dogsChildren.length === 1);
 
   // ── Test 11: Tagging (labels — cardinality N) ──
@@ -518,7 +518,7 @@ async function main() {
   // ── Test 13: Schema-filtered Anchor listing ──
   console.log("\n[13] Schema-filtered Anchor Listing");
   // getAnchorsBySchema with dataSchemaUID should only return file anchors, not sub-folders
-  const fileAnchorsInPets = await indexer["getAnchorsBySchema(bytes32,bytes32,uint256,uint256,bool,bool)"](
+  const fileAnchorsInPets = await indexer.getAnchorsBySchema(
     petsUID,
     dataSchemaUID,
     0,

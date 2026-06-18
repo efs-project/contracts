@@ -333,7 +333,7 @@ async function main() {
   assert("/transports/https exists", httpsTransportUID !== ethers.ZeroHash);
 
   // Verify all 11 transport types are children of /transports/
-  const transportChildren = await indexer["getChildren(bytes32,uint256,uint256,bool,bool)"](
+  const transportChildren = await indexer.getChildren(
     transportsUID,
     0,
     20,
@@ -566,7 +566,7 @@ async function main() {
   const contentTypeHeader = headers.find((h: { key: string; value: string }) => h.key === "Content-Type");
   assert(
     "Router resolves contentType from PROPERTY",
-    contentTypeHeader?.value.includes('content-type="text/plain"'),
+    contentTypeHeader?.value.includes('content-type="text/plain"') ?? false,
     `got: ${contentTypeHeader?.value}`,
   );
 
