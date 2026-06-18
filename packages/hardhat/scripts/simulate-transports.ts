@@ -255,7 +255,13 @@ async function main() {
   assert("/transports/https exists", httpsTransportUID !== ethers.ZeroHash);
 
   // Verify all 11 transport types are children of /transports/
-  const transportChildren = await indexer["getChildren(bytes32,uint256,uint256,bool,bool)"](transportsUID, 0, 20, false, false);
+  const transportChildren = await indexer["getChildren(bytes32,uint256,uint256,bool,bool)"](
+    transportsUID,
+    0,
+    20,
+    false,
+    false,
+  );
   assert("11 transport children", transportChildren.length === 11, `got ${transportChildren.length}`);
 
   // ======================================================================
@@ -479,9 +485,7 @@ async function main() {
   const _headerStr = new TextDecoder().decode(ethers.getBytes(routerRes[1]));
   // Body is empty for external URIs; check headers
   const headers = routerRes[2];
-  const contentTypeHeader = headers.find(
-    (h: { key: string; value: string }) => h.key === "Content-Type",
-  );
+  const contentTypeHeader = headers.find((h: { key: string; value: string }) => h.key === "Content-Type");
   assert(
     "Router resolves contentType from PROPERTY",
     contentTypeHeader?.value.includes('content-type="text/plain"'),

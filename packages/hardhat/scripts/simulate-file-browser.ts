@@ -381,7 +381,14 @@ async function main() {
   // ── Test 5: MIRROR Resolution ──
   console.log("\n[5] MIRROR Resolution");
   // MIRRORs are indexed via indexer.index() — discoverable via getReferencingAttestations
-  const ownerMirrors = await indexer.getReferencingAttestations(ownerBestData.uid, mirrorSchemaUID, 0, 10, false, false);
+  const ownerMirrors = await indexer.getReferencingAttestations(
+    ownerBestData.uid,
+    mirrorSchemaUID,
+    0,
+    10,
+    false,
+    false,
+  );
   assert("Owner's DATA has 1 MIRROR", ownerMirrors.length === 1, `got ${ownerMirrors.length}`);
 
   // Decode MIRROR to get URI
@@ -488,7 +495,8 @@ async function main() {
     0,
     10,
     false,
-    false,  );
+    false,
+  );
   assert(
     "DATA-schema anchors in /pets/ = 1 (best.jpg only, cats and dogs are folders)",
     fileAnchorsInPets.length === 1,

@@ -850,7 +850,8 @@ async function main() {
     0,
     10,
     false,
-    false,  );
+    false,
+  );
   assert(
     "getAnchorsBySchema finds 1 sort naming anchor in /music/",
     sortNamingAnchors.length === 1 && sortNamingAnchors[0] === alphaNameUID,
@@ -863,7 +864,8 @@ async function main() {
     0,
     10,
     false,
-    false,  );
+    false,
+  );
   assert(
     "EFSIndexer has 1 SORT_INFO ref via index() wiring (fully on-chain discovery)",
     sortInfoRefsFromIndexer.length === 1,
