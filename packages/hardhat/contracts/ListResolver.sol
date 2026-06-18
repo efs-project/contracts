@@ -47,6 +47,17 @@ contract ListResolver is EFSUpgradeableResolver {
     ///      resolvers.
     function initialize() external initializer {}
 
+    /// @notice The LIST schema UID this resolver enforces — self-derived from the frozen LIST_DEFINITION,
+    ///         this resolver's (proxy) address, and `revocable = false`. Mirrors
+    ///         `ListEntryResolver.listEntrySchemaUID()` / `AliasResolver.redirectSchemaUID()` so the
+    ///         pre-register verify gate can read the DEPLOYED contract's own notion of its schema UID and
+    ///         assert it equals the to-be-registered `schemaUIDs.LIST` (PR #24 P2). Without this getter a
+    ///         stale/edited `LIST_DEFINITION` artifact in Batch 1 passes the gate, the current UID is
+    ///         registered, and every canonical LIST attestation then reverts `wrong LIST schema`.
+    function listSchemaUID() public view returns (bytes32) {
+        return keccak256(abi.encodePacked(LIST_DEFINITION, address(this), false));
+    }
+
     function onAttest(Attestation calldata a, uint256) internal override returns (bool) {
         // Foreign-schema guard (matches AliasResolver/ListEntryResolver/MirrorResolver/EdgeResolver):
         // EAS invokes this resolver for ANY schema registered against it. Only the canonical LIST
@@ -54,7 +65,7 @@ contract ListResolver is EFSUpgradeableResolver {
         // below and emit ListAttested. Self-derived: address(this) under the proxy delegatecall IS the
         // resolver baked into the LIST schema UID; LIST is non-revocable (the `false`). Derived inline
         // (no stored config) — LIST attestations are infrequent, so the keccak cost is negligible.
-        require(a.schema == keccak256(abi.encodePacked(LIST_DEFINITION, address(this), false)), "wrong LIST schema");
+        require(a.schema == listSchemaUID(), "wrong LIST schema");
         require(a.data.length == EXPECTED_LIST_DATA_LEN, "bad LIST payload");
         require(!a.revocable, "LIST must be non-revocable");
         require(a.expirationTime == 0, "LIST must not expire");

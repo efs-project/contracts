@@ -61,8 +61,15 @@ export async function runVerifyGate(input: VerifyInput): Promise<void> {
     }
   }
 
-  // (3) self-UID getters == computed == to-be-registered (the ListEntry-class bug guard).
-  console.log("  [verify] self-UID getters (ListEntry/Alias) == computed UID...");
+  // (3) self-UID getters == computed == to-be-registered (the ListEntry-class bug guard). Each of
+  //     these resolvers derives the schema UID it enforces from its OWN baked-in field-string constant
+  //     + its (proxy) address; reading the getter back catches a stale/edited resolver artifact whose
+  //     constant disagrees with schemaUIDs before the irreversible register (PR #24 P2).
+  console.log("  [verify] self-UID getters (List/ListEntry/Alias) == computed UID...");
+  const list = await ethers.getContractAt("ListResolver", deploys.ListResolver.proxy, deployer);
+  const onchainListUID: string = await list.listSchemaUID();
+  assertEq(onchainListUID, schemaUIDs.LIST, "ListResolver.listSchemaUID");
+
   const listEntry = await ethers.getContractAt("ListEntryResolver", deploys.ListEntryResolver.proxy, deployer);
   const onchainListEntryUID: string = await listEntry.listEntrySchemaUID();
   assertEq(onchainListEntryUID, schemaUIDs.LIST_ENTRY, "ListEntryResolver.listEntrySchemaUID");

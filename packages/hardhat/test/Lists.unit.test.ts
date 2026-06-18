@@ -255,6 +255,14 @@ describe("Lists — Unit Tests", function () {
       // Control: the canonical LIST schema still attests.
       expect(await attestList(alice, false, false, 1)).to.not.equal(ZERO_BYTES32);
     });
+
+    it("listSchemaUID() returns the self-derived canonical LIST UID (verify-gate guard)", async function () {
+      // PR #24 P2 (comment 3438135885): the pre-register verify gate reads this getter to assert the
+      // DEPLOYED ListResolver's own notion of its LIST schema UID == the to-be-registered UID — catching
+      // a stale/edited LIST_DEFINITION artifact before the irreversible register, mirroring the
+      // ListEntry/Alias self-UID getters. It must equal keccak256(LIST_DEFINITION, address(this), false).
+      expect(await listResolver.listSchemaUID()).to.equal(listSchemaUID);
+    });
   });
 
   // ── Group A: ListResolver field validation ─────────────────────────────────
