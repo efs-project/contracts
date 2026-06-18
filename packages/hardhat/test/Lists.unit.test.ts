@@ -220,6 +220,41 @@ describe("Lists — Unit Tests", function () {
     it("exposes the constructor EAS via getEAS() through the proxy", async function () {
       expect(await listResolver.getEAS()).to.equal(await eas.getAddress());
     });
+
+    it("rejects a FOREIGN 5-word schema pointed at ListResolver (wrong LIST schema) — no ListAttested", async function () {
+      // Regression for Codex P2 (comment 3433083957): EAS invokes onAttest for ANY schema registered
+      // against this resolver. A foreign non-revocable 5-word schema with a valid payload must NOT pass
+      // — it would otherwise clear the shape checks and emit ListAttested, letting log/RPC list discovery
+      // ingest fake lists that ListReader/ListEntryResolver later reject. Self-derived guard, matching
+      // AliasResolver/ListEntryResolver/MirrorResolver/EdgeResolver.
+      const listResolverAddr = await listResolver.getAddress();
+      // Different field NAMES => different UID, but the same (bool,bool,uint8,bytes32,uint256) decode
+      // shape, so the 160-byte payload + shape checks would pass — only the schema guard can reject it.
+      const foreignDef = "bool a, bool b, uint8 c, bytes32 d, uint256 e";
+      await (await registry.register(foreignDef, listResolverAddr, false)).wait();
+      const foreignSchemaUID = ethers.solidityPackedKeccak256(
+        ["string", "address", "bool"],
+        [foreignDef, listResolverAddr, false],
+      );
+      expect(foreignSchemaUID).to.not.equal(listSchemaUID);
+
+      await expect(
+        eas.connect(alice).attest({
+          schema: foreignSchemaUID,
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: NO_EXPIRATION,
+            revocable: false,
+            refUID: ZERO_BYTES32,
+            data: encodeList(false, false, 1, ZERO_BYTES32, 0),
+            value: 0n,
+          },
+        }),
+      ).to.be.revertedWith("wrong LIST schema");
+
+      // Control: the canonical LIST schema still attests.
+      expect(await attestList(alice, false, false, 1)).to.not.equal(ZERO_BYTES32);
+    });
   });
 
   // ── Group A: ListResolver field validation ─────────────────────────────────

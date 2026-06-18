@@ -20,6 +20,14 @@ import { EFSUpgradeableResolver } from "./base/EFSUpgradeableResolver.sol";
 contract ListResolver is EFSUpgradeableResolver {
     uint256 private constant EXPECTED_LIST_DATA_LEN = 160; // 5 × 32
 
+    // The LIST field string — FROZEN (ADR-0044) and MUST match the deploy registration exactly (it is
+    // hashed into the LIST schema UID). Used to self-derive this resolver's own LIST schema UID so
+    // onAttest can reject attestations from any OTHER schema an attacker registers against this
+    // resolver — which would otherwise pass the shape checks and emit ListAttested (polluting
+    // event/RPC list discovery with fake lists that ListReader/ListEntryResolver later reject).
+    string private constant LIST_DEFINITION =
+        "bool allowsDuplicates, bool appendOnly, uint8 targetType, bytes32 targetSchema, uint256 maxEntries";
+
     event ListAttested(
         bytes32 indexed listUID,
         address indexed attester,
@@ -40,6 +48,13 @@ contract ListResolver is EFSUpgradeableResolver {
     function initialize() external initializer {}
 
     function onAttest(Attestation calldata a, uint256) internal override returns (bool) {
+        // Foreign-schema guard (matches AliasResolver/ListEntryResolver/MirrorResolver/EdgeResolver):
+        // EAS invokes this resolver for ANY schema registered against it. Only the canonical LIST
+        // schema may pass — else a foreign 5-word non-revocable schema would clear the shape checks
+        // below and emit ListAttested. Self-derived: address(this) under the proxy delegatecall IS the
+        // resolver baked into the LIST schema UID; LIST is non-revocable (the `false`). Derived inline
+        // (no stored config) — LIST attestations are infrequent, so the keccak cost is negligible.
+        require(a.schema == keccak256(abi.encodePacked(LIST_DEFINITION, address(this), false)), "wrong LIST schema");
         require(a.data.length == EXPECTED_LIST_DATA_LEN, "bad LIST payload");
         require(!a.revocable, "LIST must be non-revocable");
         require(a.expirationTime == 0, "LIST must not expire");
