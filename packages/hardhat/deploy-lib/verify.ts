@@ -125,21 +125,37 @@ export async function runVerifyGate(input: VerifyInput): Promise<void> {
   console.log("  [verify] GATE GREEN ✓");
 }
 
-/// Assert EFSIndexer's one-shot partner wiring (edgeResolver / mirrorResolver / schemaRegistry) matches
-/// the deployed proxies + canonical registry. Separate from runVerifyGate because the EOA `full` path
+/// Assert the partner wiring BETWEEN EFSIndexer and its resolvers matches the deployed proxies +
+/// canonical registry, in BOTH directions. Separate from runVerifyGate because the EOA `full` path
 /// wires AFTER the step-3 gate (so the gate skips it as unwired), whereas the Safe path + the EOA
 /// --after-freeze-gate resume are already wired when the gate runs. Call wherever wiring is present and
 /// BEFORE the irreversible register: the gate calls it when wired; orchestrate.ts calls it post-wire in
 /// `full` mode. (PR #24 P2 — guards against a wrong one-shot wire registering schemas that then can
-/// never accept PIN/TAG writes.)
+/// never accept PIN/TAG/MIRROR writes.)
+///
+/// Both directions matter: `EFSIndexer.wireContracts` and each resolver's `initialize` set their
+/// partner refs INDEPENDENTLY, so checking only EFSIndexer's forward pointers would still pass if a
+/// stale/edited Batch 1 initialized EdgeResolver/MirrorResolver with the WRONG indexer/registry. The
+/// register-last would then permanently bind PIN/TAG/MIRROR to resolvers whose writes call the wrong
+/// indexer/registry. The reciprocal assertions below close that gap (PR #24 P2, second pass).
 export async function assertIndexerWiring(
   deploys: Record<string, Create3DeployResult>,
   deployer: Signer,
 ): Promise<void> {
   const indexer = await ethers.getContractAt("EFSIndexer", deploys.EFSIndexer.proxy, deployer);
+  // Forward: EFSIndexer -> resolvers / registry.
   assertEq(await indexer.edgeResolver(), deploys.EdgeResolver.proxy, "EFSIndexer.edgeResolver()");
   assertEq(await indexer.mirrorResolver(), deploys.MirrorResolver.proxy, "EFSIndexer.mirrorResolver()");
   assertEq(await indexer.schemaRegistry(), SCHEMA_REGISTRY_ADDRESS, "EFSIndexer.schemaRegistry()");
+
+  // Reciprocal: each resolver -> EFSIndexer / registry. A resolver initialized with the wrong indexer
+  // or registry would index/validate writes against the wrong contract even when the forward wiring is
+  // correct — so assert the back-references too before treating the pre-register gate as green.
+  const edge = await ethers.getContractAt("EdgeResolver", deploys.EdgeResolver.proxy, deployer);
+  assertEq(await edge.indexer(), deploys.EFSIndexer.proxy, "EdgeResolver.indexer()");
+  assertEq(await edge.schemaRegistry(), SCHEMA_REGISTRY_ADDRESS, "EdgeResolver.schemaRegistry()");
+  const mirror = await ethers.getContractAt("MirrorResolver", deploys.MirrorResolver.proxy, deployer);
+  assertEq(await mirror.indexer(), deploys.EFSIndexer.proxy, "MirrorResolver.indexer()");
 }
 
 function assertEq(got: string, want: string, label: string): void {
