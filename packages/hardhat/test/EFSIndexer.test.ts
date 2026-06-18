@@ -882,26 +882,12 @@ describe("EFSIndexer", function () {
 
     it("Should filter by Attester", async function () {
       // Filter children of "files" by User A
-      const u1Files = await indexer.getChildrenByAttester(
-        parentUID,
-        await user1.getAddress(),
-        0,
-        10,
-        false,
-        false,
-      );
+      const u1Files = await indexer.getChildrenByAttester(parentUID, await user1.getAddress(), 0, 10, false, false);
       expect(u1Files.length).to.equal(1);
       expect(u1Files[0]).to.equal(userFileUID);
 
       // Filter children of "files" by User B
-      const u2Files = await indexer.getChildrenByAttester(
-        parentUID,
-        await user2.getAddress(),
-        0,
-        10,
-        false,
-        false,
-      );
+      const u2Files = await indexer.getChildrenByAttester(parentUID, await user2.getAddress(), 0, 10, false, false);
       expect(u2Files.length).to.equal(1);
       expect(u2Files[0]).to.equal(user2FileUID);
     });
@@ -1087,14 +1073,7 @@ describe("EFSIndexer", function () {
 
       // getChildrenByAttester with showRevoked=true/false also uses _isRevoked internally
       // (child1 and child2 are non-revocable anchors, so showRevoked has no visible effect here)
-      const withRevoked = await indexer.getChildrenByAttester(
-        parentUID,
-        await user1.getAddress(),
-        0,
-        10,
-        false,
-        true,
-      );
+      const withRevoked = await indexer.getChildrenByAttester(parentUID, await user1.getAddress(), 0, 10, false, true);
       const withoutRevoked = await indexer.getChildrenByAttester(
         parentUID,
         await user1.getAddress(),
@@ -1108,14 +1087,7 @@ describe("EFSIndexer", function () {
 
     it("getChildrenByAttester with showRevoked=true includes all; COUNT is total physical length", async function () {
       // child1 and child2 are both added by user1 under parentUID
-      const all = await indexer.getChildrenByAttester(
-        parentUID,
-        await user1.getAddress(),
-        0,
-        10,
-        true,
-        true,
-      );
+      const all = await indexer.getChildrenByAttester(parentUID, await user1.getAddress(), 0, 10, true, true);
       expect(all.length).to.equal(2);
 
       const count = await indexer.getChildrenByAttesterCount(parentUID, await user1.getAddress());
@@ -1269,26 +1241,12 @@ describe("EFSIndexer", function () {
         const fileUID = getUIDFromReceipt(receiptFile);
 
         // 3. Verify getAnchorsBySchema(Property)
-        const props = await indexer.getAnchorsBySchema(
-          parentUID,
-          propertySchemaUID,
-          0,
-          10,
-          false,
-          false,
-        );
+        const props = await indexer.getAnchorsBySchema(parentUID, propertySchemaUID, 0, 10, false, false);
         expect(props.length).to.equal(1);
         expect(props[0]).to.equal(propUID);
 
         // 4. Verify getAnchorsBySchema(Data)
-        const files = await indexer.getAnchorsBySchema(
-          parentUID,
-          dataSchemaUID,
-          0,
-          10,
-          false,
-          false,
-        );
+        const files = await indexer.getAnchorsBySchema(parentUID, dataSchemaUID, 0, 10, false, false);
         expect(files.length).to.equal(1);
         expect(files[0]).to.equal(fileUID);
 

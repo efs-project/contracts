@@ -518,14 +518,7 @@ async function main() {
   // ── Test 13: Schema-filtered Anchor listing ──
   console.log("\n[13] Schema-filtered Anchor Listing");
   // getAnchorsBySchema with dataSchemaUID should only return file anchors, not sub-folders
-  const fileAnchorsInPets = await indexer.getAnchorsBySchema(
-    petsUID,
-    dataSchemaUID,
-    0,
-    10,
-    false,
-    false,
-  );
+  const fileAnchorsInPets = await indexer.getAnchorsBySchema(petsUID, dataSchemaUID, 0, 10, false, false);
   assert(
     "DATA-schema anchors in /pets/ = 1 (best.jpg only, cats and dogs are folders)",
     fileAnchorsInPets.length === 1,

@@ -857,14 +857,7 @@ async function main() {
   // ════════════════════════════════════════════════════════════════════════════════
   console.log("\n── Phase 13: Sort discovery ──\n");
 
-  const sortNamingAnchors = await indexer.getAnchorsBySchema(
-    musicUID,
-    sortInfoSchemaUID,
-    0,
-    10,
-    false,
-    false,
-  );
+  const sortNamingAnchors = await indexer.getAnchorsBySchema(musicUID, sortInfoSchemaUID, 0, 10, false, false);
   assert(
     "getAnchorsBySchema finds 1 sort naming anchor in /music/",
     sortNamingAnchors.length === 1 && sortNamingAnchors[0] === alphaNameUID,

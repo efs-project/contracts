@@ -333,13 +333,7 @@ async function main() {
   assert("/transports/https exists", httpsTransportUID !== ethers.ZeroHash);
 
   // Verify all 11 transport types are children of /transports/
-  const transportChildren = await indexer.getChildren(
-    transportsUID,
-    0,
-    20,
-    false,
-    false,
-  );
+  const transportChildren = await indexer.getChildren(transportsUID, 0, 20, false, false);
   assert("11 transport children", transportChildren.length === 11, `got ${transportChildren.length}`);
 
   // ======================================================================

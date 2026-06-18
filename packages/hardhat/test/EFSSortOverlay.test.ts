@@ -1142,14 +1142,7 @@ describe("EFSSortOverlay", function () {
       const tsInfoUID = await createSortInfo(owner, tsNameUID, await tsSort.getAddress());
 
       // Step 1: discover naming anchors
-      const namingAnchors = await indexer.getAnchorsBySchema(
-        dirUID,
-        sortInfoSchemaUID,
-        0,
-        10,
-        false,
-        false,
-      );
+      const namingAnchors = await indexer.getAnchorsBySchema(dirUID, sortInfoSchemaUID, 0, 10, false, false);
       expect(namingAnchors.length).to.equal(2);
       expect(namingAnchors).to.include(alphaNameUID);
       expect(namingAnchors).to.include(tsNameUID);

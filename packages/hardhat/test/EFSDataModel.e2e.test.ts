@@ -1397,14 +1397,7 @@ describe("EFS Data Model — E2E Integration", function () {
 
       // After first placement, folder is in alice's root children-by-attester exactly once.
       expect(await indexer.getChildrenByAttesterCount(rootUID, aliceAddr)).to.equal(1n);
-      let children = await indexer.getChildrenByAttester(
-        rootUID,
-        aliceAddr,
-        0,
-        10,
-        false,
-        false,
-      );
+      let children = await indexer.getChildrenByAttester(rootUID, aliceAddr, 0, 10, false, false);
       expect(children).to.deep.equal([folderUID]);
 
       // Revoke the only PIN. EdgeResolver will fire clearContains(folder, alice), flipping
@@ -1421,14 +1414,7 @@ describe("EFS Data Model — E2E Integration", function () {
 
       // Count and contents must remain 1/[folder] — the fix's guard prevents the second push.
       expect(await indexer.getChildrenByAttesterCount(rootUID, aliceAddr)).to.equal(1n);
-      children = await indexer.getChildrenByAttester(
-        rootUID,
-        aliceAddr,
-        0,
-        10,
-        false,
-        false,
-      );
+      children = await indexer.getChildrenByAttester(rootUID, aliceAddr, 0, 10, false, false);
       expect(children).to.deep.equal([folderUID]);
 
       // Sanity: folder's flag is restored so it shows up in lens-filtered views again.
