@@ -23,6 +23,8 @@ A use case picks PIN or TAG based on the nature of its predicate. Smart-contract
 - `name` (string)
 - `forSchema` (bytes32) - Enforces what type of data can be attached to this anchor (e.g., Folder vs File vs Property).
 
+**Write-time guards** (`EFSIndexer.onAttest`): `revocable` must be `false`; `expirationTime` must be `0` (anchors are permanent — EAS expiry is never honored); the payload must be the exact canonical `abi.encode(name, forSchema)` with no trailing bytes (else `NonCanonicalPayload`); `name` must pass canonical-name validation (below); names are unique per `(parent, name, forSchema)`.
+
 **Details**: An Anchor represents a name (like a folder name or a file name) within a specific context. It references (is a child of) an attestation in its EAS `refUID` field. Other attestations reference these Anchors in their `refUID` fields when they need to be associated with that specific name. Names are considered unique within their direct hierarchy level relative to the parent entity.
 
 ### Canonical anchor-name encoding (NFC + percent-encode)
@@ -59,6 +61,8 @@ The resolver validates only the byte-level canonical form (percent-encoding + up
 - `value` (string)
 
 **Revocable**: `false` (ADR-0052) — a PROPERTY value is dumb, shared, *interned* content (an "anchor for a string"), not a claim. Many PINs can point at one value (best-effort dedup); nobody owns the value. Non-revocability is what makes a value safely shareable — a shared value can't be yanked out from under the other bindings that point at it. This is symmetric with DATA (§3): value = content, claim = edge. The revocable *claim* is the **PIN** (the binding): which container the value applies to, from which attester. Removal or change of a property is done by revoking or superseding the PIN, never the value (see Removal below). The reserved-key `contentHash`/`size` claims (ADR-0049) are likewise interned values bound by a PIN; retracting one means revoking its PIN.
+
+**Write-time guards** (`EFSIndexer.onAttest`): `revocable` must be `false`; `expirationTime` must be `0`; `refUID` must be zero (standalone); the payload must be the exact canonical `abi.encode(value)` with no trailing bytes (else `NonCanonicalPayload`).
 
 **Details**: Per ADR-0035 (superseded by ADR-0041 for the cardinality story), PROPERTY no longer carries a `key` field and no longer targets a container via `refUID`. Instead:
 
@@ -117,6 +121,8 @@ A single value attestation may be shared across many bindings (best-effort dedup
 
 **Revocable**: `false` — DATA is permanent. Once a file identity exists, it cannot be removed.
 
+**Write-time guards** (`EFSIndexer.onAttest`): `revocable` must be `false`; `expirationTime` must be `0`; `refUID` must be zero (standalone); the payload must be **empty** (zero-length) — any bytes are rejected, keeping the empty-DATA canonical invariant.
+
 **Details**: DATA is **pure identity** (ADR-0049). A DATA attestation asserts only "a file identity exists"; its EAS UID *is* the file's identity. DATA carries no fields — the on-wire payload is empty (zero-length). MIRRORs, folder placements (PIN), and metadata (PROPERTY) all reference the DATA **UID**, never a content hash. EFS is **not** content-addressed at the identity layer: two uploads of the same bytes get two distinct DATA UIDs.
 
 DATA attestations are standalone (refUID = 0x0) and non-revocable. They represent file identity, not file location. A DATA is placed at a path via a PIN attestation (see Pin Schema below). The same DATA can be pinned into multiple paths by different attesters without duplication.
@@ -135,6 +141,8 @@ Other metadata (content type, description, version history) is likewise stored a
 - `uri` (string) — retrieval URI (e.g., `ipfs://QmXxx`, `ar://yyy`, `web3://0xABC`)
 
 **Revocable**: `true`
+
+**Write-time guards** (`MirrorResolver.onAttest`): `revocable` must be `true` (`NotRevocable`); `expirationTime` must be `0` (`HasExpiration`); the payload must be the exact canonical `abi.encode(transportDefinition, uri)` with no trailing bytes (else `NonCanonicalPayload`); `uri` must pass the scheme allowlist (below) and be ≤ `MAX_URI_LENGTH`; `transportDefinition` must be a `/transports` descendant; only the canonical MIRROR schema is accepted (foreign schemas → `WrongSchema`).
 
 **Details**: MIRRORs attach retrieval methods to a DATA. The `MirrorResolver` contract validates that `refUID` points to a valid DATA attestation and `transportDefinition` points to a valid Anchor. No singleton enforcement — multiple mirrors per transport type per attester are allowed.
 
@@ -164,6 +172,8 @@ The transport preference order for serving keeps the original five ranked per AD
 
 **Revocable**: `true`
 
+**Write-time guards** (`EdgeResolver.onAttest`): `revocable` must be `true` (`NotRevocable`); `expirationTime` must be `0` (`HasExpiration`); the payload must be exactly 32 bytes — `abi.encode(bytes32 definition)` — any other length is rejected (`NonCanonicalPayload`).
+
 **Cardinality**: 1. Re-PINning the same `(attester, definition, targetSchema)` slot supersedes the prior PIN in O(1) — `EdgeResolver._activeBySlot` updates atomically and the prior PIN's edge entry is cleared from the active map.
 
 **Details**: PIN maps to `owl:FunctionalProperty` / Datomic `:db.cardinality/one` / a singular GraphQL field. Smart-contract readers can call `getActivePin(definition, attester, targetSchema) → bytes32 pinUID` and `getActivePinTarget(...) → bytes32 targetID` for O(1) reads — no scanning, no newest-by-time disambiguation.
@@ -188,6 +198,8 @@ Call `eas.revoke(pinUID)`. `EdgeResolver.onRevoke` clears the slot if the revoke
 - `weight` (int256) — Generic per-entry metadata. Sort key, score, ranking, vote weight, recency — the kernel does not interpret it; consumers and sort overlays (see [07-Sort-Overlay-Architecture.md](./07-Sort-Overlay-Architecture.md)) read it inline alongside the entry's UID.
 
 **Revocable**: `true`
+
+**Write-time guards** (`EdgeResolver.onAttest`): `revocable` must be `true` (`NotRevocable`); `expirationTime` must be `0` (`HasExpiration`); the payload must be exactly 64 bytes — `abi.encode(bytes32 definition, int256 weight)` — any other length is rejected (`NonCanonicalPayload`).
 
 **Cardinality**: N. Each `(attester, target, definition)` is a distinct edge; re-attesting the same triple updates the entry's UID and weight in place (no new entry, no duplication). Different targets under the same `(attester, definition)` accumulate as independent entries.
 
