@@ -67,7 +67,9 @@ What else we looked at and why it lost.
 - [ADR-0005 — ContentType moved from DATA to PROPERTY](./0005-content-type-moved-to-property.md)
 - [ADR-0006 — Folders don't need TAGs for visibility](./0006-folders-no-tags-for-visibility.md) *(Superseded by ADR-0038)*
 - [ADR-0038 — Tag-only folder visibility (single-source)](./0038-tag-only-folder-visibility.md)
-- [ADR-0052 — PROPERTY is non-revocable (interned shared value)](./0052-property-is-revocable.md)
+- [ADR-0049 — DATA is pure identity; hash and size are data, not identity](./0049-file-content-identity-hash-as-data.md)
+- [ADR-0050 — REDIRECT: first-class canonical / sameAs / symlink edge](./0050-redirect-canonical-symlink-schema.md)
+- [ADR-0052 — PROPERTY is non-revocable (interned shared value)](./0052-property-is-non-revocable.md)
 
 ### Index Design
 - [ADR-0007 — `_activeByAttesterAndSchema`: swap-and-pop compact index](./0007-activeByAttesterAndSchema-swap-and-pop.md) *(Swap-and-pop decision intact; array element type widened from `bytes32` to `TagEntry { tagUID, weight }` per ADR-0041)*
@@ -102,6 +104,7 @@ What else we looked at and why it lost.
 - [ADR-0028 — CI graceful degradation](./0028-ci-graceful-degradation.md)
 - [ADR-0029 — MIT license for EFS contracts (web client license deferred)](./0029-dual-licensing-mit-agpl.md)
 - [ADR-0037 — Pinned Sepolia fork for cross-environment determinism](./0037-pinned-sepolia-fork.md)
+- [ADR-0048 — Sepolia freeze set + proxy-ready resolvers (burn to immutable)](./0048-sepolia-freeze-set-and-proxy-ready-resolvers.md)
 
 ### Architectural Foundations
 - [ADR-0030 — Mainnet permanence (no upgradeability)](./0030-mainnet-permanence.md)
