@@ -659,13 +659,26 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
 
     // Generic Explorer
     //
-    // ADR-0051: these referencing/discovery getters take a REQUIRED `bool showRevoked` (false =
-    // exclude revoked + PIN-superseded, the common path; true = full history). A single required arg,
-    // not an overloaded convenience twin, because overloaded same-name functions collapse `args` to
-    // `never` in viem/wagmi/scaffold-eth and break every typed consumer (Vite client, SDK, subgraph
-    // codegen). Solidity has no default parameters, so callers pass `false` explicitly; the EFS
-    // SDK/client layer supplies that default so app devs rarely type it. This is the same uniform
-    // shape as getChildren*/getAnchorsBySchema*. Arrays stay append-only (ADR-0009); filter on read.
+    // These are LOW-LEVEL, SCHEMA-LEVEL discovery getters — they enumerate the raw attestation set
+    // under a schema. The REQUIRED `bool showRevoked` (false = exclude EAS-revoked, the common path;
+    // true = full history) filters EAS *revocation* only — the one notion of "inactive" that exists at
+    // the EAS/schema layer and that the kernel can cheaply track (`_isRevoked`).
+    //
+    // They do NOT reflect PIN/TAG *supersession* (a cardinality-1 PIN replaced by re-attesting at the
+    // same slot, ADR-0041). Supersession is an EdgeResolver SLOT-OVERLAY concept, not an EAS/schema
+    // one, so a schema-level enumerator cannot meaningfully filter it. `showRevoked=false` therefore
+    // still returns superseded edge UIDs — by design: this is the raw, EAS-mirroring layer.
+    //
+    // For supersession-aware "current claims" reads (ADR-0051's default-current contract), use the
+    // active-edge getters — getActivePinTarget / isActiveEdge / getActiveEdgeUID — or the view
+    // contracts (EFSFileView, ListReader) / EFSRouter, which read EdgeResolver's active sets. That is
+    // the EFS *semantic* read layer; these generic getters are the raw layer beneath it.
+    //
+    // Single required arg (not an overloaded convenience twin): overloaded same-name functions collapse
+    // `args` to `never` in viem/wagmi/scaffold-eth and break every typed consumer (Vite client, SDK,
+    // subgraph codegen). Solidity has no default parameters, so callers pass `false` explicitly; the EFS
+    // SDK/client layer supplies that default so app devs rarely type it. Same uniform shape as
+    // getChildren*/getAnchorsBySchema*. Arrays stay append-only (ADR-0009); filter on read.
 
     function getAttestationsBySchema(
         bytes32 schemaUID,

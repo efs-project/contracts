@@ -6,13 +6,13 @@
 
 ## Context
 
-EAS revocation does not erase an attestation — it sets a flag; the bytes persist on-chain forever (the cypherpunk "data is forever" stance, also enforced by EFS's append-only indices, ADR-0009). EFS already exploits this unevenly: the kernel's active-edge sets exclude revoked entries by construction, and ADR-0009 says append-only listing indices keep revoked entries while *"readers filter on iteration."* But there was no single, stated rule for what a read **returns by default** across every surface (kernel reads, view contracts, the router, the future SDK). Without one, each consumer reinvents the filter, and some surfaces leak revoked items.
+EAS revocation does not erase an attestation — it sets a flag; the bytes persist on-chain forever (the cypherpunk "data is forever" stance, also enforced by EFS's append-only indices, ADR-0009). EFS already exploits this unevenly: the kernel's active-edge sets exclude revoked entries by construction, and ADR-0009 says append-only listing indices keep revoked entries while _"readers filter on iteration."_ But there was no single, stated rule for what a read **returns by default** across every surface (kernel reads, view contracts, the router, the future SDK). Without one, each consumer reinvents the filter, and some surfaces leak revoked items.
 
 We want a mental model that lets a user **"delete"** something (a placement, a mirror, a value they no longer trust) without contradicting permanent, credibly-neutral archival.
 
 ## Decision
 
-**Every EFS read excludes revoked and superseded attestations by default. A consumer that wants them passes an explicit opt-in (`includeRevoked` or equivalent).**
+**Every EFS _semantic_ read (the active-edge getters, the view contracts, the router, the SDK) excludes revoked and superseded attestations by default; a consumer that wants them passes an explicit opt-in (`showRevoked` / `includeRevoked`). The low-level, schema-level discovery getters beneath that layer are the raw EAS mirror — they filter EAS-_revocation_ only, never PIN/TAG _supersession_ (see Scope).**
 
 This is a two-layer model — keep the layers distinct:
 
@@ -21,15 +21,17 @@ This is a two-layer model — keep the layers distinct:
 - **Opt-in read = full history.** `includeRevoked: true` surfaces the tombstones, including the revocation record itself.
 
 Scope and properties:
-- The filter is **per-attester / per-lens.** In EAS you can only revoke your *own* attestations, so "default-hidden" is always the author withdrawing their own claim — consistent with viewer sovereignty (ADR-0013/0014/0031). You can never hide someone else's claim from their lens.
+
+- The filter is **per-attester / per-lens.** In EAS you can only revoke your _own_ attestations, so "default-hidden" is always the author withdrawing their own claim — consistent with viewer sovereignty (ADR-0013/0014/0031). You can never hide someone else's claim from their lens.
 - **Credible neutrality is preserved.** Because (a) only the author can revoke, and (b) the withdrawal is itself a permanent, opt-in-visible record, a publisher can retract a claim from the default view but **cannot silently revise the past** — an auditor can always reconstruct what was published and that it was withdrawn.
-- Applies to: EFSIndexer read helpers, the view contracts (EFSFileView, ListReader), EFSRouter resolution (already active-only), and the SDK read layer (which owns this default for clients — see the EFS SDK boundary).
+- **Applies to the EFS _semantic_ read layer** — the active-edge getters (`getActivePinTarget` / `isActiveEdge` / `getActiveEdgeUID`), the view contracts (EFSFileView, ListReader), EFSRouter resolution (already active-only), and the SDK read layer (which owns this default for clients — see the EFS SDK boundary). These honor BOTH exclusions, revoked **and** superseded.
+- **The generic, schema-level discovery getters are the raw layer beneath that** (`getAttestationsBySchema`, `getReferencingAttestations`, `getReferencingBySchemaAndAttester`, `getAllReferencing`, `getIncoming`/`getOutgoingAttestations`, `getChildren*`, `getAnchorsBySchema*`). Their `showRevoked=false` filters EAS-_revocation_ only — the single "inactive" notion that exists at the EAS/schema layer. They do **not** (and structurally cannot) filter PIN/TAG **supersession**, which is an EdgeResolver slot-overlay concept, not a schema one — so they still return superseded edge UIDs by design. They mirror the raw EAS set; "current claims" reads use the semantic layer above. (PR #24 clarification: this is intentional low-level behavior, not a leak — a consumer wanting current edge state must use the active-edge/view/router reads.)
 
 ## Consequences
 
 - **Enables.** "Delete" / "untrust" as a first-class, intuitive default everywhere, with no loss of the immutable record. Unifies a previously ad-hoc behavior into one rule consumers can rely on.
 - **Costs.** Read paths over append-only arrays iterate-then-filter (already the ADR-0009 reality; hot paths stay O(1) via the active-edge sets). View functions that should expose history grow an `includeRevoked` parameter — an additive API change.
-- **Implies.** This is **upgradeable read/logic, not frozen schema shape** — it does not touch any of the nine schema UIDs. It operates on the revocable schemas (PIN, TAG, MIRROR, LIST_ENTRY, REDIRECT); PROPERTY is non-revocable interned content (ADR-0052), so its *value* is never hidden — but its revocable **binding PIN** is, which is how a property is removed from the default view (revoke the PIN, and `getActivePinTarget` stops returning it).
+- **Implies.** This is **upgradeable read/logic, not frozen schema shape** — it does not touch any of the nine schema UIDs. It operates on the revocable schemas (PIN, TAG, MIRROR, LIST_ENTRY, REDIRECT); PROPERTY is non-revocable interned content (ADR-0052), so its _value_ is never hidden — but its revocable **binding PIN** is, which is how a property is removed from the default view (revoke the PIN, and `getActivePinTarget` stops returning it).
 - **Follow-up.** Audit each view surface to confirm the default holds and add `includeRevoked` where a consumer needs the historical set; the SDK adopts the same default in its read layer.
 
 ## Alternatives considered

@@ -19,7 +19,7 @@ import { ethers } from "hardhat";
 import { EAS_ADDRESS, SCHEMA_REGISTRY_ADDRESS } from "./addresses";
 import { Create3DeployResult, Create3Name, deployResolverViaCreate3, getCreateX, predictProxyAddress } from "./create3";
 import { RESOLVERS, ResolverName, SCHEMAS, computeAllSchemaUIDs } from "./schemas";
-import { runVerifyGate } from "./verify";
+import { runVerifyGate, assertIndexerWiring } from "./verify";
 
 export type RunMode = "full" | "until-freeze-gate" | "after-freeze-gate";
 
@@ -292,6 +292,12 @@ export async function orchestrate(deployer: Signer, mode: RunMode, log = true): 
     ).wait();
     l("  EFSIndexer.wireContracts done");
   }
+
+  // Assert the one-shot wiring landed correctly before the (irreversible) register. Step-3's gate ran
+  // PRE-wire, so it skipped this; assert it now that wiring is done — covers `full` mode and the
+  // --until-freeze-gate stop below (a wrong wire here can never accept PIN/TAG writes). The
+  // --after-freeze-gate resume re-runs the gate, which checks it there (already wired). (PR #24 P2.)
+  await assertIndexerWiring(deploys, deployer);
 
   const result: OrchestrationResult = {
     deploys,

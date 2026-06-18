@@ -182,9 +182,19 @@ export async function orchestrateViaSafe(
     const proxy = name === "SystemAccount" ? plan.systemAccount : plan.proxies[name as ResolverName];
     const code = await ethers.provider.getCode(proxy);
     if (code === "0x") throw new Error(`SAFE-DEPLOY: no code at Safe-keyed predicted ${proxy} for ${name}`);
+    // Read the LIVE impl from the proxy's EIP-1967 slot, NOT plan.impls (PR #24 P2). On a resume where
+    // Batch 1 is SKIPPED, buildSafePlan still deployed a FRESH unused impl set, so plan.impls would not
+    // be the impls actually behind the proxies — and the verify gate's impl-direct `_disableInitializers`
+    // lock check would run on the wrong (fresh) impls, letting a drifted/unlocked live Batch-1 impl pass
+    // the rehearsal and proceed to register. The proxy's own impl slot is correct in BOTH branches (on a
+    // fresh Batch 1 the proxy points at plan.impls anyway). Mirrors orchestrate.ts after-freeze-gate +
+    // the propose path's buildDeploysFromOnchain.
+    const impl = await readImplementation(proxy);
+    if (impl === ethers.ZeroAddress)
+      throw new Error(`SAFE-DEPLOY: proxy ${proxy} for ${name} has a zero EIP-1967 implementation slot`);
     deploys[name] = {
       resolver: name,
-      impl: plan.impls[name],
+      impl,
       proxy,
       predicted: proxy,
       proxyAdmin: await readProxyAdmin(proxy),

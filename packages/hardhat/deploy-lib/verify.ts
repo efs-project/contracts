@@ -3,9 +3,9 @@
 // failure throws — the orchestration aborts before the freeze gate, so no schema is ever registered
 // against an unverified proxy.
 
-import { Signer, ZeroHash } from "ethers";
+import { Signer, ZeroHash, ZeroAddress } from "ethers";
 import { ethers } from "hardhat";
-import { EAS_ADDRESS } from "./addresses";
+import { EAS_ADDRESS, SCHEMA_REGISTRY_ADDRESS } from "./addresses";
 import type { Create3DeployResult } from "./create3";
 import { SCHEMAS, computeSchemaUID } from "./schemas";
 
@@ -89,6 +89,21 @@ export async function runVerifyGate(input: VerifyInput): Promise<void> {
   assertEq(await aliasR.dataSchemaUID(), schemaUIDs.DATA, "AliasResolver.dataSchemaUID");
   assertEq(await aliasR.anchorSchemaUID(), schemaUIDs.ANCHOR, "AliasResolver.anchorSchemaUID");
 
+  // (3c) one-shot partner WIRING addresses (PR #24 P2) — checked IFF the indexer is already wired.
+  //      (3b) checks the UID cross-refs; this checks the ADDRESSES set by EFSIndexer.wireContracts() —
+  //      a ONE-SHOT setter (`edgeResolver == address(0)` guard). A stale/hand-edited wire that consumed
+  //      the slot with a WRONG EdgeResolver/MirrorResolver/SchemaRegistry passes every UID check above,
+  //      lets the 9 permanent schemas register, and only THEN breaks irrecoverably: PIN/TAG writes
+  //      revert forever when the real EdgeResolver calls back and fails `msg.sender == edgeResolver`.
+  //      Ordering note: the Safe path (Batch 1 wires) and the EOA --after-freeze-gate resume are ALREADY
+  //      wired when this gate runs, so the check fires; the EOA `full` path wires in step 4 AFTER this
+  //      gate, so here it is correctly unwired and skipped — orchestrate.ts asserts it explicitly
+  //      post-wire (assertIndexerWiring) before its register.
+  if ((await indexer.edgeResolver()) !== ZeroAddress) {
+    console.log("  [verify] EFSIndexer partner wiring (edgeResolver / mirrorResolver / schemaRegistry)...");
+    await assertIndexerWiring(deploys, deployer);
+  }
+
   // (4) proxy.getEAS() == EAS for every resolver.
   console.log("  [verify] getEAS() == canonical EAS (per proxy)...");
   for (const d of Object.values(deploys)) {
@@ -108,6 +123,23 @@ export async function runVerifyGate(input: VerifyInput): Promise<void> {
   }
 
   console.log("  [verify] GATE GREEN ✓");
+}
+
+/// Assert EFSIndexer's one-shot partner wiring (edgeResolver / mirrorResolver / schemaRegistry) matches
+/// the deployed proxies + canonical registry. Separate from runVerifyGate because the EOA `full` path
+/// wires AFTER the step-3 gate (so the gate skips it as unwired), whereas the Safe path + the EOA
+/// --after-freeze-gate resume are already wired when the gate runs. Call wherever wiring is present and
+/// BEFORE the irreversible register: the gate calls it when wired; orchestrate.ts calls it post-wire in
+/// `full` mode. (PR #24 P2 — guards against a wrong one-shot wire registering schemas that then can
+/// never accept PIN/TAG writes.)
+export async function assertIndexerWiring(
+  deploys: Record<string, Create3DeployResult>,
+  deployer: Signer,
+): Promise<void> {
+  const indexer = await ethers.getContractAt("EFSIndexer", deploys.EFSIndexer.proxy, deployer);
+  assertEq(await indexer.edgeResolver(), deploys.EdgeResolver.proxy, "EFSIndexer.edgeResolver()");
+  assertEq(await indexer.mirrorResolver(), deploys.MirrorResolver.proxy, "EFSIndexer.mirrorResolver()");
+  assertEq(await indexer.schemaRegistry(), SCHEMA_REGISTRY_ADDRESS, "EFSIndexer.schemaRegistry()");
 }
 
 function assertEq(got: string, want: string, label: string): void {
