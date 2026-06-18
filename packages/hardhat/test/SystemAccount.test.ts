@@ -13,9 +13,13 @@ import { deployResolverProxy } from "./helpers/deployResolverProxy";
 // Non-fork: deploys a real EAS + SchemaRegistry locally (the same pattern the resolver tests use).
 describe("SystemAccount (ADR-0053)", function () {
   let owner: Signer;
-  let module: Signer;
   let stranger: Signer;
   let ownerAddr: string;
+
+  // The authorized module is now a CONTRACT (MockSystemModule), not an EOA: setModuleAuthorization
+  // rejects EOAs (NotAContract, PR #24 P2). Tests authorize the mock's address and drive the relay
+  // THROUGH it (mockModule.callAttest(...) etc.) so the EAS attester still comes out == SystemAccount.
+  let mockModule: any;
   let moduleAddr: string;
 
   let eas: any;
@@ -46,9 +50,8 @@ describe("SystemAccount (ADR-0053)", function () {
   });
 
   beforeEach(async function () {
-    [owner, module, stranger] = await ethers.getSigners();
+    [owner, stranger] = await ethers.getSigners();
     ownerAddr = await owner.getAddress();
-    moduleAddr = await module.getAddress();
 
     const RegistryFactory = await ethers.getContractFactory("SchemaRegistry");
     registry = await RegistryFactory.deploy();
@@ -65,6 +68,13 @@ describe("SystemAccount (ADR-0053)", function () {
     // Deploy SystemAccount behind a proxy; initialize(owner_=ownerAddr).
     systemAccount = await deployResolverProxy("SystemAccount", [await eas.getAddress()], [ownerAddr], owner);
     systemAccountAddr = await systemAccount.getAddress();
+
+    // The authorized module must be a CONTRACT now (NotAContract guard, PR #24 P2). Deploy a thin mock
+    // module that forwards relay calls into SystemAccount; its address is the authorized "moduleAddr".
+    const ModuleFactory = await ethers.getContractFactory("MockSystemModule");
+    mockModule = await ModuleFactory.deploy(systemAccountAddr);
+    await mockModule.waitForDeployment();
+    moduleAddr = await mockModule.getAddress();
   });
 
   describe("config + views", function () {
@@ -85,8 +95,8 @@ describe("SystemAccount (ADR-0053)", function () {
     });
 
     it("setModuleAuthorization is onlyOwner", async function () {
-      await expect(systemAccount.connect(module).setModuleAuthorization(moduleAddr, true)).to.be.reverted;
-      // owner succeeds + emits
+      await expect(systemAccount.connect(stranger).setModuleAuthorization(moduleAddr, true)).to.be.reverted;
+      // owner succeeds + emits (moduleAddr is the mock contract → passes the NotAContract guard)
       await expect(systemAccount.setModuleAuthorization(moduleAddr, true))
         .to.emit(systemAccount, "ModuleAuthorizationSet")
         .withArgs(moduleAddr, true);
@@ -97,6 +107,15 @@ describe("SystemAccount (ADR-0053)", function () {
         systemAccount,
         "ZeroAddress",
       );
+    });
+
+    it("setModuleAuthorization rejects an EOA (NotAContract)", async function () {
+      // PR #24 P2: only a contract may be an authorized writer — an EOA (or the Safe) authorized
+      // pre-seal could author arbitrary `system` payloads forever post-burn. `stranger` is an EOA
+      // (code.length == 0), so authorizing it reverts NotAContract; the mock contract (above) passes.
+      await expect(
+        systemAccount.setModuleAuthorization(await stranger.getAddress(), true),
+      ).to.be.revertedWithCustomError(systemAccount, "NotAContract");
     });
   });
 
@@ -162,6 +181,53 @@ describe("SystemAccount (ADR-0053)", function () {
     });
   });
 
+  describe("getAuthorizedModules enumeration (FIX, PR #24 P2)", function () {
+    // The enumerable mirror of the authorized-module SET — the auditable membership the non-enumerable
+    // `authorizedModule` mapping cannot provide. The burn ceremony reads it to PROVE the permanent
+    // `system` writer set is exactly the intended contracts. Pushes on authorize, swap-and-pops on
+    // de-authorize, no-ops if unchanged — so it always equals the currently-authorized set.
+    let mockModule2: any;
+    let moduleAddr2: string;
+
+    beforeEach(async function () {
+      const ModuleFactory = await ethers.getContractFactory("MockSystemModule");
+      mockModule2 = await ModuleFactory.deploy(systemAccountAddr);
+      await mockModule2.waitForDeployment();
+      moduleAddr2 = await mockModule2.getAddress();
+    });
+
+    it("reflects authorize then de-authorize (push + swap-and-pop), and re-authorizing does not duplicate", async function () {
+      // getAuthorizedModules returns an ethers Result proxy; spread to a plain array for chai set/equality.
+      expect([...(await systemAccount.getAuthorizedModules())]).to.deep.equal([]);
+
+      await (await systemAccount.setModuleAuthorization(moduleAddr, true)).wait();
+      await (await systemAccount.setModuleAuthorization(moduleAddr2, true)).wait();
+      expect([...(await systemAccount.getAuthorizedModules())]).to.have.members([moduleAddr, moduleAddr2]);
+      expect([...(await systemAccount.getAuthorizedModules())]).to.have.lengthOf(2);
+
+      // Re-authorizing an already-authorized module is a no-op-if-unchanged → no duplicate entry.
+      await (await systemAccount.setModuleAuthorization(moduleAddr, true)).wait();
+      expect([...(await systemAccount.getAuthorizedModules())]).to.have.lengthOf(2);
+
+      // De-authorize one → swap-and-pop leaves exactly the other (order is unspecified set semantics).
+      await (await systemAccount.setModuleAuthorization(moduleAddr, false)).wait();
+      expect([...(await systemAccount.getAuthorizedModules())]).to.deep.equal([moduleAddr2]);
+    });
+
+    it("is frozen after sealModules(): still returns the authorized module and setModuleAuthorization reverts", async function () {
+      await (await systemAccount.setModuleAuthorization(moduleAddr, true)).wait();
+      await (await systemAccount.sealModules()).wait();
+
+      // Membership AND its enumeration are frozen together — the list still reports the sealed member,
+      // and no further authorize/de-authorize can change it (ModulesSealed).
+      expect([...(await systemAccount.getAuthorizedModules())]).to.deep.equal([moduleAddr]);
+      await expect(systemAccount.setModuleAuthorization(moduleAddr2, true)).to.be.revertedWithCustomError(
+        systemAccount,
+        "ModulesSealed",
+      );
+    });
+  });
+
   describe("attester-relay gating (module-only — PR #24 P1 fix)", function () {
     it("reverts for an unauthorized caller", async function () {
       await expect(
@@ -207,9 +273,7 @@ describe("SystemAccount (ADR-0053)", function () {
 
     it("an authorized module can author; the EAS attester == SystemAccount address", async function () {
       await (await systemAccount.setModuleAuthorization(moduleAddr, true)).wait();
-      const tx = await systemAccount
-        .connect(module)
-        .attest(attestRequest(plainSchemaUID, enc.encode(["string"], ["from-module"])));
+      const tx = await mockModule.callAttest(attestRequest(plainSchemaUID, enc.encode(["string"], ["from-module"])));
       const uid = getUID(await tx.wait());
       const att = await eas.getAttestation(uid);
       expect(att.attester).to.equal(systemAccountAddr);
@@ -237,7 +301,7 @@ describe("SystemAccount (ADR-0053)", function () {
       );
 
       await (await systemAccount.setModuleAuthorization(moduleAddr, true)).wait();
-      const tx = await systemAccount.connect(module).multiAttest(multiReq);
+      const tx = await mockModule.callMultiAttest(multiReq);
       const uid = getUID(await tx.wait());
       const att = await eas.getAttestation(uid);
       expect(att.attester).to.equal(systemAccountAddr);
@@ -245,16 +309,14 @@ describe("SystemAccount (ADR-0053)", function () {
 
     it("revoke is module-gated; SystemAccount can revoke what it authored", async function () {
       await (await systemAccount.setModuleAuthorization(moduleAddr, true)).wait();
-      const tx = await systemAccount
-        .connect(module)
-        .attest(attestRequest(plainSchemaUID, enc.encode(["string"], ["to-revoke"])));
+      const tx = await mockModule.callAttest(attestRequest(plainSchemaUID, enc.encode(["string"], ["to-revoke"])));
       const uid = getUID(await tx.wait());
 
       await expect(
         systemAccount.connect(stranger).revoke({ schema: plainSchemaUID, data: { uid, value: 0n } }),
       ).to.be.revertedWithCustomError(systemAccount, "NotAuthorized");
 
-      await (await systemAccount.connect(module).revoke({ schema: plainSchemaUID, data: { uid, value: 0n } })).wait();
+      await (await mockModule.callRevoke({ schema: plainSchemaUID, data: { uid, value: 0n } })).wait();
       const att = await eas.getAttestation(uid);
       expect(att.revocationTime).to.be.greaterThan(0n);
     });
@@ -272,7 +334,7 @@ describe("SystemAccount (ADR-0053)", function () {
       // registerAnchor is part of the steady-state relay → module-only (PR #24 P1 fix). Authorize a
       // module and author through it; the owner itself cannot call it (covered by the relay-gating test).
       await (await systemAccount.setModuleAuthorization(moduleAddr, true)).wait();
-      const tx = await systemAccount.connect(module).registerAnchor(ZeroHash, "root", anchorSchemaUID, ZeroHash);
+      const tx = await mockModule.callRegisterAnchor(ZeroHash, "root", anchorSchemaUID, ZeroHash);
       const uid = getUID(await tx.wait());
       const att = await eas.getAttestation(uid);
       expect(att.attester).to.equal(systemAccountAddr);
@@ -377,10 +439,11 @@ describe("SystemAccount (ADR-0053)", function () {
 
     it("an authorized module CANNOT bootstrap (bootstrap is owner-only, not the relay gate)", async function () {
       // Confirms the modifier split: bootstrap is onlyOwner, NOT onlyAuthorizedModule. Authorizing a
-      // module grants relay access (attest/etc.) but never the one-time bootstrap ceremony power.
+      // module grants relay access (attest/etc.) but never the one-time bootstrap ceremony power — a
+      // non-owner caller still reverts OwnableUnauthorizedAccount even with the module authorized.
       await (await systemAccount.setModuleAuthorization(moduleAddr, true)).wait();
       await expect(
-        systemAccount.connect(module).bootstrap(await mockIndex.getAddress(), anchorSchemaUID, SPECS),
+        systemAccount.connect(stranger).bootstrap(await mockIndex.getAddress(), anchorSchemaUID, SPECS),
       ).to.be.revertedWithCustomError(systemAccount, "OwnableUnauthorizedAccount");
     });
 

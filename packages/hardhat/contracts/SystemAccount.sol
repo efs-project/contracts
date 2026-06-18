@@ -62,6 +62,15 @@ contract SystemAccount is Initializable, OwnableUpgradeable, ReentrancyGuardUpgr
     error ZeroAddress();
     error BootstrapSealed();
 
+    /// @notice An authorized module must be a contract, not an EOA (PR #24 P2 fix). ADR-0053 is
+    ///         "humans choose programs, never payloads" — an EOA is not a program, so an EOA (or the
+    ///         Safe itself) authorized pre-seal could author arbitrary `system` payloads forever after
+    ///         the burn. `setModuleAuthorization` rejects any address with no code so the permanent
+    ///         `system` writer set is code-governed by construction. (Defense-in-depth, not a complete
+    ///         guarantee — a thin relay contract can still forward an EOA's calls — but it closes the
+    ///         obvious footgun and makes the sealed set auditable as code via getAuthorizedModules.)
+    error NotAContract();
+
     /// @notice Module-authorization membership has been permanently sealed (PR #24 P1 fix). Thrown by
     ///         `setModuleAuthorization` once `sealModules()` has latched membership closed forever.
     error ModulesSealed();
@@ -115,6 +124,13 @@ contract SystemAccount is Initializable, OwnableUpgradeable, ReentrancyGuardUpgr
         // documented. Appended AFTER `bootstrapSealed` (END of the struct) so the namespaced storage
         // layout stays backward-compatible (additive, upgrade-safe — never reorder/insert).
         bool _modulesSealed;
+        // Enumerable mirror of the authorized-module SET (PR #24 P2 fix). The `authorizedModule`
+        // mapping above is non-enumerable, so the burn checklist could not PROVE the sealed `system`
+        // writer set is code-only except by replaying events. This array is the auditable membership
+        // list: `setModuleAuthorization` pushes on authorize and swap-and-pops on de-authorize, so it
+        // always equals the set of currently-authorized modules. `getAuthorizedModules()` exposes it
+        // for the pre-burn membership assertion. Appended at the END (additive, upgrade-safe).
+        address[] authorizedModuleList;
     }
 
     // keccak256(abi.encode(uint256(keccak256("efs.systemaccount.config")) - 1)) & ~bytes32(uint256(0xff))
@@ -349,9 +365,28 @@ contract SystemAccount is Initializable, OwnableUpgradeable, ReentrancyGuardUpgr
     ///      attester post-burn — making ADR-0053's "membership authority is pre-burn only" a
     ///      contract-enforced invariant the burn ceremony asserts, not merely documented intent.
     function setModuleAuthorization(address module, bool ok) external onlyOwner {
-        if (_cfg()._modulesSealed) revert ModulesSealed();
+        SystemAccountConfig storage $ = _cfg();
+        if ($._modulesSealed) revert ModulesSealed();
         if (module == address(0)) revert ZeroAddress();
-        _cfg().authorizedModule[module] = ok;
+        // ADR-0053 "programs, never payloads": only a contract may be authorized (PR #24 P2). An EOA
+        // (or the Safe) authorized pre-seal could author arbitrary `system` payloads forever post-burn.
+        if (module.code.length == 0) revert NotAContract();
+        if ($.authorizedModule[module] == ok) return; // no-op: state unchanged, keep the list exact
+        $.authorizedModule[module] = ok;
+        if (ok) {
+            $.authorizedModuleList.push(module);
+        } else {
+            // swap-and-pop: order is irrelevant (it's a set), and N is tiny (a handful of modules ever).
+            address[] storage list = $.authorizedModuleList;
+            uint256 len = list.length;
+            for (uint256 i = 0; i < len; i++) {
+                if (list[i] == module) {
+                    list[i] = list[len - 1];
+                    list.pop();
+                    break;
+                }
+            }
+        }
         emit ModuleAuthorizationSet(module, ok);
     }
 
@@ -405,6 +440,15 @@ contract SystemAccount is Initializable, OwnableUpgradeable, ReentrancyGuardUpgr
     ///         write as `system` is frozen, so membership is provably pre-burn only (ADR-0053).
     function modulesSealed() external view returns (bool) {
         return _cfg()._modulesSealed;
+    }
+
+    /// @notice The full set of currently-authorized modules (PR #24 P2 fix). The burn ceremony reads
+    ///         this BEFORE `sealModules()` to prove the permanent `system` writer set is exactly the
+    ///         intended contracts and nothing else — the auditable membership the non-enumerable
+    ///         `authorizedModule` mapping cannot provide. Each entry is a contract (EOAs are rejected
+    ///         at authorize time). Order is unspecified (set semantics); expected to be tiny.
+    function getAuthorizedModules() external view returns (address[] memory) {
+        return _cfg().authorizedModuleList;
     }
 
     /// @notice The EAS this SystemAccount was deployed against.
