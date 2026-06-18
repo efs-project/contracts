@@ -36,7 +36,8 @@ interface IEFSIndexer {
         bytes32 schemaUID,
         uint256 start,
         uint256 length,
-        bool reverseOrder
+        bool reverseOrder,
+        bool showRevoked
     ) external view returns (bytes32[] memory);
 
     function getReferencingBySchemaAndAttester(

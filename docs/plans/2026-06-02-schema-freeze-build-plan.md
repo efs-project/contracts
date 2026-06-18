@@ -20,7 +20,7 @@
 
 | # | Schema | Field string (frozen) | revocable | Resolver |
 |---|---|---|---|---|
-| 1 ANCHOR | `string name, bytes32 schemaUID` | false | EFSIndexer |
+| 1 ANCHOR | `string name, bytes32 forSchema` | false | EFSIndexer |
 | 2 PROPERTY | `string value` | false | EFSIndexer |
 | 3 DATA | `` (empty) | false | EFSIndexer |
 | 4 PIN | `bytes32 definition` | true | EdgeResolver |
