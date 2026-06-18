@@ -351,7 +351,7 @@ async function main() {
       const dataUID = await edgeResolver.getActivePinTarget(anchorUID, attester, dataSchemaUID);
       if (dataUID !== ethers.ZeroHash) {
         // Resolve the MIRROR URI for this DATA
-        const mirrors = await indexer.getReferencingAttestations(dataUID, mirrorSchemaUID, 0, 1, false);
+        const mirrors = await indexer.getReferencingAttestations(dataUID, mirrorSchemaUID, 0, 1, false, false);
         if (mirrors.length > 0) {
           const mirrorAtt = await eas.getAttestation(mirrors[0]);
           const [, uri] = encode.decode(["bytes32", "string"], mirrorAtt.data);
@@ -844,13 +844,13 @@ async function main() {
   // ════════════════════════════════════════════════════════════════════════════════
   console.log("\n── Phase 13: Sort discovery ──\n");
 
-  const sortNamingAnchors = await indexer["getAnchorsBySchema(bytes32,bytes32,uint256,uint256,bool)"](
+  const sortNamingAnchors = await indexer["getAnchorsBySchema(bytes32,bytes32,uint256,uint256,bool,bool)"](
     musicUID,
     sortInfoSchemaUID,
     0,
     10,
     false,
-  );
+    false,  );
   assert(
     "getAnchorsBySchema finds 1 sort naming anchor in /music/",
     sortNamingAnchors.length === 1 && sortNamingAnchors[0] === alphaNameUID,
@@ -863,7 +863,7 @@ async function main() {
     0,
     10,
     false,
-  );
+    false,  );
   assert(
     "EFSIndexer has 1 SORT_INFO ref via index() wiring (fully on-chain discovery)",
     sortInfoRefsFromIndexer.length === 1,

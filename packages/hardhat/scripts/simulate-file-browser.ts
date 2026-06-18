@@ -339,7 +339,7 @@ async function main() {
 
   // ── Test 2: List Children (global) ──
   console.log("\n[2] Children Listing");
-  const petsChildren = await indexer["getChildren(bytes32,uint256,uint256,bool)"](petsUID, 0n, 10, false);
+  const petsChildren = await indexer["getChildren(bytes32,uint256,uint256,bool,bool)"](petsUID, 0n, 10, false, false);
   assert(
     "getChildren(/pets/) returns 3 (best.jpg, cats, dogs)",
     petsChildren.length === 3,
@@ -381,7 +381,7 @@ async function main() {
   // ── Test 5: MIRROR Resolution ──
   console.log("\n[5] MIRROR Resolution");
   // MIRRORs are indexed via indexer.index() — discoverable via getReferencingAttestations
-  const ownerMirrors = await indexer.getReferencingAttestations(ownerBestData.uid, mirrorSchemaUID, 0, 10, false);
+  const ownerMirrors = await indexer.getReferencingAttestations(ownerBestData.uid, mirrorSchemaUID, 0, 10, false, false);
   assert("Owner's DATA has 1 MIRROR", ownerMirrors.length === 1, `got ${ownerMirrors.length}`);
 
   // Decode MIRROR to get URI
@@ -436,15 +436,15 @@ async function main() {
   // Add a second mirror (onchain) to owner's best DATA
   await mirror(owner, ownerBestData.uid, onchainTransportUID, "web3://0xABCDEF");
 
-  const allMirrors = await indexer.getReferencingAttestations(ownerBestData.uid, mirrorSchemaUID, 0, 10, false);
+  const allMirrors = await indexer.getReferencingAttestations(ownerBestData.uid, mirrorSchemaUID, 0, 10, false, false);
   assert("DATA now has 2 MIRRORs (ipfs + onchain)", allMirrors.length === 2, `got ${allMirrors.length}`);
 
   // ── Test 10: Subdirectory Navigation ──
   console.log("\n[10] Subdirectory Navigation");
-  const catsChildren = await indexer["getChildren(bytes32,uint256,uint256,bool)"](catsUID, 0, 10, false);
+  const catsChildren = await indexer["getChildren(bytes32,uint256,uint256,bool,bool)"](catsUID, 0, 10, false, false);
   assert("/pets/cats/ has 2 files", catsChildren.length === 2);
 
-  const dogsChildren = await indexer["getChildren(bytes32,uint256,uint256,bool)"](dogsUID, 0, 10, false);
+  const dogsChildren = await indexer["getChildren(bytes32,uint256,uint256,bool,bool)"](dogsUID, 0, 10, false, false);
   assert("/pets/dogs/ has 1 file", dogsChildren.length === 1);
 
   // ── Test 11: Tagging (labels — cardinality N) ──
@@ -482,13 +482,13 @@ async function main() {
   // ── Test 13: Schema-filtered Anchor listing ──
   console.log("\n[13] Schema-filtered Anchor Listing");
   // getAnchorsBySchema with dataSchemaUID should only return file anchors, not sub-folders
-  const fileAnchorsInPets = await indexer["getAnchorsBySchema(bytes32,bytes32,uint256,uint256,bool)"](
+  const fileAnchorsInPets = await indexer["getAnchorsBySchema(bytes32,bytes32,uint256,uint256,bool,bool)"](
     petsUID,
     dataSchemaUID,
     0,
     10,
     false,
-  );
+    false,  );
   assert(
     "DATA-schema anchors in /pets/ = 1 (best.jpg only, cats and dogs are folders)",
     fileAnchorsInPets.length === 1,

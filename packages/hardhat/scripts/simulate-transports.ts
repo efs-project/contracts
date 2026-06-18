@@ -254,9 +254,9 @@ async function main() {
   assert("/transports/magnet exists", magnetTransportUID !== ethers.ZeroHash);
   assert("/transports/https exists", httpsTransportUID !== ethers.ZeroHash);
 
-  // Verify all 5 transport types are children of /transports/
-  const transportChildren = await indexer["getChildren(bytes32,uint256,uint256,bool)"](transportsUID, 0, 10, false);
-  assert("5 transport children", transportChildren.length === 5, `got ${transportChildren.length}`);
+  // Verify all 11 transport types are children of /transports/
+  const transportChildren = await indexer["getChildren(bytes32,uint256,uint256,bool,bool)"](transportsUID, 0, 20, false, false);
+  assert("11 transport children", transportChildren.length === 11, `got ${transportChildren.length}`);
 
   // ======================================================================
   // TEST 2: Single-Transport File Upload (IPFS)
@@ -272,7 +272,7 @@ async function main() {
   await pin(owner, photo1Data.uid, photo1UID);
 
   // Verify mirror is discoverable via getReferencingAttestations
-  const photo1Mirrors = await indexer.getReferencingAttestations(photo1Data.uid, mirrorSchemaUID, 0, 10, false);
+  const photo1Mirrors = await indexer.getReferencingAttestations(photo1Data.uid, mirrorSchemaUID, 0, 10, false, false);
   assert("MIRROR indexed on DATA", photo1Mirrors.length === 1);
   assert("MIRROR UID matches", photo1Mirrors[0] === photo1Mirror);
 
@@ -299,7 +299,7 @@ async function main() {
   const docMirrorHTTPS = await createMirror(owner, docData.uid, httpsTransportUID, "https://example.com/paper.pdf");
   await pin(owner, docData.uid, docUID);
 
-  const docMirrors = await indexer.getReferencingAttestations(docData.uid, mirrorSchemaUID, 0, 10, false);
+  const docMirrors = await indexer.getReferencingAttestations(docData.uid, mirrorSchemaUID, 0, 10, false, false);
   assert("3 mirrors on paper.pdf DATA", docMirrors.length === 3, `got ${docMirrors.length}`);
 
   // Verify each mirror's transport definition
@@ -480,11 +480,11 @@ async function main() {
   // Body is empty for external URIs; check headers
   const headers = routerRes[2];
   const contentTypeHeader = headers.find(
-    (h: { key: string; value: string }) => h.key === "Content-Type" && !h.value.startsWith("message/"),
+    (h: { key: string; value: string }) => h.key === "Content-Type",
   );
   assert(
     "Router resolves contentType from PROPERTY",
-    contentTypeHeader?.value === "text/plain",
+    contentTypeHeader?.value.includes('content-type="text/plain"'),
     `got: ${contentTypeHeader?.value}`,
   );
 
