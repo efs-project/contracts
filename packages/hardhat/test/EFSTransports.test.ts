@@ -467,6 +467,44 @@ describe("EFS Transports & Data Model", function () {
     });
   });
 
+  describe("canonical-payload guard (NonCanonicalPayload)", function () {
+    // abi.decode tolerates trailing words, so `abi.encode(fields) || extraWord` decodes to the SAME
+    // fields and would mint a second record under a distinct permanent UID (an anchor name / interned
+    // value with multiple accepted encodings). EFSIndexer re-encodes and hash-compares on onAttest.
+    // Parent/name/value are all valid here, so ONLY the canonical-payload guard can reject these.
+    it("rejects an ANCHOR with trailing bytes past the canonical encoding", async function () {
+      await expect(
+        eas.attest({
+          schema: anchorSchemaUID,
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: NO_EXPIRATION,
+            revocable: false,
+            refUID: rootUID,
+            data: encodeAnchor("canon-folder") + "00".repeat(32),
+            value: 0n,
+          },
+        }),
+      ).to.be.revertedWithCustomError(indexer, "NonCanonicalPayload");
+    });
+
+    it("rejects a PROPERTY with trailing bytes past the canonical encoding", async function () {
+      await expect(
+        eas.attest({
+          schema: propertySchemaUID,
+          data: {
+            recipient: ZeroAddress,
+            expirationTime: NO_EXPIRATION,
+            revocable: false,
+            refUID: ZERO_BYTES32,
+            data: encodePropertyValue("text/plain") + "00".repeat(32),
+            value: 0n,
+          },
+        }),
+      ).to.be.revertedWithCustomError(indexer, "NonCanonicalPayload");
+    });
+  });
+
   // ─── PROPERTY on DATA Tests ───────────────────────────────────────────────
 
   describe("PROPERTY on DATA", function () {

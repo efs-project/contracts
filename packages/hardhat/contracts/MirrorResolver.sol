@@ -196,12 +196,10 @@ contract MirrorResolver is EFSUpgradeableResolver, OwnableUpgradeable {
         // Decode the transportDefinition (the first MIRROR field) so MirrorCleared carries the same
         // (dataUID, attester, transportDefinition) key as MirrorSet. Just a calldata decode — no
         // external call — and lets a log indexer retire the exact transport slot without an eth_call.
-        (bytes32 transportDefinition, string memory uri) = abi.decode(attestation.data, (bytes32, string));
-        // Symmetric canonical-payload guard (belt-and-suspenders: a non-canonical mirror never passed
-        // onAttest, so it can't be an active mirror, but enforce the same invariant on both paths).
-        if (keccak256(attestation.data) != keccak256(abi.encode(transportDefinition, uri))) {
-            revert NonCanonicalPayload();
-        }
+        // No canonical-payload guard here: any stored mirror already passed the onAttest re-encode
+        // check, so its payload is canonical by construction — and a revocation (a user withdrawing
+        // their own mirror) should never be blocked by a write-shape check.
+        (bytes32 transportDefinition, ) = abi.decode(attestation.data, (bytes32, string));
         emit MirrorCleared(attestation.refUID, attestation.attester, transportDefinition, attestation.uid);
         return true;
     }

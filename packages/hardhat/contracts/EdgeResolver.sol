@@ -440,14 +440,15 @@ contract EdgeResolver is EFSUpgradeableResolver {
         bytes32 definition;
         bool isPin = attestation.schema == $.pinSchemaUID;
         if (isPin) {
-            if (attestation.data.length != PIN_PAYLOAD_LEN) revert NonCanonicalPayload();
             definition = abi.decode(attestation.data, (bytes32));
         } else if (attestation.schema == $.tagSchemaUID) {
-            if (attestation.data.length != TAG_PAYLOAD_LEN) revert NonCanonicalPayload();
             (definition, ) = abi.decode(attestation.data, (bytes32, int256));
         } else {
             revert UnknownEdgeSchema();
         }
+        // No canonical-length guard on revoke: any stored edge already passed the onAttest length
+        // check, so its payload is canonical by construction — and a revocation (a user withdrawing
+        // their own edge) should never be blocked by a write-shape check.
 
         bytes32 targetID = _resolveTargetID(attestation.refUID, attestation.recipient);
         bytes32 edgeHash = _edgeHash(attestation.attester, targetID, definition, attestation.schema);

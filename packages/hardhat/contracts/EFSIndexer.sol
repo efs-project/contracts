@@ -15,6 +15,14 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
     error AnchorTooDeep();
     error Unauthorized();
     error InvalidAnchorName();
+    /// @dev ANCHOR/PROPERTY payload decodes but is not the exact canonical `abi.encode(...)` — e.g.
+    ///      trailing bytes. abi.decode tolerates a canonical prefix with trailing words, so two
+    ///      byte-different payloads would decode to the same fields and mint two records under distinct
+    ///      permanent UIDs (an anchor name or interned value with multiple accepted encodings). The
+    ///      dynamic `string` rules out a fixed-length check, so re-encode the decoded fields and
+    ///      hash-compare (the SystemAccount._requireCanonicalAnchor pattern). Reject what doesn't
+    ///      round-trip. Enforced on the write (onAttest) path only — revocation needs no guard.
+    error NonCanonicalPayload();
 
     /// @notice Emitted when a new Anchor is created under a parent directory.
     ///         Enables off-chain indexers (The Graph) to track directory structure changes
@@ -372,6 +380,11 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
             if (attestation.expirationTime != 0) return false;
 
             (string memory name, bytes32 anchorSchema) = abi.decode(attestation.data, (string, bytes32));
+            // Reject non-canonical encodings (e.g. trailing bytes) so one anchor has exactly one
+            // permanent UID — re-encode the decoded fields and require the bytes round-trip.
+            if (keccak256(attestation.data) != keccak256(abi.encode(name, anchorSchema))) {
+                revert NonCanonicalPayload();
+            }
 
             // Validate name: must be the canonical anchor-name encoding (NFC + percent-encode,
             // uppercase hex) — see _isValidAnchorName. Reserved bytes must be %XX-escaped; NFC
@@ -481,6 +494,11 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
             // an existing value to dedup against — off-chain via this event's indexed topic, and
             // on-chain via the future opt-in intern registry (ADR-0052). Decode the sole field.
             string memory value = abi.decode(attestation.data, (string));
+            // Reject non-canonical encodings (e.g. trailing bytes) so one interned value has exactly
+            // one permanent UID — re-encode the decoded field and require the bytes round-trip.
+            if (keccak256(attestation.data) != keccak256(abi.encode(value))) {
+                revert NonCanonicalPayload();
+            }
             emit PropertyCreated(attestation.uid, attestation.attester, keccak256(bytes(value)));
             return true;
         }
