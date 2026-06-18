@@ -21,7 +21,7 @@ A use case picks PIN or TAG based on the nature of its predicate. Smart-contract
 **Structure**:
 `refUID = Parent Anchor UID (or User Address / bytes32(0))`
 - `name` (string)
-- `schemaUID` (bytes32) - Enforces what type of data can be attached to this anchor (e.g., Folder vs File vs Property).
+- `forSchema` (bytes32) - Enforces what type of data can be attached to this anchor (e.g., Folder vs File vs Property).
 
 **Details**: An Anchor represents a name (like a folder name or a file name) within a specific context. It references (is a child of) an attestation in its EAS `refUID` field. Other attestations reference these Anchors in their `refUID` fields when they need to be associated with that specific name. Names are considered unique within their direct hierarchy level relative to the parent entity.
 
@@ -62,7 +62,7 @@ The resolver validates only the byte-level canonical form (percent-encoding + up
 
 **Details**: Per ADR-0035 (superseded by ADR-0041 for the cardinality story), PROPERTY no longer carries a `key` field and no longer targets a container via `refUID`. Instead:
 
-1. The **key** is the `name` of a PROPERTY-typed anchor (`schemaUID = PROPERTY_SCHEMA_UID`) under the target container.
+1. The **key** is the `name` of a PROPERTY-typed anchor (`forSchema = PROPERTY_SCHEMA_UID`) under the target container.
 2. The **value** is the PROPERTY attestation's sole field.
 3. The **binding** is a **PIN** with `definition = keyAnchorUID`, `refUID = propertyUID`. PIN is cardinality-1 (ADR-0041) — re-PINning the same key anchor from the same attester supersedes the previous binding in O(1).
 
@@ -73,7 +73,7 @@ The resolver validates only the byte-level canonical form (percent-encoding + up
 ```
 DATA()                                                      // free-floating content identity (empty, ADR-0049)
   ↑ refUID
-Anchor<PROPERTY>(name = "contentType", schemaUID = PROPERTY) // key anchor under the DATA
+Anchor<PROPERTY>(name = "contentType", forSchema = PROPERTY) // key anchor under the DATA
   ↑ definition
 PIN(refUID = propertyUID, attester = alice)                  // binding (cardinality 1)
   ↓
@@ -85,7 +85,7 @@ PROPERTY(value = "image/jpeg")                               // free-floating va
 For address containers the key anchor is created with `recipient = addr` instead of `refUID` (specs/02 §1 permits this; ADR-0033 relies on it):
 
 ```
-Anchor<PROPERTY>(recipient = 0xAbC…, name = "name", schemaUID = PROPERTY)
+Anchor<PROPERTY>(recipient = 0xAbC…, name = "name", forSchema = PROPERTY)
   ↑ definition
 PIN(refUID = propertyUID, attester = alice)
   ↓

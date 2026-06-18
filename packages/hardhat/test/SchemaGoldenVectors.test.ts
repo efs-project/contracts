@@ -34,9 +34,9 @@ interface GoldenVector {
 const GOLDEN: GoldenVector[] = [
   {
     name: "ANCHOR",
-    fieldString: "string name, bytes32 schemaUID",
+    fieldString: "string name, bytes32 forSchema",
     revocable: false,
-    uid: "0x7997829d33ea7afcacbc119a6d8b29b26daee771a55a69e738ef03848ae93b07",
+    uid: "0x393ca282d695bc7da2806f2c4225cd6c00de50c3ffb5ac806728923dfbc2243f",
   },
   {
     name: "PROPERTY",

@@ -547,7 +547,7 @@ export const CreateItemModal = ({
         const anchorData = encodeAbiParameters(
           [
             { name: "name", type: "string" },
-            { name: "schemaUID", type: "bytes32" },
+            { name: "forSchema", type: "bytes32" },
           ],
           [nfcName, listSchemaUID as `0x${string}`],
         );

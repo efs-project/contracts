@@ -34,7 +34,11 @@ export interface SchemaDef {
 // The 9 frozen schemas, in deploy/register order. Field strings + revocable flags are FROZEN
 // (changing any orphans the schema's data on a chain where it is registered).
 export const SCHEMAS: SchemaDef[] = [
-  { name: "ANCHOR", fieldString: "string name, bytes32 schemaUID", revocable: false, resolver: "EFSIndexer" },
+  // `forSchema` (not `schemaUID`): the EAS attestation already carries a top-level `.schema` (always
+  // ANCHOR_SCHEMA_UID here), so a field literally named `schemaUID` shadows it and is a permanent
+  // footgun for SDK/subgraph authors. `forSchema` = the schema this anchor is a slot FOR (DATA for a
+  // file anchor, PROPERTY for a key anchor, SORT_INFO for a sort anchor; bytes32(0) = generic folder).
+  { name: "ANCHOR", fieldString: "string name, bytes32 forSchema", revocable: false, resolver: "EFSIndexer" },
   // PROPERTY is NON-revocable (ADR-0052): a value is dumb, shared, interned content — an
   // "anchor for a string" that many PINs can point at — not a claim. The revocable claim is
   // the PIN (the binding), not the value. Non-revocability is what makes a value safely

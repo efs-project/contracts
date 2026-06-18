@@ -192,12 +192,12 @@ contract SystemAccount is Initializable, OwnableUpgradeable, ReentrancyGuardUpgr
 
     /// @notice Build the canonical ANCHOR `AttestationRequest` and forward it, so the anchor's
     ///         attester is this contract. Encodes the ANCHOR data exactly as the deploy bootstrap
-    ///         does (`abi.encode(string name, bytes32 schemaUID)`), non-revocable, recipient zero,
+    ///         does (`abi.encode(string name, bytes32 forSchema)`), non-revocable, recipient zero,
     ///         refUID = parent. Mirrors orchestrate.ts `ensureAnchor`.
     /// @param parent             the parent anchor UID (ZeroHash for the root anchor).
     /// @param name               the anchor name segment.
     /// @param anchorSchemaUID    the registered ANCHOR schema UID to attest under.
-    /// @param anchorSchemaToRegister the ANCHOR `schemaUID` data field (a schema-alias anchor's
+    /// @param anchorSchemaToRegister the ANCHOR `forSchema` data field (a schema-alias anchor's
     ///        target, or ZeroHash for a plain path anchor) — the second ANCHOR field.
     /// @return the new anchor UID.
     function registerAnchor(
@@ -231,7 +231,7 @@ contract SystemAccount is Initializable, OwnableUpgradeable, ReentrancyGuardUpgr
     /// @param parentIndex        index into the SAME specs array of this node's parent; a negative
     ///                           value (sentinel) marks the root (refUID = ZeroHash). A child MUST
     ///                           appear after its parent so the parent's UID is already realized.
-    /// @param anchorSchemaToRegister the ANCHOR `schemaUID` data field (a schema-alias anchor's
+    /// @param anchorSchemaToRegister the ANCHOR `forSchema` data field (a schema-alias anchor's
     ///                           target, or ZeroHash for a plain path anchor) — the second ANCHOR field.
     struct BootstrapAnchor {
         string name;

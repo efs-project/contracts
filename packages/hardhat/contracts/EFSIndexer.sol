@@ -152,13 +152,13 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
     // STORAGE: FILE SYSTEM INDICES (EFS CORE)
     // ============================================================================================
 
-    // Directory Index (Path Resolution): parentAnchorUID => name => schemaUID => childAnchorUID
+    // Directory Index (Path Resolution): parentAnchorUID => name => forSchema => childAnchorUID
     mapping(bytes32 => mapping(string => mapping(bytes32 => bytes32))) private _nameToAnchor;
 
     // Hierarchy List: parentAnchorUID => childAnchorUIDs
     mapping(bytes32 => bytes32[]) private _children;
 
-    // Children By Schema: parentAnchorUID => schemaUID => childAnchorUIDs
+    // Children By Schema: parentAnchorUID => forSchema => childAnchorUIDs
     mapping(bytes32 => mapping(bytes32 => bytes32[])) private _childrenBySchema;
 
     // Parent Lookups: childAnchorUID => parentAnchorUID

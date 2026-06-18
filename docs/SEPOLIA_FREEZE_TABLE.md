@@ -10,7 +10,7 @@ A first-principles + adversarial durability review (28 candidate cracks, all ref
 
 | # | Schema | Field string (exact) | revocable | Resolver (proxy) | Schema UID |
 |---|---|---|---|---|---|
-| 1 | ANCHOR | `string name, bytes32 schemaUID` | `false` | EFSIndexer proxy `0x…TBD` | `0x…TBD` |
+| 1 | ANCHOR | `string name, bytes32 forSchema` | `false` | EFSIndexer proxy `0x…TBD` | `0x…TBD` |
 | 2 | PROPERTY | `string value` | `false` | EFSIndexer proxy `0x…TBD` | `0x…TBD` |
 | 3 | DATA | `` (empty — pure identity) | `false` | EFSIndexer proxy `0x…TBD` | `0x…TBD` |
 | 4 | PIN | `bytes32 definition` | `true` | EdgeResolver proxy `0x…TBD` | `0x…TBD` |
