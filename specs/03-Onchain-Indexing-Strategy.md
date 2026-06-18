@@ -268,6 +268,8 @@ For a responsive web UI, off-chain indexers should expose these additional query
 
 ## Sort Overlay Indexing via EFSSortOverlay
 
+> **⚠️ Deferred — NOT in the Sepolia freeze set.** SORT_INFO and its `EFSSortOverlay` resolver are **not** registered by the freeze ceremony (the freeze set is nine schemas: ANCHOR, DATA, MIRROR, PIN, TAG, PROPERTY, LIST, LIST_ENTRY, REDIRECT — see `specs/overview.md` and `docs/SEPOLIA_FREEZE_TABLE.md`). The design below remains valid future work (authoritative in `07-Sort-Overlay-Architecture.md`) but `EFSSortOverlay` is **not deployed** and SORT_INFO is **not registered** in this set — it must **not** be added to the freeze as a tenth schema. `sortsAnchorUID` stays unset and no `setSortsAnchor()` step runs (`SEPOLIA_FREEZE_TABLE.md`).
+
 The SORT_INFO schema is handled by `EFSSortOverlay`. It is registered in EAS with `EFSSortOverlay` as its resolver.
 
 Sort overlays are **not populated in the resolver hook** — they are populated lazily off-hook by `processItems` calls. The resolver hook only validates and caches the sort config.

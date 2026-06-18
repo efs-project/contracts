@@ -29,14 +29,17 @@ The **kernel** (EFSIndexer) tracks these children in insertion order. The **sort
 
 ## 2. SORT_INFO Schema
 
+> **⚠️ Deferred — NOT in the Sepolia freeze set.** SORT_INFO and the `EFSSortOverlay` resolver are **not** registered/deployed by the freeze ceremony (the freeze set is nine schemas: ANCHOR, DATA, MIRROR, PIN, TAG, PROPERTY, LIST, LIST_ENTRY, REDIRECT — see `specs/overview.md` and `docs/SEPOLIA_FREEZE_TABLE.md`). Sections 2–7 below remain valid future work; the authoritative current sort design lives in [Sort Overlay Architecture](./07-Sort-Overlay-Architecture.md). Do **not** add SORT_INFO to the freeze as a tenth schema. The live list primitive is Section 8 (`LIST` / `LIST_ENTRY`).
+
 ```
-SORT_INFO: "address sortFunc, bytes32 targetSchema"
+SORT_INFO: "address sortFunc, bytes32 targetSchema, uint8 sourceType"
 ```
 
 | Field | Description |
 |-------|-------------|
 | `sortFunc` | Address of an `ISortFunc` contract defining the comparator |
-| `targetSchema` | Which Anchor schema to sort — `bytes32(0)` = all children, `DATA_SCHEMA` = only file anchors |
+| `targetSchema` | For `sourceType == 1`, restricts to children of this schema — `bytes32(0)` = all children, `DATA_SCHEMA` = only file anchors |
+| `sourceType` | Which kernel array is the source list: `0` = all children, `1` = schema-filtered children (`targetSchema`), `2+` = reserved (`UnsupportedSourceType()`). See [Sort Overlay Architecture](./07-Sort-Overlay-Architecture.md) §SORT_INFO Schema |
 | `refUID` | Naming Anchor UID — the Anchor is a **child** of the directory being sorted (its schema = `SORT_INFO_SCHEMA`) |
 | revocable | `true` — revoking signals "I'm done maintaining this sort; hide from menu" |
 

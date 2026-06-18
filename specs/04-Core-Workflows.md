@@ -128,6 +128,8 @@ EFS files are modified by issuing new attestations.
 
 The two compose — a curator can keep a `LIST` *and* expose a sort over a directory — but they are separate primitives with separate contracts.
 
+> **⚠️ Sorted-directory workflows (16–21) are deferred — SORT_INFO is NOT in the Sepolia freeze set.** The freeze registers nine schemas (ANCHOR, DATA, MIRROR, PIN, TAG, PROPERTY, LIST, LIST_ENTRY, REDIRECT); SORT_INFO and `EFSSortOverlay` are **not** registered/deployed by the freeze ceremony (see `specs/overview.md` and `docs/SEPOLIA_FREEZE_TABLE.md`). Workflows 16–21 below describe valid future behavior (authoritative design in [Sort Overlay Architecture](./07-Sort-Overlay-Architecture.md)), but until SORT_INFO is registered post-freeze there is **no `SORT_INFO_SCHEMA_UID` to attest against** — do not treat these as live, and do **not** add SORT_INFO to the freeze as a tenth schema. The curated-list workflows (22–24) are unaffected. (Workflows 22–24 are the live list path.)
+
 ### 16. Create a New Sort and Add Items
 
 - **Step 1 — Create the directory**: The list is a normal EFS directory (Anchor). If it doesn't exist yet, attest an Anchor for it under the desired parent.
