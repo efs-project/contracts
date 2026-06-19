@@ -393,7 +393,7 @@ async function main() {
   // ======================================================================
   console.log("\n[4] EFSFileView.getDataMirrors\n");
 
-  const mirrorItems = await fileView.getDataMirrors(docData.uid, 0, 10);
+  const mirrorItems = await fileView.getDataMirrorsAllAttesters(docData.uid, 0, 10);
   assert("getDataMirrors returns 3 active mirrors", mirrorItems.length === 3, `got ${mirrorItems.length}`);
 
   // Verify MirrorItem struct fields
@@ -405,9 +405,9 @@ async function main() {
   assert("MirrorItem has timestamp", firstMirror.timestamp > 0n);
 
   // Pagination: page size 2
-  const page1 = await fileView.getDataMirrors(docData.uid, 0, 2);
+  const page1 = await fileView.getDataMirrorsAllAttesters(docData.uid, 0, 2);
   assert("Page 1 returns 2 mirrors", page1.length === 2);
-  const page2 = await fileView.getDataMirrors(docData.uid, 2, 2);
+  const page2 = await fileView.getDataMirrorsAllAttesters(docData.uid, 2, 2);
   assert("Page 2 returns 1 mirror", page2.length === 1);
 
   // ======================================================================
@@ -420,7 +420,7 @@ async function main() {
   assert("HTTPS mirror revoked", await indexer.isRevoked(docMirrorHTTPS));
 
   // getDataMirrors should filter out the revoked one
-  const postRevokeMirrors = await fileView.getDataMirrors(docData.uid, 0, 10);
+  const postRevokeMirrors = await fileView.getDataMirrorsAllAttesters(docData.uid, 0, 10);
   assert(
     "getDataMirrors returns 2 after revocation",
     postRevokeMirrors.length === 2,
@@ -440,7 +440,7 @@ async function main() {
   // user1 adds an Arweave mirror to owner's sunset.jpg DATA
   const _u1SunsetMirror = await createMirror(user1, photo1Data.uid, arweaveTransportUID, "ar://user1-sunset-backup");
 
-  const sunsetMirrors = await fileView.getDataMirrors(photo1Data.uid, 0, 10);
+  const sunsetMirrors = await fileView.getDataMirrorsAllAttesters(photo1Data.uid, 0, 10);
   assert("sunset.jpg now has 2 mirrors", sunsetMirrors.length === 2, `got ${sunsetMirrors.length}`);
 
   // Verify second mirror's attester is user1
@@ -468,11 +468,11 @@ async function main() {
 
   // user2 can add mirrors to their own DATA
   await createMirror(user2, dupData.uid, ipfsTransportUID, "ipfs://QmSunsetDup");
-  const dupMirrors = await fileView.getDataMirrors(dupData.uid, 0, 10);
+  const dupMirrors = await fileView.getDataMirrorsAllAttesters(dupData.uid, 0, 10);
   assert("duplicate DATA has its own mirror", dupMirrors.length === 1);
 
   // Original DATA's mirrors are unaffected
-  const origMirrors = await fileView.getDataMirrors(photo1Data.uid, 0, 10);
+  const origMirrors = await fileView.getDataMirrorsAllAttesters(photo1Data.uid, 0, 10);
   assert("original DATA mirrors unchanged", origMirrors.length === 2);
 
   // ======================================================================
@@ -496,7 +496,7 @@ async function main() {
   assert("sunset.jpg in /faves/ via PIN", faveTarget === photo1Data.uid);
 
   // Both paths share the same mirrors
-  const favesMirrors = await fileView.getDataMirrors(faveTarget, 0, 10);
+  const favesMirrors = await fileView.getDataMirrorsAllAttesters(faveTarget, 0, 10);
   assert("shared DATA, shared mirrors (2)", favesMirrors.length === 2, `got ${favesMirrors.length}`);
 
   // ======================================================================
@@ -529,7 +529,7 @@ async function main() {
   await createMirror(owner, torrentData.uid, magnetTransportUID, magnetURI);
   await pin(owner, torrentData.uid, torrentUID);
 
-  const torrentMirrors = await fileView.getDataMirrors(torrentData.uid, 0, 10);
+  const torrentMirrors = await fileView.getDataMirrorsAllAttesters(torrentData.uid, 0, 10);
   assert("magnet mirror created", torrentMirrors.length === 1);
   assert("magnet URI preserved", torrentMirrors[0].uri === magnetURI);
   assert("transport = /transports/magnet", torrentMirrors[0].transportDefinition === magnetTransportUID);
@@ -612,7 +612,7 @@ async function main() {
   const orphanData = await createData(owner, "orphan-no-mirrors");
   await pin(owner, orphanData.uid, orphanUID);
 
-  const orphanMirrors = await fileView.getDataMirrors(orphanData.uid, 0, 10);
+  const orphanMirrors = await fileView.getDataMirrorsAllAttesters(orphanData.uid, 0, 10);
   assert("DATA with no mirrors returns empty", orphanMirrors.length === 0);
 
   // Router should return 404 (no mirror available)

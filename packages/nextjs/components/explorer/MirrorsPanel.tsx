@@ -38,7 +38,7 @@ const FILE_VIEW_MIRRORS_ABI = [
       { internalType: "uint256", name: "start", type: "uint256" },
       { internalType: "uint256", name: "length", type: "uint256" },
     ],
-    name: "getDataMirrors",
+    name: "getDataMirrorsAllAttesters",
     outputs: [
       {
         components: [
@@ -143,7 +143,7 @@ export const MirrorsPanel = ({ fileAnchorUID, lensAddresses }: { fileAnchorUID: 
       const result = (await publicClient.readContract({
         address: fileViewInfo.address as `0x${string}`,
         abi: FILE_VIEW_MIRRORS_ABI,
-        functionName: "getDataMirrors",
+        functionName: "getDataMirrorsAllAttesters",
         args: [dataUID as `0x${string}`, 0n, 50n],
       })) as readonly {
         uid: `0x${string}`;

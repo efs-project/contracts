@@ -929,35 +929,35 @@ describe("EFS Transports & Data Model", function () {
   });
 
   describe("EFSFileView.getDataMirrors", function () {
-    it("should return mirrors for a DATA", async function () {
+    it("should return a lens's mirrors for a DATA (lens-scoped getDataMirrors)", async function () {
       const contentHash = ethers.keccak256(ethers.toUtf8Bytes("mirror test"));
       const dataUID = await createData(contentHash, 100n);
-      await createMirror(dataUID, ipfsTransportUID, "ipfs://QmTest");
+      await createMirror(dataUID, ipfsTransportUID, "ipfs://QmTest"); // attester = owner (default)
 
-      const mirrors = await fileView.getDataMirrors(dataUID, 0, 10);
+      const mirrors = await fileView.getDataMirrors(dataUID, await owner.getAddress(), 0, 10);
       expect(mirrors.length).to.equal(1);
       expect(mirrors[0].uri).to.equal("ipfs://QmTest");
       expect(mirrors[0].transportDefinition).to.equal(ipfsTransportUID);
     });
 
-    it("getDataMirrorsByAttester is lens-scoped — returns only the named attester's mirrors (ADR-0056 review fix)", async function () {
-      // Two attesters attach a mirror to the SAME DATA. The unscoped getDataMirrors returns both;
-      // getDataMirrorsByAttester returns only the requested lens's — so a foreign attester's (now
-      // arbitrary-scheme) mirror can't surface to a viewer who never opted into them.
+    it("getDataMirrors is lens-scoped; getDataMirrorsAllAttesters is the explicit cross-attester reader (ADR-0056)", async function () {
+      // Two attesters attach a mirror to the SAME DATA. Lens-scoped getDataMirrors returns only the
+      // requested lens's — so a foreign attester's (now arbitrary-scheme) mirror can't surface to a
+      // viewer who never opted into them. getDataMirrorsAllAttesters is the explicit debug/discovery read.
       const dataUID = await createData(ethers.keccak256(ethers.toUtf8Bytes("lens-scope test")), 100n);
       await createMirror(dataUID, ipfsTransportUID, "ipfs://QmAlice", alice);
       await createMirror(dataUID, ipfsTransportUID, "ipfs://QmBob", bob);
 
-      const all = await fileView.getDataMirrors(dataUID, 0, 10);
-      expect(all.length, "unscoped returns both attesters").to.equal(2);
+      const all = await fileView.getDataMirrorsAllAttesters(dataUID, 0, 10);
+      expect(all.length, "all-attesters returns both").to.equal(2);
 
       const aliceAddr = await alice.getAddress();
-      const aliceOnly = await fileView.getDataMirrorsByAttester(dataUID, aliceAddr, 0, 10);
+      const aliceOnly = await fileView.getDataMirrors(dataUID, aliceAddr, 0, 10);
       expect(aliceOnly.length, "scoped to alice returns one").to.equal(1);
       expect(aliceOnly[0].uri).to.equal("ipfs://QmAlice");
       expect(aliceOnly[0].attester).to.equal(aliceAddr);
 
-      const bobOnly = await fileView.getDataMirrorsByAttester(dataUID, await bob.getAddress(), 0, 10);
+      const bobOnly = await fileView.getDataMirrors(dataUID, await bob.getAddress(), 0, 10);
       expect(bobOnly.length).to.equal(1);
       expect(bobOnly[0].uri).to.equal("ipfs://QmBob");
     });

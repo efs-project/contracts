@@ -499,7 +499,7 @@ describe("EFS Data Model — E2E Integration", function () {
       expect(decodedValue).to.equal("text/markdown");
 
       // Verify onchain MIRROR exists
-      const mirrors = await fileView.getDataMirrors(dataUID, 0, 10);
+      const mirrors = await fileView.getDataMirrorsAllAttesters(dataUID, 0, 10);
       expect(mirrors.length).to.equal(1);
       expect(mirrors[0].transportDefinition).to.equal(onchainTransportUID);
       expect(mirrors[0].uri).to.equal("web3://0x1234567890AbCdEf1234567890AbCdEf12345678");
@@ -536,7 +536,7 @@ describe("EFS Data Model — E2E Integration", function () {
         docsUID,
       );
 
-      const mirrors = await fileView.getDataMirrors(dataUID, 0, 10);
+      const mirrors = await fileView.getDataMirrorsAllAttesters(dataUID, 0, 10);
       expect(mirrors.length).to.equal(1);
       expect(mirrors[0].transportDefinition).to.equal(ipfsTransportUID);
       expect(mirrors[0].uri).to.equal("ipfs://QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG");
@@ -551,7 +551,7 @@ describe("EFS Data Model — E2E Integration", function () {
         docsUID,
       );
 
-      const mirrors = await fileView.getDataMirrors(dataUID, 0, 10);
+      const mirrors = await fileView.getDataMirrorsAllAttesters(dataUID, 0, 10);
       expect(mirrors[0].transportDefinition).to.equal(arweaveTransportUID);
       expect(mirrors[0].uri).to.equal("ar://bNbA3TEQVL60xlgCcqdz4ZPHFZ711cZ3hmkpGttDt_U");
     });
@@ -566,7 +566,7 @@ describe("EFS Data Model — E2E Integration", function () {
         docsUID,
       );
 
-      const mirrors = await fileView.getDataMirrors(dataUID, 0, 10);
+      const mirrors = await fileView.getDataMirrorsAllAttesters(dataUID, 0, 10);
       expect(mirrors[0].transportDefinition).to.equal(magnetTransportUID);
       expect(mirrors[0].uri).to.equal(magnetUri);
     });
@@ -580,7 +580,7 @@ describe("EFS Data Model — E2E Integration", function () {
         docsUID,
       );
 
-      const mirrors = await fileView.getDataMirrors(dataUID, 0, 10);
+      const mirrors = await fileView.getDataMirrorsAllAttesters(dataUID, 0, 10);
       expect(mirrors[0].transportDefinition).to.equal(httpsTransportUID);
       expect(mirrors[0].uri).to.equal("https://example.com/images/photo.png");
     });
@@ -599,7 +599,7 @@ describe("EFS Data Model — E2E Integration", function () {
       await createMirror(dataUID, ipfsTransportUID, "ipfs://QmMulti1");
       await createMirror(dataUID, arweaveTransportUID, "ar://ArMulti1");
 
-      const mirrors = await fileView.getDataMirrors(dataUID, 0, 10);
+      const mirrors = await fileView.getDataMirrorsAllAttesters(dataUID, 0, 10);
       expect(mirrors.length).to.equal(3);
 
       const transports = mirrors.map((m: any) => m.transportDefinition);
@@ -619,7 +619,7 @@ describe("EFS Data Model — E2E Integration", function () {
       await createMirror(dataUID, ipfsTransportUID, "ipfs://QmGateway1");
       await createMirror(dataUID, ipfsTransportUID, "ipfs://QmGateway2");
 
-      const mirrors = await fileView.getDataMirrors(dataUID, 0, 10);
+      const mirrors = await fileView.getDataMirrorsAllAttesters(dataUID, 0, 10);
       expect(mirrors.length).to.equal(2);
       expect(mirrors[0].uri).to.not.equal(mirrors[1].uri);
     });
@@ -637,7 +637,7 @@ describe("EFS Data Model — E2E Integration", function () {
       // Later: add an IPFS mirror to the same DATA
       await createMirror(dataUID, ipfsTransportUID, "ipfs://QmBackup");
 
-      const mirrors = await fileView.getDataMirrors(dataUID, 0, 10);
+      const mirrors = await fileView.getDataMirrorsAllAttesters(dataUID, 0, 10);
       expect(mirrors.length).to.equal(2);
     });
   });
@@ -916,7 +916,7 @@ describe("EFS Data Model — E2E Integration", function () {
       expect(animalsItems[0].uid).to.equal(dataUID);
 
       // Shared mirrors
-      const mirrors = await fileView.getDataMirrors(dataUID, 0, 10);
+      const mirrors = await fileView.getDataMirrorsAllAttesters(dataUID, 0, 10);
       expect(mirrors.length).to.equal(1);
       expect(mirrors[0].uri).to.equal("ipfs://QmSharedCat");
     });
@@ -1651,7 +1651,7 @@ describe("EFS Data Model — E2E Integration", function () {
       const dataUID = await createData(hash("mirrorless"), 10n);
       await pinTarget(dataUID, docsUID);
 
-      const mirrors = await fileView.getDataMirrors(dataUID, 0, 10);
+      const mirrors = await fileView.getDataMirrorsAllAttesters(dataUID, 0, 10);
       expect(mirrors.length).to.equal(0);
 
       // But it still appears in folder listing
@@ -1675,7 +1675,7 @@ describe("EFS Data Model — E2E Integration", function () {
       const mirrorUID = await createMirror(dataUID, ipfsTransportUID, "ipfs://QmBobMirror", bob);
       expect(mirrorUID).to.not.equal(ZERO_BYTES32);
 
-      const mirrors = await fileView.getDataMirrors(dataUID, 0, 10);
+      const mirrors = await fileView.getDataMirrorsAllAttesters(dataUID, 0, 10);
       expect(mirrors.length).to.equal(1);
       expect(mirrors[0].attester).to.equal(await bob.getAddress());
     });
@@ -1804,7 +1804,7 @@ describe("EFS Data Model — E2E Integration", function () {
 
       // ── Bob adds an IPFS mirror to Alice's beach photo ──
       await createMirror(photo1.dataUID, ipfsTransportUID, "ipfs://QmBeachBackup", bob);
-      const beachMirrors = await fileView.getDataMirrors(photo1.dataUID, 0, 10);
+      const beachMirrors = await fileView.getDataMirrorsAllAttesters(photo1.dataUID, 0, 10);
       expect(beachMirrors.length).to.equal(2); // onchain + IPFS
 
       // ── Alice edits photo2 (new version) ──
