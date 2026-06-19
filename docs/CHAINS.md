@@ -1,4 +1,4 @@
-# EFS deployed addresses
+# EFS chains — deployed addresses
 
 Canonical, human-readable registry of EFS contract addresses + frozen schema UIDs per chain. The
 machine-readable source the apps consume is `packages/nextjs/contracts/deployedContracts.ts`; this file
