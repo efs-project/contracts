@@ -437,17 +437,22 @@ export const MirrorsPanel = ({ fileAnchorUID, lensAddresses }: { fileAnchorUID: 
       ) : (
         <div className="flex flex-col gap-1">
           {mirrors.map(m => {
+            // ADR-0056: mirror URIs are attester-controlled arbitrary bytes (any scheme). NEVER make the
+            // raw URI a live link — only a RESOLVED http(s) gateway URL is clickable, so javascript:/data:
+            // and other active-content schemes render as inert text and can't be navigated. The raw URI is
+            // still shown (truncated, in title) for inspection. Render/scheme safety is the client's job.
             const gwUrl = resolveGatewayUrl(m.uri);
+            const safeHref = gwUrl && /^https?:\/\//i.test(gwUrl) ? gwUrl : null;
             return (
               <div key={m.uid} className="flex items-center gap-1.5 text-xs group">
                 <span className="badge badge-xs badge-outline shrink-0">
                   {getTransportLabel(m.transportDefinition)}
                 </span>
-                {gwUrl || m.uri.startsWith("http") ? (
+                {safeHref ? (
                   <a
-                    href={gwUrl || m.uri}
+                    href={safeHref}
                     target="_blank"
-                    rel="noopener noreferrer"
+                    rel="noopener noreferrer nofollow"
                     className="truncate text-primary hover:underline"
                     title={m.uri}
                   >

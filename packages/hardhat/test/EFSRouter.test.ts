@@ -644,7 +644,7 @@ describe("EFSRouter Web3 Capabilities", function () {
       const fileAnchorUID = await createFileAnchor(ideasUID, "evil.bin");
       const dataUID = await createData("evil-content");
       await addProperty(dataUID, "contentType", "text/plain");
-      // Passes _isAllowedScheme (ipfs:// prefix) + length, so MirrorResolver stores it. Body carries a
+      // Passes length + transport-ancestry, so MirrorResolver stores it. Body carries a
       // quote (breaks the URL param), CR/LF (header injection), and a backslash.
       const hostileUri = 'ipfs://QmABC"\r\ninjected="evil\\x';
       await addMirror(dataUID, ipfsTransportUID, hostileUri);

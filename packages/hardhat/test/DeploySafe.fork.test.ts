@@ -198,7 +198,7 @@ describe("DeploySafe.fork — Safe-native deploy, born Safe-owned", function () 
     expect(await indexer.resolvePath(result.transportsAnchorUID, "https")).to.not.equal(ethers.ZeroHash);
 
     // PR #24 P2 fix: the Safe bootstrap seeds ALL 11 allowed transport schemes
-    // (MirrorResolver._isAllowedScheme), so no scheme is left squattable on a fresh deploy.
+    // (ADR-0011), so no transport name is left squattable on a fresh deploy.
     const ALL_TRANSPORTS = [
       "onchain",
       "ipfs",

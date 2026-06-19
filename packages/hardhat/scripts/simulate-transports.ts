@@ -775,17 +775,19 @@ async function main() {
 
   const guardData = onchainData.uid;
 
-  // (a) Disallowed URI scheme → InvalidURIScheme. javascript:/data: are the only
-  //     schemes explicitly excluded (active-content / XSS) from the allowlist.
+  // (a) Empty URI → InvalidData. ADR-0056 removed the scheme allowlist (no InvalidURIScheme):
+  //     any non-empty, length-bounded URI under a valid /transports anchor is accepted, so the
+  //     remaining write-time URI gate is just non-empty + length. (javascript:/data: are now
+  //     accepted on-chain — scheme/render safety is a client concern; see ADR-0056.)
   await assertReverts(
-    "disallowed scheme (javascript:) rejected",
-    createMirror(owner, guardData, ipfsTransportUID, "javascript:alert(1)"),
+    "empty URI rejected",
+    createMirror(owner, guardData, ipfsTransportUID, ""),
     mirrorResolver,
-    "InvalidURIScheme",
+    "InvalidData",
   );
 
-  // (b) URI longer than MAX_URI_LENGTH (8192) → URITooLong. Use an allowlisted
-  //     scheme so length is the sole trigger (8193 chars = "ipfs://" + filler).
+  // (b) URI longer than MAX_URI_LENGTH (8192) → URITooLong. Use any scheme so length is the
+  //     sole trigger (8193 chars = "ipfs://" + filler).
   const tooLongURI = "ipfs://" + "Q".repeat(8193 - "ipfs://".length);
   await assertReverts(
     "URI longer than MAX_URI_LENGTH (8192) rejected",

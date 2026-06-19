@@ -720,21 +720,32 @@ describe("EFS Transports & Data Model", function () {
       expect(mirrorUID).to.not.equal(ZERO_BYTES32);
     });
 
-    it("should accept MIRROR with an s3:// URI (widened scheme allowlist, supersedes ADR-0023)", async function () {
-      // ADR-0048 MIRROR change: scheme safety is a client-render concern, not a write-time one
-      // (the router never executes URIs). s3:// (and ftp://, gs://, dat://, bittorrent://) are now
-      // accepted; only active-content schemes (javascript:, data:) remain rejected.
+    it("should accept MIRROR with an s3:// URI (no scheme gate, ADR-0056)", async function () {
+      // ADR-0056: there is NO URI-scheme allowlist. A scheme check on an immutable contract is not a
+      // security boundary (an allowed https:// serves malicious HTML too), is trivially evaded, and
+      // can't anticipate future transports. Any non-empty, length-bounded URI under a valid /transports
+      // anchor is accepted; render/scheme safety is the client's job. The transport-ancestry + length
+      // gates still hold (see the reverting cases above).
       const mirrorUID = await createMirror(testDataUID, ipfsTransportUID, "s3://my-bucket/cat.jpg");
       expect(mirrorUID).to.not.equal(ZERO_BYTES32);
     });
 
-    it("should accept MIRROR with an ftp:// URI (widened scheme allowlist)", async function () {
+    it("should accept MIRROR with an ftp:// URI (no scheme gate, ADR-0056)", async function () {
       const mirrorUID = await createMirror(testDataUID, ipfsTransportUID, "ftp://ftp.example.com/cat.jpg");
       expect(mirrorUID).to.not.equal(ZERO_BYTES32);
     });
 
-    it("should still reject MIRROR with a javascript: URI (XSS scheme stays blocked)", async function () {
-      await expect(createMirror(testDataUID, ipfsTransportUID, "javascript:alert(1)")).to.be.reverted;
+    it("should accept previously-blocked active-content schemes — javascript:/data: (ADR-0056)", async function () {
+      // These were rejected pre-ADR-0056. They are now accepted on-chain: scheme/XSS safety moved to
+      // the client render layer (sandboxing), where it always belonged. The contract no longer gates.
+      const js = await createMirror(testDataUID, ipfsTransportUID, "javascript:alert(1)");
+      expect(js).to.not.equal(ZERO_BYTES32);
+      const data = await createMirror(testDataUID, ipfsTransportUID, "data:text/html,<script>alert(1)</script>");
+      expect(data).to.not.equal(ZERO_BYTES32);
+    });
+
+    it("should still reject an empty URI (ADR-0056 keeps the non-empty + length gates)", async function () {
+      await expect(createMirror(testDataUID, ipfsTransportUID, "")).to.be.reverted;
     });
 
     it("should be discoverable via getReferencingAttestations", async function () {
@@ -927,6 +938,28 @@ describe("EFS Transports & Data Model", function () {
       expect(mirrors.length).to.equal(1);
       expect(mirrors[0].uri).to.equal("ipfs://QmTest");
       expect(mirrors[0].transportDefinition).to.equal(ipfsTransportUID);
+    });
+
+    it("getDataMirrorsByAttester is lens-scoped — returns only the named attester's mirrors (ADR-0056 review fix)", async function () {
+      // Two attesters attach a mirror to the SAME DATA. The unscoped getDataMirrors returns both;
+      // getDataMirrorsByAttester returns only the requested lens's — so a foreign attester's (now
+      // arbitrary-scheme) mirror can't surface to a viewer who never opted into them.
+      const dataUID = await createData(ethers.keccak256(ethers.toUtf8Bytes("lens-scope test")), 100n);
+      await createMirror(dataUID, ipfsTransportUID, "ipfs://QmAlice", alice);
+      await createMirror(dataUID, ipfsTransportUID, "ipfs://QmBob", bob);
+
+      const all = await fileView.getDataMirrors(dataUID, 0, 10);
+      expect(all.length, "unscoped returns both attesters").to.equal(2);
+
+      const aliceAddr = await alice.getAddress();
+      const aliceOnly = await fileView.getDataMirrorsByAttester(dataUID, aliceAddr, 0, 10);
+      expect(aliceOnly.length, "scoped to alice returns one").to.equal(1);
+      expect(aliceOnly[0].uri).to.equal("ipfs://QmAlice");
+      expect(aliceOnly[0].attester).to.equal(aliceAddr);
+
+      const bobOnly = await fileView.getDataMirrorsByAttester(dataUID, await bob.getAddress(), 0, 10);
+      expect(bobOnly.length).to.equal(1);
+      expect(bobOnly[0].uri).to.equal("ipfs://QmBob");
     });
   });
 

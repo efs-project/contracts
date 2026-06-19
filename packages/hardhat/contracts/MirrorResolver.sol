@@ -40,7 +40,6 @@ contract MirrorResolver is EFSUpgradeableResolver, OwnableUpgradeable {
     error WrongSchema();
     error InvalidTransport();
     error URITooLong();
-    error InvalidURIScheme();
     error NotRevocable();
     error HasExpiration();
     /// @dev MIRROR payload decodes but is not the exact canonical `abi.encode(bytes32, string)` — e.g.
@@ -164,15 +163,21 @@ contract MirrorResolver is EFSUpgradeableResolver, OwnableUpgradeable {
         if (!attestation.revocable) revert NotRevocable();
         if (attestation.expirationTime != 0) revert HasExpiration();
 
-        // Validate transportDefinition is a valid Anchor and URI passes scheme/length checks
+        // Validate transportDefinition is a valid Anchor and the URI is canonical + length-bounded.
+        // NOTE (ADR-0056): there is deliberately NO URI-scheme allowlist. A scheme prefix check on an
+        // immutable contract is not a security boundary (an allowed https:// mirror serves malicious
+        // HTML just as well) and is trivially evaded (case / zero-width / whitespace / percent-encoding)
+        // and un-patchable — and it cannot anticipate future transports. Render/scheme safety lives in
+        // the upgradeable client layer (sandboxed rendering); the on-chain gate is the transport-anchor
+        // ancestry + length only. See ADR-0056 (supersedes ADR-0023).
         (bytes32 transportDefinition, string memory uri) = abi.decode(attestation.data, (bytes32, string));
         // Reject non-canonical encodings (e.g. trailing bytes) so one semantic mirror has exactly one
         // permanent UID — re-encode the decoded fields and require the bytes round-trip.
         if (keccak256(attestation.data) != keccak256(abi.encode(transportDefinition, uri))) {
             revert NonCanonicalPayload();
         }
+        if (bytes(uri).length == 0) revert InvalidData();
         if (bytes(uri).length > MAX_URI_LENGTH) revert URITooLong();
-        if (!_isAllowedScheme(uri)) revert InvalidURIScheme();
         if (transportDefinition == EMPTY_UID) revert InvalidTransport();
         Attestation memory transport = _eas.getAttestation(transportDefinition);
         if (transport.schema != idx.ANCHOR_SCHEMA_UID()) revert InvalidTransport();
@@ -220,34 +225,4 @@ contract MirrorResolver is EFSUpgradeableResolver, OwnableUpgradeable {
         return false;
     }
 
-    /// @dev Returns true iff the URI starts with a known-safe scheme.
-    /// Rejects javascript:, data:, and other schemes that could be executed or
-    /// misinterpreted by clients. Scheme safety is a client-render concern (the router
-    /// never executes URIs) — so the allowlist is broad enough to cover the transports
-    /// EFS supports plus content-addressed P2P schemes, and excludes only the
-    /// active-content / inline-payload schemes (javascript:, data:) that enable XSS.
-    /// Supersedes the narrower ADR-0023 set (see ADR-0023 Status note).
-    function _isAllowedScheme(string memory uri) private pure returns (bool) {
-        bytes memory u = bytes(uri);
-        if (_startsWith(u, "web3://")) return true;
-        if (_startsWith(u, "ipfs://")) return true;
-        if (_startsWith(u, "ar://")) return true;
-        if (_startsWith(u, "https://")) return true;
-        if (_startsWith(u, "ftp://")) return true;
-        if (_startsWith(u, "s3://")) return true;
-        if (_startsWith(u, "gs://")) return true;
-        if (_startsWith(u, "dat://")) return true;
-        if (_startsWith(u, "rsync://")) return true;
-        if (_startsWith(u, "magnet:")) return true;
-        if (_startsWith(u, "bittorrent://")) return true;
-        return false;
-    }
-
-    function _startsWith(bytes memory str, bytes memory prefix) private pure returns (bool) {
-        if (str.length < prefix.length) return false;
-        for (uint256 i = 0; i < prefix.length; i++) {
-            if (str[i] != prefix[i]) return false;
-        }
-        return true;
-    }
 }

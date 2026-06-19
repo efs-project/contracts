@@ -103,7 +103,7 @@ async function readImplementation(proxy: string): Promise<string> {
 // each child's refUID is threaded from the parent UID the prior EAS.attest returned in the same call,
 // so nothing is predicted off-chain. parentIndex indexes into this array; -1 = root (refUID=ZeroHash).
 //
-// The transport children = every scheme MirrorResolver._isAllowedScheme accepts (11). Each name is the
+// The transport children = every canonical transport scheme (11, ADR-0011). Each name is the
 // TransportType the client's detectTransport() yields, since the explorer resolves /transports/<name>
 // with that exact string before minting a MIRROR (utils/efs/transports.ts). web3:// → "onchain" and
 // ar:// → "arweave" are the two where the anchor name differs from the URI scheme; the other nine match

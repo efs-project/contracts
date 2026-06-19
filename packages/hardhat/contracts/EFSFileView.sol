@@ -98,6 +98,15 @@ interface IEFSIndexer {
         bool reverseOrder,
         bool showRevoked
     ) external view returns (bytes32[] memory);
+    function getReferencingBySchemaAndAttester(
+        bytes32 targetUID,
+        bytes32 schemaUID,
+        address attester,
+        uint256 start,
+        uint256 length,
+        bool reverseOrder,
+        bool showRevoked
+    ) external view returns (bytes32[] memory);
 }
 
 contract EFSFileView {
@@ -911,7 +920,13 @@ contract EFSFileView {
     }
 
     /**
-     * @notice Get mirrors (retrieval methods) for a DATA attestation.
+     * @notice Get mirrors (retrieval methods) for a DATA attestation, across ALL attesters.
+     * @dev NOT lens-scoped: returns every attester's mirrors on this DATA, including ones from
+     *      attesters the viewer never trusted. Mirror URIs are attester-controlled bytes (any scheme
+     *      since ADR-0056), so a UI MUST either (a) lens-scope via `getDataMirrorsByAttester`, or
+     *      (b) treat foreign mirror URIs as inert/untrusted (never auto-fetch or render as a live link).
+     *      Each `MirrorItem.attester` is returned so callers can filter. Kept unscoped for explicit
+     *      "all mirrors" debugging; lens-scoped reads should use `getDataMirrorsByAttester`.
      * @param dataUID  The DATA attestation UID
      * @param start    Pagination offset
      * @param length   Page size
@@ -938,6 +953,56 @@ contract EFSFileView {
         }
 
         // Second pass: populate result
+        MirrorItem[] memory result = new MirrorItem[](activeCount);
+        uint256 idx = 0;
+        for (uint256 i = 0; i < mirrorUIDs.length; i++) {
+            if (indexer.isRevoked(mirrorUIDs[i])) continue;
+            Attestation memory att = eas.getAttestation(mirrorUIDs[i]);
+            (bytes32 transportDef, string memory uri) = abi.decode(att.data, (bytes32, string));
+            result[idx++] = MirrorItem({
+                uid: mirrorUIDs[i],
+                transportDefinition: transportDef,
+                uri: uri,
+                attester: att.attester,
+                timestamp: att.time
+            });
+        }
+        return result;
+    }
+
+    /**
+     * @notice Get a single attester's mirrors for a DATA attestation (lens-scoped, ADR-0013).
+     * @dev The safe read for clients: returns only `attester`'s active mirrors on `dataUID`, matching
+     *      the router's lens-scoped mirror selection. A UI showing "the winning lens's mirrors" should
+     *      call this with that lens, so a foreign attester's (post-ADR-0056 arbitrary-scheme) mirror can
+     *      never surface to a viewer who didn't opt into that attester.
+     * @param dataUID   The DATA attestation UID
+     * @param attester  The lens attester to scope to
+     * @param start     Pagination offset
+     * @param length    Page size
+     */
+    function getDataMirrorsByAttester(
+        bytes32 dataUID,
+        address attester,
+        uint256 start,
+        uint256 length
+    ) external view returns (MirrorItem[] memory) {
+        bytes32 mirrorSchemaUID = indexer.MIRROR_SCHEMA_UID();
+        bytes32[] memory mirrorUIDs = indexer.getReferencingBySchemaAndAttester(
+            dataUID,
+            mirrorSchemaUID,
+            attester,
+            start,
+            length,
+            false, // reverseOrder
+            false // showRevoked — serves active mirrors (re-checked below)
+        );
+
+        uint256 activeCount = 0;
+        for (uint256 i = 0; i < mirrorUIDs.length; i++) {
+            if (!indexer.isRevoked(mirrorUIDs[i])) activeCount++;
+        }
+
         MirrorItem[] memory result = new MirrorItem[](activeCount);
         uint256 idx = 0;
         for (uint256 i = 0; i < mirrorUIDs.length; i++) {

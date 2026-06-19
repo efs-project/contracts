@@ -1,6 +1,6 @@
 # ADR-0023: URI scheme allowlist in MirrorResolver
 
-**Status:** Accepted — superseded in part by ADR-0048 (allowlist widened to add `ftp://`, `s3://`, `gs://`, `dat://`, `rsync://`, `bittorrent://`; the XSS-rejection intent below is preserved)
+**Status:** Superseded by ADR-0056 — the scheme allowlist is removed entirely (it is not a security boundary on immutable state, is trivially evaded, and can't anticipate future transports; render isolation moves to the client). *(Was previously: Accepted — superseded in part by ADR-0048, which widened the allowlist to add `ftp://`/`s3://`/`gs://`/`dat://`/`rsync://`/`bittorrent://`.)*
 **Date:** 2026-04-16
 **Related:** PR #8 commit e523335, ADR-0012
 

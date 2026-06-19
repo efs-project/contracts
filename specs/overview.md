@@ -93,7 +93,7 @@ Full field definitions and resolver wiring: `02-Data-Models-and-Schemas.md`.
 | EFSRouter | `web3://` URI resolution (ERC-5219). Lens-scoped content serving. | No | Yes — but URIs change |
 | EFSFileView | Directory listing views over EFSIndexer + EdgeResolver. | No | Yes — fully stateless |
 | EdgeResolver | PIN + TAG schema hooks (ADR-0041). `_activeBySlot` for PIN (O(1) singleton); `_activeByAAS` (struct-of-tuple) for TAG. | Yes | No — wired into EFSIndexer |
-| MirrorResolver | MIRROR schema hook. URI scheme allowlist + transport ancestry check. | Minimal | No — wired into EFSIndexer |
+| MirrorResolver | MIRROR schema hook. Transport-ancestry + non-empty/length checks; **no URI scheme allowlist** (ADR-0056 — scheme/render safety is the client's job). | Minimal | No — wired into EFSIndexer |
 | EFSSortOverlay | Per-parent sorted linked lists. Lazy overlay on EFSIndexer. | Yes | No — wired into EFSIndexer |
 | ListResolver | LIST schema hook. Validates shape; no state. | No | No — baked into LIST_SCHEMA_UID at registration |
 | ListEntryResolver | LIST_ENTRY schema hook. Wide EntryRecord[] storage, swap-and-pop removal, per-attester lens. | Yes | No — baked into LIST_ENTRY_SCHEMA_UID at registration |
@@ -135,7 +135,8 @@ Breaking these is painful or impossible to reverse:
 
 - **Append-only indices** (`03-Onchain-Indexing-Strategy.md`). Revocation sets an `_isRevoked` flag; never mutate or compact existing entries. Readers filter on iteration.
 - **Schema UIDs are immutable.** The UID hashes the field string; any field change produces a new schema UID. Old attestations stay under the old UID forever.
-- **Lens-scoped reads.** Mirrors and PROPERTYs on a DATA are filtered to the lens attester at read time — cross-attester injection of mirrors or MIME types is blocked by design.
+- **Lens-scoped reads.** Mirrors and PROPERTYs on a DATA are filtered to the lens attester at read time — cross-attester injection of mirrors or MIME types is blocked by design. (Use the lens-scoped readers: `EFSRouter` serves the winning lens's mirror; `EFSFileView.getDataMirrorsByAttester` is the scoped enumeration. The unscoped `getDataMirrors` returns *all* attesters — callers must lens-scope or treat foreign URIs as untrusted.)
+- **Client render-isolation is mandatory (ADR-0056).** The kernel does **no** URI-scheme safety — a mirror URI is arbitrary attester-controlled bytes (any scheme, incl. `data:`/`javascript:`). Clients MUST sandbox rendered mirror content (sandboxed iframe + CSP; SES/LavaMoat for active content), never render a raw mirror URI as a live link, and never navigate the top-level context to one. This is a client launch-blocker.
 - **Mainnet contracts are permanent.** No upgrades, no admin override, no migrations. Devnet uses upgradeable proxies for iteration; mainnet does not.
 
 ## Where to go next

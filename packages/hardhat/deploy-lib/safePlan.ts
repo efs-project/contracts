@@ -60,7 +60,7 @@ const CREATEX_IFACE = new Interface(["function deployCreate3(bytes32 salt, bytes
 // off-chain UID prediction). `parentIndex` indexes into this same array; -1 marks the root.
 //
 // This list MUST stay byte-identical to orchestrate.ts's BOOTSTRAP_SCAFFOLDING (same names, same order).
-// The transport children = every scheme MirrorResolver._isAllowedScheme accepts (11), each named with
+// The transport children = every canonical transport scheme (11, ADR-0011), each named with
 // the TransportType the client's detectTransport() yields (utils/efs/transports.ts) — web3:// → "onchain"
 // and ar:// → "arweave" differ from the URI scheme; the other nine match the scheme token.
 export interface AnchorSpec {
