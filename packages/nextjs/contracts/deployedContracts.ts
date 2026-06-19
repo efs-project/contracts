@@ -8400,6 +8400,902 @@ const deployedContracts = {
       ],
       inheritedFunctions: {},
     },
+    EFSFileView: {
+      address: "0x56da693C297ed11F5Dfc387A3Cdbfe5C81da935f",
+      abi: [
+        {
+          inputs: [
+            {
+              internalType: "contract IEFSIndexer",
+              name: "_indexer",
+              type: "address",
+            },
+            {
+              internalType: "contract IEdgeResolverForFileView",
+              name: "_edgeResolver",
+              type: "address",
+            },
+          ],
+          stateMutability: "nonpayable",
+          type: "constructor",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes",
+              name: "data",
+              type: "bytes",
+            },
+          ],
+          name: "decodeName",
+          outputs: [
+            {
+              internalType: "string",
+              name: "",
+              type: "string",
+            },
+          ],
+          stateMutability: "pure",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "eas",
+          outputs: [
+            {
+              internalType: "contract IEAS",
+              name: "",
+              type: "address",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "edgeResolver",
+          outputs: [
+            {
+              internalType: "contract IEdgeResolverForFileView",
+              name: "",
+              type: "address",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "",
+              type: "bytes32",
+            },
+          ],
+          name: "getCanonicalData",
+          outputs: [
+            {
+              internalType: "bytes32",
+              name: "",
+              type: "bytes32",
+            },
+          ],
+          stateMutability: "pure",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "dataUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "uint256",
+              name: "start",
+              type: "uint256",
+            },
+            {
+              internalType: "uint256",
+              name: "length",
+              type: "uint256",
+            },
+          ],
+          name: "getDataMirrors",
+          outputs: [
+            {
+              components: [
+                {
+                  internalType: "bytes32",
+                  name: "uid",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "bytes32",
+                  name: "transportDefinition",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "string",
+                  name: "uri",
+                  type: "string",
+                },
+                {
+                  internalType: "address",
+                  name: "attester",
+                  type: "address",
+                },
+                {
+                  internalType: "uint64",
+                  name: "timestamp",
+                  type: "uint64",
+                },
+              ],
+              internalType: "struct EFSFileView.MirrorItem[]",
+              name: "",
+              type: "tuple[]",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "parentAnchor",
+              type: "bytes32",
+            },
+            {
+              internalType: "uint256",
+              name: "start",
+              type: "uint256",
+            },
+            {
+              internalType: "uint256",
+              name: "length",
+              type: "uint256",
+            },
+            {
+              internalType: "bytes32",
+              name: "dataSchemaUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "propertySchemaUID",
+              type: "bytes32",
+            },
+          ],
+          name: "getDirectoryPage",
+          outputs: [
+            {
+              components: [
+                {
+                  internalType: "bytes32",
+                  name: "uid",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "string",
+                  name: "name",
+                  type: "string",
+                },
+                {
+                  internalType: "bytes32",
+                  name: "parentUID",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "bool",
+                  name: "isFolder",
+                  type: "bool",
+                },
+                {
+                  internalType: "bool",
+                  name: "hasData",
+                  type: "bool",
+                },
+                {
+                  internalType: "uint256",
+                  name: "childCount",
+                  type: "uint256",
+                },
+                {
+                  internalType: "uint256",
+                  name: "propertyCount",
+                  type: "uint256",
+                },
+                {
+                  internalType: "uint64",
+                  name: "timestamp",
+                  type: "uint64",
+                },
+                {
+                  internalType: "address",
+                  name: "attester",
+                  type: "address",
+                },
+                {
+                  internalType: "bytes32",
+                  name: "schema",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "bytes32",
+                  name: "contentHash",
+                  type: "bytes32",
+                },
+              ],
+              internalType: "struct EFSFileView.FileSystemItem[]",
+              name: "",
+              type: "tuple[]",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "parentAnchor",
+              type: "bytes32",
+            },
+            {
+              internalType: "address[]",
+              name: "attesters",
+              type: "address[]",
+            },
+            {
+              internalType: "uint256",
+              name: "startingCursor",
+              type: "uint256",
+            },
+            {
+              internalType: "uint256",
+              name: "pageSize",
+              type: "uint256",
+            },
+          ],
+          name: "getDirectoryPageByAddressList",
+          outputs: [
+            {
+              components: [
+                {
+                  internalType: "bytes32",
+                  name: "uid",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "string",
+                  name: "name",
+                  type: "string",
+                },
+                {
+                  internalType: "bytes32",
+                  name: "parentUID",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "bool",
+                  name: "isFolder",
+                  type: "bool",
+                },
+                {
+                  internalType: "bool",
+                  name: "hasData",
+                  type: "bool",
+                },
+                {
+                  internalType: "uint256",
+                  name: "childCount",
+                  type: "uint256",
+                },
+                {
+                  internalType: "uint256",
+                  name: "propertyCount",
+                  type: "uint256",
+                },
+                {
+                  internalType: "uint64",
+                  name: "timestamp",
+                  type: "uint64",
+                },
+                {
+                  internalType: "address",
+                  name: "attester",
+                  type: "address",
+                },
+                {
+                  internalType: "bytes32",
+                  name: "schema",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "bytes32",
+                  name: "contentHash",
+                  type: "bytes32",
+                },
+              ],
+              internalType: "struct EFSFileView.FileSystemItem[]",
+              name: "items",
+              type: "tuple[]",
+            },
+            {
+              internalType: "uint256",
+              name: "nextCursor",
+              type: "uint256",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "parentAnchor",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "anchorSchema",
+              type: "bytes32",
+            },
+            {
+              internalType: "address[]",
+              name: "attesters",
+              type: "address[]",
+            },
+            {
+              internalType: "bytes",
+              name: "cursor",
+              type: "bytes",
+            },
+            {
+              internalType: "uint256",
+              name: "maxItems",
+              type: "uint256",
+            },
+          ],
+          name: "getDirectoryPageBySchemaAndAddressList",
+          outputs: [
+            {
+              components: [
+                {
+                  components: [
+                    {
+                      internalType: "bytes32",
+                      name: "uid",
+                      type: "bytes32",
+                    },
+                    {
+                      internalType: "string",
+                      name: "name",
+                      type: "string",
+                    },
+                    {
+                      internalType: "bytes32",
+                      name: "parentUID",
+                      type: "bytes32",
+                    },
+                    {
+                      internalType: "bool",
+                      name: "isFolder",
+                      type: "bool",
+                    },
+                    {
+                      internalType: "bool",
+                      name: "hasData",
+                      type: "bool",
+                    },
+                    {
+                      internalType: "uint256",
+                      name: "childCount",
+                      type: "uint256",
+                    },
+                    {
+                      internalType: "uint256",
+                      name: "propertyCount",
+                      type: "uint256",
+                    },
+                    {
+                      internalType: "uint64",
+                      name: "timestamp",
+                      type: "uint64",
+                    },
+                    {
+                      internalType: "address",
+                      name: "attester",
+                      type: "address",
+                    },
+                    {
+                      internalType: "bytes32",
+                      name: "schema",
+                      type: "bytes32",
+                    },
+                    {
+                      internalType: "bytes32",
+                      name: "contentHash",
+                      type: "bytes32",
+                    },
+                  ],
+                  internalType: "struct EFSFileView.FileSystemItem[]",
+                  name: "items",
+                  type: "tuple[]",
+                },
+                {
+                  internalType: "bytes",
+                  name: "nextCursor",
+                  type: "bytes",
+                },
+              ],
+              internalType: "struct EFSFileView.DirectoryPage",
+              name: "page",
+              type: "tuple",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "parentAnchor",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "anchorSchema",
+              type: "bytes32",
+            },
+            {
+              internalType: "address[]",
+              name: "attesters",
+              type: "address[]",
+            },
+            {
+              internalType: "bytes32[]",
+              name: "excludeTagDefs",
+              type: "bytes32[]",
+            },
+            {
+              internalType: "int256[]",
+              name: "minWeights",
+              type: "int256[]",
+            },
+            {
+              internalType: "bytes",
+              name: "cursor",
+              type: "bytes",
+            },
+            {
+              internalType: "uint256",
+              name: "maxItems",
+              type: "uint256",
+            },
+          ],
+          name: "getDirectoryPageFiltered",
+          outputs: [
+            {
+              components: [
+                {
+                  components: [
+                    {
+                      internalType: "bytes32",
+                      name: "uid",
+                      type: "bytes32",
+                    },
+                    {
+                      internalType: "string",
+                      name: "name",
+                      type: "string",
+                    },
+                    {
+                      internalType: "bytes32",
+                      name: "parentUID",
+                      type: "bytes32",
+                    },
+                    {
+                      internalType: "bool",
+                      name: "isFolder",
+                      type: "bool",
+                    },
+                    {
+                      internalType: "bool",
+                      name: "hasData",
+                      type: "bool",
+                    },
+                    {
+                      internalType: "uint256",
+                      name: "childCount",
+                      type: "uint256",
+                    },
+                    {
+                      internalType: "uint256",
+                      name: "propertyCount",
+                      type: "uint256",
+                    },
+                    {
+                      internalType: "uint64",
+                      name: "timestamp",
+                      type: "uint64",
+                    },
+                    {
+                      internalType: "address",
+                      name: "attester",
+                      type: "address",
+                    },
+                    {
+                      internalType: "bytes32",
+                      name: "schema",
+                      type: "bytes32",
+                    },
+                    {
+                      internalType: "bytes32",
+                      name: "contentHash",
+                      type: "bytes32",
+                    },
+                  ],
+                  internalType: "struct EFSFileView.FileSystemItem[]",
+                  name: "items",
+                  type: "tuple[]",
+                },
+                {
+                  internalType: "bytes",
+                  name: "nextCursor",
+                  type: "bytes",
+                },
+              ],
+              internalType: "struct EFSFileView.DirectoryPage",
+              name: "page",
+              type: "tuple",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "anchorUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "address[]",
+              name: "attesters",
+              type: "address[]",
+            },
+            {
+              internalType: "bytes32",
+              name: "schema",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes",
+              name: "cursor",
+              type: "bytes",
+            },
+            {
+              internalType: "uint256",
+              name: "maxItems",
+              type: "uint256",
+            },
+          ],
+          name: "getFilesAtPath",
+          outputs: [
+            {
+              components: [
+                {
+                  components: [
+                    {
+                      internalType: "bytes32",
+                      name: "uid",
+                      type: "bytes32",
+                    },
+                    {
+                      internalType: "string",
+                      name: "name",
+                      type: "string",
+                    },
+                    {
+                      internalType: "bytes32",
+                      name: "parentUID",
+                      type: "bytes32",
+                    },
+                    {
+                      internalType: "bool",
+                      name: "isFolder",
+                      type: "bool",
+                    },
+                    {
+                      internalType: "bool",
+                      name: "hasData",
+                      type: "bool",
+                    },
+                    {
+                      internalType: "uint256",
+                      name: "childCount",
+                      type: "uint256",
+                    },
+                    {
+                      internalType: "uint256",
+                      name: "propertyCount",
+                      type: "uint256",
+                    },
+                    {
+                      internalType: "uint64",
+                      name: "timestamp",
+                      type: "uint64",
+                    },
+                    {
+                      internalType: "address",
+                      name: "attester",
+                      type: "address",
+                    },
+                    {
+                      internalType: "bytes32",
+                      name: "schema",
+                      type: "bytes32",
+                    },
+                    {
+                      internalType: "bytes32",
+                      name: "contentHash",
+                      type: "bytes32",
+                    },
+                  ],
+                  internalType: "struct EFSFileView.FileSystemItem[]",
+                  name: "items",
+                  type: "tuple[]",
+                },
+                {
+                  internalType: "bytes",
+                  name: "nextCursor",
+                  type: "bytes",
+                },
+              ],
+              internalType: "struct EFSFileView.DirectoryPage",
+              name: "page",
+              type: "tuple",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "indexer",
+          outputs: [
+            {
+              internalType: "contract IEFSIndexer",
+              name: "",
+              type: "address",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+      ],
+      inheritedFunctions: {},
+    },
+    EFSRouter: {
+      address: "0x4EF216e1096237dA8A962157Ed13ea1B3FcC5E17",
+      abi: [
+        {
+          inputs: [
+            {
+              internalType: "address",
+              name: "_indexer",
+              type: "address",
+            },
+            {
+              internalType: "address",
+              name: "_eas",
+              type: "address",
+            },
+            {
+              internalType: "address",
+              name: "_edgeResolver",
+              type: "address",
+            },
+            {
+              internalType: "address",
+              name: "_schemaRegistry",
+              type: "address",
+            },
+            {
+              internalType: "bytes32",
+              name: "_dataSchemaUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "address",
+              name: "_systemAccount",
+              type: "address",
+            },
+          ],
+          stateMutability: "nonpayable",
+          type: "constructor",
+        },
+        {
+          inputs: [
+            {
+              internalType: "string",
+              name: "segment",
+              type: "string",
+            },
+          ],
+          name: "classifyTopLevel",
+          outputs: [
+            {
+              internalType: "uint8",
+              name: "flavor",
+              type: "uint8",
+            },
+            {
+              internalType: "bytes32",
+              name: "uid",
+              type: "bytes32",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "dataSchemaUID",
+          outputs: [
+            {
+              internalType: "bytes32",
+              name: "",
+              type: "bytes32",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "eas",
+          outputs: [
+            {
+              internalType: "contract IEAS",
+              name: "",
+              type: "address",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "edgeResolver",
+          outputs: [
+            {
+              internalType: "contract IEdgeResolverForRouter",
+              name: "",
+              type: "address",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "indexer",
+          outputs: [
+            {
+              internalType: "contract IEFSIndexer",
+              name: "",
+              type: "address",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "string[]",
+              name: "resource",
+              type: "string[]",
+            },
+            {
+              components: [
+                {
+                  internalType: "string",
+                  name: "key",
+                  type: "string",
+                },
+                {
+                  internalType: "string",
+                  name: "value",
+                  type: "string",
+                },
+              ],
+              internalType: "struct IDecentralizedApp.KeyValue[]",
+              name: "params",
+              type: "tuple[]",
+            },
+          ],
+          name: "request",
+          outputs: [
+            {
+              internalType: "uint256",
+              name: "statusCode",
+              type: "uint256",
+            },
+            {
+              internalType: "bytes",
+              name: "body",
+              type: "bytes",
+            },
+            {
+              components: [
+                {
+                  internalType: "string",
+                  name: "key",
+                  type: "string",
+                },
+                {
+                  internalType: "string",
+                  name: "value",
+                  type: "string",
+                },
+              ],
+              internalType: "struct IDecentralizedApp.KeyValue[]",
+              name: "headers",
+              type: "tuple[]",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "resolveMode",
+          outputs: [
+            {
+              internalType: "bytes32",
+              name: "",
+              type: "bytes32",
+            },
+          ],
+          stateMutability: "pure",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "schemaRegistry",
+          outputs: [
+            {
+              internalType: "contract ISchemaRegistry",
+              name: "",
+              type: "address",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "systemAccount",
+          outputs: [
+            {
+              internalType: "address",
+              name: "",
+              type: "address",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+      ],
+      inheritedFunctions: {},
+    },
     EdgeResolver: {
       address: "0xD6643DB36B20895E3E46aD08cdD4ED4BC1dBB7F1",
       abi: [
@@ -12690,6 +13586,405 @@ const deployedContracts = {
         },
       ],
       inheritedFunctions: {},
+    },
+    ListReader: {
+      address: "0x689AA70BF6a8b22BE4E959dcf33A40ea03F85Bd5",
+      abi: [
+        {
+          inputs: [
+            {
+              internalType: "contract IEAS",
+              name: "_eas",
+              type: "address",
+            },
+            {
+              internalType: "contract ListEntryResolver",
+              name: "_resolver",
+              type: "address",
+            },
+            {
+              internalType: "bytes32",
+              name: "listSchemaUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "bytes32",
+              name: "listEntrySchemaUID",
+              type: "bytes32",
+            },
+          ],
+          stateMutability: "nonpayable",
+          type: "constructor",
+        },
+        {
+          inputs: [],
+          name: "LIST_ENTRY_SCHEMA_UID",
+          outputs: [
+            {
+              internalType: "bytes32",
+              name: "",
+              type: "bytes32",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "LIST_SCHEMA_UID",
+          outputs: [
+            {
+              internalType: "bytes32",
+              name: "",
+              type: "bytes32",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "listUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+            {
+              internalType: "bytes32",
+              name: "identityKey",
+              type: "bytes32",
+            },
+          ],
+          name: "countOf",
+          outputs: [
+            {
+              internalType: "uint256",
+              name: "",
+              type: "uint256",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "eas",
+          outputs: [
+            {
+              internalType: "contract IEAS",
+              name: "",
+              type: "address",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "listUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+            {
+              internalType: "uint256",
+              name: "start",
+              type: "uint256",
+            },
+            {
+              internalType: "uint256",
+              name: "len",
+              type: "uint256",
+            },
+          ],
+          name: "entries",
+          outputs: [
+            {
+              components: [
+                {
+                  internalType: "bytes32",
+                  name: "entryUID",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "uint8",
+                  name: "targetType",
+                  type: "uint8",
+                },
+                {
+                  internalType: "bytes32",
+                  name: "identityKey",
+                  type: "bytes32",
+                },
+              ],
+              internalType: "struct IListReader.Entry[]",
+              name: "",
+              type: "tuple[]",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "listUID",
+              type: "bytes32",
+            },
+          ],
+          name: "getMode",
+          outputs: [
+            {
+              components: [
+                {
+                  internalType: "bool",
+                  name: "exists",
+                  type: "bool",
+                },
+                {
+                  internalType: "address",
+                  name: "curator",
+                  type: "address",
+                },
+                {
+                  internalType: "bool",
+                  name: "allowsDuplicates",
+                  type: "bool",
+                },
+                {
+                  internalType: "bool",
+                  name: "appendOnly",
+                  type: "bool",
+                },
+                {
+                  internalType: "uint8",
+                  name: "targetType",
+                  type: "uint8",
+                },
+                {
+                  internalType: "bytes32",
+                  name: "targetSchema",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "uint256",
+                  name: "maxEntries",
+                  type: "uint256",
+                },
+              ],
+              internalType: "struct IListReader.ListMode",
+              name: "m",
+              type: "tuple",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "address",
+              name: "a",
+              type: "address",
+            },
+          ],
+          name: "identityKeyForAddress",
+          outputs: [
+            {
+              internalType: "bytes32",
+              name: "",
+              type: "bytes32",
+            },
+          ],
+          stateMutability: "pure",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "k",
+              type: "bytes32",
+            },
+          ],
+          name: "identityKeyForMemberKey",
+          outputs: [
+            {
+              internalType: "bytes32",
+              name: "",
+              type: "bytes32",
+            },
+          ],
+          stateMutability: "pure",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "uid",
+              type: "bytes32",
+            },
+          ],
+          name: "identityKeyForUID",
+          outputs: [
+            {
+              internalType: "bytes32",
+              name: "",
+              type: "bytes32",
+            },
+          ],
+          stateMutability: "pure",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "listUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+          ],
+          name: "length",
+          outputs: [
+            {
+              internalType: "uint256",
+              name: "",
+              type: "uint256",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [],
+          name: "resolver",
+          outputs: [
+            {
+              internalType: "contract ListEntryResolver",
+              name: "",
+              type: "address",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "listUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "address",
+              name: "lens",
+              type: "address",
+            },
+            {
+              internalType: "bytes32",
+              name: "entryUID",
+              type: "bytes32",
+            },
+          ],
+          name: "targetAsAddress",
+          outputs: [
+            {
+              internalType: "address",
+              name: "",
+              type: "address",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "listUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "address",
+              name: "lens",
+              type: "address",
+            },
+            {
+              internalType: "bytes32",
+              name: "entryUID",
+              type: "bytes32",
+            },
+          ],
+          name: "targetAsMemberKey",
+          outputs: [
+            {
+              internalType: "bytes32",
+              name: "",
+              type: "bytes32",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "listUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "address",
+              name: "lens",
+              type: "address",
+            },
+            {
+              internalType: "bytes32",
+              name: "entryUID",
+              type: "bytes32",
+            },
+          ],
+          name: "targetAsUID",
+          outputs: [
+            {
+              internalType: "bytes32",
+              name: "",
+              type: "bytes32",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+      ],
+      inheritedFunctions: {
+        countOf: "contracts/interfaces/IListReader.sol",
+        entries: "contracts/interfaces/IListReader.sol",
+        getMode: "contracts/interfaces/IListReader.sol",
+        identityKeyForAddress: "contracts/interfaces/IListReader.sol",
+        identityKeyForMemberKey: "contracts/interfaces/IListReader.sol",
+        identityKeyForUID: "contracts/interfaces/IListReader.sol",
+        length: "contracts/interfaces/IListReader.sol",
+        targetAsAddress: "contracts/interfaces/IListReader.sol",
+        targetAsMemberKey: "contracts/interfaces/IListReader.sol",
+        targetAsUID: "contracts/interfaces/IListReader.sol",
+      },
     },
     ListResolver: {
       address: "0x678883253e0edA926aC48F23655967e78E7d464C",

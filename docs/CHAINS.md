@@ -42,11 +42,15 @@ once run.
 
 ### Read views (stateless, redeployable — in no schema UID)
 
+Deployed 2026-06-19 (plain EOA deploy, no Safe — these are ownerless and in no UID). Redeployable at any
+time; on a redeploy, off-chain consumers update a config value. (On-chain consumers should bind to the
+permanent kernel/resolvers, not these addresses — see `docs/FUTURE_WORK.md`.)
+
 | Contract | Address |
 |---|---|
-| EFSFileView | _pending `yarn deploy:efs-views --network sepolia`_ |
-| EFSRouter | _pending_ |
-| ListReader | _pending_ |
+| EFSFileView | `0x56da693C297ed11F5Dfc387A3Cdbfe5C81da935f` |
+| EFSRouter | `0x4EF216e1096237dA8A962157Ed13ea1B3FcC5E17` |
+| ListReader | `0x689AA70BF6a8b22BE4E959dcf33A40ea03F85Bd5` |
 
 ### Frozen schema UIDs
 
