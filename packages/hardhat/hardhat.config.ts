@@ -99,7 +99,10 @@ const config: HardhatUserConfig = {
       accounts: [deployerPrivateKey],
     },
     sepolia: {
-      url: `https://eth-sepolia.g.alchemy.com/v2/${providerApiKey}`,
+      // SEPOLIA_RPC_URL overrides the default Alchemy endpoint so the live deploy (deploy:efs
+      // --network sepolia) can use any provider, e.g. Infura: https://sepolia.infura.io/v3/<key>.
+      // `||` (not `??`) so an empty-string .env value falls through to the Alchemy default.
+      url: process.env.SEPOLIA_RPC_URL || `https://eth-sepolia.g.alchemy.com/v2/${providerApiKey}`,
       accounts: [deployerPrivateKey],
     },
     arbitrum: {
