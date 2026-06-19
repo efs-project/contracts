@@ -10,21 +10,39 @@ A first-principles + adversarial durability review (28 candidate cracks, all ref
 
 | # | Schema | Field string (exact) | revocable | Resolver (proxy) | Schema UID |
 |---|---|---|---|---|---|
-| 1 | ANCHOR | `string name, bytes32 forSchema` | `false` | EFSIndexer proxy `0x…TBD` | `0x…TBD` |
-| 2 | PROPERTY | `string value` | `false` | EFSIndexer proxy `0x…TBD` | `0x…TBD` |
-| 3 | DATA | `` (empty — pure identity) | `false` | EFSIndexer proxy `0x…TBD` | `0x…TBD` |
-| 4 | PIN | `bytes32 definition` | `true` | EdgeResolver proxy `0x…TBD` | `0x…TBD` |
-| 5 | TAG | `bytes32 definition, int256 weight` | `true` | EdgeResolver proxy `0x…TBD` | `0x…TBD` |
-| 6 | MIRROR | `bytes32 transportDefinition, string uri` | `true` | MirrorResolver proxy `0x…TBD` | `0x…TBD` |
-| 7 | LIST | `bool allowsDuplicates, bool appendOnly, uint8 targetType, bytes32 targetSchema, uint256 maxEntries` | `false` | ListResolver proxy `0x…TBD` | `0x…TBD` |
-| 8 | LIST_ENTRY | `bytes32 listUID, bytes32 target` | `true` | ListEntryResolver proxy `0x…TBD` | `0x…TBD` |
-| 9 | REDIRECT | `bytes32 target, uint16 kind` | `true` | AliasResolver proxy `0x…TBD` | `0x…TBD` |
+| 1 | ANCHOR | `string name, bytes32 forSchema` | `false` | EFSIndexer proxy `0xc4DeaBB482C2FA74690629eEa662efb166BD658a` | `0xf818abd74da70345c8acd7087e6ce69fd48eaf4e79c1931e5c6b08fb148c921a` |
+| 2 | PROPERTY | `string value` | `false` | EFSIndexer proxy `0xc4DeaBB482C2FA74690629eEa662efb166BD658a` | `0xa1f54f2d395c24077e374d9a2d835a2d2fcb3b4c3e019f63525bee3424f1c246` |
+| 3 | DATA | `` (empty — pure identity) | `false` | EFSIndexer proxy `0xc4DeaBB482C2FA74690629eEa662efb166BD658a` | `0xa3400cecc384d66d84f502fd91e56dc0321edccde9ef8e49d303ba63cc841b3c` |
+| 4 | PIN | `bytes32 definition` | `true` | EdgeResolver proxy `0xD6643DB36B20895E3E46aD08cdD4ED4BC1dBB7F1` | `0x5aaabaea19accff34c604f6f1b0dd2361a0a9ba64f7746ea6b3ed95d4047d878` |
+| 5 | TAG | `bytes32 definition, int256 weight` | `true` | EdgeResolver proxy `0xD6643DB36B20895E3E46aD08cdD4ED4BC1dBB7F1` | `0x0c41f8ee209fdbea4de3942c488a4098dd5a8bb1afce117857c5493002dd0e87` |
+| 6 | MIRROR | `bytes32 transportDefinition, string uri` | `true` | MirrorResolver proxy `0xd4991Ced6D460A3794E9120dC6C19975092982b9` | `0x9573ea8100bda88cc09ba275d8307b309c42ae82cca7f96ccf0e3eef4b5ea58d` |
+| 7 | LIST | `bool allowsDuplicates, bool appendOnly, uint8 targetType, bytes32 targetSchema, uint256 maxEntries` | `false` | ListResolver proxy `0x678883253e0edA926aC48F23655967e78E7d464C` | `0x2e2801910184228802919fcc6f20c7e6c9e9c12fb8ae7a1f4e516cd3eeec6a59` |
+| 8 | LIST_ENTRY | `bytes32 listUID, bytes32 target` | `true` | ListEntryResolver proxy `0x7a14832E355d5937019C3D0b72bd11F2dbD5e513` | `0x9a22c62bf63ef3a04412c124747df97d9f9e81376fa202d4ed514d0a5e6c9af1` |
+| 9 | REDIRECT | `bytes32 target, uint16 kind` | `true` | AliasResolver proxy `0xB07225842d6513239a3519ae052B5bc7EBf18996` | `0x5dca2fcc2c39c8629616b175a38c5e71d641b3019a3cb4ca790cc8fd32c9b8e0` |
 
 **PROPERTY (ADR-0052):** `revocable: false`. PROPERTY is a non-revocable *interned value* — dumb shared content (an "anchor for a string"), not a claim. Many PINs can point at one value (best-effort dedup); nobody owns the value. Revocability and removal live in the **PIN** (the binding), not the value — revoke or supersede the PIN to unbind/change a property; the shared value is untouched. Non-revocability is what makes a value safely shareable: it can't be yanked out from under other bindings. Symmetric with DATA (value = content, claim = edge).
 
 **DATA (ADR-0049):** empty schema = pure identity. `contentHash` + `size` move to trust-scoped reserved-key PROPERTYs (lets you pin a 10 GB IPFS file with zero download; multiple lens-scoped hash claims). This is a real Tier-1 reshape (new DATA UID, removes `dataByContentKey`) — safe now because nothing is frozen on Sepolia yet.
 
 **REDIRECT (ADR-0050):** canonical/`sameAs`/`supersededBy`/`symlink` redirect. `refUID` = source; `target` = destination. Only `uint16 kind` is frozen — the kind *taxonomy* is upgradeable resolver logic + convention. (`uint16` not `uint8`: widening is free under ABI padding, and `kind` is an open relationship vocabulary, so the irreversible field takes zero-cost headroom; see ADR-0050.) Write-time guards in `AliasResolver`; multi-hop cycle/chain resolution is a Durable read-time spec (cycle → lowest-UID-in-SCC), pinned with conformance vectors before durable seeding. Hardlinks remain native (one DATA, many PINs).
+
+## Realized deploy facts (Sepolia — chainId 11155111)
+
+Filled from the live Safe-native deploy (`deploy:efs --via-safe --network sepolia`). Addresses/UIDs are
+Safe-keyed CREATE3 (the EFS.eth Safe is the CreateX caller) and match the table above. **The 7 impl
+addresses are NOT here** — they are content-addressed CREATE2, behind the proxies, and in no UID, so they
+are not part of the freeze.
+
+- **Deploy FROM (EFS.eth Safe / CreateX caller / born owner):** `0x1Ad8B0a3F7F6892e9206FcA4c93871FEA3cA11D7`
+- **Gas-paying deployer EOA (zero authority):** `0x8f99ED774D2eDd7390657130172Fa6FFAea95bb5`
+- **CreateX factory:** `0xba5Ed099633D3B313e4D5F7bdc1305d3c28ba5Ed`
+- **EAS:** `0xC2679fBD37d54388Ce493F1DB75320D236e1815e` · **SchemaRegistry:** `0x0a7E2Ff54e76B8E6659aedc9103FB21c038050D0`
+- **SystemAccount proxy (default-lens `system` tail, ADR-0053):** `0x63DEA7336C4217B7c5433eE3CB21Bb6a6813588d`
+- **Verify gate (pre-register):** GREEN ✓ — realized==predicted, `initialize()` locked, self-UID getters, init cross-ref UIDs, EFSIndexer partner wiring, `getEAS()`==EAS, golden-vector field strings.
+- **Safe MultiSend batches** (MultiSendCallOnly 1.4.1 `0x9641d764fc13c8B624c04430C7356C1C7C8102e2`, `operation=1`):
+  - **Batch 1** (deploy + wire), nonce 0 — safeTxHash `0x0f631eb9eba02979e1e109a1f7ac056dc27e10b6545972a3a572199fd5f6466a` — **EXECUTED** ✓ (7/7 proxies live on-chain; `EFSIndexer.edgeResolver()` wired).
+  - **Batch 2** (register×9 + `SystemAccount.bootstrap` + `seal`), nonce 1 — safeTxHash `0x12dc7b0d9d3f96e44ac715d4e6e78fca252c02626d68805b35bedbb4e2228647` — **PENDING — execute only after this table is signed.**
+  - **Batch 3** (`MirrorResolver.setTransportsAnchor`), nonce 2 — safeTxHash `TBD` (emitted by the re-run after Batch 2 lands; fed the realized `/transports` UID).
 
 ## Explicitly NOT frozen now (addable later, no orphaning)
 
@@ -69,5 +87,5 @@ A first-principles + adversarial durability review (28 candidate cracks, all ref
 
 ## Sign-off
 
-- [ ] **James** — frozen-UID table approved for Sepolia registration. Date: ________
+- [x] **James** — frozen-UID table approved for Sepolia registration. Date: 2026-06-19
 - [ ] **James** — FREEZE_LEDGER approved for burn-to-immutable. Date: ________
