@@ -14,8 +14,10 @@ foundation from here without the rest of the repo). Update it in the same commit
 
 ## Sepolia — chainId 11155111
 
-**Status:** frozen (9 schemas registered + scaffolding sealed) on **2026-06-19**. Born Safe-owned; **not
-yet burned** (burn-to-immutable follows a ≥14-day soak — see `docs/SEPOLIA_FREEZE_TABLE.md`). Read views
+**Status:** frozen (9 schemas registered + scaffolding sealed) on **2026-06-19**. Born Safe-owned and
+**still upgradeable** by the EFS.eth Safe — the upgrade keys stay until EFS is audited and explicitly
+approved for immutability. **There is no burn timeline** (James-gated; the ≥14-day soak in
+`docs/SEPOLIA_FREEZE_TABLE.md` is a *minimum precondition*, not a schedule). Read views
 (EFSFileView / EFSRouter / ListReader) are deployed separately via `yarn deploy:efs-views` and added below
 once run.
 
