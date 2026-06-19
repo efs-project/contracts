@@ -26,7 +26,8 @@
     "simulate:redirect": "hardhat run scripts/simulate-redirect.ts --network localhost",
     "simulate:freeze": "hardhat run scripts/simulate-freeze-set.ts --network localhost",
     "test": "REPORT_GAS=true hardhat test --network hardhat",
-    "verify": "hardhat etherscan-verify"
+    "verify": "hardhat etherscan-verify",
+    "mirror:upgrade": "HARDHAT_DEPLOY_TASK=mirror:upgrade ts-node scripts/runHardhatDeployWithPK.ts"
   },
   "dependencies": {
     "@inquirer/password": "^4.0.2",
