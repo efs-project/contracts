@@ -9,9 +9,14 @@ pragma solidity 0.8.26;
 ///         the Sepolia structure IS the mainnet structure (same salt + same deployer EOA ⇒ same
 ///         proxy address ⇒ same schema UIDs). See docs/DEPLOYMENT.md §1-3, ADR-0048.
 ///
-///         Only the four members EFS calls are declared. We vendor the interface (rather than add a
+///         Only the members EFS calls are declared. We vendor the interface (rather than add a
 ///         dependency) so the TS deploy lib can encode/decode calldata against a stable ABI and so a
-///         resolver/test can reference it directly.
+///         resolver/test can reference it directly. The proxies use CREATE3 (address keyed on
+///         (deployer, salt) only — impl-independent). The resolver IMPLEMENTATIONS use CREATE2
+///         (`deployCreate2`): their address is keyed on (deployer, salt, initCode), so it is
+///         content-addressed — a re-run computes the same address and skips the deploy if code is
+///         already there, and any bytecode change yields a NEW address (no stale-impl reuse). Impl
+///         addresses are in no schema UID, so this does not touch the frozen set.
 ///
 /// @dev Salt-guarding (CreateX `_guard`): if the salt's leading 20 bytes equal `msg.sender` and byte
 ///      20 is `0x00` (no cross-chain redeploy protection — what EFS uses, so the address depends only
@@ -42,4 +47,13 @@ interface ICreateX {
 
     /// @notice Compute the CREATE3 address for a (already-guarded) salt, assuming this factory deploys.
     function computeCreate3Address(bytes32 salt) external view returns (address computedAddress);
+
+    /// @notice Deploy `initCode` via CREATE2 at a `salt`-derived, content-addressed address (used for
+    ///         the resolver impls — see the `_guard` note above for how the raw salt is guarded).
+    function deployCreate2(bytes32 salt, bytes memory initCode) external payable returns (address newContract);
+
+    /// @notice Compute the CREATE2 address for a (already-guarded) salt + initCode hash, assuming this
+    ///         factory deploys. Mirror of `computeCreate3Address`: pass the GUARDED salt (the TS lib
+    ///         computes it off-chain) and `keccak256(initCode)`.
+    function computeCreate2Address(bytes32 salt, bytes32 initCodeHash) external view returns (address computedAddress);
 }

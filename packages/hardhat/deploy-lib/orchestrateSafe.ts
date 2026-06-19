@@ -547,7 +547,14 @@ async function proposeViaSafe(
   if (artifactPath) {
     mkdirSync(dirname(artifactPath), { recursive: true });
     writeFileSync(artifactPath, JSON.stringify(artifact, null, 2));
-    l(`Safe-native deploy (propose): wrote build/propose artifact → ${artifactPath}`);
+    l("");
+    l("  ┌─────────────────────────────────────────────────────────────────────────────");
+    l("  │ SAFE BATCH ARTIFACT (import this into Safe{Wallet} / the Safe Tx Service):");
+    l(`  │   ${artifactPath}`);
+    l("  │ Durable location (survives `hardhat clean` / a deployments wipe). If it is ever");
+    l("  │ lost, just re-run `deploy:efs --via-safe` — impls are content-addressed and reused,");
+    l("  │ so regenerating this file costs no gas.");
+    l("  └─────────────────────────────────────────────────────────────────────────────");
   }
 
   l("");

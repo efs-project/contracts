@@ -23,6 +23,11 @@ cache-zk
 # deployments
 deployments/localhost
 
+# Safe-native deploy hand-off artifacts (safe-batches.json) — durable, regenerable, per-run; not committed
+deploy-state/
+# Decoded Safe Transaction Builder upload files (regenerated from safe-batches.json per batch)
+batch*-txbuilder.json
+
 # typescript
 *.tsbuildinfo
 

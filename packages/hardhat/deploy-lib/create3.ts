@@ -13,7 +13,7 @@
 
 import { AbiCoder, Contract, Signer, concat, getBytes, hexlify, keccak256, solidityPacked, zeroPadValue } from "ethers";
 import { ethers } from "hardhat";
-import { CREATEX_ADDRESS } from "./addresses";
+import { CREATEX_ADDRESS, EAS_ADDRESS } from "./addresses";
 import type { ResolverName } from "./schemas";
 
 /// CREATE3-deployed contract names: the six schema resolvers PLUS `SystemAccount` (ADR-0053). The
@@ -92,6 +92,42 @@ export async function predictProxyAddress(
   const gSalt = guardedSalt(deployer, rawSalt);
   const predicted: string = await createx.computeCreate3Address(gSalt);
   return { rawSalt, predicted };
+}
+
+/// Build the impl creation bytecode (creation bytecode ++ abi.encode(EAS_ADDRESS)) for a CREATE2
+/// content-addressed impl. Every EFS impl takes the single `address eas` constructor arg, so the
+/// initCode — and therefore the CREATE2 address — is a pure function of the compiled bytecode + the
+/// (constant) EAS address.
+///
+/// DETERMINISM CAVEAT: solc appends a CBOR metadata hash (of sources + compiler settings) to creation
+/// bytecode, so the initCode — and thus the predicted impl address — is sensitive to the exact toolchain
+/// and source tree. Within a single deploy ceremony (one checkout, one solc) it is fully stable, which is
+/// all the idempotent re-run / lost-artifact-recovery path needs. But a different machine, a solc bump,
+/// or an unrelated edit to the contract or its imports will MOVE the address and force a one-time
+/// redeploy. This is not a freeze-safety risk (impls are in no schema UID), only an idempotency caveat.
+/// To make impl addresses reproducible across toolchains, set solc `metadata.bytecodeHash: "none"`.
+export async function buildImplInitCode(name: Create3Name): Promise<string> {
+  const Factory = await ethers.getContractFactory(name);
+  const tx = await Factory.getDeployTransaction(EAS_ADDRESS);
+  return tx.data as string;
+}
+
+/// Predict the CREATE2 content-addressed impl address for a resolver/SystemAccount, given the deployer.
+/// Reuses the SAME permissioned raw salt as the proxy (leading 20 bytes = deployer, flag 0x00) — the
+/// CREATE2 vs CREATE3 derivations never collide (different address formulas), and a permissioned salt
+/// means only `deployer` can occupy the address (no front-run griefing). The address is
+/// `f(deployer, salt, initCode)`: stable across re-runs (idempotent), and a bytecode change moves it
+/// (so "code present ⇒ skip" can never reuse a stale impl). Impl addresses are in NO schema UID.
+export async function predictImplAddress(
+  createx: Contract,
+  deployer: string,
+  name: Create3Name,
+): Promise<{ rawSalt: string; initCode: string; predicted: string }> {
+  const initCode = await buildImplInitCode(name);
+  const rawSalt = buildRawSalt(deployer, name);
+  const gSalt = guardedSalt(deployer, rawSalt);
+  const predicted: string = await createx.computeCreate2Address(gSalt, keccak256(initCode));
+  return { rawSalt, initCode, predicted };
 }
 
 export interface Create3DeployResult {

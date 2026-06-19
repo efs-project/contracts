@@ -654,7 +654,7 @@ describe("DeploySafe.fork — Safe-native deploy, born Safe-owned", function () 
       expect(p1.batches[0].label, "Phase 1 emits Batch 2").to.match(/Batch 2/);
       expect(
         nonceAfterP1 - nonceBeforeP1,
-        "Phase 1 propose deployed NO impls (deployer nonce flat — buildSafePlan/deployImpls not called)",
+        "Phase 1 propose deployed NO impls (deployer nonce flat — buildSafePlan/ensureImpls not called)",
       ).to.equal(0);
       // Belt-and-suspenders: the result's plan carries NO impl addresses on a resume (impls map empty).
       expect(

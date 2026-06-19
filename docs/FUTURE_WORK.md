@@ -12,6 +12,29 @@ Backlog of known improvements, scale concerns, and architectural enhancements th
 
 A six-angle expert review (schema-permanence, proxy/burn, kernel-integrity, adversarial-resolver, EAS/evolution, deploy-ceremony) of the Sepolia freeze + upgradeable contracts ran 2026-06-11. **Verdict: the frozen schema surface (9 field strings + revocable flags + resolver-proxy addresses) is sound — zero freeze-blockers.** Fixed in-PR: burn-checklist completeness (renounce EFSIndexer/MirrorResolver owners), verify-gate cross-ref UID assertions, expected-Safe pin, golden-vector comment. The items below are recoverable-later (upgrade-safe logic, docs, or pre-mainnet decisions) — none reopen the freeze, but each should land before mainnet.
 
+### Deploy-ceremony hardening follow-ups (from the 2026-06-19 live Sepolia freeze) [tooling; upgrade-safe]
+The first real Safe-native Sepolia freeze (2026-06-19) surfaced deploy-tooling lessons. Three were fixed in
+that PR — impls are now deterministic content-addressed CREATE2 (`ensureImpls` reuses on-chain impls on a
+re-run instead of re-spending — a lost `safe-batches.json` no longer forces a paid redeploy), a preflight
+balance guard fails before spending if the deployer can't finish, and the hand-off artifact moved to a
+durable `deploy-state/` dir. Also fixed: `hardhat.config.ts` pinned the fork at block **0** when `.env`
+shipped `FORK_BLOCK=` empty (`Number("")===0`), so **every `*.fork.test` had been silently self-skipping**
+— no fork rehearsal had actually run in that env. Residual follow-ups (none block mainnet):
+- **Fork-gated tests should FAIL LOUD, not skip, on misconfig.** A `*.fork.test` that self-skips because
+  CreateX is absent can't tell "forking off" from "forking on but broken." When `MAINNET_FORKING_ENABLED=true`
+  yet the fork didn't engage, that's a configuration error — assert it rather than skip, so a broken fork
+  can never masquerade as a green run again.
+- **Empty-string env is a recurring footgun.** Two `??`/`||`-vs-`""` traps hit this repo (`SEPOLIA_FORK_RPC_URL`
+  caught with a comment; `FORK_BLOCK` missed). Add a tiny `envOr(name, default)` helper that treats `""` as
+  unset and route all `.env`-derived config through it.
+- **Real-network deploys clobber the committed fork pin.** `generateTsAbis` regenerates
+  `deployedContracts.ts` from ALL `deployments/*` dirs, so a `--network sepolia` deploy drifted the 31337
+  view addresses (had to be hand-reverted to keep ADR-0037 + `deploy-pin-check` green). Scope the pin
+  regeneration to the fork network, or skip rewriting the committed 31337 block on non-fork deploys.
+- **Script the `safe-batches.json` → Transaction Builder decode.** It worked (safeTxHash matched the script
+  exactly all 3 batches), but via a hand-written node one-liner each time. Add `yarn safe:txbuilder <network>`
+  to emit the upload JSON so the ceremony has no ad-hoc decoding step.
+
 ### WHITEOUT — cross-lens negative masking (overlay deletion) [post-freeze additive; reserve concept pre-freeze]
 EFS lenses are additive-only: there is no way to assert "render this path empty in my view without substituting my own content" — the overlayfs whiteout, i.e. a lens-local *delete* of inherited content and the other half of a lens-local *rename*. Decided (multi-agent verification 2026-06-18): a **dedicated WHITEOUT schema + resolver, registered additively post-freeze** — NOT a REDIRECT `kind`, NOT TAG `weight<0` (both rejected). The only pre-freeze act is a reservation: the REDIRECT read-time resolution spec must leave room for a "negative terminal" in the lens scan, and no sentinel-kind / `weight<0` whiteout may be seeded into durable data before the schema ships. [ADR-0055]
 

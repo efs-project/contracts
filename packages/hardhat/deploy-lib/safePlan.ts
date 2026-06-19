@@ -43,10 +43,10 @@
 // This module produces the call lists; deploy-lib/safe.ts turns a call list into the executable
 // MultiSend batch, and the deploy task / fork test drive execution.
 
-import { Contract, Interface, Signer, ZeroAddress, ZeroHash } from "ethers";
+import { Contract, Interface, Signer, ZeroAddress, ZeroHash, getBytes } from "ethers";
 import { ethers } from "hardhat";
-import { EAS_ADDRESS, SCHEMA_REGISTRY_ADDRESS } from "./addresses";
-import { Create3Name, buildProxyInitCode, getCreateX, predictProxyAddress } from "./create3";
+import { SCHEMA_REGISTRY_ADDRESS } from "./addresses";
+import { Create3Name, buildProxyInitCode, getCreateX, predictImplAddress, predictProxyAddress } from "./create3";
 import { RESOLVERS, ResolverName, SCHEMAS, computeAllSchemaUIDs } from "./schemas";
 import { SafeCall } from "./safe";
 
@@ -190,29 +190,135 @@ export async function predictPlan(deployer: Signer, safe: string, log = true): P
   return { safe, proxies, systemAccount, rawSalts, schemaUIDs };
 }
 
-/// Deploy the 7 resolver/SystemAccount impls from the EOA (non-deterministic addresses, in no UID —
-/// cheaper than routing impl creation through the Safe and address-irrelevant). PR #24 P2: this is the
-/// ONLY step that deploys impls, and it is called ONLY for a Phase-0 deploy (Batch 1 needs the impls as
-/// CreateX initcode). A Phase-1+ resume NEVER calls this — it spends no gas deploying impls no remaining
-/// batch consumes (the bug this fix closes — a read-only resume on an unfunded gas EOA could fail here).
-export async function deployImpls(deployer: Signer, log = true): Promise<Record<Create3Name, string>> {
+/// Ensure the 7 resolver/SystemAccount impls exist on-chain, deployed by the EOA via CreateX CREATE2 at
+/// CONTENT-ADDRESSED addresses (in no schema UID). PR #24 P2: this is the ONLY step that deploys impls,
+/// and it is called ONLY for a Phase-0 deploy (Batch 1 embeds the impl addresses as CreateX initcode).
+///
+/// HARDENING (this PR): impls are now deterministic + idempotent. Each impl address is
+/// `f(deployer, salt, initCode)` via `predictImplAddress`, so:
+///   • a RE-RUN recomputes the same address, sees code already there, and SKIPS the deploy (no
+///     double-spend — the failure mode where losing the regenerable safe-batches.json artifact forced a
+///     full re-deploy of all 7 impls at fresh non-deterministic addresses);
+///   • a PARTIAL run (out-of-gas mid-loop) is crash-safe — a re-run reuses the impls already on-chain
+///     and only deploys the remainder;
+///   • a bytecode change moves the address, so "code present ⇒ reuse" can NEVER silently reuse a stale
+///     impl (CREATE2 binds the initCode into the address).
+/// Before spending anything on a real network, a PREFLIGHT BALANCE GUARD estimates the gas for exactly
+/// the missing impls (priced with spike headroom) and throws a clear "fund N more ETH" error if the
+/// deployer can't afford them — so an UNDERFUNDED run fails before the first tx rather than dying half-way
+/// and orphaning impls already paid for. (It guards funding, not later logic: a throw in buildBatch1/2
+/// after the impls deploy still spends that gas — but the content-addressed impls are reused on the
+/// re-run, so it is never wasted.)
+export async function ensureImpls(deployer: Signer, log = true): Promise<Record<Create3Name, string>> {
   const l = (...a: unknown[]) => log && console.log(...a);
-  l("Safe-native deploy: deploying resolver impls (EOA; non-deterministic, in no UID)...");
-  const impls = {} as Record<Create3Name, string>;
+  const createx = await getCreateX(deployer);
+  const deployerAddr = await deployer.getAddress();
   const allNames: Create3Name[] = [...RESOLVERS, "SystemAccount"];
+
+  // (1) Predict every impl address (content-addressed) and split into reuse-vs-deploy by on-chain code.
+  l("Safe-native deploy: ensuring resolver impls (EOA; CreateX CREATE2, content-addressed, in no UID)...");
+  const plan = {} as Record<Create3Name, { rawSalt: string; initCode: string; predicted: string }>;
+  const missing: Create3Name[] = [];
   for (const name of allNames) {
-    const Factory = await ethers.getContractFactory(name, deployer);
-    const impl = await Factory.deploy(EAS_ADDRESS);
-    await impl.waitForDeployment();
-    impls[name] = await impl.getAddress();
-    l(`  ${name} impl: ${impls[name]}`);
+    const p = await predictImplAddress(createx, deployerAddr, name);
+    plan[name] = p;
+    if ((await ethers.provider.getCode(p.predicted)) === "0x") missing.push(name);
+    else l(`  ${name} impl: ${p.predicted} (reused — already on-chain)`);
+  }
+
+  // (2) Preflight balance guard — on a real network, fail BEFORE spending if we can't finish all of the
+  //     missing impls. A fully-deployed set (re-run/recovery) skips this with zero gas.
+  if (missing.length === 0) {
+    l("Safe-native deploy: all impls already on-chain (content-addressed) — nothing to deploy, no gas spent.");
+  } else {
+    await assertCanAffordImpls(createx, deployer, deployerAddr, missing, plan, log);
+  }
+
+  // (3) Deploy the missing impls deterministically. CreateX is permissioned to `deployer`, so no foreign
+  //     sender can occupy these addresses — but a CONCURRENT run by the SAME deployer (two worktrees, a
+  //     double-invoke) could deploy a given impl between our getCode check above and our deployCreate2
+  //     here, making deployCreate2 revert "address already taken". That is benign — the impl we wanted is
+  //     now on-chain — so on any deploy failure we re-check the predicted address and CONVERGE if code is
+  //     present, instead of propagating a raw CreateX revert. Only a still-empty address is a real error.
+  const impls = {} as Record<Create3Name, string>;
+  for (const name of allNames) {
+    const { rawSalt, initCode, predicted } = plan[name];
+    if (!missing.includes(name)) {
+      impls[name] = predicted;
+      continue;
+    }
+    try {
+      const tx = await createx["deployCreate2(bytes32,bytes)"](rawSalt, initCode);
+      await tx.wait();
+      l(`  ${name} impl: ${predicted} (deployed)`);
+    } catch (e) {
+      if ((await ethers.provider.getCode(predicted)) === "0x") throw e; // genuine failure — address still empty
+      l(`  ${name} impl: ${predicted} (converged — deployed by a concurrent run)`);
+    }
+    if ((await ethers.provider.getCode(predicted)) === "0x") {
+      throw new Error(`CREATE2 ${name}: no code at predicted impl ${predicted} after deployCreate2`);
+    }
+    impls[name] = predicted;
   }
   return impls;
 }
 
+/// Preflight gas/funding check for the impls about to be deployed. Sums an eth_estimateGas per missing
+/// impl, adds gas-unit headroom, and prices it at a MULTIPLE of the current maxFeePerGas — then throws a
+/// precise, actionable error if the deployer's balance is short, so the run fails before the first deploy
+/// tx instead of dying half-way. The price multiple matters: the impls deploy as SEQUENTIAL txs over many
+/// blocks, and EIP-1559 base fee can climb ~12.5%/block, so a one-shot snapshot of the current price would
+/// under-fund a run that spans a rising market. We therefore require the balance to cover the estimate at
+/// PREFLIGHT_PRICE_MULTIPLE × the snapshot price. (Even so, an extreme spike can strand a run mid-loop —
+/// but that is fully recoverable: a re-run reuses the content-addressed impls already on-chain and only
+/// deploys the remainder, so no gas is ever wasted.) No-ops harmlessly where gas is ~free (in-process
+/// hardhat) or the balance is ample.
+const PREFLIGHT_PRICE_MULTIPLE = 3n; // headroom for base-fee rise across the sequential impl deploys
+async function assertCanAffordImpls(
+  createx: Contract,
+  deployer: Signer,
+  deployerAddr: string,
+  missing: Create3Name[],
+  plan: Record<Create3Name, { rawSalt: string; initCode: string; predicted: string }>,
+  log = true,
+): Promise<void> {
+  const l = (...a: unknown[]) => log && console.log(...a);
+  const fee = await ethers.provider.getFeeData();
+  const price = fee.maxFeePerGas ?? fee.gasPrice ?? 0n;
+  let totalGas = 0n;
+  for (const name of missing) {
+    const { rawSalt, initCode } = plan[name];
+    let gas: bigint;
+    try {
+      gas = await createx.getFunction("deployCreate2(bytes32,bytes)").estimateGas(rawSalt, initCode);
+    } catch {
+      // Fall back to a conservative size heuristic if estimateGas can't simulate (e.g. transient RPC).
+      gas = BigInt(getBytes(initCode).length) * 250n + 200_000n;
+    }
+    totalGas += (gas * 12n) / 10n; // +20% gas-unit headroom per impl
+  }
+  const need = totalGas * price * PREFLIGHT_PRICE_MULTIPLE;
+  const have = await ethers.provider.getBalance(deployerAddr);
+  const gwei = (x: bigint) => (Number(x) / 1e9).toFixed(2);
+  l(
+    `Safe-native deploy: preflight — ${missing.length} impl(s) to deploy, ~${totalGas} gas; ` +
+      `require ${ethers.formatEther(need)} ETH (${PREFLIGHT_PRICE_MULTIPLE}× the ${gwei(price)} gwei snapshot, ` +
+      `spike headroom), have ${ethers.formatEther(have)}.`,
+  );
+  if (have < need) {
+    throw new Error(
+      `INSUFFICIENT FUNDS to deploy ${missing.length} impl(s) [${missing.join(", ")}]: deployer ${deployerAddr} ` +
+        `has ${ethers.formatEther(have)} ETH but needs ~${ethers.formatEther(need)} ETH ` +
+        `(${totalGas} gas at ${PREFLIGHT_PRICE_MULTIPLE}× the ${gwei(price)} gwei snapshot, for base-fee headroom). ` +
+        `Fund the deployer ~${ethers.formatEther(need - have)} ETH more and re-run — already-deployed impls are ` +
+        `reused (content-addressed), so no gas is wasted on a retry.`,
+    );
+  }
+}
+
 /// Build Batch 1 (CreateX proxy deploys, atomic init, born Safe-owned + wireContracts) from a predicted
-/// plan + the freshly-deployed impls. Only used on a Phase-0 deploy — Batch 1's CreateX initcode embeds
-/// the impl addresses, so it cannot be built without `deployImpls` having run.
+/// plan + the impl addresses. Only used on a Phase-0 deploy — Batch 1's CreateX initcode embeds the impl
+/// addresses, so it cannot be built without `ensureImpls` having run (which deploys-or-reuses them).
 async function buildBatch1(
   deployer: Signer,
   predicted: PredictedPlan,
@@ -345,7 +451,7 @@ export async function buildBatch2(
 /// authority + the CreateX caller + the born owner of everything.
 export async function buildSafePlan(deployer: Signer, safe: string, log = true): Promise<SafePlan> {
   const predicted = await predictPlan(deployer, safe, log);
-  const impls = await deployImpls(deployer, log);
+  const impls = await ensureImpls(deployer, log);
   const batch1 = await buildBatch1(deployer, predicted, impls);
   const { batch2, batch2RegistersOmitted, batch2BootstrapOmitted } = await buildBatch2(deployer, predicted, log);
 
@@ -458,5 +564,3 @@ export async function buildSetTransportsAnchorCall(
   const data = mirrorIface.encodeFunctionData("setTransportsAnchor", [transportsUID]);
   return { to: mirrorResolver, data, label: "MirrorResolver.setTransportsAnchor" };
 }
-
-void Contract;

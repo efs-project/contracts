@@ -116,7 +116,12 @@ const deployEfsCore: DeployFunction = async function (hre: HardhatRuntimeEnviron
     console.log(
       `[efs-core] Safe-native CREATE3 deploy — safe=${safe}, deployer=${deployer}, mode=${mode} (born Safe-owned)`,
     );
-    const proposeArtifactPath = `${hre.config.paths.root}/deployments/${hre.network.name}/safe-batches.json`;
+    // Durable artifact location (HARDENING, this PR): the Safe hand-off artifact lives under
+    // `deploy-state/` — NOT `deployments/`, which hardhat-deploy manages and which a `clean`/wipe can
+    // silently remove (the failure that forced a full impl re-deploy to regenerate it). `deploy-state/`
+    // is a dedicated dir no toolchain step auto-cleans. The absolute path is logged loudly so the
+    // operator always knows where to find the file to import into Safe{Wallet}.
+    const proposeArtifactPath = `${hre.config.paths.root}/deploy-state/${hre.network.name}/safe-batches.json`;
     const safeResult = await orchestrateViaSafe(signer, safe, owners, { mode, proposeArtifactPath });
     if (safeResult.mode === "propose") {
       // Built + emitted the propose artifact; the operator executes the batches in Safe{Wallet}. Save

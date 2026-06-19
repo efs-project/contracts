@@ -79,7 +79,11 @@ const config: HardhatUserConfig = {
         // (local hardhat fork, CI, the devnet VPS, the Vite client). See ADR-0037.
         // Override with FORK_BLOCK=<n> to bump the pin (requires regenerating
         // deployedContracts.ts and a new EFS commit SHA — that's the coordination unit).
-        blockNumber: Number(process.env.FORK_BLOCK ?? 10_691_000),
+        // `? :` (not `??`): `.env.example` ships `FORK_BLOCK=` (empty string), which `??` would KEEP —
+        // and `Number("")` is `0`, silently pinning the fork at GENESIS (empty chain → CreateX/EAS/Safe
+        // all absent → every *.fork.test self-skips and every fork rehearsal becomes a no-op). Treat a
+        // blank value as unset and fall back to the canonical pin. Same blank-is-unset rule as the URL above.
+        blockNumber: process.env.FORK_BLOCK ? Number(process.env.FORK_BLOCK) : 10_691_000,
         enabled: process.env.MAINNET_FORKING_ENABLED === "true",
       },
       // forking: {
@@ -99,7 +103,10 @@ const config: HardhatUserConfig = {
       accounts: [deployerPrivateKey],
     },
     sepolia: {
-      url: `https://eth-sepolia.g.alchemy.com/v2/${providerApiKey}`,
+      // SEPOLIA_RPC_URL overrides the default Alchemy endpoint so the live deploy (deploy:efs
+      // --network sepolia) can use any provider, e.g. Infura: https://sepolia.infura.io/v3/<key>.
+      // `||` (not `??`) so an empty-string .env value falls through to the Alchemy default.
+      url: process.env.SEPOLIA_RPC_URL || `https://eth-sepolia.g.alchemy.com/v2/${providerApiKey}`,
       accounts: [deployerPrivateKey],
     },
     arbitrum: {
