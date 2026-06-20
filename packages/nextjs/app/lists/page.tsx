@@ -4,7 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { encodeAbiParameters, zeroAddress, zeroHash } from "viem";
 import { useAccount, useReadContract, useWriteContract } from "wagmi";
-import { useDeployedContractInfo } from "~~/hooks/scaffold-eth";
+import { useDeployedContractInfo, useTargetNetwork } from "~~/hooks/scaffold-eth";
 import { notification } from "~~/utils/scaffold-eth";
 
 // Minimal EAS ABI for attest + Attested event
@@ -68,14 +68,18 @@ export default function ListsPage() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const listReaderAddress = (listReaderInfo as any)?.address as `0x${string}` | undefined;
 
+  const { targetNetwork } = useTargetNetwork();
+
   // Read schema UIDs from ListReader
   const { data: listSchemaUID } = useReadContract({
+    chainId: targetNetwork.id,
     address: listReaderAddress,
     abi: LIST_READER_ABI,
     functionName: "LIST_SCHEMA_UID",
     query: { enabled: !!listReaderAddress },
   });
   const { data: listEntrySchemaUID } = useReadContract({
+    chainId: targetNetwork.id,
     address: listReaderAddress,
     abi: LIST_READER_ABI,
     functionName: "LIST_ENTRY_SCHEMA_UID",

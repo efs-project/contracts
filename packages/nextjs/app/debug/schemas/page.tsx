@@ -694,7 +694,9 @@ function AttestationItem({
   easAddress: string;
   onFocus: (uid: string) => void;
 }) {
+  const { targetNetwork } = useTargetNetwork();
   const { data: attestation } = useReadContract({
+    chainId: targetNetwork.id,
     address: easAddress as `0x${string}`,
     abi: EAS_ABI,
     functionName: "getAttestation",
