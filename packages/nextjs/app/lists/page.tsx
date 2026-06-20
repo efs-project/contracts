@@ -133,6 +133,9 @@ export default function ListsPage() {
 
     try {
       const tx = await writeContractAsync({
+        // Guard: writes follow the selected network (reads already do) — wagmi throws
+        // ChainMismatchError if the wallet is on a different chain.
+        chainId: targetNetwork.id,
         address: EAS_ADDRESS,
         abi: EAS_ABI,
         functionName: "attest",
