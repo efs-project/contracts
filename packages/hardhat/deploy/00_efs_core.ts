@@ -4,6 +4,9 @@ import { CREATEX_ADDRESS, EXPECTED_EFS_SAFE } from "../deploy-lib/addresses";
 import { orchestrate, OrchestrationResult, RunMode } from "../deploy-lib/orchestrate";
 import { orchestrateViaSafe } from "../deploy-lib/orchestrateSafe";
 import { SAFE_PROXY_FACTORY_141, deployTestSafe } from "../deploy-lib/safe";
+import { oneOfEnvOr } from "../env";
+
+const EFS_DEPLOY_MODES = ["full", "until-freeze-gate", "after-freeze-gate"] as const;
 
 // EFS orchestrated CREATE3 deploy (Phase D core) — the single source of truth for standing up the
 // upgradeable EFS system per docs/DEPLOYMENT.md §3. Replaces the nonce-prediction + TestERC1967Proxy
@@ -20,6 +23,15 @@ import { SAFE_PROXY_FACTORY_141, deployTestSafe } from "../deploy-lib/safe";
 // vanilla hardhat node with no fork it skips gracefully (ADR-0028 graceful degradation) so plain
 // `yarn deploy` against a bare node doesn't fail.
 const deployEfsCore: DeployFunction = async function (hre: HardhatRuntimeEnvironment) {
+  const runMode = oneOfEnvOr("EFS_DEPLOY_MODE", "full", EFS_DEPLOY_MODES) as RunMode;
+  const viaSafe = process.env.EFS_DEPLOY_VIA_SAFE === "1" || process.env.EFS_DEPLOY_VIA_SAFE === "true";
+  if (viaSafe && runMode !== "full") {
+    throw new Error(
+      `[efs-core] EFS_DEPLOY_MODE=${runMode} only applies to the EOA deploy path. ` +
+        `The Safe-native path is phase-aware; unset EFS_DEPLOY_MODE or disable EFS_DEPLOY_VIA_SAFE.`,
+    );
+  }
+
   const { deployer } = await hre.getNamedAccounts();
   const signer = await hre.ethers.getSigner(deployer);
 
@@ -52,7 +64,6 @@ const deployEfsCore: DeployFunction = async function (hre: HardhatRuntimeEnviron
   // ownership-transfer phase — no hot key ever holds the nascent system). The CREATE3 addresses become
   // Safe-keyed (the Safe is the CreateX caller). The EOA path below stays intact as the simpler
   // fallback. Toggle with EFS_DEPLOY_VIA_SAFE=1 + EFS_SAFE_ADDRESS=<Safe>.
-  const viaSafe = process.env.EFS_DEPLOY_VIA_SAFE === "1" || process.env.EFS_DEPLOY_VIA_SAFE === "true";
   let result: OrchestrationResult;
   if (viaSafe) {
     const onFork = (await hre.ethers.provider.getCode(SAFE_PROXY_FACTORY_141)) !== "0x";
@@ -151,9 +162,8 @@ const deployEfsCore: DeployFunction = async function (hre: HardhatRuntimeEnviron
     }
     result = safeResult;
   } else {
-    const mode = (process.env.EFS_DEPLOY_MODE as RunMode) ?? "full";
-    console.log(`[efs-core] orchestrated CREATE3 deploy — mode=${mode}, deployer=${deployer}`);
-    result = await orchestrate(signer, mode);
+    console.log(`[efs-core] orchestrated CREATE3 deploy — mode=${runMode}, deployer=${deployer}`);
+    result = await orchestrate(signer, runMode);
   }
 
   // Save the CREATE3 proxies as hardhat-deploy named deployments so the legacy downstream consumer

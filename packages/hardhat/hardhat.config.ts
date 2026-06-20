@@ -1,5 +1,6 @@
 import * as dotenv from "dotenv";
 dotenv.config();
+import { boolEnv, envOr, positiveIntEnvOr } from "./env";
 import { HardhatUserConfig } from "hardhat/config";
 import "@nomicfoundation/hardhat-ethers";
 import "@nomicfoundation/hardhat-chai-matchers";
@@ -19,17 +20,19 @@ import "./tasks/mirrorUpgrade";
 // If not set, it uses Scaffold-ETH-2's public default Alchemy API key.
 // You can get your own at https://dashboard.alchemyapi.io.
 // This default is shared with the Scaffold-ETH community and rotates
-// occasionally — keep this value synced with upstream:
+// occasionally - keep this value synced with upstream:
 // https://github.com/scaffold-eth/scaffold-eth-2/blob/main/packages/hardhat/hardhat.config.ts
-const providerApiKey = process.env.ALCHEMY_API_KEY || "IZYEU2cWBgnFmgiTAgpWD";
+const providerApiKey = envOr("ALCHEMY_API_KEY", "IZYEU2cWBgnFmgiTAgpWD");
 // If not set, it uses the hardhat account 0 private key.
 // You can generate a random account with `yarn generate` or `yarn account:import` to import your existing PK
-const deployerPrivateKey =
-  process.env.__RUNTIME_DEPLOYER_PRIVATE_KEY ?? "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+const defaultHardhatPrivateKey = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+// Do not use envOr here. A blank runtime private key should fail closed on live networks
+// instead of silently falling back to the public Hardhat dev key.
+const deployerPrivateKey = process.env.__RUNTIME_DEPLOYER_PRIVATE_KEY ?? defaultHardhatPrivateKey;
 // If not set, it uses our block explorers default API keys.
-const etherscanApiKey = process.env.ETHERSCAN_MAINNET_API_KEY || "DNXJA8RX2Q3VZ4URQIWP7Z68CJXQZSC6AW";
-const etherscanOptimisticApiKey = process.env.ETHERSCAN_OPTIMISTIC_API_KEY || "RM62RDISS1RH448ZY379NX625ASG1N633R";
-const basescanApiKey = process.env.BASESCAN_API_KEY || "ZZZEIPMT1MNJ8526VV2Y744CA7TNZR64G6";
+const etherscanApiKey = envOr("ETHERSCAN_MAINNET_API_KEY", "DNXJA8RX2Q3VZ4URQIWP7Z68CJXQZSC6AW");
+const etherscanOptimisticApiKey = envOr("ETHERSCAN_OPTIMISTIC_API_KEY", "RM62RDISS1RH448ZY379NX625ASG1N633R");
+const basescanApiKey = envOr("BASESCAN_API_KEY", "ZZZEIPMT1MNJ8526VV2Y744CA7TNZR64G6");
 
 const config: HardhatUserConfig = {
   solidity: {
@@ -72,20 +75,16 @@ const config: HardhatUserConfig = {
       gas: "auto",
       gasMultiplier: 3,
       forking: {
-        // `||` (not `??`): `.env.example` ships `SEPOLIA_FORK_RPC_URL=` (empty string),
-        // which `??` would keep — starting the fork with an empty URL. Treat blank as unset.
-        url: process.env.SEPOLIA_FORK_RPC_URL || `https://eth-sepolia.g.alchemy.com/v2/${providerApiKey}`,
-        // Pinned Sepolia block — makes deployed contract addresses, EAS schema UIDs,
+        // Blank `.env` values are treated as unset. This protects fork rehearsals
+        // from `FORK_BLOCK=` becoming Number("") === 0.
+        url: envOr("SEPOLIA_FORK_RPC_URL", `https://eth-sepolia.g.alchemy.com/v2/${providerApiKey}`),
+        // Pinned Sepolia block - makes deployed contract addresses, EAS schema UIDs,
         // and the resulting `deployedContracts.ts` byte-identical across environments
         // (local hardhat fork, CI, the devnet VPS, the Vite client). See ADR-0037.
-        // Override with FORK_BLOCK=<n> to bump the pin (requires regenerating
-        // deployedContracts.ts and a new EFS commit SHA — that's the coordination unit).
-        // `? :` (not `??`): `.env.example` ships `FORK_BLOCK=` (empty string), which `??` would KEEP —
-        // and `Number("")` is `0`, silently pinning the fork at GENESIS (empty chain → CreateX/EAS/Safe
-        // all absent → every *.fork.test self-skips and every fork rehearsal becomes a no-op). Treat a
-        // blank value as unset and fall back to the canonical pin. Same blank-is-unset rule as the URL above.
-        blockNumber: process.env.FORK_BLOCK ? Number(process.env.FORK_BLOCK) : 10_691_000,
-        enabled: process.env.MAINNET_FORKING_ENABLED === "true",
+        // Override with FORK_BLOCK=10691001 to bump the pin (requires regenerating
+        // deployedContracts.ts and a new EFS commit SHA - that's the coordination unit).
+        blockNumber: positiveIntEnvOr("FORK_BLOCK", 10_691_000),
+        enabled: boolEnv("MAINNET_FORKING_ENABLED"),
       },
       // forking: {
       //   url: `https://eth-mainnet.alchemyapi.io/v2/${providerApiKey}`,
@@ -95,9 +94,9 @@ const config: HardhatUserConfig = {
     localhost: {
       // Override via LOCALHOST_RPC_URL when running multiple chains concurrently (e.g. a
       // second agent on port 8546). Keeps `yarn deploy` / `yarn simulate` pointed at the
-      // right node without editing this file. See AGENTS.md → "Running alongside another project".
-      url: process.env.LOCALHOST_RPC_URL ?? "http://127.0.0.1:8545",
-      gasPrice: 2_000_000_000, // 2 gwei — comfortably above any forked baseFee
+      // right node without editing this file. See AGENTS.md -> "Running alongside another project".
+      url: envOr("LOCALHOST_RPC_URL", "http://127.0.0.1:8545"),
+      gasPrice: 2_000_000_000, // 2 gwei - comfortably above any forked baseFee
     },
     mainnet: {
       url: `https://eth-mainnet.alchemyapi.io/v2/${providerApiKey}`,
@@ -106,8 +105,7 @@ const config: HardhatUserConfig = {
     sepolia: {
       // SEPOLIA_RPC_URL overrides the default Alchemy endpoint so the live deploy (deploy:efs
       // --network sepolia) can use any provider, e.g. Infura: https://sepolia.infura.io/v3/<key>.
-      // `||` (not `??`) so an empty-string .env value falls through to the Alchemy default.
-      url: process.env.SEPOLIA_RPC_URL || `https://eth-sepolia.g.alchemy.com/v2/${providerApiKey}`,
+      url: envOr("SEPOLIA_RPC_URL", `https://eth-sepolia.g.alchemy.com/v2/${providerApiKey}`),
       accounts: [deployerPrivateKey],
     },
     arbitrum: {

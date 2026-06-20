@@ -24,9 +24,6 @@ shipped `FORK_BLOCK=` empty (`Number("")===0`), so **every `*.fork.test` had bee
   CreateX is absent can't tell "forking off" from "forking on but broken." When `MAINNET_FORKING_ENABLED=true`
   yet the fork didn't engage, that's a configuration error — assert it rather than skip, so a broken fork
   can never masquerade as a green run again.
-- **Empty-string env is a recurring footgun.** Two `??`/`||`-vs-`""` traps hit this repo (`SEPOLIA_FORK_RPC_URL`
-  caught with a comment; `FORK_BLOCK` missed). Add a tiny `envOr(name, default)` helper that treats `""` as
-  unset and route all `.env`-derived config through it.
 - **Real-network deploys clobber the committed fork pin.** `generateTsAbis` regenerates
   `deployedContracts.ts` from ALL `deployments/*` dirs, so a `--network sepolia` deploy drifted the 31337
   view addresses (had to be hand-reverted to keep ADR-0037 + `deploy-pin-check` green). Scope the pin
