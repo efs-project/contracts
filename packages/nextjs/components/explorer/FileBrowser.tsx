@@ -291,6 +291,7 @@ export const FileBrowser = ({
   ] as const;
 
   const { data: listSchemaUID } = useReadContract({
+    chainId: targetNetwork.id,
     address: listReaderAddress,
     abi: LIST_SCHEMA_UID_ABI,
     functionName: "LIST_SCHEMA_UID",

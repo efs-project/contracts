@@ -9,7 +9,7 @@ import { zeroHash } from "viem";
 import { useReadContract } from "wagmi";
 import { DocumentDuplicateIcon } from "@heroicons/react/24/outline";
 import { Address } from "~~/components/scaffold-eth";
-import { useScaffoldReadContract } from "~~/hooks/scaffold-eth";
+import { useScaffoldReadContract, useTargetNetwork } from "~~/hooks/scaffold-eth";
 
 // Minimal ABI for EAS and SchemaRegistry
 const EAS_ABI = [
@@ -126,6 +126,8 @@ function EASExplorerContent() {
   const [activeTab, setActiveTab] = useState("human");
   const [decodedData, setDecodedData] = useState<any[]>([]);
 
+  const { targetNetwork } = useTargetNetwork();
+
   useEffect(() => {
     if (uidParam) {
       setUid(uidParam);
@@ -170,6 +172,7 @@ function EASExplorerContent() {
 
   // 2. Fetch Attestation
   const { data: attestation, isLoading: isAttestationLoading } = useReadContract({
+    chainId: targetNetwork.id,
     address: easAddress as `0x${string}` | undefined,
     abi: EAS_ABI,
     functionName: "getAttestation",
@@ -201,6 +204,7 @@ function EASExplorerContent() {
 
   // 3. Get SchemaRegistry Address (only if we found an attestation or we want to try fetching schema)
   const { data: schemaRegistryAddress } = useReadContract({
+    chainId: targetNetwork.id,
     address: easAddress as `0x${string}` | undefined,
     abi: EAS_ABI,
     functionName: "getSchemaRegistry",
@@ -213,6 +217,7 @@ function EASExplorerContent() {
   const schemaUidToFetch = isAttestationFound ? attestation.schema : uidParam;
 
   const { data: schemaRecord, isLoading: isSchemaLoading } = useReadContract({
+    chainId: targetNetwork.id,
     address: schemaRegistryAddress,
     abi: SCHEMA_REGISTRY_ABI,
     functionName: "getSchema",

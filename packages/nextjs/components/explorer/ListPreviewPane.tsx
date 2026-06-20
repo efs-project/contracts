@@ -309,7 +309,9 @@ const DragDots = () => (
 
 /** A SCHEMA-mode row: fetch the target attestation and summarize it. */
 const AttestationLabel = ({ uid, easAddress }: { uid: `0x${string}`; easAddress?: `0x${string}` }) => {
+  const { targetNetwork } = useTargetNetwork();
   const { data: att } = useReadContract({
+    chainId: targetNetwork.id,
     address: easAddress,
     abi: EAS_ABI,
     functionName: "getAttestation",
@@ -374,26 +376,30 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
   const { data: edgeResolverInfo } = useDeployedContractInfo({ contractName: "EdgeResolver" });
   const edgeResolverAddress = edgeResolverInfo?.address as `0x${string}` | undefined;
 
+  const { targetNetwork } = useTargetNetwork();
+
   const { data: propertySchemaUID } = useReadContract({
+    chainId: targetNetwork.id,
     address: indexerAddress,
     abi: INDEXER_PROPERTY_ABI,
     functionName: "PROPERTY_SCHEMA_UID",
     query: { enabled: !!indexerAddress },
   });
   const { data: anchorSchemaUID } = useReadContract({
+    chainId: targetNetwork.id,
     address: indexerAddress,
     abi: INDEXER_PROPERTY_ABI,
     functionName: "ANCHOR_SCHEMA_UID",
     query: { enabled: !!indexerAddress },
   });
   const { data: pinSchemaUID } = useReadContract({
+    chainId: targetNetwork.id,
     address: indexerAddress,
     abi: INDEXER_PROPERTY_ABI,
     functionName: "PIN_SCHEMA_UID",
     query: { enabled: !!indexerAddress },
   });
 
-  const { targetNetwork } = useTargetNetwork();
   const publicClient = usePublicClient({ chainId: targetNetwork.id });
   const ops = useBackgroundOps();
   const { writeContractAsync } = useWriteContract();
@@ -401,6 +407,7 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
   const listUID = uid as `0x${string}`;
 
   const { data: mode } = useReadContract({
+    chainId: targetNetwork.id,
     address: listReaderAddress,
     abi: LIST_READER_ABI,
     functionName: "getMode",
@@ -429,6 +436,7 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
   // so smart contracts read it the same way). Append-only; we keep all of them as edition chips.
   // First 100 contributors is ample for the edition picker; paginate further if ever needed.
   const { data: rawAttesters } = useReadContract({
+    chainId: targetNetwork.id,
     address: listEntryResolverAddress,
     abi: LIST_ENTRY_RESOLVER_ABI,
     functionName: "getListAttesters",
@@ -497,6 +505,7 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
     void refetchEntries();
   }, [refetchEntries]);
   const { data: entrySchemaUID } = useReadContract({
+    chainId: targetNetwork.id,
     address: listReaderAddress,
     abi: LIST_READER_ABI,
     functionName: "LIST_ENTRY_SCHEMA_UID",
@@ -866,6 +875,7 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
   // BEFORE the user pays gas. Saves a guaranteed-to-revert transaction.
   const schemaDraftIsUID = targetType === MODE.SCHEMA && draft.trim().startsWith("0x") && draft.trim().length === 66;
   const { data: draftAtt } = useReadContract({
+    chainId: targetNetwork.id,
     address: easAddress,
     abi: EAS_ABI,
     functionName: "getAttestation",

@@ -145,7 +145,10 @@ export default function ListDetailPage() {
 
   const lensAddress = connectedAddress ?? zeroAddress;
 
+  const { targetNetwork } = useTargetNetwork();
+
   const { data: mode } = useReadContract({
+    chainId: targetNetwork.id,
     address: listReaderAddress,
     abi: LIST_READER_ABI,
     functionName: "getMode",
@@ -154,6 +157,7 @@ export default function ListDetailPage() {
   });
 
   const { data: listLen, refetch: refetchLength } = useReadContract({
+    chainId: targetNetwork.id,
     address: listReaderAddress,
     abi: LIST_READER_ABI,
     functionName: "length",
@@ -166,7 +170,6 @@ export default function ListDetailPage() {
   // unremovable) every entry past the 50th. Loop the reader cursor until a short page, mirroring
   // ListPreviewPane.refetchEntries, with a safety bound for the debug UI.
   type EntryRow = { entryUID: `0x${string}`; identityKey: `0x${string}` };
-  const { targetNetwork } = useTargetNetwork();
   const publicClient = usePublicClient({ chainId: targetNetwork.id });
   const [entries, setEntries] = useState<readonly EntryRow[] | undefined>(undefined);
   // Generation guard (mirrors ListPreviewPane): if `lensAddress` changes (wallet account switch)
@@ -200,6 +203,7 @@ export default function ListDetailPage() {
   }, [refetchEntries]);
 
   const { data: listEntrySchemaUID } = useReadContract({
+    chainId: targetNetwork.id,
     address: listReaderAddress,
     abi: LIST_READER_ABI,
     functionName: "LIST_ENTRY_SCHEMA_UID",

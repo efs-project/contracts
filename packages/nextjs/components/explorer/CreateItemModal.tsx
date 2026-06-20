@@ -212,7 +212,9 @@ export const CreateItemModal = ({
   const { data: listReaderInfo } = useDeployedContractInfo({ contractName: "ListReader" as any });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const listReaderAddress = (listReaderInfo as any)?.address as `0x${string}` | undefined;
+  const { targetNetwork } = useTargetNetwork();
   const { data: listSchemaUID } = useReadContract({
+    chainId: targetNetwork.id,
     address: listReaderAddress,
     abi: [
       {
@@ -226,7 +228,6 @@ export const CreateItemModal = ({
     functionName: "LIST_SCHEMA_UID",
     query: { enabled: !!listReaderAddress },
   });
-  const { targetNetwork } = useTargetNetwork();
 
   const [internalType, setInternalType] = useState<CreationType | null>(creationType);
   const [newName, setNewName] = useState("");
