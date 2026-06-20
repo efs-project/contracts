@@ -35,6 +35,38 @@ shipped `FORK_BLOCK=` empty (`Number("")===0`), so **every `*.fork.test` had bee
   exactly all 3 batches), but via a hand-written node one-liner each time. Add `yarn safe:txbuilder <network>`
   to emit the upload JSON so the ceremony has no ad-hoc decoding step.
 
+### EFSFileView directory-read API consolidation [deferred; view-layer, redeployable, pre-launch]
+The four `getDirectoryPage*` readers form a confusing subset chain (lens-only ⊂ lens+schema ⊂
+lens+schema+tag-exclusion) plus one misleadingly-bare UNSCOPED reader
+(`getDirectoryPage(parent, start, length, dataSchema, propSchema)`). Consolidate into honestly-named
+functions. **Not a bug or security issue** — the directory readers expose names + counts, not served
+bytes/mirrors, and the main grid already fails safe to lens-only; the related security fix (lens-scoped
+`getDataMirrors`) already landed (commit 4931409). Pure API cleanliness; pre-launch + redeployable, so
+safe to defer to a focused PR. **Two 2026-06-19 expert design reviews did the analysis — start the PR
+from these findings, don't re-derive:**
+- **Do NOT make it one god-function.** `anchorSchema` is the index JOIN KEY, not a nullable filter —
+  `anchorSchema = 0` queries the null-schema bucket and silently returns ~nothing. Schema must stay
+  required/non-zero. The ONLY safely-optional axis is the tag-exclusion (empty arrays = exclude nothing).
+- **Do NOT reuse the `getDirectoryPage` name.** Rebinding a stable public name to lens-scoped+filterable
+  behavior is a silent semantic swap (old callers mis-resolve instead of failing loudly). Give the
+  consolidated readers fresh honest names and fully retire the old name.
+- **Keep an explicit unscoped reader.** Three live nextjs callers REQUIRE cross-attester visibility:
+  the TopicTree no-lens fallback, PropertiesModal's key-anchor lookup, and FileBrowser's delete-cascade
+  subtree walk (completeness is load-bearing — a lens-scoped walk orphans placements). Name it
+  `…AllAttesters` / `…Unscoped` (mirror the blessed `getDataMirrorsAllAttesters` precedent) and keep it
+  on simple `(start, length)`.
+- **"empty `attesters[]` = all lenses" is a footgun (decide in the PR).** Convenient, but an empty array
+  is what an uninitialized/buggy caller passes, so it makes the cross-attester leak the *accidental
+  default* — the exact thing the lens invariant prevents. Safer: empty → revert + an explicit
+  AllAttesters function (the mirrors pattern). James leaned toward empty=all; revisit against this.
+- **Cross-repo break:** the SDK (`sdk/…/reads/list.ts`) decodes `getDirectoryPageByAddressList`'s cursor
+  as a uint256 `bigint`; consolidating changes it to opaque bytes. Coordinate with the SDK agent and ship
+  the SDK migration (cursor decode + ABI fragment) in the same window. (`/client/` repo intentionally out
+  of scope.)
+- **Impl note:** route the merged lens reader through the existing `_FilteredWalk`/`_walkPhase0`/
+  `_walkPhase1` helpers (already refactored for the viaIR stack limit); a unified cursor needs a
+  phase/index-path discriminator so the all-children vs by-schema index paths don't collide.
+
 ### WHITEOUT — cross-lens negative masking (overlay deletion) [post-freeze additive; reserve concept pre-freeze]
 EFS lenses are additive-only: there is no way to assert "render this path empty in my view without substituting my own content" — the overlayfs whiteout, i.e. a lens-local *delete* of inherited content and the other half of a lens-local *rename*. Decided (multi-agent verification 2026-06-18): a **dedicated WHITEOUT schema + resolver, registered additively post-freeze** — NOT a REDIRECT `kind`, NOT TAG `weight<0` (both rejected). The only pre-freeze act is a reservation: the REDIRECT read-time resolution spec must leave room for a "negative terminal" in the lens scan, and no sentinel-kind / `weight<0` whiteout may be seeded into durable data before the schema ships. [ADR-0055]
 
