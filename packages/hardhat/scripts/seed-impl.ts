@@ -312,25 +312,32 @@ export async function seedDemoTree() {
 
   /**
    * Deploy the bytes of `content` as an on-chain SSTORE2-style body and wrap it
-   * in a `MockChunkedFile` so the EFSRouter's `web3://` branch can read it back
-   * via `chunkCount()` / `chunkAddress()` + `extcodecopy`.
+   * in an `EFSBytesStore` so the EFSRouter's `web3://` branch can read it back
+   * via `chunkCount()` / `chunkAddress()` + `extcodecopy`. The store also
+   * implements ERC-5219 (`resolveMode`/`request`), so the same `web3://<store>`
+   * URI resolves in generic web3:// clients (ADR-0057).
    *
    * The router skips the first runtime byte (the SSTORE2 STOP-opcode convention,
    * `EFSRouter.sol` §"Normal SSTORE2 skips first byte 0x00"), so the data
    * contract's runtime must be `0x00 || content`. We deploy it with the minimal
    * SSTORE2 init code: `PUSH(len) DUP1 PUSH(offset) PUSH0 CODECOPY PUSH0 RETURN`
-   * followed by the runtime payload. Returns the `MockChunkedFile` address as a
+   * followed by the runtime payload. Returns the `EFSBytesStore` address as a
    * `web3://0x…` URI string ready to hand to `makeMirror`.
    *
    * This is the one place the seed puts *real, retrievable* bytes on-chain (the
    * other demo files use HTTPS mirrors to placeholder hosts). READMEs must
    * actually render in the Overview pane, so their bytes have to come back
    * through the router — an unreachable HTTPS mirror would render nothing.
+   *
+   * `contentType` is the MIME the store reports on its ERC-5219 path; the router
+   * path uses the lens-scoped `contentType` PROPERTY instead. Defaults to
+   * `text/markdown` (the seed's on-chain bytes are all READMEs).
    */
   const deployOnchainMirrorURI = async (
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     signer: any,
     content: string,
+    contentType: string = "text/markdown",
   ): Promise<string> => {
     // Runtime = 0x00 (STOP) || content bytes — matches the router's SSTORE2 read.
     const runtime = ethers.concat(["0x00", ethers.toUtf8Bytes(content)]);
@@ -356,9 +363,10 @@ export async function seedDemoTree() {
     const dataReceipt = await dataTx.wait();
     const dataContract = dataReceipt.contractAddress as string;
 
-    // Wrap the single data chunk in a MockChunkedFile (chunkCount/chunkAddress).
-    const MockChunkedFile = await ethers.getContractFactory("MockChunkedFile", signer);
-    const chunked = await MockChunkedFile.deploy([dataContract]);
+    // Wrap the single data chunk in an EFSBytesStore (chunkCount/chunkAddress +
+    // ERC-5219 request/resolveMode — ADR-0057).
+    const EFSBytesStore = await ethers.getContractFactory("EFSBytesStore", signer);
+    const chunked = await EFSBytesStore.deploy([dataContract], contentType);
     await chunked.waitForDeployment();
     const chunkedAddr = await chunked.getAddress();
     console.log(`  Onchain   ${chunkedAddr}  (${runtimeLen - 1} bytes)`);
