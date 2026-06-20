@@ -70,6 +70,7 @@ What else we looked at and why it lost.
 - [ADR-0049 — DATA is pure identity; hash and size are data, not identity](./0049-file-content-identity-hash-as-data.md)
 - [ADR-0050 — REDIRECT: first-class canonical / sameAs / symlink edge](./0050-redirect-canonical-symlink-schema.md)
 - [ADR-0052 — PROPERTY is non-revocable (interned shared value)](./0052-property-is-non-revocable.md)
+- [ADR-0060 — `contentHash`/`size`/`cid` self-describing encoding (multibase-multihash + CID)](./0060-content-hash-self-describing-encoding.md) *(Proposed — pin before durable file-metadata seeding)*
 
 ### Index Design
 - [ADR-0007 — `_activeByAttesterAndSchema`: swap-and-pop compact index](./0007-activeByAttesterAndSchema-swap-and-pop.md) *(Swap-and-pop decision intact; array element type widened from `bytes32` to `TagEntry { tagUID, weight }` per ADR-0041)*
@@ -90,6 +91,7 @@ What else we looked at and why it lost.
 - [ADR-0018 — Single `message/external-body` Content-Type header](./0018-single-content-type-header.md)
 - [ADR-0019 — Non-reverting hex parser](./0019-non-reverting-hex-parser.md)
 - [ADR-0020 — `MAX_PAGES = 10` mirror scan cap](./0020-max-pages-mirror-scan-cap.md)
+- [ADR-0059 — REDIRECT read-time resolution rules](./0059-redirect-read-time-resolution.md) *(Proposed — kind-following, D_MAX=8/ceiling 32, cycle-stop, lowest-UID-in-SCC canonicalization, lens precedence, WHITEOUT negative-terminal reservation + seeding ban; gates durable REDIRECT seeding)*
 
 ### Security Limits
 - [ADR-0021 — `MAX_ANCHOR_DEPTH = 32`](./0021-max-anchor-depth.md) *(Superseded by ADR-0058 — raised to 1024)*

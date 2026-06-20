@@ -13,7 +13,7 @@ Authoritative description of how EFS works today. If specs and code disagree, th
 - **`06-Lists-and-Collections.md`** — the `LIST` + `LIST_ENTRY` curated-collection primitive (ADR-0044, ADR-0046): write-time shape enforcement, per-attester lenses, order/label as PIN-bound PROPERTYs. Authoritative for list-related work.
 - **`07-Sort-Overlay-Architecture.md`** — EFSSortOverlay design: per-parent linked lists, `processItems`, `computeHints`, `ISortFunc` comparators. Required for sort overlay work.
 - **`08-Custom-Lists-Design-Notes.md`** — **historical design notes** (pre-ADR-0044/0046) exploring the rejected positional-anchor list model. Superseded by the `LIST`/`LIST_ENTRY` primitive in `06`; retained for the sorts-vs-curation reasoning only. Not the implemented model.
-
-## When to update
+- **`09-redirect-resolution.md`** — REDIRECT read-time resolution (ADR-0050/0059): following by kind, the D_MAX hop cap, cycle-stop, lens precedence, the dangling contract, the WHITEOUT negative-terminal reservation, the reference follower algorithm, and conformance vectors. **Proposed** — required before any durable REDIRECT seeding.
+- **`10-file-metadata-encoding.md`** — canonical string format for the reserved-key file-stat PROPERTYs (`contentHash`, `size`, `cid`): multibase-multihash + CID, the closed reserved-key registry, verification semantics, and conformance vectors (ADR-0049/0060). **Proposed** — pin before seeding durable file metadata.
 
 When code changes alter system behavior visible to consumers (contracts, client UIs, off-chain indexers), update the relevant spec **in the same PR**. Specs lagging behind code is the most common failure mode of this kind of doc.
