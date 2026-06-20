@@ -4,5 +4,6 @@ export * from "./notification";
 export * from "./block";
 export * from "./decodeTxData";
 export * from "./ensureWalletChain";
+export * from "./faucet";
 export * from "./getParsedError";
 export * from "./networkLabel";

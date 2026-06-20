@@ -10,6 +10,7 @@ import { WagmiProvider } from "wagmi";
 import { BackgroundOpsDrawer } from "~~/components/BackgroundOpsDrawer";
 import { DevnetAutoFund } from "~~/components/DevnetAutoFund";
 import { DevnetBanner } from "~~/components/DevnetBanner";
+import { FaucetAutoDrip } from "~~/components/FaucetAutoDrip";
 import { Footer } from "~~/components/Footer";
 import { Header } from "~~/components/Header";
 import { BlockieAvatar } from "~~/components/scaffold-eth";
@@ -31,6 +32,8 @@ const ScaffoldEthApp = ({ children }: { children: React.ReactNode }) => {
       <BackgroundOpsDrawer />
       {/* No-op off the hardhat fork; silently tops up freshly-connected wallets with 0 balance. */}
       <DevnetAutoFund />
+      {/* No-op unless on the faucet's chain (NEXT_PUBLIC_FAUCET_CHAIN_ID) with NEXT_PUBLIC_FAUCET_URL set; drips via the HTTP faucet. */}
+      <FaucetAutoDrip />
     </>
   );
 };
