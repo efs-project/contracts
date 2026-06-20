@@ -34,11 +34,16 @@ Pin the Sepolia fork to a specific block. Default set in `packages/hardhat/hardh
 
 ```ts
 forking: {
-  url: `https://eth-sepolia.g.alchemy.com/v2/${providerApiKey}`,
-  blockNumber: Number(process.env.FORK_BLOCK ?? 10_691_000),
-  enabled: process.env.MAINNET_FORKING_ENABLED === "true",
+  url: envOr("SEPOLIA_FORK_RPC_URL", `https://eth-sepolia.g.alchemy.com/v2/${providerApiKey}`),
+  blockNumber: positiveIntEnvOr("FORK_BLOCK", 10_691_000),
+  enabled: boolEnv("MAINNET_FORKING_ENABLED"),
 },
 ```
+
+Implementation note, 2026-06-20: this snippet was refreshed to show the current
+blank-safe env helpers. The ADR-level decision is unchanged: the default fork
+pin is still `10_691_000`, `yarn preview` still enables forking automatically,
+and `.env` / shell overrides remain the operator interface.
 
 `yarn preview` (the one-command dev-stack launcher) sets `MAINNET_FORKING_ENABLED=true` in the fork child process env so the pin applies automatically. `yarn fork` run by itself requires the variable set in `.env` or the shell — documented in `packages/hardhat/.env.example`.
 
@@ -76,5 +81,6 @@ Pin advancement cadence is ad hoc — bump when we need state the current pin do
 ## Operational notes (not part of the decision)
 
 - Current pin: `10_691_000` (Sepolia). Selected ~1,500 blocks behind tip on 2026-04-19 for finality buffer and availability across RPC providers.
+- Blank or whitespace-only `.env` values are treated as unset by the helpers in `packages/hardhat/env.ts`, so leaving `FORK_BLOCK=` blank uses the default pin instead of block zero.
 - To bump: `FORK_BLOCK=<n> yarn preview` once, confirm `deployedContracts.ts` diff is only the expected address/UID changes, then set that number as the new default in `hardhat.config.ts` and commit.
 - The user-visible invariant — "commit SHA is the coordination unit" — is captured in `AGENTS.md` under Setup → Pinned Sepolia fork.

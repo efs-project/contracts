@@ -8,6 +8,10 @@ Informal dated log of small decisions agents made while working. Lighter than AD
 
 ---
 
+### 2026-06-20 — [codex gpt-5 · dev] Blank Hardhat env values normalize to defaults
+
+Hardhat config now routes optional string env values through `packages/hardhat/env.ts` helpers so blank or whitespace-only `.env` entries behave like unset values, while typed knobs still fail closed: `positiveIntEnvOr` rejects zero/non-decimal fork pins, `oneOfEnvOr` constrains `EFS_DEPLOY_MODE`, and `boolEnv` keeps exact `"true"` semantics. Deliberately kept `__RUNTIME_DEPLOYER_PRIVATE_KEY` on raw `process.env` fallback so a blank runtime deployer key does not silently use the default key. ADR-0037's implementation snippet and operational notes were refreshed in place because the pinning decision did not change.
+
 ### 2026-06-18 — [claude-opus-4.8 · dev] Superseded edges: generic getters are the low-level raw EAS layer (option B)
 
 James's call on the Codex P2 (superseded PINs/TAGs leaking from `showRevoked=false` generic getters). The generic schema-level discovery getters (`getAttestationsBySchema` / `getReferencing*` / `getChildren*` / `getAnchorsBySchema*`) filter EAS-_revocation_ only and do NOT reflect PIN/TAG _supersession_ — by design, because supersession is an EdgeResolver slot-overlay concept, not an EAS/schema one. "Current claims" reads use the EFS semantic layer (active-edge getters / views / router), which already honor it. Chose B (document the layering) over A (a `_isSuperseded` flag across two burned contracts + edit-path gas). Note: a new PIN cannot auto-revoke the old one — EAS revoke is attester-gated, a resolver can't revoke on the attester's behalf — which is why supersession (not EAS-revocation) is the mechanism. Clarified the getter NatSpec + ADR-0051 (Proposed) text; no contract change. Refs: ADR-0051, ADR-0041.
