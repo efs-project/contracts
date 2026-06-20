@@ -26,7 +26,12 @@ import {
 } from "@heroicons/react/24/outline";
 import { useLensesDirectoryPage } from "~~/hooks/efs/useLensesDirectoryPage";
 import { useSortedData } from "~~/hooks/efs/useSortedData";
-import { useDeployedContractInfo, useScaffoldReadContract, useScaffoldWriteContract } from "~~/hooks/scaffold-eth";
+import {
+  useDeployedContractInfo,
+  useScaffoldReadContract,
+  useScaffoldWriteContract,
+  useTargetNetwork,
+} from "~~/hooks/scaffold-eth";
 import { useBackgroundOps } from "~~/services/store/backgroundOps";
 import { EDGE_RESOLVER_ABI, getEdgeResolverAddress } from "~~/utils/efs/edgeResolver";
 import { isFile, isList, isTopic } from "~~/utils/efs/efsTypes";
@@ -251,7 +256,8 @@ export const FileBrowser = ({
 
   const { data: indexerInfo } = useDeployedContractInfo({ contractName: "Indexer" });
   const { data: efsFileViewInfo } = useDeployedContractInfo({ contractName: "EFSFileView" });
-  const publicClient = usePublicClient();
+  const { targetNetwork } = useTargetNetwork();
+  const publicClient = usePublicClient({ chainId: targetNetwork.id });
   const { address: connectedAddress } = useAccount();
   const { writeContractAsync: easWrite } = useScaffoldWriteContract("EAS");
 

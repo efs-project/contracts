@@ -20,7 +20,7 @@ import {
   XMarkIcon,
 } from "@heroicons/react/24/outline";
 import { Address, AddressInput } from "~~/components/scaffold-eth";
-import { useDeployedContractInfo } from "~~/hooks/scaffold-eth";
+import { useDeployedContractInfo, useTargetNetwork } from "~~/hooks/scaffold-eth";
 import { useBackgroundOps } from "~~/services/store/backgroundOps";
 import { EDGE_RESOLVER_ABI } from "~~/utils/efs/edgeResolver";
 import {
@@ -393,7 +393,8 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
     query: { enabled: !!indexerAddress },
   });
 
-  const publicClient = usePublicClient();
+  const { targetNetwork } = useTargetNetwork();
+  const publicClient = usePublicClient({ chainId: targetNetwork.id });
   const ops = useBackgroundOps();
   const { writeContractAsync } = useWriteContract();
 
@@ -695,6 +696,9 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
    */
   const attestEntry = async (recipient: `0x${string}`, target: `0x${string}`): Promise<`0x${string}`> => {
     const hash = await writeContractAsync({
+      // Guard: reads follow targetNetwork, so pin writes to it too — wagmi throws
+      // ChainMismatchError if the wallet is on a different chain (no cross-chain write).
+      chainId: targetNetwork.id,
       address: easAddress!,
       abi: EAS_ABI,
       functionName: "attest",
@@ -752,6 +756,7 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
         [keyName, propertySchemaUID as `0x${string}`],
       );
       const keyHash = await writeContractAsync({
+        chainId: targetNetwork.id,
         address: easAddress,
         abi: EAS_ABI,
         functionName: "attest",
@@ -779,6 +784,7 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
     opLog?.(`Writing “${keyName}” value…`);
     const encodedProperty = encodeAbiParameters([{ name: "value", type: "string" }], [value]);
     const propHash = await writeContractAsync({
+      chainId: targetNetwork.id,
       address: easAddress,
       abi: EAS_ABI,
       functionName: "attest",
@@ -804,6 +810,7 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
     opLog?.(`Binding “${keyName}”…`);
     const encodedPin = encodeAbiParameters([{ name: "definition", type: "bytes32" }], [keyAnchorUID]);
     const pinHash = await writeContractAsync({
+      chainId: targetNetwork.id,
       address: easAddress,
       abi: EAS_ABI,
       functionName: "attest",
@@ -826,6 +833,7 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
 
   const revokeEntry = async (e: Entry) => {
     const hash = await writeContractAsync({
+      chainId: targetNetwork.id,
       address: easAddress!,
       abi: EAS_ABI,
       functionName: "revoke",

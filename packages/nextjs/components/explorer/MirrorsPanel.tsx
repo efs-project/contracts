@@ -10,7 +10,7 @@ import { useTargetNetwork } from "~~/hooks/scaffold-eth/useTargetNetwork";
 import { CHUNK_SIZE, MAX_CHUNKS, MAX_ONCHAIN_SIZE } from "~~/lib/efs/sstore2";
 import { EDGE_RESOLVER_ABI } from "~~/utils/efs/edgeResolver";
 import { TRANSPORT_LABELS, detectTransport, resolveGatewayUrl } from "~~/utils/efs/transports";
-import { notification } from "~~/utils/scaffold-eth";
+import { ensureWalletChain, notification } from "~~/utils/scaffold-eth";
 
 const MOCK_CHUNKED_FILE_ABI = [
   {
@@ -69,10 +69,10 @@ export const MirrorsPanel = ({ fileAnchorUID, lensAddresses }: { fileAnchorUID: 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [transportAnchors, setTransportAnchors] = useState<Record<string, string>>({});
 
-  const publicClient = usePublicClient();
+  const { targetNetwork } = useTargetNetwork();
+  const publicClient = usePublicClient({ chainId: targetNetwork.id });
   const { data: walletClient } = useWalletClient();
   const { address: connectedAddress } = useAccount();
-  const { targetNetwork } = useTargetNetwork();
   const { data: indexerInfo } = useDeployedContractInfo({ contractName: "Indexer" });
   const { data: fileViewInfo } = useDeployedContractInfo({ contractName: "EFSFileView" });
   const { data: edgeResolverInfo } = useDeployedContractInfo({ contractName: "EdgeResolver" });
@@ -313,6 +313,7 @@ export const MirrorsPanel = ({ fileAnchorUID, lensAddresses }: { fileAnchorUID: 
 
   const handleAddMirrorByUpload = async () => {
     if (!dataUID || !fileToUpload || !walletClient || !publicClient) return;
+    if (!ensureWalletChain(walletClient, targetNetwork.id, targetNetwork.name)) return;
     setIsSubmitting(true);
     try {
       const fileArrayBuffer = await fileToUpload.arrayBuffer();

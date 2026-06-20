@@ -4,7 +4,7 @@ import { useRef, useState } from "react";
 import { ethers } from "ethers";
 import { decodeEventLog, parseAbiItem } from "viem";
 import { usePublicClient, useWalletClient } from "wagmi";
-import { useScaffoldWriteContract } from "~~/hooks/scaffold-eth";
+import { useScaffoldWriteContract, useTargetNetwork } from "~~/hooks/scaffold-eth";
 import { useBackgroundOps } from "~~/services/store/backgroundOps";
 import { notification } from "~~/utils/scaffold-eth";
 
@@ -47,7 +47,8 @@ export const CreateSortModal = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const modalRef = useRef<HTMLDialogElement>(null);
-  const publicClient = usePublicClient();
+  const { targetNetwork } = useTargetNetwork();
+  const publicClient = usePublicClient({ chainId: targetNetwork.id });
   const { data: walletClient } = useWalletClient();
   const { writeContractAsync: attest } = useScaffoldWriteContract({ contractName: "EAS" });
 

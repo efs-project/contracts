@@ -5,6 +5,7 @@ import { decodeAbiParameters, encodeAbiParameters, parseAbiParameters, zeroHash 
 import { useAccount, usePublicClient } from "wagmi";
 import { PlusIcon, XMarkIcon } from "@heroicons/react/24/outline";
 import { useDeployedContractInfo, useScaffoldReadContract, useScaffoldWriteContract } from "~~/hooks/scaffold-eth";
+import { useTargetNetwork } from "~~/hooks/scaffold-eth/useTargetNetwork";
 import { EDGE_RESOLVER_ABI, getEdgeResolverAddress } from "~~/utils/efs/edgeResolver";
 import { notification } from "~~/utils/scaffold-eth";
 
@@ -46,7 +47,8 @@ export const TagModal = ({ uid, isFile, lensAddresses = [], onClose, onTagChange
   const [dataUIDMissing, setDataUIDMissing] = useState(false);
 
   const { address: connectedAddress } = useAccount();
-  const publicClient = usePublicClient();
+  const { targetNetwork } = useTargetNetwork();
+  const publicClient = usePublicClient({ chainId: targetNetwork.id });
 
   const { data: anchorSchemaUID } = useScaffoldReadContract({
     contractName: "Indexer",

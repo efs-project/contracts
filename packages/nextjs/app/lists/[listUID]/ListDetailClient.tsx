@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import { encodeAbiParameters, zeroAddress, zeroHash } from "viem";
 import { useAccount, usePublicClient, useReadContract, useWaitForTransactionReceipt, useWriteContract } from "wagmi";
-import { useDeployedContractInfo } from "~~/hooks/scaffold-eth";
+import { useDeployedContractInfo, useTargetNetwork } from "~~/hooks/scaffold-eth";
 import { notification } from "~~/utils/scaffold-eth";
 
 const EAS_ABI = [
@@ -166,7 +166,8 @@ export default function ListDetailPage() {
   // unremovable) every entry past the 50th. Loop the reader cursor until a short page, mirroring
   // ListPreviewPane.refetchEntries, with a safety bound for the debug UI.
   type EntryRow = { entryUID: `0x${string}`; identityKey: `0x${string}` };
-  const publicClient = usePublicClient();
+  const { targetNetwork } = useTargetNetwork();
+  const publicClient = usePublicClient({ chainId: targetNetwork.id });
   const [entries, setEntries] = useState<readonly EntryRow[] | undefined>(undefined);
   // Generation guard (mirrors ListPreviewPane): if `lensAddress` changes (wallet account switch)
   // while a paginated read is in flight, the stale read must not setEntries() under the new lens.
@@ -260,6 +261,9 @@ export default function ListDetailPage() {
 
     try {
       const tx = await writeContractAsync({
+        // Guard: writes follow the selected network (reads already do) — wagmi
+        // throws ChainMismatchError if the wallet is on a different chain.
+        chainId: targetNetwork.id,
         address: easAddress,
         abi: EAS_ABI,
         functionName: "attest",
@@ -291,6 +295,7 @@ export default function ListDetailPage() {
     if (!listEntrySchemaUID || !easAddress) return;
     try {
       const tx = await writeContractAsync({
+        chainId: targetNetwork.id,
         address: easAddress,
         abi: EAS_ABI,
         functionName: "revoke",

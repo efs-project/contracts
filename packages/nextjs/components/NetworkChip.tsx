@@ -40,9 +40,10 @@
  * skipped / silently fails, so nothing renders.
  */
 import { useEffect, useState } from "react";
-import { useAccount, useConfig } from "wagmi";
+import { useAccount } from "wagmi";
 import { CheckIcon, DocumentDuplicateIcon, ExclamationTriangleIcon, GlobeAltIcon } from "@heroicons/react/24/outline";
 import deployedContracts from "~~/contracts/deployedContracts";
+import { useTargetNetwork } from "~~/hooks/scaffold-eth";
 
 const HARDHAT_CHAIN_ID = 31337;
 
@@ -198,14 +199,16 @@ const CopyButton = ({ value, label }: { value: string; label: string }) => {
 
 export const NetworkChip = () => {
   const { chain } = useAccount();
-  const config = useConfig();
+  const { targetNetwork } = useTargetNetwork();
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => setMounted(true), []);
 
-  // Prefer the connected account's chain; fall back to first configured chain so the chip
-  // still shows something useful before wallet connect.
-  const activeChain = chain ?? config.chains[0];
+  // Prefer the connected account's chain; fall back to the selected target network
+  // (what reads run against) so the chip matches the NetworkSwitcher even before a
+  // wallet connects — not the first *configured* chain, which would mislabel as the
+  // default when the user has switched the UI to the other network.
+  const activeChain = chain ?? targetNetwork;
   const rpcUrl = activeChain?.rpcUrls.default.http[0];
   const flavor = inferFlavor(rpcUrl, activeChain?.id);
   const label = flavor === "other" ? (activeChain?.name ?? "Unknown") : flavorLabels[flavor];
@@ -354,7 +357,7 @@ export const NetworkChip = () => {
             </div>
           )}
           <div className="text-[11px] opacity-60 pt-1 border-t border-base-200">
-            Switching networks requires a rebuild. See <code>NEXT_PUBLIC_HARDHAT_RPC_URL</code>.
+            Switch networks from the header. Set the default with <code>NEXT_PUBLIC_TARGET_CHAIN</code>.
           </div>
         </div>
       </div>

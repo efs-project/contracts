@@ -12,7 +12,7 @@ import {
   PlusIcon,
 } from "@heroicons/react/24/outline";
 import { useSortDiscovery } from "~~/hooks/efs/useSortDiscovery";
-import { useDeployedContractInfo, useScaffoldReadContract } from "~~/hooks/scaffold-eth";
+import { useDeployedContractInfo, useScaffoldReadContract, useTargetNetwork } from "~~/hooks/scaffold-eth";
 import { SortedListItem, computeHintsLocally } from "~~/utils/efs/sortHints";
 import { SORT_OVERLAY_ABI, SortOverlayInfo, formatSyncPercent } from "~~/utils/efs/sortOverlay";
 import { notification } from "~~/utils/scaffold-eth";
@@ -105,7 +105,8 @@ export const SortDropdown = ({
   autoProcessSortUIDs,
   anchorSchemaUID,
 }: SortDropdownProps) => {
-  const publicClient = usePublicClient();
+  const { targetNetwork } = useTargetNetwork();
+  const publicClient = usePublicClient({ chainId: targetNetwork.id });
   const { data: walletClient } = useWalletClient();
   const [isOpen, setIsOpen] = useState(false);
   const [isCreateSortOpen, setIsCreateSortOpen] = useState(false);
@@ -248,6 +249,11 @@ export const SortDropdown = ({
     ): Promise<number> => {
       if (!sortOverlayAddress || !indexerAddress || !parentAnchor || !publicClient || !walletClient?.account)
         throw new Error("Missing addresses or wallet.");
+      // Reads follow targetNetwork; this raw writeContract follows the wallet. If they diverge,
+      // the write would land on the wrong chain. Throw (matching the precondition above) so the
+      // callers' try/catch surfaces it; the user-facing handlers toast e.message.
+      if (walletClient.chain?.id !== targetNetwork.id)
+        throw new Error(`Wallet is on the wrong network. Switch your wallet to ${targetNetwork.name} to continue.`);
 
       const remaining = totalCount - expectedStartIndex;
       if (remaining <= 0n) return 0;
@@ -452,7 +458,16 @@ export const SortDropdown = ({
 
       return batchCount;
     },
-    [sortOverlayAddress, indexerAddress, parentAnchor, publicClient, walletClient, getSortConfig],
+    [
+      sortOverlayAddress,
+      indexerAddress,
+      parentAnchor,
+      publicClient,
+      walletClient,
+      getSortConfig,
+      targetNetwork.id,
+      targetNetwork.name,
+    ],
   );
 
   // ── Process ALL remaining batches — loops until fully synced ─────────────────
