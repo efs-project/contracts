@@ -137,8 +137,16 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
         return owner();
     }
 
-    // Maximum anchor nesting depth — prevents gas griefing in propagateContains
-    uint256 public constant MAX_ANCHOR_DEPTH = 32;
+    // Maximum anchor nesting depth — bounds gas on the ancestor-chain walks (_propagateContains,
+    // _indexGlobal, creation-time depth check). The cap's ONLY purpose is anti-grief gas-bounding;
+    // it is deliberately set far above any real tree. Raised 32 -> 1024 (ADR-0058 supersedes ADR-0021):
+    // no real filesystem imposes an explicit depth cap (depth is bounded emergently by path length,
+    // e.g. Linux PATH_MAX 4096 => ~2048 levels, Windows long-path => ~16k), so 32 wrongly rejected
+    // deep trees EFS must be able to mirror. 1024 is ~90x the deepest tree ever observed in the wild
+    // and still gas-trivial (~2.1K gas/level => ~2.1M worst-case one-time, self-paid by the creator;
+    // steady state is O(1) via early-break). A depth COUNTER (not a path-byte cap) is the right tool
+    // because it is what actually bounds these walks.
+    uint256 public constant MAX_ANCHOR_DEPTH = 1024;
 
     // Content-addressed deduplication: keccak256(contentHash) => first DATA UID.
     // AGENT-NOTE: this is a RETAINED DEAD SLOT, kept for storage-layout stability, no longer

@@ -92,8 +92,9 @@ What else we looked at and why it lost.
 - [ADR-0020 — `MAX_PAGES = 10` mirror scan cap](./0020-max-pages-mirror-scan-cap.md)
 
 ### Security Limits
-- [ADR-0021 — `MAX_ANCHOR_DEPTH = 32`](./0021-max-anchor-depth.md)
+- [ADR-0021 — `MAX_ANCHOR_DEPTH = 32`](./0021-max-anchor-depth.md) *(Superseded by ADR-0058 — raised to 1024)*
 - [ADR-0022 — `MAX_URI_LENGTH = 8192` in MirrorResolver](./0022-max-uri-length.md)
+- [ADR-0058 — Raise `MAX_ANCHOR_DEPTH` to 1024; no anchor-name length cap](./0058-raise-max-anchor-depth-and-no-name-length-cap.md)
 - [ADR-0023 — URI scheme allowlist in MirrorResolver](./0023-uri-scheme-allowlist.md)
 - [ADR-0024 — Content-Type sanitization](./0024-content-type-sanitization.md)
 - [ADR-0025 — Anchor name validation](./0025-anchor-name-validation.md)

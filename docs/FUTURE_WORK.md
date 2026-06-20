@@ -394,8 +394,8 @@ Public ingress is gateway-only (`/arweave/<txid>` reads succeed; `POST /arweave/
 ### External audit on EFSIndexer
 Single most important pre-mainnet item. EFSIndexer is permanent and the kernel of the system — one external pass from a credentialed firm (Trail of Bits, OpenZeppelin, Code4rena contest) is worth the cost. See `docs/LAUNCH_CHECKLIST.md`.
 
-### Anchor name length cap
-`_isValidAnchorName` (ADR-0025) doesn't currently cap byte length. A 100KB filename is technically allowed. Add a cap (e.g. 255 bytes) to prevent storage-cost griefing.
+### Anchor name length cap [DECIDED AGAINST 2026-06-20 — ADR-0058]
+~~`_isValidAnchorName` (ADR-0025) doesn't currently cap byte length. Add a cap (e.g. 255 bytes).~~ **Resolved: no cap** ([ADR-0058](adr/0058-raise-max-anchor-depth-and-no-name-length-cap.md)). Not needed for correctness; calldata + O(length) validation cost makes absurd names exceed block gas (self-paid), and lens-scoping means a huge name only burdens viewers who trust its creator — no public grief surface. Presentation/truncation is a client concern (ADR-0056 principle); long names can be legitimate Schelling points. An 8192-byte backstop (matching `MAX_URI_LENGTH`) stays available if pure anti-bloat is ever wanted.
 
 ### Fuzzing / property tests for path resolution
 `resolvePath`, `_findDataAtPath`, mirror selection are good targets for property-based testing (Foundry/Echidna). Adversarial path construction is the relevant attack class.
