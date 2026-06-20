@@ -158,6 +158,12 @@ export async function uploadOnchainFile(args: UploadOnchainFileArgs): Promise<Up
     beforePlacement,
   } = args;
 
+  if (walletClient.chain?.id !== chainId) {
+    throw new Error(
+      `Wallet is on the wrong network (chain ${walletClient.chain?.id ?? "unknown"}); expected ${chainId}. Switch your wallet and retry.`,
+    );
+  }
+
   const log = (msg: string) => onProgress?.(msg);
   const checkCancelled = () => {
     if (isCancelled?.()) throw new Error(UPLOAD_CANCELLED);

@@ -14,7 +14,7 @@ import { TopicTree } from "~~/components/explorer/TopicTree";
 import type { PathItem } from "~~/components/explorer/types";
 import deployedContracts from "~~/contracts/deployedContracts";
 import { useContainerName } from "~~/hooks/efs/useContainerName";
-import { useDeployedContractInfo, useScaffoldReadContract } from "~~/hooks/scaffold-eth";
+import { useDeployedContractInfo, useScaffoldReadContract, useTargetNetwork } from "~~/hooks/scaffold-eth";
 import {
   ClassifiedContainer,
   DEVNET_BOOTSTRAP_CURATOR,
@@ -107,7 +107,8 @@ export default function ExplorerClient() {
 
   const sortParam = searchParams.get("sort");
   const activeSortInfoUID = sortParam || null;
-  const publicClient = usePublicClient();
+  const { targetNetwork } = useTargetNetwork();
+  const publicClient = usePublicClient({ chainId: targetNetwork.id });
   // Mainnet client for ENS resolution only. `targetNetworks` in
   // `scaffold.config.ts` is `[hardhat]`, so the active `publicClient` above is
   // hardhat and has no ENS registry — `getEnsAddress` / `getEnsName` against

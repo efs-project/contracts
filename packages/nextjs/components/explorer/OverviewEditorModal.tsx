@@ -31,7 +31,7 @@ import { uploadOnchainFile } from "~~/lib/efs/uploadOnchainFile";
 import { useBackgroundOps } from "~~/services/store/backgroundOps";
 import { EDGE_RESOLVER_ABI, getEdgeResolverAddress } from "~~/utils/efs/edgeResolver";
 import { MAX_RENDER_BYTES } from "~~/utils/markdown/limits";
-import { notification } from "~~/utils/scaffold-eth";
+import { ensureWalletChain, notification } from "~~/utils/scaffold-eth";
 
 export interface OverviewEditorModalProps {
   mode: "create" | "edit";
@@ -65,7 +65,7 @@ export const OverviewEditorModal = (props: OverviewEditorModalProps) => {
   } = props;
 
   const { targetNetwork } = useTargetNetwork();
-  const publicClient = usePublicClient();
+  const publicClient = usePublicClient({ chainId: targetNetwork.id });
   const { data: walletClient } = useWalletClient();
   // attest is the EAS write handle; the seams take it injected (they're plain
   // async and can't call a React hook). The scaffold handle's `variables.args` is
@@ -85,6 +85,7 @@ export const OverviewEditorModal = (props: OverviewEditorModalProps) => {
 
   const handleSave = async () => {
     if (!walletClient || !publicClient || !indexerAbi) return;
+    if (!ensureWalletChain(walletClient, targetNetwork.id, targetNetwork.name)) return;
 
     const edgeResolverAddress = await getEdgeResolverAddress(targetNetwork.id);
     if (!edgeResolverAddress) {

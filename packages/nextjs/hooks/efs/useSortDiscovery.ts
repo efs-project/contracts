@@ -15,6 +15,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { zeroAddress, zeroHash } from "viem";
 import { usePublicClient } from "wagmi";
+import { useTargetNetwork } from "~~/hooks/scaffold-eth/useTargetNetwork";
 import { SortOverlayInfo, getSortOverlayAddress } from "~~/utils/efs/sortOverlay";
 
 // ── Minimal ABI fragments needed for discovery ────────────────────────────────
@@ -146,7 +147,8 @@ export function useSortDiscovery({
   lensAddresses,
   filterBySchema,
 }: UseSortDiscoveryOptions): UseSortDiscoveryResult {
-  const publicClient = usePublicClient();
+  const { targetNetwork } = useTargetNetwork();
+  const publicClient = usePublicClient({ chainId: targetNetwork.id });
   const [availableSorts, setAvailableSorts] = useState<SortOverlayInfo[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);

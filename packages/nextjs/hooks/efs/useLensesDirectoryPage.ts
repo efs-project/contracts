@@ -27,6 +27,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Abi } from "viem";
 import { usePublicClient } from "wagmi";
+import { useTargetNetwork } from "~~/hooks/scaffold-eth/useTargetNetwork";
 import { reconcileMinWeights, shouldUseFilteredQuery } from "~~/utils/efs/excludeFilter";
 
 interface UseLensesDirectoryPageOptions {
@@ -91,7 +92,8 @@ export function useLensesDirectoryPage({
   minWeights = [],
   enabled,
 }: UseLensesDirectoryPageOptions): UseLensesDirectoryPageResult {
-  const publicClient = usePublicClient();
+  const { targetNetwork } = useTargetNetwork();
+  const publicClient = usePublicClient({ chainId: targetNetwork.id });
   // The on-chain `getDirectoryPageFiltered` requires `minWeights.length ===
   // excludeTagDefs.length` (parallel arrays). A caller that omits `minWeights`
   // (default `[]`) or passes a length-mismatched array alongside non-empty

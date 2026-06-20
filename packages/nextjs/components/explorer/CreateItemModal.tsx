@@ -22,7 +22,7 @@ import type { ClassifiedContainer } from "~~/utils/efs/containers";
 import { EDGE_RESOLVER_ABI, getEdgeResolverAddress } from "~~/utils/efs/edgeResolver";
 import { SORT_OVERLAY_ABI } from "~~/utils/efs/sortOverlay";
 import { TRANSPORT_LABELS, computeContentHash, detectTransport, resolveGatewayUrl } from "~~/utils/efs/transports";
-import { notification } from "~~/utils/scaffold-eth";
+import { ensureWalletChain, notification } from "~~/utils/scaffold-eth";
 
 export type CreationType = "Folder" | "File" | "PasteLink" | "List";
 
@@ -275,7 +275,7 @@ export const CreateItemModal = ({
   // Flipped by the Stop button mid-upload. Checked between transactions so we
   // break cleanly on the next safe boundary (can't abort an already-broadcast tx).
   const cancelledRef = useRef(false);
-  const publicClient = usePublicClient();
+  const publicClient = usePublicClient({ chainId: targetNetwork.id });
   const { data: walletClient } = useWalletClient();
 
   // Sync external `creationType` prop to internal state + dialog visibility.
@@ -669,6 +669,7 @@ export const CreateItemModal = ({
 
   const handleSubmit = async () => {
     if (!currentAnchorUID || !newName || !walletClient || !publicClient || !internalType) return;
+    if (!ensureWalletChain(walletClient, targetNetwork.id, targetNetwork.name)) return;
     const nameError = validateAnchorName(newName);
     if (nameError) {
       notification.error(nameError);

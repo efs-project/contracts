@@ -20,6 +20,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { zeroHash } from "viem";
 import { usePublicClient } from "wagmi";
+import { useTargetNetwork } from "~~/hooks/scaffold-eth/useTargetNetwork";
 import { DEFAULT_MAX_TRAVERSAL, SORT_OVERLAY_ABI } from "~~/utils/efs/sortOverlay";
 
 interface UseSortedDataOptions {
@@ -54,7 +55,8 @@ export function useSortedData({
   showRevoked = false,
   refreshKey = 0,
 }: UseSortedDataOptions): UseSortedDataResult {
-  const publicClient = usePublicClient();
+  const { targetNetwork } = useTargetNetwork();
+  const publicClient = usePublicClient({ chainId: targetNetwork.id });
   const [sortedUIDs, setSortedUIDs] = useState<string[] | null>(null);
   const cursorRef = useRef<string>(zeroHash);
   const [isLoading, setIsLoading] = useState(false);

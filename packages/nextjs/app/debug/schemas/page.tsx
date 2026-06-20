@@ -13,7 +13,7 @@ import {
 } from "viem";
 import { usePublicClient, useReadContract, useWriteContract } from "wagmi";
 import { useSchemaRegistry } from "~~/hooks/efs/useSchemaRegistry";
-import { useScaffoldReadContract } from "~~/hooks/scaffold-eth";
+import { useScaffoldReadContract, useTargetNetwork } from "~~/hooks/scaffold-eth";
 import { notification } from "~~/utils/scaffold-eth";
 
 // Minimal EAS ABI (standard, doesn't change per deployment)
@@ -87,7 +87,8 @@ const EAS_ABI = [
 
 export default function DebugSchemas() {
   const { writeContractAsync, isPending } = useWriteContract();
-  const publicClient = usePublicClient();
+  const { targetNetwork } = useTargetNetwork();
+  const publicClient = usePublicClient({ chainId: targetNetwork.id });
   const registry = useSchemaRegistry();
 
   // State for forms
@@ -128,6 +129,9 @@ export default function DebugSchemas() {
     }
     try {
       const tx = await writeContractAsync({
+        // Guard: writes go to the selected network (reads already do) — wagmi throws
+        // ChainMismatchError if the wallet is on a different chain.
+        chainId: targetNetwork.id,
         address: registry.easAddress as `0x${string}`,
         abi: EAS_ABI,
         functionName: "attest",
