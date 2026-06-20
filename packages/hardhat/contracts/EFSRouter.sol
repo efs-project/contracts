@@ -14,7 +14,7 @@ interface IDecentralizedApp {
     function request(
         string[] memory resource,
         KeyValue[] memory params
-    ) external view returns (uint256 statusCode, bytes memory body, KeyValue[] memory headers);
+    ) external view returns (uint16 statusCode, bytes memory body, KeyValue[] memory headers);
 }
 
 interface IChunkedSSTORE2 {
@@ -199,7 +199,7 @@ contract EFSRouter is IDecentralizedApp {
     function request(
         string[] memory resource,
         KeyValue[] memory params
-    ) external view override returns (uint statusCode, bytes memory body, KeyValue[] memory headers) {
+    ) external view override returns (uint16 statusCode, bytes memory body, KeyValue[] memory headers) {
         // Empty path guard (must be before classification)
         if (resource.length == 0) return (404, bytes("Not Found: Empty path"), new KeyValue[](0));
 
@@ -311,8 +311,13 @@ contract EFSRouter is IDecentralizedApp {
         // 3. Get best MIRROR for retrieval URI (scoped to the lens attester)
         (string memory uri, bool hadMirrors) = _getBestMirrorURI(dataUID, dataAttester);
 
-        // 4. Get contentType from PROPERTY on DATA, scoped to the lens attester
-        string memory contentType = _getContentType(dataUID, dataAttester);
+        // 4. Get contentType from PROPERTY on DATA, scoped to the lens attester.
+        //    Sanitize at the source (ADR-0024): the PROPERTY value is attester-
+        //    controlled, and it flows into the `Content-Type` header on BOTH the
+        //    on-chain (web3://) and off-chain (message/external-body) branches.
+        //    Sanitizing here closes the header-injection hole on the on-chain
+        //    branch (the off-chain branch re-sanitizes, which is idempotent).
+        string memory contentType = _sanitizeHeaderValue(_getContentType(dataUID, dataAttester));
 
         // 5. Content Retrieval & Translation
         if (bytes(uri).length == 0) {
@@ -323,14 +328,17 @@ contract EFSRouter is IDecentralizedApp {
             return (404, bytes("Not Found: No mirror available"), new KeyValue[](0));
         }
 
-        if (_startsWith(uri, "web3://")) {
+        if (_startsWith(uri, "web3://") && _web3UriServesLocally(uri)) {
             // On-chain fetch: the mirror points at an EFSBytesStore (or any
-            // contract exposing the chunkCount()/chunkAddress() interface). We
-            // read the SSTORE2 chunks directly via extcodecopy — the efficient,
-            // paginated (EIP-7617) path. The store ALSO implements ERC-5219
-            // (resolveMode/request) so a bare web3://<store> resolves in generic
-            // clients; the router doesn't need that path — extcodecopy is cheaper
-            // and lens-scoped here. See ADR-0057.
+            // contract exposing the chunkCount()/chunkAddress() interface) ON THIS
+            // CHAIN (no `:chainId` suffix, or one equal to block.chainid — see
+            // _web3UriServesLocally / ADR-0058). We read the SSTORE2 chunks directly
+            // via extcodecopy — the efficient, paginated (EIP-7617) path. The store
+            // ALSO implements ERC-5219 (resolveMode/request) so a bare web3://<store>
+            // resolves in generic clients; the router doesn't need that path —
+            // extcodecopy is cheaper and lens-scoped here. See ADR-0057.
+            // A web3:// mirror naming a DIFFERENT chain falls through to the
+            // off-chain redirect below (the client resolves it cross-chain).
 
             // EIP-7617 Chunking Validation
             address targetContract = _parseContractFromWeb3URI(uri);
@@ -355,6 +363,14 @@ contract EFSRouter is IDecentralizedApp {
             }
 
             if (isChunked) {
+                // Empty store (0 chunks) is a valid empty file, not "not found" —
+                // parity with EFSBytesStore.request() (ADR-0057/0058). Must precede
+                // the bounds check (chunkIdx 0 >= totalChunks 0 would 404 otherwise).
+                if (totalChunks == 0) {
+                    headers = new KeyValue[](1);
+                    headers[0] = KeyValue("Content-Type", contentType);
+                    return (200, "", headers);
+                }
                 if (chunkIdx >= totalChunks) {
                     return (404, bytes("Chunk out of bounds"), new KeyValue[](0));
                 }
@@ -370,9 +386,15 @@ contract EFSRouter is IDecentralizedApp {
                 if (chunkIdx + 1 < totalChunks) {
                     headers = new KeyValue[](2);
                     headers[0] = KeyValue("Content-Type", contentType);
+                    // EIP-7617 next-chunk pointer. MUST be a leading-slash relative URL
+                    // re-emitting THIS request's path + routing params (lenses/caller),
+                    // so the web3protocol-js client round-trips it back to a byte-
+                    // identical request() for chunk N+1 — keeping every chunk on the
+                    // same lens-resolved DATA/mirror (no cross-lens splice). A bare
+                    // "?chunk=" would throw in the client's URL parser. See ADR-0058.
                     headers[1] = KeyValue(
                         "web3-next-chunk",
-                        string(abi.encodePacked("?chunk=", _uintToString(chunkIdx + 1)))
+                        _nextChunkURL(resource, params, chunkIdx + 1)
                     );
                 } else {
                     headers = new KeyValue[](1);
@@ -410,9 +432,12 @@ contract EFSRouter is IDecentralizedApp {
         // Any other non-empty allowlisted scheme (ipfs://, ar://, https://, magnet:,
         // ftp://, s3://, gs://, dat://, rsync://, bittorrent://, and any future
         // MirrorResolver allowlist addition) is served as an external-body redirect.
-        // web3:// is handled above; the only other non-web3 case is an off-chain URI,
-        // so the retrieval is transport-agnostic — we delegate to the client rather
-        // than ever returning the raw URI as the response body.
+        // Same-chain web3:// is handled above (extcodecopy); a CROSS-chain web3://
+        // mirror (`:chainId` != block.chainid) also reaches here and is delegated as
+        // a redirect to the full `web3://<addr>:<chainId>` URL — a web3://-aware
+        // client resolves it on the right chain (EIP-6860, ADR-0058). The retrieval
+        // is transport-agnostic — we delegate to the client rather than ever
+        // returning the raw URI as the response body.
         // Single Content-Type with the actual type embedded as a parameter,
         // avoiding duplicate headers that clients may collapse or mishandle.
         // Sanitize BOTH interpolated values — strip quotes/backslashes/control bytes to prevent header
@@ -562,6 +587,44 @@ contract EFSRouter is IDecentralizedApp {
             parsed += nibble;
         }
         return address(parsed);
+    }
+
+    /// @dev Whether a `web3://` mirror should be served on-chain by THIS router via
+    ///      extcodecopy, vs. delegated to the client as a cross-chain redirect.
+    ///      Returns true when the URI carries NO `:chainId` suffix (EFS convention:
+    ///      the mirror lives on the router's own chain) or the suffix equals
+    ///      `block.chainid`. A suffix naming a DIFFERENT chain cannot be
+    ///      extcodecopy'd here — the caller falls through to the
+    ///      `message/external-body` redirect so a web3://-aware client resolves it
+    ///      on the right chain (EIP-6860). See ADR-0058. Malformed/absurd suffixes
+    ///      degrade to local-serve (the address parser then 500s a bad address),
+    ///      never a revert.
+    function _web3UriServesLocally(string memory uri) private view returns (bool) {
+        bytes memory u = bytes(uri);
+        if (u.length < 49) return true; // too short to carry a suffix; address parser handles it
+
+        // AGENT-NOTE: this offset math (7 + optional 0x/0X, then 40 hex) MUST stay
+        // in lockstep with _parseContractFromWeb3URI — both must locate the address
+        // identically or the suffix check lands on the wrong byte. Keep them aligned
+        // (or extract a shared `_web3AddrEnd` if either ever changes prefix handling).
+        uint256 offset = 7; // past "web3://"
+        if (u[offset] == "0" && (u[offset + 1] == "x" || u[offset + 1] == "X")) offset += 2;
+        uint256 afterAddr = offset + 40;
+
+        // No `:chainId` suffix → mirror is on this chain by convention → serve locally.
+        if (afterAddr >= u.length || u[afterAddr] != ":") return true;
+
+        uint256 chainId = 0;
+        bool anyDigit = false;
+        for (uint256 i = afterAddr + 1; i < u.length; i++) {
+            bytes1 c = u[i];
+            if (c < "0" || c > "9") break; // stop at a non-digit (e.g. a trailing "/path")
+            chainId = chainId * 10 + (uint8(c) - 48);
+            anyDigit = true;
+            if (chainId > type(uint64).max) return false; // absurd → not this chain (no overflow revert)
+        }
+        if (!anyDigit) return true; // ":" with no digits → malformed; serve locally
+        return chainId == block.chainid;
     }
 
     /// @dev Produce a lowercased copy of a string's ASCII A–F range plus the `X` used in the
@@ -722,6 +785,95 @@ contract EFSRouter is IDecentralizedApp {
         return string(buffer);
     }
 
+    // ── EIP-7617 next-chunk URL reconstruction (ADR-0058) ─────────────────────
+
+    /// @dev Build the `web3-next-chunk` header value: a leading-slash, percent-
+    ///      encoded reconstruction of THIS request's path with all routing params
+    ///      preserved and `chunk` set to `nextIdx`:
+    ///        /<enc(seg0)>/<enc(seg1)>/…?<key>=<enc(val)>&…&chunk=<nextIdx>
+    ///
+    ///      Binding spec = the `web3protocol-js` reference client (`src/mode/5219.js`
+    ///      getNextChunk): a next-chunk value is rewritten to a fetchable URL only
+    ///      if it starts with "/" (→ `web3://<router>:<chainId><value>`); a bare
+    ///      "?chunk=" is fed raw to the URL parser and throws. The client then
+    ///      decodes each path segment (`decodeURIComponent`) and each query value
+    ///      (`URLSearchParams`), so we percent-encode both to round-trip back to the
+    ///      EXACT `resource[]`/`params[]` that produced chunk 0. Re-emitting the
+    ///      `lenses`/`caller` params (dropping the OLD `chunk`) keeps chunk N+1 on
+    ///      the same lens-resolved DATA/mirror — without it a paginated read under
+    ///      `?lenses=alice` would re-resolve chunk N+1 under the default chain and
+    ///      splice a different attester's bytes (ADR-0013/0031).
+    function _nextChunkURL(
+        string[] memory resource,
+        KeyValue[] memory params,
+        uint256 nextIdx
+    ) private pure returns (string memory) {
+        bytes memory path = "";
+        for (uint256 i = 0; i < resource.length; i++) {
+            path = abi.encodePacked(path, "/", _percentEncode(resource[i]));
+        }
+        if (resource.length == 0) path = "/"; // defensive; request() 404s on empty resource
+
+        bytes memory query = abi.encodePacked("?");
+        for (uint256 i = 0; i < params.length; i++) {
+            if (_stringsEqual(params[i].key, "chunk")) continue; // replaced below
+            query = abi.encodePacked(
+                query,
+                _percentEncode(params[i].key),
+                "=",
+                _percentEncode(params[i].value),
+                "&"
+            );
+        }
+        query = abi.encodePacked(query, "chunk=", _uintToString(nextIdx));
+
+        return string(abi.encodePacked(path, query));
+    }
+
+    /// @dev RFC 3986 percent-encoding: leaves the unreserved set (ALPHA / DIGIT /
+    ///      "-" "." "_" "~") literal and percent-encodes every other byte (reserved,
+    ///      sub-delims, and ≥0x80) with uppercase hex. Encoding a superset of the
+    ///      strictly-required bytes is always reversible by the client's
+    ///      decodeURIComponent / URLSearchParams decode, so it can never break the
+    ///      round-trip; it only prevents a metacharacter in a name/value from
+    ///      re-splitting the path or query.
+    function _percentEncode(string memory s) private pure returns (string memory) {
+        bytes memory b = bytes(s);
+        bytes memory hexChars = "0123456789ABCDEF";
+
+        uint256 outLen = 0;
+        for (uint256 i = 0; i < b.length; i++) {
+            outLen += _isUnreserved(uint8(b[i])) ? 1 : 3;
+        }
+        if (outLen == b.length) return s; // nothing to encode — common fast path
+
+        bytes memory out = new bytes(outLen);
+        uint256 j = 0;
+        for (uint256 i = 0; i < b.length; i++) {
+            uint8 c = uint8(b[i]);
+            if (_isUnreserved(c)) {
+                out[j++] = bytes1(c);
+            } else {
+                out[j++] = "%";
+                out[j++] = hexChars[c >> 4];
+                out[j++] = hexChars[c & 0x0f];
+            }
+        }
+        return string(out);
+    }
+
+    /// @dev RFC 3986 unreserved set: ALPHA / DIGIT / "-" "." "_" "~".
+    function _isUnreserved(uint8 c) private pure returns (bool) {
+        return
+            (c >= 0x41 && c <= 0x5A) || // A-Z
+            (c >= 0x61 && c <= 0x7A) || // a-z
+            (c >= 0x30 && c <= 0x39) || // 0-9
+            c == 0x2D || // -
+            c == 0x2E || // .
+            c == 0x5F || // _
+            c == 0x7E;   // ~
+    }
+
     /// @dev Lowercase-hex encoding of a bytes32 with 0x prefix. Used to serialize UIDs in JSON
     ///      responses for schema/attestation containers (see `_respondSchemaJSON` / `_respondAttestationJSON`).
     function _bytes32ToHex(bytes32 v) private pure returns (string memory) {
@@ -789,7 +941,7 @@ contract EFSRouter is IDecentralizedApp {
 
     /// @dev Build a 200 / application/json response for a schema container.
     ///      Shape: `{"uid":"0x…","resolver":"0x…","revocable":true,"schema":"…"}`.
-    function _respondSchemaJSON(bytes32 uid) private view returns (uint, bytes memory, KeyValue[] memory) {
+    function _respondSchemaJSON(bytes32 uid) private view returns (uint16, bytes memory, KeyValue[] memory) {
         SchemaRecord memory s = schemaRegistry.getSchema(uid);
         string memory json = string(
             abi.encodePacked(
@@ -811,7 +963,7 @@ contract EFSRouter is IDecentralizedApp {
 
     /// @dev Build a 200 / application/json response for an attestation container.
     ///      Split into two encodePacked batches to keep the stack shallow.
-    function _respondAttestationJSON(bytes32 uid) private view returns (uint, bytes memory, KeyValue[] memory) {
+    function _respondAttestationJSON(bytes32 uid) private view returns (uint16, bytes memory, KeyValue[] memory) {
         IEAS.Attestation memory a = eas.getAttestation(uid);
         bytes memory part1 = abi.encodePacked(
             '{"uid":"',
