@@ -261,6 +261,23 @@ export const FileBrowser = ({
   const { address: connectedAddress } = useAccount();
   const { writeContractAsync: easWrite } = useScaffoldWriteContract("EAS");
 
+  // On a network switch the chain-scoped tag-filter resolver state below was
+  // resolved against the previous chain's Indexer/EdgeResolver. The `/tags` gate
+  // (`if (tagsRoot) return`) never re-resolves once set, so without this reset a
+  // hardhat <-> Sepolia switch reuses the old chain's `/tags` UID + edge-resolver
+  // address while the directory reads follow the new chain — the exclude filter
+  // then resolves empty/wrong and the listing falls back to unfiltered until a
+  // reload. Keyed on targetNetwork.id so it clears only on an actual chain change.
+  useEffect(() => {
+    setTagsRoot(null);
+    setTagsRootSettled(false);
+    setEdgeResolverAddress(null);
+    setExcludeResolved(false);
+    setExcludeTagDefUIDs([]);
+    setTagFilteredUIDs(null);
+    setExcludeRetry(0);
+  }, [targetNetwork.id]);
+
   // PIN and TAG schema UIDs from EdgeResolver (ADR-0041 — distinct schemas
   // for cardinality 1 vs N). Declared early because the tag-filter useEffect
   // below depends on tagSchemaUID for schema-aware active-edge queries; the
