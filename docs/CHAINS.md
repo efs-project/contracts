@@ -50,7 +50,7 @@ permanent kernel/resolvers, not these addresses — see `docs/FUTURE_WORK.md`.)
 
 | Contract | Address |
 |---|---|
-| EFSFileView | `0x56da693C297ed11F5Dfc387A3Cdbfe5C81da935f` |
+| EFSFileView | `0x141D9FdbadCd9f6e6928A4842FF00094502CC146` |
 | EFSRouter | `0x4EF216e1096237dA8A962157Ed13ea1B3FcC5E17` |
 | ListReader | `0x689AA70BF6a8b22BE4E959dcf33A40ea03F85Bd5` |
 
