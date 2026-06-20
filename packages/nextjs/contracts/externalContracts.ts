@@ -4401,4 +4401,15 @@ const externalContracts = {
   
   
 
-export default externalContracts satisfies GenericContractsDeclaration;
+// `ContractName` (utils/scaffold-eth/contract.ts) is the INTERSECTION of contract names across every
+// chain present in deployedContracts.ts. The Sepolia freeze added an 11155111 block there, so external
+// contracts defined only for 31337 drop out of that intersection — which is the 26 `next:check-types`
+// errors. These debug-UI-only ABIs are chain-agnostic (deferred sort / schema-name views, guarded to
+// no-op when the contract isn't deployed), so we surface the same set under 11155111 to keep them in
+// the union. Reusing externalContracts[31337] avoids duplicating ~4.3k lines of ABI.
+const externalContractsAllChains = {
+  31337: externalContracts[31337],
+  11155111: externalContracts[31337],
+} as const;
+
+export default externalContractsAllChains satisfies GenericContractsDeclaration;
