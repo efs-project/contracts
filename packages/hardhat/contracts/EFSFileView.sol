@@ -1057,8 +1057,9 @@ contract EFSFileView {
     }
 
     /// @dev DRAFT default hop cap (D_MAX) when caller passes `maxHops == 0`
-    ///      (specs/09-redirect-resolution.md). Matches the spec's canonical D_MAX.
-    uint16 private constant _REDIRECT_D_MAX = 8;
+    ///      (specs/09-redirect-resolution.md). Matches the spec's canonical D_MAX
+    ///      (16 — James ratified 2026-06-20; ceiling stays 32).
+    uint16 private constant _REDIRECT_D_MAX = 16;
 
     /// @dev DRAFT hard ceiling on hops regardless of the caller's `maxHops`
     ///      (specs/09-redirect-resolution.md). Also sizes the in-memory visited-set, so it
@@ -1073,12 +1074,24 @@ contract EFSFileView {
     ///         node — ADR-0031 first-attester-wins), until it reaches a terminal node, detects a
     ///         cycle, exceeds the hop cap, or hits a dangling target. Never reverts.
     ///
+    ///         **Versioning model (specs/09; James ratified 2026-06-20).** A *path* resolves to the
+    ///         newest content because the publisher re-points the path's placement PIN; a specific
+    ///         *DATA UID* is permanent and resolves to exactly that version. "Give me the latest
+    ///         version" is therefore answered by the path/placement, NOT by chasing `supersededBy`.
+    ///         A version chain is a discoverable on-chain breadcrumb (read by clients/indexers), not
+    ///         auto-navigation — this preserves EFS's "no silent revision" property: a fixed UID/link
+    ///         never silently advances.
+    ///
     ///         **Follow rules by kind (specs/09; do not deviate):**
-    ///           - `symlink` (2): source Anchor → target (Anchor or DATA). Followed.
-    ///           - `supersededBy` (1): DATA → newer DATA. Followed (walk to the newest in the chain).
-    ///           - `sameAs` (0): canonicalization hint only — NOT auto-navigated by this follower.
-    ///             A node whose only redirect is `sameAs` is treated as terminal here.
-    ///           - `3+` (reserved, e.g. relatedVersion): never auto-followed — terminal.
+    ///           - `symlink` (2): source Anchor → target (Anchor or DATA). Followed — a navigational
+    ///             shortcut.
+    ///           - `supersededBy` (1): DATA → newer DATA. NOT auto-followed — a non-followed terminal.
+    ///             The version chain is a discoverable breadcrumb; the follower stops here and returns
+    ///             `Resolved` at the node, leaving the chain for clients/indexers to walk if they want.
+    ///           - `sameAs` (0): canonicalization hint only — NOT auto-navigated. Non-followed terminal.
+    ///           - `3+` (reserved, e.g. relatedVersion): never auto-followed — non-followed terminal.
+    ///         Only `symlink` (2) is auto-followed; every other kind is a non-followed terminal that
+    ///         returns `Resolved` at the node holding it.
     ///
     ///         **Lens-scoping (ADR-0031).** At each node we read `getActiveRedirect(node, lens)`
     ///         for each `lens` in order and take the FIRST hit (lowest-index lens wins). A redirect
@@ -1100,7 +1113,7 @@ contract EFSFileView {
     ///                  `hops == 0`.
     /// @param lenses    Trust set in precedence order (ADR-0031). Must be non-empty and within the
     ///                  per-query cap. A redirect is followed only if authored by one of these.
-    /// @param maxHops   Hop cap. `0` ⇒ default `_REDIRECT_D_MAX` (8). Clamped to the hard ceiling
+    /// @param maxHops   Hop cap. `0` ⇒ default `_REDIRECT_D_MAX` (16). Clamped to the hard ceiling
     ///                  `_REDIRECT_HOP_CEILING` (32). Exceeding the effective cap ⇒ `DepthExceeded`.
     /// @param aliasResolver The AliasResolver (proxy) exposing `getActiveRedirect`. Passed as a
     ///                  parameter because this view's constructor is frozen-additive (we add no
@@ -1154,24 +1167,20 @@ contract EFSFileView {
                 return res;
             }
 
-            // Decide whether this kind is auto-followed (specs/09): symlink(2) and
-            // supersededBy(1) are; sameAs(0) and reserved(3+) are NOT — treat as terminal.
-            if (kind != _KIND_SYMLINK && kind != _KIND_SUPERSEDED_BY) {
+            // Decide whether this kind is auto-followed (specs/09; James ratified 2026-06-20):
+            // ONLY symlink(2) is a navigational shortcut and is followed. supersededBy(1), sameAs(0),
+            // and reserved(3+) are NON-FOLLOWED terminals — a version chain is a discoverable
+            // breadcrumb, not auto-navigation (path=newest / UID=exact). Return Resolved at this node.
+            if (kind != _KIND_SYMLINK) {
                 res.status = RedirectStatus.Resolved;
                 return res;
             }
 
             // Validate the target for the kind. A missing/revoked/wrong-type target is DANGLING:
             // stop and keep the last VALID node (`current`) as the result.
+            // symlink: target may be Anchor OR DATA.
             _UIDKind targetKind = _classifyUID(target, dataSchemaUID, anchorSchemaUID);
-            bool targetOk;
-            if (kind == _KIND_SUPERSEDED_BY) {
-                // DATA → DATA only.
-                targetOk = targetKind == _UIDKind.Data;
-            } else {
-                // symlink: target may be Anchor OR DATA.
-                targetOk = targetKind == _UIDKind.Data || targetKind == _UIDKind.Anchor;
-            }
+            bool targetOk = targetKind == _UIDKind.Data || targetKind == _UIDKind.Anchor;
             if (!targetOk) {
                 res.status = RedirectStatus.Dangling;
                 return res; // res.resolvedUID/isData still reflect the last valid node
@@ -1194,7 +1203,11 @@ contract EFSFileView {
     }
 
     /// @dev DRAFT kind discriminators mirrored from AliasResolver (specs/09; the taxonomy is
-    ///      resolver logic + client convention, ADR-0050, not part of any frozen UID).
+    ///      resolver logic + client convention, ADR-0050, not part of any frozen UID). Only
+    ///      `symlink` (2) is auto-followed by this follower (James ratified 2026-06-20);
+    ///      `supersededBy` (1) is documented here for the taxonomy but is a NON-followed terminal
+    ///      (the version chain is a discoverable breadcrumb, not auto-navigation — path=newest /
+    ///      UID=exact).
     uint16 private constant _KIND_SUPERSEDED_BY = 1;
     uint16 private constant _KIND_SYMLINK = 2;
 

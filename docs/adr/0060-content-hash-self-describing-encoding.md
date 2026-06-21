@@ -1,6 +1,6 @@
 # ADR-0060: `contentHash`/`size`/`cid` use a self-describing encoding (multibase-multihash + CID)
 
-**Status:** Proposed
+**Status:** Accepted (James ratified 2026-06-20)
 **Date:** 2026-06-20
 **Deciders:** James (convention pinned before durable seeding is human-gated)
 **Permanence-tier:** Durable (convention + reference vectors; no schema change)
@@ -39,13 +39,15 @@ The full normative spec — exact byte layout, the closed reserved-key registry,
 verification semantics, and conformance vectors — is **specs/10**. The decision:
 
 1. **`contentHash` is a multibase-prefixed [multihash].** The hash-function code
-   (`0x1b` keccak-256, `0x12` sha2-256) and digest length travel inside the
+   (`0x12` sha2-256, `0x1b` keccak-256) and digest length travel inside the
    string, so it is self-describing. **Canonical emit form is multibase `base16`
-   lowercase (prefix `f`)** — e.g. `f1b20<64 hex>` for keccak-256 — because it
+   lowercase (prefix `f`)** — e.g. `f1220<64 hex>` for sha2-256 — because it
    round-trips trivially to a Solidity `bytes32` via the existing non-reverting
    hex parser (ADR-0019), needing no on-chain base32 decoder. Readers SHOULD also
-   accept `base32` (prefix `b`). keccak-256 is the **default** for native
-   uploads (EVM-native); sha2-256 is available and is what a CID embeds.
+   accept `base32` (prefix `b`). **sha2-256 is the canonical/default function**
+   (James ratified 2026-06-20) so a file's EFS `contentHash` and its IPFS CID
+   **share the same digest** — one hash, not two. keccak-256 remains an optional
+   alternate the self-describing format CAN carry (EVM-native), not the default.
 
 2. **`cid` is a distinct reserved key** carrying a full IPFS CID
    (`CID.toString()`, CIDv1 `base32` `bafkrei…`). A CID is a superset of a
@@ -79,23 +81,27 @@ compares. Retraction is by **revoking the PIN binding, never the value**
 ## Consequences
 
 - **Enables.** Permanently verifiable claims — a 2050 verifier reads the
-  function out of the value. EVM and IPFS hash worlds coexist cleanly
-  (`contentHash` keccak default + `cid` sha2). Cheap Solidity verification (base16
-  → `bytes32` with the existing parser). Conformance vectors let an SDK author
-  and a Solidity verifier produce byte-identical values.
+  function out of the value. With **sha2-256 canonical**, a file's `contentHash`
+  and its IPFS `cid` carry **one shared digest**, not two — EVM and IPFS hash
+  worlds coexist with the common case needing only one hash; keccak-256 stays
+  available as the optional alternate the format can carry. Cheap Solidity
+  verification (base16 → `bytes32` with the existing parser). Conformance vectors
+  let an SDK author and a Solidity verifier produce byte-identical values.
 - **Costs / implies.** **SDK and any verifying contract MUST agree** on specs/10
   exactly — a deviation produces a distinct, permanent, non-deduping value.
   `specs/04` workflow prose must change from bare keccak hex to the canonical
-  `f1b20…` form (owned by another agent; specs/10 §8 is the target). Writers must
-  emit the single canonical encoding (base16 lowercase; no leading zeros on
-  `size`) or fragment the interning/dedup index.
-- **Gate.** This convention **must be pinned (Status: Accepted) before durable
-  data is seeded** under `contentHash`/`size`/`cid`. Until then it is Proposed
-  and blocks durable seeding, per `docs/FUTURE_WORK.md` and the FS-ops audit.
+  sha2-256 `f1220…` form (owned by another agent; specs/10 §8 is the target).
+  Writers must emit the single canonical encoding (base16 lowercase; no leading
+  zeros on `size`) or fragment the interning/dedup index.
+- **Gate.** This convention is **pinned (Status: Accepted, James ratified
+  2026-06-20) before durable data is seeded** under `contentHash`/`size`/`cid`,
+  per `docs/FUTURE_WORK.md` and the FS-ops audit — durable seeding is now
+  unblocked.
 - **Revisit.** Adding hash functions (blake3, sha3-256) is a future specs/10
   revision — additive (new multihash codes), not a break, since old values stay
   valid and self-describe. The single-`contentHash`-slot vs algorithm-suffixed-keys
-  question (specs/10 §5.1) is flagged for maintainer confirmation.
+  question (specs/10 §5.1) is **resolved**: single self-describing slot, sha2-256
+  canonical (James ratified 2026-06-20).
 
 ## Alternatives considered
 

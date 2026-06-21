@@ -1,6 +1,6 @@
 # ADR-0059: REDIRECT read-time resolution rules
 
-**Status:** Proposed
+**Status:** Accepted (James ratified 2026-06-20)
 **Date:** 2026-06-20
 **Deciders:** James (this pins behavior before durable seeding; human-gated)
 **Permanence-tier:** Durable (the resolution algorithm + conformance vectors — ADR-governed, NOT frozen in a UID; the on-chain follower is a redeployable view)
@@ -16,8 +16,8 @@ The production read path follows **nothing** today: `EFSRouter._findDataAtPath` 
 
 Adopt the read-time resolution rules in `specs/09-redirect-resolution.md` as the normative contract for the on-chain navigational follower and every conformant client/indexer:
 
-1. **Following by kind.** `symlink` (2) and `supersededBy` (1) are **navigational** (followed). `sameAs` (0) is **canonicalization-only** (never navigated). `kind ≥ 3` is never auto-followed.
-2. **Hop cap `D_MAX = 8`**, hard ceiling **32**. A "hop" is a followed redirect edge — independent of `MAX_ANCHOR_DEPTH = 1024` path descent. Exceeding `D_MAX` stops and returns status `DepthExceeded` surfacing the last node; never reverts.
+1. **Following by kind — `symlink`-only (James ratified 2026-06-20).** `symlink` (2) is the **only** auto-followed (navigational) kind. `supersededBy` (1) is **NOT auto-followed** — it is a non-followed terminal: a version chain is a discoverable on-chain breadcrumb (read by clients/indexers), not auto-navigation. "Latest version" is reached by the **path/placement PIN** (which the publisher re-points), not by chasing `supersededBy` — this is the **path = newest, UID = exact** model, and it preserves EFS's "no silent revision" property (a fixed UID/link never silently advances). `sameAs` (0) is **canonicalization-only** (never navigated). `kind ≥ 3` is never auto-followed. All non-`symlink` kinds return `Resolved` at the node holding them.
+2. **Hop cap `D_MAX = 16`** (James ratified 2026-06-20; was 8), hard ceiling **32**. A "hop" is a followed `symlink` edge (the only auto-followed kind) — independent of `MAX_ANCHOR_DEPTH = 1024` path descent. 16 covers any long real symlink chain with trivial gas cost; `supersededBy`/`sameAs` consume zero hops (non-followed terminals). Exceeding `D_MAX` stops and returns status `DepthExceeded` surfacing the last node; never reverts.
 3. **Cycle handling.** The on-chain follower keeps a **visited-set** within the walk and **stops** on revisit (`CycleStopped`) — catches direct and multi-hop cycles the resolver's `SelfLoop` guard cannot. Separately, `sameAs`-cluster **canonicalization** elects the **lowest UID in the SCC** (start-independent, deterministic) — a **client/indexer** dedup concern; the on-chain navigational follower does NOT run SCC analysis.
 4. **Lens precedence (ADR-0031).** A redirect is followable only if its attester is in the active lens set; foreign redirects are invisible. Competing edges resolve first-attester-wins by lens order, ties by lowest redirect UID. A symlink resolves within the same lens scope as the surrounding walk.
 5. **Dangling targets.** A target that is missing, revoked, or fails read-time kind-typing → status `Dangling` surfacing the last good node; never reverts.
@@ -29,13 +29,14 @@ Adopt the read-time resolution rules in `specs/09-redirect-resolution.md` as the
 - **The on-chain follower is a redeployable, stateless view = purely additive.** It adds no kernel storage and is baked into no schema UID, so it can be deployed (and re-deployed) without touching the frozen nine schemas. Its exact landing site (EFSFileView vs EFSRouter vs a dedicated follower) is not frozen here.
 - **Clients and off-chain indexers implement the same conformance vectors** (spec §9). On-chain navigation and off-chain dedup converge because both pin the same kind-following, lens-precedence, depth, cycle-stop, and lowest-UID-in-SCC rules.
 - **Durable REDIRECT seeding is gated on this ADR's sign-off.** This is the linchpin ADR-0050 and ADR-0055 both name.
-- **Read gas is bounded** to `O(D_MAX)` per resolution (≤ 8 hops × per-hop lens scan), independent of path depth.
-- **Cost:** the follower, the conformance-vector test suite, and client/indexer parity work are real, and must precede seeding. `supersededBy` default-follow and the follower's landing contract still want maintainer ratification (below).
+- **Read gas is bounded** to `O(D_MAX)` per resolution (≤ 16 hops × per-hop lens scan), independent of path depth.
+- **Cost:** the follower, the conformance-vector test suite, and client/indexer parity work are real, and must precede seeding. The two formerly-open items — `supersededBy` follow semantics and `D_MAX` — are now **ratified** (James, 2026-06-20): `supersededBy` is a non-followed terminal, `D_MAX = 16`. The follower's exact landing contract (EFSFileView vs EFSRouter vs a dedicated follower) remains a redeployable-view detail, not frozen here.
 
 ## Alternatives considered
 
 - **Kernel-side following (resolver walks on write) — REJECTED.** The resolver cannot graph-walk per write (multi-hop cycles span attesters and writes; ADR-0050). Following is inherently a read-time, lens-scoped concern; baking it into the immutable resolver would also freeze the follow rules forever.
-- **No hop cap (or path-depth cap reuse) — REJECTED.** An on-chain walk must be bounded; reusing `MAX_ANCHOR_DEPTH = 1024` over-budgets a redirect chain (real chains are short) and conflates two independent budgets. `D_MAX = 8` / ceiling 32 bounds gas while never truncating a legitimate chain.
+- **No hop cap (or path-depth cap reuse) — REJECTED.** An on-chain walk must be bounded; reusing `MAX_ANCHOR_DEPTH = 1024` over-budgets a redirect chain (real chains are short) and conflates two independent budgets. `D_MAX = 16` / ceiling 32 bounds gas while never truncating a legitimate chain.
+- **Auto-following `supersededBy` (a bare DATA UID read returns the latest version) — REJECTED** (James ratified 2026-06-20). It would make a fixed DATA UID silently resolve to a different, newer version, violating EFS's "no silent revision" property. "Latest" is reached the EFS way — by the path's placement PIN, which the publisher re-points — so the path is newest and a specific UID is exact. `supersededBy` stays a discoverable on-chain breadcrumb (clients/indexers may walk it deliberately); the navigational follower treats it as a non-followed terminal.
 - **Full Tarjan SCC on-chain for navigation — REJECTED.** SCC analysis is unbounded-in-general and unnecessary for *navigation*: a bounded walk with a visited-set stops cleanly on any cycle. Lowest-UID-in-SCC is needed only for `sameAs` **dedup**, which is a client/indexer concern off the per-read on-chain path.
 - **Encode whiteout as a REDIRECT sentinel kind now — REJECTED** (ADR-0055): a *follow* vocabulary used as a *stop* terminal, unenforceable by the frozen resolver, and a forever-fact once seeded. WHITEOUT gets its own schema additively; this spec only reserves the terminal slot.
 - **`sameAs` followed navigationally — REJECTED.** Equivalence has no direction or terminal; navigating it teleports reads arbitrarily. Keep equivalence out of the follow path (SKOS discipline, ADR-0050); resolve it by canonicalization instead.

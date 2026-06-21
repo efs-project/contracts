@@ -291,7 +291,10 @@ describe("EFSFileView.resolveRedirect — REDIRECT follower (DRAFT, specs/09)", 
     expect(res.hops).to.equal(2n);
   });
 
-  it("version chain → latest: DATA supersededBy DATA supersededBy DATA", async function () {
+  it("supersededBy is a NON-followed terminal: stops at source, Resolved, 0 hops", async function () {
+    // James ratified 2026-06-20 (specs/09 / ADR-0059): supersededBy is NOT auto-followed.
+    // "Latest" is reached by the path's placement PIN (path=newest / UID=exact); the version
+    // chain is a discoverable breadcrumb, not auto-navigation. The follower stops at v1.
     const v1 = await mintData();
     const v2 = await mintData();
     const v3 = await mintData();
@@ -299,10 +302,30 @@ describe("EFSFileView.resolveRedirect — REDIRECT follower (DRAFT, specs/09)", 
     await attestRedirect(v2, v3, KIND_SUPERSEDED_BY);
 
     const res = await fileView.resolveRedirect(v1, [await owner.getAddress()], 0, resolverAddr);
-    expect(res.resolvedUID).to.equal(v3);
+    expect(res.resolvedUID).to.equal(v1);
     expect(res.isData).to.equal(true);
     expect(res.status).to.equal(Status.Resolved);
-    expect(res.hops).to.equal(2n);
+    expect(res.hops).to.equal(0n);
+  });
+
+  it("supersededBy not followed even with a competing in-lens fork", async function () {
+    // Two trusted attesters each assert a different supersededBy on v1; neither is taken because
+    // supersededBy is a non-followed terminal regardless of lens precedence (specs/09 vector 9).
+    const v1 = await mintData();
+    const v2 = await mintData();
+    const v9 = await mintData();
+    await attestRedirect(v1, v2, KIND_SUPERSEDED_BY, owner);
+    await attestRedirect(v1, v9, KIND_SUPERSEDED_BY, alice);
+
+    const res = await fileView.resolveRedirect(
+      v1,
+      [await owner.getAddress(), await alice.getAddress()],
+      0,
+      resolverAddr,
+    );
+    expect(res.resolvedUID).to.equal(v1);
+    expect(res.status).to.equal(Status.Resolved);
+    expect(res.hops).to.equal(0n);
   });
 
   it("sameAs is NOT auto-navigated: terminal at source, Resolved, 0 hops", async function () {
@@ -337,6 +360,32 @@ describe("EFSFileView.resolveRedirect — REDIRECT follower (DRAFT, specs/09)", 
     expect(res.status).to.equal(Status.DepthExceeded);
     expect(res.hops).to.equal(2n);
     expect(res.resolvedUID).to.equal(nodes[2]); // settled after exactly 2 hops
+  });
+
+  it("default D_MAX is 16: a 17-symlink chain DepthExceeds at hop 16 with maxHops=0", async function () {
+    // James ratified 2026-06-20: default D_MAX = 16 (was 8). Build 18 anchors / 17 symlink hops
+    // (n0→…→n17) and resolve with maxHops=0 (⇒ default). After 16 hops the walk settles on n16,
+    // which still has a lens-visible symlink out ⇒ DepthExceeded surfacing n16.
+    const nodes: string[] = [];
+    for (let i = 0; i < 18; i++) nodes.push(await mintAnchor(`d${i}`));
+    for (let i = 0; i < 17; i++) await attestRedirect(nodes[i], nodes[i + 1], KIND_SYMLINK);
+
+    const res = await fileView.resolveRedirect(nodes[0], [await owner.getAddress()], 0, resolverAddr);
+    expect(res.status).to.equal(Status.DepthExceeded);
+    expect(res.hops).to.equal(16n);
+    expect(res.resolvedUID).to.equal(nodes[16]);
+  });
+
+  it("default D_MAX is 16: a 16-symlink chain resolves cleanly (boundary)", async function () {
+    // Exactly 16 hops (n0→…→n16) terminates at n16 with no edge out ⇒ Resolved, not DepthExceeded.
+    const nodes: string[] = [];
+    for (let i = 0; i < 17; i++) nodes.push(await mintAnchor(`e${i}`));
+    for (let i = 0; i < 16; i++) await attestRedirect(nodes[i], nodes[i + 1], KIND_SYMLINK);
+
+    const res = await fileView.resolveRedirect(nodes[0], [await owner.getAddress()], 0, resolverAddr);
+    expect(res.status).to.equal(Status.Resolved);
+    expect(res.hops).to.equal(16n);
+    expect(res.resolvedUID).to.equal(nodes[16]);
   });
 
   it("chain ending exactly at the cap reports Resolved (not DepthExceeded)", async function () {

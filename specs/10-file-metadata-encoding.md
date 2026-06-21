@@ -1,6 +1,6 @@
 # File-Metadata Encoding Convention (`contentHash`, `size`, `cid`)
 
-> **Status: Proposed** (pending maintainer sign-off — see ADR-0060). This spec
+> **Status: Accepted** (James ratified 2026-06-20 — see ADR-0060). This spec
 > defines the **canonical string format** for the reserved-key file-stat
 > PROPERTYs that ADR-0049 moved out of DATA. It changes **no schema**: PROPERTY
 > remains `string value` (frozen). It pins the *encoding* of that value, because
@@ -59,8 +59,8 @@ short, registry-free, IPFS/IPLD-native string.
 
 | Hash function | Multicodec name | Code (hex) | Digest length | Use |
 |---|---|---|---|---|
-| keccak-256 | `keccak-256` | `0x1b` | 32 (`0x20`) | EVM-native; default for native uploads |
-| sha2-256 | `sha2-256` | `0x12` | 32 (`0x20`) | IPFS/IPLD-native; the digest inside a CIDv1 |
+| sha2-256 | `sha2-256` | `0x12` | 32 (`0x20`) | **Canonical/default** for `contentHash` (James ratified 2026-06-20); IPFS/IPLD-native; the digest inside a CIDv1 — so a file's EFS `contentHash` and its IPFS CID share one digest |
+| keccak-256 | `keccak-256` | `0x1b` | 32 (`0x20`) | Optional alternate the self-describing format CAN carry (EVM-native); NOT the default |
 
 These two are the **only** registered functions for `contentHash` at genesis.
 Both are drawn from the canonical [multicodec table]; EFS does not invent codes.
@@ -102,16 +102,21 @@ CIDv1 default; a reader that already decodes multibase handles both for free.
 contentHash = <multibase-prefix> || baseEncode( <hashFnCode> || <digestLen> || <digestBytes> )
 ```
 
-For a keccak-256 digest `D` (32 bytes), the canonical value is:
+For a sha2-256 digest `D` (32 bytes) — the **canonical/default** function (James
+ratified 2026-06-20) — the canonical value is:
 
 ```
-"f" + lowerhex( 0x1b || 0x20 || D )
+"f" + lowerhex( 0x12 || 0x20 || D )
 ```
 
-i.e. the literal string `f1b20` followed by the 64 lowercase-hex chars of the
-digest. (`f` = base16, `1b` = keccak-256, `20` = length 32.) A reader strips
-`f`, confirms the `1b20` header, and the remaining 64 hex chars are the EVM
-`keccak256` digest as a `bytes32`.
+i.e. the literal string `f1220` followed by the 64 lowercase-hex chars of the
+digest. (`f` = base16, `12` = sha2-256, `20` = length 32.) A reader strips `f`,
+confirms the `1220` header, and the remaining 64 hex chars are the sha2-256
+digest as a `bytes32` — the **same digest embedded in the file's IPFS CID** (§4),
+so EFS's `contentHash` and its CID carry one hash, not two.
+
+For the optional keccak-256 alternate, the header is `1b20` instead (`f1b20…`,
+`1b` = keccak-256); a reader dispatches on the multihash code either way.
 
 ---
 
@@ -155,9 +160,13 @@ IPFS. That extra codec is exactly what a `contentHash` multihash omits.
 They are **distinct reserved keys with distinct jobs**, and both MAY coexist on
 one DATA:
 
-- **`contentHash`** — a *bare digest of the file bytes*, function-tagged. Use it
-  for content-identity / dedup-prevention lookups and for EVM-side verification
-  (keccak-256 round-trips to `bytes32`). It says nothing about IPFS framing.
+- **`contentHash`** — a *bare digest of the file bytes*, function-tagged
+  (canonical/default **sha2-256**, §2). Use it for content-identity /
+  dedup-prevention lookups and for verification (the base16 form round-trips to a
+  `bytes32` regardless of function). Because the default sha2-256 digest is the
+  *same digest a CIDv1 embeds*, a file's `contentHash` and its `cid` carry **one
+  hash, not two**. `contentHash` says nothing about IPFS framing (no IPLD codec) —
+  that is what `cid` adds.
 - **`cid`** — an *IPFS-addressable identifier*. Use it when the content is (or
   will be) retrievable from IPFS, so the value doubles as the key for an
   `ipfs://<cid>` MIRROR. A `cid` is the right key for the **zero-download remote
@@ -195,7 +204,7 @@ per-container conventions, exactly as ADR-0034 framed `name`.)
 |---|---|---|---|
 | `contentType` | DATA | IANA media type, e.g. `image/png`; fallback `application/octet-stream` | ADR-0005 |
 | `name` | any | display string, NFC-normalized; SHOULD be ≤ 64 chars (clients truncate, never reject) | ADR-0034 |
-| `contentHash` | DATA | multibase-`base16` multihash; `f1b20…` (keccak-256) or `f1220…` (sha2-256) — **§2** | ADR-0049 + **this spec** |
+| `contentHash` | DATA | multibase-`base16` multihash; canonical/default `f1220…` (sha2-256); optional alternate `f1b20…` (keccak-256) — **§2** | ADR-0049 + **this spec** |
 | `size` | DATA | base-10 ASCII byte count, no leading zeros — **§3** | ADR-0049 + **this spec** |
 | `cid` | DATA | IPFS CID string (CIDv1 default `base32`, `bafkrei…`) — **§4** | ADR-0049 + **this spec** |
 
@@ -204,24 +213,27 @@ Non-reserved but conventional keys (free for client use, NOT governed here):
 
 ### 5.1 Multiple coexisting hashes
 
-ADR-0049 permits multiple coexisting hash claims (keccak for EVM + sha2 for
-IPFS). They coexist **by encoding, not by minting extra keys**: because a
-`contentHash` value is self-describing, the *same* `contentHash` key anchor can
-hold either a keccak-256 (`f1b20…`) or a sha2-256 (`f1220…`) value, and a reader
-dispatches on the multihash code. The cardinality-1 PIN means one attester's
-`contentHash` slot holds **one** value at a time, so:
+ADR-0049 permits multiple coexisting hash claims. They coexist **by encoding, not
+by minting extra keys**: because a `contentHash` value is self-describing, the
+*same* `contentHash` key anchor can hold either a sha2-256 (`f1220…`, the
+canonical default) or a keccak-256 (`f1b20…`, the optional alternate) value, and a
+reader dispatches on the multihash code. The cardinality-1 PIN means one
+attester's `contentHash` slot holds **one** value at a time, so:
 
-- An attester wanting **both** a keccak and a sha2 claim uses **`contentHash`
-  for the keccak-256 (EVM-native default) and `cid` for the IPFS/sha2 side** —
-  the two distinct keys are exactly why `cid` is separate from `contentHash`.
+- With **sha2-256 canonical** (James ratified 2026-06-20), the common case needs
+  no dual hash at all: `contentHash` and `cid` share the *same* sha2-256 digest,
+  so one digest serves both EVM-side identity/dedup and the IPFS CID. An attester
+  wanting an additional **keccak** claim (e.g. for a contract that wants the
+  EVM-native function) carries it in the self-describing `contentHash` slot
+  (`f1b20…`) — or keeps sha2 in `contentHash` and the CID in `cid`.
 - This avoids needing a `contentHash:keccak` / `contentHash:sha2` keyspace
   explosion or a multi-value (TAG) binding. The self-describing prefix plus the
-  `contentHash`/`cid` split covers the EVM+IPFS dual-hash case cleanly.
+  `contentHash`/`cid` split covers the dual-hash case cleanly.
 
-> **Open question for the maintainer** (see ADR-0060 / SPICY): whether to keep
-> the single self-describing `contentHash` slot (default keccak, sha2 via `cid`)
-> or instead permit *several* algorithm-suffixed keys. This spec takes the
-> single-slot position; flagged for sign-off.
+> **Resolved (James ratified 2026-06-20, ADR-0060):** keep the **single
+> self-describing `contentHash` slot** with **sha2-256 canonical** (sharing the
+> CID digest); keccak-256 remains an optional alternate the format CAN carry. No
+> algorithm-suffixed keyspace.
 
 ---
 
@@ -260,59 +272,66 @@ dispatches on the multihash code. The cardinality-1 PIN means one attester's
 ## 7. Conformance vectors
 
 For each input byte string, an SDK author and a Solidity verifier MUST produce
-**byte-identical** values. Digests verified against `viem` (`keccak256`,
-`sha256`); CIDs verified against `multiformats` (`CID.create(1, raw, sha256)`).
-The `base16` `contentHash` is the canonical emit form; `base32` and `cid` columns
-are the accepted-on-read / IPFS-side forms.
+**byte-identical** values. Digests verified against Node `crypto`/`viem`
+(`sha256`, `keccak256`); CIDs verified against `multiformats`
+(`CID.create(1, raw, sha256)`). The **canonical/default** `contentHash` is the
+**sha2-256 `base16`** form (`f1220…`, James ratified 2026-06-20) — bolded below;
+it shares its digest with the `cid`. The keccak-256 rows are the optional alternate
+the format can carry; the `base32` and `cid` columns are accepted-on-read /
+IPFS-side forms.
 
 ### Vector 1 — empty content (`""`, 0 bytes)
 
 | Field | Canonical value |
 |---|---|
 | `size` | `0` |
-| keccak-256 digest | `0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470` |
-| **`contentHash`** (keccak, base16) | `f1b20c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470` |
-| `contentHash` (keccak, base32) | `bdmqmlusgagdpoiz4sj7h3mw4y4b4bziawzj4varhhn57vwaelwc2i4a` |
 | sha2-256 digest | `0xe3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` |
-| `contentHash` (sha2, base16) | `f1220e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` |
-| **`cid`** (CIDv1 raw + sha2-256) | `bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku` |
+| **`contentHash`** (sha2, base16 — canonical/default) | `f1220e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` |
+| **`cid`** (CIDv1 raw + sha2-256, shares the digest) | `bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku` |
+| keccak-256 digest (alternate) | `0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470` |
+| `contentHash` (keccak, base16 — alternate) | `f1b20c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470` |
+| `contentHash` (keccak, base32) | `bdmqmlusgagdpoiz4sj7h3mw4y4b4bziawzj4varhhn57vwaelwc2i4a` |
 
 ### Vector 2 — `abc` (3 bytes: `0x61 0x62 0x63`)
 
 | Field | Canonical value |
 |---|---|
 | `size` | `3` |
-| keccak-256 digest | `0x4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45` |
-| **`contentHash`** (keccak, base16) | `f1b204e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45` |
-| `contentHash` (keccak, base32) | `bdmqe4a3fplvelkkpy7khxkbgzdlgpqgr43rtuzfag3wej5mpuewwyri` |
 | sha2-256 digest | `0xba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad` |
-| `contentHash` (sha2, base16) | `f1220ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad` |
-| **`cid`** (CIDv1 raw + sha2-256) | `bafkreif2pall7dybz7vecqka3zo24irdwabwdi4wc55jznaq75q7eaavvu` |
+| **`contentHash`** (sha2, base16 — canonical/default) | `f1220ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad` |
+| **`cid`** (CIDv1 raw + sha2-256, shares the digest) | `bafkreif2pall7dybz7vecqka3zo24irdwabwdi4wc55jznaq75q7eaavvu` |
+| keccak-256 digest (alternate) | `0x4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45` |
+| `contentHash` (keccak, base16 — alternate) | `f1b204e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45` |
+| `contentHash` (keccak, base32) | `bdmqe4a3fplvelkkpy7khxkbgzdlgpqgr43rtuzfag3wej5mpuewwyri` |
 
 ### Vector 3 — `hello\n` (6 bytes: `hello` + LF `0x0a`)
 
 | Field | Canonical value |
 |---|---|
 | `size` | `6` |
-| keccak-256 digest | `0x1d63660020a5b5062fb35d9f82afa81581442281c43343763ab1d340e9861bae` |
-| **`contentHash`** (keccak, base16) | `f1b201d63660020a5b5062fb35d9f82afa81581442281c43343763ab1d340e9861bae` |
-| `contentHash` (keccak, base32) | `bdmqb2y3gaaqklnigf6zv3h4cv6ublakeeka4im2doy5ldu2a5gdbxlq` |
 | sha2-256 digest | `0x5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03` |
-| `contentHash` (sha2, base16) | `f12205891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03` |
-| **`cid`** (CIDv1 raw + sha2-256) | `bafkreicysg23kiwv34eg2d7qweipxwosdo2py4ldv42nbauguluen5v6am` |
+| **`contentHash`** (sha2, base16 — canonical/default) | `f12205891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03` |
+| **`cid`** (CIDv1 raw + sha2-256, shares the digest) | `bafkreicysg23kiwv34eg2d7qweipxwosdo2py4ldv42nbauguluen5v6am` |
+| keccak-256 digest (alternate) | `0x1d63660020a5b5062fb35d9f82afa81581442281c43343763ab1d340e9861bae` |
+| `contentHash` (keccak, base16 — alternate) | `f1b201d63660020a5b5062fb35d9f82afa81581442281c43343763ab1d340e9861bae` |
+| `contentHash` (keccak, base32) | `bdmqb2y3gaaqklnigf6zv3h4cv6ublakeeka4im2doy5ldu2a5gdbxlq` |
 
 ### 7.1 Reconstruction recipe (for an implementer)
 
-To regenerate `contentHash` from a digest `D`:
+To regenerate the canonical `contentHash` from the file bytes:
 
-1. Pick the function code: keccak-256 → `0x1b`, sha2-256 → `0x12`.
-2. Prepend the multihash header bytes `<code> 0x20` to the 32 digest bytes.
+1. Compute the **sha2-256** digest `D` of the bytes (canonical/default function).
+2. Prepend the multihash header bytes `0x12 0x20` (sha2-256, length 32) to `D`.
 3. Lowercase-hex-encode the 34-byte result.
-4. Prepend the multibase prefix `f`.
+4. Prepend the multibase prefix `f`. → `f1220<64-hex sha256>`.
+
+(For the optional keccak-256 alternate, use function code `0x1b` in step 2 →
+`f1b20…`. A reader dispatches on the multihash code regardless.)
 
 To regenerate `cid` (CIDv1, raw codec, sha2-256): `CID.create(1, 0x55,
 multihash(0x12, sha256(bytes))).toString()`. The leading `bafkrei` is the
-CIDv1/base32/raw/sha2-256 signature shared by every vector above.
+CIDv1/base32/raw/sha2-256 signature shared by every vector above. Note the `cid`
+and the canonical `contentHash` embed the **same** sha2-256 digest `D`.
 
 ---
 
@@ -320,11 +339,12 @@ CIDv1/base32/raw/sha2-256 signature shared by every vector above.
 
 `specs/04` (upload workflow) currently says "compute `keccak256(bytes)` for
 `contentHash`" and "byte count as decimal string" for `size`. The `size` prose
-is already correct (§3). The `contentHash` prose MUST be updated to emit the
-canonical multibase-multihash form (`f1b20…`) rather than a bare `0x…` hex,
-**before any durable data is seeded** — this is the gate ADR-0060 records. (That
-edit is owned by another agent per the worktree split; this spec is the
-normative target it points at.)
+is already correct (§3). The `contentHash` prose MUST be updated to compute the
+**sha2-256** digest and emit the canonical multibase-multihash form (`f1220…`,
+sha2-256 — James ratified 2026-06-20) rather than a bare keccak `0x…` hex, so the
+`contentHash` shares the IPFS CID digest. This must land **before any durable data
+is seeded** — the gate ADR-0060 records. (That edit is owned by another agent per
+the worktree split; this spec is the normative target it points at.)
 
 [multibase]: https://github.com/multiformats/multibase
 [multihash]: https://github.com/multiformats/multihash
