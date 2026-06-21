@@ -291,12 +291,19 @@ async function main() {
 
   /**
    * Deploy multi-chunk on-chain content: split `bytes` into `chunkSize`-byte
-   * SSTORE2 chunks, wrap their addresses in a MockChunkedFile (chunkCount /
-   * chunkAddress, the EIP-7617 interface the router probes), and return a
+   * SSTORE2 chunks, wrap their addresses in an EFSBytesStore (chunkCount /
+   * chunkAddress, the EIP-7617 interface the router probes; plus ERC-5219
+   * request/resolveMode for generic clients — ADR-0057), and return a
    * `web3://<chunkManager>` URI plus the chunk byte slices for byte-compare.
    */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const deployChunkedOnchainURI = async (signer: any, bytes: Uint8Array, chunkSize: number) => {
+  const deployChunkedOnchainURI = async (
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    signer: any,
+    bytes: Uint8Array,
+    chunkSize: number,
+    contentType = "application/octet-stream",
+  ) => {
     const chunkSlices: Uint8Array[] = [];
     for (let off = 0; off < bytes.length; off += chunkSize) {
       chunkSlices.push(bytes.slice(off, off + chunkSize));
@@ -305,8 +312,8 @@ async function main() {
     for (const slice of chunkSlices) {
       chunkAddrs.push(await deploySSTORE2Chunk(signer, slice));
     }
-    const MockChunkedFile = await ethers.getContractFactory("MockChunkedFile", signer);
-    const chunked = await MockChunkedFile.deploy(chunkAddrs);
+    const EFSBytesStore = await ethers.getContractFactory("EFSBytesStore", signer);
+    const chunked = await EFSBytesStore.deploy(chunkAddrs, contentType);
     await chunked.waitForDeployment();
     const chunkedAddr = await chunked.getAddress();
     return { uri: `web3://${chunkedAddr}`, chunkSlices, chunkManager: chunkedAddr };

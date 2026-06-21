@@ -91,6 +91,10 @@ What else we looked at and why it lost.
 - [ADR-0018 — Single `message/external-body` Content-Type header](./0018-single-content-type-header.md)
 - [ADR-0019 — Non-reverting hex parser](./0019-non-reverting-hex-parser.md)
 - [ADR-0020 — `MAX_PAGES = 10` mirror scan cap](./0020-max-pages-mirror-scan-cap.md)
+- [ADR-0057 — Production ERC-5219 on-chain byte store (EFSBytesStore)](./0057-production-erc5219-bytes-store.md)
+- [ADR-0058 — Harden the EFSRouter web3:// serving path (pagination round-trip, parity, sanitization)](./0058-router-web3-serving-hardening.md)
+- [ADR-0059 — web3:// reads depend on extcodecopy; EOF/EVM-evolution survival posture](./0059-extcodecopy-eof-survival-posture.md)
+- [ADR-0060 — Multi-chain web3:// addressing: per-chain ENS subdomains + movable default](./0060-multichain-web3-ens-addressing.md) *(Proposed)*
 - [ADR-0063 — REDIRECT read-time resolution rules](./0063-redirect-read-time-resolution.md) *(Accepted — symlink-only following (supersededBy is a non-followed terminal; path=newest/UID=exact), D_MAX=16/ceiling 32, cycle-stop, lowest-UID-in-SCC canonicalization, lens precedence, WHITEOUT negative-terminal reservation + seeding ban; gates durable REDIRECT seeding)*
 
 ### Security Limits
@@ -108,7 +112,7 @@ What else we looked at and why it lost.
 - [ADR-0029 — MIT license for EFS contracts (web client license deferred)](./0029-dual-licensing-mit-agpl.md)
 - [ADR-0037 — Pinned Sepolia fork for cross-environment determinism](./0037-pinned-sepolia-fork.md)
 - [ADR-0048 — Sepolia freeze set + proxy-ready resolvers (burn to immutable)](./0048-sepolia-freeze-set-and-proxy-ready-resolvers.md)
-- [ADR-0057 — deployedContracts.ts is multi-chain; generation merges per-chain](./0057-multichain-deployedcontracts-merge.md)
+- [ADR-0061 — deployedContracts.ts is multi-chain; generation merges per-chain](./0061-multichain-deployedcontracts-merge.md)
 
 ### Architectural Foundations
 - [ADR-0030 — Mainnet permanence (no upgradeability)](./0030-mainnet-permanence.md)

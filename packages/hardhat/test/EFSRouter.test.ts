@@ -681,8 +681,8 @@ describe("EFSRouter Web3 Capabilities", function () {
       await setCode(c1, "0x00" + d1.toString("hex"));
       await setCode(c2, "0x00" + d2.toString("hex"));
 
-      const MockChunkedFile = await ethers.getContractFactory("MockChunkedFile");
-      const chunkedFile = await MockChunkedFile.deploy([c0, c1, c2]);
+      const EFSBytesStore = await ethers.getContractFactory("EFSBytesStore");
+      const chunkedFile = await EFSBytesStore.deploy([c0, c1, c2], "application/octet-stream");
       await chunkedFile.waitForDeployment();
       const mgr = await chunkedFile.getAddress();
 
@@ -692,21 +692,24 @@ describe("EFSRouter Web3 Capabilities", function () {
       await addMirror(dataUID, onchainTransportUID, `web3://${mgr}`);
       await pinAtPath(dataUID, fileAnchorUID);
 
-      // Chunk 0: should have web3-next-chunk=?chunk=1
+      // Chunk 0: web3-next-chunk must be a leading-slash URL that re-emits the
+      // path + the lenses param and bumps chunk → 1 (ADR-0058). A bare "?chunk=1"
+      // would throw in web3protocol-js; dropping lenses would re-resolve chunk 1
+      // under a different attester.
       const [s0, b0, h0] = await router.request(["ideas", "chunked.bin"], ownerParams({ key: "chunk", value: "0" }));
       expect(s0).to.equal(200);
       expect(Buffer.from(ethers.getBytes(b0)).toString()).to.equal(d0.toString());
       const next0 = h0.find((h: any) => h.key === "web3-next-chunk");
       expect(next0, "Chunk 0 must have web3-next-chunk header").to.not.be.undefined; // eslint-disable-line @typescript-eslint/no-unused-expressions
-      expect(next0.value).to.equal("?chunk=1");
+      expect(next0.value).to.equal(`/ideas/chunked.bin?lenses=${ownerAddr}&chunk=1`);
 
-      // Chunk 1: should have web3-next-chunk=?chunk=2
+      // Chunk 1: same path + lenses preserved, chunk bumped → 2
       const [s1, b1, h1] = await router.request(["ideas", "chunked.bin"], ownerParams({ key: "chunk", value: "1" }));
       expect(s1).to.equal(200);
       expect(Buffer.from(ethers.getBytes(b1)).toString()).to.equal(d1.toString());
       const next1 = h1.find((h: any) => h.key === "web3-next-chunk");
       expect(next1, "Chunk 1 must have web3-next-chunk header").to.not.be.undefined; // eslint-disable-line @typescript-eslint/no-unused-expressions
-      expect(next1.value).to.equal("?chunk=2");
+      expect(next1.value).to.equal(`/ideas/chunked.bin?lenses=${ownerAddr}&chunk=2`);
 
       // Chunk 2 (last): must NOT have web3-next-chunk
       const [s2, b2, h2] = await router.request(["ideas", "chunked.bin"], ownerParams({ key: "chunk", value: "2" }));
@@ -716,12 +719,88 @@ describe("EFSRouter Web3 Capabilities", function () {
       expect(next2, "Last chunk must NOT have web3-next-chunk header").to.be.undefined; // eslint-disable-line @typescript-eslint/no-unused-expressions
     });
 
+    it("Should percent-encode the next-chunk URL so a multi-address lenses list round-trips (ADR-0058)", async function () {
+      const a0 = "0x0000000000000000000000000000000000000050";
+      const a1 = "0x0000000000000000000000000000000000000051";
+      await setCode(a0, "0x00" + Buffer.from("AA").toString("hex"));
+      await setCode(a1, "0x00" + Buffer.from("BB").toString("hex"));
+      const EFSBytesStore = await ethers.getContractFactory("EFSBytesStore");
+      const store = await EFSBytesStore.deploy([a0, a1], "application/octet-stream");
+      await store.waitForDeployment();
+      const mgr = await store.getAddress();
+
+      const fileAnchorUID = await createFileAnchor(ideasUID, "comma.bin");
+      const dataUID = await createData("comma-content");
+      await addProperty(dataUID, "contentType", "application/octet-stream");
+      await addMirror(dataUID, onchainTransportUID, `web3://${mgr}`);
+      await pinAtPath(dataUID, fileAnchorUID);
+
+      // A 2-address lenses list: owner first (owns the pin) so resolution succeeds.
+      const second = "0x1111111111111111111111111111111111111111";
+      const [s0, , h0] = await router.request(
+        ["ideas", "comma.bin"],
+        [
+          { key: "lenses", value: `${ownerAddr},${second}` },
+          { key: "chunk", value: "0" },
+        ],
+      );
+      expect(s0).to.equal(200);
+      const next0 = h0.find((h: any) => h.key === "web3-next-chunk"); // eslint-disable-line @typescript-eslint/no-explicit-any
+      // The comma in the lenses VALUE must be percent-encoded (%2C) so the client's
+      // URLSearchParams decodes it back to one `lenses` param of "addr,addr".
+      expect(next0.value).to.equal(`/ideas/comma.bin?lenses=${ownerAddr}%2C${second}&chunk=1`);
+    });
+
+    it("Should serve an empty on-chain store (0 chunks) as 200 empty, not 404 (ADR-0058 parity with EFSBytesStore)", async function () {
+      const EFSBytesStore = await ethers.getContractFactory("EFSBytesStore");
+      const emptyStore = await EFSBytesStore.deploy([], "text/plain");
+      await emptyStore.waitForDeployment();
+      const mgr = await emptyStore.getAddress();
+
+      const fileAnchorUID = await createFileAnchor(ideasUID, "empty.txt");
+      const dataUID = await createData("empty-file-content");
+      await addProperty(dataUID, "contentType", "text/plain");
+      await addMirror(dataUID, onchainTransportUID, `web3://${mgr}`);
+      await pinAtPath(dataUID, fileAnchorUID);
+
+      const [status, body, headers] = await router.request(["ideas", "empty.txt"], ownerParams());
+      expect(status).to.equal(200);
+      expect(ethers.getBytes(body).length).to.equal(0);
+      const ct = headers.find((h: any) => h.key === "Content-Type"); // eslint-disable-line @typescript-eslint/no-explicit-any
+      expect(ct.value).to.equal("text/plain");
+      const next = headers.find((h: any) => h.key === "web3-next-chunk"); // eslint-disable-line @typescript-eslint/no-explicit-any
+      expect(next, "empty store has no next-chunk").to.be.undefined; // eslint-disable-line @typescript-eslint/no-unused-expressions
+    });
+
+    it("Should sanitize an attacker-controlled contentType in the web3:// Content-Type header (ADR-0024/0058)", async function () {
+      const c0 = "0x0000000000000000000000000000000000000046";
+      await setCode(c0, "0x00" + Buffer.from("hi").toString("hex"));
+      const EFSBytesStore = await ethers.getContractFactory("EFSBytesStore");
+      const store = await EFSBytesStore.deploy([c0], "application/octet-stream");
+      await store.waitForDeployment();
+      const mgr = await store.getAddress();
+
+      const fileAnchorUID = await createFileAnchor(ideasUID, "evil.bin");
+      const dataUID = await createData("evil-content");
+      // Attacker-controlled contentType PROPERTY: CRLF header-injection + a quote.
+      await addProperty(dataUID, "contentType", 'text/html"\r\nX-Injected: yes');
+      await addMirror(dataUID, onchainTransportUID, `web3://${mgr}`);
+      await pinAtPath(dataUID, fileAnchorUID);
+
+      const [status, , headers] = await router.request(["ideas", "evil.bin"], ownerParams());
+      expect(status).to.equal(200);
+      const ct = headers.find((h: any) => h.key === "Content-Type"); // eslint-disable-line @typescript-eslint/no-explicit-any
+      // CR, LF, and the quote must be stripped so no second header can be injected.
+      expect(ct.value).to.not.match(/[\r\n"\\]/);
+      expect(ct.value).to.equal("text/htmlX-Injected: yes");
+    });
+
     it("Should return 404 for out-of-bounds chunk index", async function () {
       const c0 = "0x0000000000000000000000000000000000000040";
       await setCode(c0, "0x00" + Buffer.from("data").toString("hex"));
 
-      const MockChunkedFile = await ethers.getContractFactory("MockChunkedFile");
-      const chunkedFile = await MockChunkedFile.deploy([c0]);
+      const EFSBytesStore = await ethers.getContractFactory("EFSBytesStore");
+      const chunkedFile = await EFSBytesStore.deploy([c0], "application/octet-stream");
       await chunkedFile.waitForDeployment();
       const mgr = await chunkedFile.getAddress();
 
@@ -752,8 +831,8 @@ describe("EFSRouter Web3 Capabilities", function () {
         await setCode(addrs[i], "0x00" + chunks[i].toString("hex"));
       }
 
-      const MockChunkedFile = await ethers.getContractFactory("MockChunkedFile");
-      const chunkedFile = await MockChunkedFile.deploy(addrs);
+      const EFSBytesStore = await ethers.getContractFactory("EFSBytesStore");
+      const chunkedFile = await EFSBytesStore.deploy(addrs, "application/octet-stream");
       await chunkedFile.waitForDeployment();
       const mgr = await chunkedFile.getAddress();
 
@@ -778,16 +857,16 @@ describe("EFSRouter Web3 Capabilities", function () {
       expect(reassembled.toString("hex")).to.equal(originalFull.toString("hex"));
     });
 
-    it("Should detect MockChunkedFile via staticcall to chunkCount() with correct selector", async function () {
+    it("Should detect EFSBytesStore via staticcall to chunkCount() with correct selector", async function () {
       const chunk0 = "0x0000000000000000000000000000000000000020";
       await setCode(chunk0, "0x00" + Buffer.from("hello").toString("hex"));
 
-      const MockChunkedFile = await ethers.getContractFactory("MockChunkedFile");
-      const chunkedFile = await MockChunkedFile.deploy([chunk0]);
+      const EFSBytesStore = await ethers.getContractFactory("EFSBytesStore");
+      const chunkedFile = await EFSBytesStore.deploy([chunk0], "application/octet-stream");
       await chunkedFile.waitForDeployment();
 
       expect(await chunkedFile.chunkCount()).to.equal(1n);
-      const iface = MockChunkedFile.interface;
+      const iface = EFSBytesStore.interface;
       const selector = iface.getFunction("chunkCount")!.selector;
       expect(selector).to.equal("0xf91f0937");
     });
@@ -1274,22 +1353,83 @@ describe("EFSRouter Web3 Capabilities", function () {
       expect(statusAfter).to.equal(404);
     });
 
-    it("Should parse web3:// URI with :chainId suffix (suffix ignored, address extracted)", async function () {
-      // _parseContractFromWeb3URI reads exactly 40 hex chars after '0x' and stops.
-      // A :chainId suffix does not interfere with address parsing.
+    it("Should serve a web3:// mirror on-chain when its :chainId suffix matches block.chainid (ADR-0058)", async function () {
+      const chainId = (await ethers.provider.getNetwork()).chainId;
       const targetAddress = ethers.getAddress("0x00000000000000000000000000000000000000E2");
       await setCode(targetAddress, "0x00" + Buffer.from("chainid suffix content").toString("hex"));
 
-      const fileAnchorUID = await createFileAnchor(ideasUID, "chainid_suffix.txt");
-      const dataUID = await createData("chainid suffix content");
+      const fileAnchorUID = await createFileAnchor(ideasUID, "chainid_match.txt");
+      const dataUID = await createData("chainid-match-content");
       await addProperty(dataUID, "contentType", "text/plain");
-      // URI with :1 chain ID suffix appended
-      await addMirror(dataUID, onchainTransportUID, `web3://${targetAddress}:1`);
+      await addMirror(dataUID, onchainTransportUID, `web3://${targetAddress}:${chainId}`);
       await pinAtPath(dataUID, fileAnchorUID);
 
-      const [statusCode, body] = await router.request(["ideas", "chainid_suffix.txt"], ownerParams());
+      const [statusCode, body] = await router.request(["ideas", "chainid_match.txt"], ownerParams());
       expect(statusCode).to.equal(200);
       expect(Buffer.from(ethers.getBytes(body)).toString()).to.equal("chainid suffix content");
+    });
+
+    it("Should redirect a cross-chain web3:// mirror (:chainId != block.chainid) instead of serving wrong local bytes (ADR-0058)", async function () {
+      // A mirror naming a DIFFERENT chain cannot be extcodecopy'd here; the router
+      // must delegate to the client via message/external-body, NOT read whatever
+      // happens to sit at that address on THIS chain.
+      const targetAddress = ethers.getAddress("0x00000000000000000000000000000000000000E3");
+      await setCode(targetAddress, "0x00" + Buffer.from("LOCAL_bytes_must_not_serve").toString("hex"));
+
+      const fileAnchorUID = await createFileAnchor(ideasUID, "chainid_cross.txt");
+      const dataUID = await createData("chainid-cross-content");
+      await addProperty(dataUID, "contentType", "text/plain");
+      const crossUri = `web3://${targetAddress}:1`; // chain 1 (mainnet) != hardhat 31337
+      await addMirror(dataUID, onchainTransportUID, crossUri);
+      await pinAtPath(dataUID, fileAnchorUID);
+
+      const [statusCode, body, headers] = await router.request(["ideas", "chainid_cross.txt"], ownerParams());
+      expect(statusCode).to.equal(200);
+      expect(ethers.getBytes(body).length).to.equal(0); // redirect → empty body
+      const ct = headers.find((h: any) => h.key === "Content-Type"); // eslint-disable-line @typescript-eslint/no-explicit-any
+      expect(ct.value).to.contain("message/external-body");
+      expect(ct.value).to.contain(`URL="${crossUri}"`);
+    });
+
+    it("Should redirect (not revert) on an absurdly long :chainId suffix — overflow guard (ADR-0058)", async function () {
+      // The chainId parser caps at type(uint64).max AFTER each digit, so the value
+      // entering each multiply is bounded and can never overflow uint256. A 100-digit
+      // suffix must degrade to a redirect (not this chain), never revert request().
+      const targetAddress = ethers.getAddress("0x00000000000000000000000000000000000000E4");
+      await setCode(targetAddress, "0x00" + Buffer.from("unused").toString("hex"));
+
+      const fileAnchorUID = await createFileAnchor(ideasUID, "chainid_overflow.txt");
+      const dataUID = await createData("chainid-overflow-content");
+      await addProperty(dataUID, "contentType", "text/plain");
+      const overflowUri = `web3://${targetAddress}:${"9".repeat(100)}`; // >> uint64.max, >> uint256
+      await addMirror(dataUID, onchainTransportUID, overflowUri);
+      await pinAtPath(dataUID, fileAnchorUID);
+
+      const [statusCode, body, headers] = await router.request(["ideas", "chainid_overflow.txt"], ownerParams());
+      expect(statusCode).to.equal(200); // did NOT revert
+      expect(ethers.getBytes(body).length).to.equal(0); // redirect, not local extcodecopy
+      const ct = headers.find((h: any) => h.key === "Content-Type"); // eslint-disable-line @typescript-eslint/no-explicit-any
+      expect(ct.value).to.contain("message/external-body");
+    });
+
+    it("Should fall through a dead (no-code) same-chain web3:// mirror to a good ipfs:// mirror, not 500 (ADR-0058)", async function () {
+      // Same attester has a web3:// mirror whose address has NO code (never deployed
+      // / wrong chain) AND a good ipfs:// mirror. The router must skip the dead
+      // top-priority mirror and serve the ipfs:// redirect (multi-mirror redundancy),
+      // not 500 "Storage contract has no code".
+      const deadAddr = ethers.getAddress("0x000000000000000000000000000000000000dEaD"); // no code
+      const fileAnchorUID = await createFileAnchor(ideasUID, "redundant.bin");
+      const dataUID = await createData("redundant-content");
+      await addProperty(dataUID, "contentType", "application/octet-stream");
+      await addMirror(dataUID, onchainTransportUID, `web3://${deadAddr}`); // priority 0, but dead
+      await addMirror(dataUID, ipfsTransportUID, "ipfs://QmFallbackGood"); // priority 2, good
+      await pinAtPath(dataUID, fileAnchorUID);
+
+      const [status, , headers] = await router.request(["ideas", "redundant.bin"], ownerParams());
+      expect(status).to.equal(200);
+      const ct = headers.find((h: any) => h.key === "Content-Type"); // eslint-disable-line @typescript-eslint/no-explicit-any
+      expect(ct.value).to.contain("message/external-body");
+      expect(ct.value).to.contain('URL="ipfs://QmFallbackGood"');
     });
 
     it("Should pick the DATA with the highest attestation timestamp when multiple are active", async function () {
