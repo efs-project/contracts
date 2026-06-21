@@ -299,6 +299,14 @@ contract WhiteoutResolver is EFSUpgradeableResolver {
         if (a.data.length != 0) revert BadPayload();
         if (a.refUID == bytes32(0)) revert ZeroRef();
 
+        // AGENT-NOTE (ADR-0055): onRevoke intentionally does NOT re-validate the refUID's typing
+        // (SourceNotAnchor) or re-derive/re-check its parent against the one used at attest time. It is
+        // safe to trust `getParent(a.refUID)` here because anchors are NON-revocable and their parent
+        // (`refUID` at mint) is IMMUTABLE — so `getParent(a.refUID)` returns the exact same parent it
+        // returned in onAttest, and the (parent, attester, child) slot key is stable across the
+        // attest→revoke lifetime. Even in the impossible event of a mismatch, the `== a.uid` guard
+        // below makes it a harmless no-op: a key that never held this UID simply isn't cleared. Skipping
+        // the re-typing keeps revoke (un-hide) cheap and unconditional, matching revocable=true intent.
         bytes32 parent = $.indexer.getParent(a.refUID);
         bytes32 child = a.refUID;
         address attester = a.attester;

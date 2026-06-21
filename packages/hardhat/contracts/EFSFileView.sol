@@ -80,6 +80,7 @@ interface IEFSIndexer {
         bool reverseOrder,
         bool showRevoked
     ) external view returns (bytes32[] memory results, uint256 nextCursor);
+    function getParent(bytes32 anchorUID) external view returns (bytes32);
     function getChildrenCount(bytes32 anchorUID) external view returns (uint256);
     function getChildCountBySchema(bytes32 parentAnchor, bytes32 schema) external view returns (uint256);
     function getReferencingAttestationCount(bytes32 targetUID, bytes32 schemaUID) external view returns (uint256);
@@ -814,6 +815,15 @@ contract EFSFileView {
     ///
     ///      `whiteoutResolver == address(0)` (disabled) short-circuits to false before any read — a
     ///      pre-WHITEOUT view redeploy keeps its exact prior listing behavior.
+    // AGENT-NOTE (ADR-0055, v1 scope): the same-lens positive-OVERRIDE here fires ONLY for a
+    // DATA-schema placement PIN — i.e. files. A lens that whites out a FOLDER and then re-asserts that
+    // folder's visibility via a visibility TAG (definition = anchorSchema, ADR-0038) will NOT get the
+    // override in v1: this predicate checks `getActivePinTarget(child, lens, dataSchemaUID)` (PIN-only,
+    // Shape A), and folder visibility is TAG-based (Shape B), so a re-asserting visibility TAG is not
+    // seen as a positive terminal and the lens's own whiteout still drops the folder. This is EXPECTED:
+    // ADR-0055 v1 scopes whiteout to per-name file/anchor suppression and DEFERS the opaque-directory /
+    // folder-whiteout variant. When the opaque variant ships, the folder-re-assert override needs its
+    // own conformance vector (visibility-TAG-beats-own-whiteout) added to the suite.
     function _isItemWhitedOut(
         bytes32 parentAnchor,
         bytes32 childAnchor,
@@ -909,6 +919,27 @@ contract EFSFileView {
         require(attesters.length > 0, "Attesters list cannot be empty");
         require(attesters.length <= MAX_ATTESTERS_PER_QUERY, "Too many attesters");
         require(maxItems > 0, "maxItems must be > 0");
+
+        // Cross-lens negative mask (ADR-0055) — view/router consistency. This single-anchor file
+        // reader resolves DATA AT `anchorUID` across the lens stack, the SAME shape as the router's
+        // `_findDataAtPath` negative terminal (the resolved anchor here plays the router's
+        // `targetAnchor` role). Apply the identical terminal so a whited-out anchor never serves DATA
+        // through the view that the router would 404: precedence-ordered scan, positive placement PIN
+        // FIRST then whiteout (same-lens positive-before-whiteout override, higher-lens transparency).
+        // `_isItemWhitedOut` re-derives the winner per-item and short-circuits when the resolver is
+        // disabled (`address(0)`), so a pre-WHITEOUT view keeps its exact prior behavior. The whiteout
+        // key is (parent, lens, anchor) with parent = `indexer.getParent(anchorUID)`, exactly as the
+        // router computes it; the positive-PIN override bucket is `schema` (the slot being read). The
+        // `getParent` SLOAD is guarded on the resolver being wired — disabled views read nothing extra,
+        // mirroring the router's `_findDataAtPath` guard.
+        if (address(whiteoutResolver) != address(0)) {
+            bytes32 parentAnchor = indexer.getParent(anchorUID);
+            if (_isItemWhitedOut(parentAnchor, anchorUID, attesters, schema)) {
+                page.items = new FileSystemItem[](0);
+                page.nextCursor = "";
+                return page;
+            }
+        }
 
         // Decode cursor — empty OR malformed = fresh start at attesterIdx=0.
         // Same defensive pattern as `getDirectoryPageBySchemaAndAddressList`: length-check

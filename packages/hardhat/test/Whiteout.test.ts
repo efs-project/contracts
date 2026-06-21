@@ -143,6 +143,27 @@ describe("Whiteout (WHITEOUT cross-lens negative mask, ADR-0055)", function () {
     return getUID(await tx.wait());
   };
 
+  /** Create a TAG (cardinality N). definition=def, refUID=target, with weight (default 1). */
+  const createTag = async (
+    definition: string,
+    target: string,
+    signer: Signer = owner,
+    weight: bigint = 1n,
+  ): Promise<string> => {
+    const tx = await eas.connect(signer).attest({
+      schema: tagSchemaUID,
+      data: {
+        recipient: ZeroAddress,
+        expirationTime: NO_EXPIRATION,
+        revocable: true,
+        refUID: target,
+        data: enc.encode(["bytes32", "int256"], [definition, weight]),
+        value: 0n,
+      },
+    });
+    return getUID(await tx.wait());
+  };
+
   /** Create a PIN (cardinality 1 — file placement). definition=anchor, refUID=DATA. */
   const createPin = async (definition: string, target: string, signer: Signer = owner): Promise<string> => {
     const tx = await eas.connect(signer).attest({
@@ -782,6 +803,161 @@ describe("Whiteout (WHITEOUT cross-lens negative mask, ADR-0055)", function () {
       await revoke(whiteoutSchemaUID, woUID, owner);
       res = await router.request(["dir", "doc.txt"], [{ key: "lenses", value: `${ownerAddr},${aliceAddr}` }]);
       expect(res.statusCode).to.equal(200n); // alice's placement now falls through
+    });
+  });
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // VECTOR 11 — getFilesAtPath negative terminal (view/router consistency, ADR-0055)
+  //   The single-anchor file reader applies the SAME (parent, lens, anchor) whiteout terminal the
+  //   router's `_findDataAtPath` does, so a viewer can't see DATA via the view that the router 404s.
+  // ════════════════════════════════════════════════════════════════════════════
+  describe("vector 11: getFilesAtPath negative terminal (view/router consistency)", function () {
+    it("a whited anchor returns empty from getFilesAtPath for the lens that whited it; an unaffected lens still sees the file", async function () {
+      const root = await createAnchor("root", ZERO_BYTES32);
+      const dir = await createAnchor("dir", root);
+      const fileAnchor = await createAnchor("doc.txt", dir, dataSchemaUID);
+
+      // ALICE places real content at the anchor (her DATA via her placement PIN).
+      const dAlice = await mintData(alice);
+      await createPin(fileAnchor, dAlice, alice);
+
+      // Baseline: viewer [owner, alice] resolves alice's DATA (owner has no placement of his own).
+      let page = await fileView.getFilesAtPath(fileAnchor, [ownerAddr, aliceAddr], dataSchemaUID, "0x", 10);
+      expect(page.items.map(i => i.uid)).to.deep.equal([dAlice]);
+
+      // Owner (higher lens) whites the anchor out. Viewer [owner, alice]: the negative terminal stops
+      // the scan at owner — NO fall-through to alice's placement → empty (router would 404 here too).
+      await attestWhiteout(fileAnchor, owner);
+      page = await fileView.getFilesAtPath(fileAnchor, [ownerAddr, aliceAddr], dataSchemaUID, "0x", 10);
+      expect(page.items.length).to.equal(0);
+      expect(page.nextCursor).to.equal("0x");
+
+      // Cross-lens unaffected: a lens that did NOT white it out (alice alone) still sees the file.
+      const aliceOnly = await fileView.getFilesAtPath(fileAnchor, [aliceAddr], dataSchemaUID, "0x", 10);
+      expect(aliceOnly.items.map(i => i.uid)).to.deep.equal([dAlice]);
+    });
+
+    it("same-lens positive PIN beats that lens's own earlier whiteout (positive-before-whiteout)", async function () {
+      const root = await createAnchor("root", ZERO_BYTES32);
+      const dir = await createAnchor("dir", root);
+      const fileAnchor = await createAnchor("doc.txt", dir, dataSchemaUID);
+
+      // Owner whites the anchor out, THEN places his own content at the same anchor (marker stays live).
+      await attestWhiteout(fileAnchor, owner);
+      const dOwner = await mintData(owner);
+      await createPin(fileAnchor, dOwner, owner);
+
+      expect(await whiteoutResolver.isWhitedOut(dir, ownerAddr, fileAnchor)).to.equal(true);
+      // The terminal checks the positive PIN FIRST within the lens → owner's DATA is served.
+      const page = await fileView.getFilesAtPath(fileAnchor, [ownerAddr], dataSchemaUID, "0x", 10);
+      expect(page.items.map(i => i.uid)).to.deep.equal([dOwner]);
+    });
+  });
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // VECTOR 12 — whiteout participates in the FILTERED listing too (ADR-0055 + ADR-0054)
+  //   The ADR makes whiteout load-bearing in BOTH plain and filtered listings. Here the view is wired
+  //   WITH a real WhiteoutResolver (the suite harness), so we assert: (a) whiteout drops an item from
+  //   a FILTERED listing, and (b) an item dropped by BOTH a tag-exclusion AND a whiteout is skipped
+  //   exactly once (no double-decrement / pagination corruption).
+  // ════════════════════════════════════════════════════════════════════════════
+  describe("vector 12: whiteout in getDirectoryPageFiltered (filtered walker)", function () {
+    let excludeTagDef: string;
+
+    beforeEach(async function () {
+      // Registered after all suite deploys (in the test body's beforeEach) so it cannot shift any
+      // CREATE nonce the suite's address predictions depend on. A standalone schema UID is a valid
+      // bytes32 exclude-tag definition (matches EFSFileViewFiltered.test.ts).
+      const tx = await registry.register("string whiteoutFilterLabel", ZeroAddress, false);
+      excludeTagDef = (await tx.wait())!.logs[0].topics[1];
+    });
+
+    it("(a) whiteout drops an item from a FILTERED listing (zero exclude tags ⇒ whiteout is the only filter)", async function () {
+      const root = await createAnchor("root", ZERO_BYTES32);
+      const dir = await createAnchor("dir", root);
+
+      // Two files placed by ALICE; OWNER views [owner, alice] and whites out one.
+      const keepAnchor = await createAnchor("keep.txt", dir, dataSchemaUID);
+      const hideAnchor = await createAnchor("hide.txt", dir, dataSchemaUID);
+      const dKeep = await mintData(alice);
+      const dHide = await mintData(alice);
+      await createPin(keepAnchor, dKeep, alice);
+      await createPin(hideAnchor, dHide, alice);
+
+      await attestWhiteout(hideAnchor, owner);
+
+      // Empty exclude policy → the ONLY drop is the whiteout (proves the filtered walker honors it).
+      const page = await fileView.getDirectoryPageFiltered(
+        dir,
+        dataSchemaUID,
+        [ownerAddr, aliceAddr],
+        [], // no exclude tags
+        [],
+        "0x",
+        10,
+      );
+      expect(page.items.map(i => i.uid)).to.deep.equal([keepAnchor]);
+      expect(page.nextCursor).to.equal("0x");
+    });
+
+    it("(b) an item dropped by BOTH a tag-exclusion AND a whiteout is skipped exactly once (no pagination corruption)", async function () {
+      const root = await createAnchor("root", ZERO_BYTES32);
+      const dir = await createAnchor("dir", root);
+
+      // Three files placed by ALICE: `both` is BOTH whited-out AND tag-excluded; `taggedOnly` is only
+      // tag-excluded; `clean` survives. Owner views [owner, alice].
+      const bothAnchor = await createAnchor("both.txt", dir, dataSchemaUID);
+      const taggedAnchor = await createAnchor("tagged.txt", dir, dataSchemaUID);
+      const cleanAnchor = await createAnchor("clean.txt", dir, dataSchemaUID);
+      const dBoth = await mintData(alice);
+      const dTagged = await mintData(alice);
+      const dClean = await mintData(alice);
+      await createPin(bothAnchor, dBoth, alice);
+      await createPin(taggedAnchor, dTagged, alice);
+      await createPin(cleanAnchor, dClean, alice);
+
+      // Exclude tag on the DATA (file branch bucket = dataSchemaUID), by alice (a viewed lens).
+      await createTag(excludeTagDef, dBoth, alice, 1n);
+      await createTag(excludeTagDef, dTagged, alice, 1n);
+      // AND owner whites out `both` — the doubly-suppressed item.
+      await attestWhiteout(bothAnchor, owner);
+
+      // One-shot page: only clean.txt survives. `both` being suppressed by two independent predicates
+      // must not double-decrement the slot accounting or corrupt the walk.
+      const page = await fileView.getDirectoryPageFiltered(
+        dir,
+        dataSchemaUID,
+        [ownerAddr, aliceAddr],
+        [excludeTagDef],
+        [0n],
+        "0x",
+        10,
+      );
+      expect(page.items.map(i => i.uid)).to.deep.equal([cleanAnchor]);
+      expect(page.nextCursor).to.equal("0x");
+
+      // Paginate at size 1 across the whole source: every surviving item is yielded exactly once and
+      // the doubly-suppressed item is never emitted (skip-exactly-once across page boundaries).
+      const seen: string[] = [];
+      let cursor = "0x";
+      let calls = 0;
+      while (true) {
+        calls++;
+        if (calls > 20) throw new Error("filtered pagination did not terminate");
+        const p = await fileView.getDirectoryPageFiltered(
+          dir,
+          dataSchemaUID,
+          [ownerAddr, aliceAddr],
+          [excludeTagDef],
+          [0n],
+          cursor,
+          1,
+        );
+        for (const it of p.items) seen.push(it.uid);
+        if (p.nextCursor === "0x") break;
+        cursor = p.nextCursor;
+      }
+      expect(seen).to.deep.equal([cleanAnchor]); // exactly one survivor, emitted once
     });
   });
 });
