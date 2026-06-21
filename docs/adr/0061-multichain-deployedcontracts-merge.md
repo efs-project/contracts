@@ -1,4 +1,4 @@
-# ADR-0057: deployedContracts.ts is multi-chain; generation merges per-chain
+# ADR-0061: deployedContracts.ts is multi-chain; generation merges per-chain
 
 **Status:** Accepted
 **Date:** 2026-06-20
