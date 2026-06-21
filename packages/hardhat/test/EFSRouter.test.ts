@@ -1388,6 +1388,26 @@ describe("EFSRouter Web3 Capabilities", function () {
       expect(ct.value).to.contain(`URL="${crossUri}"`);
     });
 
+    it("Should fall through a dead (no-code) same-chain web3:// mirror to a good ipfs:// mirror, not 500 (ADR-0058)", async function () {
+      // Same attester has a web3:// mirror whose address has NO code (never deployed
+      // / wrong chain) AND a good ipfs:// mirror. The router must skip the dead
+      // top-priority mirror and serve the ipfs:// redirect (multi-mirror redundancy),
+      // not 500 "Storage contract has no code".
+      const deadAddr = ethers.getAddress("0x000000000000000000000000000000000000dEaD"); // no code
+      const fileAnchorUID = await createFileAnchor(ideasUID, "redundant.bin");
+      const dataUID = await createData("redundant-content");
+      await addProperty(dataUID, "contentType", "application/octet-stream");
+      await addMirror(dataUID, onchainTransportUID, `web3://${deadAddr}`); // priority 0, but dead
+      await addMirror(dataUID, ipfsTransportUID, "ipfs://QmFallbackGood"); // priority 2, good
+      await pinAtPath(dataUID, fileAnchorUID);
+
+      const [status, , headers] = await router.request(["ideas", "redundant.bin"], ownerParams());
+      expect(status).to.equal(200);
+      const ct = headers.find((h: any) => h.key === "Content-Type"); // eslint-disable-line @typescript-eslint/no-explicit-any
+      expect(ct.value).to.contain("message/external-body");
+      expect(ct.value).to.contain('URL="ipfs://QmFallbackGood"');
+    });
+
     it("Should pick the DATA with the highest attestation timestamp when multiple are active", async function () {
       // Two DATAs placed at the same anchor by the same attester — newest timestamp wins.
       const addr1 = ethers.getAddress("0x00000000000000000000000000000000000000C0");
