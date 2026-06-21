@@ -109,7 +109,7 @@ What else we looked at and why it lost.
 - [ADR-0029 — MIT license for EFS contracts (web client license deferred)](./0029-dual-licensing-mit-agpl.md)
 - [ADR-0037 — Pinned Sepolia fork for cross-environment determinism](./0037-pinned-sepolia-fork.md)
 - [ADR-0048 — Sepolia freeze set + proxy-ready resolvers (burn to immutable)](./0048-sepolia-freeze-set-and-proxy-ready-resolvers.md)
-- [ADR-0057 — deployedContracts.ts is multi-chain; generation merges per-chain](./0057-multichain-deployedcontracts-merge.md)
+- [ADR-0061 — deployedContracts.ts is multi-chain; generation merges per-chain](./0061-multichain-deployedcontracts-merge.md)
 
 ### Architectural Foundations
 - [ADR-0030 — Mainnet permanence (no upgradeability)](./0030-mainnet-permanence.md)
