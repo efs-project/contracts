@@ -111,6 +111,10 @@ export function useScaffoldWriteContract<TContractName extends ContractName>(
             abi: deployedContractData.abi as Abi,
             address: deployedContractData.address,
             ...variables,
+            // Pin the dispatch to the selected network so wagmi enforces the chain at send time, not
+            // just the React-state guard above (which can lag an external wallet switch). ChainMismatch
+            // throws instead of silently dispatching the selected-network payload on the wallet's chain.
+            chainId: selectedNetwork.id,
           } as WriteContractVariables<Abi, string, any[], Config, number>,
           mutateOptions as
             | MutateOptions<
@@ -157,6 +161,8 @@ export function useScaffoldWriteContract<TContractName extends ContractName>(
         abi: deployedContractData.abi as Abi,
         address: deployedContractData.address,
         ...variables,
+        // Pin to the selected network (see async path above) — enforce the chain at send time.
+        chainId: selectedNetwork.id,
       } as WriteContractVariables<Abi, string, any[], Config, number>,
       options as
         | MutateOptions<

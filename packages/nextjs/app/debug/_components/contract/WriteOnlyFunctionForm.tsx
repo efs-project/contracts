@@ -51,6 +51,9 @@ export const WriteOnlyFunctionForm = ({
             abi: abi,
             args: getParsedContractFunctionArgs(form),
             value: BigInt(txValue),
+            // Pin to the selected network so the write is enforced on the right chain even if the
+            // wallet switched externally after the writeDisabled guard was evaluated.
+            chainId: targetNetwork.id,
           });
         await writeTxn(makeWriteWithParams);
         onChange();
