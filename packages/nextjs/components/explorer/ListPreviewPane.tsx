@@ -502,6 +502,10 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
     }
   }, [publicClient, listReaderAddress, listUID, effectiveLens]);
   useEffect(() => {
+    // Clear stale rows on chain/list/lens identity change (refetchEntries is memoized on
+    // publicClient/listUID/effectiveLens) so a network switch can't leave the old chain's entries —
+    // and their Remove buttons — rendered while the new chain's read is in flight. (Codex P2 analog.)
+    setRawEntries([]);
     void refetchEntries();
   }, [refetchEntries]);
   const { data: entrySchemaUID } = useReadContract({
@@ -520,7 +524,9 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
   // order/label PROPERTYs (which re-PIN, never revoke the entry) are still allowed —
   // so an append-only list (incl. an empty one) can still be populated and reordered.
   const canEdit = viewingOwn; // add / reorder / edit-label
-  const canRemove = viewingOwn && !mode?.appendOnly; // entry revocation only
+  // `mode?.exists` gates Remove on the current chain's mode being loaded — otherwise a network switch
+  // would briefly expose Remove (revoke) while `mode` is undefined, acting on a stale-chain entry UID.
+  const canRemove = viewingOwn && !!mode?.exists && !mode.appendOnly; // entry revocation only
 
   // ── Entry-scoped order/label PROPERTY reads (ADR-0046, lens-scoped) ──────────
   // The order ("weight") and label ("name") that ADR-0044 stored inline now live as

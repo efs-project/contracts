@@ -199,6 +199,11 @@ export default function ListDetailPage() {
     }
   }, [publicClient, listReaderAddress, listUID, lensAddress]);
   useEffect(() => {
+    // Clear the displayed rows whenever the chain/list/lens identity changes (refetchEntries is memoized on
+    // publicClient/listUID/lensAddress). Otherwise a network switch leaves the old chain's entries — and
+    // their Remove buttons — rendered while the new chain's read is in flight, so a Remove could revoke an
+    // old-chain entry UID against the newly selected chain. (Codex P2.)
+    setEntries(undefined);
     void refetchEntries();
   }, [refetchEntries]);
 
@@ -379,8 +384,9 @@ export default function ListDetailPage() {
         </div>
       )}
 
-      {/* ENTRIES */}
-      {entries && entries.length > 0 && (
+      {/* ENTRIES — gated on the current chain's mode being loaded and the list existing, so a chain
+          switch can't render stale rows (or their Remove buttons) before the new chain's mode resolves. */}
+      {mode?.exists && entries && entries.length > 0 && (
         <div className="card w-full max-w-xl bg-base-100 shadow border border-base-200">
           <div className="card-body">
             <h2 className="card-title text-lg">Entries ({entries.length})</h2>
