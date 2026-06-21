@@ -3,8 +3,10 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { isAddress, isHex } from "viem";
+import { hardhat } from "viem/chains";
 import { usePublicClient } from "wagmi";
 import { useTargetNetwork } from "~~/hooks/scaffold-eth";
+import { getBlockExplorerAddressLink } from "~~/utils/scaffold-eth";
 
 export const SearchBar = () => {
   const [searchInput, setSearchInput] = useState("");
@@ -28,7 +30,14 @@ export const SearchBar = () => {
     }
 
     if (isAddress(searchInput)) {
-      router.push(`/blockexplorer/address/${searchInput}`);
+      // The internal address page (contract/storage tabs) reads hardhat clients, so it's
+      // only correct for the local chain. For live targets, route to the selected chain's
+      // external explorer instead of showing hardhat bytecode/storage under a live address.
+      if (targetNetwork.id === hardhat.id) {
+        router.push(`/blockexplorer/address/${searchInput}`);
+      } else {
+        window.open(getBlockExplorerAddressLink(targetNetwork, searchInput), "_blank", "noopener,noreferrer");
+      }
       return;
     }
   };

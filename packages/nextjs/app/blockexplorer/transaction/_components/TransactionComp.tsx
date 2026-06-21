@@ -16,23 +16,46 @@ const TransactionComp = ({ txHash }: { txHash: Hash }) => {
   const [transaction, setTransaction] = useState<Transaction>();
   const [receipt, setReceipt] = useState<TransactionReceipt>();
   const [functionCalled, setFunctionCalled] = useState<string>();
+  const [notFound, setNotFound] = useState(false);
 
   useEffect(() => {
-    if (txHash && client) {
-      const fetchTransaction = async () => {
+    // Reset to a loading state whenever the chain (client) or txHash changes, so a
+    // stale transaction from the previous chain can never stay rendered after a switch.
+    setTransaction(undefined);
+    setReceipt(undefined);
+    setFunctionCalled(undefined);
+    setNotFound(false);
+
+    if (!txHash || !client) return;
+
+    let cancelled = false;
+    const fetchTransaction = async () => {
+      try {
         const tx = await client.getTransaction({ hash: txHash });
         const receipt = await client.getTransactionReceipt({ hash: txHash });
+
+        // Guard against a chain switch (or txHash change) mid-fetch: the effect
+        // cleanup flips `cancelled`, so a stale completion never writes state.
+        if (cancelled) return;
 
         const transactionWithDecodedData = decodeTransactionData(tx);
         setTransaction(transactionWithDecodedData);
         setReceipt(receipt);
+        setFunctionCalled(transactionWithDecodedData.input.substring(0, 10));
+      } catch (error) {
+        // The tx hash isn't present on the selected chain (e.g. a hardhat hash
+        // viewed after switching to Sepolia), or the read failed.
+        if (cancelled) return;
+        console.error("Failed to fetch transaction:", error);
+        setNotFound(true);
+      }
+    };
 
-        const functionCalled = transactionWithDecodedData.input.substring(0, 10);
-        setFunctionCalled(functionCalled);
-      };
+    fetchTransaction();
 
-      fetchTransaction();
-    }
+    return () => {
+      cancelled = true;
+    };
   }, [client, txHash]);
 
   return (
@@ -136,6 +159,8 @@ const TransactionComp = ({ txHash }: { txHash: Hash }) => {
             </tbody>
           </table>
         </div>
+      ) : notFound ? (
+        <p className="text-2xl text-base-content">Transaction not found on {targetNetwork.name}.</p>
       ) : (
         <p className="text-2xl text-base-content">Loading...</p>
       )}

@@ -210,18 +210,26 @@ export default function ListDetailPage() {
     query: { enabled: !!listReaderAddress },
   });
 
-  // Pending tx hash — watched by useWaitForTransactionReceipt to trigger refetch.
-  const [pendingTxHash, setPendingTxHash] = useState<`0x${string}` | undefined>(undefined);
-  const { data: txReceipt } = useWaitForTransactionReceipt({ hash: pendingTxHash });
+  // Pending tx — watched by useWaitForTransactionReceipt to trigger refetch. We store the
+  // chainId the write was dispatched on alongside the hash: the watcher defaults to the
+  // wallet's current chain, so a mid-pending network switch would otherwise wait for the
+  // old hash on the new chain and fire a stale refetch. Pinning chainId keeps the watcher
+  // and the post-confirm refetch scoped to the chain the tx actually landed on.
+  const [pendingTx, setPendingTx] = useState<{ hash: `0x${string}`; chainId: number } | undefined>(undefined);
+  const { data: txReceipt } = useWaitForTransactionReceipt({ hash: pendingTx?.hash, chainId: pendingTx?.chainId });
 
-  // Refetch both length and entries once the pending tx confirms.
+  // Refetch both length and entries once the pending tx confirms — but only if the user
+  // hasn't switched away from the chain the tx was submitted on (the reads are pinned to
+  // targetNetwork.id, so a refetch under a different target would be meaningless).
   useEffect(() => {
     if (txReceipt) {
-      refetchLength();
-      refetchEntries();
-      setPendingTxHash(undefined);
+      if (pendingTx?.chainId === targetNetwork.id) {
+        refetchLength();
+        refetchEntries();
+      }
+      setPendingTx(undefined);
     }
-  }, [txReceipt, refetchLength, refetchEntries]);
+  }, [txReceipt, pendingTx, targetNetwork.id, refetchLength, refetchEntries]);
 
   // ADD ENTRY form
   const [entryTarget, setEntryTarget] = useState("");
@@ -286,7 +294,7 @@ export default function ListDetailPage() {
         ],
       });
       notification.success("Entry submitted — waiting for confirmation…");
-      setPendingTxHash(tx);
+      setPendingTx({ hash: tx, chainId: targetNetwork.id });
       setEntryTarget("");
       setEntryRecipient("");
     } catch (e) {
@@ -306,7 +314,7 @@ export default function ListDetailPage() {
         args: [{ schema: listEntrySchemaUID, data: { uid: entryUID, value: 0n } }],
       });
       notification.success("Revoke submitted — waiting for confirmation…");
-      setPendingTxHash(tx);
+      setPendingTx({ hash: tx, chainId: targetNetwork.id });
     } catch (e) {
       console.error(e);
       notification.error("Revoke failed. Check console.");
@@ -398,7 +406,7 @@ export default function ListDetailPage() {
                         <td>
                           <button
                             className="btn btn-xs btn-error btn-outline"
-                            disabled={isPending || !!pendingTxHash}
+                            disabled={isPending || !!pendingTx}
                             onClick={() => handleRemoveEntry(e.entryUID as `0x${string}`)}
                           >
                             Remove
@@ -461,10 +469,10 @@ export default function ListDetailPage() {
             <div className="card-actions justify-end mt-2">
               <button
                 className="btn btn-primary"
-                disabled={isPending || !!pendingTxHash || !connectedAddress}
+                disabled={isPending || !!pendingTx || !connectedAddress}
                 onClick={handleAddEntry}
               >
-                {isPending || !!pendingTxHash ? <span className="loading loading-spinner" /> : "Add Entry"}
+                {isPending || !!pendingTx ? <span className="loading loading-spinner" /> : "Add Entry"}
               </button>
             </div>
           </div>

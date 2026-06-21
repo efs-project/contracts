@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   decodeAbiParameters,
   decodeEventLog,
@@ -112,12 +112,23 @@ export default function DebugSchemas() {
 
   const [lastTxHash, setLastTxHash] = useState("");
 
-  // Initialize/Update form refs when rootTopicUid loads
+  // Tracks the last rootTopicUid we auto-filled into the ref fields, so a chain
+  // switch (which changes rootTopicUid — e.g. hardhat → Sepolia) can refresh
+  // fields still holding the prior chain's default while preserving user edits.
+  const lastAutoRootRef = useRef("");
+
+  // Initialize/Update form refs when rootTopicUid loads or changes (chain switch).
+  // A field is "still an auto-filled default" iff it's empty/zero OR equals the
+  // previously auto-filled root; those get updated to the new root. A field the
+  // user typed a custom value into (anything else) is left untouched.
   useEffect(() => {
     if (registry.rootTopicUid && registry.rootTopicUid !== zeroHash) {
-      if (!pinRef || pinRef === zeroHash) setPinRef(registry.rootTopicUid);
-      if (!tagRef || tagRef === zeroHash) setTagRef(registry.rootTopicUid);
-      if (!propRef || propRef === zeroHash) setPropRef(registry.rootTopicUid);
+      const prevRoot = lastAutoRootRef.current;
+      const isAutoDefault = (v: string) => !v || v === zeroHash || v === prevRoot;
+      if (isAutoDefault(pinRef)) setPinRef(registry.rootTopicUid);
+      if (isAutoDefault(tagRef)) setTagRef(registry.rootTopicUid);
+      if (isAutoDefault(propRef)) setPropRef(registry.rootTopicUid);
+      lastAutoRootRef.current = registry.rootTopicUid;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [registry.rootTopicUid]);
