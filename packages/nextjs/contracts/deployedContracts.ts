@@ -668,6 +668,11 @@ const deployedContracts = {
               type: "bytes32",
             },
             {
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+            {
               internalType: "uint256",
               name: "start",
               type: "uint256",
@@ -679,6 +684,62 @@ const deployedContracts = {
             },
           ],
           name: "getDataMirrors",
+          outputs: [
+            {
+              components: [
+                {
+                  internalType: "bytes32",
+                  name: "uid",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "bytes32",
+                  name: "transportDefinition",
+                  type: "bytes32",
+                },
+                {
+                  internalType: "string",
+                  name: "uri",
+                  type: "string",
+                },
+                {
+                  internalType: "address",
+                  name: "attester",
+                  type: "address",
+                },
+                {
+                  internalType: "uint64",
+                  name: "timestamp",
+                  type: "uint64",
+                },
+              ],
+              internalType: "struct EFSFileView.MirrorItem[]",
+              name: "",
+              type: "tuple[]",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "dataUID",
+              type: "bytes32",
+            },
+            {
+              internalType: "uint256",
+              name: "start",
+              type: "uint256",
+            },
+            {
+              internalType: "uint256",
+              name: "length",
+              type: "uint256",
+            },
+          ],
+          name: "getDataMirrorsAllAttesters",
           outputs: [
             {
               components: [
@@ -6686,11 +6747,6 @@ const deployedContracts = {
         {
           inputs: [],
           name: "InvalidTransport",
-          type: "error",
-        },
-        {
-          inputs: [],
-          name: "InvalidURIScheme",
           type: "error",
         },
         {

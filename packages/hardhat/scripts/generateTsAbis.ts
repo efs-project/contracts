@@ -75,7 +75,14 @@ function getInheritedFunctions(sources: Record<string, any>, contractName: strin
   return inheritedFunctions;
 }
 
-function getContractDataFromDeployments() {
+// `activeNetwork` is the network just deployed (hardhat-deploy saves under `deployments/<network.name>`).
+// Only that deployment may contribute a chain block to the merge. Without this filter, getDirectories()
+// returns EVERY `deployments/<net>` dir on disk — so a stale `deployments/sepolia` left over from a prior
+// real-Sepolia deploy would land in the result and, via the merge below, OVERRIDE the committed (frozen)
+// Sepolia block with whatever local state that dir holds — silently drifting a frozen chain that a fresh CI
+// checkout (no such dir) can't catch. Restricting to the active network guarantees a single-network deploy
+// only ever regenerates its own block; all other chains are preserved from the committed file. (Codex P2, PR #33.)
+function getContractDataFromDeployments(activeNetwork?: string) {
   if (!fs.existsSync(DEPLOYMENTS_DIR)) {
     // The in-memory `hardhat` network persists no deployments dir, so `deploy:efs --network hardhat`
     // (the fork rehearsal) reaches here with nothing on disk. That's not an error — the rehearsal is
@@ -85,7 +92,8 @@ function getContractDataFromDeployments() {
     return {} as Record<string, any>;
   }
   const output = {} as Record<string, any>;
-  for (const chainName of getDirectories(DEPLOYMENTS_DIR)) {
+  const chainDirs = getDirectories(DEPLOYMENTS_DIR).filter(dir => !activeNetwork || dir === activeNetwork);
+  for (const chainName of chainDirs) {
     const chainId = fs.readFileSync(`${DEPLOYMENTS_DIR}/${chainName}/.chainId`).toString();
     const contracts = {} as Record<string, any>;
     for (const contractName of getContractNames(`${DEPLOYMENTS_DIR}/${chainName}`)) {
@@ -112,17 +120,71 @@ function getContractDataFromDeployments() {
   return output;
 }
 
+// Read the chain blocks already committed in deployedContracts.ts so a single-network deploy can preserve
+// the chains it didn't deploy (merge-per-chain — see generateTsAbis below). The file is generated TS
+// (`const deployedContracts = {…} as const`); we extract the object literal and eval it.
+//
+// On `eval` safety: the input is THIS repo's own committed, self-generated source file — not user/network
+// data. Anyone able to alter it already has write access to these deploy scripts, so eval adds no marginal
+// attack surface (it runs at deploy time in the dev/CI toolchain, never at app runtime). Safer parsers don't
+// fit: `JSON.parse` rejects the unquoted numeric keys + `as const`, and importing the module is circular and
+// would resolve the nextjs `~~/…` path alias from the hardhat package. The literal holds only JSON-compatible
+// values (strings/numbers/arrays/objects/bools), so the eval→JSON.stringify round-trip is lossless and
+// re-serializes byte-identically. Returns {} when the file is absent or unparseable (first-ever generation,
+// or a hand-broken file) — we then fall back to writing only the freshly-deployed chains, never throwing
+// mid-deploy.
+function getExistingChains(targetPath: string): Record<string, any> {
+  // Absent file = first-ever generation: nothing to preserve, write only freshly-deployed chains.
+  if (!fs.existsSync(targetPath)) return {};
+  // Present-but-unparseable is NOT silently treated as empty: returning {} here would make the merge
+  // below delete every chain the current deploy didn't touch — the exact clobber this function exists to
+  // prevent. Fail loudly instead so a corrupt/hand-broken file is fixed (e.g. `git checkout`) rather than
+  // silently regenerated as a single-chain file.
+  const src = fs.readFileSync(targetPath, "utf8");
+  const match = src.match(/const\s+deployedContracts\s*=\s*(\{[\s\S]*\})\s*as const/);
+  if (!match) {
+    throw new Error(
+      `[generateTsAbis] could not locate the deployedContracts object in ${targetPath}. Refusing to ` +
+        `regenerate: writing now would silently delete chains not in this deploy. Restore the file first.`,
+    );
+  }
+  let parsed: unknown;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-implied-eval, no-eval
+    parsed = eval(`(${match[1]})`);
+  } catch (e) {
+    throw new Error(
+      `[generateTsAbis] failed to parse existing ${targetPath} (${(e as Error).message}). Refusing to ` +
+        `regenerate and clobber other chains' blocks. Restore the file first.`,
+    );
+  }
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error(`[generateTsAbis] parsed ${targetPath} but found no chain object. Refusing to clobber.`);
+  }
+  return parsed as Record<string, any>;
+}
+
 /**
  * Generates the TypeScript contract definition file based on the json output of the contract deployment scripts
  * This script should be run last.
  */
-const generateTsAbis: DeployFunction = async function () {
+const generateTsAbis: DeployFunction = async function (hre) {
   const TARGET_DIR = "../nextjs/contracts/";
-  const allContractsData = getContractDataFromDeployments();
+  // Restrict to the network just deployed — only its block may override the committed file (see merge below).
+  const deployedChains = getContractDataFromDeployments(hre.network.name);
 
   // No persisted deployments (e.g. `deploy:efs --network hardhat` fork rehearsal): do NOT write — that
   // would clobber the committed deployedContracts.ts with `{}`. Leave the pinned file untouched.
-  if (Object.keys(allContractsData).length === 0) return;
+  if (Object.keys(deployedChains).length === 0) return;
+
+  // Merge-per-chain (multi-chain safe). A deploy targets ONE network, so `deployedChains` only has that
+  // network's block. But deployedContracts.ts is multi-chain: it also carries real-network blocks (Sepolia
+  // 11155111 today, mainnet later) that a local fork deploy cannot — and must not — reproduce. Overwriting
+  // the whole file would silently delete every chain the current deploy didn't touch (this clobbered the
+  // frozen Sepolia block once). So preserve existing chains and let freshly-deployed chain(s) override only
+  // their own block: the local fork (31337) stays byte-deterministic, frozen real-network blocks pass through
+  // verbatim, and `deploy-pin-check` can keep diffing the whole file across all chains. See ADR-0037.
+  const allContractsData = { ...getExistingChains(`${TARGET_DIR}deployedContracts.ts`), ...deployedChains };
 
   const fileContent = Object.entries(allContractsData).reduce((content, [chainId, chainConfig]) => {
     return `${content}${parseInt(chainId).toFixed(0)}:${JSON.stringify(chainConfig, null, 2)},`;
