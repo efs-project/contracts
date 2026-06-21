@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import { getAddress, isAddress } from "viem";
 import { useAccount, usePublicClient } from "wagmi";
@@ -565,6 +565,35 @@ export default function ExplorerClient() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rootUID, pathname, publicClient, mainnetPublicClient, easAddress, dataSchemaUID]);
 
+  // Chain-switch reset (Codex P2). Runtime network switching (hardhat 31337 ↔
+  // Sepolia 11155111) re-keys `publicClient` to the new chain, so the Path
+  // Resolution Effect above re-fires — but it resolves asynchronously (one RPC
+  // per segment). Until it completes, the OLD chain's resolved
+  // `currentAnchorUID` / `currentPath` / `currentContainer` stay exposed to the
+  // write controls (FileActionsBar, and any already-open CreateItemModal it
+  // renders, which reads `currentAnchorUID` LIVE at submit time). A submit in
+  // that window would attempt to create under a stale-chain parent while the
+  // wallet/client guard already points at the NEW chain. Clear the resolved
+  // anchor state synchronously on the id change and re-assert `isResolving` so
+  // the write controls are disabled/gated until the new chain re-resolves; the
+  // `key={targetNetwork.id}` on FileActionsBar below force-closes an open
+  // creation modal in the same switch. The first (mount) run is skipped — there
+  // is no stale state to clear, and the Path Resolution Effect drives the
+  // initial resolve.
+  const didMountChainRef = useRef(false);
+  useEffect(() => {
+    if (!didMountChainRef.current) {
+      didMountChainRef.current = true;
+      return;
+    }
+    setCurrentAnchorUID(null);
+    setCurrentPath([]);
+    setCurrentContainer(null);
+    setCurrentIsFileLeaf(false);
+    setPathError(null);
+    setIsResolving(true);
+  }, [targetNetwork.id]);
+
   // Keep the browser tab title in sync with the deepest path segment. When
   // the container has a resolved display name (ENS / persona / property)
   // and we're at the container root, prefer it over the short-hex label.
@@ -781,6 +810,12 @@ export default function ExplorerClient() {
           <section className="flex-grow flex flex-col min-w-0">
             {!pathError && (
               <FileActionsBar
+                // Remount on chain switch so an already-open CreateItemModal
+                // (whose open state lives inside FileActionsBar) is force-closed
+                // before write controls re-expose for the new chain. Pairs with
+                // the chain-switch reset effect that clears the resolved anchor
+                // (Codex P2).
+                key={targetNetwork.id}
                 currentAnchorUID={currentAnchorUID}
                 currentIsFileLeaf={currentIsFileLeaf}
                 container={currentContainer}

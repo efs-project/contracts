@@ -310,6 +310,21 @@ export const FileBrowser = ({
     setFetchError(null);
     setIsFileLoading(false);
     setPreviewFullscreen(false);
+    // Client-side preview-sort state is chain-scoped too: previewCacheKey already
+    // includes targetNetwork.id, but previewFetchKey/previewFetchRef do NOT, so
+    // after a switch the preview effect can early-return on
+    // `previewFetchRef.current === previewFetchKey` (the (anchor,sort,staleness)
+    // tuple is chain-agnostic and unchanged when the same folder/sort exists on
+    // both chains) before reading the chain-scoped cache or refetching — leaving
+    // the previous chain's previewSortKeys/isPreviewSort applied to the new
+    // chain's items whenever on-chain sortedUIDs is empty (Codex round 2,
+    // FileBrowser.tsx:920). Clear all three here so the effect re-fetches against
+    // the new chain instead of reusing stale keys. (Refs and the setters are
+    // declared below; the effect body runs at commit time after all hooks
+    // initialize, so the forward references resolve — same as setSelectedList.)
+    previewFetchRef.current = null;
+    setPreviewSortKeys(new Map());
+    setIsPreviewSort(false);
   }, [targetNetwork.id]);
 
   // PIN and TAG schema UIDs from EdgeResolver (ADR-0041 — distinct schemas
@@ -1615,6 +1630,13 @@ export const FileBrowser = ({
   // (the curator's placement), then show the pane against that LIST.
   const openList = async (item: any) => {
     if (!publicClient || !edgeResolverAddress || !listSchemaUID) return;
+    // Capture the chain generation up front. openList closes over the old chain's
+    // publicClient / edgeResolverAddress / listSchemaUID and awaits getActivePinTarget;
+    // if the user switches networks mid-resolve, the reset effect bumps chainGenRef and
+    // clears the pane, then this old-chain promise would otherwise restore an old-chain
+    // LIST UID into setSelectedList (Codex round 2, FileBrowser.tsx:288). Re-check before
+    // every state write below — same guard the /tags resolver uses.
+    const gen = chainGenRef.current;
     setSelectedFile(null);
     const resolvePin = (attester: `0x${string}`) =>
       publicClient.readContract({
@@ -1644,12 +1666,16 @@ export const FileBrowser = ({
       let resolvedAttester: `0x${string}` = item.attester;
       for (const cand of candidates) {
         const uid = await resolvePin(cand);
+        // A chain switch during the resolve loop invalidates every remaining probe
+        // (they ran against the old chain's edgeResolver) — stop and write nothing.
+        if (gen !== chainGenRef.current) return;
         if (uid && uid !== zeroHash) {
           listUID = uid;
           resolvedAttester = cand;
           break;
         }
       }
+      if (gen !== chainGenRef.current) return;
       if (!listUID || listUID === zeroHash) {
         notification.error(
           "This list has no active placement here — it was deleted, or its creation was " +
