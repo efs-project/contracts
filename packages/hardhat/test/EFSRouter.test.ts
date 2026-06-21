@@ -678,8 +678,8 @@ describe("EFSRouter Web3 Capabilities", function () {
       await setCode(c1, "0x00" + d1.toString("hex"));
       await setCode(c2, "0x00" + d2.toString("hex"));
 
-      const MockChunkedFile = await ethers.getContractFactory("MockChunkedFile");
-      const chunkedFile = await MockChunkedFile.deploy([c0, c1, c2]);
+      const EFSBytesStore = await ethers.getContractFactory("EFSBytesStore");
+      const chunkedFile = await EFSBytesStore.deploy([c0, c1, c2], "application/octet-stream");
       await chunkedFile.waitForDeployment();
       const mgr = await chunkedFile.getAddress();
 
@@ -717,8 +717,8 @@ describe("EFSRouter Web3 Capabilities", function () {
       const c0 = "0x0000000000000000000000000000000000000040";
       await setCode(c0, "0x00" + Buffer.from("data").toString("hex"));
 
-      const MockChunkedFile = await ethers.getContractFactory("MockChunkedFile");
-      const chunkedFile = await MockChunkedFile.deploy([c0]);
+      const EFSBytesStore = await ethers.getContractFactory("EFSBytesStore");
+      const chunkedFile = await EFSBytesStore.deploy([c0], "application/octet-stream");
       await chunkedFile.waitForDeployment();
       const mgr = await chunkedFile.getAddress();
 
@@ -749,8 +749,8 @@ describe("EFSRouter Web3 Capabilities", function () {
         await setCode(addrs[i], "0x00" + chunks[i].toString("hex"));
       }
 
-      const MockChunkedFile = await ethers.getContractFactory("MockChunkedFile");
-      const chunkedFile = await MockChunkedFile.deploy(addrs);
+      const EFSBytesStore = await ethers.getContractFactory("EFSBytesStore");
+      const chunkedFile = await EFSBytesStore.deploy(addrs, "application/octet-stream");
       await chunkedFile.waitForDeployment();
       const mgr = await chunkedFile.getAddress();
 
@@ -775,16 +775,16 @@ describe("EFSRouter Web3 Capabilities", function () {
       expect(reassembled.toString("hex")).to.equal(originalFull.toString("hex"));
     });
 
-    it("Should detect MockChunkedFile via staticcall to chunkCount() with correct selector", async function () {
+    it("Should detect EFSBytesStore via staticcall to chunkCount() with correct selector", async function () {
       const chunk0 = "0x0000000000000000000000000000000000000020";
       await setCode(chunk0, "0x00" + Buffer.from("hello").toString("hex"));
 
-      const MockChunkedFile = await ethers.getContractFactory("MockChunkedFile");
-      const chunkedFile = await MockChunkedFile.deploy([chunk0]);
+      const EFSBytesStore = await ethers.getContractFactory("EFSBytesStore");
+      const chunkedFile = await EFSBytesStore.deploy([chunk0], "application/octet-stream");
       await chunkedFile.waitForDeployment();
 
       expect(await chunkedFile.chunkCount()).to.equal(1n);
-      const iface = MockChunkedFile.interface;
+      const iface = EFSBytesStore.interface;
       const selector = iface.getFunction("chunkCount")!.selector;
       expect(selector).to.equal("0xf91f0937");
     });

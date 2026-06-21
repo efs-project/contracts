@@ -90,6 +90,7 @@ What else we looked at and why it lost.
 - [ADR-0018 — Single `message/external-body` Content-Type header](./0018-single-content-type-header.md)
 - [ADR-0019 — Non-reverting hex parser](./0019-non-reverting-hex-parser.md)
 - [ADR-0020 — `MAX_PAGES = 10` mirror scan cap](./0020-max-pages-mirror-scan-cap.md)
+- [ADR-0057 — Production ERC-5219 on-chain byte store (EFSBytesStore)](./0057-production-erc5219-bytes-store.md)
 
 ### Security Limits
 - [ADR-0021 — `MAX_ANCHOR_DEPTH = 32`](./0021-max-anchor-depth.md)

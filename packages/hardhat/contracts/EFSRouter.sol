@@ -324,9 +324,13 @@ contract EFSRouter is IDecentralizedApp {
         }
 
         if (_startsWith(uri, "web3://")) {
-            // On-chain fetch via SSTORE2 or similar.
-            // In a real deployed version, web3:// contract addresses are queried.
-            // For now, if uri is internal or points to contract, pull bytes. (Mocking EXTCODECOPY)
+            // On-chain fetch: the mirror points at an EFSBytesStore (or any
+            // contract exposing the chunkCount()/chunkAddress() interface). We
+            // read the SSTORE2 chunks directly via extcodecopy — the efficient,
+            // paginated (EIP-7617) path. The store ALSO implements ERC-5219
+            // (resolveMode/request) so a bare web3://<store> resolves in generic
+            // clients; the router doesn't need that path — extcodecopy is cheaper
+            // and lens-scoped here. See ADR-0057.
 
             // EIP-7617 Chunking Validation
             address targetContract = _parseContractFromWeb3URI(uri);
