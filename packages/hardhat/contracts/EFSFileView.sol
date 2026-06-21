@@ -119,6 +119,12 @@ interface IWhiteoutResolverForFileView {
     /// @notice True iff `attester` has an ACTIVE whiteout suppressing `child` under `parent`.
     ///         See `WhiteoutResolver.isWhitedOut`.
     function isWhitedOut(bytes32 parent, address attester, bytes32 child) external view returns (bool);
+
+    /// @notice True iff `attester` has an ACTIVE opaque-directory marker on `dir` (ADR-0055 opaque
+    ///         variant) — "show only my children here; suppress all lower-lens children." See
+    ///         `WhiteoutResolver.isOpaque`. One SLOAD per directory page (the opaque cut-line), not
+    ///         per item.
+    function isOpaque(bytes32 dir, address attester) external view returns (bool);
 }
 
 /// @notice DRAFT (specs/09-redirect-resolution.md, Proposed). Minimal read view over the
@@ -369,6 +375,13 @@ contract EFSFileView {
         bytes32[] memory buf = new bytes32[](maxItems);
         uint256 count = 0;
 
+        // ADR-0055 opaque cut-line for THIS directory page — computed ONCE here (one isOpaque SLOAD per
+        // lens), then folded O(1) into the per-item predicate in both phases. `max` ⇒ no opaque lens in
+        // the stack, so `_suppressedInOpaqueWalk` reduces to the plain listing predicate (folder-fix).
+        // The folder-visibility TAG definition for this page IS the `anchorSchema` param (ADR-0038) —
+        // NOT the ANCHOR schema UID — so the folder-fix override matches a real visibility TAG.
+        uint256 opaqueIdx = _opaqueCutIdx(parentAnchor, attesters);
+
         // ───── Phase 0: qualifying tagged folders ─────
         if (phase == 0) {
             uint256 folderBudget = _folderScanBudgetPerCall();
@@ -386,10 +399,19 @@ contract EFSFileView {
                     bytes32 uid = batch[k];
                     if (indexer.isRevoked(uid)) continue;
                     if (!edgeResolver.hasActiveTagFromAny(uid, anchorSchema, attesters)) continue;
-                    // Cross-lens negative mask (ADR-0055): a whited-out child advances the walker but
-                    // consumes no slot — same skip as revoked / out-of-lens. Unconditional viewer
-                    // sovereignty (applies to plain AND filtered listings).
-                    if (_isItemWhitedOut(parentAnchor, uid, attesters, indexer.DATA_SCHEMA_UID())) continue;
+                    // Cross-lens negative mask + opaque cut (ADR-0055): a whited-out OR opaque-suppressed
+                    // child advances the walker but consumes no slot — same skip as revoked / out-of-lens.
+                    // Unconditional viewer sovereignty (applies to plain AND filtered listings).
+                    if (
+                        _suppressedInOpaqueWalk(
+                            parentAnchor,
+                            uid,
+                            attesters,
+                            indexer.DATA_SCHEMA_UID(),
+                            anchorSchema,
+                            opaqueIdx
+                        )
+                    ) continue;
                     buf[count++] = uid;
                     if (count == maxItems) break;
                 }
@@ -419,9 +441,19 @@ contract EFSFileView {
                 );
                 for (uint256 k = 0; k < batch.length; k++) {
                     bytes32 uid = batch[k];
-                    // Cross-lens negative mask (ADR-0055): drop whited-out files; the walker advances
-                    // but the slot is not consumed (same as the filtered variant's exclusion skip).
-                    if (_isItemWhitedOut(parentAnchor, uid, attesters, indexer.DATA_SCHEMA_UID())) continue;
+                    // Cross-lens negative mask + opaque cut (ADR-0055): drop whited-out / opaque-
+                    // suppressed files; the walker advances but the slot is not consumed (same as the
+                    // filtered variant's exclusion skip).
+                    if (
+                        _suppressedInOpaqueWalk(
+                            parentAnchor,
+                            uid,
+                            attesters,
+                            indexer.DATA_SCHEMA_UID(),
+                            anchorSchema,
+                            opaqueIdx
+                        )
+                    ) continue;
                     buf[count++] = uid;
                     if (count == maxItems) break;
                 }
@@ -551,6 +583,7 @@ contract EFSFileView {
             dataSchemaUID: indexer.DATA_SCHEMA_UID(),
             anchorSchemaUID: indexer.ANCHOR_SCHEMA_UID(),
             maxItems: maxItems,
+            opaqueIdx: _opaqueCutIdx(parentAnchor, attesters),
             phase: phase,
             folderIdx: folderIdx,
             fileIdx: fileIdx,
@@ -594,6 +627,9 @@ contract EFSFileView {
         bytes32 dataSchemaUID;
         bytes32 anchorSchemaUID;
         uint256 maxItems;
+        // ADR-0055 opaque cut-line for this page (index of the first opaque lens, or max). Computed
+        // ONCE in getDirectoryPageFiltered and folded O(1) into the per-item predicate (single-pass).
+        uint256 opaqueIdx;
         // walker state (mutated in place)
         uint8 phase;
         uint256 folderIdx;
@@ -623,9 +659,19 @@ contract EFSFileView {
                 bytes32 uid = batch[k];
                 if (indexer.isRevoked(uid)) continue;
                 if (!edgeResolver.hasActiveTagFromAny(uid, w.anchorSchema, w.attesters)) continue;
-                // Cross-lens negative mask (ADR-0055): whited-out items advance the walker but consume
-                // no slot. Checked alongside the tag-exclusion predicate (both are post-filter skips).
-                if (_isItemWhitedOut(w.parentAnchor, uid, w.attesters, w.dataSchemaUID)) continue;
+                // Cross-lens negative mask + opaque cut (ADR-0055): whited-out / opaque-suppressed items
+                // advance the walker but consume no slot. Checked alongside the tag-exclusion predicate
+                // (all are post-filter skips). opaqueIdx was computed ONCE for the page.
+                if (
+                    _suppressedInOpaqueWalk(
+                        w.parentAnchor,
+                        uid,
+                        w.attesters,
+                        w.dataSchemaUID,
+                        w.anchorSchema, // visibility-TAG definition for this page (NOT ANCHOR schema UID)
+                        w.opaqueIdx
+                    )
+                ) continue;
                 // Exclusion predicate (post-filter slot accounting): excluded items advance
                 // the walker but consume no slot, identical to a revoked/out-of-lens skip.
                 if (_isItemExcluded(uid, w.attesters, w.filter, w.dataSchemaUID, w.anchorSchemaUID)) continue;
@@ -664,9 +710,19 @@ contract EFSFileView {
             for (uint256 k = 0; k < batch.length; k++) {
                 scanned++;
                 bytes32 uid = batch[k];
-                // Cross-lens negative mask (ADR-0055): whited-out items advance the walker (and the
-                // scan budget) but consume no slot — same post-filter accounting as the exclusion skip.
-                if (_isItemWhitedOut(w.parentAnchor, uid, w.attesters, w.dataSchemaUID)) continue;
+                // Cross-lens negative mask + opaque cut (ADR-0055): whited-out / opaque-suppressed items
+                // advance the walker (and the scan budget) but consume no slot — same post-filter
+                // accounting as the exclusion skip. opaqueIdx was computed ONCE for the page.
+                if (
+                    _suppressedInOpaqueWalk(
+                        w.parentAnchor,
+                        uid,
+                        w.attesters,
+                        w.dataSchemaUID,
+                        w.anchorSchema, // visibility-TAG definition for this page (NOT ANCHOR schema UID)
+                        w.opaqueIdx
+                    )
+                ) continue;
                 if (_isItemExcluded(uid, w.attesters, w.filter, w.dataSchemaUID, w.anchorSchemaUID)) continue;
                 w.buf[w.count++] = uid;
                 if (w.count == w.maxItems) break;
@@ -815,27 +871,92 @@ contract EFSFileView {
     ///
     ///      `whiteoutResolver == address(0)` (disabled) short-circuits to false before any read — a
     ///      pre-WHITEOUT view redeploy keeps its exact prior listing behavior.
-    // AGENT-NOTE (ADR-0055, v1 scope): the same-lens positive-OVERRIDE here fires ONLY for a
-    // DATA-schema placement PIN — i.e. files. A lens that whites out a FOLDER and then re-asserts that
-    // folder's visibility via a visibility TAG (definition = anchorSchema, ADR-0038) will NOT get the
-    // override in v1: this predicate checks `getActivePinTarget(child, lens, dataSchemaUID)` (PIN-only,
-    // Shape A), and folder visibility is TAG-based (Shape B), so a re-asserting visibility TAG is not
-    // seen as a positive terminal and the lens's own whiteout still drops the folder. This is EXPECTED:
-    // ADR-0055 v1 scopes whiteout to per-name file/anchor suppression and DEFERS the opaque-directory /
-    // folder-whiteout variant. When the opaque variant ships, the folder-re-assert override needs its
-    // own conformance vector (visibility-TAG-beats-own-whiteout) added to the suite.
-    function _isItemWhitedOut(
+    /// @dev Single-element-array wrapper for `edgeResolver.hasActiveTagFromAny` (which takes an
+    ///      `address[] calldata`). The folder-fix listing predicate needs a TAG check scoped to ONE
+    ///      lens at a time (precedence-ordered same-lens override), but EdgeResolver only exposes the
+    ///      lens-aware ANY-of-many form — and it is FROZEN-by-UID (its address is hashed into the PIN/
+    ///      TAG schema UIDs), so we cannot add a single-lens getter there. Wrapping the lens in a
+    ///      1-element memory array reuses the frozen reader without touching it (ADR-0055 folder-fix).
+    function _one(address lens) private pure returns (address[] memory arr) {
+        arr = new address[](1);
+        arr[0] = lens;
+    }
+
+    /// @dev RESOLUTION-side per-item negative-mask predicate (ADR-0055). PIN-ONLY positive terminal —
+    ///      the original `_isItemWhitedOut` behavior, kept for single-anchor DATA RESOLUTION
+    ///      (`getFilesAtPath`) and shared in shape with the router's `_findDataAtPath` terminal: a
+    ///      direct file lookup is PIN-gated (correct overlayfs lookup semantics — a folder's visibility
+    ///      TAG is not a file placement, so it must NOT un-gate a DATA read). Walk in precedence order:
+    ///      positive placement PIN FIRST (same-lens positive-before-whiteout), then whiteout.
+    function _isItemWhitedOutForResolution(
         bytes32 parentAnchor,
         bytes32 childAnchor,
         address[] memory attesters,
-        bytes32 dataSchemaUID
+        bytes32 schema
     ) internal view returns (bool) {
         IWhiteoutResolverForFileView wr = whiteoutResolver;
         if (address(wr) == address(0)) return false;
         for (uint256 i = 0; i < attesters.length; i++) {
             address lens = attesters[i];
             // Positive terminal: this lens places its own content here → visible, stop.
-            if (edgeResolver.getActivePinTarget(childAnchor, lens, dataSchemaUID) != bytes32(0)) return false;
+            if (edgeResolver.getActivePinTarget(childAnchor, lens, schema) != bytes32(0)) return false;
+            // Negative terminal: this lens whites the entry out → drop, stop (no fall-through).
+            if (wr.isWhitedOut(parentAnchor, lens, childAnchor)) return true;
+        }
+        return false; // no lens asserted a positive or a whiteout → transparent.
+    }
+
+    /// @dev The opaque cut-line for a directory page: the index of the FIRST lens (precedence order)
+    ///      with an active opaque marker on `parentAnchor`, or `type(uint256).max` if none. Computed
+    ///      ONCE per page (one isOpaque SLOAD per lens, bounded by MAX_ATTESTERS_PER_QUERY), NOT per
+    ///      item — opaque is one EXTRA O(1)-class index source per page, never a per-item doubling
+    ///      (ADR-0055 single-pass mandate). `whiteoutResolver == 0` (disabled) ⇒ max (no cut).
+    function _opaqueCutIdx(bytes32 parentAnchor, address[] memory attesters) internal view returns (uint256) {
+        IWhiteoutResolverForFileView wr = whiteoutResolver;
+        if (address(wr) == address(0)) return type(uint256).max;
+        for (uint256 i = 0; i < attesters.length; i++) {
+            if (wr.isOpaque(parentAnchor, attesters[i])) return i;
+        }
+        return type(uint256).max;
+    }
+
+    /// @dev The per-item LISTING predicate (ADR-0055) WITH the opaque cut folded in (opaque variant,
+    ///      single-pass). This IS the listing-side predicate (split from the resolution-side
+    ///      `_isItemWhitedOutForResolution`): its positive terminal is a file PIN OR a folder
+    ///      visibility TAG (the folder-fix), so a lens that whites out a folder then re-asserts it with
+    ///      its own visibility TAG is un-hidden in listings. `opaqueIdx` is the page-level cut-line from
+    ///      `_opaqueCutIdx`. `visibilityTagDef` is the listing's `anchorSchema` param (the visibility
+    ///      TAG's definition — `dataSchemaUID` in the standard file/folder listing, NOT the ANCHOR
+    ///      schema UID). Walk the lenses in precedence order; the FIRST lens that asserts a positive
+    ///      (file PIN OR folder visibility TAG) is the item's CONTRIBUTING lens:
+    ///        - if that contributing lens is STRICTLY BELOW the opaque cut (`i > opaqueIdx`) ⇒ the
+    ///          opaque lens at `opaqueIdx` curates this directory and suppresses all lower-lens
+    ///          children ⇒ DROP. (A lens AT/ABOVE the cut — `i <= opaqueIdx` — is transparent to the
+    ///          opaque: an opaque by Lk suppresses only lenses strictly below Lk, and Lk's OWN children
+    ///          are shown, so `i == opaqueIdx` is visible.)
+    ///        - else ⇒ VISIBLE.
+    ///      A whiteout on the item before any positive is the usual negative terminal (drop). When
+    ///      `opaqueIdx == max` this reduces EXACTLY to `_isItemWhitedOutForListing` (the folder-fix).
+    function _suppressedInOpaqueWalk(
+        bytes32 parentAnchor,
+        bytes32 childAnchor,
+        address[] memory attesters,
+        bytes32 dataSchemaUID,
+        bytes32 visibilityTagDef,
+        uint256 opaqueIdx
+    ) internal view returns (bool) {
+        IWhiteoutResolverForFileView wr = whiteoutResolver;
+        if (address(wr) == address(0)) return false;
+        for (uint256 i = 0; i < attesters.length; i++) {
+            address lens = attesters[i];
+            // Positive terminal: file placement PIN (Shape A) OR folder visibility TAG (Shape B).
+            if (
+                edgeResolver.getActivePinTarget(childAnchor, lens, dataSchemaUID) != bytes32(0) ||
+                edgeResolver.hasActiveTagFromAny(childAnchor, visibilityTagDef, _one(lens))
+            ) {
+                // Contributing lens found. Drop iff it is strictly below the opaque cut-line.
+                return i > opaqueIdx;
+            }
             // Negative terminal: this lens whites the entry out → drop, stop (no fall-through).
             if (wr.isWhitedOut(parentAnchor, lens, childAnchor)) return true;
         }
@@ -934,7 +1055,22 @@ contract EFSFileView {
         // mirroring the router's `_findDataAtPath` guard.
         if (address(whiteoutResolver) != address(0)) {
             bytes32 parentAnchor = indexer.getParent(anchorUID);
-            if (_isItemWhitedOut(parentAnchor, anchorUID, attesters, schema)) {
+            // Per-name negative terminal (PIN-only resolution predicate — a direct file lookup is
+            // PIN-gated; a folder visibility TAG must not un-gate a DATA read). Plus the terminal
+            // opaque cut (ADR-0055 full-unionfs 2-B): if the parent dir is opaque for some lens and
+            // this anchor's contributing lens is strictly below that cut, the deep link 404s — exactly
+            // the router's per-segment behavior for the terminal segment.
+            if (
+                _isItemWhitedOutForResolution(parentAnchor, anchorUID, attesters, schema) ||
+                _suppressedInOpaqueWalk(
+                    parentAnchor,
+                    anchorUID,
+                    attesters,
+                    schema, // PIN bucket being read
+                    schema, // visibility-def for the contributing-lens check (terminal file resolution)
+                    _opaqueCutIdx(parentAnchor, attesters)
+                )
+            ) {
                 page.items = new FileSystemItem[](0);
                 page.nextCursor = "";
                 return page;

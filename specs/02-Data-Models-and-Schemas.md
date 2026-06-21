@@ -363,6 +363,33 @@ See [ADR-0044](../docs/adr/0044-list-and-list-entry-schemas.md) and [Lists and C
 
 See [ADR-0050](../docs/adr/0050-redirect-canonical-symlink-schema.md) for full design rationale.
 
+## Schema 11 + 12: WHITEOUT and WHITEOUT_OPAQUE (additive post-freeze, ADR-0055)
+
+> **Not in the frozen nine.** WHITEOUT and WHITEOUT_OPAQUE are added **additively after the Sepolia freeze** (ADR-0055) — a new schema + resolver orphans nothing, exactly how SORT_INFO or any future primitive is added. They are not part of the nine-schema freeze set. Both share one resolver, `WhiteoutResolver`.
+
+**Purpose**: the cross-lens **negative mask** — the one filesystem primitive additive-only lenses (ADR-0031) otherwise lack: *"render this path empty in MY view; stop fall-through to lower lenses, WITHOUT substituting my own content."* This is the overlayfs *whiteout*. It powers the lens-local **delete** of inherited content and the other half of a lens-local **rename** (whiteout the old inherited name + place the new one). There are **two markers**:
+
+| Schema | Field string | Revocable | refUID | Payload | Resolver |
+|---|---|---|---|---|---|
+| **WHITEOUT** | `""` (empty — pure-identity negative marker, DATA/ADR-0049 idiom) | yes (revoke == un-hide) | the suppressed **child path ANCHOR** | none (zero-length) | WhiteoutResolver |
+| **WHITEOUT_OPAQUE** | `"bool opaque"` (non-empty — see note) | yes (revoke == un-opaque) | the opaque **directory's own generic-folder ANCHOR** (`forSchema == 0`) | `abi.encode(true)` | WhiteoutResolver |
+
+> **Why `WHITEOUT_OPAQUE`'s field string is non-empty.** An EAS schema UID is `keccak256(fieldString, resolver, revocable)`. Both WHITEOUT schemas share the resolver proxy and `revocable = true`, so an *empty* opaque field string would self-derive the **same UID** as the per-name WHITEOUT — a collision. `"bool opaque"` gives a distinct UID and is self-describing. The payload `abi.encode(true)` is a defensive `require true` guard, not a toggle: there is no `opaque == false` marker — un-opaque is `revoke`, exactly like un-hide.
+
+- **Per-name WHITEOUT** (`refUID = leaf/folder Anchor`) hides one entry. Keyed on `(parent, attester, suppressedChildAnchor)` — `parent = indexer.getParent(refUID)`. Whiting out a root-level anchor reverts (`OrphanAnchor`): there is no lens below the parent slot to suppress.
+- **WHITEOUT_OPAQUE** (`refUID = a generic FOLDER Anchor`) is the **curation** marker: *"show only MY children here; suppress all lower-lens children, including ones added later."* "Hide everything below" as one whiteout per descendant is unbounded and races future additions, so opaque is a distinct, single marker keyed on `(dir, attester)` alone. An opaque on a file/key/sort anchor reverts (`OpaqueTargetNotFolder`); opaque on a root-child folder is allowed (it keys on `(dir)` alone — no orphan-parent problem).
+
+**Write-time guards** (`WhiteoutResolver`, both markers): `a.schema` must be the resolver's own self-derived WHITEOUT / WHITEOUT_OPAQUE UID (`WrongSchema` otherwise — EAS lets anyone register a foreign schema pointing here); `revocable` (`NotRevocable`); no expiry (`HasExpiration`); `refUID != 0` (`ZeroRef`); per-name payload empty (`BadPayload`); opaque payload `== abi.encode(true)` (`BadPayload`); per-name refUID is an ANCHOR (`SourceNotAnchor`); opaque refUID is a generic folder (`OpaqueTargetNotFolder`). The resolver keeps its **own** append-only discovery indices (ADR-0009 shape), NOT co-keyed with EdgeResolver, and writes no kernel state (read-only `getParent` / `ANCHOR_SCHEMA_UID`).
+
+**Read-time resolution** (`EFSFileView` listings + `EFSRouter` path walk) — *"deleted means gone" across BOTH listing AND resolution*:
+- **Negative terminal in first-attester-wins**: walking `L0…system`, the first lens at a path with EITHER a positive placement (file PIN or folder visibility TAG) OR a whiteout terminates the scan — positive ⇒ serve / list it; whiteout ⇒ serve **empty** (404-equivalent) and **stop** (no fall-through, no `system` gap-fill).
+- **Opaque cut**: an opaque marker by `Lk` on directory `D` suppresses every child of `D` whose contributing lens is **strictly below** `Lk` (lower lenses), in both directory listings and direct (deep-link) path resolution. `Lk`'s own children — and any lens above `Lk` — are unaffected.
+- **Lens-scoped & viewer-sovereign**: both markers affect only viewers who voluntarily include the authoring lens; never a global delete. Revoke un-hides / un-opaques. Same-lens override: a lens's own newer positive placement beats its own earlier whiteout (in listings the positive can be a visibility TAG — the folder re-add fix; in single-anchor DATA *resolution* the positive is PIN-only, the correct overlayfs lookup gate). Reads stay single-pass (one extra O(1)-class index source per page, never a per-item doubling).
+
+**Out of scope (explicit, ADR-0055)**: DATA-whiteout (suppressing a DATA UID directly) is **not** a unionfs concept and is not built — whiteout suppresses a *path entry* in a lens, not content identity. Suppressing a PROPERTY / MIRROR / another whiteout is meaningless and rejected at write time.
+
+See [ADR-0055](../docs/adr/0055-whiteout-cross-lens-negative-mask.md) for full design rationale + the rejected encodings (REDIRECT kind, TAG `weight < 0`, sentinel PIN, tombstone DATA).
+
 ## Schema Hierarchy
 To represent a standard filesystem interaction where a file has a name within a folder:
 1. **Parent Folder** (e.g., Anchor "memes") →

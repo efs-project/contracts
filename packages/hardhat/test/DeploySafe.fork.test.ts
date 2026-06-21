@@ -290,13 +290,15 @@ describe("DeploySafe.fork — Safe-native deploy, born Safe-owned", function () 
     // Re-build the plan against the deployed+sealed system. This is the post-seal re-run path.
     const plan = await buildSafePlan(deployer, deployedSafe, false);
 
-    // ── The omit flags are set: bootstrap+seal omitted, and all 9 registers omitted ─────────────────
+    // ── The omit flags are set: bootstrap+seal omitted, and all register legs omitted ───────────────
+    // SCHEMAS is the frozen nine PLUS the additive post-freeze WHITEOUT + WHITEOUT_OPAQUE (ADR-0055),
+    // so the count is now the full SCHEMAS.length, not a hardcoded 9 — every register leg is omitted on
+    // a post-seal re-run (register is NOT idempotent).
     expect(plan.batch2BootstrapOmitted, "batch2BootstrapOmitted on a post-seal re-run").to.equal(true);
-    expect(SCHEMAS.length, "freeze set is 9 schemas").to.equal(9);
     expect(
       plan.batch2RegistersOmitted,
-      "all 9 register legs omitted — the schemas are already registered (register is NOT idempotent)",
-    ).to.equal(9);
+      "all register legs omitted — the schemas are already registered (register is NOT idempotent)",
+    ).to.equal(SCHEMAS.length);
 
     // ── Batch 2 is EMPTY — every register leg + bootstrap + seal omitted (full idempotency) ─────────
     expect(plan.batch2, "Batch 2 is an empty no-op (all registers + bootstrap + seal omitted)").to.have.lengthOf(0);
