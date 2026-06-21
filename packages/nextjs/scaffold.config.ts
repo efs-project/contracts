@@ -55,11 +55,12 @@ const sepoliaChain: chains.Chain = SEPOLIA_RPC_URL
 // `NEXT_PUBLIC_TARGET_CHAIN` is an explicit override that always wins — e.g. a production
 // build pointed at a VPS hardhat-fork sets it to "hardhat". The runtime switcher works
 // either way. (Supersedes the earlier hardhat-always default — see docs/decisions.md.)
-const TARGET_CHAIN = (
-  process.env.NEXT_PUBLIC_TARGET_CHAIN ?? (process.env.NODE_ENV === "production" ? "sepolia" : "hardhat")
-)
-  .trim()
-  .toLowerCase();
+//
+// A blank/whitespace override counts as UNSET (a copied `.env`/hosting config often ships an empty
+// `NEXT_PUBLIC_TARGET_CHAIN=`). `??` only catches null/undefined, not "", so coalesce explicitly —
+// otherwise a prod SPA with a blank value would wrongly start on hardhat. (Codex P2.)
+const TARGET_CHAIN_OVERRIDE = (process.env.NEXT_PUBLIC_TARGET_CHAIN ?? "").trim().toLowerCase();
+const TARGET_CHAIN = TARGET_CHAIN_OVERRIDE || (process.env.NODE_ENV === "production" ? "sepolia" : "hardhat");
 const defaultIsSepolia = TARGET_CHAIN === "sepolia" || TARGET_CHAIN === "11155111";
 
 const RECOGNIZED = ["", "hardhat", "local", "31337", "sepolia", "11155111"];
