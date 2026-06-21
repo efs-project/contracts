@@ -75,15 +75,27 @@ contract** that is simultaneously:
      concatenates; a single-chunk store returns the whole file in one call with no
      next header. The chunk index is read from the `chunk` query param (default 0,
      non-reverting). The body is `bytes` and raw — the binary mechanism validated
-     above. statusCode is `uint16`. A no-code chunk (corrupt/incomplete store) →
-     `(500, "Chunk contract has no code", [])`; an explicit out-of-bounds index →
-     `(404, "Chunk out of bounds", [])`; an empty store → `(200, "", [Content-Type])`.
-     Error responses carry no `web3-next-chunk`, so a client never loops on a fault.
+     above. statusCode is `uint16`. A codeless chunk is rejected **at construction**
+     (`require` in the constructor) so a corrupt/incomplete store can't be deployed —
+     this matters because ERC-7617 clients ignore the status code on follow-up chunks
+     and append only the body, so a later chunk faulting with a `(500, …)` body would
+     concatenate its error string into the file; `request()` keeps a belt-and-suspenders
+     no-code **revert** (unreachable post-construction, SSTORE2 chunks can't
+     self-destruct) so any such fault fails the whole `eth_call` cleanly rather than
+     corrupting the stream. An explicit out-of-bounds index → `(404, "Chunk out of
+     bounds", [])` (an oversized decimal `chunk` value saturates rather than overflow-
+     reverting); an empty store → `(200, "", [Content-Type])`. Error responses carry no
+     `web3-next-chunk`, so a client never loops on a fault.
 
    **Why per-chunk, not whole-file.** A `request()` that reassembles the entire
    file in one `eth_call` fails for large files — real gateways (w3link, eth.limo)
    cap `eth_call` response size/gas (~50M). Per-chunk reads stay ~24KB, so a bare
-   `web3://<EFSBytesStore>` resolves files of **any size**. Critically, EIP-7617
+   `web3://<EFSBytesStore>` resolves files of **any readable size** — read
+   resolution is unbounded. (The *upload* side is still capped by the
+   manager-deploy gas ceiling: the constructor stores every chunk address in one
+   tx, so a single store tops out around the documented chunk count — see
+   `docs/FUTURE_WORK.md`. Pagination removes the read cap, not the write cap.)
+   Critically, EIP-7617
    pagination cannot be added to an immutable store *after* deployment (the contract
    must emit the `web3-next-chunk` header), so shipping it now — before this surface
    is Etched — avoids a fleet-wide redeploy later. The next-chunk value is
@@ -112,6 +124,13 @@ defaults to `application/octet-stream` (matches the router's fallback, ADR-0018)
 This keeps the store self-describing for the generic-client path without coupling
 it to the attestation graph — the router path still uses the lens-scoped PROPERTY
 and is unaffected.
+
+The deployer-supplied MIME is **sanitized at construction** (ADR-0024): quotes,
+backslash, and control bytes (`< 0x20`, incl. CR/LF) are stripped before the value
+is stored, so the `Content-Type` header `request()` emits can't be used to inject
+extra headers into a generic web3:// gateway response. The router already applied
+this defense to the lens-scoped PROPERTY value; mirroring it on the bare-store path
+closes the same hole there (a malicious store deployer is the threat actor).
 
 **The two MIME sources may legitimately disagree — by design.** The store's
 constructor `contentType` is the *deployer's* immutable claim; the lens-scoped
@@ -168,11 +187,15 @@ this ADR closes. Router stays redeployable (not frozen).
   debug client keeps working and previously-uploaded files keep resolving; the
   stores the debug UI deploys are simply chunk-only (not standalone ERC-5219)
   until re-vendored. Re-vendoring the new 2-arg bytecode + passing a content type
-  (SDK and debug UI together) is the tracked follow-up in
-  `planning/Designs/web3-bytesstore-sdk-followup.md`.
+  (SDK and debug UI together) is tracked durably in-repo at `docs/FUTURE_WORK.md`
+  and GitHub issue
+  [#34](https://github.com/efs-project/contracts/issues/34) (the detailed
+  hand-off spec lives in `planning/Designs/web3-bytesstore-sdk-followup.md`), so
+  the defer stands on its own even if this PR lands before the planning vault.
 - **Gas / large files:** `request()` returns at most one ~24KB chunk per call, so
-  every response stays well under node `eth_call` size/gas caps — files of any size
-  resolve via the bare-store path by following the `web3-next-chunk` chain. (The
+  every response stays well under node `eth_call` size/gas caps — any file that
+  fits the manager-deploy gas cap resolves via the bare-store path by following
+  the `web3-next-chunk` chain (read resolution itself is unbounded). (The
   earlier whole-file-in-one-call design hit those caps for large files; EIP-7617
   pagination is the fix and is shipped here, not deferred.)
 - **Sub-path / range semantics are permanently foreclosed at the store — by design.**
@@ -197,8 +220,9 @@ this ADR closes. Router stays redeployable (not frozen).
   reflect a production on-chain byte store.
 - Tests: `EFSBytesStore` round-trips bytes via both `chunkAddress` (router path)
   and the paginated `request()` chain (standard path), single- and multi-chunk,
-  binary with embedded `0x00`, plus first-call/mid/last/out-of-bounds(404)/no-code(500)/
-  empty-store/garbage-param edges; the router still serves `web3://<router>/<path>`
+  binary with embedded `0x00`, plus first-call/mid/last/out-of-bounds(404)/
+  oversized-decimal-saturates(404)/codeless-chunk-rejected-at-construction/
+  content-type-sanitization/empty-store/garbage-param edges; the router still serves `web3://<router>/<path>`
   for an on-chain-stored file. The pagination was **verified empirically against the
   real `web3protocol` reference client** (multi-chunk store reassembled to exact
   bytes; `/?chunk=` leading-slash requirement confirmed). Update

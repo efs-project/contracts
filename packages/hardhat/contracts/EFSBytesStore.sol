@@ -45,9 +45,21 @@ contract EFSBytesStore {
     ///                     Trailing underscore avoids shadowing `contentType()`.
     constructor(address[] memory chunks, string memory contentType_) {
         for (uint256 i = 0; i < chunks.length; i++) {
+            // Reject codeless chunk addresses at construction. A store that
+            // advertises a chunk whose later `request()` faults would corrupt the
+            // ERC-7617 stream — clients ignore the status code on follow-up chunks
+            // and append the body verbatim, so a faulting later chunk's error
+            // string would be concatenated into the file. SSTORE2 data contracts
+            // have no SELFDESTRUCT, so a chunk validated here keeps its code
+            // permanently; this closes the corruption vector at the source. (ADR-0057)
+            require(chunks[i].code.length > 0, "EFSBytesStore: chunk has no code");
             _chunks.push(chunks[i]);
         }
-        _contentType = contentType_;
+        // Sanitize the deployer-supplied MIME once at construction (ADR-0024): the
+        // value is emitted as a `Content-Type` header on the ERC-5219 path, so
+        // strip quotes/backslash/control bytes that could break out of the header
+        // for generic web3:// gateways.
+        _contentType = _sanitizeHeaderValue(contentType_);
     }
 
     // ── Chunk interface (router extcodecopy path) ─────────────────────────────
@@ -121,17 +133,20 @@ contract EFSBytesStore {
             return (404, bytes("Chunk out of bounds"), new KeyValue[](0));
         }
 
-        // No-code chunk = corrupt/incomplete store: fail loudly rather than serve a
-        // truncated 200, matching the router's "Storage contract has no code" 500.
-        // (A 1-byte STOP-only chunk is a valid empty payload; size == 1 is allowed.)
+        // No-code chunk = corrupt/incomplete store. The constructor already rejects
+        // codeless chunks and SSTORE2 contracts can't self-destruct, so this is
+        // unreachable in practice — but if it ever occurs, REVERT rather than return
+        // a 500 body. ERC-7617 clients ignore the status code on follow-up chunks and
+        // stream only the body, so a 500 here would append "Chunk contract has no
+        // code" into the file; a reverted eth_call is the only corruption-free
+        // failure (the whole fetch errors cleanly). (A 1-byte STOP-only chunk is a
+        // valid empty payload; size == 1 is allowed.)
         address chunk = _chunks[index];
         uint256 size;
         assembly {
             size := extcodesize(chunk)
         }
-        if (size == 0) {
-            return (500, bytes("Chunk contract has no code"), new KeyValue[](0));
-        }
+        require(size != 0, "EFSBytesStore: chunk has no code");
 
         body = _readChunk(chunk, size);
 
@@ -152,8 +167,9 @@ contract EFSBytesStore {
     /// @dev Read one chunk's payload. The runtime is `0x00 || data` (SSTORE2
     ///      convention), so we skip the leading STOP byte: copy `size - 1` bytes from
     ///      code offset 1. A STOP-only chunk (`size == 1`) yields empty bytes. Caller
-    ///      has already ruled out `size == 0` (no-code 500). Memory-safe: `new
-    ///      bytes(len)` allocates exactly the data region the extcodecopy fills.
+    ///      has already ruled out `size == 0` (constructor validation + no-code
+    ///      revert). Memory-safe: `new bytes(len)` allocates exactly the data region
+    ///      the extcodecopy fills.
     function _readChunk(address chunk, uint256 size) private view returns (bytes memory out) {
         if (size > 1) {
             uint256 len = size - 1;
@@ -178,15 +194,46 @@ contract EFSBytesStore {
         return 0;
     }
 
-    /// @dev Decimal string → uint256, non-reverting (any non-digit byte or empty → 0).
+    /// @dev Decimal string → uint256, non-reverting (any non-digit byte or empty → 0;
+    ///      an oversized decimal saturates to `type(uint256).max`). Saturation matters:
+    ///      without it a long all-digit `chunk` value overflows Solidity 0.8 checked
+    ///      arithmetic and reverts the whole `request()` eth_call instead of returning
+    ///      a clean 404 (the caller bounds-checks `index >= count`). Truly non-reverting.
     function _parseUint(string memory str) private pure returns (uint256 result) {
         bytes memory b = bytes(str);
         if (b.length == 0) return 0;
         for (uint256 i = 0; i < b.length; i++) {
             uint8 c = uint8(b[i]);
             if (c < 48 || c > 57) return 0;
-            result = result * 10 + (c - 48);
+            uint256 digit = c - 48;
+            if (result > (type(uint256).max - digit) / 10) return type(uint256).max;
+            result = result * 10 + digit;
         }
+    }
+
+    /// @dev Strip double-quotes, backslash, and control bytes (< 0x20) from a header
+    ///      value to prevent header injection via the deployer-supplied MIME type.
+    ///      Mirrors `EFSRouter._sanitizeHeaderValue` (ADR-0024) so the bare-store
+    ///      ERC-5219 path has the same defense as the router path.
+    function _sanitizeHeaderValue(string memory value) private pure returns (string memory) {
+        bytes memory raw = bytes(value);
+        uint256 safeCount = 0;
+        for (uint256 i = 0; i < raw.length; i++) {
+            bytes1 c = raw[i];
+            if (c != '"' && c != "\\" && uint8(c) >= 0x20) {
+                safeCount++;
+            }
+        }
+        if (safeCount == raw.length) return value; // nothing to strip
+        bytes memory out = new bytes(safeCount);
+        uint256 j = 0;
+        for (uint256 i = 0; i < raw.length; i++) {
+            bytes1 c = raw[i];
+            if (c != '"' && c != "\\" && uint8(c) >= 0x20) {
+                out[j++] = c;
+            }
+        }
+        return string(out);
     }
 
     /// @dev The `web3-next-chunk` header value for next index `n` — `/?chunk=<n>`

@@ -67,6 +67,14 @@ describe("EFSBytesStore", function () {
     throw new Error("pagination did not terminate");
   };
 
+  beforeEach(async function () {
+    // The constructor now rejects codeless chunks (corruption prevention), so plant a
+    // default 1-byte runtime at each chunk address up front; tests that assert on
+    // specific bytes re-plant (setCode overwrites). The dedicated no-code addresses
+    // (0x…200 / 0x…201) are intentionally NOT planted, so those stores fail to deploy.
+    for (const addr of CHUNK_ADDRS) await plantChunk(addr, Buffer.from("x"));
+  });
+
   describe("chunk interface (router extcodecopy path)", function () {
     it("reports chunk count and addresses from the constructor", async function () {
       const store = await deployStore(CHUNK_ADDRS, "application/octet-stream");
@@ -230,30 +238,48 @@ describe("EFSBytesStore", function () {
       expect(Buffer.from(ethers.getBytes(body)).toString()).to.equal("Chunk out of bounds");
     });
 
-    it("a client following the chain into a no-code chunk gets a clean 500 (no next-chunk loop)", async function () {
-      // chunk 0 has code and advertises /?chunk=1; chunk 1 is a pristine no-code
-      // address. A conformant client follows the advertised link and must hit a
-      // loud 500 with NO further next-chunk header (so it stops, never loops).
+    it("an oversized chunk decimal saturates to a clean 404, not a reverted eth_call", async function () {
+      // A long all-digit value would overflow Solidity 0.8 checked math in the parser
+      // and revert the whole request(); _parseUint saturates to type(uint256).max so
+      // the bounds check returns a clean 404 instead.
       await plantChunk(CHUNK_ADDRS[0], Buffer.from("a"));
-      const noCodeAddr = "0x0000000000000000000000000000000000000200";
-      const store = await deployStore([CHUNK_ADDRS[0], noCodeAddr], "text/plain");
+      const store = await deployStore([CHUNK_ADDRS[0]], "text/plain");
 
-      const [s0, , h0] = await store.request([], []);
-      expect(s0).to.equal(200);
-      expect(header(h0, "web3-next-chunk")).to.equal("/?chunk=1"); // chain points at the bad chunk
-
-      const [statusCode, body, headers] = await store.request([], [{ key: "chunk", value: "1" }]);
-      expect(statusCode).to.equal(500);
-      expect(Buffer.from(ethers.getBytes(body)).toString()).to.equal("Chunk contract has no code");
-      expect(headers.length).to.equal(0); // no next-chunk header on an error → client stops
+      const huge = "9".repeat(100);
+      const [statusCode, body] = await store.request([], [{ key: "chunk", value: huge }]);
+      expect(statusCode).to.equal(404);
+      expect(Buffer.from(ethers.getBytes(body)).toString()).to.equal("Chunk out of bounds");
     });
 
-    it("returns 500 for a no-code chunk 0 (default request)", async function () {
+    it("sanitizes a header-injecting content type at construction (ADR-0024)", async function () {
+      await plantChunk(CHUNK_ADDRS[0], Buffer.from("x"));
+      // CRLF + quote + backslash + control bytes would break out of the Content-Type
+      // header for a generic web3:// gateway; all are stripped at construction.
+      const evil = 'text/html"\r\nSet-Cookie: x\t\\';
+      const sanitized = "text/htmlSet-Cookie: x"; // ", \r, \n, \t (<0x20), \\ all removed
+      const store = await deployStore([CHUNK_ADDRS[0]], evil);
+
+      expect(await store.contentType()).to.equal(sanitized);
+      const [, , headers] = await store.request([], []);
+      expect(header(headers, "Content-Type")).to.equal(sanitized);
+    });
+  });
+
+  describe("no-code chunk rejection (corruption prevention)", function () {
+    // ERC-7617 clients ignore the status code on follow-up chunks and append only the
+    // body, so a later chunk that faults would concatenate its error string into the
+    // file. The store closes this at the source: a codeless chunk can't be deployed.
+    it("rejects construction of a store whose chunk 0 has no code", async function () {
       const noCodeAddr = "0x0000000000000000000000000000000000000201";
-      const store = await deployStore([noCodeAddr], "text/plain");
-      const [statusCode, body] = await store.request([], []);
-      expect(statusCode).to.equal(500);
-      expect(Buffer.from(ethers.getBytes(body)).toString()).to.equal("Chunk contract has no code");
+      await expect(deployStore([noCodeAddr], "text/plain")).to.be.revertedWith("EFSBytesStore: chunk has no code");
+    });
+
+    it("rejects construction when any later chunk has no code (no corrupt stream possible)", async function () {
+      await plantChunk(CHUNK_ADDRS[0], Buffer.from("a"));
+      const noCodeAddr = "0x0000000000000000000000000000000000000200";
+      await expect(deployStore([CHUNK_ADDRS[0], noCodeAddr], "text/plain")).to.be.revertedWith(
+        "EFSBytesStore: chunk has no code",
+      );
     });
   });
 
