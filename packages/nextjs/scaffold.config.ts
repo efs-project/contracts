@@ -46,21 +46,24 @@ const sepoliaChain: chains.Chain = SEPOLIA_RPC_URL
 // or "sepolia"/"11155111".
 //
 // The default keys off the BUILD TYPE so each audience just works with zero config:
-//   • `next dev` (NODE_ENV=development) → hardhat — paired with the local `yarn preview`
-//     fork that dev already runs. No env var, no script change.
-//   • `next build` static SPA (NODE_ENV=production) → Sepolia — a deployed SPA has no
-//     local node, so it talks to the live chain (no dedicated RPC needed; falls back to
-//     the shared scaffold Alchemy key / public RPC, overridable via NEXT_PUBLIC_*).
+//   • `next dev` (development) → hardhat — paired with the local `yarn preview` fork dev runs.
+//   • `next build` static SPA (production) → Sepolia — a deployed SPA has no local node, so it
+//     talks to the live chain (no dedicated RPC needed; falls back to the shared scaffold Alchemy
+//     key / public RPC, overridable via NEXT_PUBLIC_*).
+//   • EXCEPTION — a production build with NEXT_PUBLIC_HARDHAT_RPC_URL set points the hardhat chain
+//     at a real fork (the devnet VPS export, AGENTS.md → static export). That's a hardhat-fork
+//     deploy, not a public Sepolia SPA, so it defaults to hardhat — keeping the documented devnet
+//     build correct WITHOUT needing an extra TARGET_CHAIN=hardhat. (Codex P2.)
 //
-// `NEXT_PUBLIC_TARGET_CHAIN` is an explicit override that always wins — e.g. a production
-// build pointed at a VPS hardhat-fork sets it to "hardhat". The runtime switcher works
-// either way. (Supersedes the earlier hardhat-always default — see docs/decisions.md.)
-//
-// A blank/whitespace override counts as UNSET (a copied `.env`/hosting config often ships an empty
-// `NEXT_PUBLIC_TARGET_CHAIN=`). `??` only catches null/undefined, not "", so coalesce explicitly —
-// otherwise a prod SPA with a blank value would wrongly start on hardhat. (Codex P2.)
+// `NEXT_PUBLIC_TARGET_CHAIN` is an explicit override that always wins. A blank/whitespace value
+// counts as UNSET — `??` only catches null/undefined, not "", and a copied `.env`/hosting config
+// often ships an empty `NEXT_PUBLIC_TARGET_CHAIN=`, which must not wrongly pin a prod SPA to hardhat.
+// (Supersedes the earlier hardhat-always default — see docs/decisions.md.)
 const TARGET_CHAIN_OVERRIDE = (process.env.NEXT_PUBLIC_TARGET_CHAIN ?? "").trim().toLowerCase();
-const TARGET_CHAIN = TARGET_CHAIN_OVERRIDE || (process.env.NODE_ENV === "production" ? "sepolia" : "hardhat");
+const HARDHAT_RPC_CONFIGURED = (process.env.NEXT_PUBLIC_HARDHAT_RPC_URL ?? "").trim().length > 0;
+const BUILD_DEFAULT =
+  process.env.NODE_ENV === "production" ? (HARDHAT_RPC_CONFIGURED ? "hardhat" : "sepolia") : "hardhat";
+const TARGET_CHAIN = TARGET_CHAIN_OVERRIDE || BUILD_DEFAULT;
 const defaultIsSepolia = TARGET_CHAIN === "sepolia" || TARGET_CHAIN === "11155111";
 
 const RECOGNIZED = ["", "hardhat", "local", "31337", "sepolia", "11155111"];

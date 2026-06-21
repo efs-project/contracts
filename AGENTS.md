@@ -212,6 +212,8 @@ yarn build
 
 Outputs `packages/nextjs/out/`. `ipfs add -r out/` → copy the resulting root CID to the ENS name.
 
+This build defaults to the **hardhat** chain because `NEXT_PUBLIC_HARDHAT_RPC_URL` is set — a production build with that var points the hardhat chain at a real fork (this devnet VPS), so it's treated as a hardhat-fork deploy. A production build *without* a hardhat RPC (a public Sepolia SPA) defaults to **Sepolia**. Set `NEXT_PUBLIC_TARGET_CHAIN` to override either way (see `packages/nextjs/scaffold.config.ts`).
+
 **Deep-link SPA fallback.** The only truly dynamic route is `/explorer/[[...path]]` — anchor / address / schema / attestation URLs aren't enumerable at build time. Next's static export emits one shell at `/explorer/index.html`; `public/_redirects` tells IPFS gateways (per the [web-redirects spec](https://specs.ipfs.tech/http-gateways/web-redirects-file/), honored by Kubo ≥ 0.23 and eth.limo) to serve that shell with status 200 for any `/explorer/*` URL. The shell is a client component that reads `useParams()` at runtime and renders the real path. Blockexplorer's `/address/[address]` and `/transaction/[txHash]` use the same trick via dummy `generateStaticParams` values.
 
 **CORS prerequisite on the VPS.** Because the app origin (`app.efs.eth.limo`) is different from the service origin (the VPS), the VPS reverse proxy (Caddy/nginx) MUST respond with:
