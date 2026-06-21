@@ -52,7 +52,7 @@ async function main() {
   const listReader = (await ethers.getContract("ListReader", deployer)) as unknown as ListReader;
 
   // The live resolver-proxy address baked into each FROZEN-NINE schema's UID, keyed by the schemas.ts
-  // ResolverName. WhiteoutResolver (the additive post-freeze WHITEOUT schemas, ADR-0055) is NOT part of
+  // ResolverName. WhiteoutResolver (the additive post-freeze WHITEOUT schema, ADR-0055) is NOT part of
   // this frozen-nine conformance check, so it is intentionally absent — the loop below filters to
   // `frozenNine`, which never indexes it. Hence a Partial map.
   const proxies: Partial<Record<ResolverName, string>> = {
@@ -90,10 +90,9 @@ async function main() {
     registryAddr,
   )) as any;
 
-  // The FROZEN nine (ADR-0048) are the schemas NOT on the WhiteoutResolver — WHITEOUT and
-  // WHITEOUT_OPAQUE (ADR-0055) are additive post-freeze schemas on a separate proxy, so they are
-  // excluded from the frozen-nine conformance check (they have their own self-UID getters asserted in
-  // the deploy verify gate, not here).
+  // The FROZEN nine (ADR-0048) are the schemas NOT on the WhiteoutResolver — WHITEOUT (ADR-0055) is an
+  // additive post-freeze schema on a separate proxy, so it is excluded from the frozen-nine conformance
+  // check (it has its own self-UID getter asserted in the deploy verify gate, not here).
   const frozenNine = SCHEMAS.filter(s => s.resolver !== "WhiteoutResolver");
   assert("freeze set has exactly 9 schemas (schemas.ts)", frozenNine.length === 9, `got ${frozenNine.length}`);
 

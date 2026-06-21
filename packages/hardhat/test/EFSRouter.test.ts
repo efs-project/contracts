@@ -177,7 +177,7 @@ describe("EFSRouter Web3 Capabilities", function () {
       // ADR-0053 systemAccount: zero here → router falls back to indexer.DEPLOYER() (= owner =
       // deployer in these unit tests), preserving the pre-ADR-0053 default-lens behavior.
       ethers.ZeroAddress,
-      // ADR-0055 whiteoutResolver: zero → whiteout/opaque disabled (this suite predates WHITEOUT and
+      // ADR-0055 whiteoutResolver: zero → whiteout disabled (this suite predates WHITEOUT and
       // exercises only the positive resolution path), so the negative-mask reads are skipped.
       ethers.ZeroAddress,
     );

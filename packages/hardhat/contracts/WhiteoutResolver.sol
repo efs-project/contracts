@@ -35,9 +35,9 @@ interface IEFSIndexerForWhiteout {
  *                 key shape or its storage).
  *
  *      v1 SCOPE (narrows ADR-0055's "ANCHOR or DATA" — the ADR left v1 scope open): refUID MUST be an
- *      ANCHOR. DATA-whiteout and the opaque-directory marker are DEFERRED — additive later (widening
- *      the guard never orphans data). Suppressing a PROPERTY / MIRROR / DATA / another whiteout is
- *      meaningless and rejected at write time (SourceNotAnchor).
+ *      ANCHOR. DATA-whiteout is DEFERRED — additive later (widening the guard never orphans data).
+ *      Suppressing a PROPERTY / MIRROR / DATA / another whiteout is meaningless and rejected at write
+ *      time (SourceNotAnchor).
  *
  *      WRITE-TIME GUARDS ONLY + a read-side discovery index. This resolver does NOT write kernel
  *      state — it reads `getParent` (ADR-0055: read-side only; the kernel's indices and
@@ -67,10 +67,6 @@ contract WhiteoutResolver is EFSUpgradeableResolver {
     error HasExpiration();
     error SourceNotAnchor();
     error OrphanAnchor();
-    // ADR-0055 opaque variant: the opaque marker's refUID MUST be a generic FOLDER anchor
-    // (forSchema == bytes32(0)). Suppressing "all lower-lens children" only makes sense on a
-    // directory; an opaque marker on a file/key/sort anchor is meaningless and rejected at write time.
-    error OpaqueTargetNotFolder();
 
     // ── Events ──────────────────────────────────────────────────────────────────
     // Indexed topics: parent, suppressedChild, whiteoutUID. The attester is left non-indexed
@@ -90,13 +86,6 @@ contract WhiteoutResolver is EFSUpgradeableResolver {
         address attester,
         bytes32 indexed whiteoutUID
     );
-    // Opaque-directory marker (ADR-0055 opaque variant). `dir` is the opaque folder anchor (the
-    // attestation's refUID); `attester` is the lens that curated it. `opaqueUID` (the attestation's
-    // own UID) is the join key for correlating with native EAS Attested/Revoked logs and for
-    // last-writer-wins liveness, so it earns the indexed slot. `dir` is the per-(dir) key an opaque
-    // marker is stored under (keyed on (dir) alone — NOT (parent, child) like a per-name whiteout).
-    event OpaqueAttested(bytes32 indexed dir, address attester, bytes32 indexed opaqueUID);
-    event OpaqueRevoked(bytes32 indexed dir, address attester, bytes32 indexed opaqueUID);
 
     // ── Constants ───────────────────────────────────────────────────────────────
     // The WHITEOUT field string — FROZEN (ADR-0055) and MUST match the deploy registration exactly
@@ -105,15 +94,6 @@ contract WhiteoutResolver is EFSUpgradeableResolver {
     // attestations from any OTHER schema an attacker registers pointing at this resolver (which would
     // otherwise bypass write-time enforcement).
     string private constant WHITEOUT_DEFINITION = "";
-
-    // The WHITEOUT_OPAQUE field string — FROZEN (ADR-0055 opaque variant) once registered; MUST match
-    // the deploy registration byte-for-byte (it's hashed into the opaque schema UID). It is NON-empty
-    // ("bool opaque") on purpose: an empty string would self-derive the SAME UID as the per-name
-    // WHITEOUT (both share this resolver proxy + revocable=true), so the two schemas would collide.
-    // "bool opaque" gives a DISTINCT UID and is self-describing — the payload is abi.encode(true),
-    // guarded == true at write time (a defensive payload, not a meaningful toggle: there is no
-    // "opaque == false" marker — un-opaque is `revoke`, like the per-name marker's un-hide).
-    string private constant WHITEOUT_OPAQUE_DEFINITION = "bool opaque";
 
     // ============================================================================================
     // ERC-7201 NAMESPACED CONFIG (per-deployment, set in initialize())
@@ -130,8 +110,7 @@ contract WhiteoutResolver is EFSUpgradeableResolver {
         // after revoke); readers/predicate filter on the marker. NEVER pop the list (ADR-0009).
         //
         // childrenWhitedOut[parent][attester] — append-only discovery list of suppressed child
-        // anchors (a per-name whiteout keys on (parent, suppressedChildAnchor); leave room here for
-        // a future opaque-directory marker keyed on (parent) alone, ADR-0055 — DEFERRED, not built).
+        // anchors (a per-name whiteout keys on (parent, suppressedChildAnchor)).
         mapping(bytes32 parent => mapping(address attester => bytes32[] children)) childrenWhitedOut;
         // isChildWhitedOut[parent][attester][child] — append-once membership guard so re-whiteout of
         // the same child by the same attester doesn't double-push the discovery list (idempotent).
@@ -142,27 +121,6 @@ contract WhiteoutResolver is EFSUpgradeableResolver {
         // revoke (last-writer-wins). cardinality-1 per (parent, attester, child).
         mapping(bytes32 parent => mapping(address attester => mapping(bytes32 child => bytes32 uid)))
             activeWhiteout;
-        // ─────────────────────────────────────────────────────────────────────────────────────
-        // OPAQUE-DIRECTORY MARKER (ADR-0055 opaque variant) — APPENDED to the ERC-7201 struct
-        // (never reorder the fields above; appending preserves every existing storage slot). Same
-        // two-structure shape as the per-name marker (append-only discovery list + active marker for
-        // O(1) liveness), but keyed on (dir) alone — an opaque marker is NOT per-child, it suppresses
-        // ALL lower-lens children of `dir` (including ones added later). `dir` = the opaque folder's
-        // OWN anchor (the attestation's refUID).
-        //
-        // whiteoutOpaqueSchemaUID — self-derived against the PROXY in initialize() (the SECOND
-        // self-UID; see WHITEOUT_OPAQUE_DEFINITION). onAttest/onRevoke branch on it.
-        bytes32 whiteoutOpaqueSchemaUID;
-        // activeOpaque[dir][attester] — the LIVE opaque UID for this (dir, attester) slot, or 0 when
-        // none/revoked. The O(1) liveness predicate (`isOpaque` != 0) reads this; cleared on revoke
-        // (last-writer-wins). cardinality-1 per (dir, attester).
-        mapping(bytes32 dir => mapping(address attester => bytes32 uid)) activeOpaque;
-        // opaqueDirs[attester] — append-only discovery list of dirs `attester` ever made opaque (a
-        // stale entry — revoked — stays; readers filter on the marker). NEVER pop (ADR-0009).
-        mapping(address attester => bytes32[] dirs) opaqueDirs;
-        // isOpaqueListed[attester][dir] — append-once membership guard so re-opaquing the same dir by
-        // the same attester doesn't double-push the discovery list (idempotent).
-        mapping(address attester => mapping(bytes32 dir => bool)) isOpaqueListed;
     }
 
     // keccak256(abi.encode(uint256(keccak256("efs.whiteout.config")) - 1)) & ~bytes32(uint256(0xff))
@@ -199,12 +157,9 @@ contract WhiteoutResolver is EFSUpgradeableResolver {
         bytes32 anchorUID = indexer_.ANCHOR_SCHEMA_UID();
         require(anchorUID != bytes32(0), "anchorSchemaUID is zero");
         $.anchorSchemaUID = anchorUID;
-        // address(this) == proxy here (delegatecall) — matches the EAS-registered resolver. BOTH
-        // self-UIDs are derived here against the proxy: the per-name WHITEOUT (empty field string) and
-        // the OPAQUE-directory marker ("bool opaque"). The two share this resolver + revocable=true, so
-        // the distinct field strings are what give them distinct UIDs (see WHITEOUT_OPAQUE_DEFINITION).
+        // address(this) == proxy here (delegatecall) — matches the EAS-registered resolver. The
+        // per-name WHITEOUT self-UID is derived here against the proxy (empty field string).
         $.whiteoutSchemaUID = keccak256(abi.encodePacked(WHITEOUT_DEFINITION, address(this), true));
-        $.whiteoutOpaqueSchemaUID = keccak256(abi.encodePacked(WHITEOUT_OPAQUE_DEFINITION, address(this), true));
     }
 
     // ── Getters ───────────────────────────────────────────────────────────────────
@@ -217,15 +172,6 @@ contract WhiteoutResolver is EFSUpgradeableResolver {
     ///      deploy verify gate (deploy-lib/verify.ts) asserts this equals the computed WHITEOUT UID.
     function whiteoutSchemaUID() external view returns (bytes32) {
         return _cfg().whiteoutSchemaUID;
-    }
-
-    /// @notice This resolver's own WHITEOUT_OPAQUE schema UID (ADR-0055 opaque variant), self-derived
-    ///         in initialize() against the PROXY address from the "bool opaque" field string. The
-    ///         opaque-directory marker schema shares this resolver with the per-name WHITEOUT; the
-    ///         distinct field string is what separates their UIDs. The deploy verify gate asserts this
-    ///         equals the computed WHITEOUT_OPAQUE UID.
-    function whiteoutOpaqueSchemaUID() external view returns (bytes32) {
-        return _cfg().whiteoutOpaqueSchemaUID;
     }
 
     /// @notice The EFSIndexer (proxy) this resolver reads (getParent + ANCHOR_SCHEMA_UID). Read-only.
@@ -249,24 +195,6 @@ contract WhiteoutResolver is EFSUpgradeableResolver {
     /// @param child    The suppressed child anchor (the refUID of the whiteout).
     function isWhitedOut(bytes32 parent, address attester, bytes32 child) external view returns (bool) {
         return _cfg().activeWhiteout[parent][attester][child] != bytes32(0);
-    }
-
-    /// @notice O(1) liveness predicate: true iff `attester` has an ACTIVE opaque marker on directory
-    ///         `dir` (ADR-0055 opaque variant). The listing walk (EFSFileView) and the router's
-    ///         per-segment cut call this once per directory page / segment to compute the opaque
-    ///         cut-line. A revoked opaque reads false (the marker was cleared); a re-attested one reads
-    ///         true under the new UID (last-writer-wins).
-    /// @param dir      The opaque folder anchor (an opaque marker's refUID).
-    /// @param attester The lens whose opaque marker to read.
-    function isOpaque(bytes32 dir, address attester) external view returns (bool) {
-        return _cfg().activeOpaque[dir][attester] != bytes32(0);
-    }
-
-    /// @notice Length of the append-only opaque-dir discovery list for `attester` — INCLUDING stale
-    ///         (revoked) entries (ADR-0009: the list never pops). Co-shaped with
-    ///         `getChildrenWhitedOutCount`; readers filter live entries via `isOpaque`.
-    function getOpaqueDirsCount(address attester) external view returns (uint256) {
-        return _cfg().opaqueDirs[attester].length;
     }
 
     /// @notice Paged discovery: child anchors `attester` has an ACTIVE whiteout on under `parent`.
@@ -314,10 +242,8 @@ contract WhiteoutResolver is EFSUpgradeableResolver {
 
     function onAttest(Attestation calldata a, uint256) internal override returns (bool) {
         WhiteoutConfig storage $ = _cfg();
-        // Branch on the schema (ADR-0055): the per-name WHITEOUT and the opaque-directory marker share
-        // this resolver but have distinct UIDs. EAS lets anyone register a NEW schema pointing at this
-        // resolver; without this dispatch their attests would skip write-time typing → WrongSchema.
-        if (a.schema == $.whiteoutOpaqueSchemaUID) return _onAttestOpaque($, a);
+        // EAS lets anyone register a NEW schema pointing at this resolver; reject any attestation whose
+        // schema is not this resolver's own self-derived per-name WHITEOUT UID.
         if (a.schema != $.whiteoutSchemaUID) revert WrongSchema();
         // Empty field string ⇒ zero-length payload (pure-identity marker). A non-empty data field is
         // not a WHITEOUT this resolver authored.
@@ -361,56 +287,6 @@ contract WhiteoutResolver is EFSUpgradeableResolver {
         return true;
     }
 
-    /// @dev Opaque-directory marker write path (ADR-0055 opaque variant). Same lifecycle invariants as
-    ///      the per-name marker (revocable, no expiry) PLUS: payload is `abi.encode(true)` (a defensive
-    ///      `require true`, not a toggle — un-opaque is `revoke`), and refUID MUST be a generic FOLDER
-    ///      anchor (`getAttestation(refUID).schema == ANCHOR` AND its decoded `forSchema == 0`). An
-    ///      opaque marker on a file/key/sort anchor is meaningless (OpaqueTargetNotFolder); an opaque
-    ///      marker on root IS allowed (suppressing all lower-lens root children is a coherent curation
-    ///      act — unlike a per-name whiteout, opaque keys on (dir) alone, so there is no orphan-parent
-    ///      problem). Keyed on (dir, attester); last-writer-wins; append-once discovery push.
-    function _onAttestOpaque(WhiteoutConfig storage $, Attestation calldata a) private returns (bool) {
-        // Payload guard: the "bool opaque" field decodes to exactly one bool, and it MUST be true. A
-        // false/garbage payload is not an opaque marker this resolver authored (there is no opaque==false
-        // marker; un-opaque is revoke). Reject anything that isn't a clean abi.encode(true).
-        if (a.data.length != 32) revert BadPayload();
-        bool opaque = abi.decode(a.data, (bool));
-        if (!opaque) revert BadPayload();
-        // refUID is the opaque directory; an opaque marker with no directory is meaningless.
-        if (a.refUID == bytes32(0)) revert ZeroRef();
-        // Lifecycle invariants (mirror the per-name path): revoke == un-opaque, no expiry.
-        if (!a.revocable) revert NotRevocable();
-        if (a.expirationTime != 0) revert HasExpiration();
-
-        // Typing: refUID MUST be a generic FOLDER anchor. First it must be an ANCHOR at all, then its
-        // payload's forSchema must be bytes32(0) (the generic-folder discriminant — files/keys/sort
-        // anchors carry a non-zero forSchema). Suppressing "all lower children" only means something on
-        // a directory.
-        Attestation memory refAtt = _eas.getAttestation(a.refUID);
-        if (refAtt.schema != $.anchorSchemaUID) revert OpaqueTargetNotFolder();
-        // Decode (name, forSchema); a generic folder has forSchema == 0. Guard the decode on non-empty
-        // data (EAS permits a zero-length data field on any schema; an unguarded decode would panic).
-        bytes32 forSchema = bytes32(0);
-        if (refAtt.data.length > 0) {
-            (, forSchema) = abi.decode(refAtt.data, (string, bytes32));
-        }
-        if (forSchema != bytes32(0)) revert OpaqueTargetNotFolder();
-
-        bytes32 dir = a.refUID;
-        address attester = a.attester;
-
-        // Append-once discovery push (idempotent re-opaque of the same dir by the same attester).
-        if (!$.isOpaqueListed[attester][dir]) {
-            $.isOpaqueListed[attester][dir] = true;
-            $.opaqueDirs[attester].push(dir);
-        }
-        // Last-writer-wins liveness marker.
-        $.activeOpaque[dir][attester] = a.uid;
-
-        emit OpaqueAttested(dir, attester, a.uid);
-        return true;
-    }
-
     function onRevoke(Attestation calldata a, uint256) internal override returns (bool) {
         // revocable == true: a WHITEOUT can always be retracted (un-hide). Guard the schema for
         // symmetry with onAttest (reject foreign-schema revokes), then clear the live marker — but
@@ -419,9 +295,7 @@ contract WhiteoutResolver is EFSUpgradeableResolver {
         // revoking the stale older one must not wipe the live newer pointer. The append-only
         // discovery list entry is left in place (ADR-0009 never pops); readers filter on the marker.
         WhiteoutConfig storage $ = _cfg();
-        // Dispatch on schema (mirror onAttest): the opaque-directory revoke clears its own (dir,
-        // attester) marker. Foreign schemas pointed at this resolver are rejected (WrongSchema).
-        if (a.schema == $.whiteoutOpaqueSchemaUID) return _onRevokeOpaque($, a);
+        // Mirror onAttest: reject foreign-schema revokes pointed at this resolver (WrongSchema).
         if (a.schema != $.whiteoutSchemaUID) revert WrongSchema();
         if (a.data.length != 0) revert BadPayload();
         if (a.refUID == bytes32(0)) revert ZeroRef();
@@ -443,28 +317,6 @@ contract WhiteoutResolver is EFSUpgradeableResolver {
         }
 
         emit WhiteoutRevoked(parent, child, attester, a.uid);
-        return true;
-    }
-
-    /// @dev Opaque-directory marker revoke path (ADR-0055 opaque variant). Mirror the per-name revoke:
-    ///      guard the payload (`abi.encode(true)` — EAS replays the original attestation's data on
-    ///      revoke) + refUID, then clear the live (dir, attester) marker ONLY if it still points at
-    ///      THIS uid (last-writer-wins — a newer opaque on the same dir by the same attester may own the
-    ///      marker, and revoking the stale one must not wipe it). The append-only discovery list entry
-    ///      stays (ADR-0009). Like the per-name path, refUID typing is NOT re-checked — anchors are
-    ///      immutable, and the `== a.uid` guard makes any mismatch a harmless no-op.
-    function _onRevokeOpaque(WhiteoutConfig storage $, Attestation calldata a) private returns (bool) {
-        if (a.data.length != 32) revert BadPayload();
-        if (!abi.decode(a.data, (bool))) revert BadPayload();
-        if (a.refUID == bytes32(0)) revert ZeroRef();
-
-        bytes32 dir = a.refUID;
-        address attester = a.attester;
-        if ($.activeOpaque[dir][attester] == a.uid) {
-            $.activeOpaque[dir][attester] = bytes32(0);
-        }
-
-        emit OpaqueRevoked(dir, attester, a.uid);
         return true;
     }
 }

@@ -2,8 +2,8 @@ import { expect } from "chai";
 import { getAddress } from "ethers";
 import { SCHEMAS, computeSchemaUID } from "../deploy-lib/schemas";
 
-// I-1 (frozen golden vectors). This guards an ETCHED surface: the 9 frozen field strings (+ the 2
-// additive post-freeze WHITEOUT field strings, ADR-0055) hash into the permanent Sepolia schema UIDs. The verify gate's golden-vector step recomputes UIDs from
+// I-1 (frozen golden vectors). This guards an ETCHED surface: the 9 frozen field strings (+ the
+// additive post-freeze WHITEOUT field string, ADR-0055) hash into the permanent Sepolia schema UIDs. The verify gate's golden-vector step recomputes UIDs from
 // deploy-lib/schemas.ts against itself, which is circular for the 7 schemas whose field strings only
 // appear as NatSpec comments in the resolver contracts (ANCHOR/PROPERTY/DATA/PIN/TAG/MIRROR/LIST) —
 // a typo in schemas.ts for those would not be caught on-chain. This test breaks that tautology: it
@@ -30,7 +30,7 @@ interface GoldenVector {
   uid: string; // computeSchemaUID(fieldString, MOCK_RESOLVER, revocable)
 }
 
-// FROZEN. Order matches docs/SEPOLIA_FREEZE_TABLE.md (1–9), then the additive WHITEOUT schemas (ADR-0055).
+// FROZEN. Order matches docs/SEPOLIA_FREEZE_TABLE.md (1–9), then the additive WHITEOUT schema (ADR-0055).
 const GOLDEN: GoldenVector[] = [
   {
     name: "ANCHOR",
@@ -86,26 +86,20 @@ const GOLDEN: GoldenVector[] = [
     revocable: true,
     uid: "0xd448aa033fb2d32840169f6a0a8a6bf8d5dcff5a7768b7a7d9fa9b48217342ce",
   },
-  // ── ADDITIVE post-freeze (ADR-0055) — NOT part of the frozen nine, but their field strings are
-  //    still hashed into permanent UIDs once registered, so they are golden-pinned here too. ──
+  // ── ADDITIVE post-freeze (ADR-0055) — NOT part of the frozen nine, but its field string is
+  //    still hashed into a permanent UID once registered, so it is golden-pinned here too. ──
   {
     name: "WHITEOUT",
     fieldString: "",
     revocable: true,
     uid: "0xcad2a30531b688969bef16f8ac631a94da7e320bed0023136cc1f9b4c6226e7a",
   },
-  {
-    name: "WHITEOUT_OPAQUE",
-    fieldString: "bool opaque",
-    revocable: true,
-    uid: "0x2a8b7348da4088ae0ef7716c969ecd64f5b863f81016ea43d6d23e286cc21fd3",
-  },
 ];
 
 describe("Schema golden vectors (frozen — no fork)", function () {
-  it("schemas.ts has exactly the frozen nine + the additive WHITEOUT schemas, in order", function () {
-    // GOLDEN = the frozen nine (freeze-table order) followed by the two additive post-freeze WHITEOUT
-    // schemas (ADR-0055). The full equality also pins that the additive schemas stay appended LAST
+  it("schemas.ts has exactly the frozen nine + the additive WHITEOUT schema, in order", function () {
+    // GOLDEN = the frozen nine (freeze-table order) followed by the additive post-freeze WHITEOUT
+    // schema (ADR-0055). The full equality also pins that the additive schema stays appended LAST
     // (never reordered into the frozen nine).
     expect(SCHEMAS.map(s => s.name)).to.deep.equal(GOLDEN.map(g => g.name));
   });

@@ -155,7 +155,7 @@ function initSpecs(
     ListResolver: { fn: "initialize", args: [] },
     ListEntryResolver: { fn: "initialize", args: [schemaUIDs.LIST] },
     AliasResolver: { fn: "initialize", args: [schemaUIDs.DATA, schemaUIDs.ANCHOR] },
-    // WhiteoutResolver (ADR-0055): read-only kernel ref. It self-derives BOTH WHITEOUT schema UIDs +
+    // WhiteoutResolver (ADR-0055): read-only kernel ref. It self-derives its WHITEOUT schema UID +
     // snapshots ANCHOR_SCHEMA_UID from the indexer in initialize(); no kernel writes, no Ownable.
     WhiteoutResolver: { fn: "initialize", args: [proxies.EFSIndexer] },
     // SystemAccount: born Safe-owned so the Safe (its owner) can author the scaffolding in Batch 2.

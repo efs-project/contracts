@@ -84,11 +84,6 @@ export async function runVerifyGate(input: VerifyInput): Promise<void> {
   const whiteoutR = await ethers.getContractAt("WhiteoutResolver", deploys.WhiteoutResolver.proxy, deployer);
   const onchainWhiteoutUID: string = await whiteoutR.whiteoutSchemaUID();
   assertEq(onchainWhiteoutUID, schemaUIDs.WHITEOUT, "WhiteoutResolver.whiteoutSchemaUID");
-  // WHITEOUT_OPAQUE (ADR-0055 opaque variant): the SAME WhiteoutResolver self-derives a SECOND UID from
-  // its "bool opaque" field-string constant + the proxy address — assert it too, before the irreversible
-  // register (both self-UIDs must match the to-be-registered set).
-  const onchainOpaqueUID: string = await whiteoutR.whiteoutOpaqueSchemaUID();
-  assertEq(onchainOpaqueUID, schemaUIDs.WHITEOUT_OPAQUE, "WhiteoutResolver.whiteoutOpaqueSchemaUID");
 
   // (3b) init-supplied cross-reference UIDs (PR #24 50yr-review, M-1). (3) above only checks the two
   //      SELF-DERIVED UIDs (ListEntry/Alias). The UIDs threaded INTO initialize() as typing/config

@@ -291,9 +291,9 @@ describe("DeploySafe.fork — Safe-native deploy, born Safe-owned", function () 
     const plan = await buildSafePlan(deployer, deployedSafe, false);
 
     // ── The omit flags are set: bootstrap+seal omitted, and all register legs omitted ───────────────
-    // SCHEMAS is the frozen nine PLUS the additive post-freeze WHITEOUT + WHITEOUT_OPAQUE (ADR-0055),
-    // so the count is now the full SCHEMAS.length, not a hardcoded 9 — every register leg is omitted on
-    // a post-seal re-run (register is NOT idempotent).
+    // SCHEMAS is the frozen nine PLUS the additive post-freeze WHITEOUT (ADR-0055), so the count is the
+    // full SCHEMAS.length, not a hardcoded 9 — every register leg is omitted on a post-seal re-run
+    // (register is NOT idempotent).
     expect(plan.batch2BootstrapOmitted, "batch2BootstrapOmitted on a post-seal re-run").to.equal(true);
     expect(
       plan.batch2RegistersOmitted,

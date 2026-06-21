@@ -7,9 +7,8 @@ import { legacySuperseded } from "../deploy-lib/superseded";
 const EAS_ADDRESS = "0xC2679fBD37d54388Ce493F1DB75320D236e1815e";
 const SCHEMA_REGISTRY_ADDRESS = "0x0a7E2Ff54e76B8E6659aedc9103FB21c038050D0";
 
-// WHITEOUT deploy (ADR-0055) — LOCAL/DEVNET path. The cross-lens negative mask resolver + its TWO
-// schemas (additive 10th + 11th schemas, post-freeze): WHITEOUT (per-name) and WHITEOUT_OPAQUE
-// (opaque-directory marker), both against the SAME WhiteoutResolver proxy.
+// WHITEOUT deploy (ADR-0055) — LOCAL/DEVNET path. The cross-lens negative mask resolver + its
+// WHITEOUT (per-name) schema (additive 10th schema, post-freeze) against the WhiteoutResolver proxy.
 //
 // On CreateX networks (Sepolia / mainnet / pinned fork) WHITEOUT is deployed by the orchestrated core
 // (deploy/00_efs_core.ts → deploy-lib/orchestrate.ts: WhiteoutResolver is the 7th RESOLVERS entry,
@@ -61,15 +60,8 @@ const deployWhiteout: DeployFunction = async function (hre: HardhatRuntimeEnviro
     ["string", "address", "bool"],
     [whiteoutDefinition, futureProxyAddr, whiteoutRevocable],
   );
-  // WHITEOUT_OPAQUE (ADR-0055 opaque variant) — SAME proxy, distinct field string "bool opaque".
-  const whiteoutOpaqueDefinition = "bool opaque";
-  const whiteoutOpaqueSchemaUID = ethers.solidityPackedKeccak256(
-    ["string", "address", "bool"],
-    [whiteoutOpaqueDefinition, futureProxyAddr, whiteoutRevocable],
-  );
   console.log("Predicted WhiteoutResolver proxy:", futureProxyAddr);
   console.log("Pre-computed WHITEOUT_SCHEMA_UID:", whiteoutSchemaUID);
-  console.log("Pre-computed WHITEOUT_OPAQUE_SCHEMA_UID:", whiteoutOpaqueSchemaUID);
 
   // 4. Deploy the implementation (constructor: IEAS) then the proxy, initialized with the indexer.
   await deploy("WhiteoutResolverImpl", {
@@ -101,7 +93,7 @@ const deployWhiteout: DeployFunction = async function (hre: HardhatRuntimeEnviro
     );
   }
 
-  // 5. Register BOTH schemas against the proxy (try/catch — idempotent if already registered).
+  // 5. Register the WHITEOUT schema against the proxy (try/catch — idempotent if already registered).
   try {
     const tx = await schemaRegistry.register(whiteoutDefinition, whiteoutResolver.target, whiteoutRevocable);
     await tx.wait();
@@ -109,29 +101,15 @@ const deployWhiteout: DeployFunction = async function (hre: HardhatRuntimeEnviro
   } catch {
     console.log("Failed to register WHITEOUT (likely already exists). Skipping.");
   }
-  try {
-    const tx = await schemaRegistry.register(whiteoutOpaqueDefinition, whiteoutResolver.target, whiteoutRevocable);
-    await tx.wait();
-    console.log("Registered WHITEOUT_OPAQUE schema:", whiteoutOpaqueSchemaUID);
-  } catch {
-    console.log("Failed to register WHITEOUT_OPAQUE (likely already exists). Skipping.");
-  }
 
-  // 6. Verify gate (local mirror of deploy-lib/verify.ts): the resolver self-derived BOTH UIDs.
+  // 6. Verify gate (local mirror of deploy-lib/verify.ts): the resolver self-derived the UID.
   const onchainUID = await whiteoutResolver.whiteoutSchemaUID();
   if (onchainUID.toLowerCase() !== whiteoutSchemaUID.toLowerCase()) {
     throw new Error(
       `WHITEOUT verify gate: WhiteoutResolver.whiteoutSchemaUID() ${onchainUID} != computed ${whiteoutSchemaUID}`,
     );
   }
-  const onchainOpaqueUID = await whiteoutResolver.whiteoutOpaqueSchemaUID();
-  if (onchainOpaqueUID.toLowerCase() !== whiteoutOpaqueSchemaUID.toLowerCase()) {
-    throw new Error(
-      `WHITEOUT verify gate: WhiteoutResolver.whiteoutOpaqueSchemaUID() ${onchainOpaqueUID} != ` +
-        `computed ${whiteoutOpaqueSchemaUID}`,
-    );
-  }
-  console.log("WhiteoutResolver deployment complete (both self-UIDs verified).");
+  console.log("WhiteoutResolver deployment complete (self-UID verified).");
 };
 
 export default deployWhiteout;

@@ -2,10 +2,9 @@
 //
 // The original NINE schemas frozen at Sepolia registration (ADR-0048; docs/SEPOLIA_FREEZE_TABLE.md):
 // ANCHOR, PROPERTY, DATA, PIN, TAG, MIRROR, LIST, LIST_ENTRY, REDIRECT — those nine and their UIDs
-// are FROZEN. WHITEOUT (ADR-0055) is a 10th schema added ADDITIVELY post-freeze, and WHITEOUT_OPAQUE
-// (ADR-0055 opaque variant) is an 11th — both share the WhiteoutResolver proxy (a new schema +
-// resolver orphans nothing — exactly how SORT_INFO / any future primitive is added; ADR-0055
-// Consequences). Neither is part of the original frozen nine.
+// are FROZEN. WHITEOUT (ADR-0055) is a 10th schema added ADDITIVELY post-freeze on the WhiteoutResolver
+// proxy (a new schema + resolver orphans nothing — exactly how SORT_INFO / any future primitive is
+// added; ADR-0055 Consequences). It is not part of the original frozen nine.
 //
 // Each schema's UID is `keccak256(abi.encodePacked(fieldString, resolverProxyAddr, revocable))`.
 // The field strings here are the GOLDEN VECTORS — they must be byte-identical to the
@@ -39,7 +38,7 @@ export interface SchemaDef {
   resolver: ResolverName;
 }
 
-// The 9 frozen schemas + the 2 additive post-freeze WHITEOUT schemas (11 total), in deploy/register
+// The 9 frozen schemas + the additive post-freeze WHITEOUT schema (10 total), in deploy/register
 // order. Field strings + revocable flags are FROZEN (changing any orphans the schema's data on a chain
 // where it is registered).
 export const SCHEMAS: SchemaDef[] = [
@@ -81,13 +80,6 @@ export const SCHEMAS: SchemaDef[] = [
   // Empty field string (pure-identity negative marker, DATA/ADR-0049 idiom); revocable (revoke ==
   // un-hide). Cross-lens negative mask / lens-local delete. Resolver: WhiteoutResolver (7th proxy).
   { name: "WHITEOUT", fieldString: "", revocable: true, resolver: "WhiteoutResolver" },
-  // WHITEOUT_OPAQUE (ADR-0055 opaque variant) — the 11th schema, also ADDITIVE post-freeze, SAME
-  // WhiteoutResolver proxy. NON-empty field string "bool opaque" (payload abi.encode(true)) on purpose:
-  // an empty string would self-derive the SAME UID as WHITEOUT (shared resolver + revocable=true), so
-  // the distinct field string is what separates the two schemas' UIDs. The opaque-directory marker —
-  // "show only my children here; suppress all lower-lens children, incl. future ones." revocable
-  // (revoke == un-opaque). Resolver: WhiteoutResolver (7th proxy — two schemas, one resolver).
-  { name: "WHITEOUT_OPAQUE", fieldString: "bool opaque", revocable: true, resolver: "WhiteoutResolver" },
 ];
 
 /// The distinct resolver contracts, in deploy order (impls first, then proxies).

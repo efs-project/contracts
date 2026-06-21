@@ -77,15 +77,6 @@ interface IEdgeResolverForRouter {
         address attester,
         bytes32 targetSchema
     ) external view returns (bytes32);
-
-    /// @notice Lens-aware TAG-specific check: true iff ANY of `attesters` has an active TAG on
-    ///         (targetID, definition). Used by the per-segment opaque cut to find an intermediate
-    ///         folder's contributing lens (folder visibility is TAG-based, ADR-0038, Shape B).
-    function hasActiveTagFromAny(
-        bytes32 targetID,
-        bytes32 definition,
-        address[] calldata attesters
-    ) external view returns (bool);
 }
 
 /// @notice Minimal read view over the WhiteoutResolver (ADR-0055) for the router's negative terminal.
@@ -95,11 +86,6 @@ interface IWhiteoutResolverForRouter {
     /// @notice True iff `attester` has an ACTIVE whiteout suppressing `child` under `parent`.
     ///         See `WhiteoutResolver.isWhitedOut`.
     function isWhitedOut(bytes32 parent, address attester, bytes32 child) external view returns (bool);
-
-    /// @notice True iff `attester` has an ACTIVE opaque-directory marker on `dir` (ADR-0055 opaque
-    ///         variant). See `WhiteoutResolver.isOpaque`. The router's per-segment cut reads this once
-    ///         per segment to make a deep link into a suppressed path 404 (full-unionfs 2-B).
-    function isOpaque(bytes32 dir, address attester) external view returns (bool);
 }
 
 interface IEAS {
@@ -249,11 +235,8 @@ contract EFSRouter is IDecentralizedApp {
         //    the JSON fallback below still serves raw EAS info for either case.
         (ContainerFlavor flavor, bytes32 rawUID) = _classifyTopLevel(resource[0]);
 
-        // Parse params + compute the effective lens stack BEFORE the segment walk (ADR-0055 full-
-        // unionfs 2-B): the per-segment opaque cut needs the lens stack to decide whether a deep link
-        // descends into a suppressed subtree. The address-default block depends only on flavor / rawUID
-        // / caller / lensesExplicit — all known here — so moving this above the walk is behavior-neutral
-        // for the existing data-resolution path (which reads the same `lenses` afterward).
+        // Parse params (lenses / caller / chunk) + apply the address-default lens block before the
+        // segment walk. The data-resolution path below reads the same `lenses`.
         address[] memory lenses;
         bool lensesExplicit = false;
         address caller = msg.sender; // non-zero if web3:// client sets `from` on eth_call
@@ -271,8 +254,7 @@ contract EFSRouter is IDecentralizedApp {
         }
 
         // Address-default lenses: when browsing an address container with no explicit `?lenses=`,
-        // default to `[caller, segmentAddr, system]`. (See the data-resolution comment below — moved up
-        // verbatim so the opaque cut and `_findDataAtPath` use the SAME stack.)
+        // default to `[caller, segmentAddr, system]` (matches the data-resolution comment below).
         if (flavor == ContainerFlavor.Address && !lensesExplicit) {
             address segmentAddr = address(uint160(uint256(rawUID)));
             address sys = _systemLens();
@@ -287,10 +269,6 @@ contract EFSRouter is IDecentralizedApp {
                 lenses[1] = sys;
             }
         }
-
-        // The effective attester stack the opaque cut walks — identical to the one `_findDataAtPath`
-        // resolves against (caller→system fallback, or empty if the user removed every lens).
-        address[] memory effLenses = _effectiveLenses(lenses, caller, lensesExplicit);
 
         bytes32 currentParent;
         bytes32 targetAnchor;
@@ -327,17 +305,6 @@ contract EFSRouter is IDecentralizedApp {
             }
 
             if (targetAnchor == bytes32(0)) {
-                return (404, bytes("Not Found: Path does not exist"), new KeyValue[](0));
-            }
-
-            // ADR-0055 full-unionfs (2-B) per-segment opaque cut: if `currentParent` (the directory
-            // this segment is resolved UNDER) is opaque for some lens, and `targetAnchor`'s contributing
-            // lens is strictly BELOW that opaque cut-line, the child is suppressed for this viewer — a
-            // deep link descending through a suppressed subtree 404s exactly as a directory listing
-            // would hide it. Applied to EVERY segment (intermediate folders AND the terminal), so the
-            // suppression can't be bypassed by deep-linking past the listing. Guarded on the resolver
-            // being wired (zero-cost when disabled).
-            if (_segmentOpaqueSuppressed(currentParent, targetAnchor, effLenses)) {
                 return (404, bytes("Not Found: Path does not exist"), new KeyValue[](0));
             }
 
@@ -908,10 +875,9 @@ contract EFSRouter is IDecentralizedApp {
     // back to caller/system). Without this flag an empty `?lenses=` would be indistinguishable
     // from an absent one, violating viewer sovereignty.
     /// @dev Build the effective attester stack from the parsed `lenses` + caller fallback (ADR-0031 /
-    ///      ADR-0039 / ADR-0053). Extracted so the per-segment opaque cut (ADR-0055 2-B) walks the SAME
-    ///      stack `_findDataAtPath` resolves against — they must agree on viewer sovereignty. Returns an
-    ///      EMPTY array when the user supplied an explicit `?lenses=` that parsed to zero valid lenses
-    ///      (every lens, including system, removed): no data, no opaque cut, no fallback.
+    ///      ADR-0039 / ADR-0053). Returns an EMPTY array when the user supplied an explicit `?lenses=`
+    ///      that parsed to zero valid lenses (every lens, including system, removed): no data, no
+    ///      fallback (viewer sovereignty).
     function _effectiveLenses(
         address[] memory lenses,
         address caller,
@@ -933,60 +899,6 @@ contract EFSRouter is IDecentralizedApp {
             attesters = new address[](1);
             attesters[0] = systemLens;
         }
-    }
-
-    /// @dev Per-segment opaque cut (ADR-0055 full-unionfs 2-B). True iff resolving `child` under
-    ///      directory `D` must 404 for the viewer because an opaque lens curates `D` and `child`'s
-    ///      contributing lens is strictly below that opaque cut-line. Mirrors EFSFileView's
-    ///      `_suppressedInOpaqueWalk`: find `D`'s opaque cut index (first lens with an opaque marker on
-    ///      `D`), then the child's contributing lens (first lens with a placement PIN on `child` for
-    ///      DATA, OR a folder visibility TAG on `child` for ANCHOR — Shape A/B); suppress iff that
-    ///      contributing index is strictly greater than the opaque index. `whiteoutResolver == 0`
-    ///      (disabled) or an empty lens stack ⇒ never suppress (zero extra reads).
-    function _segmentOpaqueSuppressed(
-        bytes32 D,
-        bytes32 child,
-        address[] memory attesters
-    ) private view returns (bool) {
-        IWhiteoutResolverForRouter wr = whiteoutResolver;
-        if (address(wr) == address(0) || attesters.length == 0) return false;
-
-        // Opaque cut-line on D: first lens (precedence order) with an active opaque marker.
-        uint256 opaqueIdx = type(uint256).max;
-        for (uint256 i = 0; i < attesters.length; i++) {
-            if (wr.isOpaque(D, attesters[i])) {
-                opaqueIdx = i;
-                break;
-            }
-        }
-        if (opaqueIdx == type(uint256).max) return false; // no opaque lens curates D → nothing to cut.
-
-        // Both the file-placement PIN and the folder-visibility TAG key on `definition = dataSchema`
-        // (ADR-0038 / the upload flow: `TAG(definition=dataSchemaUID, refUID=folder)`), so a single
-        // schema drives the contributing-lens lookup — matching EFSFileView's listing predicate where
-        // the visibility-TAG definition is the listing's `anchorSchema` (= dataSchemaUID in standard
-        // file/folder browsing).
-        bytes32 dataSchema = indexer.DATA_SCHEMA_UID();
-        // Child's contributing lens: first lens with a placement PIN (file) OR visibility TAG (folder).
-        for (uint256 i = 0; i < attesters.length; i++) {
-            address lens = attesters[i];
-            if (
-                edgeResolver.getActivePinTarget(child, lens, dataSchema) != bytes32(0) ||
-                edgeResolver.hasActiveTagFromAny(child, dataSchema, _oneLens(lens))
-            ) {
-                // Contributing lens found — suppress iff it is strictly below the opaque cut-line.
-                return i > opaqueIdx;
-            }
-        }
-        return false; // no contributing lens (anchor exists but unplaced) → not opaque-suppressed.
-    }
-
-    /// @dev Single-element memory array wrapper for `edgeResolver.hasActiveTagFromAny` (calldata
-    ///      `address[]`). EdgeResolver is frozen-by-UID (no single-lens getter to add), so the per-
-    ///      segment opaque cut reuses the lens-aware ANY-of-many reader one lens at a time.
-    function _oneLens(address lens) private pure returns (address[] memory arr) {
-        arr = new address[](1);
-        arr[0] = lens;
     }
 
     function _findDataAtPath(
