@@ -341,6 +341,37 @@ export default function ExplorerClient() {
     };
   }, [lensesParam, mainnetPublicClient]);
 
+  // Chain-switch reset (Codex P2, rounds 2–3). Runtime network switching
+  // (hardhat 31337 ↔ Sepolia 11155111) re-keys `publicClient`, so the Path
+  // Resolution Effect below re-fires. Until it completes, the OLD chain's
+  // resolved `currentAnchorUID` / `currentPath` / `currentContainer` stay
+  // exposed to the write controls (FileActionsBar + any open CreateItemModal,
+  // which reads `currentAnchorUID` LIVE at submit time) — a submit in that
+  // window would create under a stale-chain parent while the wallet guard
+  // already points at the NEW chain. Clear the resolved anchor synchronously on
+  // the id change and re-assert `isResolving`; the `key={targetNetwork.id}` on
+  // FileActionsBar force-closes an open creation modal.
+  //
+  // This MUST be declared BEFORE the Path Resolution Effect so it runs first in
+  // the commit: for a root-level switch (no path segments) that effect resolves
+  // the new root SYNCHRONOUSLY in the same flush, so a reset running *after* it
+  // would clear the freshly-resolved root and leave `isResolving` stuck with no
+  // rerun (rootUID may not change again). Running first, we clear then the
+  // resolver re-resolves. The first (mount) run is skipped.
+  const didMountChainRef = useRef(false);
+  useEffect(() => {
+    if (!didMountChainRef.current) {
+      didMountChainRef.current = true;
+      return;
+    }
+    setCurrentAnchorUID(null);
+    setCurrentPath([]);
+    setCurrentContainer(null);
+    setCurrentIsFileLeaf(false);
+    setPathError(null);
+    setIsResolving(true);
+  }, [targetNetwork.id]);
+
   // Path Resolution Effect — cancel-guarded.
   //
   // Path resolution fires an arbitrary number of async `resolvePath` RPC reads
@@ -564,35 +595,6 @@ export default function ExplorerClient() {
     // every render and thrash the effect, so we intentionally exclude it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rootUID, pathname, publicClient, mainnetPublicClient, easAddress, dataSchemaUID]);
-
-  // Chain-switch reset (Codex P2). Runtime network switching (hardhat 31337 ↔
-  // Sepolia 11155111) re-keys `publicClient` to the new chain, so the Path
-  // Resolution Effect above re-fires — but it resolves asynchronously (one RPC
-  // per segment). Until it completes, the OLD chain's resolved
-  // `currentAnchorUID` / `currentPath` / `currentContainer` stay exposed to the
-  // write controls (FileActionsBar, and any already-open CreateItemModal it
-  // renders, which reads `currentAnchorUID` LIVE at submit time). A submit in
-  // that window would attempt to create under a stale-chain parent while the
-  // wallet/client guard already points at the NEW chain. Clear the resolved
-  // anchor state synchronously on the id change and re-assert `isResolving` so
-  // the write controls are disabled/gated until the new chain re-resolves; the
-  // `key={targetNetwork.id}` on FileActionsBar below force-closes an open
-  // creation modal in the same switch. The first (mount) run is skipped — there
-  // is no stale state to clear, and the Path Resolution Effect drives the
-  // initial resolve.
-  const didMountChainRef = useRef(false);
-  useEffect(() => {
-    if (!didMountChainRef.current) {
-      didMountChainRef.current = true;
-      return;
-    }
-    setCurrentAnchorUID(null);
-    setCurrentPath([]);
-    setCurrentContainer(null);
-    setCurrentIsFileLeaf(false);
-    setPathError(null);
-    setIsResolving(true);
-  }, [targetNetwork.id]);
 
   // Keep the browser tab title in sync with the deepest path segment. When
   // the container has a resolved display name (ENS / persona / property)
