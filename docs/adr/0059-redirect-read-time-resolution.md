@@ -1,6 +1,6 @@
 # ADR-0059: REDIRECT read-time resolution rules
 
-**Status:** Accepted (James ratified 2026-06-20)
+**Status:** Accepted (James ratified 2026-06-20) — rules accepted; on-chain follower IMPLEMENTATION DEFERRED (built when REDIRECTs are actually used — see Consequences)
 **Date:** 2026-06-20
 **Deciders:** James (this pins behavior before durable seeding; human-gated)
 **Permanence-tier:** Durable (the resolution algorithm + conformance vectors — ADR-governed, NOT frozen in a UID; the on-chain follower is a redeployable view)
@@ -26,7 +26,8 @@ Adopt the read-time resolution rules in `specs/09-redirect-resolution.md` as the
 
 ## Consequences
 
-- **The on-chain follower is a redeployable, stateless view = purely additive.** It adds no kernel storage and is baked into no schema UID, so it can be deployed (and re-deployed) without touching the frozen nine schemas. Its exact landing site (EFSFileView vs EFSRouter vs a dedicated follower) is not frozen here.
+- **Implementation deferred — the rules are pinned now, the follower is built later.** This ADR ratifies the *rules*; the on-chain read-time follower is **not built yet** and is deferred until REDIRECTs are actually used (there is no redirect data to resolve today). Pinning the rules now is the point — durable seeding is gated on the rules, not on the code (see below) — and the spec/ADR may be refined when the follower is actually implemented (implementation tends to surface details). An earlier draft follower (a `resolveRedirect` view on `EFSFileView`, backed by an additive `AliasResolver.getActiveRedirect` reverse-by-source index) was written and then **removed** to avoid carrying unused, undeployed read-time machinery — notably, removing it returns `AliasResolver` to **zero storage change vs. its pre-follower state** (the only frozen-proxy storage write the draft introduced). The reverse-by-source read the follower needs will be re-added additively (off the frozen REDIRECT schema UID) when the follower is built.
+- **The on-chain follower (once built) is a redeployable, stateless view = purely additive.** It adds no kernel storage and is baked into no schema UID, so it can be deployed (and re-deployed) without touching the frozen nine schemas. Its exact landing site (EFSFileView vs EFSRouter vs a dedicated follower) is not frozen here.
 - **Clients and off-chain indexers implement the same conformance vectors** (spec §9). On-chain navigation and off-chain dedup converge because both pin the same kind-following, lens-precedence, depth, cycle-stop, and lowest-UID-in-SCC rules.
 - **Durable REDIRECT seeding is gated on this ADR's sign-off.** This is the linchpin ADR-0050 and ADR-0055 both name.
 - **Read gas is bounded** to `O(D_MAX)` per resolution (≤ 16 hops × per-hop lens scan), independent of path depth.

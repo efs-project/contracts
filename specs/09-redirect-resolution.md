@@ -1,8 +1,10 @@
 # REDIRECT Read-Time Resolution
 
-**Status:** Accepted (James ratified 2026-06-20 — see `docs/adr/0059-redirect-read-time-resolution.md`)
+**Status:** Accepted (James ratified 2026-06-20 — see `docs/adr/0059-redirect-read-time-resolution.md`). The **rules** here are accepted; the on-chain read-time follower **implementation is DEFERRED** (see "Implementation status" below).
 **Governs:** the read-time behavior of the REDIRECT schema (ADR-0050). The on-wire schema and its write-time guards are frozen; this spec is the **Durable** half ADR-0050 §"Write-time guards vs read-time resolution" requires before any durable REDIRECT data is seeded on Sepolia.
 **Related:** ADR-0050 (REDIRECT schema), ADR-0055 (WHITEOUT negative terminal — reserved here), ADR-0031 (lens first-attester-wins), ADR-0058 (depth-cap precedent), specs/02 §10 (REDIRECT fields), specs/overview.md (read flow).
+
+> **Implementation status — DEFERRED (follower not yet built).** No on-chain redirect-follower exists today, by design: it will be built when REDIRECTs are actually used. This document is the **specification that the future follower must satisfy** — the rules are pinned now (Accepted) because they must be fixed *before* any durable REDIRECT data is seeded (see §10), but the read-time code itself is deferred until there is real redirect data to resolve. An earlier draft follower (a `resolveRedirect` view on `EFSFileView` plus an `AliasResolver.getActiveRedirect` reverse-by-source index) was removed pending that need; when the follower is implemented, this spec may be refined in light of what implementation surfaces ("we might find things"). Treat every "a reader MUST …" / "the follower …" sentence below as a **requirement on that future implementation**, not a description of shipped code. The write-time guards referenced as `AliasResolver.sol:NNN` ARE shipped (the frozen REDIRECT resolver); only the *read-time follower* is deferred.
 
 ---
 
@@ -186,7 +188,7 @@ function resolve(node, isData, lenses) -> Result {
 Notes:
 - `supersededBy` and `sameAs` are **non-followed terminals** — the loop returns `Resolved` at the node holding either. `supersededBy` is a discoverable version-chain breadcrumb (clients/indexers may walk it deliberately, §2); `sameAs` canonicalization (§4.2) is a separate, caller-layered, off-the-navigational-path computation. Only `symlink` advances the loop.
 - The follower returns a node + status; the **router** maps `Resolved`+DATA → serve that DATA's best mirror (existing `_findDataAtPath` + `_getBestMirrorURI` flow), `Dangling`/`DepthExceeded`/`CycleStopped` → 404-equivalent (with the surfaced node available for diagnostics), `Suppressed-reserved` → (future) serve empty without fall-through.
-- The follower is a **stateless redeployable view** — it adds no kernel storage (§ADR-0059 Consequences). It can be re-deployed without touching any frozen schema UID, so the exact landing site (EFSFileView vs EFSRouter vs a dedicated follower) is not frozen by this spec (flagged in ADR-0059 SPICY).
+- The follower, once built, is a **stateless redeployable view** — it adds no kernel storage (§ADR-0059 Consequences). It can be re-deployed without touching any frozen schema UID, so the exact landing site (EFSFileView vs EFSRouter vs a dedicated follower) is not frozen by this spec (flagged in ADR-0059 SPICY). Because the implementation is **deferred** (see "Implementation status"), even the reverse-by-source read it needs from `AliasResolver` (the earlier draft's `getActiveRedirect` index) is not present today and will be added — additively, off the frozen REDIRECT schema UID — when the follower is built.
 
 ---
 
