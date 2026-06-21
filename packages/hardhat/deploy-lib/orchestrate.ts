@@ -729,5 +729,5 @@ async function perSchemaSmoke(
   }
   void attesterAddr;
   void propUID;
-  l("  10/10 per-schema smokes passed; index write confirmed.");
+  l(`  ${SCHEMAS.length}/${SCHEMAS.length} per-schema smokes passed; index write confirmed.`);
 }

@@ -1254,6 +1254,88 @@ describe("Whiteout (WHITEOUT cross-lens negative mask, ADR-0055)", function () {
   });
 
   // ════════════════════════════════════════════════════════════════════════════
+  // VECTOR 21a — higher-lens whiteout of the opaque-lens's OWN child (P3 close-out)
+  //   Stack [L0, L1(opaque), L2]: L1 marks `dir` opaque AND places its own child C; L0 (ABOVE the cut)
+  //   whites out C. The higher whiteout legitimately wins — the negative terminal at i < the
+  //   contributing index fires before L1's positive placement, so C is dropped. (Exercises the
+  //   precedence of a strictly-higher whiteout over the opaque lens's own at-cut positive.)
+  // ════════════════════════════════════════════════════════════════════════════
+  it("vector 21a: a higher lens's whiteout of the opaque lens's own child wins (child dropped)", async function () {
+    const root = await createAnchor("root", ZERO_BYTES32);
+    const dir = await createAnchor("dir", root);
+
+    // Viewer stack [bob (L0, above), owner (L1, opaque), alice (L2, below)].
+    const child = await createAnchor("c.txt", dir, dataSchemaUID);
+    // L1 = owner makes `dir` opaque AND places its OWN content at `child` (owner is AT the cut line).
+    await attestOpaque(dir, owner);
+    await createPin(child, await mintData(owner), owner);
+
+    // Baseline: with [owner, alice] the opaque-lens's own child IS shown (vector 17 territory).
+    let page = await fileView.getDirectoryPageBySchemaAndAddressList(
+      dir,
+      dataSchemaUID,
+      [ownerAddr, aliceAddr],
+      "0x",
+      10,
+    );
+    expect(page.items.map(i => i.uid)).to.deep.equal([child]);
+
+    // L0 = bob (strictly ABOVE owner) whites out `child`. Viewer [bob, owner, alice]: bob's negative
+    // terminal at i=0 fires BEFORE owner's positive placement at i=1 → child dropped.
+    await attestWhiteout(child, bob);
+    page = await fileView.getDirectoryPageBySchemaAndAddressList(
+      dir,
+      dataSchemaUID,
+      [bobAddr, ownerAddr, aliceAddr],
+      "0x",
+      10,
+    );
+    expect(page.items.length).to.equal(0); // the higher whiteout legitimately wins
+  });
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // VECTOR 21b — multi-level opaque cut: two opaque lenses in one stack (P3 close-out)
+  //   Stack [L0, L1(opaque), L2, L3(opaque)] listing `dir` where L1 AND L3 both opaque `dir`. The
+  //   highest-precedence opaque (L1) is the effective cut — children contributed by L2/L3/below are
+  //   dropped, L0/L1's own children are shown. (Exercises `_opaqueCutIdx` returning the FIRST/highest
+  //   opaque and stopping; a lower opaque is irrelevant once a higher one cuts.)
+  // ════════════════════════════════════════════════════════════════════════════
+  it("vector 21b: with two opaque lenses, the highest-precedence opaque is the effective cut", async function () {
+    const root = await createAnchor("root", ZERO_BYTES32);
+    const dir = await createAnchor("dir", root);
+
+    // Viewer stack [bob (L0), owner (L1, opaque), alice (L2), carol (L3, opaque)].
+    const [, , , carol] = await ethers.getSigners();
+    const carolAddr = await carol.getAddress();
+
+    // One child per lens, each placed by that lens (so each child's contributing lens is its placer).
+    const bobChild = await createAnchor("bob.txt", dir, dataSchemaUID);
+    const ownerChild = await createAnchor("owner.txt", dir, dataSchemaUID);
+    const aliceChild = await createAnchor("alice.txt", dir, dataSchemaUID);
+    const carolChild = await createAnchor("carol.txt", dir, dataSchemaUID);
+    await createPin(bobChild, await mintData(bob), bob);
+    await createPin(ownerChild, await mintData(owner), owner);
+    await createPin(aliceChild, await mintData(alice), alice);
+    await createPin(carolChild, await mintData(carol), carol);
+
+    // L1 = owner AND L3 = carol both opaque `dir`. The cut is at the HIGHEST (owner, idx 1).
+    await attestOpaque(dir, owner);
+    await attestOpaque(dir, carol);
+
+    const page = await fileView.getDirectoryPageBySchemaAndAddressList(
+      dir,
+      dataSchemaUID,
+      [bobAddr, ownerAddr, aliceAddr, carolAddr],
+      "0x",
+      10,
+    );
+    // L0 (bob, i=0) and L1 (owner, i=1, AT the cut) shown; L2 (alice, i=2) and L3 (carol, i=3) cut.
+    expect(page.items.map(i => i.uid)).to.have.members([bobChild, ownerChild]);
+    expect(page.items.map(i => i.uid)).to.not.have.members([aliceChild, carolChild]);
+    expect(page.items.length).to.equal(2);
+  });
+
+  // ════════════════════════════════════════════════════════════════════════════
   // VECTOR 22 — opaque write-guards (each invalid opaque write reverts with the specific error)
   // ════════════════════════════════════════════════════════════════════════════
   describe("vector 22: opaque write-guard rejections", function () {
@@ -1609,6 +1691,64 @@ describe("Whiteout (WHITEOUT cross-lens negative mask, ADR-0055)", function () {
       });
       const res = await router.request(["dir", "doc.txt"], [{ key: "lenses", value: `${ownerAddr},${aliceAddr}` }]);
       expect(res.statusCode).to.equal(200n);
+    });
+
+    // ────────────────────────────────────────────────────────────────────────
+    // VECTOR 24c — INTERMEDIATE-segment opaque cut (router 2-B non-terminal branch, P3 close-out)
+    //   A deep link `/dir/sub/file` where `sub` (and thus `file`) is contributed by a BELOW-cut lens
+    //   (alice). With OWNER making `dir` opaque, the router's per-segment cut must 404 at the
+    //   INTERMEDIATE `sub` segment — not just the terminal — so suppression can't be bypassed by
+    //   deep-linking past the listing. Exercises the non-terminal branch of EFSRouter's per-segment
+    //   opaque cut (the `i != resource.length - 1` resolvePath path, then `_segmentOpaqueSuppressed`).
+    // ────────────────────────────────────────────────────────────────────────
+    it("intermediate-segment opaque cut: a deep link through a below-cut subfolder 404s at the intermediate segment", async function () {
+      // Build `/dir/sub/file.txt`: `sub` is a generic FOLDER made visible by ALICE's visibility TAG
+      // (definition = dataSchemaUID, ADR-0038); `file.txt` under it is placed by ALICE. Both are
+      // below-cut content. `dir` itself stays a normal (non-opaque, transparent) folder for now.
+      const sub = await createAnchor("sub", dir, ZERO_BYTES32);
+      await createTag(dataSchemaUID, sub, alice); // alice contributes `sub`'s visibility (folder)
+      const deepFile = await createAnchor("file.txt", sub, dataSchemaUID);
+      const dDeep = await mintData(alice);
+      await createPin(deepFile, dDeep, alice);
+      await eas.connect(alice).attest({
+        schema: mirrorSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: NO_EXPIRATION,
+          revocable: true,
+          refUID: dDeep,
+          data: enc.encode(
+            ["bytes32", "string"],
+            [
+              await indexer.resolvePath(
+                await indexer.resolvePath(await indexer.rootAnchorUID(), "transports"),
+                "onchain",
+              ),
+              `web3://${await eas.getAddress()}`,
+            ],
+          ),
+          value: 0n,
+        },
+      });
+
+      // Baseline: with no opaque, [owner, alice] resolves the deep file (200) — proves the deep path
+      // is otherwise reachable, so the later 404 is the opaque cut, not a missing path.
+      let res = await router.request(
+        ["dir", "sub", "file.txt"],
+        [{ key: "lenses", value: `${ownerAddr},${aliceAddr}` }],
+      );
+      expect(res.statusCode).to.equal(200n);
+
+      // OWNER makes `dir` opaque. The deep link walks: segment `sub` is resolved UNDER `dir` (the
+      // INTERMEDIATE segment), `sub`'s contributing lens is alice (below the cut) → suppressed → 404
+      // at the intermediate segment, before the terminal `file.txt` is ever reached.
+      await attestOpaque(dir, owner);
+      res = await router.request(["dir", "sub", "file.txt"], [{ key: "lenses", value: `${ownerAddr},${aliceAddr}` }]);
+      expect(res.statusCode).to.equal(404n);
+
+      // Lens-scoped: a viewer EXCLUDING the opaque lens still resolves the deep file (200).
+      const aliceRes = await router.request(["dir", "sub", "file.txt"], [{ key: "lenses", value: `${aliceAddr}` }]);
+      expect(aliceRes.statusCode).to.equal(200n);
     });
   });
 

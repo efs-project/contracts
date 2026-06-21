@@ -936,7 +936,11 @@ contract EFSFileView {
     ///          are shown, so `i == opaqueIdx` is visible.)
     ///        - else ⇒ VISIBLE.
     ///      A whiteout on the item before any positive is the usual negative terminal (drop). When
-    ///      `opaqueIdx == max` this reduces EXACTLY to `_isItemWhitedOutForListing` (the folder-fix).
+    ///      `opaqueIdx == max` this reduces EXACTLY to the plain listing predicate (the folder-fix):
+    ///      this function IS that listing predicate — there is no separate `_isItemWhitedOutForListing`
+    ///      helper; the listing side is `_suppressedInOpaqueWalk` itself with `opaqueIdx == max`, and the
+    ///      resolution-side twin (file-PIN positive only, no folder-visibility TAG) is
+    ///      `_isItemWhitedOutForResolution`.
     function _suppressedInOpaqueWalk(
         bytes32 parentAnchor,
         bytes32 childAnchor,
