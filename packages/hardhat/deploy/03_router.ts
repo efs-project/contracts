@@ -44,6 +44,11 @@ const deployEFSRouter: DeployFunction = async function (hre: HardhatRuntimeEnvir
     schemaRegistryAddress = SCHEMA_REGISTRY_ADDRESS;
   }
 
+  // WhiteoutResolver (ADR-0055) — deployed by 08_whiteout.ts on the local/devnet path. Optional:
+  // ZeroAddress disables the cross-lens negative terminal (a partial deploy without 08).
+  const whiteoutDep = await hre.deployments.getOrNull("WhiteoutResolver");
+  const whiteoutAddr = whiteoutDep?.address ?? ethers.ZeroAddress;
+
   // Legacy/devnet path: no SystemAccount (ADR-0053) here — pass zero so the router falls back to
   // indexer.DEPLOYER() for the default lens, preserving the pre-ADR-0053 devnet behavior exactly.
   const routerArgs = [
@@ -53,6 +58,7 @@ const deployEFSRouter: DeployFunction = async function (hre: HardhatRuntimeEnvir
     schemaRegistryAddress,
     dataSchemaUID,
     ethers.ZeroAddress,
+    whiteoutAddr,
   ];
   await redeployIfArgsChanged(hre, "EFSRouter", routerArgs);
 

@@ -40,6 +40,7 @@ export const RESOLVER_SALT_ENTROPY: Record<Create3Name, string> = {
   ListResolver: "0x000000000000006c697374", // "list" (11 bytes)
   ListEntryResolver: "0x00006c697374656e747279", // "listentry" (11 bytes)
   AliasResolver: "0x000000000000616c696173", // "alias" (11 bytes)
+  WhiteoutResolver: "0x00000077686974656f7574", // "whiteout" (11 bytes) — ADR-0055, additive 7th resolver
   SystemAccount: "0x000000000073797374656d", // "system" (11 bytes) — ADR-0053, frozen for address stability
 };
 

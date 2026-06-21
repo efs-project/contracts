@@ -29,11 +29,17 @@ const deployEFSFileView: DeployFunction = async function (hre: HardhatRuntimeEnv
     throw new Error("EdgeResolver not found! Make sure 01_indexer.ts ran.");
   }
 
-  await redeployIfArgsChanged(hre, "EFSFileView", [indexer.target, edgeResolver.target]);
+  // WhiteoutResolver (ADR-0055) — deployed by 08_whiteout.ts on the local/devnet path. Optional:
+  // ZeroAddress disables the cross-lens negative-mask predicate (a partial deploy without 08).
+  const whiteoutDep = await hre.deployments.getOrNull("WhiteoutResolver");
+  const whiteoutAddr = whiteoutDep?.address ?? ethers.ZeroAddress;
+
+  const fileViewArgs = [indexer.target, edgeResolver.target, whiteoutAddr];
+  await redeployIfArgsChanged(hre, "EFSFileView", fileViewArgs);
 
   await deploy("EFSFileView", {
     from: deployer,
-    args: [indexer.target, edgeResolver.target],
+    args: fileViewArgs,
     log: true,
     autoMine: true,
   });

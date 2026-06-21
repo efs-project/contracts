@@ -229,7 +229,7 @@ describe("EFSFileView.resolveRedirect — REDIRECT follower (DRAFT, specs/09)", 
     );
 
     const FileViewFactory = await ethers.getContractFactory("EFSFileView");
-    fileView = await FileViewFactory.deploy(await indexer.getAddress(), futureEdgeResolverAddr);
+    fileView = await FileViewFactory.deploy(await indexer.getAddress(), futureEdgeResolverAddr, ZeroAddress);
     await fileView.waitForDeployment();
 
     void propertySchemaUID;

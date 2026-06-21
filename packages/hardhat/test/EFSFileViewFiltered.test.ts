@@ -115,7 +115,7 @@ describe("EFSFileView — getDirectoryPageFiltered (ADR-0054)", function () {
     excludeTagDef = (await tx7.wait())!.logs[0].topics[1];
 
     const FileViewFactory = await ethers.getContractFactory("EFSFileView");
-    fileView = await FileViewFactory.deploy(await indexer.getAddress(), await edgeResolver.getAddress());
+    fileView = await FileViewFactory.deploy(await indexer.getAddress(), await edgeResolver.getAddress(), ZeroAddress);
     await fileView.waitForDeployment();
 
     await indexer.wireContracts(
@@ -240,7 +240,7 @@ describe("EFSFileView — getDirectoryPageFiltered (ADR-0054)", function () {
    */
   const deployTestableFileView = async (budget: number = 4): Promise<EFSFileView> => {
     const Factory = await ethers.getContractFactory("EFSFileViewTestable");
-    const tv = await Factory.deploy(await indexer.getAddress(), await edgeResolver.getAddress(), BigInt(budget));
+    const tv = await Factory.deploy(await indexer.getAddress(), await edgeResolver.getAddress(), ZeroAddress, BigInt(budget));
     await tv.waitForDeployment();
     return tv as unknown as EFSFileView;
   };

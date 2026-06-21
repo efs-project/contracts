@@ -65,7 +65,7 @@ export async function runVerifyGate(input: VerifyInput): Promise<void> {
   //     these resolvers derives the schema UID it enforces from its OWN baked-in field-string constant
   //     + its (proxy) address; reading the getter back catches a stale/edited resolver artifact whose
   //     constant disagrees with schemaUIDs before the irreversible register (PR #24 P2).
-  console.log("  [verify] self-UID getters (List/ListEntry/Alias) == computed UID...");
+  console.log("  [verify] self-UID getters (List/ListEntry/Alias/Whiteout) == computed UID...");
   const list = await ethers.getContractAt("ListResolver", deploys.ListResolver.proxy, deployer);
   const onchainListUID: string = await list.listSchemaUID();
   assertEq(onchainListUID, schemaUIDs.LIST, "ListResolver.listSchemaUID");
@@ -77,6 +77,13 @@ export async function runVerifyGate(input: VerifyInput): Promise<void> {
   const aliasR = await ethers.getContractAt("AliasResolver", deploys.AliasResolver.proxy, deployer);
   const onchainRedirectUID: string = await aliasR.redirectSchemaUID();
   assertEq(onchainRedirectUID, schemaUIDs.REDIRECT, "AliasResolver.redirectSchemaUID");
+
+  // WHITEOUT (ADR-0055): WhiteoutResolver self-derives its schema UID from its own empty field-string
+  // constant + the proxy address in initialize() — assert it equals the to-be-registered WHITEOUT UID
+  // before the irreversible register (same ListEntry-class bug guard as the three above).
+  const whiteoutR = await ethers.getContractAt("WhiteoutResolver", deploys.WhiteoutResolver.proxy, deployer);
+  const onchainWhiteoutUID: string = await whiteoutR.whiteoutSchemaUID();
+  assertEq(onchainWhiteoutUID, schemaUIDs.WHITEOUT, "WhiteoutResolver.whiteoutSchemaUID");
 
   // (3b) init-supplied cross-reference UIDs (PR #24 50yr-review, M-1). (3) above only checks the two
   //      SELF-DERIVED UIDs (ListEntry/Alias). The UIDs threaded INTO initialize() as typing/config
@@ -95,6 +102,9 @@ export async function runVerifyGate(input: VerifyInput): Promise<void> {
   assertEq(await edge.TAG_SCHEMA_UID(), schemaUIDs.TAG, "EdgeResolver.TAG_SCHEMA_UID");
   assertEq(await aliasR.dataSchemaUID(), schemaUIDs.DATA, "AliasResolver.dataSchemaUID");
   assertEq(await aliasR.anchorSchemaUID(), schemaUIDs.ANCHOR, "AliasResolver.anchorSchemaUID");
+  // WhiteoutResolver (ADR-0055): typing + read-only kernel ref threaded through initialize(indexer).
+  assertEq(await whiteoutR.anchorSchemaUID(), schemaUIDs.ANCHOR, "WhiteoutResolver.anchorSchemaUID");
+  assertEq(await whiteoutR.indexer(), deploys.EFSIndexer.proxy, "WhiteoutResolver.indexer()");
 
   // (3c) one-shot partner WIRING addresses (PR #24 P2) — checked IFF the indexer is already wired.
   //      (3b) checks the UID cross-refs; this checks the ADDRESSES set by EFSIndexer.wireContracts() —

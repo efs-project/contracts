@@ -417,7 +417,7 @@ describe("EFS Data Model — E2E Integration", function () {
 
     // Deploy FileView
     const FileViewFactory = await ethers.getContractFactory("EFSFileView");
-    fileView = await FileViewFactory.deploy(await indexer.getAddress(), await edgeResolver.getAddress());
+    fileView = await FileViewFactory.deploy(await indexer.getAddress(), await edgeResolver.getAddress(), ZeroAddress);
 
     // Wire contracts
     await indexer.wireContracts(

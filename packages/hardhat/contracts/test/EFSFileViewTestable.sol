@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
-import { EFSFileView, IEFSIndexer, IEdgeResolverForFileView } from "../EFSFileView.sol";
+import {
+    EFSFileView,
+    IEFSIndexer,
+    IEdgeResolverForFileView,
+    IWhiteoutResolverForFileView
+} from "../EFSFileView.sol";
 
 /// @title EFSFileViewTestable
 /// @notice Test-only subclass of `EFSFileView` that shrinks the per-call scan budgets so the
@@ -18,8 +23,9 @@ contract EFSFileViewTestable is EFSFileView {
     constructor(
         IEFSIndexer _indexer,
         IEdgeResolverForFileView _edgeResolver,
+        IWhiteoutResolverForFileView _whiteoutResolver,
         uint256 testBudget
-    ) EFSFileView(_indexer, _edgeResolver) {
+    ) EFSFileView(_indexer, _edgeResolver, _whiteoutResolver) {
         _testBudget = testBudget;
     }
 

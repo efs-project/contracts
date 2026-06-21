@@ -58,6 +58,10 @@ interface IEFSIndexer {
 
     function isRevoked(bytes32 uid) external view returns (bool);
 
+    /// @notice The parent anchor of `anchorUID` (ADR-0055 whiteout key: a whiteout on a file anchor
+    ///         keys on (parent, fileAnchor)). Returns bytes32(0) for root / unknown.
+    function getParent(bytes32 anchorUID) external view returns (bytes32);
+
     function DATA_SCHEMA_UID() external view returns (bytes32);
     function MIRROR_SCHEMA_UID() external view returns (bytes32);
     function PROPERTY_SCHEMA_UID() external view returns (bytes32);
@@ -73,6 +77,15 @@ interface IEdgeResolverForRouter {
         address attester,
         bytes32 targetSchema
     ) external view returns (bytes32);
+}
+
+/// @notice Minimal read view over the WhiteoutResolver (ADR-0055) for the router's negative terminal.
+///         `address(0)` ⇒ whiteout disabled: the lens scan never calls it and serves exactly as
+///         before WHITEOUT existed (pre-WHITEOUT router redeploys / harnesses that don't wire one).
+interface IWhiteoutResolverForRouter {
+    /// @notice True iff `attester` has an ACTIVE whiteout suppressing `child` under `parent`.
+    ///         See `WhiteoutResolver.isWhitedOut`.
+    function isWhitedOut(bytes32 parent, address attester, bytes32 child) external view returns (bool);
 }
 
 interface IEAS {
@@ -98,6 +111,12 @@ contract EFSRouter is IDecentralizedApp {
     IEdgeResolverForRouter public edgeResolver;
     ISchemaRegistry public schemaRegistry;
     bytes32 public dataSchemaUID;
+
+    /// @notice The WhiteoutResolver (proxy) for the cross-lens negative mask (ADR-0055). The router is
+    ///         redeployable (in no schema UID), so this is a constructor arg, not a frozen wire.
+    ///         `address(0)` ⇒ whiteout disabled: the lens scan serves exactly as before WHITEOUT
+    ///         existed (pre-WHITEOUT router redeploys + tests that don't wire one keep prior behavior).
+    IWhiteoutResolverForRouter public whiteoutResolver;
 
     /// @notice The SystemAccount (ADR-0053) — the neutral, code-governed `system` lens. Used as
     ///         the tail of the default-lens chain (ADR-0039): when no `?lenses=` is given, content
@@ -125,13 +144,16 @@ contract EFSRouter is IDecentralizedApp {
         address _edgeResolver,
         address _schemaRegistry,
         bytes32 _dataSchemaUID,
-        address _systemAccount
+        address _systemAccount,
+        address _whiteoutResolver
     ) {
         indexer = IEFSIndexer(_indexer);
         eas = IEAS(_eas);
         edgeResolver = IEdgeResolverForRouter(_edgeResolver);
         schemaRegistry = ISchemaRegistry(_schemaRegistry);
         dataSchemaUID = _dataSchemaUID;
+        // ADR-0055: the cross-lens negative mask. Zero = disabled (pre-WHITEOUT router / tests).
+        whiteoutResolver = IWhiteoutResolverForRouter(_whiteoutResolver);
         // ADR-0053: the default-lens fallback points at SystemAccount, not the deployer EOA. Falls
         // back to indexer.DEPLOYER() only if a zero address is passed (pre-ADR-0053 deploys / tests
         // that don't wire a SystemAccount), preserving the old behavior in that degenerate case.
@@ -886,10 +908,24 @@ contract EFSRouter is IDecentralizedApp {
         // File placement is Shape A — a file Anchor holds at most one DATA per attester.
         // Read the active PIN's target in O(1); skip attesters with an empty slot.
         // (Per ADR-0041 the cardinality lives in the schema UID itself.)
+        //
+        // ADR-0055 negative terminal: within each lens, in precedence order, check the POSITIVE
+        // placement PIN FIRST, then the WHITEOUT. (1) A positive PIN serves that lens's DATA (existing
+        // behavior; same-lens positive-before-whiteout override). (2) Otherwise, if the lens has an
+        // ACTIVE whiteout on this anchor, that is a negative terminal: serve empty (the router's
+        // existing not-found path → 404) and STOP — no fall-through to lower lenses, no system gap-fill.
+        // A whiteout by Lk is transparent to any lens ABOVE Lk because a higher lens's positive PIN
+        // (or its own whiteout) terminates the scan first. `whiteoutResolver == 0` ⇒ skip the whiteout
+        // read entirely (disabled).
+        IWhiteoutResolverForRouter wr = whiteoutResolver;
+        bytes32 parentAnchor = address(wr) != address(0) ? indexer.getParent(targetAnchor) : bytes32(0);
         for (uint256 i = 0; i < attesters.length; i++) {
             bytes32 target = edgeResolver.getActivePinTarget(targetAnchor, attesters[i], dataSchema);
-            if (target == bytes32(0)) continue;
-            return (target, attesters[i]);
+            if (target != bytes32(0)) return (target, attesters[i]);
+            // Negative terminal: this lens masks the path. Stop — serve empty, no fall-through.
+            if (address(wr) != address(0) && wr.isWhitedOut(parentAnchor, attesters[i], targetAnchor)) {
+                return (bytes32(0), address(0));
+            }
         }
 
         return (bytes32(0), address(0));
