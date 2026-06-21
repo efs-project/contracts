@@ -68,22 +68,34 @@ export function useSortedData({
   const currentAnchorRef = useRef<string | undefined>(undefined);
   const currentLensesRef = useRef<string>("");
   const currentRefreshKeyRef = useRef<number>(0);
+  // Chain + overlay-address identity. A runtime chain switch (hardhat ↔ Sepolia)
+  // keeps the same sort/anchor/lenses but reads from a different chain via the
+  // pinned client below. Without these in the reset identity, a folder that
+  // reached hasMore=false on one chain would stay terminated after the switch —
+  // the fetch effect's `if (!hasMore) return` guard then blocks any read on the
+  // new chain. sortOverlayAddress is chain-scoped, so it also covers a redeploy.
+  const currentChainRef = useRef<number | undefined>(undefined);
+  const currentOverlayRef = useRef<string | undefined>(undefined);
 
   const lensesKey = lensAddresses.join(",");
 
-  // Reset when sort, anchor, lenses, or refreshKey change
+  // Reset when sort, anchor, lenses, refreshKey, chain, or overlay address change
   useEffect(() => {
     const changed =
       currentSortRef.current !== sortInfoUID ||
       currentAnchorRef.current !== parentAnchor ||
       currentLensesRef.current !== lensesKey ||
-      currentRefreshKeyRef.current !== refreshKey;
+      currentRefreshKeyRef.current !== refreshKey ||
+      currentChainRef.current !== targetNetwork.id ||
+      currentOverlayRef.current !== sortOverlayAddress;
 
     if (changed) {
       currentSortRef.current = sortInfoUID;
       currentAnchorRef.current = parentAnchor;
       currentLensesRef.current = lensesKey;
       currentRefreshKeyRef.current = refreshKey;
+      currentChainRef.current = targetNetwork.id;
+      currentOverlayRef.current = sortOverlayAddress;
 
       setSortedUIDs(sortInfoUID ? [] : null);
       cursorRef.current = zeroHash;
@@ -91,7 +103,7 @@ export function useSortedData({
       // Trigger initial page load (0 → 1)
       setLoadTrigger(1);
     }
-  }, [sortInfoUID, parentAnchor, lensesKey, refreshKey]);
+  }, [sortInfoUID, parentAnchor, lensesKey, refreshKey, targetNetwork.id, sortOverlayAddress]);
 
   const reset = useCallback(() => {
     setSortedUIDs(sortInfoUID ? [] : null);
