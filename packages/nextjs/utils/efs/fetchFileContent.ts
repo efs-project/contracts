@@ -84,10 +84,14 @@ export async function fetchFileContent(args: FetchFileArgs): Promise<FetchedFile
       queryParams.push({ key: "lenses", value: lensAddresses.join(",") });
     }
 
-    // Chunk pagination: after the first response, `web3-next-chunk` header
-    // carries the next chunk index (format "?chunk=N"); forward it back.
+    // Chunk pagination: after the first response, the `web3-next-chunk` header
+    // carries the next chunk as a leading-slash relative URL. The router emits a
+    // path- and lens-preserving form (`/<path>?lenses=…&chunk=N`); a bare
+    // EFSBytesStore emits `/?chunk=N`. Extract the `chunk=` value from anywhere in
+    // the URL (not `split("=")[1]`, which grabs the wrong segment when other params
+    // precede it). `lenses` is re-sent above each call, so we only need the index.
     if (currentChunkHeader) {
-      const chunkIndex = currentChunkHeader.split("=")[1];
+      const chunkIndex = currentChunkHeader.match(/[?&]chunk=(\d+)/)?.[1];
       if (chunkIndex !== undefined) {
         queryParams.push({ key: "chunk", value: chunkIndex });
       }
