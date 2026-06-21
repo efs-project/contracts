@@ -1,8 +1,8 @@
 # ADR-0021: `MAX_ANCHOR_DEPTH = 32`
 
-**Status:** Superseded by ADR-0058 (value raised 32 → 1024; the bounded-walk reasoning still holds, only the number changed)
+**Status:** Superseded by ADR-0062 (value raised 32 → 1024; the bounded-walk reasoning still holds, only the number changed)
 **Date:** 2026-04-16 (formalized retroactively)
-**Related:** ADR-0008, ADR-0010, ADR-0058
+**Related:** ADR-0008, ADR-0010, ADR-0062
 
 ## Context
 

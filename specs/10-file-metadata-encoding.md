@@ -1,6 +1,6 @@
 # File-Metadata Encoding Convention (`contentHash`, `size`, `cid`)
 
-> **Status: Accepted** (James ratified 2026-06-20 — see ADR-0060). This spec
+> **Status: Accepted** (James ratified 2026-06-20 — see ADR-0064). This spec
 > defines the **canonical string format** for the reserved-key file-stat
 > PROPERTYs that ADR-0049 moved out of DATA. It changes **no schema**: PROPERTY
 > remains `string value` (frozen). It pins the *encoding* of that value, because
@@ -11,7 +11,7 @@
 **Related:** ADR-0049 (DATA empty; `contentHash`/`size`/`cid` as reserved-key
 PROPERTYs), ADR-0052 (PROPERTY non-revocable; the PIN is the revocable claim),
 ADR-0005 (`contentType` reserved-key precedent), ADR-0034 (`name` reserved key),
-ADR-0060 (this convention's decision record), specs/02 §2 (Property Schema),
+ADR-0064 (this convention's decision record), specs/02 §2 (Property Schema),
 specs/04 (upload workflow), `EFSIndexer.PropertyCreated` (the `valueHash` topic).
 
 ---
@@ -132,7 +132,7 @@ no leading zeros, no sign, no separators, and no unit suffix.**
   parsing benefit (decimal-string → integer is trivial in JS and Solidity) and
   breaks the no-leading-zeros canonical rule. Arbitrary length is fine —
   PROPERTY `value` is an unbounded string and there is no anchor-name length cap
-  (ADR-0058), so even an astronomically large `size` fits.
+  (ADR-0062), so even an astronomically large `size` fits.
 - Decimal (not hex) is chosen for human readability and because it is the
   obvious default a naive SDK author reaches for, minimizing the
   ambiguity surface. `size` is **not** self-describing (it needs no algorithm
@@ -230,7 +230,7 @@ attester's `contentHash` slot holds **one** value at a time, so:
   explosion or a multi-value (TAG) binding. The self-describing prefix plus the
   `contentHash`/`cid` split covers the dual-hash case cleanly.
 
-> **Resolved (James ratified 2026-06-20, ADR-0060):** keep the **single
+> **Resolved (James ratified 2026-06-20, ADR-0064):** keep the **single
 > self-describing `contentHash` slot** with **sha2-256 canonical** (sharing the
 > CID digest); keccak-256 remains an optional alternate the format CAN carry. No
 > algorithm-suffixed keyspace.
@@ -343,7 +343,7 @@ is already correct (§3). The `contentHash` prose MUST be updated to compute the
 **sha2-256** digest and emit the canonical multibase-multihash form (`f1220…`,
 sha2-256 — James ratified 2026-06-20) rather than a bare keccak `0x…` hex, so the
 `contentHash` shares the IPFS CID digest. This must land **before any durable data
-is seeded** — the gate ADR-0060 records. (That edit is owned by another agent per
+is seeded** — the gate ADR-0064 records. (That edit is owned by another agent per
 the worktree split; this spec is the normative target it points at.)
 
 [multibase]: https://github.com/multiformats/multibase

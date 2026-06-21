@@ -1,4 +1,4 @@
-# ADR-0060: `contentHash`/`size`/`cid` use a self-describing encoding (multibase-multihash + CID)
+# ADR-0064: `contentHash`/`size`/`cid` use a self-describing encoding (multibase-multihash + CID)
 
 **Status:** Accepted (James ratified 2026-06-20)
 **Date:** 2026-06-20

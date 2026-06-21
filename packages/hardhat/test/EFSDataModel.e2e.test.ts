@@ -1722,7 +1722,7 @@ describe("EFS Data Model — E2E Integration", function () {
       for (const slot of slots) expect(uniqueUIDs.has(slot)).to.equal(true);
     });
 
-    it("MAX_ANCHOR_DEPTH allows deep trees (1024, ADR-0058)", async function () {
+    it("MAX_ANCHOR_DEPTH allows deep trees (1024, ADR-0062)", async function () {
       // Value lock + positive regression: deep trees beyond the old 32-level cap now create.
       // The boundary-revert proof (build to cap+1) is the opt-in RUN_SLOW_TESTS test in
       // EFSTransports.test.ts — building 1025 anchors here would blow the mocha timeout.

@@ -1,10 +1,10 @@
-# ADR-0059: REDIRECT read-time resolution rules
+# ADR-0063: REDIRECT read-time resolution rules
 
 **Status:** Accepted (James ratified 2026-06-20) — rules accepted; on-chain follower IMPLEMENTATION DEFERRED (built when REDIRECTs are actually used — see Consequences)
 **Date:** 2026-06-20
 **Deciders:** James (this pins behavior before durable seeding; human-gated)
 **Permanence-tier:** Durable (the resolution algorithm + conformance vectors — ADR-governed, NOT frozen in a UID; the on-chain follower is a redeployable view)
-**Related:** ADR-0050 (REDIRECT schema — requires this spec before durable seeding), ADR-0055 (WHITEOUT negative terminal — reserved here), ADR-0031 (lens first-attester-wins), ADR-0021/0058 (depth-cap precedent), ADR-0051 (reads exclude revoked), spec `specs/09-redirect-resolution.md` (the normative algorithm + vectors)
+**Related:** ADR-0050 (REDIRECT schema — requires this spec before durable seeding), ADR-0055 (WHITEOUT negative terminal — reserved here), ADR-0031 (lens first-attester-wins), ADR-0021/0062 (depth-cap precedent), ADR-0051 (reads exclude revoked), spec `specs/09-redirect-resolution.md` (the normative algorithm + vectors)
 
 ## Context
 

@@ -895,12 +895,12 @@ describe("EFS Transports & Data Model", function () {
   // ─── MAX_ANCHOR_DEPTH Tests ───────────────────────────────────────────────
 
   describe("MAX_ANCHOR_DEPTH", function () {
-    it("MAX_ANCHOR_DEPTH constant is 1024 (ADR-0058)", async function () {
-      // Value lock: catches an accidental change to the cap. 32 -> 1024 per ADR-0058.
+    it("MAX_ANCHOR_DEPTH constant is 1024 (ADR-0062)", async function () {
+      // Value lock: catches an accidental change to the cap. 32 -> 1024 per ADR-0062.
       expect(await indexer.MAX_ANCHOR_DEPTH()).to.equal(1024n);
     });
 
-    it("allows trees far deeper than the old 32-level cap (ADR-0058)", async function () {
+    it("allows trees far deeper than the old 32-level cap (ADR-0062)", async function () {
       // Regression for the raise: a 40-deep chain (past the old cap of 32) must now create successfully.
       this.timeout(180000); // dozens of sequential attestations
       let parent = rootUID;
