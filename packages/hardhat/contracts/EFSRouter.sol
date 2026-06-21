@@ -1112,7 +1112,15 @@ contract EFSRouter is IDecentralizedApp {
                 if (priority < bestPriority) {
                     if (priority == 0) {
                         address candidate = _parseContractFromWeb3URI(uri);
-                        if (candidate == address(0)) continue;
+                        if (candidate == address(0)) continue; // malformed web3:// — skip
+                        // Skip a DEAD same-chain store: if this mirror would be served
+                        // on-chain here (same chain, see _web3UriServesLocally) but the
+                        // target has no code, picking it would 500 — so fall through and
+                        // let a good lower-priority mirror (ar://ipfs://https://) from the
+                        // same attester serve instead, honoring multi-mirror redundancy
+                        // (ADR-0058). A cross-chain web3:// keeps its top priority (it's
+                        // client-redirected, not extcodecopy'd here).
+                        if (_web3UriServesLocally(uri) && candidate.code.length == 0) continue;
                         return (uri, true); // web3:// is highest — done
                     }
                     bestPriority = priority;
