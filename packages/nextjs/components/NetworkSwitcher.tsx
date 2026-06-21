@@ -25,7 +25,7 @@ import { useAccount, useSwitchChain } from "wagmi";
 import { GlobeAltIcon } from "@heroicons/react/24/outline";
 import { getNetworkColor, useTargetNetwork } from "~~/hooks/scaffold-eth";
 import { useGlobalState } from "~~/services/store/store";
-import { getTargetNetworks } from "~~/utils/scaffold-eth";
+import { getTargetNetworks, networkLabel } from "~~/utils/scaffold-eth";
 
 const allowedNetworks = getTargetNetworks();
 
@@ -95,7 +95,7 @@ export const NetworkSwitcher = () => {
         title="Switch the network the debug UI reads from"
       >
         <GlobeAltIcon className="h-4 w-4" style={{ color: getNetworkColor(targetNetwork, isDarkMode) }} />
-        <span className="hidden sm:inline">{targetNetwork.name}</span>
+        <span className="hidden sm:inline">{networkLabel(targetNetwork)}</span>
       </label>
       <ul
         tabIndex={0}
@@ -113,7 +113,7 @@ export const NetworkSwitcher = () => {
                 }`}
                 onClick={() => selectNetwork(network.id)}
               >
-                <span style={{ color: getNetworkColor(network, isDarkMode) }}>{network.name}</span>
+                <span style={{ color: getNetworkColor(network, isDarkMode) }}>{networkLabel(network)}</span>
                 <span className="text-xs opacity-50 font-mono">{network.id}</span>
               </button>
             </li>
