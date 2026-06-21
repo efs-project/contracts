@@ -75,7 +75,14 @@ function getInheritedFunctions(sources: Record<string, any>, contractName: strin
   return inheritedFunctions;
 }
 
-function getContractDataFromDeployments() {
+// `activeNetwork` is the network just deployed (hardhat-deploy saves under `deployments/<network.name>`).
+// Only that deployment may contribute a chain block to the merge. Without this filter, getDirectories()
+// returns EVERY `deployments/<net>` dir on disk — so a stale `deployments/sepolia` left over from a prior
+// real-Sepolia deploy would land in the result and, via the merge below, OVERRIDE the committed (frozen)
+// Sepolia block with whatever local state that dir holds — silently drifting a frozen chain that a fresh CI
+// checkout (no such dir) can't catch. Restricting to the active network guarantees a single-network deploy
+// only ever regenerates its own block; all other chains are preserved from the committed file. (Codex P2, PR #33.)
+function getContractDataFromDeployments(activeNetwork?: string) {
   if (!fs.existsSync(DEPLOYMENTS_DIR)) {
     // The in-memory `hardhat` network persists no deployments dir, so `deploy:efs --network hardhat`
     // (the fork rehearsal) reaches here with nothing on disk. That's not an error — the rehearsal is
@@ -85,7 +92,8 @@ function getContractDataFromDeployments() {
     return {} as Record<string, any>;
   }
   const output = {} as Record<string, any>;
-  for (const chainName of getDirectories(DEPLOYMENTS_DIR)) {
+  const chainDirs = getDirectories(DEPLOYMENTS_DIR).filter(dir => !activeNetwork || dir === activeNetwork);
+  for (const chainName of chainDirs) {
     const chainId = fs.readFileSync(`${DEPLOYMENTS_DIR}/${chainName}/.chainId`).toString();
     const contracts = {} as Record<string, any>;
     for (const contractName of getContractNames(`${DEPLOYMENTS_DIR}/${chainName}`)) {
@@ -160,9 +168,10 @@ function getExistingChains(targetPath: string): Record<string, any> {
  * Generates the TypeScript contract definition file based on the json output of the contract deployment scripts
  * This script should be run last.
  */
-const generateTsAbis: DeployFunction = async function () {
+const generateTsAbis: DeployFunction = async function (hre) {
   const TARGET_DIR = "../nextjs/contracts/";
-  const deployedChains = getContractDataFromDeployments();
+  // Restrict to the network just deployed — only its block may override the committed file (see merge below).
+  const deployedChains = getContractDataFromDeployments(hre.network.name);
 
   // No persisted deployments (e.g. `deploy:efs --network hardhat` fork rehearsal): do NOT write — that
   // would clobber the committed deployedContracts.ts with `{}`. Leave the pinned file untouched.

@@ -40,6 +40,13 @@ own block; chains absent from the current deploy pass through verbatim:
 allContractsData = { ...existingChains, ...deployedChains }   // per-chain key merge
 ```
 
+`deployedChains` is restricted to the **active network** (`deployments/<hre.network.name>`),
+not every `deployments/<net>` dir on disk. Otherwise a stale leftover dir (e.g. a developer's
+old `deployments/sepolia` from a prior real deploy) would land in `deployedChains` and override
+the committed frozen block with whatever local state it holds — a silent drift a fresh CI
+checkout couldn't catch. With the restriction, a single-network deploy regenerates only its own
+block; every other chain is preserved from the committed file.
+
 `deploy-pin-check` is **unchanged**: it still does a localhost fork deploy and diffs the
 whole file. With merge semantics the diff is correct again — `31337` is regenerated
 deterministically (the ADR-0037 guarantee), and frozen real-network blocks are preserved
