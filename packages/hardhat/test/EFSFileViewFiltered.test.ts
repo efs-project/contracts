@@ -240,7 +240,12 @@ describe("EFSFileView — getDirectoryPageFiltered (ADR-0054)", function () {
    */
   const deployTestableFileView = async (budget: number = 4): Promise<EFSFileView> => {
     const Factory = await ethers.getContractFactory("EFSFileViewTestable");
-    const tv = await Factory.deploy(await indexer.getAddress(), await edgeResolver.getAddress(), ZeroAddress, BigInt(budget));
+    const tv = await Factory.deploy(
+      await indexer.getAddress(),
+      await edgeResolver.getAddress(),
+      ZeroAddress,
+      BigInt(budget),
+    );
     await tv.waitForDeployment();
     return tv as unknown as EFSFileView;
   };
