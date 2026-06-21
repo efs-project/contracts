@@ -42,15 +42,24 @@ const sepoliaChain: chains.Chain = SEPOLIA_RPC_URL
   : chains.sepolia;
 
 // Which network the UI defaults to (the chain reads run on before any wallet
-// connects, and the network the store starts on). Explicit and documented — not
-// magic. Accepts "hardhat"/"local"/"31337" or "sepolia"/"11155111".
+// connects, and the network the store starts on). Accepts "hardhat"/"local"/"31337"
+// or "sepolia"/"11155111".
 //
-// Unset → hardhat. This is deliberate: the devnet static export (app.efs.eth.limo)
-// is a *production* build that targets the hardhat Sepolia-fork via
-// NEXT_PUBLIC_HARDHAT_RPC_URL, so keying the default off NODE_ENV would wrongly
-// flip it to Sepolia-live. Defaulting to hardhat preserves every existing flow;
-// Sepolia is opt-in (this var for builds, the runtime switcher anytime).
-const TARGET_CHAIN = (process.env.NEXT_PUBLIC_TARGET_CHAIN ?? "").trim().toLowerCase();
+// The default keys off the BUILD TYPE so each audience just works with zero config:
+//   • `next dev` (NODE_ENV=development) → hardhat — paired with the local `yarn preview`
+//     fork that dev already runs. No env var, no script change.
+//   • `next build` static SPA (NODE_ENV=production) → Sepolia — a deployed SPA has no
+//     local node, so it talks to the live chain (no dedicated RPC needed; falls back to
+//     the shared scaffold Alchemy key / public RPC, overridable via NEXT_PUBLIC_*).
+//
+// `NEXT_PUBLIC_TARGET_CHAIN` is an explicit override that always wins — e.g. a production
+// build pointed at a VPS hardhat-fork sets it to "hardhat". The runtime switcher works
+// either way. (Supersedes the earlier hardhat-always default — see docs/decisions.md.)
+const TARGET_CHAIN = (
+  process.env.NEXT_PUBLIC_TARGET_CHAIN ?? (process.env.NODE_ENV === "production" ? "sepolia" : "hardhat")
+)
+  .trim()
+  .toLowerCase();
 const defaultIsSepolia = TARGET_CHAIN === "sepolia" || TARGET_CHAIN === "11155111";
 
 const RECOGNIZED = ["", "hardhat", "local", "31337", "sepolia", "11155111"];

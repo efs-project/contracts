@@ -36,6 +36,11 @@ export default function ExplorerClient() {
   const [isResolving, setIsResolving] = useState(false);
   const [pathError, setPathError] = useState<string | null>(null);
 
+  // If the system schema reads don't arrive within a grace period, the active chain's RPC is
+  // unreachable (e.g. defaulted to hardhat with no local node, or a dead Sepolia RPC). Show a
+  // clear message + switch hint instead of an indefinite "Loading System...". Reset on chain switch.
+  const [systemReadTimedOut, setSystemReadTimedOut] = useState(false);
+
   const [resolvedLensAddresses, setResolvedLensAddresses] = useState<string[]>([]);
   const [isResolvingLenses, setIsResolvingLenses] = useState(false);
 
@@ -372,6 +377,15 @@ export default function ExplorerClient() {
     setIsResolving(true);
   }, [targetNetwork.id]);
 
+  // Grace-period timer for the "system unreachable" state. Reset on every chain switch; if the
+  // system schema reads still haven't landed when it fires, the gate below shows a switch hint
+  // instead of hanging on "Loading System..." forever.
+  useEffect(() => {
+    setSystemReadTimedOut(false);
+    const t = setTimeout(() => setSystemReadTimedOut(true), 12000);
+    return () => clearTimeout(t);
+  }, [targetNetwork.id]);
+
   // Path Resolution Effect — cancel-guarded.
   //
   // Path resolution fires an arbitrary number of async `resolvePath` RPC reads
@@ -639,8 +653,23 @@ export default function ExplorerClient() {
     !pinSchemaUID ||
     !tagSchemaUID ||
     !mirrorSchemaUID
-  )
+  ) {
+    if (systemReadTimedOut) {
+      const isLocal = targetNetwork.id === 31337;
+      return (
+        <div className="flex flex-col items-center gap-3 py-16 px-4 text-center">
+          <div className="text-2xl">⚠️ Can&apos;t reach {targetNetwork.name}</div>
+          <p className="opacity-70 max-w-md text-sm">
+            The explorer couldn&apos;t read the EFS contracts from {targetNetwork.name}&apos;s RPC.{" "}
+            {isLocal
+              ? "Start a local chain (`yarn preview`, or `yarn fork` + `yarn deploy`), or switch to Sepolia with the network selector at the top-right."
+              : "The RPC may be unreachable or rate-limited — try again, or switch networks with the selector at the top-right."}
+          </p>
+        </div>
+      );
+    }
     return <div>Loading System...</div>;
+  }
   if (isResolvingLenses) return <div>Resolving Lenses...</div>;
 
   const containerKind = currentContainer?.kind ?? "anchor";
