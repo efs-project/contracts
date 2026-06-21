@@ -1388,6 +1388,27 @@ describe("EFSRouter Web3 Capabilities", function () {
       expect(ct.value).to.contain(`URL="${crossUri}"`);
     });
 
+    it("Should redirect (not revert) on an absurdly long :chainId suffix — overflow guard (ADR-0058)", async function () {
+      // The chainId parser caps at type(uint64).max AFTER each digit, so the value
+      // entering each multiply is bounded and can never overflow uint256. A 100-digit
+      // suffix must degrade to a redirect (not this chain), never revert request().
+      const targetAddress = ethers.getAddress("0x00000000000000000000000000000000000000E4");
+      await setCode(targetAddress, "0x00" + Buffer.from("unused").toString("hex"));
+
+      const fileAnchorUID = await createFileAnchor(ideasUID, "chainid_overflow.txt");
+      const dataUID = await createData("chainid-overflow-content");
+      await addProperty(dataUID, "contentType", "text/plain");
+      const overflowUri = `web3://${targetAddress}:${"9".repeat(100)}`; // >> uint64.max, >> uint256
+      await addMirror(dataUID, onchainTransportUID, overflowUri);
+      await pinAtPath(dataUID, fileAnchorUID);
+
+      const [statusCode, body, headers] = await router.request(["ideas", "chainid_overflow.txt"], ownerParams());
+      expect(statusCode).to.equal(200); // did NOT revert
+      expect(ethers.getBytes(body).length).to.equal(0); // redirect, not local extcodecopy
+      const ct = headers.find((h: any) => h.key === "Content-Type"); // eslint-disable-line @typescript-eslint/no-explicit-any
+      expect(ct.value).to.contain("message/external-body");
+    });
+
     it("Should fall through a dead (no-code) same-chain web3:// mirror to a good ipfs:// mirror, not 500 (ADR-0058)", async function () {
       // Same attester has a web3:// mirror whose address has NO code (never deployed
       // / wrong chain) AND a good ipfs:// mirror. The router must skip the dead
