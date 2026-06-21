@@ -23,6 +23,7 @@ import {
   classifyTopLevelSegment,
   defaultLensesForContainer,
 } from "~~/utils/efs/containers";
+import { inferNetworkFlavor, networkLabel } from "~~/utils/scaffold-eth";
 
 export default function ExplorerClient() {
   const [currentPath, setCurrentPath] = useState<PathItem[]>([]);
@@ -655,15 +656,19 @@ export default function ExplorerClient() {
     !mirrorSchemaUID
   ) {
     if (systemReadTimedOut) {
-      const isLocal = targetNetwork.id === 31337;
+      const label = networkLabel(targetNetwork);
+      const flavor = inferNetworkFlavor(targetNetwork.rpcUrls?.default?.http?.[0], targetNetwork.id);
+      const advice =
+        flavor === "local"
+          ? "Start a local chain (`yarn preview`, or `yarn fork` + `yarn deploy`), or switch network at the top-right."
+          : flavor === "devnet"
+            ? "The devnet may be down or resetting — switch to Sepolia at the top-right, or try again shortly."
+            : "The RPC may be unreachable or rate-limited — try again, or switch network at the top-right.";
       return (
         <div className="flex flex-col items-center gap-3 py-16 px-4 text-center">
-          <div className="text-2xl">⚠️ Can&apos;t reach {targetNetwork.name}</div>
+          <div className="text-2xl">⚠️ Can&apos;t reach {label}</div>
           <p className="opacity-70 max-w-md text-sm">
-            The explorer couldn&apos;t read the EFS contracts from {targetNetwork.name}&apos;s RPC.{" "}
-            {isLocal
-              ? "Start a local chain (`yarn preview`, or `yarn fork` + `yarn deploy`), or switch to Sepolia with the network selector at the top-right."
-              : "The RPC may be unreachable or rate-limited — try again, or switch networks with the selector at the top-right."}
+            The explorer couldn&apos;t read the EFS contracts from {label}&apos;s RPC. {advice}
           </p>
         </div>
       );

@@ -5,3 +5,4 @@ export * from "./block";
 export * from "./decodeTxData";
 export * from "./ensureWalletChain";
 export * from "./getParsedError";
+export * from "./networkLabel";
