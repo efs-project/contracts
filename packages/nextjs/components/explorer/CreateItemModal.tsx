@@ -248,6 +248,7 @@ export const CreateItemModal = ({
   }, [pasteUri]);
   const [showPasteDetails, setShowPasteDetails] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isFinishingPlacement, setIsFinishingPlacement] = useState(false);
   const [existingAnchorWarning, setExistingAnchorWarning] = useState(false);
 
   // List-specific state (ADR-0044)
@@ -294,6 +295,7 @@ export const CreateItemModal = ({
       setPasteContentHash(null);
       setShowPasteDetails(false);
       setExistingAnchorWarning(false);
+      setIsFinishingPlacement(false);
       modalRef.current?.showModal();
     } else {
       modalRef.current?.close();
@@ -705,6 +707,7 @@ export const CreateItemModal = ({
     }
 
     setIsSubmitting(true);
+    setIsFinishingPlacement(false);
     cancelledRef.current = false;
 
     const ops = useBackgroundOps.getState();
@@ -1111,7 +1114,7 @@ export const CreateItemModal = ({
           data: "0x" as `0x${string}`,
           revocable: true,
           refUID: { ref: `property:${key}` },
-          definitionRef: { ref: `keyAnchor:${key}` },
+          pinDefinitionRef: { ref: `keyAnchor:${key}` },
         })),
       ];
 
@@ -1137,7 +1140,7 @@ export const CreateItemModal = ({
           : ("0x" as `0x${string}`),
         revocable: true,
         refUID: { ref: "DATA" },
-        ...(fileAnchorUID ? {} : { definitionRef: { ref: "fileAnchor" } }),
+        ...(fileAnchorUID ? {} : { pinDefinitionRef: { ref: "fileAnchor" } }),
       });
 
       let completedLayer = 0;
@@ -1157,6 +1160,9 @@ export const CreateItemModal = ({
             mintsFileAnchor,
             fileAnchorLayer,
           }),
+        onBeforeLayer: ({ layer }) => {
+          if (mintsFileAnchor && layer >= fileAnchorLayer) setIsFinishingPlacement(true);
+        },
         onProgress: message => ops.log(opId, message),
         onLayer: ({ layer, minted }) => {
           completedLayer = layer;
@@ -1164,6 +1170,7 @@ export const CreateItemModal = ({
             if (ref === "DATA") ops.log(opId, `DATA created: ${uid.slice(0, 10)}...`);
             if (ref === "fileAnchor") ops.log(opId, "File anchor created.");
           }
+          if (mintsFileAnchor && layer >= placementPinLayer) setIsFinishingPlacement(false);
           ops.progress(opId, Math.min(95, 40 + layer * 15));
         },
       });
@@ -1172,7 +1179,6 @@ export const CreateItemModal = ({
       if (!dataUID) throw new Error("Could not extract DATA UID");
       fileAnchorUID = fileAnchorUID ?? submittedUIDs.get("fileAnchor");
       if (!fileAnchorUID) throw new Error("Could not extract file Anchor UID");
-      checkCancelled();
 
       // Ancestor-walk visibility TAGs (tag-only folder-visibility model, ADR-0038 / ADR-0041).
       // A folder appears in a lens listing iff at least one lens attester has an
@@ -1200,6 +1206,7 @@ export const CreateItemModal = ({
               current !== (ethers.ZeroHash as `0x${string}`) &&
               current.toLowerCase() !== rootUID.toLowerCase()
             ) {
+              checkCancelled();
               // Schema-aware check on the TAG slot. Under ADR-0041 there is no
               // `applies=false` and no supersede-via-negative-weight; an active TAG either
               // exists (slot is non-empty) or it doesn't (revoked / never created), so a
@@ -1212,6 +1219,7 @@ export const CreateItemModal = ({
               })) as boolean;
 
               if (!tagged) {
+                checkCancelled();
                 ops.log(opId, `Tagging ancestor folder ${current.slice(0, 10)}... for visibility`);
                 const encodedVisTag = ethers.AbiCoder.defaultAbiCoder().encode(
                   ["bytes32", "int256"],
@@ -1250,6 +1258,7 @@ export const CreateItemModal = ({
               checkCancelled();
             }
           } catch (e) {
+            if (e instanceof Error && e.message === CANCEL_SENTINEL) throw e;
             console.warn("Ancestor-walk visibility tagging failed; some ancestors may stay hidden.", e);
           }
         }
@@ -1264,12 +1273,21 @@ export const CreateItemModal = ({
         ops.fail(opId, "Cancelled by user. Any transactions already broadcast will still settle on-chain.");
       } else {
         console.error(e);
-        const msg = extractErrorMessage(e);
+        let msg = extractErrorMessage(e);
+        if (e instanceof LayeredWriteError) {
+          if (e.landed.has("fileAnchor") && !e.landed.has("placementPin")) {
+            const txHint = e.txHash ? ` Transaction: ${e.txHash.slice(0, 10)}...` : "";
+            msg = `${msg} File anchor was created, but placement could not be confirmed.${txHint} If placement did not land, retry the same name to complete it.`;
+          } else if (e.landed.size > 0) {
+            msg = `${msg} Earlier attestation layers already landed; retrying is safe.`;
+          }
+        }
         notification.error(msg);
         ops.fail(opId, msg);
       }
     } finally {
       setIsSubmitting(false);
+      setIsFinishingPlacement(false);
       cancelledRef.current = false;
     }
   };
@@ -1646,14 +1664,24 @@ export const CreateItemModal = ({
           {isSubmitting ? (
             <button
               type="button"
-              className="btn btn-error"
+              className={`btn ${isFinishingPlacement ? "btn-disabled" : "btn-error"}`}
+              disabled={isFinishingPlacement}
               onClick={() => {
+                if (isFinishingPlacement) return;
                 cancelledRef.current = true;
               }}
-              title="Stop upload. Transactions already broadcast will still settle on-chain."
+              title={
+                isFinishingPlacement
+                  ? "Finishing placement. Anchor or placement transaction is in progress."
+                  : "Stop upload. Transactions already broadcast will still settle on-chain."
+              }
             >
-              <StopIcon className="w-4 h-4" />
-              Stop
+              {isFinishingPlacement ? (
+                <span className="loading loading-spinner loading-xs" />
+              ) : (
+                <StopIcon className="w-4 h-4" />
+              )}
+              {isFinishingPlacement ? "Finishing" : "Stop"}
             </button>
           ) : (
             <button className="btn btn-ghost" onClick={handleClose}>

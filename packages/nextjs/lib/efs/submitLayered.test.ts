@@ -108,7 +108,7 @@ test("submitLayered submits one multiAttest per layer and threads mined UIDs int
         schema: SCHEMA_C,
         revocable: true,
         refUID: { ref: "DATA" },
-        definitionRef: { ref: "DATA" },
+        pinDefinitionRef: { ref: "DATA" },
       }),
     ],
     {
@@ -234,6 +234,32 @@ test("submitLayered marks pre-layer cancellation so callers can keep the user-ca
   assert.equal(writes.length, 1);
 });
 
+test("submitLayered announces a layer before opening the wallet prompt", async () => {
+  const events: { layer: number; refs: readonly string[]; writes: number }[] = [];
+  const { walletClient, publicClient, writes } = makeCtx([[[SCHEMA_A, uid(1)]], [[SCHEMA_B, uid(2)]]]);
+
+  await submitLayered(
+    [
+      plan({ ref: "DATA", layer: 1, schema: SCHEMA_A }),
+      plan({ ref: "MIRROR", layer: 2, schema: SCHEMA_B, refUID: { ref: "DATA" } }),
+    ],
+    {
+      walletClient,
+      publicClient,
+      easAddress: EAS_ADDRESS,
+      account: ATTESTER,
+      onBeforeLayer: ({ layer, refs }) => {
+        events.push({ layer, refs, writes: writes.length });
+      },
+    },
+  );
+
+  assert.deepEqual(events, [
+    { layer: 1, refs: ["DATA"], writes: 0 },
+    { layer: 2, refs: ["MIRROR"], writes: 1 },
+  ]);
+});
+
 test("submitLayered preserves landed UIDs when a later wallet prompt is rejected", async () => {
   const dataUID = uid(101);
   const mirrorUID = uid(102);
@@ -284,6 +310,141 @@ test("submitLayered preserves landed UIDs when a later wallet prompt is rejected
     },
   );
   assert.equal(writes.length, 3);
+});
+
+test("submitLayered preserves tx hash and landed UIDs when receipt waiting fails", async () => {
+  const dataUID = uid(301);
+  const writes: unknown[] = [];
+  const txHashes = [uid(30_001), uid(30_002)];
+  const walletClient = {
+    writeContract: async (args: unknown) => {
+      writes.push(args);
+      return txHashes[writes.length - 1]!;
+    },
+  };
+  const publicClient = {
+    waitForTransactionReceipt: async ({ hash }: { hash: `0x${string}` }) => {
+      if (hash === txHashes[1]) throw new Error("receipt timeout");
+      return {
+        status: "success" as const,
+        logs: [attestedLog(SCHEMA_A, dataUID)],
+      };
+    },
+  };
+
+  await assert.rejects(
+    () =>
+      submitLayered(
+        [
+          plan({ ref: "DATA", layer: 1, schema: SCHEMA_A }),
+          plan({ ref: "MIRROR", layer: 2, schema: SCHEMA_B, refUID: { ref: "DATA" } }),
+        ],
+        {
+          walletClient,
+          publicClient,
+          easAddress: EAS_ADDRESS,
+          account: ATTESTER,
+        },
+      ),
+    (error: unknown) => {
+      assert.ok(error instanceof LayeredWriteError);
+      assert.equal(error.cancelled, false);
+      assert.equal(error.layer, 2);
+      assert.equal(error.txHash, txHashes[1]);
+      assert.equal(error.landed.get("DATA"), dataUID);
+      assert.match(error.message, /receipt timeout/);
+      return true;
+    },
+  );
+  assert.equal(writes.length, 2);
+});
+
+test("submitLayered preserves tx hash and landed UIDs when a layer reverts", async () => {
+  const dataUID = uid(351);
+  const writes: unknown[] = [];
+  const txHashes = [uid(35_001), uid(35_002)];
+  const walletClient = {
+    writeContract: async (args: unknown) => {
+      writes.push(args);
+      return txHashes[writes.length - 1]!;
+    },
+  };
+  const publicClient = {
+    waitForTransactionReceipt: async ({ hash }: { hash: `0x${string}` }) => ({
+      status: hash === txHashes[1] ? ("reverted" as const) : ("success" as const),
+      logs: hash === txHashes[0] ? [attestedLog(SCHEMA_A, dataUID)] : [],
+    }),
+  };
+
+  await assert.rejects(
+    () =>
+      submitLayered(
+        [
+          plan({ ref: "DATA", layer: 1, schema: SCHEMA_A }),
+          plan({ ref: "MIRROR", layer: 2, schema: SCHEMA_B, refUID: { ref: "DATA" } }),
+        ],
+        {
+          walletClient,
+          publicClient,
+          easAddress: EAS_ADDRESS,
+          account: ATTESTER,
+        },
+      ),
+    (error: unknown) => {
+      assert.ok(error instanceof LayeredWriteError);
+      assert.equal(error.cancelled, false);
+      assert.equal(error.layer, 2);
+      assert.equal(error.txHash, txHashes[1]);
+      assert.equal(error.landed.get("DATA"), dataUID);
+      assert.match(error.message, /reverted/);
+      return true;
+    },
+  );
+  assert.equal(writes.length, 2);
+});
+
+test("submitLayered preserves tx hash and landed UIDs when Attested logs are missing", async () => {
+  const dataUID = uid(401);
+  const writes: unknown[] = [];
+  const txHashes = [uid(40_001), uid(40_002)];
+  const walletClient = {
+    writeContract: async (args: unknown) => {
+      writes.push(args);
+      return txHashes[writes.length - 1]!;
+    },
+  };
+  const publicClient = {
+    waitForTransactionReceipt: async ({ hash }: { hash: `0x${string}` }) => ({
+      status: "success" as const,
+      logs: hash === txHashes[0] ? [attestedLog(SCHEMA_A, dataUID)] : [],
+    }),
+  };
+
+  await assert.rejects(
+    () =>
+      submitLayered(
+        [
+          plan({ ref: "DATA", layer: 1, schema: SCHEMA_A }),
+          plan({ ref: "MIRROR", layer: 2, schema: SCHEMA_B, refUID: { ref: "DATA" } }),
+        ],
+        {
+          walletClient,
+          publicClient,
+          easAddress: EAS_ADDRESS,
+          account: ATTESTER,
+        },
+      ),
+    (error: unknown) => {
+      assert.ok(error instanceof LayeredWriteError);
+      assert.equal(error.cancelled, false);
+      assert.equal(error.layer, 2);
+      assert.equal(error.txHash, txHashes[1]);
+      assert.equal(error.landed.get("DATA"), dataUID);
+      assert.match(error.message, /expected 1 Attested event/);
+      return true;
+    },
+  );
+  assert.equal(writes.length, 2);
 });
 
 test("submitLayered passes the selected account and chain to every layer write", async () => {

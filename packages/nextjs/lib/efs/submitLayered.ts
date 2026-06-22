@@ -24,7 +24,7 @@ export interface PlannedAttestation {
   readonly revocable: boolean;
   readonly refUID: RefOrUID;
   readonly recipient?: `0x${string}`;
-  readonly definitionRef?: RefOrUID;
+  readonly pinDefinitionRef?: RefOrUID;
 }
 
 export interface SubmitLayeredCtx {
@@ -66,6 +66,7 @@ export interface SubmitLayeredCtx {
   readonly chain?: Chain;
   readonly isCancelled?: () => boolean;
   readonly onProgress?: (message: string) => void;
+  readonly onBeforeLayer?: (event: { readonly layer: number; readonly refs: readonly string[] }) => void;
   readonly onLayer?: (event: {
     readonly layer: number;
     readonly txHash: `0x${string}`;
@@ -146,8 +147,8 @@ function materialize(
   resolved: ReadonlyMap<string, `0x${string}`>,
 ): { refUID: `0x${string}`; data: `0x${string}` } {
   const refUID = resolveRef(att.refUID, resolved, `${att.ref} refUID`);
-  if (att.definitionRef === undefined) return { refUID, data: att.data };
-  const definition = resolveRef(att.definitionRef, resolved, `${att.ref} definition`);
+  if (att.pinDefinitionRef === undefined) return { refUID, data: att.data };
+  const definition = resolveRef(att.pinDefinitionRef, resolved, `${att.ref} PIN definition`);
   return {
     refUID,
     data: encodeAbiParameters(PIN_DEFINITION_PARAMS, [definition]),
@@ -253,6 +254,7 @@ export async function submitLayered(
     }
 
     const { requests, flatRefs } = buildLayerRequests(layerAtts, resolved);
+    ctx.onBeforeLayer?.({ layer, refs: flatRefs });
     ctx.onProgress?.(
       `Submitting layer ${layer} (${flatRefs.length} attestation${flatRefs.length === 1 ? "" : "s"})...`,
     );
@@ -276,12 +278,36 @@ export async function submitLayered(
       );
     }
 
-    const receipt = await ctx.publicClient.waitForTransactionReceipt({ hash: txHash });
+    let receipt: Awaited<ReturnType<SubmitLayeredCtx["publicClient"]["waitForTransactionReceipt"]>>;
+    try {
+      receipt = await ctx.publicClient.waitForTransactionReceipt({ hash: txHash });
+    } catch (cause) {
+      throw new LayeredWriteError(
+        layer,
+        new Map(resolved),
+        `submitLayered: layer ${layer} was sent but not confirmed (${
+          cause instanceof Error ? cause.message : String(cause)
+        }).`,
+        txHash,
+      );
+    }
     if (receipt.status === "reverted") {
       throw new LayeredWriteError(layer, new Map(resolved), `submitLayered: layer ${layer} reverted.`, txHash);
     }
 
-    const uids = extractMintedUIDs(receipt, ctx.easAddress, flatRefs.length);
+    let uids: `0x${string}`[];
+    try {
+      uids = extractMintedUIDs(receipt, ctx.easAddress, flatRefs.length);
+    } catch (cause) {
+      throw new LayeredWriteError(
+        layer,
+        new Map(resolved),
+        `submitLayered: layer ${layer} was confirmed but UIDs could not be extracted (${
+          cause instanceof Error ? cause.message : String(cause)
+        }).`,
+        txHash,
+      );
+    }
     const minted = flatRefs.map((ref, index) => {
       const uid = uids[index]!;
       resolved.set(ref, uid);
