@@ -50,18 +50,11 @@ const deployWhiteout: DeployFunction = async function (hre: HardhatRuntimeEnviro
   const indexer = await ethers.getContract<Contract>("Indexer", deployer);
   console.log("Using EFSIndexer at:", indexer.target);
 
-  // 3. Predict the WhiteoutResolver PROXY address (the resolver baked into the WHITEOUT schema UID).
-  //    Two deployer txs: (impl) then (proxy). The proxy is the resolver — predict at nonce+1.
-  const nonce = await ethers.provider.getTransactionCount(deployer);
-  const futureProxyAddr = ethers.getCreateAddress({ from: deployer, nonce: nonce + 1 });
+  // 3. WHITEOUT schema params. The resolver proxy address (baked into the schema UID) is read from
+  //    the ACTUAL deployment AFTER deploy below — never predicted: a nonce+1 prediction is wrong on a
+  //    retry where hardhat-deploy reuses an unchanged impl without sending a tx (proxy not at nonce+1).
   const whiteoutDefinition = ""; // empty field string (ADR-0055) — pure-identity negative marker.
   const whiteoutRevocable = true;
-  const whiteoutSchemaUID = ethers.solidityPackedKeccak256(
-    ["string", "address", "bool"],
-    [whiteoutDefinition, futureProxyAddr, whiteoutRevocable],
-  );
-  console.log("Predicted WhiteoutResolver proxy:", futureProxyAddr);
-  console.log("Pre-computed WHITEOUT_SCHEMA_UID:", whiteoutSchemaUID);
 
   // 4. Deploy the implementation (constructor: IEAS) then the proxy, initialized with the indexer.
   await deploy("WhiteoutResolverImpl", {
@@ -86,12 +79,13 @@ const deployWhiteout: DeployFunction = async function (hre: HardhatRuntimeEnviro
   const whiteoutResolver = await ethers.getContractAt("WhiteoutResolver", proxy.target as string, deployerSigner);
   console.log("WhiteoutResolver (proxy) deployed at:", whiteoutResolver.target);
 
-  if (whiteoutResolver.target !== futureProxyAddr) {
-    console.warn(
-      `WARNING: WhiteoutResolver proxy address differs from predicted (got ${whiteoutResolver.target}, ` +
-        `expected ${futureProxyAddr}) — the WHITEOUT schema UID will not match; check the nonce offset.`,
-    );
-  }
+  // Compute the WHITEOUT schema UID from the ACTUAL proxy address (correct whether the proxy was
+  // newly deployed or reused on a retry — the self-UID gate below is the cross-check).
+  const whiteoutSchemaUID = ethers.solidityPackedKeccak256(
+    ["string", "address", "bool"],
+    [whiteoutDefinition, whiteoutResolver.target, whiteoutRevocable],
+  );
+  console.log("WHITEOUT_SCHEMA_UID:", whiteoutSchemaUID);
 
   // 5. Register the WHITEOUT schema against the proxy (try/catch — idempotent if already registered).
   try {
