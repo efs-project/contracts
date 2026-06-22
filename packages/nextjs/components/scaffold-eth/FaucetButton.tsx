@@ -12,37 +12,43 @@
  *
  * Exported name preserved so the scaffold-eth barrel export stays stable.
  */
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { createWalletClient, http, parseEther } from "viem";
 import { hardhat } from "viem/chains";
 import { useAccount } from "wagmi";
 import { BanknotesIcon } from "@heroicons/react/24/outline";
 import { useTransactor } from "~~/hooks/scaffold-eth";
+import { isFundableForkChainId } from "~~/utils/scaffold-eth";
 
 const NUM_OF_ETH = "1";
 const FAUCET_ADDRESS = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
 
-// `scaffold.config.ts` patches an instance of the hardhat chain with the
-// env-var URL, but we're importing the vanilla `hardhat` from `viem/chains`
-// here — so `http()` with no argument would fall back to viem's default
-// `http://127.0.0.1:8545`, which is wrong whenever a parallel worktree or the
-// Claude Code Preview auto-port scan shifted hardhat to a different port.
-// Read the env var directly so we always target the same node the rest of
-// the app is using. See also `DevnetAutoFund.tsx` which has the same fix.
+// Funding works on BOTH fork chains (ADR-0062): the local fork (31337) and the devnet (5318008),
+// which have different RPC URLs. Build the wallet client from the CONNECTED wagmi chain (already
+// patched with the right RPC in scaffold.config.ts) so it targets the correct node per chain. The
+// env var is only the vanilla-hardhat fallback. See also `DevnetAutoFund.tsx`.
 const HARDHAT_RPC_URL = process.env.NEXT_PUBLIC_HARDHAT_RPC_URL || "http://127.0.0.1:8545";
-const localWalletClient = createWalletClient({
-  chain: hardhat,
-  transport: http(HARDHAT_RPC_URL),
-});
 
 export const FaucetButton = ({ hidden = false }: { hidden?: boolean } = {}) => {
   const { address, chain: ConnectedChain } = useAccount();
   const [loading, setLoading] = useState(false);
-  const faucetTxn = useTransactor(localWalletClient);
 
-  // Only meaningful on the local hardhat fork — on any other chain the button
+  const fundable = isFundableForkChainId(ConnectedChain?.id);
+  // Pin a wallet client to the connected fork's chain + RPC. Built unconditionally (hooks can't be
+  // conditional); only used when `fundable`, and defaults to the hardhat chain otherwise.
+  const walletClient = useMemo(
+    () =>
+      createWalletClient({
+        chain: ConnectedChain && fundable ? ConnectedChain : hardhat,
+        transport: http(ConnectedChain?.rpcUrls?.default?.http?.[0] ?? HARDHAT_RPC_URL),
+      }),
+    [ConnectedChain, fundable],
+  );
+  const faucetTxn = useTransactor(walletClient);
+
+  // Only meaningful on a fork chain (local 31337 / devnet 5318008) — on any other chain the button
   // disappears entirely (no placeholder, no greyed-out state).
-  if (ConnectedChain?.id !== hardhat.id) {
+  if (!fundable) {
     return null;
   }
 

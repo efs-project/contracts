@@ -52,3 +52,16 @@ const FLAVOR_SORT_RANK: Record<NetworkFlavor, number> = {
 export function networkSortRank(chain: Chain | undefined): number {
   return FLAVOR_SORT_RANK[inferNetworkFlavor(chain?.id)];
 }
+
+/**
+ * Chains where browser-side faucet funding (auto-fund + the manual Fund-wallet button) is allowed:
+ * the local fork (31337) and the shared devnet (5318008). Both are open anvil Sepolia forks whose
+ * standard accounts are pre-funded and unlocked, so the UI can top up a 0-balance burner via an
+ * `eth_sendTransaction` from account #0 (devnet drain is accepted by design — see project notes).
+ *
+ * SAFETY: this MUST stay an explicit allowlist. Auto-sending ETH must NEVER fire on Sepolia/mainnet
+ * or any chain where the funding account isn't a throwaway prefunded fork account.
+ */
+export function isFundableForkChainId(chainId: number | undefined): boolean {
+  return chainId === HARDHAT_CHAIN_ID || chainId === DEVNET_CHAIN_ID;
+}
