@@ -92,7 +92,7 @@ export const DevnetAutoFund = () => {
         inFlightRef.current = false;
       }
     })();
-  }, [address, balance, chain?.id]);
+  }, [address, balance, chain]);
 
   return null;
 };
