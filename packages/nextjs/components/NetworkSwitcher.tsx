@@ -25,9 +25,14 @@ import { useAccount, useSwitchChain } from "wagmi";
 import { GlobeAltIcon } from "@heroicons/react/24/outline";
 import { getNetworkColor, useTargetNetwork } from "~~/hooks/scaffold-eth";
 import { useGlobalState } from "~~/services/store/store";
-import { getTargetNetworks, networkLabel } from "~~/utils/scaffold-eth";
+import { getTargetNetworks, networkLabel, networkSortRank } from "~~/utils/scaffold-eth";
 
 const allowedNetworks = getTargetNetworks();
+
+// Display order for the dropdown: Sepolia (live) → Devnet → Local. Sorted independently of the
+// configured `targetNetworks` order so the menu order never changes which network the store
+// defaults to (that stays `targetNetworks[0]`).
+const displayNetworks = [...allowedNetworks].sort((a, b) => networkSortRank(a) - networkSortRank(b));
 
 // Persist the no-wallet selection so a manual switch survives a reload. Only
 // consulted when no wallet is connected (a connected wallet's chain wins).
@@ -102,7 +107,7 @@ export const NetworkSwitcher = () => {
         className="dropdown-content menu p-2 mt-2 shadow-center shadow-accent bg-base-200 rounded-box w-52 z-[100]"
       >
         <li className="menu-title px-3 py-1 text-xs">Network</li>
-        {allowedNetworks.map(network => {
+        {displayNetworks.map(network => {
           const isActive = network.id === targetNetwork.id;
           return (
             <li key={network.id}>

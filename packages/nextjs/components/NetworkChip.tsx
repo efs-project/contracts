@@ -190,7 +190,7 @@ export const NetworkChip = () => {
   // default when the user has switched the UI to the other network.
   const activeChain = chain ?? targetNetwork;
   const rpcUrl = activeChain?.rpcUrls.default.http[0];
-  const flavor = inferNetworkFlavor(rpcUrl, activeChain?.id);
+  const flavor = inferNetworkFlavor(activeChain?.id);
   const label = networkLabel(activeChain);
   const shortSha = GIT_SHA ? GIT_SHA.slice(0, 7) : "";
 

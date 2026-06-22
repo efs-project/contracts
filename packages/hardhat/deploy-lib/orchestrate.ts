@@ -377,8 +377,12 @@ export async function registerAndTransfer(
   // Batch 2). So the EOA register/bootstrap path is allowed ONLY on the local pinned fork (chainId
   // 31337, no adversarial mempool); any real network MUST use EFS_DEPLOY_VIA_SAFE=1. (Modes that
   // stop before registration — `until-freeze-gate` — already returned above and are unaffected.)
+  // 5318008 = the EFS devnet (ADR-0062): an operator-controlled Sepolia fork, deployed-before-
+  // announced and reset weekly — the same posture the public devnet already runs under today as
+  // 31337, so allowing the EOA path here is no regression, just preserving it under the devnet's
+  // own chain id. Real public networks (Sepolia/mainnet) still MUST use the atomic Safe ceremony.
   const chainId = Number((await deployer.provider!.getNetwork()).chainId);
-  if (chainId !== 31337) {
+  if (chainId !== 31337 && chainId !== 5318008) {
     throw new Error(
       `[orchestrate] EOA register/bootstrap is disallowed on chainId ${chainId} (front-run risk on ` +
         `root establishment before bootstrap — PR #24 P1). Real-network registration must go through ` +
@@ -526,7 +530,8 @@ async function resolveSafe(deployer: Signer): Promise<string> {
   // `LOCALHOST_RPC_URL=… yarn deploy`). Real Sepolia/mainnet have distinct chainIds (11155111 / 1)
   // and network names, so this never loosens the hard-fail on a real target. (SE-2 also sometimes
   // reports a forked chain's name as "unknown"; accept that too.)
-  const isForkRehearsal = net.chainId === 31337n || networkName === "hardhat" || networkName === "unknown";
+  const isForkRehearsal =
+    net.chainId === 31337n || net.chainId === 5318008n || networkName === "hardhat" || networkName === "unknown";
 
   // A well-formed, non-zero checksummed address is required on any non-fork-rehearsal network.
   const valid = !!env && ethers.isAddress(env) && env !== ZeroAddress;

@@ -657,7 +657,7 @@ export default function ExplorerClient() {
   ) {
     if (systemReadTimedOut) {
       const label = networkLabel(targetNetwork);
-      const flavor = inferNetworkFlavor(targetNetwork.rpcUrls?.default?.http?.[0], targetNetwork.id);
+      const flavor = inferNetworkFlavor(targetNetwork.id);
       const advice =
         flavor === "local"
           ? "Start a local chain (`yarn preview`, or `yarn fork` + `yarn deploy`), or switch network at the top-right."

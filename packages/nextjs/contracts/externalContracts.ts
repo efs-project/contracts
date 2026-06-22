@@ -4409,6 +4409,10 @@ const externalContracts = {
 // the union. Reusing externalContracts[31337] avoids duplicating ~4.3k lines of ABI.
 const externalContractsAllChains = {
   31337: externalContracts[31337],
+  // 5318008 = the EFS devnet (ADR-0062), a Sepolia fork with identical addresses to 31337, so it
+  // reuses the same external ABIs/addresses. Required so these chain-agnostic debug-UI contracts stay
+  // in the cross-chain `ContractName` intersection now that 5318008 is a target network.
+  5318008: externalContracts[31337],
   11155111: externalContracts[31337],
 } as const;
 

@@ -74,6 +74,10 @@ const config: HardhatUserConfig = {
       gasPrice: "auto",
       gas: "auto",
       gasMultiplier: 3,
+      // Defaults to 31337 (local fork / CI determinism, ADR-0037). Override with
+      // HARDHAT_CHAIN_ID=5318008 to run/regenerate the devnet's own chain (ADR-0062) —
+      // e.g. generating `deployedContracts[5318008]` or running the VPS node's chain id locally.
+      chainId: positiveIntEnvOr("HARDHAT_CHAIN_ID", 31337),
       forking: {
         // Blank `.env` values are treated as unset. This protects fork rehearsals
         // from `FORK_BLOCK=` becoming Number("") === 0.
