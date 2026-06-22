@@ -1462,9 +1462,9 @@ const deployedContracts = {
           name: "request",
           outputs: [
             {
-              internalType: "uint256",
+              internalType: "uint16",
               name: "statusCode",
-              type: "uint256",
+              type: "uint16",
             },
             {
               internalType: "bytes",
