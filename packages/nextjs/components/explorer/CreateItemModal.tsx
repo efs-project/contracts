@@ -16,7 +16,9 @@ import { Cog6ToothIcon, StopIcon } from "@heroicons/react/24/outline";
 import { useSortDiscovery } from "~~/hooks/efs/useSortDiscovery";
 import { useDeployedContractInfo, useScaffoldWriteContract } from "~~/hooks/scaffold-eth";
 import { useTargetNetwork } from "~~/hooks/scaffold-eth/useTargetNetwork";
+import { shouldCancelLayeredFileWrite } from "~~/lib/efs/fileWriteCancellation";
 import { CHUNK_SIZE, MAX_CHUNKS, MAX_ONCHAIN_SIZE } from "~~/lib/efs/sstore2";
+import { LayeredWriteError, type PlannedAttestation, submitLayered } from "~~/lib/efs/submitLayered";
 import { useBackgroundOps } from "~~/services/store/backgroundOps";
 import type { ClassifiedContainer } from "~~/utils/efs/containers";
 import { EDGE_RESOLVER_ABI, getEdgeResolverAddress } from "~~/utils/efs/edgeResolver";
@@ -1011,17 +1013,18 @@ export const CreateItemModal = ({
       }
 
       // AGENT-NOTE (Codex P2): the file ANCHOR is non-revocable (permanent). Its
-      // CREATION is deliberately deferred to just before the placement PIN (see
-      // below) — NOT done here. Creating the file-slot ANCHOR sets
+      // CREATION is deliberately deferred until the property bindings can land
+      // with it, just before the placement PIN (see below) — NOT done here.
+      // Creating the file-slot ANCHOR sets
       // `_containsAttestations[anchorUID][attester]` in EFSIndexer, which makes the
       // slot appear in `getDirectoryPageFiltered` phase 1 immediately, before any
       // placement PIN exists. A cancel / rejected wallet prompt / MIRROR failure
-      // anywhere in the DATA→PROPERTY→MIRROR steps below would then leave a
+      // anywhere in the DATA→PROPERTY→MIRROR→key-anchor steps below would then leave a
       // permanent file slot with no PIN — and the filtered directory view reaches
       // the DATA (and its `system`-tag exclusion) only through the PIN, so it can
-      // neither show nor hide the orphan. Minting the ANCHOR last (immediately
-      // before the PIN, with no cancellation checkpoint between them) shrinks that
-      // visible-but-unreachable window to ~1 tx. The window can't be fully closed:
+      // neither show nor hide the orphan. Minting the ANCHOR after the property
+      // bindings, then suppressing Stop until the final PIN, shrinks that
+      // visible-but-unreachable window to the final placement tx. The window can't be fully closed:
       // EAS UIDs aren't precomputable, so the ANCHOR and the PIN that references it
       // can't be batched atomically. The read-only reuse check above
       // (`existingFileAnchorUID`) stays where it is — it sets no on-chain state.
@@ -1035,249 +1038,142 @@ export const CreateItemModal = ({
       // and hardlink instead of minting) remains future PROPERTY/SDK upload-flow work. The
       // reserved-key contentHash/size PROPERTYs are now attached below alongside contentType.
 
-      ops.log(opId, "Creating DATA attestation (empty — pure identity, ADR-0049)...");
-      const dataTxHash = await attest(
-        {
-          functionName: "attest",
-          args: [
-            {
-              schema: dataSchemaUID as `0x${string}`,
-              data: {
-                recipient: ethers.ZeroAddress,
-                expirationTime: 0n,
-                revocable: false,
-                refUID: ethers.ZeroHash as `0x${string}`,
-                data: "0x",
-                value: 0n,
-              },
-            },
-          ],
-        },
-        { silent: true },
-      );
-      if (!dataTxHash) throw new Error("DATA attestation failed.");
-      const dataReceipt = await publicClient.waitForTransactionReceipt({ hash: dataTxHash });
-      const dataUID = extractUIDFromReceipt(dataReceipt);
-      if (!dataUID) throw new Error("Could not extract DATA UID");
-      ops.log(opId, `DATA created: ${dataUID.slice(0, 10)}...`);
-      checkCancelled();
-
-      // Reserved-key PROPERTYs bound to the DATA UID (ADR-0049, specs/02 §Property).
-      // Each uses the unified free-floating model (ADR-0035 / ADR-0041): a key anchor
-      // under the DATA, a free-floating PROPERTY carrying the value, then a PIN binding
-      // them. Three transactions per key; only the PIN is revocable, so changing a value
-      // is a PIN re-attest (which supersedes the prior PIN in O(1)), not a PROPERTY revoke.
-      // All values are string-encoded: contentType is the MIME type, contentHash is the
-      // 0x-prefixed keccak hex computed above, size is the decimal byte count.
-      const bindProperty = async (key: string, value: string) => {
-        ops.log(opId, `Creating ${key} key anchor...`);
-        let keyAnchorUID: `0x${string}` | undefined;
-        if (indexer && publicClient) {
-          keyAnchorUID = (await publicClient.readContract({
-            address: indexer.address as `0x${string}`,
-            abi: indexer.abi,
-            functionName: "resolveAnchor",
-            args: [dataUID, key, propertySchemaUID as `0x${string}`],
-          })) as `0x${string}`;
-        }
-        if (!keyAnchorUID || keyAnchorUID === (ethers.ZeroHash as `0x${string}`)) {
-          const encodedKey = ethers.AbiCoder.defaultAbiCoder().encode(["string", "bytes32"], [key, propertySchemaUID]);
-          const keyTx = await attest(
-            {
-              functionName: "attest",
-              args: [
-                {
-                  schema: anchorSchemaUID as `0x${string}`,
-                  data: {
-                    recipient: ethers.ZeroAddress,
-                    expirationTime: 0n,
-                    revocable: false,
-                    refUID: dataUID,
-                    data: encodedKey as `0x${string}`,
-                    value: 0n,
-                  },
-                },
-              ],
-            },
-            { silent: true },
-          );
-          if (!keyTx) throw new Error(`${key} key anchor attestation failed.`);
-          const keyReceipt = await publicClient.waitForTransactionReceipt({ hash: keyTx });
-          keyAnchorUID = extractUIDFromReceipt(keyReceipt);
-          if (!keyAnchorUID) throw new Error(`Could not extract ${key} key anchor UID`);
-        }
-
-        ops.log(opId, `Attesting ${key} PROPERTY...`);
-        const encodedProperty = ethers.AbiCoder.defaultAbiCoder().encode(["string"], [value]);
-        const propTxHash = await attest(
-          {
-            functionName: "attest",
-            args: [
-              {
-                schema: propertySchemaUID as `0x${string}`,
-                data: {
-                  recipient: ethers.ZeroAddress,
-                  expirationTime: 0n,
-                  revocable: false,
-                  refUID: ethers.ZeroHash as `0x${string}`,
-                  data: encodedProperty as `0x${string}`,
-                  value: 0n,
-                },
-              },
-            ],
-          },
-          { silent: true },
-        );
-        if (!propTxHash) throw new Error(`${key} PROPERTY attestation failed.`);
-        const propReceipt = await publicClient.waitForTransactionReceipt({ hash: propTxHash });
-        const propertyUID = extractUIDFromReceipt(propReceipt);
-        if (!propertyUID) throw new Error(`Could not extract ${key} PROPERTY UID`);
-
-        ops.log(opId, `Binding ${key} PROPERTY via PIN...`);
-        // AGENT-NOTE: PROPERTY value binding is a PIN under ADR-0041 (cardinality 1).
-        // Re-binding at the same key anchor supersedes the prior PIN in O(1) — no
-        // revoke-then-attest dance.
-        const encodedPin = ethers.AbiCoder.defaultAbiCoder().encode(["bytes32"], [keyAnchorUID]);
-        const pinTxHash = await attest(
-          {
-            functionName: "attest",
-            args: [
-              {
-                schema: pinSchemaUID as `0x${string}`,
-                data: {
-                  recipient: ethers.ZeroAddress,
-                  expirationTime: 0n,
-                  revocable: true,
-                  refUID: propertyUID,
-                  data: encodedPin as `0x${string}`,
-                  value: 0n,
-                },
-              },
-            ],
-          },
-          { silent: true },
-        );
-        if (pinTxHash) await publicClient.waitForTransactionReceipt({ hash: pinTxHash });
-        checkCancelled();
-      };
-
-      await bindProperty("contentType", contentType);
-      // Only bind contentHash/size when they're REAL (a computed hash / measured size), never the
-      // skipped-or-failed-fetch sentinels. For a pasted link where the fetch was skipped/failed or the
-      // file was too large to hash, contentHash falls back to ZeroHash (L956) and/or size to 0n (L957);
-      // binding those would publish bogus reserved-key claims that group unrelated unknown files under
-      // the zero hash / zero size for dedup/integrity reads. Skip the PROPERTY entirely when unknown —
-      // no "unknown" sentinel attestation. The two are independent: a too-large paste link has a known
-      // size (from Content-Length) but no hash.
-      if (contentHash !== (ethers.ZeroHash as `0x${string}`)) await bindProperty("contentHash", contentHash);
-      if (fileSize > 0n) await bindProperty("size", fileSize.toString());
-
       const transportAnchorUID = await resolveTransportAnchor(transportName);
       if (!transportAnchorUID) {
         const msg = `Transport anchor '/transports/${transportName}' not found. Aborting upload.`;
         notification.error(msg);
         ops.fail(opId, msg);
         return;
-      } else {
-        ops.log(
-          opId,
-          `Creating ${TRANSPORT_LABELS[transportName as keyof typeof TRANSPORT_LABELS] || transportName} mirror...`,
-        );
-        const encodedMirror = ethers.AbiCoder.defaultAbiCoder().encode(
-          ["bytes32", "string"],
-          [transportAnchorUID, mirrorUri],
-        );
-        const mirrorTxHash = await attest(
-          {
-            functionName: "attest",
-            args: [
-              {
-                schema: mirrorSchemaUID as `0x${string}`,
-                data: {
-                  recipient: ethers.ZeroAddress,
-                  expirationTime: 0n,
-                  revocable: true,
-                  refUID: dataUID,
-                  data: encodedMirror as `0x${string}`,
-                  value: 0n,
-                },
-              },
-            ],
-          },
-          { silent: true },
-        );
-        if (mirrorTxHash) await publicClient.waitForTransactionReceipt({ hash: mirrorTxHash });
       }
-      checkCancelled();
 
-      // File ANCHOR — created LAST, immediately before the placement PIN (Codex P2).
-      // Deferred here from the read-only reuse check above so the non-revocable slot
-      // is reachable in the filtered directory listing for the shortest possible
-      // window before its placement PIN makes the DATA reachable. The checkCancelled()
-      // immediately above is the LAST cancellation checkpoint of the upload: there is
-      // deliberately NO checkpoint (and no awaitable failure point that isn't the PIN
-      // itself) between this ANCHOR mint and the PIN below. Cancelling between them
-      // would leave a permanent DATA-schema file slot with no PIN — and the filtered
-      // directory view reaches the DATA only through the PIN, so it could neither show
-      // nor hide that orphan. Mirrors lib/efs/uploadOnchainFile.ts.
+      if (!_easAddress) throw new Error("EAS contract address unavailable for this network.");
+
+      const propertyEntries: { key: "contentType" | "contentHash" | "size"; value: string }[] = [
+        { key: "contentType", value: contentType },
+      ];
+      // Only bind contentHash/size when they're REAL (a computed hash / measured size), never the
+      // skipped-or-failed-fetch sentinels. For a pasted link where the fetch was skipped/failed or the
+      // file was too large to hash, contentHash falls back to ZeroHash and/or size to 0n;
+      // binding those would publish bogus reserved-key claims that group unrelated unknown files under
+      // the zero hash / zero size for dedup/integrity reads. Skip the PROPERTY entirely when unknown —
+      // no "unknown" sentinel attestation. The two are independent: a too-large paste link has a known
+      // size (from Content-Length) but no hash.
+      if (contentHash !== (ethers.ZeroHash as `0x${string}`))
+        propertyEntries.push({ key: "contentHash", value: contentHash });
+      if (fileSize > 0n) propertyEntries.push({ key: "size", value: fileSize.toString() });
+
+      const mintsFileAnchor = !fileAnchorUID;
+      const fileAnchorLayer = 3;
+      const placementPinLayer = mintsFileAnchor ? 4 : 3;
+      const attestPlan: PlannedAttestation[] = [
+        {
+          ref: "DATA",
+          layer: 1,
+          schema: dataSchemaUID as `0x${string}`,
+          data: "0x",
+          revocable: false,
+          refUID: ethers.ZeroHash as `0x${string}`,
+        },
+        ...propertyEntries.map(({ key, value }) => ({
+          ref: `property:${key}`,
+          layer: 1,
+          schema: propertySchemaUID as `0x${string}`,
+          data: ethers.AbiCoder.defaultAbiCoder().encode(["string"], [value]) as `0x${string}`,
+          revocable: false,
+          refUID: ethers.ZeroHash as `0x${string}`,
+        })),
+        {
+          ref: "mirror",
+          layer: 2,
+          schema: mirrorSchemaUID as `0x${string}`,
+          data: ethers.AbiCoder.defaultAbiCoder().encode(
+            ["bytes32", "string"],
+            [transportAnchorUID, mirrorUri],
+          ) as `0x${string}`,
+          revocable: true,
+          refUID: { ref: "DATA" },
+        },
+        ...propertyEntries.map(({ key }) => ({
+          ref: `keyAnchor:${key}`,
+          layer: 2,
+          schema: anchorSchemaUID as `0x${string}`,
+          data: ethers.AbiCoder.defaultAbiCoder().encode(
+            ["string", "bytes32"],
+            [key, propertySchemaUID],
+          ) as `0x${string}`,
+          revocable: false,
+          refUID: { ref: "DATA" },
+        })),
+        ...propertyEntries.map(({ key }) => ({
+          ref: `propertyPin:${key}`,
+          layer: 3,
+          schema: pinSchemaUID as `0x${string}`,
+          data: "0x" as `0x${string}`,
+          revocable: true,
+          refUID: { ref: `property:${key}` },
+          definitionRef: { ref: `keyAnchor:${key}` },
+        })),
+      ];
+
       if (!fileAnchorUID) {
         const parent = anchorParent();
-        const anchorTxHash = await attest(
-          {
-            functionName: "attest",
-            args: [
-              {
-                schema: anchorSchemaUID as `0x${string}`,
-                data: {
-                  recipient: parent.recipient,
-                  expirationTime: 0n,
-                  revocable: false,
-                  refUID: parent.refUID,
-                  data: encodedName as `0x${string}`,
-                  value: 0n,
-                },
-              },
-            ],
-          },
-          { silent: true },
-        );
-        if (!anchorTxHash) throw new Error("No txHash returned for file ANCHOR creation.");
-        const anchorReceipt = await publicClient.waitForTransactionReceipt({ hash: anchorTxHash });
-        fileAnchorUID = extractUIDFromReceipt(anchorReceipt);
-        if (!fileAnchorUID) throw new Error("Could not extract file Anchor UID");
-        ops.log(opId, "File anchor created.");
-        // NO checkCancelled() here: once the ANCHOR is broadcast, the placement PIN
-        // MUST follow (see the note above). The cancellation checkpoint is the
-        // checkCancelled() before this block, after the MIRROR step.
+        attestPlan.push({
+          ref: "fileAnchor",
+          layer: fileAnchorLayer,
+          schema: anchorSchemaUID as `0x${string}`,
+          data: encodedName as `0x${string}`,
+          revocable: false,
+          refUID: parent.refUID,
+          recipient: parent.recipient,
+        });
       }
 
-      ops.log(opId, "Placing file in folder via PIN...");
-      // AGENT-NOTE: File placement is a PIN under ADR-0041 (cardinality 1). Re-uploading
-      // a different DATA at the same file anchor supersedes the prior PIN in O(1).
-      const encodedPin = ethers.AbiCoder.defaultAbiCoder().encode(["bytes32"], [fileAnchorUID]);
-      const pinTxHash = await attest(
-        {
-          functionName: "attest",
-          args: [
-            {
-              schema: pinSchemaUID as `0x${string}`,
-              data: {
-                recipient: ethers.ZeroAddress,
-                expirationTime: 0n,
-                revocable: true,
-                refUID: dataUID,
-                data: encodedPin as `0x${string}`,
-                value: 0n,
-              },
-            },
-          ],
+      attestPlan.push({
+        ref: "placementPin",
+        layer: placementPinLayer,
+        schema: pinSchemaUID as `0x${string}`,
+        data: fileAnchorUID
+          ? (ethers.AbiCoder.defaultAbiCoder().encode(["bytes32"], [fileAnchorUID]) as `0x${string}`)
+          : ("0x" as `0x${string}`),
+        revocable: true,
+        refUID: { ref: "DATA" },
+        ...(fileAnchorUID ? {} : { definitionRef: { ref: "fileAnchor" } }),
+      });
+
+      let completedLayer = 0;
+      const submittedUIDs = await submitLayered(attestPlan, {
+        walletClient,
+        publicClient,
+        easAddress: _easAddress,
+        account: walletClient.account,
+        chain: walletClient.chain,
+        // Do not honor Stop after a new file ANCHOR lands; the placement PIN must
+        // follow immediately to avoid a visible empty slot. Existing-anchor updates
+        // can still stop between layers because they do not mint a new permanent slot.
+        isCancelled: () =>
+          shouldCancelLayeredFileWrite({
+            cancelled: cancelledRef.current,
+            completedLayer,
+            mintsFileAnchor,
+            fileAnchorLayer,
+          }),
+        onProgress: message => ops.log(opId, message),
+        onLayer: ({ layer, minted }) => {
+          completedLayer = layer;
+          for (const { ref, uid } of minted) {
+            if (ref === "DATA") ops.log(opId, `DATA created: ${uid.slice(0, 10)}...`);
+            if (ref === "fileAnchor") ops.log(opId, "File anchor created.");
+          }
+          ops.progress(opId, Math.min(95, 40 + layer * 15));
         },
-        { silent: true },
-      );
-      if (pinTxHash) await publicClient.waitForTransactionReceipt({ hash: pinTxHash });
+      });
+
+      const dataUID = submittedUIDs.get("DATA");
+      if (!dataUID) throw new Error("Could not extract DATA UID");
+      fileAnchorUID = fileAnchorUID ?? submittedUIDs.get("fileAnchor");
+      if (!fileAnchorUID) throw new Error("Could not extract file Anchor UID");
       checkCancelled();
 
-      // Ancestor-walk visibility TAGs (tag-only folder-visibility model, ADR-0038 / ADR-0041).
       // Ancestor-walk visibility TAGs (tag-only folder-visibility model, ADR-0038 / ADR-0041).
       // A folder appears in a lens listing iff at least one lens attester has an
       // active TAG(definition=dataSchemaUID, refUID=folder). Active = exists and not revoked;
@@ -1364,7 +1260,7 @@ export const CreateItemModal = ({
       onFileCreated?.(enabledSortUIDs);
       handleClose();
     } catch (e) {
-      if (e instanceof Error && e.message === CANCEL_SENTINEL) {
+      if ((e instanceof Error && e.message === CANCEL_SENTINEL) || (e instanceof LayeredWriteError && e.cancelled)) {
         ops.fail(opId, "Cancelled by user. Any transactions already broadcast will still settle on-chain.");
       } else {
         console.error(e);
