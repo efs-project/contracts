@@ -853,6 +853,80 @@ describe("Whiteout (WHITEOUT cross-lens negative mask, ADR-0055)", function () {
       const aliceRes = await router.request(["dir", "child.txt"], [{ key: "lenses", value: `${aliceAddr}` }]);
       expect(aliceRes.statusCode).to.equal(200n);
     });
+
+    // ADR-0055 folder re-add fix: the per-SEGMENT intermediate-folder whiteout terminal uses the
+    // LISTING positive (PIN OR folder visibility TAG), NOT the PIN-only resolution positive. Folders
+    // are made visible by a visibility TAG (ADR-0038; upload emits `TAG(definition=dataSchemaUID,
+    // refUID=folder)`), so a lens that whiteouts an inherited folder and then RE-ADDS it (by uploading
+    // its own child, which re-emits the folder's visibility TAG) makes the folder TRAVERSABLE again
+    // for that lens — listings show it via `EFSFileView._isItemWhitedOutForListing`, and the router
+    // must traverse it consistently. Regression vector: before this fix the intermediate `dir` segment
+    // used a PIN-only positive that never saw the folder TAG, so the router still 404'd the owner's
+    // own re-added child. The leaf DATA read stays PIN-only (a folder TAG must NOT un-gate it).
+    it("folder whiteout + same-lens visibility-TAG re-add → owner's own re-added child traverses (200); lower lens's non-whited child still shows (200); leaf whiteout still 404s", async function () {
+      // alice (lower lens) already placed /dir/child.txt in the beforeEach (her visibility TAG on /dir
+      // + her file). owner (higher lens) whiteouts the FOLDER /dir, THEN "uploads" /dir/own.txt:
+      // owner re-emits his OWN visibility TAG on /dir (the re-add) and places his own DATA at own.txt
+      // with a web3:// mirror so the leaf serves 200.
+      const ownChildAnchor = await createAnchor("own.txt", dir, dataSchemaUID);
+
+      await attestWhiteout(dir, owner); // owner whiteouts the inherited folder /dir
+      expect(await whiteoutResolver.isWhitedOut(dirRoot, ownerAddr, dir)).to.equal(true);
+
+      // owner RE-ADDS /dir via his own folder visibility TAG (definition=dataSchemaUID, refUID=dir),
+      // exactly what the ancestor-walk visibility-TAG step of an upload emits (ADR-0038 / overview §7).
+      await createTag(dataSchemaUID, dir, owner);
+      // owner places his own DATA at /dir/own.txt with a web3:// mirror (so the leaf can serve 200).
+      const dOwn = await mintData(owner);
+      await createPin(ownChildAnchor, dOwn, owner);
+      await eas.connect(owner).attest({
+        schema: mirrorSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: NO_EXPIRATION,
+          revocable: true,
+          refUID: dOwn,
+          data: enc.encode(["bytes32", "string"], [onchainUID, `web3://${await eas.getAddress()}`]),
+          value: 0n,
+        },
+      });
+
+      // GET /dir/own.txt (owner's re-added child) → 200: owner re-asserted /dir via his visibility
+      // TAG, so the intermediate `dir` segment is traversable for owner (listing positive), and the
+      // leaf own.txt has owner's placement PIN.
+      const ownRes = await router.request(["dir", "own.txt"], [{ key: "lenses", value: `${ownerAddr},${aliceAddr}` }]);
+      expect(ownRes.statusCode).to.equal(200n);
+
+      // GET /dir/other.txt (alice's child.txt — owner did NOT place it under owner) → 200, and this
+      // is the CORRECT overlayfs semantics, not 404. Once owner re-adds /dir (its visibility TAG), the
+      // intermediate `dir` segment is traversable for owner, so the walk descends to the leaf. The
+      // leaf DATA read is PIN-only over [owner, alice], keyed (parent=/dir, child=child.txt): owner has
+      // no placement at child.txt AND owner's only whiteout is on the FOLDER /dir (keyed on (dirRoot,
+      // owner, dir)) — owner never whited child.txt itself — so owner is NOT a leaf negative terminal
+      // and the scan falls through to alice's placement. Whiteout-then-readd of a DIRECTORY exposes the
+      // lower layer's children that were not INDIVIDUALLY whited; to also hide child.txt owner would
+      // whiteout child.txt specifically. (The leaf terminal stays PIN-only — the folder TAG did not
+      // un-gate it; it stayed gated and simply found alice's lower-lens PIN.)
+      const otherRes = await router.request(
+        ["dir", "child.txt"],
+        [{ key: "lenses", value: `${ownerAddr},${aliceAddr}` }],
+      );
+      expect(otherRes.statusCode).to.equal(200n);
+
+      // To actually hide alice's child under owner's lens, owner whiteouts the LEAF child.txt itself.
+      // Now the leaf PIN-only terminal fires at owner (negative terminal on (parent=/dir, child.txt))
+      // → 404, with NO fall-through to alice — the leaf gating is intact and unweakened by this fix.
+      await attestWhiteout(childAnchor, owner);
+      const hiddenRes = await router.request(
+        ["dir", "child.txt"],
+        [{ key: "lenses", value: `${ownerAddr},${aliceAddr}` }],
+      );
+      expect(hiddenRes.statusCode).to.equal(404n);
+
+      // Control: a viewer of [alice] only (no whiteout in her lens) sees alice's child.txt → 200.
+      const aliceOnly = await router.request(["dir", "child.txt"], [{ key: "lenses", value: `${aliceAddr}` }]);
+      expect(aliceOnly.statusCode).to.equal(200n);
+    });
   });
 
   // ════════════════════════════════════════════════════════════════════════════

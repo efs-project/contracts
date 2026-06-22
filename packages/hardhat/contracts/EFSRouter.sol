@@ -77,6 +77,17 @@ interface IEdgeResolverForRouter {
         address attester,
         bytes32 targetSchema
     ) external view returns (bytes32);
+
+    /// @notice Lens-aware, TAG-specific: true iff ANY of `attesters` has an active TAG on
+    ///         (targetID, definition). One SLOAD per attester. Used for folder-visibility checks
+    ///         (ADR-0038): folder visibility is TAG-only — `TAG(definition=dataSchemaUID, refUID=folder)`.
+    ///         Mirrors `EFSFileView._isItemWhitedOutForListing`'s positive terminal so a deep-link walk
+    ///         treats a re-asserted folder visibility TAG as a traversal positive (ADR-0055 folder-fix).
+    function hasActiveTagFromAny(
+        bytes32 targetID,
+        bytes32 definition,
+        address[] calldata attesters
+    ) external view returns (bool);
 }
 
 /// @notice Minimal read view over the WhiteoutResolver (ADR-0055) for the router's negative terminal.
@@ -315,14 +326,22 @@ contract EFSRouter is IDecentralizedApp {
                 return (404, bytes("Not Found: Path does not exist"), new KeyValue[](0));
             }
 
-            // ADR-0055 deep-link terminal (spec/04): apply the per-name whiteout RESOLUTION terminal
-            // to EACH resolved segment against the SAME effective lens stack — so a deep link into a
-            // whited-out folder (e.g. a viewer whiteouts `/dir`; `GET /dir/child.txt`) 404s instead of
-            // resolving a lower lens's content. Checked against (currentParent = the segment's parent,
-            // targetAnchor = the just-resolved child) BEFORE descending. The final-target check in
-            // `_findDataAtPath` below stays as-is (now redundant for the leaf, harmless). Cost is
+            // ADR-0055 deep-link terminal (spec/04): apply the per-name whiteout terminal to each
+            // INTERMEDIATE (non-leaf) segment against the SAME effective lens stack — so a deep link
+            // into a whited-out folder (e.g. a viewer whiteouts `/dir`; `GET /dir/child.txt`) 404s
+            // instead of resolving a lower lens's content. Checked against (currentParent = the
+            // segment's parent, targetAnchor = the just-resolved child) BEFORE descending.
+            //
+            // Intermediate folder segments use the LISTING positive (PIN OR folder visibility TAG) —
+            // a folder is made visible by a TAG, not a placement PIN (ADR-0038; upload emits
+            // `TAG(definition=dataSchemaUID, refUID=folder)`). So a lens that whiteouts an inherited
+            // folder then RE-ADDS it (uploading its own child re-emits the folder's visibility TAG)
+            // makes the folder traversable again for that lens — exactly matching
+            // `EFSFileView._isItemWhitedOutForListing`. The LEAF is deliberately excluded here: its
+            // DATA resolution stays PIN-only, gated by `_findDataAtPath` below (a folder visibility
+            // TAG must NOT un-gate a direct DATA read — overlayfs lookup semantics). Cost is
             // O(segments × lenses), bounded (MAX_LENSES ≤ 20); zero when whiteout is disabled.
-            if (_isSegmentWhitedOut(currentParent, targetAnchor, effLenses)) {
+            if (i != resource.length - 1 && _isSegmentWhitedOut(currentParent, targetAnchor, effLenses)) {
                 return (404, bytes("Not Found: Path does not exist"), new KeyValue[](0));
             }
 
@@ -1120,15 +1139,32 @@ contract EFSRouter is IDecentralizedApp {
         return (bytes32(0), address(0));
     }
 
-    /// @dev RESOLUTION-side per-name whiteout terminal (ADR-0055), shared by the per-SEGMENT deep-link
-    ///      walk and shaped identically to `EFSFileView._isItemWhitedOutForResolution`: PIN-ONLY
-    ///      positive terminal (a folder's visibility TAG is NOT a placement, so it must not un-gate a
-    ///      path traversal). Returns true iff, walking `attesters` in precedence order, some lens
-    ///      whites out `childAnchor` under `parentAnchor` with no higher-precedence lens re-asserting
-    ///      its own placement PIN there first:
-    ///        - the FIRST lens with an active placement PIN at `childAnchor` ⇒ visible, return false
-    ///          (same-lens positive-before-whiteout; a higher lens's PIN is transparent to a lower
-    ///          lens's whiteout — spec/04 deep-link case);
+    /// @dev Single-element-array wrapper for `edgeResolver.hasActiveTagFromAny` (which takes an
+    ///      `address[] calldata`). The intermediate-folder traversal terminal needs a TAG check scoped
+    ///      to ONE lens at a time (precedence-ordered same-lens override), but EdgeResolver only exposes
+    ///      the lens-aware ANY-of-many form — and it is FROZEN-by-UID (its address is hashed into the
+    ///      PIN/TAG schema UIDs), so we cannot add a single-lens getter there. Wrapping the lens in a
+    ///      1-element memory array reuses the frozen reader without touching it (ADR-0055 folder-fix);
+    ///      mirrors `EFSFileView._one`.
+    function _one(address lens) private pure returns (address[] memory arr) {
+        arr = new address[](1);
+        arr[0] = lens;
+    }
+
+    /// @dev INTERMEDIATE-FOLDER per-name whiteout terminal (ADR-0055), for the per-SEGMENT deep-link
+    ///      walk on NON-LEAF segments. Shaped identically to `EFSFileView._isItemWhitedOutForListing`:
+    ///      its positive terminal is a file placement PIN OR a folder VISIBILITY TAG
+    ///      (`TAG(definition=dataSchemaUID, refUID=folder)`, ADR-0038) — folders are made visible by a
+    ///      TAG, not a placement PIN, so a lens that whiteouts an inherited folder then RE-ADDS it (its
+    ///      own child upload re-emits the folder's visibility TAG) makes the folder traversable again
+    ///      for that lens (THE FOLDER RE-ADD FIX). The leaf is NOT routed through here — its DATA read
+    ///      stays PIN-only in `_findDataAtPath` (a folder TAG must not un-gate a direct DATA read).
+    ///      Returns true iff, walking `attesters` in precedence order, some lens whites out
+    ///      `childAnchor` under `parentAnchor` with no higher-precedence lens asserting a positive
+    ///      (PIN or visibility TAG) there first:
+    ///        - the FIRST lens with a positive (file PIN OR folder visibility TAG) at `childAnchor` ⇒
+    ///          traversable, return false (same-lens positive-before-whiteout; a higher lens's positive
+    ///          is transparent to a lower lens's whiteout — spec/04 deep-link case);
     ///        - else if that lens has an ACTIVE whiteout on `childAnchor` ⇒ negative terminal, return
     ///          true (stop fall-through — the deep link 404s);
     ///        - else continue to the next (lower) lens.
@@ -1144,8 +1180,15 @@ contract EFSRouter is IDecentralizedApp {
         bytes32 dataSchema = indexer.DATA_SCHEMA_UID();
         for (uint256 i = 0; i < attesters.length; i++) {
             address lens = attesters[i];
-            // Positive terminal: this lens places its own content here → visible, stop.
-            if (edgeResolver.getActivePinTarget(childAnchor, lens, dataSchema) != bytes32(0)) return false;
+            // Positive terminal: this lens places its own content here (file PIN) OR re-asserts the
+            // folder's visibility (TAG, ADR-0038) → traversable, stop. The visibility TAG is the
+            // folder re-add fix — listing-positive parity with EFSFileView._isItemWhitedOutForListing.
+            if (
+                edgeResolver.getActivePinTarget(childAnchor, lens, dataSchema) != bytes32(0) ||
+                edgeResolver.hasActiveTagFromAny(childAnchor, dataSchema, _one(lens))
+            ) {
+                return false;
+            }
             // Negative terminal: this lens whites the segment out → 404, stop (no fall-through).
             if (wr.isWhitedOut(parentAnchor, lens, childAnchor)) return true;
         }
