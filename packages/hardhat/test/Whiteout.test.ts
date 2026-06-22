@@ -35,6 +35,7 @@ import { deployResolverProxy } from "./helpers/deployResolverProxy";
  *   12 whiteout in the FILTERED listing — doubly-suppressed skipped exactly once
  *   13 folder whiteout hides a (visibility-TAG-listed) folder
  *   14 folder whiteout + same-lens visibility-TAG re-add → visible (THE FOLDER-FIX)
+ *   15 plain phase-1 listing scan is BUDGET-BOUNDED when many direct files are whited out
  *
  * HARNESS: the beforeEach predicts deterministic CREATE addresses via the deployer nonce, so this
  * file MUST be run as a FULL FILE (`yarn test test/Whiteout.test.ts`), NEVER via `--grep` — a grep
@@ -648,6 +649,9 @@ describe("Whiteout (WHITEOUT cross-lens negative mask, ADR-0055)", function () {
     let mirrorResolver: any;
     let dirRoot: string;
     let fileAnchor: string;
+    let dir: string;
+    let childAnchor: string;
+    let onchainUID: string;
 
     // The router beforeEach builds a fresh stack INCLUDING a MirrorResolver (the router needs a
     // wired MIRROR schema to serve content), the WhiteoutResolver, and a /transports/ tree, then
@@ -757,11 +761,13 @@ describe("Whiteout (WHITEOUT cross-lens negative mask, ADR-0055)", function () {
       // Build /dir/doc.txt with a /transports/onchain ancestry so the web3:// mirror is accepted.
       dirRoot = await createAnchor("root", ZERO_BYTES32);
       const transportsUID = await createAnchor("transports", dirRoot);
-      const onchainUID = await createAnchor("onchain", transportsUID);
+      onchainUID = await createAnchor("onchain", transportsUID);
       await mirrorResolver.setTransportsAnchor(transportsUID);
 
-      const dir = await createAnchor("dir", dirRoot);
+      dir = await createAnchor("dir", dirRoot);
       fileAnchor = await createAnchor("doc.txt", dir, dataSchemaUID);
+      // A SECOND file under the SAME folder, for the deep-link-into-a-whited-folder vector.
+      childAnchor = await createAnchor("child.txt", dir, dataSchemaUID);
 
       // ALICE (lower lens) places real content with a web3:// mirror so an un-whited read serves 200.
       // transportDefinition must be the /transports/onchain anchor (a descendant of /transports/),
@@ -776,6 +782,21 @@ describe("Whiteout (WHITEOUT cross-lens negative mask, ADR-0055)", function () {
           expirationTime: NO_EXPIRATION,
           revocable: true,
           refUID: dAlice,
+          data: enc.encode(["bytes32", "string"], [onchainUID, `web3://${await eas2.getAddress()}`]),
+          value: 0n,
+        },
+      });
+      // Alice (lower lens) also places /dir/child.txt with a web3:// mirror so /dir/child.txt is 200
+      // when not whited; the deep-link vector then whiteouts the FOLDER /dir and expects 404.
+      const dChild = await mintData(alice);
+      await createPin(childAnchor, dChild, alice);
+      await eas2.connect(alice).attest({
+        schema: mirrorSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: NO_EXPIRATION,
+          revocable: true,
+          refUID: dChild,
           data: enc.encode(["bytes32", "string"], [onchainUID, `web3://${await eas2.getAddress()}`]),
           value: 0n,
         },
@@ -808,6 +829,29 @@ describe("Whiteout (WHITEOUT cross-lens negative mask, ADR-0055)", function () {
       await revoke(whiteoutSchemaUID, woUID, owner);
       res = await router.request(["dir", "doc.txt"], [{ key: "lenses", value: `${ownerAddr},${aliceAddr}` }]);
       expect(res.statusCode).to.equal(200n); // alice's placement now falls through
+    });
+
+    // ADR-0055 deep-link terminal (spec/04): a whiteout on the FOLDER /dir must 404 a deep link
+    // GET /dir/child.txt — the per-SEGMENT terminal fires while walking the path, not only on the
+    // leaf. Without it the leaf check passes (child.txt isn't itself whited) and a lower lens's
+    // content leaks through.
+    it("deep link into a whited-out folder 404s (no fall-through to a lower lens's child)", async function () {
+      // Control: with NO whiteout, the deep link serves alice's child.txt (200).
+      let res = await router.request(["dir", "child.txt"], [{ key: "lenses", value: `${ownerAddr},${aliceAddr}` }]);
+      expect(res.statusCode).to.equal(200n);
+
+      // Owner (higher lens) whiteouts the FOLDER /dir itself.
+      await attestWhiteout(dir, owner);
+      expect(await whiteoutResolver.isWhitedOut(dirRoot, ownerAddr, dir)).to.equal(true);
+
+      // Viewer [owner, alice]: the per-segment terminal fires at the `dir` segment → 404, with NO
+      // fall-through to alice's child.txt placement.
+      res = await router.request(["dir", "child.txt"], [{ key: "lenses", value: `${ownerAddr},${aliceAddr}` }]);
+      expect(res.statusCode).to.equal(404n);
+
+      // Control: a viewer whose lens list EXCLUDES the whiteout author (alice only) is unaffected → 200.
+      const aliceRes = await router.request(["dir", "child.txt"], [{ key: "lenses", value: `${aliceAddr}` }]);
+      expect(aliceRes.statusCode).to.equal(200n);
     });
   });
 
@@ -1016,5 +1060,82 @@ describe("Whiteout (WHITEOUT cross-lens negative mask, ADR-0055)", function () {
     // owner's own TAG beats his own whiteout → the folder is VISIBLE for [owner].
     const page = await fileView.getDirectoryPageBySchemaAndAddressList(dir, dataSchemaUID, [ownerAddr], "0x", 10);
     expect(page.items.map(i => i.uid)).to.deep.equal([folder]);
+  });
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // VECTOR 15 — plain phase-1 scan budget under mass whiteout (ADR-0055 / ADR-0036)
+  //   The whited-out skip in `getDirectoryPageBySchemaAndAddressList` phase 1 DROPS items without
+  //   consuming a result slot. Without a per-call scan budget, a directory with many hidden direct
+  //   files would loop the entire remaining phase-1 source in ONE eth_call. This vector deploys a
+  //   testable view with a tiny budget (4), whites out every direct file, and asserts: the first
+  //   call returns a BOUNDED page (≤ budget scanned) with a NON-EMPTY cursor (forward progress),
+  //   and paginating to exhaustion TERMINATES (no infinite loop, no full-source scan in one call).
+  //   Fails if the phase-1 budget guard is absent: the first call would return an empty cursor (or
+  //   never return) instead of a bounded one.
+  // ════════════════════════════════════════════════════════════════════════════
+  it("vector 15: plain phase-1 listing scan is budget-bounded when many direct files are whited out", async function () {
+    const root = await createAnchor("root", ZERO_BYTES32);
+    const dir = await createAnchor("dir", root);
+
+    // 6 direct files, all placed by ALICE (so they qualify in phase 1) and all whited out by OWNER.
+    const N = 6;
+    const fileAnchors: string[] = [];
+    for (let i = 0; i < N; i++) {
+      const fa = await createAnchor(`f${i}.txt`, dir, dataSchemaUID);
+      const d = await mintData(alice);
+      await createPin(fa, d, alice);
+      await attestWhiteout(fa, owner); // owner (higher lens) hides every direct file
+      fileAnchors.push(fa);
+    }
+
+    // Testable view with a tiny per-call budget (4), wired to the SAME stack incl. the whiteout
+    // resolver — so the phase-1 budget guard can trip with a handful of seeded items.
+    const TestableFactory = await ethers.getContractFactory("EFSFileViewTestable");
+    const tv = (await TestableFactory.deploy(
+      await indexer.getAddress(),
+      await edgeResolver.getAddress(),
+      await whiteoutResolver.getAddress(),
+      4n, // small budget
+    )) as unknown as EFSFileView;
+    await tv.waitForDeployment();
+
+    // Sanity: with the whiteout resolver wired, the production view (budget 2048) returns 0 items and
+    // a CLEAN cursor (source < budget, so it fully exhausts in one call).
+    const full = await fileView.getDirectoryPageBySchemaAndAddressList(
+      dir,
+      dataSchemaUID,
+      [ownerAddr, aliceAddr],
+      "0x",
+      10,
+    );
+    expect(full.items.length).to.equal(0);
+    expect(full.nextCursor).to.equal("0x");
+
+    // First testable call: maxItems=10, budget=4 → budget hit before source exhausted → 0 items but
+    // a NON-EMPTY cursor (bounded page, forward progress). This is the guard the fix adds.
+    const first = await tv.getDirectoryPageBySchemaAndAddressList(dir, dataSchemaUID, [ownerAddr, aliceAddr], "0x", 10);
+    expect(first.items.length).to.equal(0);
+    expect(first.nextCursor).to.not.equal("0x"); // budget hit, source not exhausted → cursor emitted
+
+    // Paginate to exhaustion: each call is budget-bounded; the loop MUST terminate with an empty
+    // cursor and zero items (all whited out), proving no full-source scan and no infinite loop.
+    let cursor = first.nextCursor;
+    let calls = 1;
+    let totalItems = 0;
+    while (cursor !== "0x") {
+      if (calls > 20) throw new Error("budget pagination did not terminate");
+      const page = await tv.getDirectoryPageBySchemaAndAddressList(
+        dir,
+        dataSchemaUID,
+        [ownerAddr, aliceAddr],
+        cursor,
+        10,
+      );
+      totalItems += page.items.length;
+      cursor = page.nextCursor;
+      calls++;
+    }
+    expect(totalItems).to.equal(0); // every direct file whited out → nothing surfaces
+    expect(calls).to.be.greaterThan(1); // proves it took multiple budget-bounded calls (no one-shot scan)
   });
 });

@@ -270,6 +270,13 @@ contract EFSRouter is IDecentralizedApp {
             }
         }
 
+        // Build the effective lens stack ONCE (ADR-0031/0039/0053) and reuse it for both the
+        // per-segment deep-link whiteout terminal in the walk below and the final-target DATA read
+        // (`_findDataAtPath`). Computing it here — rather than recomputing a possibly-different stack
+        // inside `_findDataAtPath` — keeps the deep-link 404 (spec/04) and the leaf read on the exact
+        // same lens precedence (ADR-0055). An empty stack (viewer removed every lens) means no data.
+        address[] memory effLenses = _effectiveLenses(lenses, caller, lensesExplicit);
+
         bytes32 currentParent;
         bytes32 targetAnchor;
         uint256 startIdx;
@@ -308,11 +315,25 @@ contract EFSRouter is IDecentralizedApp {
                 return (404, bytes("Not Found: Path does not exist"), new KeyValue[](0));
             }
 
+            // ADR-0055 deep-link terminal (spec/04): apply the per-name whiteout RESOLUTION terminal
+            // to EACH resolved segment against the SAME effective lens stack — so a deep link into a
+            // whited-out folder (e.g. a viewer whiteouts `/dir`; `GET /dir/child.txt`) 404s instead of
+            // resolving a lower lens's content. Checked against (currentParent = the segment's parent,
+            // targetAnchor = the just-resolved child) BEFORE descending. The final-target check in
+            // `_findDataAtPath` below stays as-is (now redundant for the leaf, harmless). Cost is
+            // O(segments × lenses), bounded (MAX_LENSES ≤ 20); zero when whiteout is disabled.
+            if (_isSegmentWhitedOut(currentParent, targetAnchor, effLenses)) {
+                return (404, bytes("Not Found: Path does not exist"), new KeyValue[](0));
+            }
+
             currentParent = targetAnchor;
         }
 
-        // 2. Find DATA via TAG query: resolve lenses → TAG → DATA → MIRROR
-        (bytes32 dataUID, address dataAttester) = _findDataAtPath(targetAnchor, lenses, caller, lensesExplicit);
+        // 2. Find DATA via TAG query: resolve lenses → TAG → DATA → MIRROR. An empty effective stack
+        //    (viewer removed every lens) returns (0,0) → falls into the no-data branch below, which
+        //    still serves the raw schema/attestation JSON fallback for a bare container (resource
+        //    length 1), preserving pre-whiteout behavior.
+        (bytes32 dataUID, address dataAttester) = _findDataAtPath(targetAnchor, effLenses);
         if (dataUID == bytes32(0)) {
             // Schema/Attestation containers with no DATA attached fall back to raw-info JSON
             // instead of 404. Only fires when the user typed the container itself (no sub-path)
@@ -1057,18 +1078,21 @@ contract EFSRouter is IDecentralizedApp {
         }
     }
 
+    /// @dev DATA resolution at a single (already path-resolved) anchor over a PRECOMPUTED effective
+    ///      lens stack (`attesters`). The caller (`request`) builds the stack once via
+    ///      `_effectiveLenses` and reuses it for BOTH the per-segment deep-link whiteout terminal
+    ///      and this final-target read, so the two never diverge (ADR-0055 spec/04: a deep link into
+    ///      a whited folder 404s on the SAME stack the leaf read uses). An empty stack means the
+    ///      viewer removed all lenses → no data (viewer sovereignty), so the caller returns early.
     function _findDataAtPath(
         bytes32 targetAnchor,
-        address[] memory lenses,
-        address caller,
-        bool lensesExplicit
+        address[] memory attesters
     ) private view returns (bytes32, address) {
-        bytes32 dataSchema = indexer.DATA_SCHEMA_UID();
-
-        // Effective stack (caller→system fallback, or empty if every lens removed). An empty stack
-        // means the viewer removed all lenses → no data (viewer sovereignty), so return early.
-        address[] memory attesters = _effectiveLenses(lenses, caller, lensesExplicit);
+        // Empty stack — the viewer removed all lenses → no data (viewer sovereignty). Returning (0,0)
+        // here lets the caller still serve the raw schema/attestation JSON fallback for a bare
+        // container (resource length 1), matching pre-whiteout behavior.
         if (attesters.length == 0) return (bytes32(0), address(0));
+        bytes32 dataSchema = indexer.DATA_SCHEMA_UID();
 
         // File placement is Shape A — a file Anchor holds at most one DATA per attester.
         // Read the active PIN's target in O(1); skip attesters with an empty slot.
@@ -1094,6 +1118,38 @@ contract EFSRouter is IDecentralizedApp {
         }
 
         return (bytes32(0), address(0));
+    }
+
+    /// @dev RESOLUTION-side per-name whiteout terminal (ADR-0055), shared by the per-SEGMENT deep-link
+    ///      walk and shaped identically to `EFSFileView._isItemWhitedOutForResolution`: PIN-ONLY
+    ///      positive terminal (a folder's visibility TAG is NOT a placement, so it must not un-gate a
+    ///      path traversal). Returns true iff, walking `attesters` in precedence order, some lens
+    ///      whites out `childAnchor` under `parentAnchor` with no higher-precedence lens re-asserting
+    ///      its own placement PIN there first:
+    ///        - the FIRST lens with an active placement PIN at `childAnchor` ⇒ visible, return false
+    ///          (same-lens positive-before-whiteout; a higher lens's PIN is transparent to a lower
+    ///          lens's whiteout — spec/04 deep-link case);
+    ///        - else if that lens has an ACTIVE whiteout on `childAnchor` ⇒ negative terminal, return
+    ///          true (stop fall-through — the deep link 404s);
+    ///        - else continue to the next (lower) lens.
+    ///      `whiteoutResolver == 0` (disabled) short-circuits to false before any read — a pre-WHITEOUT
+    ///      router redeploy keeps its exact prior traversal behavior (zero cost when disabled).
+    function _isSegmentWhitedOut(
+        bytes32 parentAnchor,
+        bytes32 childAnchor,
+        address[] memory attesters
+    ) private view returns (bool) {
+        IWhiteoutResolverForRouter wr = whiteoutResolver;
+        if (address(wr) == address(0)) return false;
+        bytes32 dataSchema = indexer.DATA_SCHEMA_UID();
+        for (uint256 i = 0; i < attesters.length; i++) {
+            address lens = attesters[i];
+            // Positive terminal: this lens places its own content here → visible, stop.
+            if (edgeResolver.getActivePinTarget(childAnchor, lens, dataSchema) != bytes32(0)) return false;
+            // Negative terminal: this lens whites the segment out → 404, stop (no fall-through).
+            if (wr.isWhitedOut(parentAnchor, lens, childAnchor)) return true;
+        }
+        return false; // no lens asserted a positive or a whiteout → transparent.
     }
 
     // Get the best mirror URI for a DATA attestation, scoped to the lens attester.

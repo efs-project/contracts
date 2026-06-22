@@ -253,15 +253,13 @@ contract EFSFileView {
     ///      guard without seeding thousands of items. Production default is unchanged.
     uint256 private constant _FOLDER_SCAN_BUDGET_PER_CALL = 2048;
 
-    /// @dev Hard cap on phase-1 entries inspected per call in `getDirectoryPageFiltered`.
-    ///      Symmetric to `_FOLDER_SCAN_BUDGET_PER_CALL` (phase 0). The plain
-    ///      `getDirectoryPageBySchemaAndAddressList` does not need a phase-1 budget because every
-    ///      phase-1 candidate the indexer returns becomes a result item (no per-item drop), so its
-    ///      inner loop is naturally bounded by `maxItems`. The filtered variant can DROP phase-1
-    ///      items (the exclusion predicate), so a page that is 100%-excluded under the lens would
-    ///      otherwise loop the entire phase-1 source in one eth_call. This budget bounds per-call
-    ///      work; the opaque cursor (ADR-0036) continues progress across calls — same pattern as
-    ///      the phase-0 budget and ADR-0020's mirror-scan cap.
+    /// @dev Hard cap on phase-1 entries inspected per call. Symmetric to `_FOLDER_SCAN_BUDGET_PER_CALL`
+    ///      (phase 0). Used by BOTH directory views: `getDirectoryPageFiltered` (the exclusion
+    ///      predicate can DROP phase-1 items) AND the plain `getDirectoryPageBySchemaAndAddressList`
+    ///      (the ADR-0055 whited-out skip likewise drops phase-1 items). In either case a page that is
+    ///      ~100% dropped under the lens would otherwise loop the entire phase-1 source in one
+    ///      eth_call. This budget bounds per-call work; the opaque cursor (ADR-0036) continues
+    ///      progress across calls — same pattern as the phase-0 budget and ADR-0020's mirror-scan cap.
     ///
     ///      Read through `_fileScanBudgetPerCall()` (not the bare constant) so a test-only
     ///      subclass can override it to a small value and exercise the budget guard without
@@ -393,8 +391,19 @@ contract EFSFileView {
         // ───── Phase 1: direct children by schema ─────
         bool fileSourceDone = false;
         if (phase == 1) {
-            while (count < maxItems) {
+            // Phase-1 scan budget (ADR-0055): the whited-out skip below DROPS items without consuming
+            // a result slot, so a directory with many hidden direct files could otherwise loop the
+            // entire remaining phase-1 source in one eth_call. Mirror the filtered walker's guard —
+            // cap candidates fetched per call to the remaining budget, break at the budget, and return
+            // the opaque cursor so the next page resumes mid-source (no dup/drop across pages).
+            uint256 fileBudget = _fileScanBudgetPerCall();
+            uint256 scanned = 0; // phase-1 entries inspected this call — bounded by budget
+            while (count < maxItems && scanned < fileBudget) {
+                uint256 remainingBudget = fileBudget - scanned;
                 uint256 want = maxItems - count;
+                // Fetch at most `remainingBudget` candidates so the per-call inspection count can't
+                // exceed the budget regardless of how many get whited out below.
+                if (want > remainingBudget) want = remainingBudget;
                 (bytes32[] memory batch, uint256 nextFileCur) = indexer.getAnchorsBySchemaAndAddressList(
                     parentAnchor,
                     anchorSchema,
@@ -405,9 +414,10 @@ contract EFSFileView {
                     false // showRevoked
                 );
                 for (uint256 k = 0; k < batch.length; k++) {
+                    scanned++;
                     bytes32 uid = batch[k];
                     // Cross-lens negative mask (ADR-0055): drop whited-out files; the walker advances
-                    // but the slot is not consumed (same as the filtered variant's exclusion skip).
+                    // (and the scan budget) but the slot is not consumed (same as the filtered variant).
                     if (_isItemWhitedOutForListing(parentAnchor, uid, attesters, indexer.DATA_SCHEMA_UID(), anchorSchema))
                         continue;
                     buf[count++] = uid;

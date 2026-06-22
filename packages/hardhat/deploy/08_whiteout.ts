@@ -113,6 +113,11 @@ const deployWhiteout: DeployFunction = async function (hre: HardhatRuntimeEnviro
 };
 
 export default deployWhiteout;
-deployWhiteout.tags = ["Whiteout"];
+// Tag "WhiteoutResolver" (alongside "Whiteout") so 02_fileview / 03_router can declare it as a
+// dependency — hardhat-deploy only recurses a script's DECLARED dependencies, and it otherwise runs
+// scripts lexicographically (08 AFTER 02/03), which would make the views read getOrNull(
+// "WhiteoutResolver") as null and deploy with ZeroAddress (whiteout silently disabled). The
+// dependency forces this script to run BEFORE the views on a plain local `hardhat deploy`.
+deployWhiteout.tags = ["Whiteout", "WhiteoutResolver"];
 // Deploy before the view redeploys (02_fileview / 03_router) so they can wire the whiteout proxy.
 deployWhiteout.dependencies = ["Indexer"];

@@ -50,4 +50,10 @@ const deployEFSFileView: DeployFunction = async function (hre: HardhatRuntimeEnv
 
 export default deployEFSFileView;
 deployEFSFileView.tags = ["EFSFileView"];
-deployEFSFileView.dependencies = ["Indexer"];
+// Depend on "WhiteoutResolver" (08_whiteout) so it runs BEFORE this view on a plain local
+// `hardhat deploy` — hardhat-deploy runs scripts lexicographically (08 after 02) and only recurses
+// declared dependencies, so without this the getOrNull("WhiteoutResolver") read below is null and
+// the view deploys with ZeroAddress (whiteout silently disabled until a manual redeploy). The
+// 08_whiteout script neutralizes on CreateX networks, where the orchestrated core wires whiteout
+// via deploy-lib/views.ts instead — so the dependency is a no-op there.
+deployEFSFileView.dependencies = ["Indexer", "WhiteoutResolver"];
