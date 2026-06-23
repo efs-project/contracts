@@ -10,6 +10,12 @@
  * `uploadOnchainFile`: it is a `useScaffoldWriteContract` hook handle that
  * cannot be called inside a plain function.
  *
+ * AGENT-NOTE: this seam still uses the single-`attest` path, NOT the layered
+ * `submitLayered` engine. It runs between `uploadOnchainFile`'s stage A and stage B
+ * (as the `beforePlacement` hook), so it costs its own popup(s). When the SDK is
+ * adopted, migrate this to return `PlannedAttestation[]` so the system TAG folds
+ * into stage B's layer plan (collapses one popup on the Overview path).
+ *
  * Shape (matches seed-impl `makeTag(dataUID, systemDefUID, 1n)`):
  *   schema  = tagSchemaUID
  *   refUID  = dataUID            (DATA-targeted)

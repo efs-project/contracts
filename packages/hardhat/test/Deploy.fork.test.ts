@@ -135,14 +135,15 @@ describe("Deploy.fork — orchestrated CREATE3 deploy + register-last", function
     expect(ipfsAtt.attester.toLowerCase(), "/transports/ipfs authored by SystemAccount").to.equal(
       result.systemAccount.toLowerCase(),
     );
-    // PR #24 P2 fix: bootstrap seeds ALL 11 canonical transport anchors (ADR-0011),
-    // so no scheme is left squattable (first-writer-wins) on a fresh deploy. Names = client TransportType.
+    // PR #24 P2 fix + ADR-0063: bootstrap seeds ALL 12 default transport anchors
+    // so the common schemes resolve out of the box. Names = client TransportType.
     const ALL_TRANSPORTS = [
       "onchain",
       "ipfs",
       "arweave",
       "magnet",
       "https",
+      "data",
       "ftp",
       "s3",
       "gs",

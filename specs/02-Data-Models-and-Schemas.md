@@ -149,12 +149,13 @@ Other metadata (content type, description, version history) is likewise stored a
 **No URI scheme allowlist** (ADR-0056, supersedes ADR-0023): the resolver does **not** restrict the URI scheme. A scheme check on an immutable contract is not a security boundary (an allowed `https://` mirror serves malicious HTML just as well), is trivially evaded (case / zero-width / whitespace / percent-encoding), is un-patchable, and can't anticipate future transports — so any non-empty, length-bounded URI under a valid `/transports` anchor is accepted, including `data:`, `javascript:`, and future schemes. **Scheme and render safety move entirely to the client** (sandboxed rendering; never render a raw mirror URI as a live link or navigate to it) — see `specs/overview.md` load-bearing invariants. The transport *vocabulary* still lives in `/transports/<scheme>` anchors (below), and length (`MAX_URI_LENGTH`) + transport-ancestry remain enforced.
 
 ### Transport Definition Anchors
-Well-known transport types are created at deploy time under `/transports/` — **eleven** canonical transport types get an un-squattable definition anchor (bootstrap seeds them via `SystemAccount`, so a later writer can't claim the canonical transport name). New transports are added permissionlessly by authoring a `/transports/<scheme>` anchor (ADR-0011); the contract no longer gates the scheme set (ADR-0056):
+Well-known transport types are created at deploy time under `/transports/` — fresh deploys seed **twelve** default transport definition anchors. New transports are added permissionlessly by authoring a `/transports/<scheme>` anchor (ADR-0011); the contract no longer gates the scheme set (ADR-0056):
 - `/transports/onchain` — `web3://` URIs pointing to SSTORE2 chunk managers
 - `/transports/arweave` — `ar://` URIs
 - `/transports/ipfs` — `ipfs://` URIs
 - `/transports/magnet` — `magnet:` URIs
 - `/transports/https` — `https://` URIs
+- `/transports/data` — RFC-2397 `data:` URIs for small inline mirrors (ADR-0063)
 - `/transports/ftp` — `ftp://` URIs
 - `/transports/s3` — `s3://` URIs
 - `/transports/gs` — `gs://` URIs
@@ -162,7 +163,7 @@ Well-known transport types are created at deploy time under `/transports/` — *
 - `/transports/rsync` — `rsync://` URIs
 - `/transports/bittorrent` — `bittorrent://` URIs
 
-The transport preference order for serving keeps the original five ranked per ADR-0012: `web3://` (onchain) > `ar://` > `ipfs://` > `magnet:` > `https://`. Every other scheme (`ftp/s3/gs/dat/rsync/bittorrent` and any future or arbitrary scheme post-ADR-0056) shares the lowest priority tier with `https://` (router `_getBestMirrorURI` `else` → priority 4) — so it is *served* but not *rankable* above the named five without a router change (the router is a redeployable view; per-transport priority as a `/transports` PROPERTY is the freeze-safe follow-up — ADR-0056 Consequences). All non-`web3://` schemes are served as `message/external-body` redirects; only **same-chain** `web3://` is read on-chain (SSTORE2) — a `web3://<addr>:<otherChainId>` mirror (chainId ≠ the router's chain) is redirected like the off-chain schemes, since the router can only `extcodecopy` contracts on its own chain (ADR-0058). See ADR-0012 for the priority rationale.
+The transport preference order for serving keeps the original five ranked per ADR-0012: `web3://` (onchain) > `ar://` > `ipfs://` > `magnet:` > `https://`. Every other scheme (`data:` inline mirrors per ADR-0063, `ftp/s3/gs/dat/rsync/bittorrent`, and any future or arbitrary scheme post-ADR-0056) shares the lowest priority tier with `https://` (router `_getBestMirrorURI` `else` → priority 4) — so it is *served* but not *rankable* above the named five without a router change (the router is a redeployable view; per-transport priority as a `/transports` PROPERTY is the freeze-safe follow-up — ADR-0056 Consequences). All non-`web3://` schemes are served as `message/external-body` redirects; only **same-chain** `web3://` is read on-chain (SSTORE2) — a `web3://<addr>:<otherChainId>` mirror (chainId ≠ the router's chain) is redirected like the off-chain schemes, since the router can only `extcodecopy` contracts on its own chain (ADR-0058). See ADR-0012 for the priority rationale.
 
 ## 4. Pin Schema (cardinality 1)
 **Purpose**: Singleton edge — at most one active PIN per `(attester, definition, targetSchema)` slot. Used for file placement, PROPERTY value binding, and any predicate where "this slot holds exactly one thing" is the right semantic. ADR-0041.

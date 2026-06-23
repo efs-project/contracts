@@ -46,6 +46,9 @@ jobs:
       - name: Check typings on nextjs
         run: yarn next:check-types
 
+      - name: Run nextjs unit tests
+        run: yarn workspace @se-2/nextjs test
+
       - name: Check docs references
         run: yarn docs:check
 

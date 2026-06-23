@@ -2,6 +2,7 @@ import { keccak256 } from "viem";
 
 export type TransportType =
   | "onchain"
+  | "data"
   | "ipfs"
   | "arweave"
   | "magnet"
@@ -15,17 +16,13 @@ export type TransportType =
   | "unknown";
 
 /**
- * Ordered by preference for display/resolution. Mirrors the on-chain router's tiering: the
- * content-addressed / permanent transports rank highest, and the lowest tier (priority 4 on-chain)
- * is the mutable / off-chain / peer-dependent group — https:// plus the additional off-chain schemes
- * the MirrorResolver allowlist accepts (ftp/s3/gs/dat/rsync/bittorrent). Within that bottom tier the
- * order here is just display ordering; the router treats them as one priority class.
- * web3:// (on-chain, permanent) > ar:// (permanent, content-addressed) >
- * ipfs:// (content-addressed, requires pinning) > magnet: (peer-dependent) >
- * https:// and the other off-chain schemes (mutable / centralized / peer-dependent — least reliable)
+ * Debug-UI display and label-resolution order. This is NOT the canonical web3://
+ * router priority ladder: ADR-0063 deliberately keeps data: out of router tiering,
+ * and the additional off-chain schemes share the router's lowest priority tier.
  */
-export const TRANSPORT_PREFERENCE: TransportType[] = [
+export const TRANSPORT_DISPLAY_ORDER: TransportType[] = [
   "onchain",
+  "data",
   "arweave",
   "ipfs",
   "magnet",
@@ -56,14 +53,16 @@ const ARWEAVE_GATEWAY = process.env.NEXT_PUBLIC_ARWEAVE_GATEWAY || "https://arwe
 /** Detect transport type from a URI string. */
 export function detectTransport(uri: string): TransportType {
   if (uri.startsWith("web3://")) return "onchain";
+  if (uri.startsWith("data:")) return "data";
   if (uri.startsWith("ipfs://")) return "ipfs";
   if (uri.startsWith("ar://")) return "arweave";
   if (uri.startsWith("magnet:")) return "magnet";
   if (uri.startsWith("https://")) return "https";
-  // http:// is intentionally rejected — MirrorResolver._isAllowedScheme only permits https://.
-  // Accepting http:// here would pass early validation but cause MIRROR attestation to revert.
-  // (ADR-0023 scheme safety)
-  // Additional off-chain schemes the MirrorResolver allowlist accepts (bottom priority tier).
+  // The resolver no longer has a URI-scheme allowlist (ADR-0056). This
+  // classifier is a debug-UI affordance: unknown schemes may exist on-chain,
+  // but the paste/upload controls only offer schemes they can label clearly.
+  // Plain http:// is left unknown by client policy; use https:// for fetchable
+  // external mirrors.
   if (uri.startsWith("ftp://")) return "ftp";
   if (uri.startsWith("s3://")) return "s3";
   if (uri.startsWith("gs://")) return "gs";
@@ -77,6 +76,10 @@ export function detectTransport(uri: string): TransportType {
 export function resolveGatewayUrl(uri: string): string | null {
   const transport = detectTransport(uri);
   switch (transport) {
+    case "data":
+      // RFC 2397 data: URI — the bytes are inline. Browsers fetch() these natively,
+      // so the URI IS the fetchable URL.
+      return uri;
     case "ipfs": {
       const cid = uri.replace("ipfs://", "");
       return `${IPFS_GATEWAY}${cid}`;
@@ -109,6 +112,7 @@ export function verifyContentHash(data: Uint8Array, expected: `0x${string}`): bo
 /** Short label for transport type (for UI badges). */
 export const TRANSPORT_LABELS: Record<TransportType, string> = {
   onchain: "On-chain",
+  data: "Inline",
   ipfs: "IPFS",
   arweave: "Arweave",
   magnet: "Magnet",

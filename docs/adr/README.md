@@ -91,6 +91,7 @@ What else we looked at and why it lost.
 - [ADR-0013 — Lens-scoped mirror selection](./0013-lens-scoped-mirror-selection.md)
 - [ADR-0014 — Lens-scoped PROPERTY lookup](./0014-lens-scoped-property-lookup.md)
 - [ADR-0015 — No singleton enforcement for MIRRORs](./0015-no-singleton-mirrors.md)
+- [ADR-0063 — `data:` inline-mirror transport for small files](./0063-data-uri-inline-mirror-transport.md)
 
 ### Router & Resolution
 

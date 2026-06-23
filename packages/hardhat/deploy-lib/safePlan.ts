@@ -54,15 +54,16 @@ import { SafeCall } from "./safe";
 const CREATEX_IFACE = new Interface(["function deployCreate3(bytes32 salt, bytes initCode) payable returns (address)"]);
 
 // ── Scaffolding spec — the bootstrap anchors, in the EXACT order orchestrate.ts authors them ─────────
-// root → (tags, transports) under root; then the eleven transport children under /transports/. The whole
+// root → (tags, transports) under root; then the twelve transport children under /transports/. The whole
 // tree is authored by a SINGLE SystemAccount.bootstrap(indexer, ANCHOR_UID, specs[]) call: each child's
 // refUID is the parent UID the prior EAS.attest returned in the same call (timestamp-robust; no
 // off-chain UID prediction). `parentIndex` indexes into this same array; -1 marks the root.
 //
 // This list MUST stay byte-identical to orchestrate.ts's BOOTSTRAP_SCAFFOLDING (same names, same order).
-// The transport children = every canonical transport scheme (11, ADR-0011), each named with
+// The transport children = every default transport scheme (12, ADR-0011 + ADR-0063), each named with
 // the TransportType the client's detectTransport() yields (utils/efs/transports.ts) — web3:// → "onchain"
-// and ar:// → "arweave" differ from the URI scheme; the other nine match the scheme token.
+// and ar:// → "arweave" differ from the URI scheme; the other ten match the scheme token. `data`
+// (ADR-0063) is the inline RFC-2397 `data:` mirror transport (small files, zero storage deploys).
 export interface AnchorSpec {
   name: string;
   /// index into SCAFFOLDING of this anchor's parent, or -1 for the root (refUID = ZeroHash)
@@ -84,6 +85,7 @@ export const SCAFFOLDING: AnchorSpec[] = [
   { name: "dat", parentIndex: 2 }, // 11 → transports
   { name: "rsync", parentIndex: 2 }, // 12 → transports
   { name: "bittorrent", parentIndex: 2 }, // 13 → transports
+  { name: "data", parentIndex: 2 }, // 14 → transports (data: inline, ADR-0063)
 ];
 
 /// Index of the `/transports` anchor in SCAFFOLDING (its realized UID feeds setTransportsAnchor).
@@ -414,7 +416,7 @@ export async function buildBatch2(
 
   if (!batch2BootstrapOmitted) {
     // Scaffolding: a SINGLE SystemAccount.bootstrap leg. The whole anchor tree (root → tags/transports →
-    // 5 transport children) is authored in one call that threads each child's refUID from the parent UID
+    // 12 transport children) is authored in one call that threads each child's refUID from the parent UID
     // the prior EAS.attest returned in the same call — so it is timestamp-robust (FIX 1, PR #24): no
     // off-chain UID prediction, nothing to drift against. The call is idempotent (reuses already-created
     // anchors via the index), authored THROUGH SystemAccount (attester == SystemAccount); the Safe is
