@@ -98,9 +98,9 @@ What else we looked at and why it lost.
 - [ADR-0063 — REDIRECT read-time resolution rules](./0063-redirect-read-time-resolution.md) *(Accepted — symlink-only following (supersededBy is a non-followed terminal; path=newest/UID=exact), D_MAX=16/ceiling 32, cycle-stop, lowest-UID-in-SCC canonicalization, lens precedence, WHITEOUT negative-terminal reservation + seeding ban; gates durable REDIRECT seeding)*
 
 ### Security Limits
-- [ADR-0021 — `MAX_ANCHOR_DEPTH = 32`](./0021-max-anchor-depth.md) *(Superseded by ADR-0062 — raised to 1024)*
+- [ADR-0021 — `MAX_ANCHOR_DEPTH = 32`](./0021-max-anchor-depth.md) *(Superseded by ADR-0065 — raised to 1024)*
 - [ADR-0022 — `MAX_URI_LENGTH = 8192` in MirrorResolver](./0022-max-uri-length.md)
-- [ADR-0062 — Raise `MAX_ANCHOR_DEPTH` to 1024; no anchor-name length cap](./0062-raise-max-anchor-depth-and-no-name-length-cap.md)
+- [ADR-0065 — Raise `MAX_ANCHOR_DEPTH` to 1024; no anchor-name length cap](./0065-raise-max-anchor-depth-and-no-name-length-cap.md)
 - [ADR-0023 — URI scheme allowlist in MirrorResolver](./0023-uri-scheme-allowlist.md)
 - [ADR-0024 — Content-Type sanitization](./0024-content-type-sanitization.md)
 - [ADR-0025 — Anchor name validation](./0025-anchor-name-validation.md)

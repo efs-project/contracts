@@ -1,4 +1,4 @@
-# ADR-0062: Raise `MAX_ANCHOR_DEPTH` to 1024; do not cap anchor-name length
+# ADR-0065: Raise `MAX_ANCHOR_DEPTH` to 1024; do not cap anchor-name length
 
 **Status:** Accepted
 **Date:** 2026-06-20

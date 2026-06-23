@@ -132,7 +132,7 @@ no leading zeros, no sign, no separators, and no unit suffix.**
   parsing benefit (decimal-string → integer is trivial in JS and Solidity) and
   breaks the no-leading-zeros canonical rule. Arbitrary length is fine —
   PROPERTY `value` is an unbounded string and there is no anchor-name length cap
-  (ADR-0062), so even an astronomically large `size` fits.
+  (ADR-0065), so even an astronomically large `size` fits.
 - Decimal (not hex) is chosen for human readability and because it is the
   obvious default a naive SDK author reaches for, minimizing the
   ambiguity surface. `size` is **not** self-describing (it needs no algorithm
