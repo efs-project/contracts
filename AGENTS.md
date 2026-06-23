@@ -171,18 +171,20 @@ Exit 0 means `yarn deploy` regenerated the file byte-identically to what's commi
 
 ### Running Foundry anvil directly (devnet VPS / long-lived nodes)
 
-`yarn fork` and `yarn preview` both wrap **Hardhat's node**, which reads `blockNumber` from `hardhat.config.ts` automatically — the pin is inherited, nothing to do. But a long-lived devnet is typically run with **Foundry `anvil`** directly (faster, lighter, supports `--state` for restart persistence). Foundry does not read hardhat's config, so the pin must be passed on the CLI:
+`yarn fork` and `yarn preview` both wrap **Hardhat's node**, which reads `blockNumber` from `hardhat.config.ts` automatically — the pin is inherited, nothing to do. But a long-lived devnet is typically run with **Foundry `anvil`** directly (faster, lighter, supports `--state` for restart persistence). Foundry does not read hardhat's config, so both the pin **and the chain id** must be passed on the CLI. The shared devnet is its **own** chain — `26001993` (ADR-0062), *not* `31337` — so it stays distinct from a developer's local fork; this is what the devnet repo's `scripts/start-anvil.sh` runs:
 
 ```bash
 anvil \
   --host 0.0.0.0 \
   --port 8545 \
-  --chain-id 31337 \
+  --chain-id "${CHAIN_ID:-26001993}" \
   --fork-url "$SEPOLIA_FORK_RPC_URL" \
   --fork-block-number "${FORK_BLOCK:-10691000}" \
   --state /data/anvil-state.json \
   --state-interval 30
 ```
+
+`--chain-id` defaults to the devnet's own `26001993`; pass `CHAIN_ID=31337` only for a local long-lived fork. The app build must target the **same** id (`26001993` for the devnet — see the static-export section below); a `31337` node serving a `26001993`-targeted app rejects every EIP-155 write and faucet drip.
 
 **Trap: `--state` + pin bump.** `--state` persists live chain state (accumulated nonces, new blocks) across restarts. When you bump `FORK_BLOCK` or first introduce the pin on an already-running node, the state file encodes drifted state — loading it on startup replays that drift on top of the fresh pin and addresses still come out wrong. Wipe or rotate the state file when bumping the pin:
 
