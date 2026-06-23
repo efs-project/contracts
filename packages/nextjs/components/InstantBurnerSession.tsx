@@ -2,9 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useConnectModal } from "@rainbow-me/rainbowkit";
-import { Address, formatEther } from "viem";
 import { hardhat } from "viem/chains";
-import { useAccount, useBalance, useConnect, useConnectors, useDisconnect } from "wagmi";
+import { useAccount, useConnect, useConnectors, useDisconnect } from "wagmi";
 import { WalletIcon, XMarkIcon } from "@heroicons/react/24/outline";
 import { useTargetNetwork } from "~~/hooks/scaffold-eth";
 import scaffoldConfig from "~~/scaffold.config";
@@ -13,7 +12,6 @@ import {
   FAUCET_CHAIN_ID,
   FAUCET_URL,
   INSTANT_BURNER_PAUSE_MS,
-  getInstantBurnerMessage,
   isBurnerConnector,
   isInstantBurnerSessionEnabled,
   normalizeStoredBurnerPrivateKey,
@@ -24,7 +22,6 @@ import {
   shouldResetInstantBurnerDismissalOnAddressChange,
   shouldResumeInstantBurnerAfterRealWalletModal,
   shouldShowInstantBurnerEnable,
-  useFaucetStatus,
 } from "~~/utils/scaffold-eth";
 import { HARDHAT_ACCOUNTS } from "~~/utils/scaffold-eth/hardhatAccounts";
 
@@ -35,7 +32,6 @@ const INSTANT_BURNER_ENABLED = isInstantBurnerSessionEnabled({
   faucetChainId: FAUCET_CHAIN_ID,
 });
 
-const shortAddress = (address: string) => `${address.slice(0, 6)}...${address.slice(-4)}`;
 const hardhatPrivateKeys = HARDHAT_ACCOUNTS.map(account => account.pk);
 
 const clearPublicHardhatBurnerKey = (targetChainId: number) => {
@@ -53,13 +49,6 @@ const clearPublicHardhatBurnerKey = (targetChainId: number) => {
   }
 };
 
-const messageClass = {
-  funding: "text-info",
-  ready: "text-success",
-  waiting: "text-base-content/60",
-  error: "text-warning",
-} as const;
-
 export const InstantBurnerSession = () => {
   const { address, chainId, connector, status } = useAccount();
   const connectors = useConnectors();
@@ -67,12 +56,6 @@ export const InstantBurnerSession = () => {
   const { disconnect } = useDisconnect();
   const { targetNetwork } = useTargetNetwork();
   const { connectModalOpen, openConnectModal } = useConnectModal();
-  const faucetStatus = useFaucetStatus();
-  const { data: balance } = useBalance({
-    address: address as Address | undefined,
-    chainId: FAUCET_CHAIN_ID,
-    query: { enabled: !!address && chainId === FAUCET_CHAIN_ID },
-  });
 
   const [dismissed, setDismissed] = useState(false);
   const [editingSessionRequested, setEditingSessionRequested] = useState(false);
@@ -239,16 +222,15 @@ export const InstantBurnerSession = () => {
     })
   ) {
     return (
-      <div
-        className="hidden lg:flex items-center gap-2 rounded-full border border-info/30 bg-info/10 px-2 py-1 text-xs text-base-content shadow-sm"
-        title="Enable a free Sepolia wallet funded by the faucet"
+      <button
+        className="hidden lg:inline-flex btn btn-primary btn-sm rounded-full whitespace-nowrap shadow-md gap-2 px-4"
+        type="button"
+        onClick={enableEditing}
+        title="Use a free Sepolia wallet for promptless edits"
       >
-        <WalletIcon className="h-4 w-4 shrink-0 text-info" />
-        <span className="whitespace-nowrap text-base-content/70">Editing</span>
-        <button className="btn btn-primary btn-xs rounded-full whitespace-nowrap" type="button" onClick={enableEditing}>
-          Enable editing
-        </button>
-      </div>
+        <WalletIcon className="h-4 w-4" />
+        Enable promptless edits
+      </button>
     );
   }
 
@@ -260,13 +242,6 @@ export const InstantBurnerSession = () => {
     return null;
   }
 
-  const message = getInstantBurnerMessage({
-    pendingHash: faucetStatus.pendingHash,
-    balanceValue: balance?.value,
-    errorMessage: faucetStatus.errorMessage,
-  });
-  const balanceLabel = balance ? `${Number(formatEther(balance.value)).toFixed(4)} ETH` : "balance...";
-
   const connectRealWallet = () => {
     setPauseUntil(Date.now() + INSTANT_BURNER_PAUSE_MS);
     setWaitingForRealWallet(true);
@@ -275,26 +250,17 @@ export const InstantBurnerSession = () => {
 
   return (
     <div
-      className="hidden lg:flex items-center gap-2 max-w-[34rem] rounded-full border border-info/30 bg-info/10 px-2 py-1 text-xs text-base-content shadow-sm"
-      title="Free Sepolia wallet funded by the faucet"
+      className="hidden lg:flex items-center gap-2 rounded-full border border-info/30 bg-info/10 px-2 py-1 text-xs text-base-content shadow-sm"
+      title="Promptless edits are using a free Sepolia wallet"
     >
       <WalletIcon className="h-4 w-4 shrink-0 text-info" />
-      <div className="min-w-0">
-        <div className="uppercase tracking-normal text-[0.62rem] leading-3 text-base-content/60">
-          free editing wallet
-        </div>
-        <div className="flex min-w-0 items-center gap-2 leading-4">
-          <span className="font-mono truncate">{shortAddress(address)}</span>
-          <span className={`shrink-0 ${messageClass[message.tone]}`}>{message.label}</span>
-          <span className="shrink-0 text-base-content/70">{balanceLabel}</span>
-        </div>
-      </div>
+      <span className="whitespace-nowrap font-medium text-base-content/80">Promptless edits on</span>
       <button
         className="btn btn-primary btn-xs rounded-full whitespace-nowrap"
         type="button"
         onClick={connectRealWallet}
       >
-        Connect your own wallet
+        Use own wallet
       </button>
       <button
         className="btn btn-ghost btn-xs btn-circle"

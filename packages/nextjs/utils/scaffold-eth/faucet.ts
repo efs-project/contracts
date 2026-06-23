@@ -3,7 +3,7 @@ import { create } from "zustand";
 
 /**
  * HTTP drip-faucet client — gives a wallet a little gas after the visitor asks
- * for it through "Enable editing" or "Get test ETH".
+ * for it through "Enable promptless edits" or "Get test ETH".
  *
  * Serves the chain where no account is unlocked — **live Sepolia (11155111)** by
  * default. The fork chains (local 31337 and the EFS Devnet 26001993) are funded
