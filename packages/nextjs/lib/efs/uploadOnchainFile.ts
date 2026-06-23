@@ -553,6 +553,10 @@ async function submitFileRecordWithMirror(args: FileRecordWithMirrorArgs): Promi
         functionName: "getParent",
         args: [current],
       })) as `0x${string}`;
+      // bytes32(uint160(addr)): top 12 bytes are zero, bottom 20 encode a non-zero address.
+      // EAS has no attestation for this synthetic UID; a TAG against it would revert.
+      // Check the parent before advancing — the current node is always a real anchor.
+      if (/^0x0{24}[0-9a-fA-F]{40}$/.test(parent) && parent !== zeroHash) break;
       current = parent;
       walked += 1;
     }

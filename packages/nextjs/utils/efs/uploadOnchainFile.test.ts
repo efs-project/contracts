@@ -825,3 +825,87 @@ test("uploadOnchainFile falls back when the final data URI would exceed the mirr
   assert.equal(transportUID, onchainTransportUID);
   assert.match(uri, /^web3:\/\//, "should use an on-chain mirror when data: would exceed the cap");
 });
+
+test("uploadOnchainFile ancestor walk stops at a synthetic address-root parent", async () => {
+  // Scenario: /0xaddr/folder/file.txt — folderUID is a real EAS attestation;
+  // EFSIndexer returns bytes32(addr) as its parent (synthetic, not a real attestation).
+  // Without the fix the walk queues a TAG for the synthetic UID → EAS NotFound revert
+  // (or the mock throws and suppresses all TAGs). With the fix the walk breaks at the
+  // synthetic parent and submits exactly one TAG (for the real folder).
+  const folderUID = parentAnchorUID; // uid(4) — real EAS attestation
+  // bytes32(uint160(account)): 24 zero hex chars followed by the 40-char address hex
+  const syntheticAddressRoot = `0x${"0".repeat(24)}${account.slice(2)}` as `0x${string}`;
+
+  const writeCalls: { schema: `0x${string}`; data: readonly { data: `0x${string}` }[] }[][] = [];
+  const receipts = new Map<`0x${string}`, unknown>();
+  let nextUID = 500;
+  let nextTx = 110;
+  let nextContract = 80;
+
+  const walletClient = {
+    account: { address: account },
+    chain: { id: 31337 },
+    sendTransaction: async () => {
+      const hash = tx(nextTx++);
+      receipts.set(hash, { status: "success", contractAddress: address(nextContract++), logs: [] });
+      return hash;
+    },
+    writeContract: async ({ args }: { args: readonly unknown[] }) => {
+      const requests = args[0] as { schema: `0x${string}`; data: readonly { data: `0x${string}` }[] }[];
+      writeCalls.push(requests);
+      const hash = tx(nextTx++);
+      const logs = requests.flatMap(request => request.data.map(() => attestedLog(request.schema, uid(nextUID++))));
+      receipts.set(hash, { status: "success", logs });
+      return hash;
+    },
+  };
+
+  const publicClient = {
+    readContract: async ({ functionName, args }: { functionName: string; args?: readonly unknown[] }) => {
+      if (functionName === "rootAnchorUID") return rootUID;
+      if (functionName === "resolvePath") {
+        if (args?.[0] === rootUID && args?.[1] === "transports") return transportsUID;
+        if (args?.[0] === transportsUID && args?.[1] === "data") return zero;
+        if (args?.[0] === transportsUID && args?.[1] === "onchain") return onchainTransportUID;
+      }
+      if (functionName === "resolveAnchor") return zero;
+      if (functionName === "isActiveEdge") return false;
+      if (functionName === "getParent" && args?.[0] === folderUID) return syntheticAddressRoot;
+      throw new Error(`unexpected readContract call: ${functionName}(${JSON.stringify(args)})`);
+    },
+    waitForTransactionReceipt: async ({ hash }: { hash: `0x${string}` }) => {
+      const receipt = receipts.get(hash);
+      if (!receipt) throw new Error(`missing receipt for ${hash}`);
+      return receipt;
+    },
+  };
+
+  await uploadOnchainFile({
+    name: "file.txt",
+    bytes: new TextEncoder().encode("hello"),
+    contentType: "text/plain",
+    parentAnchorUID: folderUID,
+    fileAnchorRefUID: folderUID, // real folder UID → ancestor walk is NOT skipped
+    fileAnchorRecipient: account,
+    walletClient: walletClient as any,
+    publicClient: publicClient as any,
+    chainId: 31337,
+    easAddress,
+    indexerAddress,
+    indexerAbi: [],
+    anchorSchemaUID,
+    dataSchemaUID,
+    propertySchemaUID,
+    pinSchemaUID,
+    tagSchemaUID,
+    mirrorSchemaUID,
+    edgeResolverAddress,
+    edgeResolverAbi: [],
+  });
+
+  const tagCount = writeCalls
+    .flat()
+    .filter(r => r.schema === tagSchemaUID)
+    .reduce((n, r) => n + r.data.length, 0);
+  assert.equal(tagCount, 1, "ancestor walk must emit exactly one TAG (real folder) and stop before the synthetic address root");
+});
