@@ -357,9 +357,10 @@ export function defaultLensesForContainer(args: {
    *  WoT UX ships — the param exists so callers don't need plumbing changes
    *  when it does. */
   webOfTrust?: string[];
-  /** System tail attesters (devnet: bootstrap curator + deployer). Populated
-   *  by the caller because the deployer address is a runtime read from the
-   *  indexer. */
+  /** System tail attesters. Populated by the caller (the SystemAccount address
+   *  is a runtime read from the indexer). On the devnet (26001993) the caller
+   *  also prepends the demo bootstrap-curator + dev-attester; on Sepolia/Local
+   *  it's just the SystemAccount lens (caller-scoped — see ExplorerClient). */
   systemLenses?: string[];
 }): string[] {
   // `explicitLenses !== null` means the URL carried `?lenses=` — preserve
@@ -391,10 +392,11 @@ export function defaultLensesForContainer(args: {
   // lens-scoped `getDirectoryPageFiltered` — the unfiltered `getDirectoryPage`
   // listing fallback was removed, so an empty `lensAddresses` now FAILS SAFE (the
   // FileBrowser directory hooks disable and the grid renders empty, never
-  // unfiltered content). Today `systemLenses` always appends the devnet constants,
-  // so this is non-empty and the default view shows content. When `systemLenses`
-  // becomes user-configurable for mainnet and could be empty, the work is to give
-  // the empty-list case a FILTERED listing so the view isn't simply blank — NOT to
+  // unfiltered content). On the devnet `systemLenses` carries the demo constants,
+  // so the default view shows content; on Sepolia/Local it's just the SystemAccount
+  // lens (and an empty list still fails safe). When `systemLenses` becomes
+  // user-configurable for mainnet and could be empty, the work is to give the
+  // empty-list case a FILTERED listing so the view isn't simply blank — NOT to
   // re-introduce an unfiltered path. See the matching note in ExplorerClient.tsx.
   return out;
 }

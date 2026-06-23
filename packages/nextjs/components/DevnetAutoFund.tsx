@@ -16,8 +16,10 @@
  *     `isFundableForkChainId`. On mainnet / Sepolia / anywhere else, a no-op.
  *   - Only when `balance.value === 0n`. A wallet that already has funds is
  *     left alone.
- *   - Once per (address × browser-session). Tracked in a `Set` ref so the
- *     funding fires at most once even if the balance effect re-renders.
+ *   - Once per (chain × address × browser-session). Tracked in a `Set` ref so
+ *     the funding fires at most once per chain even if the balance effect
+ *     re-renders. Keyed by chain so a wallet funded on Local still auto-funds
+ *     when it switches to Devnet with a zero balance there.
  *   - Single-flight via `inFlight` ref so overlapping balance updates can't
  *     issue two concurrent sends.
  *
@@ -61,9 +63,13 @@ export const DevnetAutoFund = () => {
     if (!balance) return;
     if (balance.value !== 0n) return;
     if (inFlightRef.current) return;
-    if (fundedRef.current.has(address)) return;
+    // Key the dedupe by chain AND address: the same wallet can legitimately need
+    // a one-time auto-fund on each fork it visits (e.g. Local then Devnet), so an
+    // address-only key would wrongly skip the second chain.
+    const fundKey = `${chain.id}:${address}`;
+    if (fundedRef.current.has(fundKey)) return;
 
-    fundedRef.current.add(address);
+    fundedRef.current.add(fundKey);
     inFlightRef.current = true;
 
     // Pin a client to THIS fork's chain + RPC for the whole send→receipt flow, captured now (not a
@@ -86,7 +92,7 @@ export const DevnetAutoFund = () => {
       } catch (err) {
         // Roll back the funded-set entry so a retry path exists on the next
         // balance update or reconnect.
-        fundedRef.current.delete(address);
+        fundedRef.current.delete(fundKey);
         console.error("[DevnetAutoFund] auto-funding failed:", err);
       } finally {
         inFlightRef.current = false;
