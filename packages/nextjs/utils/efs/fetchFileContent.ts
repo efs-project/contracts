@@ -16,6 +16,8 @@ export interface FetchedFile {
 }
 
 export interface FetchFileArgs {
+  /** Selected chain for cache isolation. If absent and the client has no chain metadata, the read is not cached. */
+  chainId?: number | string | bigint;
   routerAddress: `0x${string}`;
   routerAbi: Abi;
   publicClient: PublicClient;
@@ -59,6 +61,70 @@ export class FileNotFoundError extends Error {
   }
 }
 
+const MAX_CACHE_ENTRIES = 50;
+const MAX_CACHE_BYTES = 50 * 1024 * 1024;
+const MAX_CACHE_ITEM_BYTES = 10 * 1024 * 1024;
+
+let cacheBytes = 0;
+let cacheEpoch = 0;
+const fileContentCache = new Map<string, FetchedFile>();
+
+function cloneFetchedFile(file: FetchedFile): FetchedFile {
+  return {
+    ...file,
+    bytes: file.bytes.slice(),
+  };
+}
+
+function enforceMaxBytes(file: FetchedFile, maxBytes?: number) {
+  if (maxBytes != null && file.bytes.length > maxBytes) throw new FileTooLargeError(file.bytes.length);
+}
+
+function cacheKeyFor(args: FetchFileArgs): string | null {
+  const chainId = args.chainId ?? (args.publicClient as { chain?: { id?: number | string | bigint } }).chain?.id;
+  if (chainId == null) return null;
+  return JSON.stringify([
+    String(chainId),
+    args.routerAddress.toLowerCase(),
+    args.lensAddresses.map(lens => lens.toLowerCase()),
+    args.resourcePath,
+  ]);
+}
+
+function getCachedFile(key: string): FetchedFile | null {
+  const cached = fileContentCache.get(key);
+  if (!cached) return null;
+  fileContentCache.delete(key);
+  fileContentCache.set(key, cached);
+  return cached;
+}
+
+function setCachedFile(key: string, file: FetchedFile) {
+  if (file.bytes.length > MAX_CACHE_ITEM_BYTES) return;
+
+  const prior = fileContentCache.get(key);
+  if (prior) cacheBytes -= prior.bytes.length;
+
+  const cached = cloneFetchedFile(file);
+  fileContentCache.delete(key);
+  fileContentCache.set(key, cached);
+  cacheBytes += cached.bytes.length;
+
+  while (fileContentCache.size > MAX_CACHE_ENTRIES || cacheBytes > MAX_CACHE_BYTES) {
+    const oldestKey = fileContentCache.keys().next().value;
+    if (!oldestKey) break;
+    const oldest = fileContentCache.get(oldestKey);
+    if (oldest) cacheBytes -= oldest.bytes.length;
+    fileContentCache.delete(oldestKey);
+  }
+}
+
+export function clearFetchFileContentCache() {
+  cacheEpoch += 1;
+  fileContentCache.clear();
+  cacheBytes = 0;
+}
+
 /**
  * Pure router-fetch for a single file's bytes. Mirrors the read flow documented
  * in `specs/overview.md` § Read flow:
@@ -75,6 +141,15 @@ export class FileNotFoundError extends Error {
  */
 export async function fetchFileContent(args: FetchFileArgs): Promise<FetchedFile> {
   const { routerAddress, routerAbi, publicClient, lensAddresses, resourcePath, maxBytes } = args;
+  const startingCacheEpoch = cacheEpoch;
+  const cacheKey = cacheKeyFor(args);
+  if (cacheKey) {
+    const cached = getCachedFile(cacheKey);
+    if (cached) {
+      enforceMaxBytes(cached, maxBytes);
+      return cloneFetchedFile(cached);
+    }
+  }
 
   const result: number[] = [];
   let contentTypeStr = "text/plain";
@@ -206,10 +281,12 @@ export async function fetchFileContent(args: FetchFileArgs): Promise<FetchedFile
     }
   }
 
-  return {
+  const fetched = {
     bytes: new Uint8Array(result),
     contentType: contentTypeStr,
     source,
     transport,
   };
+  if (cacheKey && startingCacheEpoch === cacheEpoch) setCachedFile(cacheKey, fetched);
+  return cloneFetchedFile(fetched);
 }

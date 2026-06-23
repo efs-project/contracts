@@ -23,6 +23,7 @@ import {
   classifyTopLevelSegment,
   defaultLensesForContainer,
 } from "~~/utils/efs/containers";
+import { clearFetchFileContentCache } from "~~/utils/efs/fetchFileContent";
 import { DEVNET_CHAIN_ID, inferNetworkFlavor, networkLabel } from "~~/utils/scaffold-eth";
 
 export default function ExplorerClient() {
@@ -817,6 +818,7 @@ export default function ExplorerClient() {
             <div className="hidden lg:block">
               <OverviewPane
                 key={currentAnchorUID ?? "none"}
+                chainId={targetNetwork.id}
                 anchorUID={currentAnchorUID as `0x${string}` | null}
                 lensAddresses={lensAddresses}
                 resourcePathNames={buildRouterPathNames(currentContainer, currentPath)}
@@ -834,6 +836,7 @@ export default function ExplorerClient() {
                 mirrorSchemaUID={mirrorSchemaUID as `0x${string}` | undefined}
                 indexerAddress={indexerAddress}
                 onOverviewSaved={() => {
+                  clearFetchFileContentCache();
                   setOverviewRefreshKey(k => k + 1);
                   // Re-resolve excludes (NOT a plain directory refetch): an Overview
                   // save creates /tags/system on the fly when it's absent — on a real

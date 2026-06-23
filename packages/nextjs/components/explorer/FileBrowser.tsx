@@ -36,7 +36,7 @@ import { useBackgroundOps } from "~~/services/store/backgroundOps";
 import { EDGE_RESOLVER_ABI, getEdgeResolverAddress } from "~~/utils/efs/edgeResolver";
 import { isFile, isList, isTopic } from "~~/utils/efs/efsTypes";
 import { computeExcludesPending, tagsRootGateDecision } from "~~/utils/efs/excludeFilter";
-import { fetchFileContent as fetchFileContentUtil } from "~~/utils/efs/fetchFileContent";
+import { clearFetchFileContentCache, fetchFileContent as fetchFileContentUtil } from "~~/utils/efs/fetchFileContent";
 import { SORT_OVERLAY_ABI } from "~~/utils/efs/sortOverlay";
 import { TRANSPORT_LABELS } from "~~/utils/efs/transports";
 import { safeDownloadName } from "~~/utils/markdown/downloadName";
@@ -286,6 +286,7 @@ export const FileBrowser = ({
   // old chain's bytes/UIDs stay visible in the preview while the write panels act
   // against the newly-selected chain.
   useEffect(() => {
+    clearFetchFileContentCache();
     chainGenRef.current += 1;
     fetchIdRef.current += 1;
     setTagsRoot(null);
@@ -820,6 +821,7 @@ export const FileBrowser = ({
       // pure util (utils/efs/fetchFileContent.ts), shared with the Overview hook.
       // Cancellation (fetchId) and all setState stay here in the component.
       const { bytes, contentType, transport } = await fetchFileContentUtil({
+        chainId: targetNetwork.id,
         routerAddress: efsRouter.address as `0x${string}`,
         routerAbi: efsRouter.abi as Abi,
         publicClient,
@@ -1176,6 +1178,7 @@ export const FileBrowser = ({
       return;
     }
     if (directoryRefreshKey === 0) return;
+    clearFetchFileContentCache();
     // Only create/delete/list mutations bump directoryRefreshKey — they don't touch
     // /tags/system, so the exclude defs are never stale here and a normal refetch is
     // correct (and filtered, since excludeTagDefUIDs is already resolved). Overview
@@ -1774,6 +1777,7 @@ export const FileBrowser = ({
         opId,
       );
       ops.complete(opId, `Deleted ${label}.`);
+      clearFetchFileContentCache();
       if (selectedFile?.uid === item.uid) closePreview();
       await refetchLensItems();
     } catch (e: any) {
@@ -1814,6 +1818,7 @@ export const FileBrowser = ({
         opId,
         `Deleted ${label} — revoked ${pinUIDs.length} PIN${pinUIDs.length === 1 ? "" : "s"} and ${tagUIDs.length} TAG${tagUIDs.length === 1 ? "" : "s"}.`,
       );
+      clearFetchFileContentCache();
       if (selectedFile?.uid === item.uid) closePreview();
       await refetchLensItems();
       setDeleteConfirm(null);

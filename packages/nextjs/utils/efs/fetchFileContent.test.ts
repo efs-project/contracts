@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { beforeEach, test } from "node:test";
 
 type ResolveHookContext = { parentURL?: string };
 type ResolveHookResult = { url: string; shortCircuit?: boolean };
@@ -28,7 +28,16 @@ registerHooks({
   },
 });
 
-const { fetchFileContent } = await import("./fetchFileContent.ts");
+const fetchFileContentModule = await import("./fetchFileContent.ts");
+const { fetchFileContent } = fetchFileContentModule;
+const clearFetchFileContentCache =
+  "clearFetchFileContentCache" in fetchFileContentModule
+    ? (fetchFileContentModule.clearFetchFileContentCache as () => void)
+    : () => {};
+
+beforeEach(() => {
+  clearFetchFileContentCache();
+});
 
 test("fetchFileContent treats inline data mirrors as editable on-chain content", async () => {
   const body = "Hello Overview";
@@ -99,6 +108,213 @@ test("fetchFileContent keeps external-body IPFS mirrors non-editable", async () 
     assert.equal(fetched.contentType, "text/markdown");
     assert.equal(fetched.transport, "ipfs");
     assert.equal(fetched.source, "mirror");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("fetchFileContent caches repeat mirror reads by route identity", async () => {
+  const body = "cached pinned bytes";
+  const ipfsUri = "ipfs://bafycache/example.png";
+  let fetchCount = 0;
+  let readCount = 0;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: Parameters<typeof fetch>[0]) => {
+    fetchCount += 1;
+    assert.equal(String(url), "https://dweb.link/ipfs/bafycache/example.png");
+    return {
+      ok: true,
+      headers: { get: (name: string) => (name.toLowerCase() === "content-type" ? "image/png" : null) },
+      arrayBuffer: async () => new TextEncoder().encode(body).buffer,
+    };
+  }) as any;
+
+  try {
+    const publicClient = {
+      chain: { id: 31337 },
+      readContract: async () => {
+        readCount += 1;
+        return [
+          200n,
+          "0x",
+          [
+            {
+              key: "Content-Type",
+              value: `message/external-body; access-type=URL; URL="${ipfsUri}"; content-type="image/png"`,
+            },
+          ],
+        ];
+      },
+    };
+    const args = {
+      routerAddress: `0x${"1".repeat(40)}` as `0x${string}`,
+      routerAbi: [],
+      publicClient: publicClient as any,
+      lensAddresses: [`0x${"a".repeat(40)}`],
+      resourcePath: ["images", "photo.png"],
+    };
+
+    const first = await fetchFileContent(args);
+    first.bytes[0] = 0;
+    const second = await fetchFileContent(args);
+
+    assert.equal(readCount, 1);
+    assert.equal(fetchCount, 1);
+    assert.equal(new TextDecoder().decode(second.bytes), body);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("fetchFileContent uses explicit chainId when the public client has no chain metadata", async () => {
+  const ipfsUri = "ipfs://bafychain/example.png";
+  let fetchCount = 0;
+  let readCount = 0;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: Parameters<typeof fetch>[0]) => {
+    fetchCount += 1;
+    assert.equal(String(url), "https://dweb.link/ipfs/bafychain/example.png");
+    const body = fetchCount === 1 ? "chain one" : "chain two";
+    return {
+      ok: true,
+      headers: { get: (name: string) => (name.toLowerCase() === "content-type" ? "image/png" : null) },
+      arrayBuffer: async () => new TextEncoder().encode(body).buffer,
+    };
+  }) as any;
+
+  try {
+    const publicClient = {
+      readContract: async () => {
+        readCount += 1;
+        return [
+          200n,
+          "0x",
+          [
+            {
+              key: "Content-Type",
+              value: `message/external-body; access-type=URL; URL="${ipfsUri}"; content-type="image/png"`,
+            },
+          ],
+        ];
+      },
+    };
+    const baseArgs = {
+      routerAddress: `0x${"1".repeat(40)}` as `0x${string}`,
+      routerAbi: [],
+      publicClient: publicClient as any,
+      lensAddresses: [`0x${"a".repeat(40)}`],
+      resourcePath: ["images", "photo.png"],
+    };
+
+    const first = await fetchFileContent({ ...baseArgs, chainId: 1 });
+    const second = await fetchFileContent({ ...baseArgs, chainId: 2 });
+
+    assert.equal(new TextDecoder().decode(first.bytes), "chain one");
+    assert.equal(new TextDecoder().decode(second.bytes), "chain two");
+    assert.equal(readCount, 2);
+    assert.equal(fetchCount, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("fetchFileContent still applies maxBytes to cached content", async () => {
+  const body = "large enough";
+  const dataUri = `data:text/plain;base64,${Buffer.from(body, "utf8").toString("base64")}`;
+  let readCount = 0;
+  const publicClient = {
+    chain: { id: 31337 },
+    readContract: async () => {
+      readCount += 1;
+      return [
+        200n,
+        "0x",
+        [
+          {
+            key: "Content-Type",
+            value: `message/external-body; access-type=URL; URL="${dataUri}"; content-type="text/plain"`,
+          },
+        ],
+      ];
+    },
+  };
+  const args = {
+    routerAddress: `0x${"1".repeat(40)}` as `0x${string}`,
+    routerAbi: [],
+    publicClient: publicClient as any,
+    lensAddresses: [`0x${"a".repeat(40)}`],
+    resourcePath: ["docs", "large.txt"],
+  };
+
+  await fetchFileContent(args);
+
+  await assert.rejects(() => fetchFileContent({ ...args, maxBytes: 4 }), {
+    name: "FileTooLargeError",
+  });
+  assert.equal(readCount, 1);
+});
+
+test("clearFetchFileContentCache prevents in-flight reads from repopulating stale cache", async () => {
+  const ipfsUri = "ipfs://bafyrace/photo.png";
+  let fetchCount = 0;
+  let readCount = 0;
+  let releaseFirstFetch: () => void = () => {};
+  const originalFetch = globalThis.fetch;
+  const firstFetchStarted = new Promise<void>(resolve => {
+    globalThis.fetch = (async (url: Parameters<typeof fetch>[0]) => {
+      fetchCount += 1;
+      assert.equal(String(url), "https://dweb.link/ipfs/bafyrace/photo.png");
+      if (fetchCount === 1) {
+        resolve();
+        await new Promise<void>(release => {
+          releaseFirstFetch = release;
+        });
+      }
+      const body = fetchCount === 1 ? "old bytes" : "new bytes";
+      return {
+        ok: true,
+        headers: { get: (name: string) => (name.toLowerCase() === "content-type" ? "image/png" : null) },
+        arrayBuffer: async () => new TextEncoder().encode(body).buffer,
+      };
+    }) as any;
+  });
+
+  const publicClient = {
+    chain: { id: 31337 },
+    readContract: async () => {
+      readCount += 1;
+      return [
+        200n,
+        "0x",
+        [
+          {
+            key: "Content-Type",
+            value: `message/external-body; access-type=URL; URL="${ipfsUri}"; content-type="image/png"`,
+          },
+        ],
+      ];
+    },
+  };
+  const args = {
+    routerAddress: `0x${"1".repeat(40)}` as `0x${string}`,
+    routerAbi: [],
+    publicClient: publicClient as any,
+    lensAddresses: [`0x${"a".repeat(40)}`],
+    resourcePath: ["images", "race.png"],
+  };
+
+  try {
+    const first = fetchFileContent(args);
+    await firstFetchStarted;
+    clearFetchFileContentCache();
+    releaseFirstFetch();
+    assert.equal(new TextDecoder().decode((await first).bytes), "old bytes");
+
+    const second = await fetchFileContent(args);
+
+    assert.equal(new TextDecoder().decode(second.bytes), "new bytes");
+    assert.equal(readCount, 2);
+    assert.equal(fetchCount, 2);
   } finally {
     globalThis.fetch = originalFetch;
   }
