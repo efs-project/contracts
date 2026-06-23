@@ -211,6 +211,35 @@ contract EFSFileView {
             false
         );
 
+        // Cross-lens negative mask (ADR-0055) — viewer-sovereignty consistency with the schema-aware
+        // listings. This attester-scoped, schema-AGNOSTIC view returns a FIXED indexer page (it does not
+        // run the phase walkers), so we filter the page in place: drop any child a lens in the stack
+        // whited out and no higher-precedence lens re-asserts. The `nextCursor` is the indexer's OWN
+        // source cursor (`nextCur`), independent of how many items we drop from this page — it advances
+        // over source positions, not result slots — so trimming whited children leaves pagination correct
+        // (no dup/drop across pages; the next call resumes at `nextCur` regardless).
+        //
+        // This view is schema-agnostic (returns all children), so the predicate's PIN/folder-visibility-TAG
+        // positive checks key on DATA_SCHEMA_UID — matching what the schema-aware path passes for standard
+        // file/folder browsing (`getDirectoryPageBySchemaAndAddressList` calls the predicate with
+        // `anchorSchema`, which IS dataSchemaUID on the standard listing). Zero-cost when whiteout is
+        // disabled: `_isItemWhitedOutForListing` short-circuits to false before any read when
+        // `whiteoutResolver == address(0)`.
+        if (address(whiteoutResolver) != address(0)) {
+            bytes32 dataSchemaUID = indexer.DATA_SCHEMA_UID();
+            uint256 kept = 0;
+            for (uint256 i = 0; i < resolvedUIDs.length; i++) {
+                bytes32 uid = resolvedUIDs[i];
+                // Advance the source walker (the loop) but consume no result slot for a whited child —
+                // same skip the phase walkers apply. visibilityTagDef == dataSchemaUID (standard browsing).
+                if (_isItemWhitedOutForListing(parentAnchor, uid, attesters, dataSchemaUID, dataSchemaUID)) continue;
+                resolvedUIDs[kept++] = uid; // compact in place (kept <= i, so this never overwrites unread)
+            }
+            assembly ("memory-safe") {
+                mstore(resolvedUIDs, kept)
+            }
+        }
+
         items = _buildFileSystemItems(
             resolvedUIDs,
             parentAnchor,
@@ -373,8 +402,15 @@ contract EFSFileView {
                     // Cross-lens negative mask (ADR-0055): a whited-out child advances the walker but
                     // consumes no slot — same skip as revoked / out-of-lens. Unconditional viewer
                     // sovereignty (applies to plain AND filtered listings).
-                    if (_isItemWhitedOutForListing(parentAnchor, uid, attesters, indexer.DATA_SCHEMA_UID(), anchorSchema))
-                        continue;
+                    if (
+                        _isItemWhitedOutForListing(
+                            parentAnchor,
+                            uid,
+                            attesters,
+                            indexer.DATA_SCHEMA_UID(),
+                            anchorSchema
+                        )
+                    ) continue;
                     buf[count++] = uid;
                     if (count == maxItems) break;
                 }
@@ -418,8 +454,15 @@ contract EFSFileView {
                     bytes32 uid = batch[k];
                     // Cross-lens negative mask (ADR-0055): drop whited-out files; the walker advances
                     // (and the scan budget) but the slot is not consumed (same as the filtered variant).
-                    if (_isItemWhitedOutForListing(parentAnchor, uid, attesters, indexer.DATA_SCHEMA_UID(), anchorSchema))
-                        continue;
+                    if (
+                        _isItemWhitedOutForListing(
+                            parentAnchor,
+                            uid,
+                            attesters,
+                            indexer.DATA_SCHEMA_UID(),
+                            anchorSchema
+                        )
+                    ) continue;
                     buf[count++] = uid;
                     if (count == maxItems) break;
                 }
@@ -614,7 +657,12 @@ contract EFSFileView {
             uint256 remainingBudget = folderBudget - scanned;
             uint256 chunk = remainingSource < _FOLDER_SCAN_CHUNK ? remainingSource : _FOLDER_SCAN_CHUNK;
             if (chunk > remainingBudget) chunk = remainingBudget;
-            bytes32[] memory batch = edgeResolver.getChildrenWithEdge(w.parentAnchor, w.anchorSchema, w.folderIdx, chunk);
+            bytes32[] memory batch = edgeResolver.getChildrenWithEdge(
+                w.parentAnchor,
+                w.anchorSchema,
+                w.folderIdx,
+                chunk
+            );
             for (uint256 k = 0; k < batch.length; k++) {
                 w.folderIdx++; // advance walker for every inspected entry
                 scanned++;

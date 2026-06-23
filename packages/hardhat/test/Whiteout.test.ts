@@ -1212,4 +1212,50 @@ describe("Whiteout (WHITEOUT cross-lens negative mask, ADR-0055)", function () {
     expect(totalItems).to.equal(0); // every direct file whited out → nothing surfaces
     expect(calls).to.be.greaterThan(1); // proves it took multiple budget-bounded calls (no one-shot scan)
   });
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // VECTOR 16 — whiteout honored by the attester-scoped getDirectoryPageByAddressList (P2 fix)
+  //   The schema-AGNOSTIC, attester-scoped directory view returns a fixed indexer page. Before the fix
+  //   it returned `_buildFileSystemItems(...)` directly, with NO whiteout filter — so a child whited
+  //   out by a higher lens still surfaced through this exposed API even though the schema-aware listings
+  //   suppressed it (an ADR-0055 viewer-sovereignty hole). The fix applies the same
+  //   `_isItemWhitedOutForListing` predicate (DATA_SCHEMA_UID for both the PIN positive and the folder
+  //   visibility-TAG positive, matching standard browsing), dropping whited children from the page while
+  //   leaving the indexer's source cursor (the page's nextCursor) untouched.
+  // ════════════════════════════════════════════════════════════════════════════
+  it("vector 16: getDirectoryPageByAddressList honors whiteout (drops a higher-lens-whited child; control lens still sees it)", async function () {
+    const root = await createAnchor("root", ZERO_BYTES32);
+    const dir = await createAnchor("dir", root);
+
+    // ALICE publishes a child file under dir (creates the file anchor + places her DATA via a PIN), so
+    // `_containsAttestations[hideAnchor][alice]` is set and the child qualifies for an alice-scoped walk.
+    const keepAnchor = await createAnchor("keep.txt", dir, dataSchemaUID);
+    const hideAnchor = await createAnchor("hide.txt", dir, dataSchemaUID);
+    const dKeep = await mintData(alice);
+    const dHide = await mintData(alice);
+    await createPin(keepAnchor, dKeep, alice);
+    await createPin(hideAnchor, dHide, alice);
+
+    // Baseline: viewer [owner, alice] sees both children before any whiteout.
+    let [items] = await fileView.getDirectoryPageByAddressList(dir, [ownerAddr, aliceAddr], 0, 10);
+    expect(items.map(i => i.uid)).to.have.members([keepAnchor, hideAnchor]);
+
+    // OWNER (higher lens) whites out hide.txt. Viewer [owner, alice]: owner's whiteout terminates the
+    // per-name scan (no PIN / visibility TAG of his own re-asserts it) → the child is DROPPED.
+    await attestWhiteout(hideAnchor, owner);
+    expect(await whiteoutResolver.isWhitedOut(dir, ownerAddr, hideAnchor)).to.equal(true);
+    [items] = await fileView.getDirectoryPageByAddressList(dir, [ownerAddr, aliceAddr], 0, 10);
+    expect(
+      items.map(i => i.uid),
+      "higher-lens whiteout drops the child from the attester-scoped view",
+    ).to.deep.equal([keepAnchor]);
+
+    // Control: a viewer whose lens list EXCLUDES the whiteout author (alice only) is unaffected — alice's
+    // own PIN is the positive terminal, so both children still show.
+    const [aliceItems] = await fileView.getDirectoryPageByAddressList(dir, [aliceAddr], 0, 10);
+    expect(
+      aliceItems.map(i => i.uid),
+      "control lens (excludes owner) still sees the child",
+    ).to.have.members([keepAnchor, hideAnchor]);
+  });
 });

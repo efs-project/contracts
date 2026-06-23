@@ -26,10 +26,13 @@ import { ResolverName, SCHEMAS } from "./schemas";
 import { Create3DeployResult, Create3Name } from "./create3";
 import { OrchestrationResult } from "./orchestrate";
 import {
+  AdditivePlan,
+  buildAdditivePlan,
   buildBatch2,
   buildSafePlan,
   buildSetTransportsAnchorCall,
   detectDeployPhase,
+  detectMissingResolvers,
   DeployPhase,
   PredictedPlan,
   predictPlan,
@@ -140,6 +143,22 @@ export async function orchestrateViaSafe(
   if (mode === "propose") {
     const predicted = await predictPlan(deployer, safe, log);
     return proposeViaSafe(deployer, safeContract, safe, predicted, opts.proposeArtifactPath, log);
+  }
+
+  // ── ADDITIVE execute branch (ADR-0055 — adding WHITEOUT to a LIVE core) ───────────────────────────
+  // When the core EFSIndexer is already live but a later-appended resolver is missing, the execute path
+  // must NOT run a fresh Phase-0 `buildSafePlan` (which deploys all 7 proxies and would revert on the
+  // already-taken core CREATE3 addresses). Deploy ONLY the missing resolver(s) + register their schema(s)
+  // through the Safe, leaving the core ceremony untouched. (The fork rehearsal of the additive case, and
+  // any execute-mode resume, lands here.) A fresh chain has no live core, so this is skipped and the
+  // normal full Phase-0 deploy below runs unchanged.
+  {
+    const predictedForAdditive = await predictPlan(deployer, safe, false);
+    const indexerLive = (await ethers.provider.getCode(predictedForAdditive.proxies.EFSIndexer)) !== "0x";
+    const missingAdditive = indexerLive ? await detectMissingResolvers(deployer, predictedForAdditive) : [];
+    if (missingAdditive.length > 0) {
+      return executeAdditive(deployer, safeContract, safe, predictedForAdditive, missingAdditive, owners, log);
+    }
   }
 
   // ── Execute path (fork rehearsal): always a Phase-0 self-deploy of the auto-test-Safe. Precompute the
@@ -350,6 +369,128 @@ export async function orchestrateViaSafe(
   return result;
 }
 
+/// ADDITIVE execute (ADR-0055 — adding WHITEOUT to a LIVE core). The execute-mode counterpart of
+/// `proposeAdditive`: deploy ONLY the missing resolver(s) + register their schema(s) FROM the Safe, with
+/// the new proxy born Safe-owned, leaving the live core (wiring / scaffolding / transports) untouched.
+/// Reached only when the core EFSIndexer is live but a later-appended resolver has no on-chain code (a
+/// fresh chain runs the full Phase-0 deploy instead). Idempotent: Batch A1 is skipped if the proxies are
+/// already deployed; Batch A2 register legs are omitted for already-registered schemas (so a re-run after
+/// it landed is a clean no-op). The verify gate runs against the full live proxy set before any register.
+async function executeAdditive(
+  deployer: Signer,
+  safeContract: Contract,
+  safe: string,
+  predicted: PredictedPlan,
+  missing: ResolverName[],
+  owners: Signer[],
+  log: boolean,
+): Promise<SafeOrchestrationResult> {
+  const l = (...a: unknown[]) => log && console.log(...a);
+  const safeLc = safe.toLowerCase();
+  l(`Safe-native deploy (additive): core live; deploying missing resolver(s) [${missing.join(", ")}] FROM the Safe.`);
+
+  // ── Batch A1: deploy the missing resolver proxies (born Safe-owned). Skip any already on-chain. ────
+  const stillMissing: ResolverName[] = [];
+  for (const r of missing) {
+    if ((await ethers.provider.getCode(predicted.proxies[r])) === "0x") stillMissing.push(r);
+  }
+  let a1TxHash = "0x0 (Batch A1 skipped — additive proxies already deployed)";
+  if (stillMissing.length > 0) {
+    const additive = await buildAdditivePlan(deployer, predicted, stillMissing, log);
+    l(`Safe-native deploy (additive): executing Batch A1 (${additive.batchA1.length} deploy legs) as the Safe...`);
+    const a1 = await executeBatchAsSafe(safeContract, additive.batchA1, owners, deployer);
+    a1TxHash = a1.txHash;
+    l(`  Batch A1 executed (SafeTx ${a1.txHash})`);
+  } else {
+    l("Safe-native deploy (additive): Batch A1 already landed (additive proxies deployed) — SKIPPING.");
+  }
+
+  // Every missing resolver proxy must now have code at its Safe-keyed predicted address.
+  for (const r of missing) {
+    if ((await ethers.provider.getCode(predicted.proxies[r])) === "0x")
+      throw new Error(`SAFE-DEPLOY (additive): no code at Safe-keyed predicted ${predicted.proxies[r]} for ${r}`);
+  }
+
+  // ── VERIFY GATE against the now-live FULL proxy set (core + additive) before any register. ────────
+  l("Safe-native deploy (additive): running verify gate against the on-chain proxy set (pre-register)...");
+  const deploys = await buildDeploysFromOnchain(deployer, predicted);
+  await runVerifyGate({ deploys, schemaUIDs: predicted.schemaUIDs, deployer });
+
+  // ── Batch A2: register ONLY the missing resolvers' schemas (idempotency-omit already registered). ─
+  const additive = await buildAdditivePlan(deployer, predicted, missing, log);
+  let a2TxHash = "0x0 (Batch A2 skipped — additive schemas already registered)";
+  if (additive.batchA2.length > 0) {
+    l(`Safe-native deploy (additive): executing Batch A2 (${additive.batchA2.length} register legs) as the Safe...`);
+    const a2 = await executeBatchAsSafe(safeContract, additive.batchA2, owners, deployer);
+    a2TxHash = a2.txHash;
+    l(`  Batch A2 executed (SafeTx ${a2.txHash})`);
+  } else {
+    l("Safe-native deploy (additive): Batch A2 omitted — additive schemas already registered (clean no-op).");
+  }
+
+  // ── Assert: each additive schema is registered against its Safe-keyed proxy. ──────────────────────
+  const reg = await ethers.getContractAt(
+    "@ethereum-attestation-service/eas-contracts/contracts/ISchemaRegistry.sol:ISchemaRegistry",
+    "0x0a7E2Ff54e76B8E6659aedc9103FB21c038050D0",
+    deployer,
+  );
+  for (const s of SCHEMAS) {
+    if (!missing.includes(s.resolver)) continue;
+    const rec = await reg.getSchema(predicted.schemaUIDs[s.name]);
+    if (rec.resolver.toLowerCase() !== predicted.proxies[s.resolver].toLowerCase())
+      throw new Error(`SAFE-DEPLOY (additive): ${s.name} getSchema.resolver ${rec.resolver} != Safe-keyed proxy`);
+  }
+
+  // ── Assert: the new additive proxies are BORN Safe-owned (ProxyAdmin owner == Safe). ──────────────
+  for (const r of missing) {
+    const admin = await readProxyAdmin(predicted.proxies[r]);
+    const pa = await ethers.getContractAt(
+      "@openzeppelin/contracts/proxy/transparent/ProxyAdmin.sol:ProxyAdmin",
+      admin,
+      deployer,
+    );
+    if ((await pa.owner()).toLowerCase() !== safeLc)
+      throw new Error(`SAFE-DEPLOY (additive): ${r} ProxyAdmin owner != Safe`);
+  }
+  l("Safe-native deploy (additive): missing resolver(s) deployed + registered, born Safe-owned ✓.");
+
+  // Read the existing core scaffolding UIDs for the result shape (the core ceremony was untouched).
+  const indexer = (await ethers.getContractAt(
+    "EFSIndexer",
+    predicted.proxies.EFSIndexer,
+    deployer,
+  )) as unknown as Contract;
+  const rootRealized: string = await indexer.rootAnchorUID();
+  const transportsRealized: string =
+    rootRealized === ethers.ZeroHash ? ethers.ZeroHash : await indexer.resolvePath(rootRealized, "transports");
+  const scaffoldingUIDs: Record<string, string> = { root: rootRealized, transports: transportsRealized };
+
+  const plan: SafePlan = {
+    ...predicted,
+    impls: {} as Record<Create3Name, string>,
+    batch1: [],
+    batch2: [],
+    batch2RegistersOmitted: 0,
+    batch2BootstrapOmitted: false,
+  };
+
+  return {
+    mode: "execute",
+    deploys,
+    proxies: predicted.proxies,
+    systemAccount: predicted.systemAccount,
+    schemaUIDs: predicted.schemaUIDs,
+    transportsAnchorUID: transportsRealized,
+    safe,
+    registered: true,
+    ownershipTransferred: false,
+    plan,
+    // A1/A2 reuse the batch1/batch2 slots of the result-tx-hash record (Batch 3 is N/A here).
+    safeTxHashes: { batch1: a1TxHash, batch2: a2TxHash, batch3: "0x0 (additive — no setTransportsAnchor)" },
+    scaffoldingUIDs,
+  };
+}
+
 /// Build the `deploys` map (resolver name → {proxy, predicted, impl, proxyAdmin, rawSalt}) that
 /// runVerifyGate consumes, from a plan whose proxies are already on-chain. Identical in shape to the
 /// record the execute path assembles inline after Batch 1 lands — extracted so the Phase-1 propose
@@ -453,6 +594,19 @@ async function proposeViaSafe(
   // on-chain nonce already reflects every prior executed batch, so the next-to-execute batch sits at it).
   const batches: ProposedBatch[] = [];
   let ceremony: string[];
+
+  // ── ADDITIVE post-freeze branch (ADR-0055 — adding WHITEOUT to a LIVE core) ───────────────────────
+  // When the core EFSIndexer is live (phase != 0) but a later-appended resolver (WhiteoutResolver / any
+  // future additive primitive) has no on-chain code, the ONLY owed work is to deploy that resolver +
+  // register its schema — NOT a fresh-core Phase-1/2/3 walk (the core is already complete). This takes
+  // precedence over the core phase branch: detectDeployPhase is now additive-aware (it skips schemas
+  // whose resolver proxy is absent), so on a live, complete core it resolves to 3 and we land here.
+  // Walk two re-runs: A1 (deploy the missing proxy, born Safe-owned), then A2 (register its schema). The
+  // VERIFY GATE runs before A2 against the now-live full proxy set (A1 landed ⇒ all proxies have code).
+  const missingAdditive = phase === 0 ? [] : await detectMissingResolvers(deployer, predicted);
+  if (missingAdditive.length > 0) {
+    return proposeAdditive(deployer, safeContract, safe, predicted, missingAdditive, artifactPath, log);
+  }
 
   if (phase === 0) {
     // Phase 0 — no proxies. This is the ONLY phase that deploys impls: Batch 1's CreateX initcode embeds
@@ -566,6 +720,143 @@ async function proposeViaSafe(
   if (batches.length === 0) l("  (no batch — deploy complete)");
   l("");
   l(`Safe-native deploy (propose): Phase ${phase} batch BUILT, no execTransaction sent (non-owner EOA).`);
+
+  return {
+    mode: "propose",
+    safe,
+    chainId,
+    phase,
+    proxies: plan.proxies,
+    systemAccount: plan.systemAccount,
+    schemaUIDs: plan.schemaUIDs,
+    plan,
+    batches,
+    ceremony,
+  };
+}
+
+/// ADDITIVE post-freeze build/propose (ADR-0055 — adding WHITEOUT to a LIVE core). Reached ONLY when the
+/// core EFSIndexer is live but one or more later-appended resolvers have no on-chain code. Emits the
+/// next pending ADDITIVE batch — never a core ceremony batch, never a full-core redeploy:
+///   A1 — missing resolver proxy NOT deployed  → propose Batch A1 (CreateX deploy, born Safe-owned).
+///   A2 — missing resolver proxy live, schema  → VERIFY GATE (full live proxy set), then Batch A2
+///        not yet registered                      (register ONLY the missing resolvers' schemas).
+///   done — proxy live + schema registered      → nothing (clean no-op; the additive schema is in).
+/// `phase` is reported as the core DeployPhase (the core is complete = 3 in the documented case) so the
+/// result/artifact shape is unchanged; the `additive` ceremony lines + batch labels distinguish it.
+async function proposeAdditive(
+  deployer: Signer,
+  safeContract: Contract,
+  safe: string,
+  predicted: PredictedPlan,
+  missing: ResolverName[],
+  artifactPath: string | undefined,
+  log: boolean,
+): Promise<SafeProposeResult> {
+  const l = (...a: unknown[]) => log && console.log(...a);
+  const chainId = (await ethers.provider.getNetwork()).chainId.toString();
+  const phase = await detectDeployPhase(deployer, predicted);
+
+  l("");
+  l(`EFS Safe-native deploy — ADDITIVE BUILD/PROPOSE. Missing resolver(s): [${missing.join(", ")}].`);
+
+  const batches: ProposedBatch[] = [];
+  let ceremony: string[];
+
+  // Sub-phase A1: any missing resolver proxy still absent → propose the deploy batch (deploy ALL the
+  // currently-missing resolvers in one batch; re-running after it lands advances to A2).
+  const stillMissing: ResolverName[] = [];
+  for (const r of missing) {
+    if ((await ethers.provider.getCode(predicted.proxies[r])) === "0x") stillMissing.push(r);
+  }
+
+  let additive: AdditivePlan;
+  if (stillMissing.length > 0) {
+    additive = await buildAdditivePlan(deployer, predicted, stillMissing, log);
+    batches.push(
+      await buildProposedBatch(
+        safeContract,
+        additive.batchA1,
+        `Batch A1 (additive deploy ×${stillMissing.length})`,
+        0n,
+      ),
+    );
+    ceremony = [
+      `Additive — core live, ${stillMissing.length} resolver(s) missing: [${stillMissing.join(", ")}].`,
+      "  • Propose + sign + execute Batch A1 (deploy the missing resolver proxy, born Safe-owned).",
+      "  • Then RE-RUN `deploy:efs --via-safe` — it runs the VERIFY GATE against the now-live proxy set",
+      "    and emits Batch A2 (register ONLY the missing resolvers' schemas). No core redeploy.",
+    ];
+  } else {
+    // Sub-phase A2: every missing resolver proxy is now deployed → verify-gate the full live set, then
+    // register only the missing resolvers' schemas. The verify gate runs against ALL proxies (the core
+    // ones are live too), so the existing full gate applies unchanged — read-only, throws on drift.
+    l("Safe-native deploy (additive): running verify gate against the on-chain proxy set (pre-register)...");
+    const deploys = await buildDeploysFromOnchain(deployer, predicted);
+    await runVerifyGate({ deploys, schemaUIDs: predicted.schemaUIDs, deployer });
+
+    additive = await buildAdditivePlan(deployer, predicted, missing, log);
+    if (additive.batchA2.length > 0) {
+      batches.push(
+        await buildProposedBatch(
+          safeContract,
+          additive.batchA2,
+          `Batch A2 (additive register ×${additive.batchA2.length})`,
+          0n,
+        ),
+      );
+      ceremony = [
+        "Additive — missing resolver(s) deployed. VERIFY GATE PASSED (read-only; aborts on drift).",
+        "  • Propose + sign + execute Batch A2 (register ONLY the missing resolvers' schemas).",
+        "  • Then RE-RUN `deploy:efs --via-safe` — it will report the additive resolver complete.",
+      ];
+    } else {
+      ceremony = ["Additive — missing resolver(s) deployed AND their schemas already registered. Nothing to propose."];
+    }
+  }
+
+  const plan: SafePlan = {
+    ...predicted,
+    impls: {} as Record<Create3Name, string>,
+    batch1: [],
+    batch2: [],
+    batch2RegistersOmitted: 0,
+    batch2BootstrapOmitted: false,
+  };
+
+  const artifact = {
+    note:
+      "EFS Safe-native deploy — ADDITIVE build/propose artifact (ADR-0055). The core is already live; " +
+      "this adds ONLY the missing resolver(s) + their schema(s). Import into Safe{Wallet}; sign with the " +
+      "real owner keys; execute it; then RE-RUN `deploy:efs --via-safe` for the next additive batch.",
+    additive: true,
+    missing,
+    phase,
+    chainId,
+    safe,
+    proxies: plan.proxies,
+    systemAccount: plan.systemAccount,
+    schemaUIDs: plan.schemaUIDs,
+    ceremony,
+    batches,
+  };
+
+  if (artifactPath) {
+    mkdirSync(dirname(artifactPath), { recursive: true });
+    writeFileSync(artifactPath, JSON.stringify(artifact, null, 2));
+    l("");
+    l(`  SAFE ADDITIVE BATCH ARTIFACT (import into Safe{Wallet}): ${artifactPath}`);
+  }
+
+  l("");
+  for (const line of ceremony) l(line);
+  l("");
+  for (const b of batches) {
+    l(`  ${b.label}: nonce=${b.nonce} safeTxHash=${b.safeTxHash} to=${b.to} (${b.legs.length} legs)`);
+  }
+  if (batches.length === 0) l("  (no batch — additive resolver complete)");
+  l("");
+  l(`Safe-native deploy (additive propose): batch BUILT, no execTransaction sent (non-owner EOA).`);
 
   return {
     mode: "propose",
