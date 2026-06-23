@@ -362,7 +362,7 @@ describe("SystemAccount (ADR-0053)", function () {
     let anchorSchemaUID: string;
     let mockIndex: any;
 
-    // SCAFFOLDING (orchestrate.ts / safePlan.ts): root → tags/transports → 5 transport children.
+    // SCAFFOLDING (orchestrate.ts / safePlan.ts): root → tags/transports → 12 transport children.
     const SPECS = [
       { name: "root", parentIndex: -1, anchorSchemaToRegister: ZeroHash },
       { name: "tags", parentIndex: 0, anchorSchemaToRegister: ZeroHash },
@@ -372,6 +372,13 @@ describe("SystemAccount (ADR-0053)", function () {
       { name: "arweave", parentIndex: 2, anchorSchemaToRegister: ZeroHash },
       { name: "magnet", parentIndex: 2, anchorSchemaToRegister: ZeroHash },
       { name: "https", parentIndex: 2, anchorSchemaToRegister: ZeroHash },
+      { name: "ftp", parentIndex: 2, anchorSchemaToRegister: ZeroHash },
+      { name: "s3", parentIndex: 2, anchorSchemaToRegister: ZeroHash },
+      { name: "gs", parentIndex: 2, anchorSchemaToRegister: ZeroHash },
+      { name: "dat", parentIndex: 2, anchorSchemaToRegister: ZeroHash },
+      { name: "rsync", parentIndex: 2, anchorSchemaToRegister: ZeroHash },
+      { name: "bittorrent", parentIndex: 2, anchorSchemaToRegister: ZeroHash },
+      { name: "data", parentIndex: 2, anchorSchemaToRegister: ZeroHash },
     ];
 
     // Collect the UIDs of every Attested event in a receipt, in emission order.
@@ -403,8 +410,8 @@ describe("SystemAccount (ADR-0053)", function () {
       const tx = await systemAccount.bootstrap(await mockIndex.getAddress(), anchorSchemaUID, SPECS);
       const receipt = await tx.wait();
       const uids = attestedUIDs(receipt);
-      // 8 fresh anchors (mock index reports nothing exists yet) → 8 Attested events.
-      expect(uids.length).to.equal(8);
+      // All fresh anchors (mock index reports nothing exists yet) → one Attested event per spec.
+      expect(uids.length).to.equal(SPECS.length);
 
       // Every anchor authored by SystemAccount, each child's refUID == its parent's UID, root.refUID==0.
       for (let i = 0; i < SPECS.length; i++) {
@@ -422,7 +429,7 @@ describe("SystemAccount (ADR-0053)", function () {
       // First call: everything fresh.
       const r1 = await (await systemAccount.bootstrap(await mockIndex.getAddress(), anchorSchemaUID, SPECS)).wait();
       const uids1 = attestedUIDs(r1);
-      expect(uids1.length).to.equal(8);
+      expect(uids1.length).to.equal(SPECS.length);
 
       // Seed the mock to report the root + /transports as already existing (a partial prior bootstrap),
       // so a retry must REUSE them and only fill gaps — but here we report ALL as existing for a full

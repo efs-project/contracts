@@ -149,12 +149,13 @@ Other metadata (content type, description, version history) is likewise stored a
 **No URI scheme allowlist** (ADR-0056, supersedes ADR-0023): the resolver does **not** restrict the URI scheme. A scheme check on an immutable contract is not a security boundary (an allowed `https://` mirror serves malicious HTML just as well), is trivially evaded (case / zero-width / whitespace / percent-encoding), is un-patchable, and can't anticipate future transports — so any non-empty, length-bounded URI under a valid `/transports` anchor is accepted, including `data:`, `javascript:`, and future schemes. **Scheme and render safety move entirely to the client** (sandboxed rendering; never render a raw mirror URI as a live link or navigate to it) — see `specs/overview.md` load-bearing invariants. The transport *vocabulary* still lives in `/transports/<scheme>` anchors (below), and length (`MAX_URI_LENGTH`) + transport-ancestry remain enforced.
 
 ### Transport Definition Anchors
-Well-known transport types are created at deploy time under `/transports/` — **eleven** canonical transport types get an un-squattable definition anchor (bootstrap seeds them via `SystemAccount`, so a later writer can't claim the canonical transport name). New transports are added permissionlessly by authoring a `/transports/<scheme>` anchor (ADR-0011); the contract no longer gates the scheme set (ADR-0056):
+Well-known transport types are created at deploy time under `/transports/` — fresh deploys seed **twelve** default transport definition anchors. New transports are added permissionlessly by authoring a `/transports/<scheme>` anchor (ADR-0011); the contract no longer gates the scheme set (ADR-0056):
 - `/transports/onchain` — `web3://` URIs pointing to SSTORE2 chunk managers
 - `/transports/arweave` — `ar://` URIs
 - `/transports/ipfs` — `ipfs://` URIs
 - `/transports/magnet` — `magnet:` URIs
 - `/transports/https` — `https://` URIs
+- `/transports/data` — RFC-2397 `data:` URIs for small inline mirrors (ADR-0063)
 - `/transports/ftp` — `ftp://` URIs
 - `/transports/s3` — `s3://` URIs
 - `/transports/gs` — `gs://` URIs
@@ -162,7 +163,7 @@ Well-known transport types are created at deploy time under `/transports/` — *
 - `/transports/rsync` — `rsync://` URIs
 - `/transports/bittorrent` — `bittorrent://` URIs
 
-The transport preference order for serving keeps the original five ranked per ADR-0012: `web3://` (onchain) > `ar://` > `ipfs://` > `magnet:` > `https://`. Every other scheme (`ftp/s3/gs/dat/rsync/bittorrent` and any future or arbitrary scheme post-ADR-0056) shares the lowest priority tier with `https://` (router `_getBestMirrorURI` `else` → priority 4) — so it is *served* but not *rankable* above the named five without a router change (the router is a redeployable view; per-transport priority as a `/transports` PROPERTY is the freeze-safe follow-up — ADR-0056 Consequences). All non-`web3://` schemes are served as `message/external-body` redirects; only **same-chain** `web3://` is read on-chain (SSTORE2) — a `web3://<addr>:<otherChainId>` mirror (chainId ≠ the router's chain) is redirected like the off-chain schemes, since the router can only `extcodecopy` contracts on its own chain (ADR-0058). See ADR-0012 for the priority rationale.
+The transport preference order for serving keeps the original five ranked per ADR-0012: `web3://` (onchain) > `ar://` > `ipfs://` > `magnet:` > `https://`. Every other scheme (`data:` inline mirrors per ADR-0063, `ftp/s3/gs/dat/rsync/bittorrent`, and any future or arbitrary scheme post-ADR-0056) shares the lowest priority tier with `https://` (router `_getBestMirrorURI` `else` → priority 4) — so it is *served* but not *rankable* above the named five without a router change (the router is a redeployable view; per-transport priority as a `/transports` PROPERTY is the freeze-safe follow-up — ADR-0056 Consequences). All non-`web3://` schemes are served as `message/external-body` redirects; only **same-chain** `web3://` is read on-chain (SSTORE2) — a `web3://<addr>:<otherChainId>` mirror (chainId ≠ the router's chain) is redirected like the off-chain schemes, since the router can only `extcodecopy` contracts on its own chain (ADR-0058). See ADR-0012 for the priority rationale.
 
 ## 4. Pin Schema (cardinality 1)
 **Purpose**: Singleton edge — at most one active PIN per `(attester, definition, targetSchema)` slot. Used for file placement, PROPERTY value binding, and any predicate where "this slot holds exactly one thing" is the right semantic. ADR-0041.
@@ -339,7 +340,7 @@ See [ADR-0044](../docs/adr/0044-list-and-list-entry-schemas.md) and [Lists and C
 
 `refUID` = the **source**: the duplicate DATA for `sameAs`/`supersededBy`; the source path Anchor for `symlink`.
 
-**Kinds taxonomy** (initial — evolvable, not in the UID). **Follow rules are authoritative in `specs/09-redirect-resolution.md` (ADR-0063, James ratified 2026-06-20): `symlink` is the ONLY auto-followed kind; `sameAs`/`supersededBy`/reserved are non-followed terminals.**
+**Kinds taxonomy** (initial — evolvable, not in the UID). **Follow rules are authoritative in `specs/09-redirect-resolution.md` (ADR-0067, James ratified 2026-06-20): `symlink` is the ONLY auto-followed kind; `sameAs`/`supersededBy`/reserved are non-followed terminals.**
 - `0 = sameAs` — strong dedup. Source + target both DATA. **Not auto-followed** — a canonicalization relation only; clients/indexers pick a canonical representative for dedup, but a navigational walk that lands on a DATA does not chase `sameAs` (specs/09 §4.2).
 - `1 = supersededBy` — version replacement. Source + target both DATA. **NOT auto-followed** — a discoverable version breadcrumb only. "Latest" is reached the EFS way (the path's placement PIN, which the publisher re-points), NOT by chasing this edge; auto-following it would let a fixed DATA UID silently resolve to a newer version, violating "no silent revision" (specs/09).
 - `2 = symlink` — path → target. Source ANCHOR; target ANCHOR or DATA. **The only auto-followed kind** — when path resolution lands on a symlink source, the follower advances to `target` (a `D_MAX`-bounded, cycle-safe walk per specs/09, not a hardcoded single hop).
@@ -355,13 +356,13 @@ See [ADR-0044](../docs/adr/0044-list-and-list-entry-schemas.md) and [Lists and C
   - `symlink` (2): source must be an ANCHOR (`SourceNotAnchor`); target must be ANCHOR or DATA (`TargetNotAnchorOrData`).
   - `kind >= 3`: no typing (reserved); only the `target != 0` / `target != source` guards apply.
 
-**Read-time resolution is client/spec, not the resolver.** The resolver enforces only **write-time** correctness (direct self-loops, typing). **Multi-hop cycle handling** (for symlink navigation: a bounded visited-set stop returning `CycleStopped` — NOT lowest-UID-in-SCC, which is the separate `sameAs` *dedup-canonicalization* rule; ADR-0063 / specs/09), **chain following**, **depth caps** (`D_MAX`), **lens precedence** (ADR-0031), and **kind-following rules** (only `symlink` is auto-followed) all live in the client/router + the **[specs/09-redirect-resolution.md](./09-redirect-resolution.md)** resolution spec (Accepted, ADR-0063). The resolver cannot afford to walk the graph on each write.
+**Read-time resolution is client/spec, not the resolver.** The resolver enforces only **write-time** correctness (direct self-loops, typing). **Multi-hop cycle handling** (for symlink navigation: a bounded visited-set stop returning `CycleStopped` — NOT lowest-UID-in-SCC, which is the separate `sameAs` *dedup-canonicalization* rule; ADR-0067 / specs/09), **chain following**, **depth caps** (`D_MAX`), **lens precedence** (ADR-0031), and **kind-following rules** (only `symlink` is auto-followed) all live in the client/router + the **[specs/09-redirect-resolution.md](./09-redirect-resolution.md)** resolution spec (Accepted, ADR-0067). The resolver cannot afford to walk the graph on each write.
 
 **Reverse fan-in** ("what points at me?") is intentionally not indexed on-chain by `AliasResolver` — it is the off-chain indexer's job (a future on-chain advisory index is addable as upgradeable logic; ADR-0050 §4).
 
 **Symlink / hardlink mapping**: a *hardlink* (one DATA PINned at many path Anchors) is native and untouched — no follow, no cycle. A *symlink* is `REDIRECT kind=2`. *Canonical/dedup* is `REDIRECT kind=0` (`sameAs`).
 
-See [ADR-0050](../docs/adr/0050-redirect-canonical-symlink-schema.md) for full design rationale, [ADR-0063](../docs/adr/0063-redirect-read-time-resolution.md) for the read-time resolution decision, and **[specs/09-redirect-resolution.md](./09-redirect-resolution.md)** for the authoritative follow rules + conformance vectors.
+See [ADR-0050](../docs/adr/0050-redirect-canonical-symlink-schema.md) for full design rationale, [ADR-0067](../docs/adr/0067-redirect-read-time-resolution.md) for the read-time resolution decision, and **[specs/09-redirect-resolution.md](./09-redirect-resolution.md)** for the authoritative follow rules + conformance vectors.
 
 ## Schema 10: WHITEOUT (additive post-freeze, ADR-0055)
 

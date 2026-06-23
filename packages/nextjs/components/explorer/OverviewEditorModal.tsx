@@ -4,18 +4,19 @@
  * OverviewEditorModal — the save UI for the on-chain Overview (README.md) editor.
  * ============================================================================
  *
- * Hosts the controlled <MarkdownEditor> and drives the save through the two SDK
- * seams: `uploadOnchainFile` (writes the README.md DATA + placement) and
- * `applySystemTag` (marks the DATA as a system-managed Overview). Both run as the
- * connected wallet — a single save is ~8–10 on-chain transactions and is NOT
- * atomic. Editing replaces the author's own version only (lens-scoped): re-saving
- * the same (parent, "README.md") reuses the file ANCHOR and supersedes the prior
- * placement PIN in O(1) (ADR-0041), so the author's previous Overview is cleanly
- * superseded without touching anyone else's lens.
+ * Hosts the controlled <MarkdownEditor> and drives the save through the EFS write
+ * seams: `uploadOnchainFile` writes the README.md DATA + placement via layered
+ * multiAttest (and inlines small markdown as a `data:` MIRROR when available),
+ * then `applySystemTag` marks the DATA as a system-managed Overview. Both run as
+ * the connected wallet and are not atomic. Editing replaces the author's own
+ * version only (lens-scoped): re-saving the same (parent, "README.md") reuses the
+ * file ANCHOR and supersedes the prior placement PIN in O(1) (ADR-0041), so the
+ * author's previous Overview is cleanly superseded without touching anyone else's
+ * lens.
  *
  * This modal is intentionally a thin shell: the EFS machinery lives in the seams
  * (the in-progress SDK will own fetch/resolution/hashing). No React hook is
- * called inside the seams — the `attest` handle is injected per the seams' design.
+ * called inside the seams.
  */
 import { useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -78,13 +79,20 @@ export const OverviewEditorModal = (props: OverviewEditorModalProps) => {
   const attest = writeContractAsync as unknown as AttestFn;
   const { data: indexer } = useDeployedContractInfo({ contractName: "Indexer" });
   const indexerAbi = indexer?.abi;
+  // EAS address — the target of the batched `multiAttest` in the upload seam.
+  const { data: eas } = useDeployedContractInfo({ contractName: "EAS" });
+  const easAddress = eas?.address;
 
   const [text, setText] = useState(initialText);
   const [isSaving, setIsSaving] = useState(false);
+  const [canCancelSave, setCanCancelSave] = useState(true);
   const cancelledRef = useRef(false);
 
   const handleSave = async () => {
-    if (!walletClient || !publicClient || !indexerAbi) return;
+    if (!walletClient || !publicClient || !indexerAbi || !easAddress) {
+      notification.error("Wallet, network, or EAS/Indexer address not ready. Reconnect and retry.");
+      return;
+    }
     if (!ensureWalletChain(walletClient, targetNetwork.id, targetNetwork.name)) return;
 
     const edgeResolverAddress = await getEdgeResolverAddress(targetNetwork.id);
@@ -95,6 +103,7 @@ export const OverviewEditorModal = (props: OverviewEditorModalProps) => {
     const edgeResolverAbi = EDGE_RESOLVER_ABI;
 
     cancelledRef.current = false;
+    setCanCancelSave(true);
     setIsSaving(true);
     const opId = useBackgroundOps.getState().start("Saving Overview…");
     try {
@@ -117,7 +126,7 @@ export const OverviewEditorModal = (props: OverviewEditorModalProps) => {
         walletClient,
         publicClient,
         chainId: targetNetwork.id,
-        attest,
+        easAddress,
         indexerAddress,
         indexerAbi,
         anchorSchemaUID,
@@ -129,6 +138,7 @@ export const OverviewEditorModal = (props: OverviewEditorModalProps) => {
         edgeResolverAddress,
         edgeResolverAbi,
         isCancelled: () => cancelledRef.current,
+        onCanCancelChange: setCanCancelSave,
         onProgress: msg => useBackgroundOps.getState().log(opId, msg),
         // Apply the system TAG on the DATA BEFORE the placement PIN makes the
         // README reachable, so a stopped/rejected/failed tag can never leave a
@@ -162,6 +172,7 @@ export const OverviewEditorModal = (props: OverviewEditorModalProps) => {
       }
     } finally {
       setIsSaving(false);
+      setCanCancelSave(true);
     }
   };
 
@@ -169,9 +180,15 @@ export const OverviewEditorModal = (props: OverviewEditorModalProps) => {
 
   const encodedBytes = new TextEncoder().encode(text).length;
   const overCap = encodedBytes > MAX_RENDER_BYTES;
-  // ~8 fixed attestations (DATA, contentType ×3, ANCHOR, placement PIN, MIRROR,
-  // system TAG) + one SSTORE2 deploy per content chunk.
-  const estTxs = 8 + Math.max(1, Math.ceil(encodedBytes / CHUNK_SIZE));
+  // Honest popup estimate: the ~11 attestations collapse to ~4 `multiAttest`
+  // popups plus the system TAG. Small markdown can store inline when
+  // /transports/data is seeded; older chains fall back inside the upload seam.
+  const inlineEligible = encodedBytes > 0 && encodedBytes <= 4096;
+  const fallbackStorageTxs = 1 + Math.max(1, Math.ceil(encodedBytes / CHUNK_SIZE));
+  const estTxs = inlineEligible ? `~5-${5 + fallbackStorageTxs}` : `~${5 + fallbackStorageTxs}`;
+  const storageCopy = inlineEligible
+    ? "small saves inline when /transports/data is seeded; fallback storage adds one manager plus one chunk transaction"
+    : "storage adds one manager plus one transaction per content chunk";
 
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
@@ -182,8 +199,9 @@ export const OverviewEditorModal = (props: OverviewEditorModalProps) => {
             {mode === "edit" ? "Edit Overview" : "Create Overview"}
           </h3>
           <p className="text-xs text-base-content/60 mt-2 leading-relaxed pr-8">
-            Saving writes ~{estTxs} on-chain transactions as your connected wallet (one per content chunk plus the file
-            edges). Editing replaces your own version only (lens-scoped) — it never touches anyone else&apos;s.
+            Saving writes {estTxs} on-chain transactions as your connected wallet (the file edges are now batched into a
+            few signatures; {storageCopy}). Editing replaces your own version only (lens-scoped) — it never touches
+            anyone else&apos;s.
           </p>
           <button
             type="button"
@@ -192,11 +210,17 @@ export const OverviewEditorModal = (props: OverviewEditorModalProps) => {
               // modal (and its Stop button) unmounts while uploadOnchainFile keeps
               // seeing isCancelled()===false and broadcasts the remaining txs
               // (Codex P2). Route close through the same cancellation path as Stop.
-              if (isSaving) cancelledRef.current = true;
+              if (isSaving) {
+                if (canCancelSave) cancelledRef.current = true;
+                else return;
+              }
               onClose();
             }}
             aria-label="Close editor"
-            title={isSaving ? "Stop saving and close" : "Close editor"}
+            title={
+              isSaving ? (canCancelSave ? "Stop saving and close" : "Final placement is in progress") : "Close editor"
+            }
+            disabled={isSaving && !canCancelSave}
             className="btn btn-ghost btn-sm btn-circle absolute right-3 top-3"
           >
             <XMarkIcon className="w-5 h-5" />
@@ -231,14 +255,19 @@ export const OverviewEditorModal = (props: OverviewEditorModalProps) => {
           {isSaving ? (
             <button
               type="button"
-              className="btn btn-error"
+              className={`btn ${canCancelSave ? "btn-error" : "btn-warning"}`}
+              disabled={!canCancelSave}
               onClick={() => {
-                cancelledRef.current = true;
+                if (canCancelSave) cancelledRef.current = true;
               }}
-              title="Stop saving. Transactions already broadcast will still settle on-chain."
+              title={
+                canCancelSave
+                  ? "Stops at the next safe boundary. If final placement has begun, approve remaining prompts to finish safely."
+                  : "Final placement is in progress. Use the wallet prompt if you need to reject the current transaction."
+              }
             >
               <StopIcon className="w-4 h-4" />
-              Stop
+              {canCancelSave ? "Stop" : "Finishing placement"}
             </button>
           ) : (
             <button type="button" className="btn btn-ghost" onClick={onClose} disabled={isSaving}>
@@ -250,7 +279,7 @@ export const OverviewEditorModal = (props: OverviewEditorModalProps) => {
               type="button"
               className="btn btn-primary"
               onClick={handleSave}
-              disabled={isSaving || text.trim().length === 0 || !indexerAbi || overCap}
+              disabled={isSaving || text.trim().length === 0 || !indexerAbi || !easAddress || overCap}
             >
               {isSaving && <span className="loading loading-spinner loading-xs" />}
               {isSaving ? "Saving…" : "Save"}

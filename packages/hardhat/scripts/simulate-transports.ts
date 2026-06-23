@@ -27,7 +27,7 @@ import { EFSIndexer, EdgeResolver, EFSFileView, EFSRouter, MirrorResolver } from
  *   9.  EFSRouter full resolution: path → PIN → DATA → MIRROR → response
  *  10.  EFSFileView.getFilesAtPath for PIN-based folder listing
  *  11.  Cross-path mirror sharing (same DATA at two paths via two PINs)
- *  12.  Transport preference ordering (onchain > ipfs > arweave > https > magnet)
+ *  12.  Transport priority ordering (web3:// > ar:// > ipfs:// > magnet: > https:// / other)
  *  13.  Magnet link transport
  *  14.  contentType PROPERTY resolution via EFSRouter._getContentType (PIN-based binding)
  *
@@ -326,6 +326,7 @@ async function main() {
   const arweaveTransportUID = await indexer.resolvePath(transportsUID, "arweave");
   const magnetTransportUID = await indexer.resolvePath(transportsUID, "magnet");
   const httpsTransportUID = await indexer.resolvePath(transportsUID, "https");
+  const dataTransportUID = await indexer.resolvePath(transportsUID, "data");
 
   // ======================================================================
   // TEST 1: Transport Definition Anchor Discovery
@@ -338,10 +339,11 @@ async function main() {
   assert("/transports/arweave exists", arweaveTransportUID !== ethers.ZeroHash);
   assert("/transports/magnet exists", magnetTransportUID !== ethers.ZeroHash);
   assert("/transports/https exists", httpsTransportUID !== ethers.ZeroHash);
+  assert("/transports/data exists", dataTransportUID !== ethers.ZeroHash);
 
-  // Verify all 11 transport types are children of /transports/
+  // Verify all 12 transport types are children of /transports/
   const transportChildren = await indexer.getChildren(transportsUID, 0, 20, false, false);
-  assert("11 transport children", transportChildren.length === 11, `got ${transportChildren.length}`);
+  assert("12 transport children", transportChildren.length === 12, `got ${transportChildren.length}`);
 
   // ======================================================================
   // TEST 2: Single-Transport File Upload (IPFS)
@@ -551,13 +553,13 @@ async function main() {
   const prefData = await createData(owner, "preference-test-content");
   await property(owner, prefData.uid, "contentType", "text/plain");
 
-  // Add mirrors in non-preferred order: https first, then ipfs
+  // Add mirrors in non-preferred order: https first, then ipfs.
   await createMirror(owner, prefData.uid, httpsTransportUID, "https://cdn.example.com/pref.txt");
   await createMirror(owner, prefData.uid, ipfsTransportUID, "ipfs://QmPref");
   await pin(owner, prefData.uid, prefUID);
 
-  // Router request — should pick ipfs or https (no web3:// mirror, so first non-web3 wins)
-  // Since _getBestMirrorURI prefers web3://, and there's none, it picks the first available
+  // Router request — no web3:// mirror exists, so router priority should pick ipfs://
+  // over the earlier-inserted https:// mirror.
   const routerRes = await router.request([`gallery_${S}`, `pref_${S}.txt`], [{ key: "lenses", value: ownerAddr }]);
   assert("Router returns 200", routerRes[0] === 200n, `got ${routerRes[0]}`);
   // External URI → message/external-body response

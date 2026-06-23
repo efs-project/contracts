@@ -93,6 +93,7 @@ What else we looked at and why it lost.
 - [ADR-0013 — Lens-scoped mirror selection](./0013-lens-scoped-mirror-selection.md)
 - [ADR-0014 — Lens-scoped PROPERTY lookup](./0014-lens-scoped-property-lookup.md)
 - [ADR-0015 — No singleton enforcement for MIRRORs](./0015-no-singleton-mirrors.md)
+- [ADR-0063 — `data:` inline-mirror transport for small files](./0063-data-uri-inline-mirror-transport.md)
 
 ### Router & Resolution
 
@@ -105,7 +106,7 @@ What else we looked at and why it lost.
 - [ADR-0058 — Harden the EFSRouter web3:// serving path (pagination round-trip, parity, sanitization)](./0058-router-web3-serving-hardening.md)
 - [ADR-0059 — web3:// reads depend on extcodecopy; EOF/EVM-evolution survival posture](./0059-extcodecopy-eof-survival-posture.md)
 - [ADR-0060 — Multi-chain web3:// addressing: per-chain ENS subdomains + movable default](./0060-multichain-web3-ens-addressing.md) _(Proposed)_
-- [ADR-0063 — REDIRECT read-time resolution rules](./0063-redirect-read-time-resolution.md) _(Accepted — symlink-only following (supersededBy is a non-followed terminal; path=newest/UID=exact), D_MAX=16/ceiling 32, cycle-stop, lowest-UID-in-SCC canonicalization, lens precedence, WHITEOUT negative-terminal reservation + seeding ban; gates durable REDIRECT seeding)_
+- [ADR-0067 — REDIRECT read-time resolution rules](./0067-redirect-read-time-resolution.md) _(Accepted — symlink-only following (supersededBy is a non-followed terminal; path=newest/UID=exact), D_MAX=16/ceiling 32, cycle-stop, lowest-UID-in-SCC canonicalization, lens precedence, WHITEOUT negative-terminal reservation + seeding ban; gates durable REDIRECT seeding)_
 
 ### Security Limits
 

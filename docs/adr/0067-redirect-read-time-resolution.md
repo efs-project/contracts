@@ -1,4 +1,6 @@
-# ADR-0063: REDIRECT read-time resolution rules
+# ADR-0067: REDIRECT read-time resolution rules
+
+> Renumbered from ADR-0063 (2026-06-23) to avoid a collision with main's ADR-0063 (`data:` inline-mirror transport) merged into this branch concurrently. References elsewhere updated to 0067.
 
 **Status:** Accepted (James ratified 2026-06-20) — rules accepted; on-chain follower IMPLEMENTATION DEFERRED (built when REDIRECTs are actually used — see Consequences)
 **Date:** 2026-06-20

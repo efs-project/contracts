@@ -98,17 +98,17 @@ async function readImplementation(proxy: string): Promise<string> {
   return ethers.getAddress("0x" + raw.slice(-40));
 }
 
-// ── Bootstrap scaffolding tree (root → tags/transports → 11 transport children) ───────────────────
+// ── Bootstrap scaffolding tree (root → tags/transports → 12 transport children) ───────────────────
 // The whole tree is authored by ONE timestamp-robust SystemAccount.bootstrap call (FIX 1, PR #24):
 // each child's refUID is threaded from the parent UID the prior EAS.attest returned in the same call,
 // so nothing is predicted off-chain. parentIndex indexes into this array; -1 = root (refUID=ZeroHash).
 //
-// The transport children = every canonical transport scheme (11, ADR-0011). Each name is the
-// TransportType the client's detectTransport() yields, since the explorer resolves /transports/<name>
+// The transport children = every default transport scheme (12, ADR-0011 + ADR-0063). Each name is
+// the TransportType the client's detectTransport() yields, since the explorer resolves /transports/<name>
 // with that exact string before minting a MIRROR (utils/efs/transports.ts). web3:// → "onchain" and
-// ar:// → "arweave" are the two where the anchor name differs from the URI scheme; the other nine match
-// the scheme token. All 11 must be canonical /transports/* anchors so no scheme is left squattable
-// (first-writer-wins) on a fresh deploy.
+// ar:// → "arweave" are the two where the anchor name differs from the URI scheme; the other ten match
+// the scheme token. Fresh deploys seed these 12 defaults so common transports resolve out of the box.
+// `data` (ADR-0063) lets small files store INLINE as an RFC-2397 `data:` URI mirror (zero storage deploys).
 const BOOTSTRAP_SCAFFOLDING: { name: string; parentIndex: number }[] = [
   { name: "root", parentIndex: -1 }, // 0
   { name: "tags", parentIndex: 0 }, // 1 → root
@@ -124,6 +124,7 @@ const BOOTSTRAP_SCAFFOLDING: { name: string; parentIndex: number }[] = [
   { name: "dat", parentIndex: 2 }, // 11 → transports
   { name: "rsync", parentIndex: 2 }, // 12 → transports
   { name: "bittorrent", parentIndex: 2 }, // 13 → transports
+  { name: "data", parentIndex: 2 }, // 14 → transports (data: inline, ADR-0063)
 ];
 
 export async function orchestrate(deployer: Signer, mode: RunMode, log = true): Promise<OrchestrationResult> {

@@ -26,7 +26,7 @@ Update statuses with `[x]` as items land. Add notes inline if blocked.
 - [ ] Upgrade procedure documented (storage layout enforcement via OpenZeppelin's `hardhat-upgrades`)
 - [ ] Reset procedure includes redeploying all contracts and clearing all on-chain state
 - [ ] EFSIndexer wired to EdgeResolver, MirrorResolver, EFSSortOverlay
-- [ ] System anchors created: root, `/transports/onchain`, `/transports/ipfs`, `/transports/arweave`, `/transports/magnet`, `/transports/https`
+- [ ] System anchors created: root plus default `/transports/*` children (`onchain`, `data`, `ipfs`, `arweave`, `magnet`, `https`, `ftp`, `s3`, `gs`, `dat`, `rsync`, `bittorrent`)
 - [ ] `setTransportsAnchor()` called on MirrorResolver
 
 ### Frontend / Client

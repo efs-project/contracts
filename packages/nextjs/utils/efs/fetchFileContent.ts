@@ -34,9 +34,12 @@ export interface FetchFileArgs {
 
 /** Thrown by `fetchFileContent` when a `maxBytes` cap is exceeded. */
 export class FileTooLargeError extends Error {
-  constructor(public readonly size: number) {
+  public readonly size: number;
+
+  constructor(size: number) {
     super(`File exceeds the ${size}-byte render cap`);
     this.name = "FileTooLargeError";
+    this.size = size;
   }
 }
 
@@ -47,9 +50,12 @@ export class FileTooLargeError extends Error {
  * "absent" rather than a failure.
  */
 export class FileNotFoundError extends Error {
-  constructor(public readonly path: string) {
+  public readonly path: string;
+
+  constructor(path: string) {
     super(`No file at ${path}`);
     this.name = "FileNotFoundError";
+    this.path = path;
   }
 }
 
@@ -122,8 +128,11 @@ export async function fetchFileContent(args: FetchFileArgs): Promise<FetchedFile
         if (ctParam?.[1]) contentTypeStr = ctParam[1];
 
         if (externalUri) {
-          source = "mirror";
           transport = detectTransport(externalUri);
+          // `data:` mirrors are inline bytes stored in the MIRROR attestation
+          // itself. Treat them as editable EFS-managed content, unlike external
+          // IPFS/Arweave/HTTPS/etc. redirects.
+          source = transport === "data" ? "onchain" : "mirror";
           const gatewayUrl = resolveGatewayUrl(externalUri);
           if (gatewayUrl) {
             // Fetch from gateway

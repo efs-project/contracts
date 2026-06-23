@@ -8,6 +8,30 @@ Informal dated log of small decisions agents made while working. Lighter than AD
 
 ---
 
+### 2026-06-22 — [claude-opus-4.8 · dev] Activated the `data:` inline-mirror transport (ADR-0063)
+
+James greenlit activating `data:`. Seeded `data` as the 12th default `/transports/*` child in the
+LIVE bootstrap (`deploy-lib/orchestrate.ts` + `safePlan.ts`) rather than auto-creating it during file
+writes. The client treats transport anchors as shared vocabulary UIDs, so it uses `/transports/data`
+when the path resolves regardless of who created it; if the anchor is absent, small files fall back to
+SSTORE2. See ADR-0063.
+
+### 2026-06-22 — [claude-opus-4.8 · dev] Debug-UI minimal-clicks: layered multiAttest + data: mirror
+
+Batched EFS writes in the debug UI via one `EAS.multiAttest` per DAG layer (new
+`lib/efs/submitLayered.ts`, a self-contained port of the SDK's `submitLayeredTier1`); the upload
+seam (`lib/efs/uploadOnchainFile.ts`) and its callers (`CreateItemModal`, `OverviewEditorModal`)
+now cost ~3–5 attestation popups instead of ~11. User stays attester; plain MetaMask; no contract
+change. SSTORE2 chunk deploys are pipelined (fire-all, await receipts in parallel) → N chunks in
+~1–2 blocks, not N×12s. Settled fact: EAS v1.3.0 hashes `block.timestamp` into every UID, so UIDs
+can't be precomputed — layering is the floor (true 1-sig/file needs Tier-2 7702/app-contract, out
+of scope). **ADR-0011/0012 touch:** added a `/transports/data` anchor to the bootstrap seed
+(`deploy-lib/orchestrate.ts` + `deploy-lib/safePlan.ts`) so small files (≤4KB) store inline as an RFC-2397 `data:` URI MIRROR (zero
+deploys); read path renders `data:` (`utils/efs/transports.ts`); the seam falls back to SSTORE2
+where that anchor is absent (self-heals on chains frozen earlier). The canonical web3:// router does
+not tier `data:` in ADR-0012 priority, but a file whose selected mirror is `data:` is still
+addressable through `web3://<router>/path` (formalized by ADR-0063).
+
 ### 2026-06-20 — [codex gpt-5 · dev] Blank Hardhat env values normalize to defaults
 
 Hardhat config now routes optional string env values through `packages/hardhat/env.ts` helpers so blank or whitespace-only `.env` entries behave like unset values, while typed knobs still fail closed: `positiveIntEnvOr` rejects zero/non-decimal fork pins, `oneOfEnvOr` constrains `EFS_DEPLOY_MODE`, and `boolEnv` keeps exact `"true"` semantics. Deliberately kept `__RUNTIME_DEPLOYER_PRIVATE_KEY` on raw `process.env` fallback so a blank runtime deployer key does not silently use the default key. ADR-0037's implementation snippet and operational notes were refreshed in place because the pinning decision did not change.

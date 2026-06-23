@@ -293,7 +293,7 @@ export async function orchestrateViaSafe(
     throw new Error("SAFE-DEPLOY: /transports anchor missing after bootstrap");
   realizedUIDs.transports = transportsRealized;
   realizedUIDs.tags = await indexer.resolvePath(rootRealized, "tags");
-  // Verify every /transports/* child the bootstrap authored (all 11 allowed schemes). Derived from
+  // Verify every /transports/* child the bootstrap authored (all 12 default transports). Derived from
   // SCAFFOLDING so this can't drift from the spec the bootstrap call actually seeded.
   const transportChildren = SCAFFOLDING.filter(a => a.parentIndex === TRANSPORTS_INDEX).map(a => a.name);
   for (const t of transportChildren) {

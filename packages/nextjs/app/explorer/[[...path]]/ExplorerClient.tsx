@@ -23,7 +23,7 @@ import {
   classifyTopLevelSegment,
   defaultLensesForContainer,
 } from "~~/utils/efs/containers";
-import { inferNetworkFlavor, networkLabel } from "~~/utils/scaffold-eth";
+import { DEVNET_CHAIN_ID, inferNetworkFlavor, networkLabel } from "~~/utils/scaffold-eth";
 
 export default function ExplorerClient() {
   const [currentPath, setCurrentPath] = useState<PathItem[]>([]);
@@ -150,23 +150,30 @@ export default function ExplorerClient() {
   const { data: systemAccountInfo } = useDeployedContractInfo({ contractName: "SystemAccount" });
   const systemAccountAddress = systemAccountInfo?.address;
 
-  // AGENT-NOTE (ADR-0048): these two devnet constants make `systemLenses` (and
-  // therefore `lensAddresses`) permanently non-empty. There is no longer an
-  // unfiltered read path — the unfiltered `getDirectoryPage` listing fallback was
-  // removed, so every directory read is lens-scoped through
-  // `getDirectoryPageFiltered`. An empty `lensAddresses` now FAILS SAFE: the
-  // FileBrowser directory hooks are disabled and the grid renders empty rather
-  // than showing unfiltered content. The remaining work, when the mainnet TODO
-  // above replaces these constants with a user-configurable list, is to give the
-  // empty-list case a FILTERED listing (so the view isn't simply blank) — NOT to
-  // re-introduce an unfiltered path. (TopicTree's own lens read is not yet
-  // exclude-filtered — see docs/FUTURE_WORK.md.)
+  // AGENT-NOTE (ADR-0048): on the devnet (26001993) the two demo constants seed
+  // `systemLenses`; on Sepolia/Local `systemLenses` is just the SystemAccount
+  // lens. There is no longer an unfiltered read path — the unfiltered
+  // `getDirectoryPage` listing fallback was removed, so every directory read is
+  // lens-scoped through `getDirectoryPageFiltered`. An empty `lensAddresses`
+  // FAILS SAFE: the FileBrowser directory hooks are disabled and the grid
+  // renders empty rather than showing unfiltered content. The remaining work,
+  // when the mainnet TODO above replaces these constants with a user-configurable
+  // list, is to give the empty-list case a FILTERED listing (so the view isn't
+  // simply blank) — NOT to re-introduce an unfiltered path. (TopicTree's own lens
+  // read is not yet exclude-filtered — see docs/FUTURE_WORK.md.)
   // See the matching note at `defaultLensesForContainer` in utils/efs/containers.ts.
   const systemLenses = useMemo(() => {
-    const out: string[] = [DEVNET_BOOTSTRAP_CURATOR, DEVNET_DEV_ATTESTER];
+    const out: string[] = [];
+    // Devnet-only demo lenses. Scope to 26001993 so they never leak into a
+    // Sepolia/Local view: there a no-wallet / no-`?lenses=` read would otherwise
+    // pass these demo attesters into directory reads, letting them show or shadow
+    // content on a live chain — a viewer-sovereignty break (ADR-0031, ADR-0062).
+    if (targetNetwork.id === DEVNET_CHAIN_ID) {
+      out.push(DEVNET_BOOTSTRAP_CURATOR, DEVNET_DEV_ATTESTER);
+    }
     if (systemAccountAddress) out.push(systemAccountAddress);
     return out;
-  }, [systemAccountAddress]);
+  }, [systemAccountAddress, targetNetwork.id]);
 
   const lensAddresses = useMemo(() => {
     return defaultLensesForContainer({
