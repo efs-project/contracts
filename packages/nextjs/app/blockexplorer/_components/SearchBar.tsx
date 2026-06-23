@@ -36,7 +36,9 @@ export const SearchBar = () => {
       if (targetNetwork.id === hardhat.id) {
         router.push(`/blockexplorer/address/${searchInput}`);
       } else {
-        window.open(getBlockExplorerAddressLink(targetNetwork, searchInput), "_blank", "noopener,noreferrer");
+        // Empty for chains with no explorer (e.g. EFS Devnet) — don't open about:blank.
+        const link = getBlockExplorerAddressLink(targetNetwork, searchInput);
+        if (link) window.open(link, "_blank", "noopener,noreferrer");
       }
       return;
     }

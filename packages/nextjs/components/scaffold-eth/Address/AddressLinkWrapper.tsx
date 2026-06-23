@@ -15,7 +15,9 @@ export const AddressLinkWrapper = ({
 }: AddressLinkWrapperProps) => {
   const { targetNetwork } = useTargetNetwork();
 
-  return disableAddressLink ? (
+  // No link when explicitly disabled, or when there's no explorer for this chain (e.g. EFS Devnet,
+  // which returns "" from getBlockExplorerAddressLink — it has no block explorer). Render plain text.
+  return disableAddressLink || !blockExplorerAddressLink ? (
     <>{children}</>
   ) : (
     <Link
