@@ -339,11 +339,11 @@ See [ADR-0044](../docs/adr/0044-list-and-list-entry-schemas.md) and [Lists and C
 
 `refUID` = the **source**: the duplicate DATA for `sameAs`/`supersededBy`; the source path Anchor for `symlink`.
 
-**Kinds taxonomy** (initial — evolvable, not in the UID):
-- `0 = sameAs` — strong dedup. Source + target both DATA. Followed at read time.
-- `1 = supersededBy` — version replacement. Source + target both DATA. Followed at read time.
-- `2 = symlink` — path → target. Source ANCHOR; target ANCHOR or DATA. Followed one hop.
-- `3+ = reserved` — recorded but **not type-checked** by the resolver (e.g. `relatedVersion`: a weak discovery hint that is **never** auto-followed). Follow rules for these are decided by the read-time resolution spec, not the resolver.
+**Kinds taxonomy** (initial — evolvable, not in the UID). **Follow rules are authoritative in `specs/09-redirect-resolution.md` (ADR-0063, James ratified 2026-06-20): `symlink` is the ONLY auto-followed kind; `sameAs`/`supersededBy`/reserved are non-followed terminals.**
+- `0 = sameAs` — strong dedup. Source + target both DATA. **Not auto-followed** — a canonicalization relation only; clients/indexers pick a canonical representative for dedup, but a navigational walk that lands on a DATA does not chase `sameAs` (specs/09 §4.2).
+- `1 = supersededBy` — version replacement. Source + target both DATA. **NOT auto-followed** — a discoverable version breadcrumb only. "Latest" is reached the EFS way (the path's placement PIN, which the publisher re-points), NOT by chasing this edge; auto-following it would let a fixed DATA UID silently resolve to a newer version, violating "no silent revision" (specs/09).
+- `2 = symlink` — path → target. Source ANCHOR; target ANCHOR or DATA. **The only auto-followed kind** — when path resolution lands on a symlink source, the follower advances to `target` (a `D_MAX`-bounded, cycle-safe walk per specs/09, not a hardcoded single hop).
+- `3+ = reserved` — recorded but **not type-checked** by the resolver (e.g. `relatedVersion`: a weak discovery hint that is **never** auto-followed). Non-followed terminal; meaning is assigned by a future taxonomy revision (specs/09), never by silent client guesswork.
 
 **Write-time guards enforced by `AliasResolver`** (correctness before any mainnet burn):
 - `a.schema == redirectSchemaUID` (self-derived in `initialize()` against the proxy address; rejects foreign schemas pointed at the resolver) else `WrongSchema`.
@@ -361,7 +361,7 @@ See [ADR-0044](../docs/adr/0044-list-and-list-entry-schemas.md) and [Lists and C
 
 **Symlink / hardlink mapping**: a *hardlink* (one DATA PINned at many path Anchors) is native and untouched — no follow, no cycle. A *symlink* is `REDIRECT kind=2`. *Canonical/dedup* is `REDIRECT kind=0` (`sameAs`).
 
-See [ADR-0050](../docs/adr/0050-redirect-canonical-symlink-schema.md) for full design rationale.
+See [ADR-0050](../docs/adr/0050-redirect-canonical-symlink-schema.md) for full design rationale, [ADR-0063](../docs/adr/0063-redirect-read-time-resolution.md) for the read-time resolution decision, and **[specs/09-redirect-resolution.md](./09-redirect-resolution.md)** for the authoritative follow rules + conformance vectors.
 
 ## Schema 10: WHITEOUT (additive post-freeze, ADR-0055)
 
