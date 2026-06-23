@@ -438,7 +438,8 @@ export async function registerAndTransfer(
   //     resolve the real UIDs from the index (rootAnchorUID / resolvePath) so transfer can finish.
   // bootstrap itself is idempotent (reuses existing anchors) but is gated whenNotSealed, so the SKIP
   // is what makes a post-seal retry safe — the not-sealed branch covers a pre-seal partial.
-  if (!(await systemAccount.bootstrapSealed())) {
+  const alreadySealed = await systemAccount.bootstrapSealed();
+  if (!alreadySealed) {
     const specs = BOOTSTRAP_SCAFFOLDING.map(a => ({
       name: a.name,
       parentIndex: a.parentIndex,
@@ -466,8 +467,16 @@ export async function registerAndTransfer(
   }
 
   // ── Step 8 (smoke): push one attestation through each of the 9 schemas BEFORE handing off
-  //     ownership (deployer is the attester; works on the fork without the Safe signer).
-  await perSchemaSmoke(result, deployer, eas, indexer, rootUID, l);
+  //     ownership on a FRESH run. On a post-seal retry the prior attempt may already have emitted
+  //     some of these attestation txs before failing later in the ceremony; rerunning the smoke is
+  //     therefore not a pure "verify" step anymore and can trip write-time invariants on the retry.
+  //     Once the ceremony is sealed, the remaining recovery obligation is to finish the ownership
+  //     handoff using the already-authored anchors and already-wired resolvers.
+  if (alreadySealed) {
+    l("EFS deploy: skipping per-schema smoke on post-seal retry; proceeding to ownership transfer.");
+  } else {
+    await perSchemaSmoke(result, deployer, eas, indexer, rootUID, l);
+  }
 
   // ── Step 7: transfer ownership to the Safe ──────────────────────────────────────────────────
   const deployerAddr = await deployer.getAddress();
