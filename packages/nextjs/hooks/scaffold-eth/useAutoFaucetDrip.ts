@@ -10,12 +10,12 @@ import { consumeInstantBurnerDripRequest, shouldAutoDripInstantBurner } from "~~
 const dripped = new Set<string>();
 
 /**
- * Fire one best-effort drip after the visitor explicitly clicks "Use demo
- * wallet" on the faucet's chain. No-op for page-load reconnects and real-wallet
+ * Fire one best-effort drip after the visitor explicitly clicks "Enable
+ * editing" on the faucet's chain. No-op for page-load reconnects and real-wallet
  * connects — the manual "Get test ETH" menu item remains available there. On a
  * real drip it sets the shared faucet status so the header shows a persistent
  * "Adding gas…" indicator until the ETH lands; failures update the shared faucet
- * status so the demo-wallet chip can tell users to retry or connect their own wallet.
+ * status so the editing wallet chip can tell users to retry or connect their own wallet.
  */
 export function useAutoFaucetDrip() {
   const { address, chainId, connector } = useAccount();

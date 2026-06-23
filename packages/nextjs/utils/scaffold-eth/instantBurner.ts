@@ -24,7 +24,7 @@ export function isBurnerConnector(connector: Pick<Connector, "id"> | undefined):
 
 export function shouldAutoConnectInstantBurner({
   enabled,
-  demoSessionRequested,
+  editingSessionRequested,
   status,
   targetChainId,
   faucetChainId,
@@ -33,7 +33,7 @@ export function shouldAutoConnectInstantBurner({
   now,
 }: {
   enabled: boolean;
-  demoSessionRequested: boolean;
+  editingSessionRequested: boolean;
   status: WalletStatus;
   targetChainId: number;
   faucetChainId: number;
@@ -42,7 +42,7 @@ export function shouldAutoConnectInstantBurner({
   now: number;
 }): boolean {
   if (!enabled) return false;
-  if (!demoSessionRequested) return false;
+  if (!editingSessionRequested) return false;
   if (status !== "disconnected") return false;
   if (targetChainId !== faucetChainId) return false;
   if (activeConnectorId && activeConnectorId !== BURNER_WALLET_CONNECTOR_ID) return false;
@@ -52,19 +52,19 @@ export function shouldAutoConnectInstantBurner({
 
 export function shouldDisconnectInstantBurner({
   activeConnectorId,
-  demoSessionRequested,
+  editingSessionRequested,
   chainId,
   targetChainId,
   faucetChainId,
 }: {
   activeConnectorId: string | undefined;
-  demoSessionRequested: boolean;
+  editingSessionRequested: boolean;
   chainId: number | undefined;
   targetChainId: number;
   faucetChainId: number;
 }): boolean {
   if (activeConnectorId !== BURNER_WALLET_CONNECTOR_ID) return false;
-  if (!demoSessionRequested) return true;
+  if (!editingSessionRequested) return true;
   return chainId !== faucetChainId || targetChainId !== faucetChainId;
 }
 

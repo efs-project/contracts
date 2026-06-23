@@ -54,7 +54,7 @@ test("instant burner only enables when a faucet URL is configured and the kill s
 test("auto-connect is limited to settled no-wallet state on the faucet target chain", () => {
   const base = {
     enabled: true,
-    demoSessionRequested: true,
+    editingSessionRequested: true,
     status: "disconnected" as const,
     targetChainId: 11155111,
     faucetChainId: 11155111,
@@ -68,7 +68,7 @@ test("auto-connect is limited to settled no-wallet state on the faucet target ch
   assert.equal(shouldAutoConnectInstantBurner({ ...base, targetChainId: 26001993 }), false);
   assert.equal(shouldAutoConnectInstantBurner({ ...base, activeConnectorId: "metaMask" }), false);
   assert.equal(shouldAutoConnectInstantBurner({ ...base, enabled: false }), false);
-  assert.equal(shouldAutoConnectInstantBurner({ ...base, demoSessionRequested: false }), false);
+  assert.equal(shouldAutoConnectInstantBurner({ ...base, editingSessionRequested: false }), false);
   assert.equal(shouldAutoConnectInstantBurner({ ...base, pausedUntil: base.now + INSTANT_BURNER_PAUSE_MS }), false);
 });
 
@@ -84,7 +84,7 @@ test("burner disconnects when it drifts off the faucet chain", () => {
   assert.equal(
     shouldDisconnectInstantBurner({
       activeConnectorId: "burnerWallet",
-      demoSessionRequested: true,
+      editingSessionRequested: true,
       chainId: 26001993,
       targetChainId: 26001993,
       faucetChainId: 11155111,
@@ -94,7 +94,7 @@ test("burner disconnects when it drifts off the faucet chain", () => {
   assert.equal(
     shouldDisconnectInstantBurner({
       activeConnectorId: "burnerWallet",
-      demoSessionRequested: true,
+      editingSessionRequested: true,
       chainId: 11155111,
       targetChainId: 26001993,
       faucetChainId: 11155111,
@@ -104,7 +104,7 @@ test("burner disconnects when it drifts off the faucet chain", () => {
   assert.equal(
     shouldDisconnectInstantBurner({
       activeConnectorId: "metaMask",
-      demoSessionRequested: false,
+      editingSessionRequested: false,
       chainId: 26001993,
       targetChainId: 26001993,
       faucetChainId: 11155111,
@@ -114,7 +114,7 @@ test("burner disconnects when it drifts off the faucet chain", () => {
   assert.equal(
     shouldDisconnectInstantBurner({
       activeConnectorId: "burnerWallet",
-      demoSessionRequested: false,
+      editingSessionRequested: false,
       chainId: 11155111,
       targetChainId: 11155111,
       faucetChainId: 11155111,
@@ -124,7 +124,7 @@ test("burner disconnects when it drifts off the faucet chain", () => {
   assert.equal(
     shouldDisconnectInstantBurner({
       activeConnectorId: "burnerWallet",
-      demoSessionRequested: true,
+      editingSessionRequested: true,
       chainId: 11155111,
       targetChainId: 11155111,
       faucetChainId: 11155111,
@@ -133,7 +133,7 @@ test("burner disconnects when it drifts off the faucet chain", () => {
   );
 });
 
-test("auto-drip requires an explicit demo wallet request", () => {
+test("auto-drip requires an explicit editing-wallet request", () => {
   assert.equal(
     shouldAutoDripInstantBurner({
       faucetEnabled: true,

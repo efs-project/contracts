@@ -49,7 +49,7 @@ export const InstantBurnerSession = () => {
   });
 
   const [dismissed, setDismissed] = useState(false);
-  const [demoSessionRequested, setDemoSessionRequested] = useState(false);
+  const [editingSessionRequested, setEditingSessionRequested] = useState(false);
   const [pauseUntil, setPauseUntil] = useState<number | undefined>(undefined);
   const [waitingForRealWallet, setWaitingForRealWallet] = useState(false);
   const connectingBurnerRef = useRef(false);
@@ -66,7 +66,7 @@ export const InstantBurnerSession = () => {
     if (
       !shouldDisconnectInstantBurner({
         activeConnectorId: connector?.id,
-        demoSessionRequested,
+        editingSessionRequested,
         chainId,
         targetChainId: targetNetwork.id,
         faucetChainId: FAUCET_CHAIN_ID,
@@ -81,7 +81,7 @@ export const InstantBurnerSession = () => {
         disconnectingBurnerRef.current = false;
       },
     });
-  }, [chainId, connector?.id, demoSessionRequested, disconnect, targetNetwork.id]);
+  }, [chainId, connector?.id, editingSessionRequested, disconnect, targetNetwork.id]);
 
   useEffect(() => {
     if (!INSTANT_BURNER_ENABLED) return;
@@ -111,7 +111,7 @@ export const InstantBurnerSession = () => {
     if (
       !shouldAutoConnectInstantBurner({
         enabled: INSTANT_BURNER_ENABLED,
-        demoSessionRequested,
+        editingSessionRequested,
         status,
         targetChainId: targetNetwork.id,
         faucetChainId: FAUCET_CHAIN_ID,
@@ -132,7 +132,7 @@ export const InstantBurnerSession = () => {
         },
       },
     );
-  }, [connect, connector?.id, connectors, demoSessionRequested, pauseUntil, status, targetNetwork.id]);
+  }, [connect, connector?.id, connectors, editingSessionRequested, pauseUntil, status, targetNetwork.id]);
 
   useEffect(() => {
     if (!waitingForRealWallet) return;
@@ -171,21 +171,21 @@ export const InstantBurnerSession = () => {
     return (
       <div
         className="hidden lg:flex items-center gap-2 rounded-full border border-info/30 bg-info/10 px-2 py-1 text-xs text-base-content shadow-sm"
-        title="Start a disposable Sepolia demo wallet funded by the faucet"
+        title="Enable a free Sepolia wallet funded by the faucet"
       >
         <WalletIcon className="h-4 w-4 shrink-0 text-info" />
-        <span className="whitespace-nowrap text-base-content/70">Demo wallet</span>
+        <span className="whitespace-nowrap text-base-content/70">Editing</span>
         <button
           className="btn btn-primary btn-xs rounded-full whitespace-nowrap"
           type="button"
           onClick={() => {
             setDismissed(false);
             setPauseUntil(undefined);
-            setDemoSessionRequested(true);
+            setEditingSessionRequested(true);
             requestInstantBurnerDrip();
           }}
         >
-          Use demo wallet
+          Enable editing
         </button>
       </div>
     );
@@ -211,12 +211,12 @@ export const InstantBurnerSession = () => {
   return (
     <div
       className="hidden lg:flex items-center gap-2 max-w-[34rem] rounded-full border border-info/30 bg-info/10 px-2 py-1 text-xs text-base-content shadow-sm"
-      title="Disposable Sepolia demo wallet funded by the faucet"
+      title="Free Sepolia wallet funded by the faucet"
     >
       <WalletIcon className="h-4 w-4 shrink-0 text-info" />
       <div className="min-w-0">
         <div className="uppercase tracking-normal text-[0.62rem] leading-3 text-base-content/60">
-          temporary demo wallet
+          free editing wallet
         </div>
         <div className="flex min-w-0 items-center gap-2 leading-4">
           <span className="font-mono truncate">{shortAddress(address)}</span>
@@ -234,7 +234,7 @@ export const InstantBurnerSession = () => {
       <button
         className="btn btn-ghost btn-xs btn-circle"
         type="button"
-        aria-label="Dismiss demo wallet status"
+        aria-label="Dismiss wallet status"
         onClick={() => setDismissed(true)}
       >
         <XMarkIcon className="h-3.5 w-3.5" />
