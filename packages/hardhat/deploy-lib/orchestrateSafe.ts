@@ -155,7 +155,18 @@ export async function orchestrateViaSafe(
   {
     const predictedForAdditive = await predictPlan(deployer, safe, false);
     const indexerLive = (await ethers.provider.getCode(predictedForAdditive.proxies.EFSIndexer)) !== "0x";
-    const missingAdditive = indexerLive ? await detectMissingResolvers(deployer, predictedForAdditive) : [];
+    // Additive mode runs ONLY when the EXISTING CORE is COMPLETE (Phase 3 — every core schema registered,
+    // bootstrap sealed, transports wired). `detectDeployPhase` is additive-aware (it skips schemas whose
+    // resolver proxy is absent), so a complete core with only a later-appended resolver missing resolves
+    // to 3, while an OLDER ceremony paused mid-core (Batch 1 → Phase 1, Batch 2 → Phase 2 — e.g. a
+    // six-resolver ceremony resumed under this seven-resolver code) does NOT. Without this gate that
+    // paused ceremony would enter additive, deploy/register only WHITEOUT, return `registered: true`, and
+    // ABANDON the owed core Batch 2/3 while falsely reporting success (Codex review). At Phase 1/2 we fall
+    // through to the normal path below instead. (The additive A1→A2 resume is unaffected: once the missing
+    // proxy lands, its schema registration routes through the normal Phase-1 register-omit path, which
+    // proposes exactly the one owed leg — see proposeViaSafe + DeploySafeAdditive.fork test 4.)
+    const corePhase = indexerLive ? await detectDeployPhase(deployer, predictedForAdditive) : 0;
+    const missingAdditive = corePhase === 3 ? await detectMissingResolvers(deployer, predictedForAdditive) : [];
     if (missingAdditive.length > 0) {
       return executeAdditive(deployer, safeContract, safe, predictedForAdditive, missingAdditive, owners, log);
     }
@@ -596,14 +607,18 @@ async function proposeViaSafe(
   let ceremony: string[];
 
   // ── ADDITIVE post-freeze branch (ADR-0055 — adding WHITEOUT to a LIVE core) ───────────────────────
-  // When the core EFSIndexer is live (phase != 0) but a later-appended resolver (WhiteoutResolver / any
-  // future additive primitive) has no on-chain code, the ONLY owed work is to deploy that resolver +
-  // register its schema — NOT a fresh-core Phase-1/2/3 walk (the core is already complete). This takes
-  // precedence over the core phase branch: detectDeployPhase is now additive-aware (it skips schemas
-  // whose resolver proxy is absent), so on a live, complete core it resolves to 3 and we land here.
-  // Walk two re-runs: A1 (deploy the missing proxy, born Safe-owned), then A2 (register its schema). The
-  // VERIFY GATE runs before A2 against the now-live full proxy set (A1 landed ⇒ all proxies have code).
-  const missingAdditive = phase === 0 ? [] : await detectMissingResolvers(deployer, predicted);
+  // Fires ONLY when the core is COMPLETE (Phase 3 — sealed + transports wired + every core schema
+  // registered) and a later-appended resolver (WhiteoutResolver / any future additive primitive) has no
+  // on-chain code: the only owed work is to deploy that resolver + register its schema. `detectDeployPhase`
+  // is additive-aware (it skips schemas whose resolver proxy is absent), so on a complete core with only
+  // WHITEOUT missing it resolves to 3 and we land here. Gating on `phase === 3` (NOT merely `!= 0`) is the
+  // fix for an OLDER ceremony paused mid-core (Phase 1/2 — e.g. a six-resolver ceremony resumed under this
+  // seven-resolver code): without it that paused ceremony would jump to additive and strand the owed core
+  // batches (Codex review). At Phase 1/2 we fall through to the core-phase branch below instead. This is
+  // ALSO the additive A1→A2 boundary: once A1 lands, the WhiteoutResolver proxy has code so the schema is
+  // no longer "missing" AND `detectDeployPhase` returns 1, so the A2 register routes through the normal
+  // Phase-1 register-omit path below (it proposes exactly the one owed WHITEOUT leg) — not back here.
+  const missingAdditive = phase === 3 ? await detectMissingResolvers(deployer, predicted) : [];
   if (missingAdditive.length > 0) {
     return proposeAdditive(deployer, safeContract, safe, predicted, missingAdditive, artifactPath, log);
   }

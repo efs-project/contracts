@@ -374,4 +374,56 @@ describe("DeploySafeAdditive.fork — additive WhiteoutResolver deploy onto a li
       await snap.restore();
     }
   });
+
+  // ── 5. REGRESSION (Codex review): an INCOMPLETE core must NOT enter additive mode ─────────────────
+  // The additive branch must fire ONLY when the existing core is COMPLETE (Phase 3). We manufacture a core
+  // paused after Batch 1 (proxies live + wired, NO schemas registered → Phase 1) WITHOUT WhiteoutResolver —
+  // the shape of an older six-resolver ceremony resumed under this seven-resolver code. `detectMissingResolvers`
+  // DOES flag WhiteoutResolver (so the prior `phase != 0` / `indexerLive` gate WOULD have wrongly jumped to
+  // additive, deployed/registered only WHITEOUT, and abandoned the owed core Batch 2/3 while reporting
+  // success). The fix: the additive-aware phase is 1 (core incomplete), so the `phase === 3` gate stays shut
+  // and orchestrate never emits an additive batch.
+  it("incomplete core (Phase 1) missing WhiteoutResolver does NOT enter additive mode", async function () {
+    const snap = await takeSnapshot();
+    try {
+      const [deployer, ownerSigner] = await ethers.getSigners();
+      const safe = await deployTestSafe(deployer, [await ownerSigner.getAddress()], 1);
+      const safeContract = await getSafe(safe, deployer);
+      const createx = await getCreateX(deployer);
+
+      // Execute ONLY core Batch 1 (proxies + wire), stripped of the WhiteoutResolver deploy leg. Do NOT
+      // register schemas / seal / wire transports → the core genuinely sits at Phase 1.
+      const plan = await buildSafePlan(deployer, safe, false);
+      const coreBatch1 = plan.batch1.filter(leg => !(leg.label ?? "").includes("deployCreate3 WhiteoutResolver"));
+      expect(plan.batch1.length - coreBatch1.length, "stripped 1 deploy leg (WhiteoutResolver)").to.equal(1);
+      await executeBatchAsSafe(safeContract, coreBatch1, [ownerSigner], deployer);
+
+      const predicted = await predictPlan(deployer, safe, false);
+      const whiteoutProxy = (await predictProxyAddress(createx, safe, "WhiteoutResolver")).predicted;
+      expect(await ethers.provider.getCode(predicted.proxies.EFSIndexer), "core EFSIndexer live").to.not.equal("0x");
+      expect(await ethers.provider.getCode(whiteoutProxy), "WhiteoutResolver proxy absent").to.equal("0x");
+
+      // The bug shape: WhiteoutResolver IS flagged missing (the prior gate would have fired additive)…
+      expect(await detectMissingResolvers(deployer, predicted), "WhiteoutResolver flagged missing").to.deep.equal([
+        "WhiteoutResolver",
+      ]);
+      // …but the additive-aware phase sees the core as INCOMPLETE (schemas unregistered) → Phase 1, not 3,
+      // so the `phase === 3` additive gate stays closed.
+      expect(await detectDeployPhase(deployer, predicted), "incomplete core → Phase 1 (not 3)").to.equal(1);
+
+      // Behavioral proof: a propose-mode resume never emits an additive batch. (At Phase 1 with the
+      // additive proxy absent the normal core path's verify gate throws on the missing proxy — a loud
+      // failure surfacing the cross-version mismatch — rather than silently completing as additive.)
+      let additiveEmitted = false;
+      try {
+        const res = await orchestrateViaSafe(deployer, safe, [], { mode: "propose", log: false });
+        if (res.mode === "propose") additiveEmitted = res.batches.some(b => /additive/i.test(b.label ?? ""));
+      } catch {
+        // threw in the normal core path (verify gate on the missing proxy) — definitively NOT additive.
+      }
+      expect(additiveEmitted, "Phase-1 core must NOT emit an additive deploy batch").to.equal(false);
+    } finally {
+      await snap.restore();
+    }
+  });
 });
