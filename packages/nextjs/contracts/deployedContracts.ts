@@ -578,7 +578,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     EFSFileView: {
-      address: "0x664DeF5d951ae9b0823FB34303A45e23CaA93DC3",
+      address: "0xe30dF55aEB917a0F5E7EB15F049364Cb2Ea5Efad",
       abi: [
         {
           inputs: [
@@ -1338,7 +1338,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     EFSRouter: {
-      address: "0xd66eD298351D78E7771F5bB7AC3bdEE6272A96aA",
+      address: "0x199fAB45908F1ff9f6A0F64C6430FBB4947b6E07",
       abi: [
         {
           inputs: [
@@ -5862,7 +5862,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     ListReader: {
-      address: "0xab489F00Eae0aF8330be54e73C0F48038a07d1b2",
+      address: "0xBc8f16C2840E7D3FBa1D0FC107b3f4B6447Ed453",
       abi: [
         {
           inputs: [
