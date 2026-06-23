@@ -128,8 +128,8 @@ export const Header = () => {
         <NetworkSwitcher />
         <DevWalletSwitcher />
         <FaucetStatus />
-        <InstantBurnerSession />
         <RainbowKitCustomConnectButton />
+        <InstantBurnerSession />
         <FeedbackButton />
         <SwitchTheme />
       </div>

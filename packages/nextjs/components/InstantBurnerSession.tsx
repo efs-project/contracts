@@ -1,17 +1,14 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useConnectModal } from "@rainbow-me/rainbowkit";
 import { hardhat } from "viem/chains";
 import { useAccount, useConnect, useConnectors, useDisconnect } from "wagmi";
-import { WalletIcon } from "@heroicons/react/24/outline";
 import { useTargetNetwork } from "~~/hooks/scaffold-eth";
 import scaffoldConfig from "~~/scaffold.config";
 import {
   BURNER_WALLET_PK_STORAGE_KEY,
   FAUCET_CHAIN_ID,
   FAUCET_URL,
-  INSTANT_BURNER_PAUSE_MS,
   isBurnerConnector,
   isInstantBurnerSessionEnabled,
   normalizeStoredBurnerPrivateKey,
@@ -20,7 +17,6 @@ import {
   shouldClearStoredHardhatBurner,
   shouldDisconnectInstantBurner,
   shouldResetInstantBurnerDismissalOnAddressChange,
-  shouldResumeInstantBurnerAfterRealWalletModal,
   shouldShowInstantBurnerEnable,
 } from "~~/utils/scaffold-eth";
 import { HARDHAT_ACCOUNTS } from "~~/utils/scaffold-eth/hardhatAccounts";
@@ -36,10 +32,10 @@ const hardhatPrivateKeys = HARDHAT_ACCOUNTS.map(account => account.pk);
 
 const InstantBurnerToggle = ({ active, onClick, title }: { active: boolean; onClick: () => void; title: string }) => (
   <button
-    className={`hidden h-9 w-[7.25rem] shrink-0 items-center gap-2 rounded-full border px-2.5 text-left shadow-sm transition-colors lg:inline-flex ${
+    className={`hidden h-9 w-[7.25rem] shrink-0 items-center gap-2 rounded-full border px-2.5 text-left shadow-[0_0_16px_rgba(0,255,76,0.16)] transition-colors lg:inline-flex ${
       active
-        ? "border-primary/50 bg-primary/15 text-base-content hover:bg-primary/20"
-        : "border-base-content/15 bg-base-200/70 text-base-content hover:border-primary/50 hover:bg-primary/10"
+        ? "border-primary bg-primary/20 text-primary hover:bg-primary/25"
+        : "border-primary/65 bg-primary/10 text-primary hover:border-primary hover:bg-primary/15"
     }`}
     type="button"
     onClick={onClick}
@@ -51,12 +47,14 @@ const InstantBurnerToggle = ({ active, onClick, title }: { active: boolean; onCl
       <span className="mt-0.5 whitespace-nowrap text-[9px] text-base-content/60">No prompts</span>
     </span>
     <span
-      className={`relative h-4 w-7 shrink-0 rounded-full transition-colors ${active ? "bg-primary" : "bg-base-300"}`}
+      className={`relative h-5 w-9 shrink-0 rounded-full border transition-colors ${
+        active ? "border-primary bg-primary" : "border-primary/60 bg-primary/10"
+      }`}
       aria-hidden="true"
     >
       <span
-        className={`absolute top-0.5 h-3 w-3 rounded-full bg-base-100 shadow transition-all ${
-          active ? "left-[0.875rem]" : "left-0.5"
+        className={`absolute top-0.5 h-4 w-4 rounded-full shadow transition-all ${
+          active ? "left-[1.125rem] bg-base-100" : "left-0.5 bg-primary"
         }`}
       />
     </span>
@@ -84,18 +82,13 @@ export const InstantBurnerSession = () => {
   const { connect } = useConnect();
   const { disconnect } = useDisconnect();
   const { targetNetwork } = useTargetNetwork();
-  const { connectModalOpen, openConnectModal } = useConnectModal();
 
   const [dismissed, setDismissed] = useState(false);
   const [editingSessionRequested, setEditingSessionRequested] = useState(false);
   const [pauseUntil, setPauseUntil] = useState<number | undefined>(undefined);
-  const [waitingForRealWallet, setWaitingForRealWallet] = useState(false);
   const connectingBurnerRef = useRef(false);
   const disconnectingBurnerRef = useRef(false);
-  const openedRealWalletModalRef = useRef(false);
-  const realWalletModalWasOpenRef = useRef(false);
   const previousAddressRef = useRef<string | undefined>(undefined);
-  const realWalletFlowActive = waitingForRealWallet || connectModalOpen || openedRealWalletModalRef.current;
 
   useEffect(() => {
     if (
@@ -142,7 +135,6 @@ export const InstantBurnerSession = () => {
     if (!INSTANT_BURNER_ENABLED) return;
     if (connector && !isBurnerConnector(connector)) {
       setPauseUntil(undefined);
-      openedRealWalletModalRef.current = false;
     }
   }, [connector]);
 
@@ -172,7 +164,7 @@ export const InstantBurnerSession = () => {
         faucetChainId: FAUCET_CHAIN_ID,
         activeConnectorId: connector?.id,
         pausedUntil: pauseUntil,
-        realWalletFlowActive,
+        realWalletFlowActive: false,
         now: Date.now(),
       })
     ) {
@@ -188,46 +180,7 @@ export const InstantBurnerSession = () => {
         },
       },
     );
-  }, [
-    connect,
-    connector?.id,
-    connectors,
-    dismissed,
-    editingSessionRequested,
-    pauseUntil,
-    realWalletFlowActive,
-    status,
-    targetNetwork.id,
-  ]);
-
-  useEffect(() => {
-    if (!waitingForRealWallet) return;
-    if (status !== "disconnected" || !openConnectModal) return;
-    openedRealWalletModalRef.current = true;
-    realWalletModalWasOpenRef.current = false;
-    openConnectModal();
-    setWaitingForRealWallet(false);
-  }, [openConnectModal, status, waitingForRealWallet]);
-
-  useEffect(() => {
-    if (connectModalOpen) {
-      realWalletModalWasOpenRef.current = true;
-      return;
-    }
-    if (
-      !shouldResumeInstantBurnerAfterRealWalletModal({
-        requestedRealWallet: openedRealWalletModalRef.current,
-        modalWasOpen: realWalletModalWasOpenRef.current,
-        connectModalOpen,
-        status,
-      })
-    ) {
-      return;
-    }
-    openedRealWalletModalRef.current = false;
-    realWalletModalWasOpenRef.current = false;
-    setPauseUntil(undefined);
-  }, [connectModalOpen, status]);
+  }, [connect, connector?.id, connectors, dismissed, editingSessionRequested, pauseUntil, status, targetNetwork.id]);
 
   if (!INSTANT_BURNER_ENABLED || targetNetwork.id !== FAUCET_CHAIN_ID) {
     return null;
@@ -274,28 +227,11 @@ export const InstantBurnerSession = () => {
     return null;
   }
 
-  const connectRealWallet = () => {
-    setPauseUntil(Date.now() + INSTANT_BURNER_PAUSE_MS);
-    setWaitingForRealWallet(true);
-    disconnect();
-  };
-
   return (
-    <div className="hidden lg:flex items-center gap-1.5">
-      <InstantBurnerToggle
-        active
-        onClick={disableEditing}
-        title="Turn off promptless edits from the free Sepolia wallet"
-      />
-      <button
-        className="hidden h-8 shrink-0 items-center gap-1 rounded-full border border-base-content/15 px-2 text-[10px] font-medium leading-none text-base-content/75 transition-colors hover:border-primary/40 hover:bg-primary/10 hover:text-base-content whitespace-nowrap min-[1536px]:inline-flex"
-        type="button"
-        onClick={connectRealWallet}
-        title="Connect your own wallet instead"
-      >
-        <WalletIcon className="h-3.5 w-3.5" />
-        <span>Own wallet</span>
-      </button>
-    </div>
+    <InstantBurnerToggle
+      active
+      onClick={disableEditing}
+      title="Turn off promptless edits from the free Sepolia wallet"
+    />
   );
 };
