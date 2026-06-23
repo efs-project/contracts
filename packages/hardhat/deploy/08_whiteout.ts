@@ -87,14 +87,54 @@ const deployWhiteout: DeployFunction = async function (hre: HardhatRuntimeEnviro
   );
   console.log("WHITEOUT_SCHEMA_UID:", whiteoutSchemaUID);
 
-  // 5. Register the WHITEOUT schema against the proxy (try/catch — idempotent if already registered).
-  try {
-    const tx = await schemaRegistry.register(whiteoutDefinition, whiteoutResolver.target, whiteoutRevocable);
-    await tx.wait();
-    console.log("Registered WHITEOUT schema:", whiteoutSchemaUID);
-  } catch {
-    console.log("Failed to register WHITEOUT (likely already exists). Skipping.");
-  }
+  // 5. Register the WHITEOUT schema against the proxy. Tolerate ONLY a genuine "already registered"
+  //    state — verified by reading the schema back from the SchemaRegistry, NOT by assuming every revert
+  //    means AlreadyExists. Any other failure (transient RPC, wrong / code-less registry address,
+  //    insufficient funds, or a nonce-consuming revert) is re-thrown so a broken deploy never silently
+  //    wires the router / file view to a WhiteoutResolver whose schema can't be attested (Codex review;
+  //    mirrors deploy/09_lists.ts). Read-back returns true (registered), false (readable but absent), or
+  //    null (registry UNREADABLE — no code at the address, e.g. CI's no-EAS hardhat node → getSchema
+  //    returns "0x" and ethers throws BAD_DATA → degrade gracefully per ADR-0028).
+  const registerWhiteout = async () => {
+    const isRegistered = async (): Promise<boolean | null> => {
+      try {
+        const rec = await schemaRegistry.getSchema(whiteoutSchemaUID);
+        return !!(rec?.uid && rec.uid.toLowerCase() === whiteoutSchemaUID.toLowerCase());
+      } catch {
+        return null;
+      }
+    };
+    try {
+      const tx = await schemaRegistry.register(whiteoutDefinition, whiteoutResolver.target, whiteoutRevocable);
+      await tx.wait();
+    } catch (err) {
+      const reg = await isRegistered();
+      if (reg === true) {
+        console.log("WHITEOUT schema already registered — skipping.");
+        return;
+      }
+      if (reg === null) {
+        console.warn("WHITEOUT: SchemaRegistry unreadable (no EAS?) — skipping registration (ADR-0028).");
+        return;
+      }
+      console.error("WHITEOUT schema registration failed and the schema is NOT registered.");
+      throw err; // reg === false — a real failure, not idempotent re-run
+    }
+    // Verify after success too — a tx to a wrong / code-less SchemaRegistry can "succeed" without
+    // registering anything, leaving a deploy that looks fine but can't attest WHITEOUTs.
+    const reg = await isRegistered();
+    if (reg === false) {
+      throw new Error(
+        `WHITEOUT schema is not registered at ${whiteoutSchemaUID} after register() — wrong SchemaRegistry address?`,
+      );
+    }
+    if (reg === null) {
+      console.warn("WHITEOUT: SchemaRegistry unreadable — skipping post-register verify (ADR-0028).");
+    } else {
+      console.log("Registered WHITEOUT schema:", whiteoutSchemaUID);
+    }
+  };
+  await registerWhiteout();
 
   // 6. Verify gate (local mirror of deploy-lib/verify.ts): the resolver self-derived the UID.
   const onchainUID = await whiteoutResolver.whiteoutSchemaUID();

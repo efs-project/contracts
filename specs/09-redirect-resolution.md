@@ -19,13 +19,13 @@ What this spec governs:
 - **Cycle handling** — bounded-walk cycle-stop (navigational) and the `sameAs` canonicalization rule (dedup).
 - **Lens precedence** — which redirects are even visible to follow.
 - **Dangling targets** — what a walk returns when a target is missing/revoked/mistyped.
-- **The WHITEOUT negative-terminal reservation** — the room the resolution loop must leave for a future suppression terminal.
+- **The WHITEOUT negative-terminal boundary** — why the suppression terminal (WHITEOUT, now a live separate schema, applied by the router / file view) is **never** produced by this redirect follower, and why no REDIRECT kind may stand in for it (§7).
 
 What this spec does **not** govern (out of scope, frozen elsewhere):
 
 - The REDIRECT field string `"bytes32 target, uint16 kind"` (FROZEN, ADR-0050).
 - `AliasResolver` write-time guards (no self-loop, per-kind typing). The resolver does **not** follow, detect multi-hop cycles, cap depth, or apply lens precedence — verified `AliasResolver.sol:161-198`.
-- WHITEOUT's own schema/resolver/readdir behavior — that is a future dedicated schema (ADR-0055). Only the *terminal reservation* is in scope here.
+- WHITEOUT's own schema/resolver/readdir behavior — that is a separate, now-live dedicated schema (ADR-0055; `specs/02` §WHITEOUT, `specs/04` §8f). Only its *boundary with the redirect follower* (§7) is in scope here.
 
 **Baseline fact this spec changes.** The production reader follows nothing today. `EFSRouter._findDataAtPath` (`EFSRouter.sol:889-895`) reads the active placement PIN target in O(1) and returns it — it never inspects REDIRECT. `EFSIndexer.resolvePath` (`EFSIndexer.sol:531-533`) is a pure `_nameToAnchor` lookup. So REDIRECT-following is **new read-side logic**, additively layered on top of the existing path walk; it is not implicit in any deployed read path.
 
@@ -113,17 +113,14 @@ On encountering a dangling target the walk **stops** and returns status `Danglin
 
 ---
 
-## 7. The WHITEOUT negative-terminal reservation (binding)
+## 7. WHITEOUT is a live, separate schema — never a REDIRECT terminal (binding)
 
-This spec freezes a **positive-only** resolution order today. It MUST NOT freeze it in a way that contradicts a future **negative terminal**. Per ADR-0055 (Accepted) the WHITEOUT schema will be added additively post-freeze; its read-time meaning is a *non-following terminal*: "this path is suppressed/empty in this lens — STOP, serve empty, do not fall through to lower lenses."
+This spec defines a **positive-only** *redirect* follow order. WHITEOUT — the **negative terminal** ("this path is suppressed/empty in this lens — STOP, serve empty, do not fall through to lower lenses or `system`") — now ships as its **own EAS schema + `WhiteoutResolver`** (ADR-0055, Accepted & **implemented**; `specs/02` §WHITEOUT, `specs/04` §8f). Two consequences for a **redirect** reader:
 
-**Reservation (the room this loop leaves):**
+- **The negative terminal is applied OUTSIDE this follower.** Suppression is evaluated by the `EFSRouter` path-walk and `EFSFileView` listings against the `WhiteoutResolver` (a per-name whiteout on a path Anchor), **not** by the redirect follower in §8. Path resolution applies the whiteout terminal independently of — and ahead of — any redirect follow: a whited path serves empty and the follower is never consulted for it. So this spec's *redirect* follower still has **no input that returns suppression**: `Suppressed-reserved` (§8) remains a defined-but-never-returned status **for the redirect follower** — now because WHITEOUT lives in a separate schema handled elsewhere, **not** because it is unbuilt. The control-flow slot was kept so the follower never had to change when WHITEOUT shipped.
+- **No REDIRECT kind is ever a whiteout — the sentinel encodings stay banned.** The encodings ADR-0055 rejected — a reserved REDIRECT `kind`, a `weight < 0` TAG, a sentinel PIN→PROPERTY, a tombstone DATA — remain **banned for durable seeding** and MUST NOT be interpreted as suppression by any conformant redirect reader. A `kind >= 3` REDIRECT is an **inert, ignored, non-followed terminal** (§2), never a negative terminal. Suppression comes **only** from the dedicated WHITEOUT schema. A redirect reader that sees no whiteout-as-redirect is correct; a reader that synthesizes suppression from a REDIRECT kind is non-conformant.
 
-- The lens-scan / resolution loop is defined so that a lens entry at a path may terminate the scan with **one of two terminal kinds**: a *positive* terminal (a placement PIN → serve that DATA, possibly after navigational redirect-following per §2) **or**, in the future, a *negative* terminal (a WHITEOUT → serve empty, stop, no fall-through, no `system` gap-fill). Today only positives terminate; the loop's control flow already admits "terminate with empty without following" as a reachable outcome — see the reference algorithm's `Suppressed-reserved` status (§8), which is a defined-but-never-returned placeholder.
-- The cycle / lowest-UID-in-SCC / kind-following rules in §§2-6 are all **follow** rules; none of them assumes that *every* terminal is a thing-to-follow. A terminal that **stops** rather than **follows** is consistent with this order, not a contradiction of it.
-- A negative terminal is evaluated in the **same lens precedence** as positives (§5): a WHITEOUT by `Lk` terminates the scan for lenses strictly below `Lk` and is transparent to lenses above `Lk`.
-
-**This spec does NOT implement WHITEOUT.** It reserves the terminal slot. The follower returns `Suppressed-reserved` from no input today; the status exists only so the future schema slots in without a control-flow change to the resolution loop.
+The negative terminal is evaluated in the **same lens precedence** as positives (§5): a WHITEOUT by `Lk` suppresses lenses strictly below `Lk` and is transparent to lenses above `Lk` — but, again, that evaluation lives in the router / file view against `WhiteoutResolver`, not in this redirect follower.
 
 ---
 
@@ -146,10 +143,12 @@ function resolve(node, isData, lenses) -> Result {
   hops = 0
 
   loop {
-    // ── reserved negative terminal (WHITEOUT, ADR-0055) ──────────────
+    // ── negative terminal (WHITEOUT, ADR-0055) — applied OUTSIDE this follower ──
     // if negativeTerminal(node, lenses):  return Result(0, false, Suppressed-reserved)
-    //   ^ NOT implemented today; the branch is reserved so the loop can
-    //     terminate with "empty, stop, no fall-through" without restructuring.
+    //   ^ The WHITEOUT schema is LIVE, but suppression is evaluated by the router /
+    //     file view against WhiteoutResolver, NOT by this redirect follower — no
+    //     redirect input produces it. The branch is kept reserved so this follower,
+    //     when built, can terminate "empty, stop, no fall-through" without restructuring.
 
     // ── pick the first lens-visible redirect out of `node` ───────────
     edge = firstInLensRedirect(node, lenses)
@@ -187,7 +186,7 @@ function resolve(node, isData, lenses) -> Result {
 
 Notes:
 - `supersededBy` and `sameAs` are **non-followed terminals** — the loop returns `Resolved` at the node holding either. `supersededBy` is a discoverable version-chain breadcrumb (clients/indexers may walk it deliberately, §2); `sameAs` canonicalization (§4.2) is a separate, caller-layered, off-the-navigational-path computation. Only `symlink` advances the loop.
-- The follower returns a node + status; the **router** maps `Resolved`+DATA → serve that DATA's best mirror (existing `_findDataAtPath` + `_getBestMirrorURI` flow), `Dangling`/`DepthExceeded`/`CycleStopped` → 404-equivalent (with the surfaced node available for diagnostics), `Suppressed-reserved` → (future) serve empty without fall-through.
+- The follower returns a node + status; the **router** maps `Resolved`+DATA → serve that DATA's best mirror (existing `_findDataAtPath` + `_getBestMirrorURI` flow), `Dangling`/`DepthExceeded`/`CycleStopped` → 404-equivalent (with the surfaced node available for diagnostics), `Suppressed-reserved` → serve empty without fall-through (never produced by this follower — the live WHITEOUT terminal is applied by the router / file view against `WhiteoutResolver`, §7).
 - The follower, once built, is a **stateless redeployable view** — it adds no kernel storage (§ADR-0063 Consequences). It can be re-deployed without touching any frozen schema UID, so the exact landing site (EFSFileView vs EFSRouter vs a dedicated follower) is not frozen by this spec (flagged in ADR-0063 SPICY). Because the implementation is **deferred** (see "Implementation status"), even the reverse-by-source read it needs from `AliasResolver` (the earlier draft's `getActiveRedirect` index) is not present today and will be added — additively, off the frozen REDIRECT schema UID — when the follower is built.
 
 ---
@@ -209,7 +208,7 @@ Every conformant reader (on-chain follower, router, off-chain indexer, client) M
 | 9 | `supersededBy` not followed even with a fork | `D1` `supersededBy` `D2` (attester α, lens index 0); `D1` `supersededBy` `D9` (attester β, lens index 1). Lens set `[α, β]`. Read lands on `D1`. | `{uid: D1, status: Resolved}`, **0 hops** — neither supersession is taken; `supersededBy` is a non-followed terminal regardless of lens precedence. The competing edges are breadcrumbs only. |
 | 10 | `sameAs` not navigated | `D1` `sameAs` `D2`. Navigational read lands on `D1` (e.g. a PIN placed `D1`). | `sameAs` is not in the follow loop → `{uid: D1, status: Resolved}`. (Dedup layer *may* separately canonicalize the `{D1,D2}` cluster to lowest UID `D1` — vector 11.) |
 | 11 | `sameAs` canonicalization (client/indexer) | `sameAs` cluster SCC `{C, A, B}` (e.g. `A↔B`, `B↔C`, all lens-visible). Dedup query enters from `C`. | Canonical representative = **lowest UID in SCC = `A`**, regardless of entry node. (On-chain navigational follower is not required to compute this; client/indexer layer is.) |
-| 12 | Reserved-suppressed terminal (placeholder) | A future WHITEOUT terminal at path `/x` in lens `Lk` (NOT seedable today — see §10 / ADR-0055). | Reserved: `{uid: 0, isData: false, status: Suppressed-reserved}` — serve empty, STOP, no fall-through to lower lenses. **No input produces this today**; the vector pins the future contract so the loop slot is honored when WHITEOUT ships. |
+| 12 | WHITEOUT not produced by the redirect follower | A WHITEOUT at path `/x` in lens `Lk`. WHITEOUT is **live and seedable** (ADR-0055), but it is a **separate schema**, not a REDIRECT — and a `kind ≥ 3` REDIRECT must NOT be read as suppression (§7, §10). | The **redirect follower** returns no suppression from any redirect input: `Suppressed-reserved` is never returned here. The live WHITEOUT terminal (`serve empty, STOP, no fall-through`) is applied by the `EFSRouter` path-walk / `EFSFileView` against `WhiteoutResolver`, **outside** this follower. The vector pins that the follower's reserved slot stays never-returned. |
 
 ---
 
