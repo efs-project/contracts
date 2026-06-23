@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { FEEDBACK_EMAIL, FEEDBACK_SUBJECT, buildFeedbackMailtoUrl } from "./feedback.ts";
+import { buildFeedbackMailtoUrl } from "./feedback.ts";
 
 test("buildFeedbackMailtoUrl addresses James and sets the feedback subject", () => {
   const url = new URL(buildFeedbackMailtoUrl());
 
   assert.equal(url.protocol, "mailto:");
-  assert.equal(url.pathname, FEEDBACK_EMAIL);
-  assert.equal(url.searchParams.get("subject"), FEEDBACK_SUBJECT);
+  assert.equal(url.pathname, "JamesCarnley@gmail.com");
+  assert.equal(url.searchParams.get("subject"), "EFS debug client feedback");
 });
 
 test("buildFeedbackMailtoUrl includes a structured feedback template", () => {
