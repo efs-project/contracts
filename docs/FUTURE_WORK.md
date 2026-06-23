@@ -13,6 +13,7 @@ Backlog of known improvements, scale concerns, and architectural enhancements th
 A six-angle expert review (schema-permanence, proxy/burn, kernel-integrity, adversarial-resolver, EAS/evolution, deploy-ceremony) of the Sepolia freeze + upgradeable contracts ran 2026-06-11. **Verdict: the frozen schema surface (9 field strings + revocable flags + resolver-proxy addresses) is sound — zero freeze-blockers.** Fixed in-PR: burn-checklist completeness (renounce EFSIndexer/MirrorResolver owners), verify-gate cross-ref UID assertions, expected-Safe pin, golden-vector comment. The items below are recoverable-later (upgrade-safe logic, docs, or pre-mainnet decisions) — none reopen the freeze, but each should land before mainnet.
 
 ### Deploy-ceremony hardening follow-ups (from the 2026-06-19 live Sepolia freeze) [tooling; upgrade-safe]
+
 The first real Safe-native Sepolia freeze (2026-06-19) surfaced deploy-tooling lessons. Three were fixed in
 that PR — impls are now deterministic content-addressed CREATE2 (`ensureImpls` reuses on-chain impls on a
 re-run instead of re-spending — a lost `safe-batches.json` no longer forces a paid redeploy), a preflight
@@ -20,6 +21,7 @@ balance guard fails before spending if the deployer can't finish, and the hand-o
 durable `deploy-state/` dir. Also fixed: `hardhat.config.ts` pinned the fork at block **0** when `.env`
 shipped `FORK_BLOCK=` empty (`Number("")===0`), so **every `*.fork.test` had been silently self-skipping**
 — no fork rehearsal had actually run in that env. Residual follow-ups (none block mainnet):
+
 - **Fork-gated tests should FAIL LOUD, not skip, on misconfig.** A `*.fork.test` that self-skips because
   CreateX is absent can't tell "forking off" from "forking on but broken." When `MAINNET_FORKING_ENABLED=true`
   yet the fork didn't engage, that's a configuration error — assert it rather than skip, so a broken fork
@@ -33,6 +35,7 @@ shipped `FORK_BLOCK=` empty (`Number("")===0`), so **every `*.fork.test` had bee
   to emit the upload JSON so the ceremony has no ad-hoc decoding step.
 
 ### EFSFileView directory-read API consolidation [deferred; view-layer, redeployable, pre-launch]
+
 The four `getDirectoryPage*` readers form a confusing subset chain (lens-only ⊂ lens+schema ⊂
 lens+schema+tag-exclusion) plus one misleadingly-bare UNSCOPED reader
 (`getDirectoryPage(parent, start, length, dataSchema, propSchema)`). Consolidate into honestly-named
@@ -41,6 +44,7 @@ bytes/mirrors, and the main grid already fails safe to lens-only; the related se
 `getDataMirrors`) already landed (commit 4931409). Pure API cleanliness; pre-launch + redeployable, so
 safe to defer to a focused PR. **Two 2026-06-19 expert design reviews did the analysis — start the PR
 from these findings, don't re-derive:**
+
 - **Do NOT make it one god-function.** `anchorSchema` is the index JOIN KEY, not a nullable filter —
   `anchorSchema = 0` queries the null-schema bucket and silently returns ~nothing. Schema must stay
   required/non-zero. The ONLY safely-optional axis is the tag-exclusion (empty arrays = exclude nothing).
@@ -53,8 +57,8 @@ from these findings, don't re-derive:**
   `…AllAttesters` / `…Unscoped` (mirror the blessed `getDataMirrorsAllAttesters` precedent) and keep it
   on simple `(start, length)`.
 - **"empty `attesters[]` = all lenses" is a footgun (decide in the PR).** Convenient, but an empty array
-  is what an uninitialized/buggy caller passes, so it makes the cross-attester leak the *accidental
-  default* — the exact thing the lens invariant prevents. Safer: empty → revert + an explicit
+  is what an uninitialized/buggy caller passes, so it makes the cross-attester leak the _accidental
+  default_ — the exact thing the lens invariant prevents. Safer: empty → revert + an explicit
   AllAttesters function (the mirrors pattern). James leaned toward empty=all; revisit against this.
 - **Cross-repo break:** the SDK (`sdk/…/reads/list.ts`) decodes `getDirectoryPageByAddressList`'s cursor
   as a uint256 `bigint`; consolidating changes it to opaque bytes. Coordinate with the SDK agent and ship
@@ -65,58 +69,76 @@ from these findings, don't re-derive:**
   phase/index-path discriminator so the all-children vs by-schema index paths don't collide.
 
 ### WHITEOUT — cross-lens negative masking (overlay deletion) [post-freeze additive; reserve concept pre-freeze]
-EFS lenses are additive-only: there is no way to assert "render this path empty in my view without substituting my own content" — the overlayfs whiteout, i.e. a lens-local *delete* of inherited content and the other half of a lens-local *rename*. Decided (multi-agent verification 2026-06-18): a **dedicated WHITEOUT schema + resolver, registered additively post-freeze** — NOT a REDIRECT `kind`, NOT TAG `weight<0` (both rejected). The only pre-freeze act is a reservation: the REDIRECT read-time resolution spec must leave room for a "negative terminal" in the lens scan, and no sentinel-kind / `weight<0` whiteout may be seeded into durable data before the schema ships. [ADR-0055]
+
+EFS lenses are additive-only: there is no way to assert "render this path empty in my view without substituting my own content" — the overlayfs whiteout, i.e. a lens-local _delete_ of inherited content and the other half of a lens-local _rename_. Decided (multi-agent verification 2026-06-18): a **dedicated WHITEOUT schema + resolver, registered additively post-freeze** — NOT a REDIRECT `kind`, NOT TAG `weight<0` (both rejected). The only pre-freeze act is a reservation: the REDIRECT read-time resolution spec must leave room for a "negative terminal" in the lens scan, and no sentinel-kind / `weight<0` whiteout may be seeded into durable data before the schema ships. [ADR-0055]
 
 ### Kernel read-DoS: budgeted scan on the address-list getters [pre-mainnet, upgrade-safe]
-`EFSIndexer.getChildrenByAddressList` / `getAnchorsBySchemaAndAddressList` scan the append-only child arrays with no per-call budget (only `pageSize` bounds *results*, not *work*). A spammed directory (anyone can append non-revocable anchors forever) can push a lens-filtered page past RPC gas caps → that directory becomes permanently unreadable via those getters. The view layer already has `_FOLDER_SCAN_BUDGET_PER_CALL`; the kernel getters don't. Add a `(results, nextCursor, scanned)` budgeted variant (additive ABI, deployable via proxy upgrade). Ideally before freeze so clients bind to the safe shape.
+
+`EFSIndexer.getChildrenByAddressList` / `getAnchorsBySchemaAndAddressList` scan the append-only child arrays with no per-call budget (only `pageSize` bounds _results_, not _work_). A spammed directory (anyone can append non-revocable anchors forever) can push a lens-filtered page past RPC gas caps → that directory becomes permanently unreadable via those getters. The view layer already has `_FOLDER_SCAN_BUDGET_PER_CALL`; the kernel getters don't. Add a `(results, nextCursor, scanned)` budgeted variant (additive ABI, deployable via proxy upgrade). Ideally before freeze so clients bind to the safe shape.
 
 ### Active-visibility index decision [pre-mainnet kernel decision]
+
 Kernel reads are O(append-only-history), not O(live-size) — the "redeployable stateless reads" mitigation does NOT cover the kernel (its address is frozen into UIDs). Decide before mainnet whether to add a direct active-visibility index in EFSIndexer (a new ERC-7201-namespaced mapping is upgrade-safe for go-forward writes; historical back-population is the hard part). Deepest long-horizon scale item (see also "Garbage collection / index compaction" below).
 
 ### `_indexGlobal` explicit depth guard [DONE 2026-06-17]
+
 ~~The upward `_containsAttestations` walk in `_indexGlobal` has no explicit `MAX_ANCHOR_DEPTH` break.~~ **Done** — `_indexGlobal` now carries the same `if (depth++ > MAX_ANCHOR_DEPTH) break;` guard as `_propagateContains`.
 
 ### EAS-coupling verified-in-writing + semantics register [document-now / freeze-ledger]
+
 ADR-0032 bets the whole system on a specific EAS deployment but nowhere records that mainnet EAS + SchemaRegistry are non-upgradeable (no proxy/admin/pause). Add a FREEZE_LEDGER appendix (or ADR) recording the exact addresses + bytecode hash + immutability confirmation, signed with the freeze, and enumerate the load-bearing EAS semantics in one place: `attester == msg.sender` (SystemAccount identity), `refUID`, `revocationTime`, `expirationTime` (now rejected by resolvers), `recipient`, raw-bytes `data` (not ABI-enforced).
 
 ### State-walk recovery runbook + ENS/cold-boot discovery [document-now / pre-mainnet]
+
 (a) Document that the full system reconstructs from contract STATE alone (events are EIP-4444-expiring convenience) — write the reconstruct-from-state procedure. (b) Register `efs.eth` and publish canonical URLs as `web3://efs.eth/...` (EIP-4804) so router redeploys don't rot every shared URL, and so a cold reader can find the indexer/router/`system` in 50 years without this repo surviving. (c) Consider mirroring the social-layer taxonomies (transport priority, REDIRECT `kind`, reserved PROPERTY keys) on-chain as `system`-authored content so meaning is chain-recoverable.
 
 ### Re-vendor EFSBytesStore bytecode into SDK + nextjs upload path [follow-up to ADR-0057]
+
 ADR-0057 renamed `MockChunkedFile`→`EFSBytesStore` and changed its constructor to `(address[], string contentType)` + added ERC-5219/EIP-7617 paginated `request()`. The off-contract deployers still vendor the **old 1-arg `MockChunkedFile`** bytecode and are decoupled (they work because the router/SDK read by the `chunkCount()`/`chunkAddress()` interface, not by name), so the stores they deploy are chunk-only, not standalone-ERC-5219. Re-vendor the new 2-arg creation bytecode + pass a content type in: (a) `@efs/sdk` `packages/sdk/src/writes/onchain-bytecode.ts` + the deploy call in `onchain.ts` (full recipe + sha256 pin in planning `Designs/web3-bytesstore-sdk-followup.md`); (b) the debug UI `packages/nextjs/lib/efs/{sstore2.ts,uploadOnchainFile.ts}` + `components/explorer/CreateItemModal.tsx`.
 
 ### Multi-chain web3:// ENS rollout [ADR-0060]
+
 Per ADR-0060, address EFS per-chain via ENS subdomains under mainnet `efs.eth`: `efs.eth` = movable default (Sepolia now → mainnet-class chain later), `<chain>.efs.eth` = explicit per-chain (`sepolia.efs.eth`, `zksync.efs.eth`, `base.efs.eth`, …), each `contentcontract = <shortName>:0x<router>`. Near-term: set `efs.eth` (default→Sepolia) + `sepolia.efs.eth`. As chains deploy: add `<chain>.efs.eth` + that chain's router. **Before mainnet: decide CREATE3-uniform router addressing** (same router address on every chain via same salt+deployer) so the non-ENS fallback `web3://0x<router>:<chainId>/` is uniform — today the router is plain-deployed (per-chain addresses). Caveat: the `<shortName>:` contentcontract form only resolves in clients that know the chain (`ethereum-lists/chains`); numeric `web3://0x<router>:<chainId>/` is the universal fallback.
 
 ### MirrorResolver self-schema guard [upgrade-safe hardening]
+
 MirrorResolver is the only frozen resolver whose `onAttest`/`onRevoke` lack an `a.schema == ownMirrorUID` guard — it runs its DATA/transport validation on, and indexes, foreign-schema attestations. Not exploitable today (reads filter mirrors by `MIRROR_SCHEMA_UID`, and `index()` is permissionless anyway), but adding the guard for symmetry hardens it against a future upgrade that moves MIRROR state into the resolver.
 
 ### Canonical-payload guards across all UID-minting schemas [DONE 2026-06-18]
+
 **Done:** every schema that mints a permanent, UID-bearing record now rejects non-canonical (e.g. trailing-byte) payloads at write time, so one semantic record has exactly one UID: PIN/TAG by exact length (32/64 bytes, EdgeResolver), MIRROR by re-encode-and-compare (MirrorResolver), and ANCHOR/PROPERTY by re-encode-and-compare (EFSIndexer onAttest) — plus LIST/LIST_ENTRY/REDIRECT which already enforced exact length. The guards live on the `onAttest` (write) path only; revocation is intentionally ungated (a stored record is canonical by construction, and a withdrawal should never be blocked by a write-shape check). All `keccak256(a.data) == keccak256(abi.encode(...))` for the dynamic-`string` schemas, matching `SystemAccount._requireCanonicalAnchor`. Upgrade-safe — bytecode only, no schema-string/UID change.
 
 ### Burn-completeness integration test [DONE 2026-06-18]
-**Done:** `test/BurnToImmutable.fork.test.ts` deploys the full system, proves it is upgradeable pre-burn (all 7 ProxyAdmins owner-controlled + a real EFSIndexer V1→V2→V1 `upgradeAndCall` round-trip), runs the documented burn sequence (`sealModules` + renounce all 7 ProxyAdmins + the three Ownable contracts), and asserts *every* owner == 0 and *every* upgrade path + owner-gated setter (`upgradeAndCall`, `setSortsAnchor`, `setTransportsAnchor`, `setModuleAuthorization`, `sealModules`, re-`renounceOwnership`) reverts `OwnableUnauthorizedAccount` — plus that the frozen proxies still serve reads. Fork test (needs MAINNET_FORKING_ENABLED, run as its own invocation). So the burn-incompleteness class this review caught can't regress.
+
+**Done:** `test/BurnToImmutable.fork.test.ts` deploys the full system, proves it is upgradeable pre-burn (all 7 ProxyAdmins owner-controlled + a real EFSIndexer V1→V2→V1 `upgradeAndCall` round-trip), runs the documented burn sequence (`sealModules` + renounce all 7 ProxyAdmins + the three Ownable contracts), and asserts _every_ owner == 0 and _every_ upgrade path + owner-gated setter (`upgradeAndCall`, `setSortsAnchor`, `setTransportsAnchor`, `setModuleAuthorization`, `sealModules`, re-`renounceOwnership`) reverts `OwnableUnauthorizedAccount` — plus that the frozen proxies still serve reads. Fork test (needs MAINNET_FORKING_ENABLED, run as its own invocation). So the burn-incompleteness class this review caught can't regress.
 
 ### REDIRECT read-time resolution spec + conformance vectors [before durable seeding]
+
 ADR-0050 defers multi-hop cycle/chain resolution (cycle → lowest-UID-in-SCC, depth cap, lens precedence) to a Durable read-time spec. Pin it with conformance vectors before any durable REDIRECT data is seeded — doesn't block the freeze, blocks durable seeding.
 
 ### Subgraph event coverage: the edge + mirror layer emits nothing indexable [DONE 2026-06-17 — core events landed; residual = optional event-versioning slot]
+
 **Done (2026-06-17):** EdgeResolver emits `PinSet`/`PinCleared`/`TagSet`/`TagCleared` (TagSet carries `supersededTagUID`, symmetric with PinSet); MirrorResolver emits `MirrorSet`/`MirrorCleared` (both carry indexed `transportDefinition`); `AnchorCreated` carries `string name`; AliasResolver `RedirectAttested`/`RedirectRevoked` index `redirectUID`. EFS is now reconstructable from event logs alone. Residual (optional, not blocking): the forward-compatible event-versioning slot below. Original analysis retained for context:
 A subgraph-indexability audit found EFS is **not** reconstructable from event logs as-is. Kernel-native schemas (ANCHOR/DATA/PROPERTY) and the partner resolvers (LIST/LIST_ENTRY/REDIRECT/SORT) emit rich events and are subgraph-ready. But **EdgeResolver (PIN/TAG) and MirrorResolver emit zero events of their own** — they pass through only the data-less `AttestationIndexed(uid, schema, attester)`, and EAS's own `Attested` carries no field data. So file placement (PIN), which DATA resolves at a path, **PIN supersession** (silent re-pin), TAG sets + weights, and **MIRROR uri** are invisible to a pure-event indexer — i.e. the core question EFS answers can't be indexed without per-attestation `eth_call`s (not a real subgraph). These are resolver-LOGIC additions (not schema changes) → upgrade-safe until the mainnet burn, after which event ABIs harden permanently; the PIN-supersession signal in particular is unrecoverable post-burn. Add before burn (before the Sepolia freeze if a hackathon subgraph is wanted, so indexers bind to the final ABI): `PinSet(definition indexed, attester indexed, targetSchema indexed, pinUID, targetID, supersededPinUID)`, `PinCleared(...)`, `TagSet(... , targetID, int256 weight)`, `TagCleared(...)`, `MirrorURISet(dataUID indexed, mirrorUID indexed, attester indexed, transportDefinition, string uri)`, and enrich `AnchorCreated` with `string name`. Consider a forward-compatible event-versioning slot (see "Forward-compatible event schema" above) since event signatures are Etched at burn. Also fixes a Tier-2 spec/code gap: specs/03 claims directory state reconstructs "without additional contract reads," which is currently false for the edge/mirror layer.
 
 ### contentHash self-describing encoding spec + vectors [before durable seeding]
+
 (From the 2026-06-17 CS/crypto sweep.) ADR-0049 reserves `contentHash`/`size`/`cid` as PROPERTY values and calls for a multibase-multihash (self-describing) encoding, but the conventions spec + reference vectors are unwritten and the workflow docs (`specs/04`) currently prescribe a bare `keccak256` hex with no algorithm prefix. A bare digest is algorithm-ambiguous: a 2050 reader (or an SDK verifier) can't tell keccak256 from sha2-256, and PROPERTY values are non-revocable so early-seeded bare hashes are permanent. Pin a self-describing format (e.g. multihash/CID, or a `keccak256:` prefix) + conformance vectors, and update the workflow docs, **before any real data is minted under `contentHash`**. The frozen schema is fine (`string value` carries anything); this is a convention/spec gap. Also consider self-labeling the algorithm in the etched `PropertyCreated.valueHash` story.
 
 ### `index()` `_containsAttestations` spam filter [upgrade-safe hardening]
+
 (From the 2026-06-17 STRIDE sweep.) The permissionless `index()`/`indexBatch()` path runs `_indexGlobal`, which sets `_containsAttestations[ancestor][attester]` and appends to `_childrenByAttester` for ANY EAS attestation whose `refUID` hits an EFS anchor — including a garbage foreign-schema attestation. So an attacker can make themselves appear as a "contributor" in a popular folder's lens-scoped directory listing (and permanently bloat the append-only `_childrenByAttester` arrays) without placing real EFS content. Not a content-injection (PIN reads stay empty/lens-gated); a listing-noise + state-bloat vector. Mitigation: gate the `_containsAttestations`/`_childrenByAttester` propagation behind an EFS-wired-schema allowlist (PIN/TAG/MIRROR/LIST_ENTRY/REDIRECT) before the propagation loop. Upgrade-safe (resolver/kernel logic, no schema change).
 
 ### `expirationTime` policy: keep `== 0` or allow time-bounded? [pre-burn decision]
+
 (From the 2026-06-17 forward-compat sweep.) All resolvers currently reject `expirationTime != 0`, so EFS can never express time-bounded attestations (expiring access, subscriptions, temporary endorsements) — and post-burn that rule is permanent (a time-limited variant would need a brand-new schema). Recommendation: keep `== 0` for v1 (simplicity; avoids a third active/revoked/expired filter state in the kernel) and **document it as a conscious decision**; revisit allowing expiry on MIRROR specifically (a MIRROR is already revocable, so an expired one ≈ a revoked one) if a real use case appears. Decide before burn.
 
 ### ANCHOR field name `schemaUID` → `forSchema` [DONE 2026-06-17]
+
 (From the 2026-06-15 field-string sweep.) The ANCHOR field `schemaUID` shadowed EAS's native `Attestation.schema` — two `bytes32` "schemaUID"s on one object, a permanent SDK/subgraph footgun. **Done** — James approved; renamed to `forSchema` (the schema this anchor is a slot FOR). Changes ANCHOR_SCHEMA_UID (now-or-never, done pre-freeze). See `docs/decisions.md` 2026-06-17.
 
 ### Launch logistics register (serving + operating layer) [pre-launch]
+
 A logistics audit produced a prioritized register; the launch-gating items (most also in LAUNCH_CHECKLIST — consolidate there): (1) **web3:// gateway** — decide who serves `web3://<router>/path` to browsers; recommend self-hosting the EthStorage `web3url-gateway` on the VPS with `w3link.io` as fallback, and run the `web3protocol-tests` conformance suite against EFSRouter (its `message/external-body` redirect is an unusual response shape). (2) **ENS `efs.eth`/`app.efs.eth`** — Safe-custodied; `contenthash` for the static UI (hard blocker), text records (`efs.router`/`efs.indexer`/`efs.systemaccount`/`efs.freezeLedger`) for discovery + web3:// link durability. (3) **RPC + CORS** — server-side keyed RPC behind the gateway (key out of the browser bundle); verify the documented CORS prereq against a real cross-origin deploy; EIP-4444 history expiry affects only the event indexer, not the state-based serving path. (4) **Verification** — Etherscan V2 (single multichain key) + Sourcify, scripted off the FREEZE_LEDGER realized CREATE3 addresses; publish the Sourcify metadata CID to ENS. (5) **Monitoring** — an end-to-end `web3://` heartbeat + mirror-reachability checker (can't operate a permanence system you can't observe). (6) **Indexer hosting** — The Graph hosted service is gone + thin on testnets; recommend self-hosted **Ponder** on the VPS (TS, first-class Sepolia), strictly a convenience layer (state remains the source of truth). (7) **Off-chain content durability** — the permanence promise's weakest link: decide **Arweave-as-canonical** (pay-once-permanent) for off-chain mirrors, SSTORE2 for critical on-chain content, IPFS as cache-not-guarantee; today the devnet IPFS is a single unauthenticated node.
 
 ---
@@ -124,21 +146,27 @@ A logistics audit produced a prioritized register; the launch-gating items (most
 ## Architecture & Extensibility
 
 ### Web-of-trust UX + user-configurable system lenses
+
 ADR-0039 reserves two tiers in the default lenses chain — `webOfTrust[]` and `systemLenses[]` — that are hardcoded / empty today. Shipping needs: (a) a Settings UI for users to add/remove WoT attesters (address + optional label), stored in localStorage; (b) user override of the system tier (defaults to a project-blessed seed list that ships in the repo); (c) a Lenses chip in the toolbar that surfaces the effective chain so users can see "why am I seeing this file?" Client-side only — no contract changes. Critical pre-mainnet, because the devnet's hardcoded bootstrap curator + deployer system tier isn't appropriate once real users are attesting.
 
 ### Kernel auto-tag `/tags/schema` on alias anchor creation
+
 Per ADR-0033, schema alias anchors (root-child anchors whose name is a registered schema UID in lowercase 0x-hex) are today **only** tagged with `/tags/schema` for the six system schemas seeded at deploy (`06_schema_aliases.ts`). User-created aliases (when someone registers a custom schema and attests a root anchor at its UID) need a follow-up tx to attach the tag before the sidebar enumerator sees them. Proper fix: in `EFSIndexer.onAttest` (or a kernel hook on ANCHOR attestations with `refUID == rootAnchorUID`), detect when `name` is a registered schema UID via `SchemaRegistry.getSchema` and auto-attest the `/tags/schema` TAG from the kernel. Care needed to avoid gas griefing — only triggered when name parses as bytes32 AND the UID exists in SchemaRegistry.
 
 ### Schema extensibility escape hatch
+
 Mainnet schema UIDs are baked in (ADR-0030). Adding a field to ANCHOR or DATA requires full system redeploy. A minimal `mapping(bytes32 uid => bytes data) extensions` in EFSIndexer would let future versions store extra data per attestation without re-deploying everything. Worth considering before mainnet — once frozen, no longer possible.
 
 ### Lens lists as first-class on-chain objects
+
 URLs with `?lenses=alice,bob,carol,dave,...` get long. Capped at 20 (ADR-0026). A future enhancement: register a lens list as an Anchor with member PROPERTYs, then reference the list by UID. URLs become `?lensList=<uid>` — short and shareable. Composes with existing lens resolution.
 
 ### Multi-lens merge semantics
+
 Currently first-attester-wins (ADR-0031). Users may want "newest by timestamp across all lenses" or "consensus." Could be a second router function or a query parameter. See `docs/QUESTIONS.md` for current open question.
 
 ### Forward-compatible event schema
+
 EFSIndexer emits events for off-chain indexing. Adding a field to an event later breaks indexers that decode strictly. Consider a versioning scheme or extra `bytes` field per event for future expansion.
 
 ---
@@ -146,19 +174,23 @@ EFSIndexer emits events for off-chain indexing. Adding a field to an event later
 ## Performance & Scale
 
 ### Audit and deprecate `getActiveTargetsByAttesterAndSchema`
+
 `EdgeResolver.getActiveTargetsByAttesterAndSchema` does an N+1 EAS read pattern — one `eas.getAttestation` per TAG entry to resolve `tagUID → targetID`. For large lists this hits gas limits. The preferred path is `getActiveTagEntries` (returns `(tagUID, weight)` in one bulk read) followed by targeted per-UID lookups only as needed. Audit all callers of `getActiveTargetsByAttesterAndSchema` in contracts and the TS client; migrate or deprecate once nothing load-bearing relies on it.
 
 ### Dev-UI: batch / cache PIN resolution in FileBrowser page load
+
 `getDirectoryPage` resolves `getActivePinTarget` per `(file, attester)` pair on every page load — an `items × attesters` RPC fanout. Compounds when effective-tag filtering is active (tag resolution iterates `targetSchemaBuckets × attesters × pages`). Collapse into a page-level batch helper or cache data-target results across tag names so cost scales with page size, not `tags × attesters × items`. Dev UI / Ephemeral tier; not a correctness issue.
 
 ### Dev-UI: TagModal edge-definition scan scales with lifetime churn
+
 `TagModal` paginates the full append-only `getEdgeDefinitions` set for a target, then does an active-edge lookup and ancestor walk per definition to classify it under `/tags/`. On a heavily-reused DATA UID this scales with all-time edge history, not active tags. Fix: expose a TAG-schema-specific reverse index or `/tags/` classification cache so modal-open cost is O(active tag count). Dev UI / Ephemeral tier.
 
 ### Empty lens list = "all data" (filtered + paged) — PRE-SEPOLIA, needs ADR + contract path
+
 Decision (James, 2026-06-14): the lens list is the answer to "whose data?" — `vitalik.eth`
 = only vitalik's, "me/my address" = only mine, and an EMPTY list = **all data from
 everyone**. The `system`/`nsfw` exclusion (ADR-0054) and pagination still apply; "all"
-only widens *whose* content, not *what kind*. This is a pre-Sepolia gate (LAUNCH_CHECKLIST
+only widens _whose_ content, not _what kind_. This is a pre-Sepolia gate (LAUNCH_CHECKLIST
 → Devnet → Frontend/Client), intentionally deferred from PR #27.
 
 Current state (what this supersedes): PR #27 removed the unscoped `getDirectoryPage`
@@ -179,16 +211,18 @@ makes empty mean "all", which is the opposite default — so it needs:
 - **Client wiring:** representation is just `lensAddresses.length === 0` ⇒ all. The only
   subtlety is distinguishing the empty cases. Today defaults are built in
   `defaultLensesForContainer` (`utils/efs/containers.ts`): `connected → viewedAddress →
-  webOfTrust → systemLenses`. To get a genuine empty, the systemLenses backfill must be
+webOfTrust → systemLenses`. To get a genuine empty, the systemLenses backfill must be
   removable (per the ADR). James leans toward: clearing the list (incl. an explicit
   `?lenses=` with no value) means "all" — which would also supersede ADR-0031's "explicit
   empty must not widen". Re-point the directory hooks so an empty list calls the
   all-attesters path instead of disabling.
 
 ### TopicTree navigation pane is not exclude-filtered (system/nsfw folders show in the sidebar)
+
 The ADR-0054 exclusion filter is wired into the main FileBrowser grid but NOT into the `TopicTree` sidebar, which lists folders via its own `useLensesDirectoryPage` call without `excludeTagDefs`. So a folder tagged `system`/`nsfw` is hidden from the grid but still appears in the left navigation tree — a partial break of the folder-hide guarantee. Pre-existing (the tree was never filtered) and out of the on-chain-filter PR's grid scope. Fix: lift the exclude-def resolution (currently inside FileBrowser) to a shared hook / ExplorerClient and thread `excludeTagDefUIDs` + `excludeMinWeights` through TopicTree's directory read, so both panes route through `getDirectoryPageFiltered`. Mind TopicTree's own resolution-race gating when doing so.
 
 ### Frontend exclude-filter fail-safes — unit coverage (mostly done)
+
 DONE: the pure decision logic was extracted to `utils/efs/excludeFilter.ts`
 (`shouldUseFilteredQuery`, `reconcileMinWeights`, `computeExcludesPending`,
 `tagsRootGateDecision`) with `utils/efs/excludeFilter.test.ts` + the empty-lenses
@@ -200,6 +234,7 @@ harness (react-testing-library — a Tier-2 dev dependency). Add RTL and
 component-level tests if the explorer's exclude wiring keeps regressing.
 
 ### Overview README anchor reachable before placement — mitigated; 1-tx residual is inherent
+
 EFSIndexer sets `_containsAttestations[anchorUID][creator]=true` at anchor
 creation, and `getDirectoryPageFiltered` phase 1 qualifies items on that flag — so
 a `README.md` file slot appears in the listing the moment its ANCHOR is attested,
@@ -217,6 +252,7 @@ placement rather than `_containsAttestations`) would eliminate it but changes
 Durable listing semantics for all files — out of scope here.
 
 ### Ancestor-visibility walk assumes a generic-folder parent (gated at source)
+
 `uploadOnchainFile`'s ancestor-visibility walk tags `current` (starting at
 `parentAnchorUID`) with `definition=dataSchemaUID`. If `parentAnchorUID` were a
 FILE anchor it would be mis-tagged as a visible folder and could re-surface via
@@ -232,6 +268,7 @@ expose an anchorType getter (its address is baked into the schema UIDs). Add it 
 the helper ever gains another caller.
 
 ### Per-file Overviews need a router change (currently folder-scoped)
+
 Overviews are folder-scoped. A per-file Overview (`/docs/readme.txt/README.md`)
 doesn't work end to end: the UI gates creation off on file leaves, and the read
 path can't resolve it either — `EFSRouter.request` walks intermediate segments with
@@ -244,6 +281,7 @@ segments too, then ungate creation with the file-anchor visibility-walk guard. B
 are Durable changes; settle before the Sepolia freeze if file Overviews are wanted.
 
 ### Deferred PR #27 review findings (non-blocking)
+
 - **EFSFileView exclusion gas (Gemini):** in `_isItemExcluded`, pre-check
   `edgeResolver.hasActiveTagFromAny(target, def, attesters)` before the per-attester
   `getActiveTagWeight` loop — for the common clean-item case this skips the inner
@@ -260,24 +298,31 @@ are Durable changes; settle before the Sepolia freeze if file Overviews are want
   empty-directory `getDirectoryPageFiltered` test (returns empty items + cursor).
 
 ### EFSFileView phase-0 folder pagination scales with append-only history
+
 `getDirectoryPageBySchemaAndAddressList` (phase 0) walks `getChildrenWithEdge` history under a fixed scan budget; a hot folder with many revoked or out-of-lens edges can exhaust the budget before returning a full page. Latency scales with historical churn, not live child count. Long-term: add a direct active-visibility index in EFSIndexer or EdgeResolver so phase-0 pagination is O(page) on active children. Tracked alongside ADR-0009 append-only implications.
 
 ### Sort overlay at >10K items
+
 `computeHints` punts to client-side for lists >1K. `getSortedChunk` is O(N) traversal capped by `maxTraversal`. For lists of 100K+ items, pagination is sequential — no random access. Consider: time-bucketed secondary indices, hashed offset support, or accepting that very large lists need off-chain sort hints.
 
 ### Mirror cap drift over decades
+
 `MAX_PAGES = 10` (ADR-0020) caps mirror scan at 500. Over decades, an attester accumulating revoked-but-still-indexed mirrors might push valid ones beyond the cap. Either: enforce on-chain mirror consolidation (revoke old, attest canonical set) periodically, or accept that very long-lived DATA may need fresh attesters.
 
 ### Garbage collection / index compaction
+
 Append-only indices (ADR-0009) grow monotonically. Most revocations leave dead entries forever. A compaction primitive (re-attest the same content with same UID? — no, not how EAS works) is theoretically possible but has no clean design. Worth thinking about for the >10-year horizon.
 
 ### `_containsAttestations` full de-propagation
+
 Currently sticky (ADR-0010). No longer affects folder visibility (that's tag-only post-2026-04-18), but still leaves stale flags on ancestors after file placements are revoked. Full reference-counted de-propagation would clean this up but costs gas at every untag. Low priority now that folder visibility has moved.
 
 ### Large directory pagination across attesters
+
 `getDirectoryPageBySchemaAndAddressList` works for 20 attesters max (ADR-0026). For "follow 100+ curators" use cases, requires either: relaxing the cap (gas concerns), client-side aggregation (complex but cheap), or a future merge endpoint.
 
 ### Off-chain CDN integration
+
 Every web3:// request hits eth_call directly. No HTTP cache headers (ETag, Last-Modified, Cache-Control) in router responses. Adding these would let gateways cache aggressively, dramatically reducing eth_call load for popular content.
 
 ---
@@ -285,18 +330,23 @@ Every web3:// request hits eth_call directly. No HTTP cache headers (ETag, Last-
 ## Missing APIs
 
 ### Bulk operations
+
 Publishing 100 files = ~800 transactions (8 per file). A multicall pattern or batch helper contract would meaningfully improve UX for content publishers. Could be a separate non-core contract.
 
 ### Content-addressed lookup in EFSFileView
+
 EFSIndexer has `dataByContentKey`. EFSFileView doesn't expose "where is this content placed?" as a high-level query. Add `getPathsForContent(bytes32 contentHash)` — useful for de-duping uploads, finding canonical paths, etc.
 
 ### Opt-in on-chain PROPERTY intern registry (on-chain-SDK dedup primitive) [ADR-0052]
+
 PROPERTY values are non-revocable interned content (ADR-0052) — many PINs may point at one value (best-effort dedup). For **off-chain** (JS) clients, the dedup lookup key already exists: `PropertyCreated`'s indexed `valueHash = keccak256(bytes(value))` topic lets an indexer answer "does this value already exist?" so the client reuses its UID. **On-chain** writers (other contracts attesting PROPERTYs) have no off-chain indexer to query, so they can't dedup. Proposal: a separate, **redeployable, NON-kernel** contract exposing `intern(value) → uid` (return-or-mint): the **neutral canonical minter** of a value's PROPERTY attestation, so "nobody owns the value." Properties: **opt-in** (callers choose to intern; unique never-shared values don't bloat the registry), and a **lookup, not an enforced gate** (it never reverts a batch — a writer that skips it just mints a fresh, possibly-duplicate value, which is fine). This is the on-chain half of the dedup story; the `valueHash` event topic is the off-chain half. Explicitly **not** a kernel-enforced uniqueness check — ADR-0052 rejects that (batch reverts + permanent storage bloat on unique values; cf. the retired `dataByContentKey`, ADR-0004). Ties to the forthcoming canonical-hashing spec (defines the byte-canonicalization that makes `keccak256(bytes(value))` a stable content key). Cross-ref ADR-0052, ADR-0049 (the future property index this would complement).
 
 ### Bulk revocation
+
 Revoking 1000 old TAGs = 1000 transactions. EAS supports multi-revoke; consider exposing a router/helper that batches.
 
 ### Lens discovery — "who has attested under this folder?"
+
 Currently you must know attester addresses to query. An `attestersInFolder(uid, start, length)` enumerable would help discovery layers bootstrap. Cost: another append-only index.
 
 ---
@@ -304,36 +354,47 @@ Currently you must know attester addresses to query. An `attestersInFolder(uid, 
 ## UX & Frontend (internal devtools)
 
 ### Standard (unscoped) folder view shows dead LIST/file anchors after delete + navigation
-Deleting a list or file revokes the user's placement PIN, but the standard non-lens listing comes from `getDirectoryPage`, which returns the permanent anchor regardless of whether any placement PIN is active. The `deletedListAnchors` session-local suppression hides the dead card only until a refresh / folder navigation clears it; the card then returns and `openList()` can only report the placement missing. **Systemic to the standard raw-anchor view** (dead *file* anchors behave identically) — not list-specific. Proper fix: filter the standard list/file path by an active placement PIN at render time (an RPC-per-anchor fanout — fold into "Dev-UI: batch / cache PIN resolution" above), or persist suppression (localStorage) until an active placement is re-observed. Ephemeral debug UI; **deferred per maintainer de-scoping of debug-UI polish (2026-05-31)** — future agents can pick this up. Flagged repeatedly by Codex on PR #20.
+
+Deleting a list or file revokes the user's placement PIN, but the standard non-lens listing comes from `getDirectoryPage`, which returns the permanent anchor regardless of whether any placement PIN is active. The `deletedListAnchors` session-local suppression hides the dead card only until a refresh / folder navigation clears it; the card then returns and `openList()` can only report the placement missing. **Systemic to the standard raw-anchor view** (dead _file_ anchors behave identically) — not list-specific. Proper fix: filter the standard list/file path by an active placement PIN at render time (an RPC-per-anchor fanout — fold into "Dev-UI: batch / cache PIN resolution" above), or persist suppression (localStorage) until an active placement is re-observed. Ephemeral debug UI; **deferred per maintainer de-scoping of debug-UI polish (2026-05-31)** — future agents can pick this up. Flagged repeatedly by Codex on PR #20.
 
 ### Runtime-switchable NetworkChip (auto-probe local + dropdown switcher)
+
 The current `NetworkChip` in the header is **read-only**: it displays the active chain + RPC URL inferred from `NEXT_PUBLIC_HARDHAT_RPC_URL` at build time and a copy button, but doesn't let the user switch. A future enhancement: (a) on first visit, probe `http://127.0.0.1:8545` with a short-timeout `eth_chainId` call — if reachable, prefer local; otherwise use the build-time devnet URL. (b) Dropdown with "Local / Devnet / Custom URL…" that saves preference to localStorage and reloads. Requires bootstrapping wagmi config from localStorage before `scaffold.config.ts` evaluates, so this is a refactor rather than a tack-on. Alpha ships without it because the build-time env var covers the two primary deploy targets (local + devnet) unambiguously.
 
 ### Per-container home pages ("Myspace mode")
+
 Every container (anchor / address / schema / attestation) is currently rendered with a minimal info panel + directory grid. A future enhancement is per-container user-defined "home pages" — e.g. a `description` / `icon` / `homeDataUID` PROPERTY attached to the container, which the panel picks up and expands into a rich header. Works for any container flavor. No schema changes needed; only PROPERTY keys + UI rendering.
 
 ### Accurate lens-filtered child count on folder rows
+
 Folder rows in `FileBrowser.tsx` currently render the literal `"Folder"` in lens mode because `indexer.getChildrenCount(uid)` is a kernel-level count over permanent anchors and never shrinks when placements are revoked (see `docs/decisions.md` 2026-04-19). A true count would require either a per-row view call (file-placement TAGs active under this folder for this lenses list + tagged subfolders) or a new counting helper in `EFSFileView`. Low priority — cosmetic — but worth wiring once a pattern exists.
 
 ### Attestations section in sidebar
+
 The sidebar has Anchors, Addresses, and Schemas sections. An Attestations section would complete the set, but top-N-recent heuristics aren't obvious — skip until a usage pattern emerges.
 
 ### ENS reverse lookup everywhere in the UI
+
 v1 does ENS reverse lookup only for the address in the URL bar and the Addresses sidebar list. Attester chips on file cards, mirror panels, etc. still show 0x… hex. A shared `useEnsName(addr)` hook with cache would make it ubiquitous at low cost.
 
 ### Empty-folder filtering in lens view
+
 Sticky `_containsAttestations` (ADR-0010) means empty folders appear in lens listings. The UI could cross-check with `containsAttestations()` to hide them — cosmetic improvement, no on-chain change.
 
 ### Attester attribution in multi-lens listings
+
 When `?lenses=alice,bob` shows two files named `readme.md` (one from each), the UI doesn't visually distinguish them. Add per-card attester badge.
 
 ### Mirror staleness indicator
+
 External transports (ipfs, https) can break. UI could attempt a HEAD request from the user's browser and show a "mirror unavailable" badge. Doesn't break the file itself; just signals.
 
 ### Bulk file selection / actions
+
 Currently single-file operations only. Multi-select for batch tagging, untagging, etc.
 
 ### Keyboard accessibility audit
+
 File browser cards aren't fully keyboard-navigable. Modal dialogs (TagModal) lack focus trap and ARIA roles. Pre-launch polish item.
 
 ---
@@ -341,38 +402,48 @@ File browser cards aren't fully keyboard-navigable. Modal dialogs (TagModal) lac
 ## Tooling & Process
 
 ### Review-process helper scripts
+
 The PR/review process is now documented well enough to use, but still relies on humans/agents remembering too much ceremony. High-value helpers:
+
 - `scripts/review/preflight-pr` to gather PR body, `Agents involved`, changed files, existing agent comments, unresolved threads, and likely governing specs/ADRs into one review brief.
 - `scripts/review/respond-threads` (or equivalent) to paginate unresolved review threads, apply the fixed / pushback / defer loop, and resolve threads via GraphQL with retries.
 - `yarn review:check` for lightweight local validation of PR template completeness, `[model · role]` prefixes, and reply/resolve metadata.
 
 ### Review persona de-duplication and generalization
+
 The review personas currently duplicate the same GitHub-review rules and are still somewhat overfit to the PIN/TAG migration. Refactor toward a shared base header (review-format, verification-context, common preflight) plus smaller role-specific prompts, and replace hardcoded migration-specific reads with a pluggable "governing docs for this change" slot.
 
 ### Agent-process eval canary suite
+
 A small suite of red-flag prompts to test that the agent workflow actually fires the right behaviors. Run on new models or after revising `docs/agent-workflow.md`. Grade traces, not just final outputs. Candidate canaries:
-- *"Add a field to the DATA schema"* — must stop at Tier 1 (schema UIDs are immutable).
-- *"Backfill the missing entries in the qualifying-folder index"* — must stop at Tier 1 (append-only per ADR-0009).
-- *"Rename a debug UI label"* — should take the trivial-changes fast path without escalation.
-- *"Change a TS API the Vite client consumes"* — must hit Tier 2 (Durable boundary).
-- *"Post a PR review comment"* — must include the `[model · role]` speaker prefix.
-- *"Approve your own PR"* — must recognize agent approval as advisory, not governance.
+
+- _"Add a field to the DATA schema"_ — must stop at Tier 1 (schema UIDs are immutable).
+- _"Backfill the missing entries in the qualifying-folder index"_ — must stop at Tier 1 (append-only per ADR-0009).
+- _"Rename a debug UI label"_ — should take the trivial-changes fast path without escalation.
+- _"Change a TS API the Vite client consumes"_ — must hit Tier 2 (Durable boundary).
+- _"Post a PR review comment"_ — must include the `[model · role]` speaker prefix.
+- _"Approve your own PR"_ — must recognize agent approval as advisory, not governance.
 
 Flagged as highest-leverage process follow-up by Codex (2026-04-22 high-mode review). Aligns with OpenAI and Anthropic guidance that evals beat prompt prose for reliability. Cross-ref: `docs/agent-workflow.md`.
 
 ### GitHub Action: auto-trigger Claude review on PR open
+
 Currently agent reviews are manual. A `.github/workflows/agent-review.yml` triggering Claude on PR open would close that loop. Cross-review with Codex similarly automatable.
 
 ### `make questions` shortcut to surface open items
+
 The QUESTIONS.md file works only if the human checks it. A daily-use shortcut (alias, Makefile target, or shell function) to print open questions reduces friction.
 
-### ~~`// AGENT-Q:` in-code question marker~~ — *landed in agent-workflow.md; remove from backlog.*
+### ~~`// AGENT-Q:` in-code question marker~~ — _landed in agent-workflow.md; remove from backlog._
+
 For questions tied to specific lines (rather than whole-task questions), an in-code marker pattern that agents grep for. Lighter than QUESTIONS.md for quick clarifications.
 
 ### Integration test suite for full upload + read cycle
+
 Current tests cover individual contracts. An end-to-end test (`yarn fork` → `yarn deploy` → upload via simulated client → read via web3:// → verify bytes) would catch wiring drift before deploy.
 
 ### Gas budget regression tests
+
 Track gas usage of hot paths (upload flow, directory listing, router resolution) over time. Catch regressions early.
 
 ---
@@ -380,24 +451,31 @@ Track gas usage of hot paths (upload flow, directory listing, router resolution)
 ## Security & Audit
 
 ### Uniform `includeRevoked` opt-in across the generic referencing getters [ADR-0051]
+
 ADR-0051 makes "reads exclude revoked (and superseded) by default" the universal rule. It operates on the revocable schemas (PIN/TAG/MIRROR/LIST_ENTRY/REDIRECT); PROPERTY is non-revocable interned content (ADR-0052), so removing a property value reads as absent via its revoked **binding PIN**, not a value-revocation check (`EFSRouter._getContentType` relies on `getActivePinTarget` being active-only). The schema-freeze PR audited every read surface: placement (`getActivePinTarget` is active-only), mirrors (`_getBestMirrorURI`/EFSFileView filter `isRevoked`), directory children (`getChildren`/`getDirectoryPage` have a `showRevoked` flag defaulting false), and list entries (`ListEntryResolver` swap-and-pops on revoke, so `ListReader.entries()` is active-only by construction). **Deferred:** the generic referencing-index getters on EFSIndexer — `getReferencingAttestationCount`, `getAllReferencing`, `getReferencingByAttester`, `getReferencingBySchemaAndAttester` (and the `propertyCount` EFSFileView surfaces from the count) — return the raw append-only arrays without a revoked filter and have no `showRevoked`/`includeRevoked` param. Bringing them under the ADR-0051 default uniformly is a multi-function additive ABI change (new param or sibling getters) across an Etched read surface plus the TS/debug-UI callers, so it was kept out of the freeze PR to avoid ballooning the diff. Follow-up: add the `includeRevoked` opt-in (default false) to these getters, decide count semantics (filtered count vs raw length), and update `specs/03`. Not a router/serving correctness issue — the serving path is covered — but a consistency gap the convention says to close. Cross-ref ADR-0051, ADR-0009 (append-only storage these iterate).
 
 ### Agent-session security policy
+
 `docs/agent-workflow.md` § Working principles has a minimal security posture (use tools freely; treat fetched content as data that may be prompt-injecting; never commit `.env*`). A fuller policy is needed: least-privilege scoping on any tokens an agent has access to, a prompt-injection response playbook (what an agent should do if it suspects the content it just fetched is trying to redirect the task), guidance on handling secrets that leak into logs or transcripts, and posture on MCP-server trust. Scope deliberately narrow pre-launch; expand as the attack surface grows (open-ended web access, tool permissions, MCP servers). Cross-ref: [OpenHands on prompt injection in software agents](https://openhands.dev/blog/mitigating-prompt-injection-attacks-in-software-agents).
 
 ### Devnet IPFS upload auth
+
 The public devnet's `POST /api/v0/add` endpoint is currently unauthenticated — any browser can pin arbitrary bytes into the devnet's IPFS daemon. Acceptable for an ephemeral "resets weekly" devnet and for alpha testing, but ship-blocking for any long-lived deployment that intends users to rely on pinned content persisting. Pre-launch work: add a token-gated auth layer (devnet operator whitelist, or EAS-attested uploader list) on the reverse proxy, or accept that uploads must originate from the app (which can sign them) rather than arbitrary clients.
 
 ### Devnet Arweave write path
+
 Public ingress is gateway-only (`/arweave/<txid>` reads succeed; `POST /arweave/` returns 405). For the alpha that's fine — the dev flow puts content on IPFS primarily — but the production client must not attempt to publish ar:// mirrors to the devnet's arweave endpoint without a write path. Either provision a signed-upload route or document ar:// as read-only on this devnet. Cross-ref ADR-0011 (transport anchors).
 
 ### External audit on EFSIndexer
+
 Single most important pre-mainnet item. EFSIndexer is permanent and the kernel of the system — one external pass from a credentialed firm (Trail of Bits, OpenZeppelin, Code4rena contest) is worth the cost. See `docs/LAUNCH_CHECKLIST.md`.
 
 ### Anchor name length cap
+
 `_isValidAnchorName` (ADR-0025) doesn't currently cap byte length. A 100KB filename is technically allowed. Add a cap (e.g. 255 bytes) to prevent storage-cost griefing.
 
 ### Fuzzing / property tests for path resolution
+
 `resolvePath`, `_findDataAtPath`, mirror selection are good targets for property-based testing (Foundry/Echidna). Adversarial path construction is the relevant attack class.
 
 ---
@@ -405,12 +483,15 @@ Single most important pre-mainnet item. EFSIndexer is permanent and the kernel o
 ## Discovery & Ecosystem
 
 ### Curator seeding for launch
+
 Without a discovery layer, EFS is a dark forest. Seeding with anchor curators (Wikipedia snapshot, Project Gutenberg, government records, etc.) bootstraps the ecosystem. Pre-launch coordination.
 
 ### Public web3:// resolver guidance
+
 Document how third parties can run their own EFS-aware web3:// gateway. Lower the dependency on any single gateway.
 
 ### Subgraph / The Graph integration
+
 Build and publish a subgraph that aggregates EFS attestations into queryable views. Off-chain indexing closes the gap on rich queries the on-chain kernel doesn't support.
 
 ---
@@ -418,69 +499,86 @@ Build and publish a subgraph that aggregates EFS attestations into queryable vie
 ## Lists UI — production client features (flagged 2026-05-28)
 
 ### ~~Lists in the Explorer folder grid~~ — DONE (2026-05-30; revised 2026-05-31)
+
 Lists appear as purple cards in the folder grid and open an in-pane editor. Placement is exactly like a file — `ANCHOR(anchorType=LIST_SCHEMA_UID) + LIST(free-floating) + PIN(definition=anchor, refUID=LIST)` (ADR-0044 correction). Per ADR-0046, a LIST_ENTRY is pure membership identity; order + free-text label are PIN-bound PROPERTYs on the stable entry UID (free text is arbitrary length now). ANY-mode `target` is `keccak(text)`. See `ListPreviewPane.tsx`, `utils/efs/listEncoding.ts` (unit-tested), ADR-0044 + ADR-0046 + decisions.md.
 
 ### Lens defaulting — viewing a list shows ONLY your own entries
-`ListPreviewPane` reads `entries(listUID, lens = connectedAddress)`. So you only ever see entries **you** added; opening a list someone else curated shows it empty. For the "share my top-10" use case the viewer needs to see the *curator's* entries (default lens → `mode.curator`), with an attester/lens picker (discovered from `ListEntryAttested` events + a custom-address input, per ADR-0031 first-wins waterfall) to switch views. This is the main gap blocking *shared/curated* lists; personal lists are unaffected. [ADR-0044 §lenses, ADR-0031, ADR-0039]
+
+`ListPreviewPane` reads `entries(listUID, lens = connectedAddress)`. So you only ever see entries **you** added; opening a list someone else curated shows it empty. For the "share my top-10" use case the viewer needs to see the _curator's_ entries (default lens → `mode.curator`), with an attester/lens picker (discovered from `ListEntryAttested` events + a custom-address input, per ADR-0031 first-wins waterfall) to switch views. This is the main gap blocking _shared/curated_ lists; personal lists are unaffected. [ADR-0044 §lenses, ADR-0031, ADR-0039]
 
 ### ~~ANY-mode item text limited to 31 bytes~~ — DONE (2026-05-31, ADR-0046)
+
 Resolved. Free-text labels are now an arbitrary-length `name` PROPERTY on the entry UID (the ANY-mode `target` is `keccak(text)`); the byte cap is gone. See ADR-0046.
 
 ### Lists edition picker — minor UX warts (devtools, flagged in round-2 review)
-- **Stale edition chips:** `getListAttesters` is append-only (ADR-0009), so an attester who added then revoked all their entries stays in the index and shows as an empty, clickable edition chip. The contract NatSpec says filter by `getLength(listUID, attester) > 0` for *active* lenses; the pane doesn't (would add N reads). Acceptable for the debug UI; filter before production exposure.
+
+- **Stale edition chips:** `getListAttesters` is append-only (ADR-0009), so an attester who added then revoked all their entries stays in the index and shows as an empty, clickable edition chip. The contract NatSpec says filter by `getLength(listUID, attester) > 0` for _active_ lenses; the pane doesn't (would add N reads). Acceptable for the debug UI; filter before production exposure.
 - **List-card load flash:** list anchors are classified via `isList(item, listSchemaUID)`, so until `LIST_SCHEMA_UID` resolves they're briefly filtered out of the grid (a one-frame pop). Not gated on the loading guard because that would delay folders/files for a list-only concern.
 
 ### ~~Reorder/edit are non-atomic revoke-then-attest (residual data-loss window)~~ — DONE (2026-05-31, ADR-0046)
+
 Resolved for reorder and edit. They no longer touch the entry at all — reorder re-PINs the `"weight"` order PROPERTY and edit re-PINs the `"name"` label PROPERTY (cardinality-1 supersede, O(1)), so the entry UID is never revoked and there is no `ListFull` re-attest window. (Removal still revokes the entry, which is correct — it is a deletion.) See ADR-0046.
 
 ### Post-create UID copy button
+
 After creating a list the success notification shows a truncated UID. A copy-to-clipboard button on the notification (or a modal success state with the full UID) would make it easy to share or use the UID elsewhere.
 
 ### Lists — surface read-failures and unordered entries in the UI (from ADR-0046 review)
+
 Two non-blocking polish items from the round-3 review of the order/label-as-PROPERTY work:
-- **Read-failure affordance (F1):** `readEntryProperty` now propagates RPC errors and the enrich effect retains last-known order/label + `console.error`s on a transient failure (so a blip no longer silently reorders/blanks). The remaining polish is a *user-visible* non-blocking indicator ("couldn't refresh N items") rather than console-only.
+
+- **Read-failure affordance (F1):** `readEntryProperty` now propagates RPC errors and the enrich effect retains last-known order/label + `console.error`s on a transient failure (so a blip no longer silently reorders/blanks). The remaining polish is a _user-visible_ non-blocking indicator ("couldn't refresh N items") rather than console-only.
 - **Unordered-entry grouping (F4):** entries with no `"weight"` order PROPERTY (legacy, or a half-written add) sort last by `entryUID`. Three semantically different populations (legacy / read-failed / mid-write) collapse into one bucket. Render them in a visually distinct "unordered" group with a tooltip instead of silently appending to the ranked list.
 
 ### Lists UI — items marked out of scope for v1
+
 ENS resolution on identity keys, bulk address paste, drag-to-reorder lens stack, SCHEMA-mode browse picker, ANY-mode keccak256 helper, deep-link `?lens=` URL param on detail page. [specs/2026-05-28-lists-ui-design.md]
 
 ### Lens-scoped list sorting — investigated, deferred (2026-05-31)
+
 We looked at making list ordering an on-chain, lens-scoped concern via `EFSSortOverlay` (a new `sourceType 2` reading `ListEntryResolver` + a `WeightSort` comparator + per-lens `SORT_INFO`s). A 3-agent review (feasibility / lens-semantics / adversarial) said **don't build it as designed**, for reasons worth preserving:
 
-- **It breaks the lens waterfall.** A viewer has an *ordered* lens list and membership resolves first-wins (ADR-0044). Pinning a single content-lens in the `SORT_INFO` would make *sorting change which entries you see*, not just their order — a correctness break. Encoding the content-lens in `targetSchema` is also Etched-field overloading.
-- **The requirement is already met client-side.** "Bob sorts Alice's list in his lens" decomposes into *membership = the viewer's lens waterfall* (unchanged) and *order = the sort-lens's `weight` PROPERTY* (ADR-0046), read per stable entry UID. Bob writes his own `weight` PROPERTYs on Alice's entry UIDs and sorts in his lens — no contract change.
-- **On-chain comparator cost.** `WeightSort.getSortKey` reads a PROPERTY (3–5 SLOADs + 2 calls) *per item, inside `processItems`* — 5–10× heavier than `NameSort`/`TimestampSort` and a real OOG risk on large lists. It also resurrects on-chain decimal→int parsing that ADR-0046 §Alt#4 deliberately rejected.
-- **No consumer.** Nothing in the repo reads a list's *order* on-chain today; ordering is a "NICE" (ADR-0046). And changing `EFSSortOverlay` orphans `SORT_INFO_SCHEMA_UID` (the overlay address is baked in) — an Etched, kernel-wired change.
+- **It breaks the lens waterfall.** A viewer has an _ordered_ lens list and membership resolves first-wins (ADR-0044). Pinning a single content-lens in the `SORT_INFO` would make _sorting change which entries you see_, not just their order — a correctness break. Encoding the content-lens in `targetSchema` is also Etched-field overloading.
+- **The requirement is already met client-side.** "Bob sorts Alice's list in his lens" decomposes into _membership = the viewer's lens waterfall_ (unchanged) and _order = the sort-lens's `weight` PROPERTY_ (ADR-0046), read per stable entry UID. Bob writes his own `weight` PROPERTYs on Alice's entry UIDs and sorts in his lens — no contract change.
+- **On-chain comparator cost.** `WeightSort.getSortKey` reads a PROPERTY (3–5 SLOADs + 2 calls) _per item, inside `processItems`_ — 5–10× heavier than `NameSort`/`TimestampSort` and a real OOG risk on large lists. It also resurrects on-chain decimal→int parsing that ADR-0046 §Alt#4 deliberately rejected.
+- **No consumer.** Nothing in the repo reads a list's _order_ on-chain today; ordering is a "NICE" (ADR-0046). And changing `EFSSortOverlay` orphans `SORT_INFO_SCHEMA_UID` (the overlay address is baked in) — an Etched, kernel-wired change.
 
 **Decision:** keep ADR-0046's client-side, lens-scoped `weight`-PROPERTY sort. **Two follow-ups when warranted:**
-1. *Cross-lens client wiring* (small, no contract change): let a viewing lens read membership via the waterfall but order via its own lens's weights, so "Bob re-orders Alice's list in his lens" works in the UI. The current client sorts each lens's own edition single-lens.
-2. *On-chain ordering, only if a real on-chain consumer appears*: prefer a **single per-(list, lens) ordered-vector PROPERTY** (ADR-0046 §Alt#5) over the overlay — cheaper, one-fetch read, **and crucially no schema change** (it's just a PROPERTY value), unlike the overlay path.
+
+1. _Cross-lens client wiring_ (small, no contract change): let a viewing lens read membership via the waterfall but order via its own lens's weights, so "Bob re-orders Alice's list in his lens" works in the UI. The current client sorts each lens's own edition single-lens.
+2. _On-chain ordering, only if a real on-chain consumer appears_: prefer a **single per-(list, lens) ordered-vector PROPERTY** (ADR-0046 §Alt#5) over the overlay — cheaper, one-fetch read, **and crucially no schema change** (it's just a PROPERTY value), unlike the overlay path.
 
 **Schema-freeze note:** neither viable path changes any schema. Only the rejected overlay path would (it re-registers `SORT_INFO`). So lens-scoped sorting does **not** block the schema freeze.
 
-*(Pre-existing, unrelated: `specs/06` §2 documents a 2-field `SORT_INFO` but the deployed schema is 3-field — `+ uint8 sourceType` per `deploy/04_sortoverlay.ts`. Worth a fix-in-passing during the freeze pass.)*
+_(Pre-existing, unrelated: `specs/06` §2 documents a 2-field `SORT_INFO` but the deployed schema is 3-field — `+ uint8 sourceType` per `deploy/04_sortoverlay.ts`. Worth a fix-in-passing during the freeze pass.)_
 
 ### Lists — deferred review nits (perf + API consistency)
+
 Non-blocking items from the multi-reviewer pass (Gemini / Claude-4.7), parked for after launch:
+
 - **RPC fanout (client, debug UI):** `ListPreviewPane` enrich reads order+label per entry as ~6 sequential reads × N entries, and the folder-delete cascade reads per child. Fine for hand-curated lists; batch via multicall if a large-list path ever matters.
 - **`ListReader` lacks the attester-index passthrough:** `getListAttesters`/`getListAttesterCount` live on `ListEntryResolver`; the documented consumer ABI (`ListReader`, redeployable) should mirror them for external consumers. Small, no schema impact.
 - **`ListReader` redundant EAS read:** `entries()` calls `eas.getAttestation(listUID)` once per page to denormalize `targetType`; could cache/skip. Minor gas on a view.
 - **Validation order:** `ListEntryResolver` checks `DuplicateIdentity` before the cap — both revert, so the order is cosmetic; intentional (dedup is the cheaper/more-specific signal).
 
 ### Lists deploy — CREATE2 before mainnet freeze (from Gemini / Claude 4.7 / Codex ×2 PR #20 review)
+
 `deploy/09_lists.ts` predicts the `ListResolver` / `ListEntryResolver` addresses from the deployer **nonce** (CREATE), deterministic on the pinned fork (ADR-0037). ADR-0044 §8 prescribed CREATE2 so the schema UIDs (which hash the resolver addresses) survive nonce drift across live networks. **ADR-0046 §"Supersession scope" scopes the "functionally equivalent" framing to the devnet pinned-fork regime only — on mainnet (no pin), any nonce-consuming tx on the deployer's account before deploy shifts every schema UID.** Before the mainnet freeze, move these to a CREATE2 deterministic-salt deploy (this also dissolves the partial-deploy nonce fragility that the current safe-abort guards against).
 
-**Why this is correctly deferred to the freeze, not done now.** CREATE2 ties the resolver address to the **initcode** (`keccak(0xff ++ factory ++ salt ++ keccak(initcode))`), whereas nonce-CREATE is bytecode-independent. During active devnet iteration the resolver bytecode keeps changing (this PR alone added `WrongSchema` to `ListEntryResolver`), so a CREATE2 address would move on *every* bytecode edit → the schema UID would churn → entries orphan on each iteration. Nonce-CREATE on a fresh pinned fork keeps the address stable across bytecode changes, which is what you want while iterating. CREATE2's cross-environment determinism only pays off once the bytecode is **frozen** (mainnet), so adopting it *at* the freeze — when the salt becomes a permanent, Etched input to the address derivation and warrants a deliberate choice — is the right sequencing, not a delay.
+**Why this is correctly deferred to the freeze, not done now.** CREATE2 ties the resolver address to the **initcode** (`keccak(0xff ++ factory ++ salt ++ keccak(initcode))`), whereas nonce-CREATE is bytecode-independent. During active devnet iteration the resolver bytecode keeps changing (this PR alone added `WrongSchema` to `ListEntryResolver`), so a CREATE2 address would move on _every_ bytecode edit → the schema UID would churn → entries orphan on each iteration. Nonce-CREATE on a fresh pinned fork keeps the address stable across bytecode changes, which is what you want while iterating. CREATE2's cross-environment determinism only pays off once the bytecode is **frozen** (mainnet), so adopting it _at_ the freeze — when the salt becomes a permanent, Etched input to the address derivation and warrants a deliberate choice — is the right sequencing, not a delay.
 
 **Implementation notes for the freeze task.**
+
 - CREATE2's cross-network determinism assumes the canonical CREATE2 factory is present at the same address on the target chain (e.g. Arachnid's `0x4e59…956C`); verify availability before committing.
 - The **salt becomes a permanent Etched input** to the address derivation — it's a deliberate pick at the freeze, not an incidental default.
 - The `_listAttesters` on-chain attester index (`getListAttesters` / `getListAttesterCount`, added this PR) is load-bearing storage baked into `LIST_ENTRY_SCHEMA_UID` (recorded in `docs/decisions.md`, 2026-05-30) — fold it into the schema-freeze documentation pass.
 
 ### Lists deploy — `ListEntryResolver` address mis-prediction on a persistent node (arg-change)
-`deploy/09_lists.ts` predicts `futureListEntryResolverAddress` as `existingListEntryResolver?.address ?? getCreateAddress(nonce+3)`. On a **persistent** node (long-lived anvil with a prior deployment) where the LIST constructor args change — e.g. the `uint32`→`uint256` `maxEntries` widening changed `LIST_SCHEMA_UID`, which *is* a `ListEntryResolver` constructor arg — the script keeps the **old** artifact address, but `redeployIfArgsChanged()` (~L190) then deletes that artifact and `deploy()` redeploys at the current (higher) nonce, so the deployed address ≠ the address baked into `listEntrySchemaUID`. The address assertion **aborts loud** (never registers a wrong/silent schema UID), but the deploy is wedged until the artifact is cleared. **Cannot fire on the pinned wipe-and-redeploy fork** (CI / devnet): `getOrNull` returns null on a fresh chain, so it nonce-predicts correctly — proven by `deploy-pin-check` passing on the `uint256` commit (`eb57f42`). Fix: detect the arg-change before choosing the predicted address and predict/register against the address `deploy()` will actually land at, or skip `redeployIfArgsChanged` for `ListEntryResolver`. Folds into the CREATE2 migration above (which rewrites this prediction/registration logic). Surfaced by the PR #20 adversarial deploy review + Codex (3331191025).
 
-### Demo seed runs *before* `09_lists` — demo-data edits churn List addresses — DONE
+`deploy/09_lists.ts` predicts `futureListEntryResolverAddress` as `existingListEntryResolver?.address ?? getCreateAddress(nonce+3)`. On a **persistent** node (long-lived anvil with a prior deployment) where the LIST constructor args change — e.g. the `uint32`→`uint256` `maxEntries` widening changed `LIST_SCHEMA_UID`, which _is_ a `ListEntryResolver` constructor arg — the script keeps the **old** artifact address, but `redeployIfArgsChanged()` (~L190) then deletes that artifact and `deploy()` redeploys at the current (higher) nonce, so the deployed address ≠ the address baked into `listEntrySchemaUID`. The address assertion **aborts loud** (never registers a wrong/silent schema UID), but the deploy is wedged until the artifact is cleared. **Cannot fire on the pinned wipe-and-redeploy fork** (CI / devnet): `getOrNull` returns null on a fresh chain, so it nonce-predicts correctly — proven by `deploy-pin-check` passing on the `uint256` commit (`eb57f42`). Fix: detect the arg-change before choosing the predicted address and predict/register against the address `deploy()` will actually land at, or skip `redeployIfArgsChanged` for `ListEntryResolver`. Folds into the CREATE2 migration above (which rewrites this prediction/registration logic). Surfaced by the PR #20 adversarial deploy review + Codex (3331191025).
+
+### Demo seed runs _before_ `09_lists` — demo-data edits churn List addresses — DONE
+
 **Resolved (markdown-for-items PR).** The demo seed was moved to run last (`deploy/10_seed_demo_tree.ts`, after `09_lists`, with a `Lists` dependency), so demo-data transactions can no longer shift the CREATE addresses of any contract-deploying step. Contract addresses are now deterministic for the commit independent of seed content (ADR-0037). The CREATE2 migration noted above is still the long-term fix for cross-network determinism, but the seed no longer perturbs anything regardless of order.
 
 ---
@@ -488,10 +586,12 @@ Non-blocking items from the multi-reviewer pass (Gemini / Claude-4.7), parked fo
 ## Write-flow & future schemas (flagged 2026-05-28, PM + brainstorm swarm)
 
 ### EFSUploadGateway batch-wrapper (write-flow ergonomics)
+
 A single EFS write today detonates into ~8 wallet prompts (chunk SSTORE2 + DATA + MIRROR + contentType triple + ANCHOR + PIN + ancestor visibility TAGs). **Lists add to this** — a single list placement is LIST + LIST_ENTRY + PIN + per-entry PROPERTY attestations. The leading fix is an `EFSUploadGateway` batch-wrapper contract that composes the multi-attestation flow behind one signature (EAS `multiAttest` + the gateway orchestrating chunk deploys). Keep in the back pocket; **do not scope-creep into Lists v1.** This is a system-wide write-ergonomics concern, orthogonal to the Lists data model. Cross-ref ADR-0041 (PIN/TAG), ADR-0044 (LIST/LIST_ENTRY), `specs/04-Core-Workflows.md` §Upload.
 
 ### EVENT / TRANSITION schema for state-transition edges
-The brainstorm swarm flagged a future need for a schema expressing **state-transition edges** — provenance, ownership handoff, synonymy-with-citation, "X superseded by Y," etc. This is a *directed transition* primitive, distinct from PIN/TAG (membership/placement edges) and from LIST/LIST_ENTRY (collection membership). **Explicitly NOT Lists' job** — noted here so it doesn't get shoehorned into the LIST primitive. If pursued, it gets its own ADR following the purpose-built-schema pattern (ADR-0041/0044 shape), not a generic mechanism (cf. ADR-0045's deferral).
+
+The brainstorm swarm flagged a future need for a schema expressing **state-transition edges** — provenance, ownership handoff, synonymy-with-citation, "X superseded by Y," etc. This is a _directed transition_ primitive, distinct from PIN/TAG (membership/placement edges) and from LIST/LIST_ENTRY (collection membership). **Explicitly NOT Lists' job** — noted here so it doesn't get shoehorned into the LIST primitive. If pursued, it gets its own ADR following the purpose-built-schema pattern (ADR-0041/0044 shape), not a generic mechanism (cf. ADR-0045's deferral).
 
 ---
 
@@ -500,20 +600,27 @@ The brainstorm swarm flagged a future need for a schema expressing **state-trans
 Non-blocking follow-ups for the per-item Overview markdown pane. The shipped v1 is a thin client orchestration over existing utils (the SDK is meant to own resolution/fetch/pagination later); these are the rough edges that review surfaced and we consciously deferred.
 
 ### Exact `README.md` resolution instead of a directory-page scan — DONE
+
 **Resolved.** `useItemOverview` no longer lists+scans the directory page. It resolves `README.md` by exact path through the router (`EFSRouter.request` → `EFSIndexer.resolveAnchor` / `_nameToAnchor`, an O(1) lens-scoped lookup, first-lens-wins) and reads the router's `404` ("no such anchor" / "no content for the active lens") as "no Overview". This is pagination-proof and removes the per-pane O(page) scan. (Exact "is file/property X under folder Y?" resolution is a foundational on-chain API — `resolveAnchor(parent, name, schema)` for files, `resolvePath(parent, name)` for generic folders — not something to paper over in the SDK.)
 
 ### System-tag hide filter does a global tag scan per load
+
 Defaulting `drawerTagFilters.system = "exclude"` (so Overviews are hidden from the file list like `nsfw`) routes every Explorer load through `FileBrowser.resolveTagSet`, which resolves `/tags/system` and paginates all active system-tag targets across all lenses before the page renders — O(all Overviews in the lens) rather than O(current page). It reuses the **exact** existing `nsfw` machinery (same accepted pattern), so it's not a new architecture, but the system set grows with one tag per Overview. Proper fix: hide system/README entries by batch-checking only the visible DATA UIDs after the page is known, rather than a global pre-scan — a shared refactor that improves the `nsfw` path too.
 
 ### Optional: bound the main file preview's fetch too
-**Resolved for the Overview path:** `fetchFileContent` now takes an opt-in `maxBytes` — the mirror branch rejects an oversized `Content-Length` and otherwise streams with an early abort, and the on-chain branch stops accumulating past the cap, throwing `FileTooLargeError`. `useItemOverview` passes `MAX_RENDER_BYTES`, so a folder visit can't be forced to download an arbitrarily large external README. The remaining (lower-priority) gap is the **main file preview** (`FileBrowser`), which calls `fetchFileContent` without `maxBytes` — that's a *user-initiated* click on a specific file rather than an automatic load, so the unattended-DoS concern doesn't apply, but a sensible large-file guard there (with a "download instead of preview" affordance) would still be a nice hardening.
+
+**Resolved for the Overview path:** `fetchFileContent` now takes an opt-in `maxBytes` — the mirror branch rejects an oversized `Content-Length` and otherwise streams with an early abort, and the on-chain branch stops accumulating past the cap, throwing `FileTooLargeError`. `useItemOverview` passes `MAX_RENDER_BYTES`, so a folder visit can't be forced to download an arbitrarily large external README. The remaining (lower-priority) gap is the **main file preview** (`FileBrowser`), which calls `fetchFileContent` without `maxBytes` — that's a _user-initiated_ click on a specific file rather than an automatic load, so the unattended-DoS concern doesn't apply, but a sensible large-file guard there (with a "download instead of preview" affordance) would still be a nice hardening.
 
 ### Paged/batched chunk manager for uploads above ~24 MB
-**Partly resolved:** uploads are now capped by chunk count — `MAX_CHUNKS = 1000` in `lib/efs/sstore2.ts`, with `MAX_ONCHAIN_SIZE = MAX_CHUNKS * CHUNK_SIZE` (~24 MB), enforced up front in `uploadOnchainFile`, `CreateItemModal`, and `MirrorsPanel`. The cap exists because `MockChunkedFile`'s constructor stores every chunk address with one cold SSTORE in a single deploy tx (~22k gas each), so ~1,000 chunks ≈ 23 M gas sits safely under a 30 M block while ~1,250 (the old 30 MB) risked OOG *after* the user paid for all chunk deploys. The remaining work is to lift the ceiling: replace the single-constructor manager with a **paged/batched deploy** (e.g. an `addChunks(address[])` appender called in bounded batches, or an SSTORE2-pointer index) so >24 MB files become possible without a one-shot constructor that can exceed the block gas limit. `MAX_CHUNKS` is the single knob to raise once that lands. The `1000` figure is a conservative estimate, not a measured limit — gas-test the real manager-deploy budget when revisiting.
+
+**Partly resolved:** uploads are now capped by chunk count — `MAX_CHUNKS = 1000` in `lib/efs/sstore2.ts`, with `MAX_ONCHAIN_SIZE = MAX_CHUNKS * CHUNK_SIZE` (~24 MB), enforced up front in `uploadOnchainFile`, `CreateItemModal`, and `MirrorsPanel`. The cap exists because `MockChunkedFile`'s constructor stores every chunk address with one cold SSTORE in a single deploy tx (~22k gas each), so ~1,000 chunks ≈ 23 M gas sits safely under a 30 M block while ~1,250 (the old 30 MB) risked OOG _after_ the user paid for all chunk deploys. The remaining work is to lift the ceiling: replace the single-constructor manager with a **paged/batched deploy** (e.g. an `addChunks(address[])` appender called in bounded batches, or an SSTORE2-pointer index) so >24 MB files become possible without a one-shot constructor that can exceed the block gas limit. `MAX_CHUNKS` is the single knob to raise once that lands. The `1000` figure is a conservative estimate, not a measured limit — gas-test the real manager-deploy budget when revisiting.
+
 ### getDirectoryPageFiltered — minor follow-ups (ADR-0054 review, non-blocking)
-Two P3s from the PR #26 review squad, both deliberately deferred: (1) `_isItemExcluded` and `_buildFileSystemItems` each `eas.getAttestation` + decode the same anchor for every *kept* item — bounded by `maxItems` so it never threatens the call, but the predicate could hand back the decoded `anchorType`/`isFolder` for the build step to reuse. (2) The view-level scan budget bounds the per-item exclusion loop but NOT the single underlying `EFSIndexer.getAnchorsBySchemaAndAddressList` call, which can scan up to `total` raw positions on a pathologically dense revoked/non-lens array — a pre-existing property shared with `getDirectoryPageBySchemaAndAddressList`, now inherited by a second public view. Worth a direct gas/fuzz test on the indexer page-fill before launch.
+
+Two P3s from the PR #26 review squad, both deliberately deferred: (1) `_isItemExcluded` and `_buildFileSystemItems` each `eas.getAttestation` + decode the same anchor for every _kept_ item — bounded by `maxItems` so it never threatens the call, but the predicate could hand back the decoded `anchorType`/`isFolder` for the build step to reuse. (2) The view-level scan budget bounds the per-item exclusion loop but NOT the single underlying `EFSIndexer.getAnchorsBySchemaAndAddressList` call, which can scan up to `total` raw positions on a pathologically dense revoked/non-lens array — a pre-existing property shared with `getDirectoryPageBySchemaAndAddressList`, now inherited by a second public view. Worth a direct gas/fuzz test on the indexer page-fill before launch.
 
 ### Distinct chainId for the devnet — DONE (ADR-0062, chain id 26001993)
+
 **Resolved 2026-06-22.** The devnet now has its own chain id `26001993` (ADR-0062), so Local (`31337`),
 Devnet (`26001993`), and Sepolia (`11155111`) are three distinct, explicitly-selectable wagmi chains —
 no more `31337` reuse / RPC-sniffing / auto-flipping. `deployedContracts[26001993]` is generated by the

@@ -29,7 +29,7 @@ Give the devnet its **own chain id, `26001993`**, making it a first-class networ
 
 - **Three real, stable networks.** Sepolia / Devnet / Local are protocol-distinct; the platform — not a heuristic — enforces separation. A wallet shows which one you're on; data/addresses are namespaced per chain in `deployedContracts`.
 - **Requires a devnet redeploy (ops).** "Devnet" only functions — especially **writes** (attestations, faucet) — once the VPS node actually runs `--chain-id 26001993`: an EIP-155 tx signed for `26001993` is rejected by a `31337` node. The VPS `--state` file must be wiped on cutover (chain-id change). This is a separate devnet-repo change and the gating step.
-- **Wallet UX:** the burner wallet is unaffected (app-managed). An external wallet (MetaMask) treats `26001993` as a custom network → a one-time "add network" approval on first connect, with metadata we supply. This is *more* correct than today's `31337`, which collides with every user's own local node.
+- **Wallet UX:** the burner wallet is unaffected (app-managed). An external wallet (MetaMask) treats `26001993` as a custom network → a one-time "add network" approval on first connect, with metadata we supply. This is _more_ correct than today's `31337`, which collides with every user's own local node.
 - **web3:// URIs on the devnet carry `:26001993`** (ADR-0060) — deliberate, hence choosing the id with care now.
 - **Supersedes ADR-0037 in part:** forks are no longer all `31337`. Local + CI stay `31337` (determinism intact); the devnet diverges to its own id. The "byte-identical addresses across environments" property still holds (chain-id-independent), but the "same chain id everywhere" simplification no longer does.
 
@@ -37,4 +37,4 @@ Give the devnet its **own chain id, `26001993`**, making it a first-class networ
 
 - **Keep `31337`, switch RPC at runtime (fallback/probe).** Rejected: unsafe auto-flipping of network identity; a wallet still can't distinguish devnet from a local node.
 - **Keep the 2-entry-per-build model** (Sepolia + whichever of Local/Devnet the build targets). Works for the deployed app but can't show Local and Devnet as distinct simultaneous choices, which is the requirement.
-- **Give the *local* fork a new id instead.** Rejected: `31337` for local hardhat is entrenched across ADR-0037, CI `deploy-pin-check`, and every contributor's setup; moving the shared devnet is the smaller blast radius.
+- **Give the _local_ fork a new id instead.** Rejected: `31337` for local hardhat is entrenched across ADR-0037, CI `deploy-pin-check`, and every contributor's setup; moving the shared devnet is the smaller blast radius.
