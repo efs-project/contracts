@@ -2077,7 +2077,7 @@ export const FileBrowser = ({
             ) : fetchError ? (
               <div className="text-center text-error">
                 <p className="font-semibold mb-1">Failed to load file</p>
-                <p className="text-xs opacity-70">{fetchError}</p>
+                <p className="text-xs opacity-70 break-all">{fetchError}</p>
               </div>
             ) : fileContent ? (
               fileContentType?.includes("image/svg") ? (
@@ -2237,7 +2237,7 @@ export const FileBrowser = ({
               ) : fetchError ? (
                 <div className="text-center text-error">
                   <p className="font-semibold mb-1">Failed to load file</p>
-                  <p className="text-xs opacity-70">{fetchError}</p>
+                  <p className="text-xs opacity-70 break-all">{fetchError}</p>
                 </div>
               ) : fileContent ? (
                 fileContentType?.includes("image/svg") ? (

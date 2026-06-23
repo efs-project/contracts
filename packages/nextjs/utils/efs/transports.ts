@@ -46,9 +46,12 @@ export const TRANSPORT_DISPLAY_ORDER: TransportType[] = [
  * same-origin.
  *
  * Trailing `/` matters — we concatenate `${gateway}${cid}` without inserting one.
+ * The `.replace` below normalizes env values that omit the trailing slash
+ * (e.g. `https://host/ipfs` → `https://host/ipfs/`) so the CID is never
+ * fused directly onto the path segment.
  */
-const IPFS_GATEWAY = process.env.NEXT_PUBLIC_IPFS_GATEWAY || "https://dweb.link/ipfs/";
-const ARWEAVE_GATEWAY = process.env.NEXT_PUBLIC_ARWEAVE_GATEWAY || "https://arweave.net/";
+const IPFS_GATEWAY = (process.env.NEXT_PUBLIC_IPFS_GATEWAY || "https://dweb.link/ipfs/").replace(/\/?$/, "/");
+const ARWEAVE_GATEWAY = (process.env.NEXT_PUBLIC_ARWEAVE_GATEWAY || "https://arweave.net/").replace(/\/?$/, "/");
 
 /** Detect transport type from a URI string. */
 export function detectTransport(uri: string): TransportType {

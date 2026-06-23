@@ -218,7 +218,10 @@ export async function fetchFileContent(args: FetchFileArgs): Promise<FetchedFile
           if (gatewayUrl) {
             // Fetch from gateway
             const gatewayResp = await globalThis.fetch(gatewayUrl);
-            if (!gatewayResp.ok) throw new Error(`Gateway returned ${gatewayResp.status} for ${gatewayUrl}`);
+            if (!gatewayResp.ok)
+              throw new Error(
+                `Gateway ${gatewayUrl} returned HTTP ${gatewayResp.status} for mirror ${externalUri}`,
+              );
             if (maxBytes != null) {
               // Reject a declared oversized body before reading it…
               const declared = Number(gatewayResp.headers.get("content-length"));
