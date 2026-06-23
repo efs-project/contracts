@@ -1307,13 +1307,20 @@ describe("Whiteout (WHITEOUT cross-lens negative mask, ADR-0055)", function () {
       "file stays hidden in the attester-scoped listing",
     ).to.deep.equal([]);
 
-    // (3) Resolution parity: getFilesAtPath (PIN-gated) also returns the file as deleted for [owner, alice]
-    //     — listing and resolution now agree (the inconsistency the gate closes).
-    const files = await fileView.getFilesAtPath(dir, [ownerAddr, aliceAddr], dataSchemaUID, "0x", 10);
+    // (3) Resolution parity: getFilesAtPath at the FILE anchor (where the placement PIN lives — calling it
+    //     with `dir` would trivially return empty since no DATA is pinned at the folder, so it would prove
+    //     nothing). It is PIN-gated, so for [owner, alice] owner's whiteout terminates the scan (his
+    //     folder-TAG does NOT un-gate a DATA read) → deleted; the control lens [alice] still resolves it.
+    const deletedForViewer = await fileView.getFilesAtPath(fileAnchor, [ownerAddr, aliceAddr], dataSchemaUID, "0x", 10);
     expect(
-      files.items.map(i => i.uid),
-      "getFilesAtPath agrees the file is deleted",
+      deletedForViewer.items.map(i => i.uid),
+      "getFilesAtPath agrees the file is deleted for [owner, alice]",
     ).to.deep.equal([]);
+    const resolvedForAlice = await fileView.getFilesAtPath(fileAnchor, [aliceAddr], dataSchemaUID, "0x", 10);
+    expect(
+      resolvedForAlice.items.length,
+      "getFilesAtPath still resolves the file for the control lens [alice] (her own PIN)",
+    ).to.equal(1);
 
     // Control: a viewer EXCLUDING the whiteout author (alice only) still sees her file via her own PIN.
     const alonePage = await fileView.getDirectoryPageBySchemaAndAddressList(dir, dataSchemaUID, [aliceAddr], "0x", 10);

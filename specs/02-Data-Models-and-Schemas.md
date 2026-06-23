@@ -355,7 +355,7 @@ See [ADR-0044](../docs/adr/0044-list-and-list-entry-schemas.md) and [Lists and C
   - `symlink` (2): source must be an ANCHOR (`SourceNotAnchor`); target must be ANCHOR or DATA (`TargetNotAnchorOrData`).
   - `kind >= 3`: no typing (reserved); only the `target != 0` / `target != source` guards apply.
 
-**Read-time resolution is client/spec, not the resolver.** The resolver enforces only **write-time** correctness (direct self-loops, typing). **Multi-hop cycle handling** (resolve to the lowest UID in the strongly-connected component — start-independent), **chain following**, **depth caps** (`D_MAX`), **lens precedence** (ADR-0031), and **kind-following rules** all live in the client/router + a later Durable resolution spec (ADR-0050 §"Write-time guards vs read-time resolution"). The resolver cannot afford to walk the graph on each write.
+**Read-time resolution is client/spec, not the resolver.** The resolver enforces only **write-time** correctness (direct self-loops, typing). **Multi-hop cycle handling** (for symlink navigation: a bounded visited-set stop returning `CycleStopped` — NOT lowest-UID-in-SCC, which is the separate `sameAs` *dedup-canonicalization* rule; ADR-0063 / specs/09), **chain following**, **depth caps** (`D_MAX`), **lens precedence** (ADR-0031), and **kind-following rules** (only `symlink` is auto-followed) all live in the client/router + the **[specs/09-redirect-resolution.md](./09-redirect-resolution.md)** resolution spec (Accepted, ADR-0063). The resolver cannot afford to walk the graph on each write.
 
 **Reverse fan-in** ("what points at me?") is intentionally not indexed on-chain by `AliasResolver` — it is the off-chain indexer's job (a future on-chain advisory index is addable as upgradeable logic; ADR-0050 §4).
 
