@@ -4,6 +4,10 @@ Backlog of known improvements, scale concerns, and architectural enhancements th
 
 > **Format:** organized by theme. Each item: 1–3 sentences on what + why. Add `[ADR-NNNN]` cross-refs where relevant. Newest items at the top of each section.
 
+### Partial-state fixture for post-seal ownership-transfer retry (PR #40 review P2)
+
+The current fork test for the sealed `--after-freeze-gate` retry starts from a fully-completed ceremony (seal + transfer done), so it does not exercise the specific partial state "sealed but transfer incomplete." A rigorous fixture would snapshot after `seal()` fires but before the ownership-transfer loop, then retry and assert the handoff completes. This requires either splitting `registerAndTransfer` into seam-exposed sub-steps or adding a mid-function snapshot hook — deferred as non-trivial refactoring for a scenario the idempotent transfer guards already handle in the code path.
+
 > **For agents:** when you discover something belonging here, append. When you start working on something here, move it to a GitHub issue with `next-up` label and remove from here.
 
 ---
@@ -641,3 +645,4 @@ until then, selecting Devnet in a deployed build points at a node still on 31337
 
 Remaining follow-up (smaller): the burner wallet writes use a single chain's RPC; that's inherent to
 wagmi per-chain transports and fine now that each network is a real chain.
+
