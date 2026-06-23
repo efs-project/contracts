@@ -36,6 +36,21 @@ addressable through `web3://<router>/path` (formalized by ADR-0063).
 
 Hardhat config now routes optional string env values through `packages/hardhat/env.ts` helpers so blank or whitespace-only `.env` entries behave like unset values, while typed knobs still fail closed: `positiveIntEnvOr` rejects zero/non-decimal fork pins, `oneOfEnvOr` constrains `EFS_DEPLOY_MODE`, and `boolEnv` keeps exact `"true"` semantics. Deliberately kept `__RUNTIME_DEPLOYER_PRIVATE_KEY` on raw `process.env` fallback so a blank runtime deployer key does not silently use the default key. ADR-0037's implementation snippet and operational notes were refreshed in place because the pinning decision did not change.
 
+### 2026-06-20 — [claude-opus-4.8 · dev] Debug-UI gas faucet: HTTP faucet for live Sepolia (configurable)
+
+Added an HTTP drip-faucet hook to the debug UI (auto-drip on connect + a "Get
+test ETH" wallet-menu button), backed by the standalone faucet service in
+`efs-project/devnet` (`faucet/`). Gated behind `NEXT_PUBLIC_FAUCET_URL` (unset =
+off) and scoped to one chain via `NEXT_PUBLIC_FAUCET_CHAIN_ID`, **defaulting to
+live Sepolia (11155111)** — the one network with no unlocked account. The fork
+chains (Local 31337 and the EFS Devnet 26001993) are funded by `DevnetAutoFund`
+from the node's unlocked account (zero infra), which now allowlists both fork
+ids, so the HTTP faucet stays off there. The chain is configurable (rather than
+a hardcoded `sepolia.id`) so a deployment can retarget it to another real
+testnet without a code change. `DevnetAutoFund` left untouched (the fork's
+unlocked-account drain is an accepted, separate footgun — see the devnet repo).
+Ephemeral surface. No ADR.
+
 ### 2026-06-18 — [claude-opus-4.8 · dev] Superseded edges: generic getters are the low-level raw EAS layer (option B)
 
 James's call on the Codex P2 (superseded PINs/TAGs leaking from `showRevoked=false` generic getters). The generic schema-level discovery getters (`getAttestationsBySchema` / `getReferencing*` / `getChildren*` / `getAnchorsBySchema*`) filter EAS-_revocation_ only and do NOT reflect PIN/TAG _supersession_ — by design, because supersession is an EdgeResolver slot-overlay concept, not an EAS/schema one. "Current claims" reads use the EFS semantic layer (active-edge getters / views / router), which already honor it. Chose B (document the layering) over A (a `_isSuperseded` flag across two burned contracts + edit-path gas). Note: a new PIN cannot auto-revoke the old one — EAS revoke is attester-gated, a resolver can't revoke on the attester's behalf — which is why supersession (not EAS-revocation) is the mechanism. Clarified the getter NatSpec + ADR-0051 (Proposed) text; no contract change. Refs: ADR-0051, ADR-0041.
