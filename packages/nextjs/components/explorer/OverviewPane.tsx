@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { zeroHash } from "viem";
 import { OverviewEditorModal } from "./OverviewEditorModal";
 import { MarkdownView } from "~~/components/markdown/MarkdownView";
 import { type UseItemOverviewArgs, useItemOverview } from "~~/hooks/efs/useItemOverview";
@@ -64,15 +65,16 @@ export function OverviewPane(props: OverviewPaneProps) {
 
   // Do we have everything needed to WRITE an Overview here? (false on address
   // roots / no wallet, or before the schema UIDs have loaded.)
+  const validUID = (uid?: `0x${string}`) => !!uid && uid !== zeroHash;
   const writeReady = !!(
     canEdit &&
     editAnchorUID &&
-    anchorSchemaUID &&
-    overviewArgs.dataSchemaUID &&
-    propertySchemaUID &&
-    pinSchemaUID &&
-    tagSchemaUID &&
-    mirrorSchemaUID &&
+    validUID(anchorSchemaUID) &&
+    validUID(overviewArgs.dataSchemaUID) &&
+    validUID(propertySchemaUID) &&
+    validUID(pinSchemaUID) &&
+    validUID(tagSchemaUID) &&
+    validUID(mirrorSchemaUID) &&
     indexerAddress
   );
   const hasContent =

@@ -20,6 +20,7 @@
  */
 import { useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { zeroHash } from "viem";
 import { usePublicClient, useWalletClient } from "wagmi";
 import { StopIcon, XMarkIcon } from "@heroicons/react/24/outline";
 import { MarkdownEditor } from "~~/components/markdown/MarkdownEditor";
@@ -91,6 +92,12 @@ export const OverviewEditorModal = (props: OverviewEditorModalProps) => {
   const handleSave = async () => {
     if (!walletClient || !publicClient || !indexerAbi || !easAddress) {
       notification.error("Wallet, network, or EAS/Indexer address not ready. Reconnect and retry.");
+      return;
+    }
+    const schemaUIDs = { anchorSchemaUID, dataSchemaUID, propertySchemaUID, pinSchemaUID, tagSchemaUID, mirrorSchemaUID };
+    const zeroed = Object.entries(schemaUIDs).find(([, uid]) => uid === zeroHash);
+    if (zeroed) {
+      notification.error(`Schema UIDs not yet loaded from the Indexer (${zeroed[0]} is zero). Wait a moment and retry.`);
       return;
     }
     if (!ensureWalletChain(walletClient, targetNetwork.id, targetNetwork.name)) return;
