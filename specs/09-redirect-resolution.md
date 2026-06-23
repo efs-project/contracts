@@ -212,9 +212,9 @@ Every conformant reader (on-chain follower, router, off-chain indexer, client) M
 
 ---
 
-## 10. Seeding ban (binding, pre-freeze)
+## 10. Seeding ban (binding — permanent)
 
-Until the dedicated WHITEOUT schema exists (ADR-0055), **NO durable EFS data may encode whiteout/suppression via any sentinel.** Specifically banned on permanent data:
+**Suppression is expressed ONLY by the dedicated WHITEOUT schema (ADR-0055, live).** No durable EFS data may encode whiteout/suppression via any sentinel — **this ban does not expire now that WHITEOUT ships; it is permanent.** Using a *follow* vocabulary (REDIRECT) or a *weight* / *placement* primitive (TAG/PIN/DATA) as a *stop* terminal is a category error whose cost — a forever-fact every conformant reader must honor — is identical before and after WHITEOUT exists; the only correct encoding of "this path is suppressed" is a WHITEOUT attestation. Specifically banned on permanent data, forever:
 
 - a **reserved/sentinel REDIRECT kind** (e.g. `kind ≥ 4` meaning "void") — `AliasResolver` does not type-check `kind ≥ 3` (`AliasResolver.sol:193`), so such a redirect is *writable* but is an **inert, ignored redirect** to every conformant reader (it is never a navigational kind per §2); it MUST NOT be read as suppression;
 - a **`weight < 0` TAG** used as suppression;

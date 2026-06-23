@@ -84,6 +84,7 @@ What else we looked at and why it lost.
 - [ADR-0008 — Qualifying-folder write-time index](./0008-qualifying-folder-write-time-index.md)
 - [ADR-0009 — Append-only indices stay append-only](./0009-append-only-indices.md)
 - [ADR-0010 — `_containsAttestations` propagation is one-way (sticky)](./0010-contains-attestations-sticky-propagation.md)
+- [ADR-0066 — `index()` is discovery-only; folder presence is placement-driven](./0066-index-discovery-only-no-folder-presence.md)
 
 ### Transports & Mirrors
 
