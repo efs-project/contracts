@@ -34,6 +34,7 @@ export type OverviewState =
 
 export interface UseItemOverviewArgs {
   enabled: boolean;
+  chainId?: number | string | bigint;
   anchorUID: `0x${string}` | null;
   lensAddresses: string[];
   resourcePathNames: string[];
@@ -72,6 +73,7 @@ export function useItemOverview(args: UseItemOverviewArgs): OverviewState {
         // pagination-proof — no directory page to scan. 404 ⇒ no such file or no
         // content for the active lens ⇒ no Overview.
         const fetched = await fetchFileContent({
+          chainId: args.chainId,
           routerAddress: args.routerAddress!,
           routerAbi: args.routerAbi!,
           publicClient: args.publicClient!,
@@ -118,6 +120,7 @@ export function useItemOverview(args: UseItemOverviewArgs): OverviewState {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     args.enabled,
+    args.chainId?.toString(),
     args.anchorUID,
     args.lensAddresses.join(","),
     args.resourcePathNames.join("/"),

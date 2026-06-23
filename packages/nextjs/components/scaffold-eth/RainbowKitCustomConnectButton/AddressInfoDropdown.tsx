@@ -13,7 +13,7 @@ import {
   DocumentDuplicateIcon,
   QrCodeIcon,
 } from "@heroicons/react/24/outline";
-import { BlockieAvatar, FaucetButton, isENS } from "~~/components/scaffold-eth";
+import { BlockieAvatar, FaucetButton, GasFaucetButton, isENS } from "~~/components/scaffold-eth";
 import { useOutsideClick } from "~~/hooks/scaffold-eth";
 import { getTargetNetworks } from "~~/utils/scaffold-eth";
 
@@ -126,6 +126,8 @@ export const AddressInfoDropdown = ({
           ) : null}
           {/* FaucetButton renders as its own <li> and is a no-op off hardhat. Kept above Disconnect so the destructive action stays last. */}
           <FaucetButton hidden={selectingNetwork} />
+          {/* GasFaucetButton is the HTTP-service sibling: a no-op unless on the faucet's chain with a configured faucet URL. */}
+          <GasFaucetButton hidden={selectingNetwork} />
           <li className={selectingNetwork ? "hidden" : ""}>
             <button
               className="menu-item text-error btn-sm !rounded-xl flex gap-3 py-3"

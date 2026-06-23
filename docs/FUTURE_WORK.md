@@ -33,6 +33,17 @@ shipped `FORK_BLOCK=` empty (`Number("")===0`), so **every `*.fork.test` had bee
 - **Script the `safe-batches.json` → Transaction Builder decode.** It worked (safeTxHash matched the script
   exactly all 3 batches), but via a hand-written node one-liner each time. Add `yarn safe:txbuilder <network>`
   to emit the upload JSON so the ceremony has no ad-hoc decoding step.
+- **`expectRevert` must FAIL CLOSED on non-revert errors (verify-gate initializer-lock check).** The gate's
+  `expectRevert` (`deploy-lib/verify.ts`) treats *any* rejected promise as "reverted as required". Now that
+  the 2026-06-23 fix points the initializer-lock check at an external RPC via `.staticCall` (eth_call), a
+  transient RPC error (timeout / 5xx / rate-limit) on a live Sepolia/mainnet freeze would be miscounted as
+  "lock proven" — a false positive on a one-shot, irreversible gate. Assert the caught error is a genuine EVM
+  revert before passing; else re-throw and abort the ceremony. **Implementation trap:** the revert shape is
+  node-dependent — plain ethers → `code "CALL_EXCEPTION"`; hardhat-ethers against external anvil → numeric
+  JSON-RPC `code 3`; hardhat in-process → `code undefined` ("Transaction reverted without a reason string").
+  A naive `code === "CALL_EXCEPTION"` check would RE-INTRODUCE the false negative on the very external nodes
+  this targets. Match a revert across all three shapes, or assert the OZ `InvalidInitialization()` selector.
+  (silent-failure-hunter review, 2026-06-23.)
 
 ### EFSFileView directory-read API consolidation [deferred; view-layer, redeployable, pre-launch]
 

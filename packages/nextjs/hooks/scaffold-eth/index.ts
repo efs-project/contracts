@@ -1,4 +1,5 @@
 export * from "./useAnimationConfig";
+export * from "./useAutoFaucetDrip";
 export * from "./useContractLogs";
 export * from "./useDeployedContractInfo";
 export * from "./useFetchBlocks";

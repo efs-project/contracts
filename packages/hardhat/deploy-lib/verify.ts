@@ -52,12 +52,19 @@ export async function runVerifyGate(input: VerifyInput): Promise<void> {
   for (const d of Object.values(deploys)) {
     const proxy = await ethers.getContractAt(d.resolver, d.proxy, deployer);
     // 2nd initialize on the proxy — argument shape varies per resolver; any args revert on `initializer`.
+    // Assert the revert with a STATIC call (eth_call), NOT a tx send. A state-changing send only surfaces
+    // a revert if the node rejects it at send time: Hardhat's in-process node does (so this gate passed in
+    // CI/local), but an external RPC node (the anvil devnet, and live Sepolia/mainnet) mines the reverting
+    // tx with a status-0 receipt and ethers v6 `contract.initialize(...)` resolves on broadcast — a FALSE
+    // NEGATIVE here, and on an external node the send form cannot even distinguish a locked proxy from an
+    // unlocked one (both resolve). `staticCall` reverts iff the call reverts, deterministically on every
+    // node, so the lock check is meaningful on the real freeze path (external RPC), not just in-process.
     const reinit = (proxy as any).initialize.fragment;
     const dummyArgs = reinit.inputs.map((i: any) => dummyForType(i.type));
-    await expectRevert((proxy as any).initialize(...dummyArgs), `${d.resolver} proxy 2nd initialize`);
+    await expectRevert((proxy as any).initialize.staticCall(...dummyArgs), `${d.resolver} proxy 2nd initialize`);
     if (d.impl) {
       const impl = await ethers.getContractAt(d.resolver, d.impl, deployer);
-      await expectRevert((impl as any).initialize(...dummyArgs), `${d.resolver} impl direct initialize`);
+      await expectRevert((impl as any).initialize.staticCall(...dummyArgs), `${d.resolver} impl direct initialize`);
     }
   }
 
