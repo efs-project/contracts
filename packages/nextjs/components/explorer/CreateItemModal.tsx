@@ -969,6 +969,10 @@ export const CreateItemModal = ({
           const hash = await walletClient.sendTransaction({
             data: bytecode as `0x${string}`,
             account: walletClient.account,
+            // Pin to the selected chain: a mid-upload wallet switch must fail loudly here
+            // rather than silently deploy chunks on another chain while the receipt waits
+            // and the web3://…:${targetNetwork.id} mirror URI stay scoped to this one.
+            chain: targetNetwork,
           });
           const chunkReceipt = await publicClient.waitForTransactionReceipt({ hash });
           if (!chunkReceipt.contractAddress) throw new Error("Chunk deployment failed");
@@ -987,6 +991,7 @@ export const CreateItemModal = ({
         const managerHash = await walletClient.sendTransaction({
           data: deployData,
           account: walletClient.account,
+          chain: targetNetwork,
         });
         const managerReceipt = await publicClient.waitForTransactionReceipt({ hash: managerHash });
         if (!managerReceipt.contractAddress) throw new Error("Manager deployment failed");
