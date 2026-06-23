@@ -38,6 +38,7 @@ import { deployResolverProxy } from "./helpers/deployResolverProxy";
  *   15 plain phase-1 listing scan is BUDGET-BOUNDED when many direct files are whited out
  *   16 getDirectoryPageByAddressList (attester-scoped, schema-agnostic) honors whiteout
  *   17 the folder-visibility-TAG positive is FOLDER-gated — a TAG on a whited FILE anchor doesn't un-hide
+ *   18 getFilesAtPath stops at a MID-STACK whiteout (higher positive kept, lower lens suppressed)
  *
  * HARNESS: the beforeEach predicts deterministic CREATE addresses via the deployer nonce, so this
  * file MUST be run as a FULL FILE (`yarn test test/Whiteout.test.ts`), NEVER via `--grep` — a grep
@@ -1328,5 +1329,42 @@ describe("Whiteout (WHITEOUT cross-lens negative mask, ADR-0055)", function () {
       alonePage.items.map(i => i.uid),
       "control lens (excludes owner) still sees the file",
     ).to.deep.equal([fileAnchor]);
+  });
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // VECTOR 18 — getFilesAtPath: a MID-STACK whiteout suppresses lenses below it, even with a HIGHER
+  //   visible lens. The old all-or-nothing pre-gate returned "not whited" on the higher positive PIN, and
+  //   the cursor loop then still emitted the LOWER lens's DATA. The negative terminal now lives IN the
+  //   loop: higher positives are kept; the walk STOPS at the first whiteout; lower lenses are suppressed,
+  //   and the cursor is forced terminal so a later page can't resume past it (ADR-0055 lens precedence).
+  // ════════════════════════════════════════════════════════════════════════════
+  it("vector 18: getFilesAtPath stops at a mid-stack whiteout (higher positive kept, lower lens suppressed)", async function () {
+    const root = await createAnchor("root", ZERO_BYTES32);
+    const dir = await createAnchor("dir", root);
+    const fileAnchor = await createAnchor("file.txt", dir, dataSchemaUID);
+
+    // Three lenses placing/suppressing at the SAME file anchor: owner (higher) PINs DATA-H, alice (lower)
+    // PINs DATA-A, bob (middle) whites it out.
+    const dataOwner = await mintData(owner);
+    const dataAlice = await mintData(alice);
+    await createPin(fileAnchor, dataOwner, owner);
+    await createPin(fileAnchor, dataAlice, alice);
+    await attestWhiteout(fileAnchor, bob);
+
+    // Viewer stack [owner, bob, alice]: owner's PIN is ABOVE bob's whiteout (kept); bob's whiteout
+    // suppresses alice (strictly below) → result is owner's DATA ONLY, and the cursor is terminal.
+    const page = await fileView.getFilesAtPath(fileAnchor, [ownerAddr, bobAddr, aliceAddr], dataSchemaUID, "0x", 10);
+    expect(
+      page.items.map(i => i.uid),
+      "higher positive kept; lower lens suppressed by the mid-stack whiteout",
+    ).to.deep.equal([dataOwner]);
+    expect(page.nextCursor, "cursor terminal after the whiteout cutoff (no resume into lower lenses)").to.equal("0x");
+
+    // Control without the deleter: [owner, alice] surfaces BOTH placements (no whiteout in the stack).
+    const both = await fileView.getFilesAtPath(fileAnchor, [ownerAddr, aliceAddr], dataSchemaUID, "0x", 10);
+    expect(
+      both.items.map(i => i.uid),
+      "no whiteout in the stack → both lenses' placements surface",
+    ).to.have.members([dataOwner, dataAlice]);
   });
 });

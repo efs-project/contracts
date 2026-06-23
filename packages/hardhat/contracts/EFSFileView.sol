@@ -888,32 +888,10 @@ contract EFSFileView {
         arr[0] = lens;
     }
 
-    /// @dev RESOLUTION-side per-item negative-mask predicate (ADR-0055). PIN-ONLY positive terminal —
-    ///      the original `_isItemWhitedOut` behavior, kept for single-anchor DATA RESOLUTION
-    ///      (`getFilesAtPath`) and shared in shape with the router's `_findDataAtPath` terminal: a
-    ///      direct file lookup is PIN-gated (correct overlayfs lookup semantics — a folder's visibility
-    ///      TAG is not a file placement, so it must NOT un-gate a DATA read). Walk in precedence order:
-    ///      positive placement PIN FIRST (same-lens positive-before-whiteout), then whiteout.
-    function _isItemWhitedOutForResolution(
-        bytes32 parentAnchor,
-        bytes32 childAnchor,
-        address[] memory attesters,
-        bytes32 schema
-    ) internal view returns (bool) {
-        IWhiteoutResolverForFileView wr = whiteoutResolver;
-        if (address(wr) == address(0)) return false;
-        for (uint256 i = 0; i < attesters.length; i++) {
-            address lens = attesters[i];
-            // Positive terminal: this lens places its own content here → visible, stop.
-            if (edgeResolver.getActivePinTarget(childAnchor, lens, schema) != bytes32(0)) return false;
-            // Negative terminal: this lens whites the entry out → drop, stop (no fall-through).
-            if (wr.isWhitedOut(parentAnchor, lens, childAnchor)) return true;
-        }
-        return false; // no lens asserted a positive or a whiteout → transparent.
-    }
-
-    /// @dev The per-item LISTING-side negative-mask predicate (ADR-0055). Split from the resolution-side
-    ///      `_isItemWhitedOutForResolution`: its positive terminal is a file PIN OR — for GENERIC FOLDER
+    /// @dev The per-item LISTING-side negative-mask predicate (ADR-0055). The RESOLUTION-side terminal
+    ///      (PIN-only positive; same-lens positive-before-whiteout; a whiteout suppresses strictly-lower
+    ///      lenses) is applied inline in `getFilesAtPath`'s cursor walk and the router's `_findDataAtPath`,
+    ///      NOT here. This listing predicate differs: its positive terminal is a file PIN OR — for GENERIC FOLDER
     ///      anchors only — a folder visibility TAG (the FOLDER RE-ADD FIX, via the `_one(lens)` wrapper
     ///      around `hasActiveTagFromAny`), so a lens that whites out a folder then re-asserts it with its
     ///      OWN visibility TAG is un-hidden in listings. `visibilityTagDef` is the listing's `anchorSchema`
@@ -922,8 +900,8 @@ contract EFSFileView {
     ///
     ///      The TAG branch is gated to generic folder anchors (`forSchema == 0`, the same discriminator
     ///      `_buildFileSystemItems` uses for `isFolder`). A FILE anchor's only positive re-assertion is its
-    ///      placement PIN — matching the PIN-gated resolution path (`_isItemWhitedOutForResolution`, the
-    ///      router, `getFilesAtPath`). Without this gate a same-lens TAG (`definition = dataSchemaUID`) on a
+    ///      placement PIN — matching the PIN-gated resolution path (`getFilesAtPath`'s cursor walk and the
+    ///      router's `_findDataAtPath`). Without this gate a same-lens TAG (`definition = dataSchemaUID`) on a
     ///      whited-out FILE anchor would un-hide it in directory listings while resolution still returns it
     ///      as deleted — a listing/resolution inconsistency (PR #37 review).
     ///
@@ -1063,18 +1041,14 @@ contract EFSFileView {
         // router computes it; the positive-PIN override bucket is `schema` (the slot being read). The
         // `getParent` SLOAD is guarded on the resolver being wired — disabled views read nothing extra,
         // mirroring the router's `_findDataAtPath` guard.
-        if (address(whiteoutResolver) != address(0)) {
-            bytes32 parentAnchor = indexer.getParent(anchorUID);
-            // Per-name negative terminal (PIN-only resolution predicate — a direct file lookup is
-            // PIN-gated; a folder visibility TAG must not un-gate a DATA read). A whited-out anchor
-            // serves empty, mirroring the router's `_findDataAtPath` negative terminal so the view never
-            // surfaces DATA the router would 404.
-            if (_isItemWhitedOutForResolution(parentAnchor, anchorUID, attesters, schema)) {
-                page.items = new FileSystemItem[](0);
-                page.nextCursor = "";
-                return page;
-            }
-        }
+        // Cross-lens negative mask (ADR-0055) is applied PER-LENS INSIDE the cursor walk below, NOT as a
+        // whole-anchor pre-gate: a lens's whiteout suppresses lenses STRICTLY BELOW it even when a HIGHER
+        // lens stays visible, so a higher positive PIN must not mask a lower-lens whiteout (the pre-gate
+        // bug). PIN-only positive terminal (a direct file lookup is PIN-gated — a folder visibility TAG
+        // must NOT un-gate a DATA read), mirroring the router's `_findDataAtPath`. The `getParent` SLOAD
+        // is guarded on the resolver being wired — a disabled view reads nothing extra.
+        IWhiteoutResolverForFileView wr = whiteoutResolver;
+        bytes32 parentAnchor = address(wr) == address(0) ? bytes32(0) : indexer.getParent(anchorUID);
 
         // Decode cursor — empty OR malformed = fresh start at attesterIdx=0.
         // Same defensive pattern as `getDirectoryPageBySchemaAndAddressList`: length-check
@@ -1100,7 +1074,18 @@ contract EFSFileView {
 
             // O(1) PIN read — per-attester slot holds 0 or 1 target.
             bytes32 target = edgeResolver.getActivePinTarget(anchorUID, currentAttester, schema);
-            if (target == bytes32(0)) continue;
+            if (target == bytes32(0)) {
+                // No positive placement by this lens. If it whites out this anchor, it is a NEGATIVE
+                // TERMINAL (ADR-0055): suppress all strictly-lower lenses — keep the higher positives
+                // already buffered, then STOP and force the cursor terminal so a later page can't resume
+                // past the whiteout into the lower lenses. (A lens's own positive PIN above is emitted via
+                // the `target != 0` branch, so same-lens positive-before-whiteout still holds.)
+                if (address(wr) != address(0) && wr.isWhitedOut(parentAnchor, currentAttester, anchorUID)) {
+                    attesterIdx = attesters.length; // cursor terminal — never resume past the whiteout
+                    break;
+                }
+                continue;
+            }
 
             // Cross-attester dedup (ADR-0031 first-attester-wins): if an earlier attester
             // already has an active PIN placing this DATA at this anchor, skip — this lens
