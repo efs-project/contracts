@@ -7,6 +7,7 @@ import { usePathname } from "next/navigation";
 import { Bars3Icon, BugAntIcon, FolderIcon } from "@heroicons/react/24/outline";
 import { DevWalletSwitcher } from "~~/components/DevWalletSwitcher";
 import { FaucetStatus } from "~~/components/FaucetStatus";
+import { FeedbackButton } from "~~/components/FeedbackButton";
 import { NetworkSwitcher } from "~~/components/NetworkSwitcher";
 import { SwitchTheme } from "~~/components/SwitchTheme";
 import { RainbowKitCustomConnectButton } from "~~/components/scaffold-eth";
@@ -99,6 +100,9 @@ export const Header = () => {
               }}
             >
               <HeaderMenuLinks />
+              <li>
+                <FeedbackButton variant="menu" />
+              </li>
             </ul>
           )}
         </div>
@@ -124,6 +128,7 @@ export const Header = () => {
         <NetworkSwitcher />
         <DevWalletSwitcher />
         <RainbowKitCustomConnectButton />
+        <FeedbackButton />
         <SwitchTheme />
       </div>
     </div>
