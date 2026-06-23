@@ -45,11 +45,19 @@ const {
 } = await import("./instantBurner.ts");
 
 test("instant burner only enables when a faucet URL is configured and the kill switch is not false", () => {
-  assert.equal(isInstantBurnerSessionEnabled({ faucetUrl: "", flag: undefined }), false);
-  assert.equal(isInstantBurnerSessionEnabled({ faucetUrl: "   ", flag: "true" }), false);
-  assert.equal(isInstantBurnerSessionEnabled({ faucetUrl: "https://faucet.example", flag: undefined }), true);
-  assert.equal(isInstantBurnerSessionEnabled({ faucetUrl: "https://faucet.example", flag: "false" }), false);
-  assert.equal(isInstantBurnerSessionEnabled({ faucetUrl: "https://faucet.example", flag: "0" }), false);
+  const base = {
+    faucetUrl: "https://faucet.example",
+    flag: undefined,
+    defaultChainId: 11155111,
+    faucetChainId: 11155111,
+  };
+
+  assert.equal(isInstantBurnerSessionEnabled({ ...base, faucetUrl: "" }), false);
+  assert.equal(isInstantBurnerSessionEnabled({ ...base, faucetUrl: "   ", flag: "true" }), false);
+  assert.equal(isInstantBurnerSessionEnabled(base), true);
+  assert.equal(isInstantBurnerSessionEnabled({ ...base, flag: "false" }), false);
+  assert.equal(isInstantBurnerSessionEnabled({ ...base, flag: "0" }), false);
+  assert.equal(isInstantBurnerSessionEnabled({ ...base, defaultChainId: 26001993 }), false);
 });
 
 test("auto-connect is limited to settled no-wallet state on the faucet target chain", () => {

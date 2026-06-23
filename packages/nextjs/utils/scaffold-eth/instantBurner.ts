@@ -10,12 +10,21 @@ type WalletStatus = "connected" | "connecting" | "disconnected" | "reconnecting"
 export function isInstantBurnerSessionEnabled({
   faucetUrl,
   flag,
+  defaultChainId,
+  faucetChainId,
 }: {
   faucetUrl: string | undefined;
   flag: string | undefined;
+  defaultChainId: number;
+  faucetChainId: number;
 }): boolean {
   const normalizedFlag = (flag ?? "").trim().toLowerCase();
-  return (faucetUrl ?? "").trim().length > 0 && normalizedFlag !== "false" && normalizedFlag !== "0";
+  return (
+    (faucetUrl ?? "").trim().length > 0 &&
+    normalizedFlag !== "false" &&
+    normalizedFlag !== "0" &&
+    defaultChainId === faucetChainId
+  );
 }
 
 export function isBurnerConnector(connector: Pick<Connector, "id"> | undefined): boolean {

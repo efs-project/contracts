@@ -7,6 +7,7 @@ import { hardhat } from "viem/chains";
 import { useAccount, useBalance, useConnect, useConnectors, useDisconnect } from "wagmi";
 import { WalletIcon, XMarkIcon } from "@heroicons/react/24/outline";
 import { useTargetNetwork } from "~~/hooks/scaffold-eth";
+import scaffoldConfig from "~~/scaffold.config";
 import {
   BURNER_WALLET_PK_STORAGE_KEY,
   FAUCET_CHAIN_ID,
@@ -28,6 +29,8 @@ import { HARDHAT_ACCOUNTS } from "~~/utils/scaffold-eth/hardhatAccounts";
 const INSTANT_BURNER_ENABLED = isInstantBurnerSessionEnabled({
   faucetUrl: FAUCET_URL,
   flag: process.env.NEXT_PUBLIC_INSTANT_BURNER_SESSION,
+  defaultChainId: scaffoldConfig.targetNetworks[0].id,
+  faucetChainId: FAUCET_CHAIN_ID,
 });
 
 const shortAddress = (address: string) => `${address.slice(0, 6)}...${address.slice(-4)}`;
