@@ -9,7 +9,7 @@ import { useDeployedContractInfo, useScaffoldReadContract, useScaffoldWriteContr
 import { useTargetNetwork } from "~~/hooks/scaffold-eth/useTargetNetwork";
 import { CHUNK_SIZE, MAX_CHUNKS, MAX_ONCHAIN_SIZE } from "~~/lib/efs/sstore2";
 import { EDGE_RESOLVER_ABI } from "~~/utils/efs/edgeResolver";
-import { TRANSPORT_LABELS, detectTransport, resolveGatewayUrl } from "~~/utils/efs/transports";
+import { TRANSPORT_DISPLAY_ORDER, TRANSPORT_LABELS, detectTransport, resolveGatewayUrl } from "~~/utils/efs/transports";
 import { ensureWalletChain, notification } from "~~/utils/scaffold-eth";
 
 const MOCK_CHUNKED_FILE_ABI = [
@@ -187,7 +187,7 @@ export const MirrorsPanel = ({ fileAnchorUID, lensAddresses }: { fileAnchorUID: 
       })) as `0x${string}`;
       if (!transportsUID || transportsUID === zeroHash) return;
 
-      const names = ["onchain", "ipfs", "arweave", "https", "magnet"];
+      const names = TRANSPORT_DISPLAY_ORDER;
       const results = await Promise.allSettled(
         names.map(name =>
           publicClient.readContract({
@@ -292,8 +292,15 @@ export const MirrorsPanel = ({ fileAnchorUID, lensAddresses }: { fileAnchorUID: 
     setIsSubmitting(true);
     try {
       const detected = detectTransport(newUri);
-      if (detected === "unknown") {
-        notification.error("Unrecognized URI scheme. Use web3://, ipfs://, ar://, https://, or magnet:");
+      // `data:` is not a paste-able mirror target — inline bytes are created by the
+      // upload path (which seeds them only when /transports/data exists). Reject here
+      // too so a pasted data: URI can't attempt a MIRROR against the dormant anchor.
+      if (detected === "unknown" || detected === "data") {
+        notification.error(
+          detected === "data"
+            ? "Inline data: URIs aren't a mirror target — upload the file instead."
+            : "Unrecognized URI scheme. Use web3://, ipfs://, ar://, https://, or magnet:",
+        );
         setIsSubmitting(false);
         return;
       }

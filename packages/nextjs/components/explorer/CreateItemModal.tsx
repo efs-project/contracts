@@ -2,21 +2,13 @@
 
 import { useEffect, useRef, useState } from "react";
 import { ethers } from "ethers";
-import {
-  decodeEventLog,
-  encodeAbiParameters,
-  encodeDeployData,
-  parseAbiItem,
-  toHex,
-  zeroAddress,
-  zeroHash,
-} from "viem";
+import { decodeEventLog, encodeAbiParameters, parseAbiItem, zeroAddress, zeroHash } from "viem";
 import { usePublicClient, useReadContract, useWalletClient } from "wagmi";
 import { Cog6ToothIcon, StopIcon } from "@heroicons/react/24/outline";
 import { useSortDiscovery } from "~~/hooks/efs/useSortDiscovery";
 import { useDeployedContractInfo, useScaffoldWriteContract } from "~~/hooks/scaffold-eth";
 import { useTargetNetwork } from "~~/hooks/scaffold-eth/useTargetNetwork";
-import { CHUNK_SIZE, MAX_CHUNKS, MAX_ONCHAIN_SIZE } from "~~/lib/efs/sstore2";
+import { createExternalFileReference, uploadOnchainFile } from "~~/lib/efs/uploadOnchainFile";
 import { useBackgroundOps } from "~~/services/store/backgroundOps";
 import type { ClassifiedContainer } from "~~/utils/efs/containers";
 import { EDGE_RESOLVER_ABI, getEdgeResolverAddress } from "~~/utils/efs/edgeResolver";
@@ -25,31 +17,6 @@ import { TRANSPORT_LABELS, computeContentHash, detectTransport, resolveGatewayUr
 import { ensureWalletChain, notification } from "~~/utils/scaffold-eth";
 
 export type CreationType = "Folder" | "File" | "PasteLink" | "List";
-
-const MOCK_CHUNKED_FILE_ABI = [
-  {
-    inputs: [{ internalType: "address[]", name: "_chunks", type: "address[]" }],
-    stateMutability: "nonpayable",
-    type: "constructor",
-  },
-  {
-    inputs: [{ internalType: "uint256", name: "index", type: "uint256" }],
-    name: "chunkAddress",
-    outputs: [{ internalType: "address", name: "", type: "address" }],
-    stateMutability: "view",
-    type: "function",
-  },
-  {
-    inputs: [],
-    name: "chunkCount",
-    outputs: [{ internalType: "uint256", name: "", type: "uint256" }],
-    stateMutability: "view",
-    type: "function",
-  },
-] as const;
-
-const MOCK_CHUNKED_FILE_BYTECODE =
-  "0x60806040523461013f57610274803803806100198161015a565b92833981019060208183031261013f578051906001600160401b03821161013f570181601f8201121561013f578051916001600160401b038311610144578260051b9160208061006a81860161015a565b80968152019382010191821161013f57602001915b81831061011f576000845b80518210156101115760009160018060a01b0360208260051b84010151168354680100000000000000008110156100fd57600181018086558110156100e957602085806001969752200190838060a01b0319825416179055019061008a565b634e487b7160e01b85526032600452602485fd5b634e487b7160e01b85526041600452602485fd5b60405160f490816101808239f35b82516001600160a01b038116810361013f5781526020928301920161007f565b600080fd5b634e487b7160e01b600052604160045260246000fd5b6040519190601f01601f191682016001600160401b038111838210176101445760405256fe6080806040526004361015601257600080fd5b60003560e01c9081632bfedae0146053575063f91f093714603257600080fd5b34604e576000366003190112604e576020600054604051908152f35b600080fd5b34604e576020366003190112604e576004359060005482101560a857600080527f290decd9548b62a8d60345a988386fc84ba6bc95484008f6362f93160ef3e563909101546001600160a01b03168152602090f35b634e487b7160e01b600052603260045260246000fdfea26469706673582212206ea2dc51d432b7722a3857f0e86c67aaa8fa760e9dee9a8bbd7f8fac66eade7f64736f6c634300081c0033";
 
 // Reserved bytes that MUST be percent-encoded (UPPERCASE %XX) in a canonical
 // anchor name — mirrors EFSIndexer.sol::_isReservedByte. NOTE: '%' (0x25) is
@@ -208,6 +175,11 @@ export const CreateItemModal = ({
 }: CreateItemModalProps) => {
   const { writeContractAsync: attest } = useScaffoldWriteContract({ contractName: "EAS" });
   const { data: indexer } = useDeployedContractInfo({ contractName: "Indexer" });
+  // EAS address for the batched `multiAttest` upload seam. Prefer the prop; fall
+  // back to the deployed-contracts registry so File upload works even if the prop
+  // wasn't threaded through.
+  const { data: easInfo } = useDeployedContractInfo({ contractName: "EAS" });
+  const easAddress = _easAddress ?? (easInfo?.address as `0x${string}` | undefined);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: listReaderInfo } = useDeployedContractInfo({ contractName: "ListReader" as any });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -246,6 +218,7 @@ export const CreateItemModal = ({
   }, [pasteUri]);
   const [showPasteDetails, setShowPasteDetails] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [canCancelSubmit, setCanCancelSubmit] = useState(true);
   const [existingAnchorWarning, setExistingAnchorWarning] = useState(false);
 
   // List-specific state (ADR-0044)
@@ -301,6 +274,13 @@ export const CreateItemModal = ({
   const handleClose = () => {
     modalRef.current?.close();
     onClose();
+  };
+  const requestClose = () => {
+    if (isSubmitting) {
+      if (canCancelSubmit) cancelledRef.current = true;
+      return;
+    }
+    handleClose();
   };
 
   /** Fetch content info from a pasted URI via its gateway. */
@@ -411,33 +391,6 @@ export const CreateItemModal = ({
       }
     }
     return undefined;
-  };
-
-  const resolveTransportAnchor = async (transportName: string): Promise<`0x${string}` | null> => {
-    if (!indexer || !publicClient) return null;
-    try {
-      const rootUID = (await publicClient.readContract({
-        address: indexer.address as `0x${string}`,
-        abi: indexer.abi,
-        functionName: "rootAnchorUID",
-      })) as `0x${string}`;
-      const transportsUID = (await publicClient.readContract({
-        address: indexer.address as `0x${string}`,
-        abi: indexer.abi,
-        functionName: "resolvePath",
-        args: [rootUID, "transports"],
-      })) as `0x${string}`;
-      if (!transportsUID || transportsUID === ethers.ZeroHash) return null;
-      const uid = (await publicClient.readContract({
-        address: indexer.address as `0x${string}`,
-        abi: indexer.abi,
-        functionName: "resolvePath",
-        args: [transportsUID, transportName],
-      })) as `0x${string}`;
-      return uid && uid !== ethers.ZeroHash ? uid : null;
-    } catch {
-      return null;
-    }
   };
 
   // For Address containers the top-level parent is `bytes32(uint160(addr))`,
@@ -703,6 +656,7 @@ export const CreateItemModal = ({
     }
 
     setIsSubmitting(true);
+    setCanCancelSubmit(true);
     cancelledRef.current = false;
 
     const ops = useBackgroundOps.getState();
@@ -715,9 +669,6 @@ export const CreateItemModal = ({
     const opId = ops.start(opTitle);
 
     const CANCEL_SENTINEL = "__UPLOAD_CANCELLED__";
-    const checkCancelled = () => {
-      if (cancelledRef.current) throw new Error(CANCEL_SENTINEL);
-    };
 
     try {
       if (internalType === "Folder") {
@@ -793,7 +744,8 @@ export const CreateItemModal = ({
               },
               { silent: true },
             );
-            if (tagTx) await publicClient.waitForTransactionReceipt({ hash: tagTx });
+            if (!tagTx) throw new Error("Visibility TAG attestation failed.");
+            await publicClient.waitForTransactionReceipt({ hash: tagTx });
           } catch (e) {
             console.warn("Empty-folder visibility tag failed; folder will remain hidden until it has content.", e);
           }
@@ -888,12 +840,8 @@ export const CreateItemModal = ({
 
       // --- FILE UPLOAD or PASTE LINK ---
       const fileAnchorSchemaUID = dataSchemaUID as `0x${string}`;
-      const encodedName = ethers.AbiCoder.defaultAbiCoder().encode(
-        ["string", "bytes32"],
-        [nfcName, fileAnchorSchemaUID],
-      );
 
-      let existingFileAnchorUID: `0x${string}` | undefined;
+      let knownFileAnchorUID: `0x${string}` | null | undefined;
       if (indexer) {
         try {
           const existingUID = (await publicClient.readContract({
@@ -911,458 +859,144 @@ export const CreateItemModal = ({
               ops.clear(opId);
               return;
             }
-            existingFileAnchorUID = existingUID;
+            knownFileAnchorUID = existingUID;
             setExistingAnchorWarning(false);
+          } else {
+            knownFileAnchorUID = null;
           }
         } catch (e) {
           console.warn("Failed to check if anchor exists", e);
         }
       }
 
-      let contentHash: `0x${string}`;
-      let fileSize: bigint;
-      let mirrorUri: string;
-      let transportName: string;
-      let contentType: string;
-
+      // ── FILE upload → the shared SDK seam (`uploadOnchainFile`): layered
+      //    `multiAttest` (one popup per DAG layer instead of ~11) + pipelined
+      //    SSTORE2 chunk deploys + inline `data:` URI for small files. Replaces the
+      //    long inline per-attestation sequence that used to live here; PasteLink
+      //    below uses the same seam for external URI records (no storage deploys).
       if (internalType === "File") {
-        const fileArrayBuffer = await fileToUpload!.arrayBuffer();
-        const dataBytes = new Uint8Array(fileArrayBuffer);
-        contentType = fileToUpload!.type || "application/octet-stream";
-
+        const dataBytes = new Uint8Array(await fileToUpload!.arrayBuffer());
+        const fileContentType = fileToUpload!.type || "application/octet-stream";
         if (dataBytes.length === 0) {
           const msg = "Cannot upload an empty file.";
           notification.error(msg);
           ops.fail(opId, msg);
-          setIsSubmitting(false);
           return;
         }
-
-        if (dataBytes.length > MAX_ONCHAIN_SIZE || Math.ceil(dataBytes.length / CHUNK_SIZE) > MAX_CHUNKS) {
-          const msg =
-            `File too large for on-chain upload (${Math.round(dataBytes.length / 1024 / 1024)}MB). ` +
-            `Maximum is ~${MAX_ONCHAIN_SIZE / 1_000_000}MB (${MAX_CHUNKS} chunks). Use IPFS or Arweave for large files.`;
-          notification.error(msg);
-          ops.fail(opId, msg);
-          setIsSubmitting(false);
-          return;
-        }
-
-        contentHash = computeContentHash(dataBytes);
-        fileSize = BigInt(dataBytes.length);
-
-        const totalChunks = Math.ceil(dataBytes.length / CHUNK_SIZE) || 1;
-        ops.log(
-          opId,
-          `Uploading ${Math.round(dataBytes.length / 1024) || 1}KB in ${totalChunks} chunk${totalChunks > 1 ? "s" : ""} via SSTORE2...`,
-        );
-        const chunkAddresses: string[] = [];
-
-        for (let i = 0; i < dataBytes.length; i += CHUNK_SIZE) {
-          checkCancelled();
-          const chunk = dataBytes.slice(i, i + CHUNK_SIZE);
-          const chunkHex = toHex(chunk);
-          const sizeTotal = chunk.length + 1;
-          const sizeHex = sizeTotal.toString(16).padStart(4, "0");
-          const bytecode = `0x61${sizeHex}80600a3d393df300${chunkHex.slice(2)}`;
-
-          const hash = await walletClient.sendTransaction({
-            data: bytecode as `0x${string}`,
-            account: walletClient.account,
-            // Pin to the selected chain: a mid-upload wallet switch must fail loudly here
-            // rather than silently deploy chunks on another chain while the receipt waits
-            // and the web3://…:${targetNetwork.id} mirror URI stay scoped to this one.
-            chain: targetNetwork,
-          });
-          const chunkReceipt = await publicClient.waitForTransactionReceipt({ hash });
-          if (!chunkReceipt.contractAddress) throw new Error("Chunk deployment failed");
-          chunkAddresses.push(chunkReceipt.contractAddress);
-          ops.log(opId, `Deployed chunk ${chunkAddresses.length} of ${totalChunks}`);
-          ops.progress(opId, Math.round((chunkAddresses.length / (totalChunks + 6)) * 100));
-        }
-        checkCancelled();
-
-        ops.log(opId, "Deploying chunk manager...");
-        const deployData = encodeDeployData({
-          abi: MOCK_CHUNKED_FILE_ABI,
-          bytecode: MOCK_CHUNKED_FILE_BYTECODE as `0x${string}`,
-          args: [chunkAddresses as readonly `0x${string}`[]],
-        });
-        const managerHash = await walletClient.sendTransaction({
-          data: deployData,
-          account: walletClient.account,
-          chain: targetNetwork,
-        });
-        const managerReceipt = await publicClient.waitForTransactionReceipt({ hash: managerHash });
-        if (!managerReceipt.contractAddress) throw new Error("Manager deployment failed");
-        checkCancelled();
-
-        mirrorUri = `web3://${managerReceipt.contractAddress}:${targetNetwork.id}`;
-        transportName = "onchain";
-        ops.log(opId, `File URI: ${mirrorUri}`);
-      } else {
-        mirrorUri = pasteUri;
-        const detected = detectTransport(pasteUri);
-        if (detected === "unknown") {
-          const msg = `Unsupported URI scheme. Supported: web3://, ipfs://, ar://, https://, magnet:`;
+        if (!easAddress || !indexer) {
+          const msg = "EAS / Indexer address unavailable. Is it deployed?";
           notification.error(msg);
           ops.fail(opId, msg);
           return;
         }
-        transportName = detected;
-        contentType = pasteContentType || "application/octet-stream";
-        contentHash = pasteContentHash || (ethers.ZeroHash as `0x${string}`);
-        fileSize = pasteSize ? BigInt(pasteSize) : 0n;
+        const edgeResolverAddress = await getEdgeResolverAddress(targetNetwork.id);
+        if (!edgeResolverAddress) {
+          const msg = "EdgeResolver address not available. Is it deployed?";
+          notification.error(msg);
+          ops.fail(opId, msg);
+          return;
+        }
+        await uploadOnchainFile({
+          name: nfcName,
+          bytes: dataBytes,
+          contentType: fileContentType,
+          parentAnchorUID: currentAnchorUID as `0x${string}`,
+          walletClient,
+          publicClient,
+          chainId: targetNetwork.id,
+          easAddress,
+          indexerAddress: indexer.address as `0x${string}`,
+          indexerAbi: indexer.abi,
+          anchorSchemaUID: anchorSchemaUID as `0x${string}`,
+          dataSchemaUID: dataSchemaUID as `0x${string}`,
+          propertySchemaUID: propertySchemaUID as `0x${string}`,
+          pinSchemaUID: pinSchemaUID as `0x${string}`,
+          tagSchemaUID: tagSchemaUID as `0x${string}`,
+          mirrorSchemaUID: mirrorSchemaUID as `0x${string}`,
+          edgeResolverAddress,
+          edgeResolverAbi: EDGE_RESOLVER_ABI,
+          // Address-root carve-out: a file placed directly under an Address container
+          // root needs refUID=0 + recipient=addr for its ANCHOR (the synthetic
+          // bytes32(addr) parent isn't a real attestation). Matches the inline path.
+          fileAnchorRefUID: anchorParent().refUID,
+          fileAnchorRecipient: anchorParent().recipient,
+          knownFileAnchorUID,
+          isCancelled: () => cancelledRef.current,
+          onCanCancelChange: setCanCancelSubmit,
+          onProgress: m => ops.log(opId, m),
+        });
+        notification.success("File uploaded and placed successfully.");
+        ops.complete(opId, "File uploaded and placed.");
+        onFileCreated?.(enabledSortUIDs);
+        handleClose();
+        return;
       }
 
-      // AGENT-NOTE (Codex P2): the file ANCHOR is non-revocable (permanent). Its
-      // CREATION is deliberately deferred to just before the placement PIN (see
-      // below) — NOT done here. Creating the file-slot ANCHOR sets
-      // `_containsAttestations[anchorUID][attester]` in EFSIndexer, which makes the
-      // slot appear in `getDirectoryPageFiltered` phase 1 immediately, before any
-      // placement PIN exists. A cancel / rejected wallet prompt / MIRROR failure
-      // anywhere in the DATA→PROPERTY→MIRROR steps below would then leave a
-      // permanent file slot with no PIN — and the filtered directory view reaches
-      // the DATA (and its `system`-tag exclusion) only through the PIN, so it can
-      // neither show nor hide the orphan. Minting the ANCHOR last (immediately
-      // before the PIN, with no cancellation checkpoint between them) shrinks that
-      // visible-but-unreachable window to ~1 tx. The window can't be fully closed:
-      // EAS UIDs aren't precomputable, so the ANCHOR and the PIN that references it
-      // can't be batched atomically. The read-only reuse check above
-      // (`existingFileAnchorUID`) stays where it is — it sets no on-chain state.
-      // This mirrors the proven ordering in lib/efs/uploadOnchainFile.ts.
-      let fileAnchorUID: `0x${string}` | undefined = existingFileAnchorUID;
-
-      // AGENT-NOTE: DATA is an empty schema — pure identity (ADR-0049). The prior best-effort
-      // dedup read (`indexer.dataByContentKey`) was removed: DATA carries no contentHash, that
-      // index is no longer written, and identical bytes now mint distinct DATA UIDs. Client-side
-      // dedup prevention (query the property index for a trusted contentHash claim before upload
-      // and hardlink instead of minting) remains future PROPERTY/SDK upload-flow work. The
-      // reserved-key contentHash/size PROPERTYs are now attached below alongside contentType.
-
-      ops.log(opId, "Creating DATA attestation (empty — pure identity, ADR-0049)...");
-      const dataTxHash = await attest(
-        {
-          functionName: "attest",
-          args: [
-            {
-              schema: dataSchemaUID as `0x${string}`,
-              data: {
-                recipient: ethers.ZeroAddress,
-                expirationTime: 0n,
-                revocable: false,
-                refUID: ethers.ZeroHash as `0x${string}`,
-                data: "0x",
-                value: 0n,
-              },
-            },
-          ],
-        },
-        { silent: true },
-      );
-      if (!dataTxHash) throw new Error("DATA attestation failed.");
-      const dataReceipt = await publicClient.waitForTransactionReceipt({ hash: dataTxHash });
-      const dataUID = extractUIDFromReceipt(dataReceipt);
-      if (!dataUID) throw new Error("Could not extract DATA UID");
-      ops.log(opId, `DATA created: ${dataUID.slice(0, 10)}...`);
-      checkCancelled();
-
-      // Reserved-key PROPERTYs bound to the DATA UID (ADR-0049, specs/02 §Property).
-      // Each uses the unified free-floating model (ADR-0035 / ADR-0041): a key anchor
-      // under the DATA, a free-floating PROPERTY carrying the value, then a PIN binding
-      // them. Three transactions per key; only the PIN is revocable, so changing a value
-      // is a PIN re-attest (which supersedes the prior PIN in O(1)), not a PROPERTY revoke.
-      // All values are string-encoded: contentType is the MIME type, contentHash is the
-      // 0x-prefixed keccak hex computed above, size is the decimal byte count.
-      const bindProperty = async (key: string, value: string) => {
-        ops.log(opId, `Creating ${key} key anchor...`);
-        let keyAnchorUID: `0x${string}` | undefined;
-        if (indexer && publicClient) {
-          keyAnchorUID = (await publicClient.readContract({
-            address: indexer.address as `0x${string}`,
-            abi: indexer.abi,
-            functionName: "resolveAnchor",
-            args: [dataUID, key, propertySchemaUID as `0x${string}`],
-          })) as `0x${string}`;
-        }
-        if (!keyAnchorUID || keyAnchorUID === (ethers.ZeroHash as `0x${string}`)) {
-          const encodedKey = ethers.AbiCoder.defaultAbiCoder().encode(["string", "bytes32"], [key, propertySchemaUID]);
-          const keyTx = await attest(
-            {
-              functionName: "attest",
-              args: [
-                {
-                  schema: anchorSchemaUID as `0x${string}`,
-                  data: {
-                    recipient: ethers.ZeroAddress,
-                    expirationTime: 0n,
-                    revocable: false,
-                    refUID: dataUID,
-                    data: encodedKey as `0x${string}`,
-                    value: 0n,
-                  },
-                },
-              ],
-            },
-            { silent: true },
-          );
-          if (!keyTx) throw new Error(`${key} key anchor attestation failed.`);
-          const keyReceipt = await publicClient.waitForTransactionReceipt({ hash: keyTx });
-          keyAnchorUID = extractUIDFromReceipt(keyReceipt);
-          if (!keyAnchorUID) throw new Error(`Could not extract ${key} key anchor UID`);
-        }
-
-        ops.log(opId, `Attesting ${key} PROPERTY...`);
-        const encodedProperty = ethers.AbiCoder.defaultAbiCoder().encode(["string"], [value]);
-        const propTxHash = await attest(
-          {
-            functionName: "attest",
-            args: [
-              {
-                schema: propertySchemaUID as `0x${string}`,
-                data: {
-                  recipient: ethers.ZeroAddress,
-                  expirationTime: 0n,
-                  revocable: false,
-                  refUID: ethers.ZeroHash as `0x${string}`,
-                  data: encodedProperty as `0x${string}`,
-                  value: 0n,
-                },
-              },
-            ],
-          },
-          { silent: true },
-        );
-        if (!propTxHash) throw new Error(`${key} PROPERTY attestation failed.`);
-        const propReceipt = await publicClient.waitForTransactionReceipt({ hash: propTxHash });
-        const propertyUID = extractUIDFromReceipt(propReceipt);
-        if (!propertyUID) throw new Error(`Could not extract ${key} PROPERTY UID`);
-
-        ops.log(opId, `Binding ${key} PROPERTY via PIN...`);
-        // AGENT-NOTE: PROPERTY value binding is a PIN under ADR-0041 (cardinality 1).
-        // Re-binding at the same key anchor supersedes the prior PIN in O(1) — no
-        // revoke-then-attest dance.
-        const encodedPin = ethers.AbiCoder.defaultAbiCoder().encode(["bytes32"], [keyAnchorUID]);
-        const pinTxHash = await attest(
-          {
-            functionName: "attest",
-            args: [
-              {
-                schema: pinSchemaUID as `0x${string}`,
-                data: {
-                  recipient: ethers.ZeroAddress,
-                  expirationTime: 0n,
-                  revocable: true,
-                  refUID: propertyUID,
-                  data: encodedPin as `0x${string}`,
-                  value: 0n,
-                },
-              },
-            ],
-          },
-          { silent: true },
-        );
-        if (pinTxHash) await publicClient.waitForTransactionReceipt({ hash: pinTxHash });
-        checkCancelled();
-      };
-
-      await bindProperty("contentType", contentType);
-      // Only bind contentHash/size when they're REAL (a computed hash / measured size), never the
-      // skipped-or-failed-fetch sentinels. For a pasted link where the fetch was skipped/failed or the
-      // file was too large to hash, contentHash falls back to ZeroHash (L956) and/or size to 0n (L957);
-      // binding those would publish bogus reserved-key claims that group unrelated unknown files under
-      // the zero hash / zero size for dedup/integrity reads. Skip the PROPERTY entirely when unknown —
-      // no "unknown" sentinel attestation. The two are independent: a too-large paste link has a known
-      // size (from Content-Length) but no hash.
-      if (contentHash !== (ethers.ZeroHash as `0x${string}`)) await bindProperty("contentHash", contentHash);
-      if (fileSize > 0n) await bindProperty("size", fileSize.toString());
-
-      const transportAnchorUID = await resolveTransportAnchor(transportName);
-      if (!transportAnchorUID) {
-        const msg = `Transport anchor '/transports/${transportName}' not found. Aborting upload.`;
+      // ── PasteLink (external URI; File returned above). ──
+      const mirrorUri = pasteUri;
+      const detected = detectTransport(pasteUri);
+      // Reject `data:` here: inline data is a property of the UPLOAD path (which
+      // mints a data: mirror only when /transports/data is seeded, else falls back to
+      // SSTORE2). Pasting a data: URI as an external "link" is nonsensical and, on a
+      // deploy without /transports/data, would burn DATA/PROPERTY writes then abort on
+      // the missing transport anchor. Reject before any attestation is sent.
+      if (detected === "unknown" || detected === "data") {
+        const msg =
+          detected === "data"
+            ? `Inline data: URIs aren't a paste-link target — upload the file instead.`
+            : `Unsupported URI scheme. Supported: web3://, ipfs://, ar://, https://, magnet:`;
         notification.error(msg);
         ops.fail(opId, msg);
         return;
-      } else {
-        ops.log(
-          opId,
-          `Creating ${TRANSPORT_LABELS[transportName as keyof typeof TRANSPORT_LABELS] || transportName} mirror...`,
-        );
-        const encodedMirror = ethers.AbiCoder.defaultAbiCoder().encode(
-          ["bytes32", "string"],
-          [transportAnchorUID, mirrorUri],
-        );
-        const mirrorTxHash = await attest(
-          {
-            functionName: "attest",
-            args: [
-              {
-                schema: mirrorSchemaUID as `0x${string}`,
-                data: {
-                  recipient: ethers.ZeroAddress,
-                  expirationTime: 0n,
-                  revocable: true,
-                  refUID: dataUID,
-                  data: encodedMirror as `0x${string}`,
-                  value: 0n,
-                },
-              },
-            ],
-          },
-          { silent: true },
-        );
-        if (mirrorTxHash) await publicClient.waitForTransactionReceipt({ hash: mirrorTxHash });
       }
-      checkCancelled();
+      const transportName = detected;
+      const contentType = pasteContentType || "application/octet-stream";
+      const contentHash: `0x${string}` = pasteContentHash || (ethers.ZeroHash as `0x${string}`);
+      const fileSize: bigint = pasteSize ? BigInt(pasteSize) : 0n;
 
-      // File ANCHOR — created LAST, immediately before the placement PIN (Codex P2).
-      // Deferred here from the read-only reuse check above so the non-revocable slot
-      // is reachable in the filtered directory listing for the shortest possible
-      // window before its placement PIN makes the DATA reachable. The checkCancelled()
-      // immediately above is the LAST cancellation checkpoint of the upload: there is
-      // deliberately NO checkpoint (and no awaitable failure point that isn't the PIN
-      // itself) between this ANCHOR mint and the PIN below. Cancelling between them
-      // would leave a permanent DATA-schema file slot with no PIN — and the filtered
-      // directory view reaches the DATA only through the PIN, so it could neither show
-      // nor hide that orphan. Mirrors lib/efs/uploadOnchainFile.ts.
-      if (!fileAnchorUID) {
-        const parent = anchorParent();
-        const anchorTxHash = await attest(
-          {
-            functionName: "attest",
-            args: [
-              {
-                schema: anchorSchemaUID as `0x${string}`,
-                data: {
-                  recipient: parent.recipient,
-                  expirationTime: 0n,
-                  revocable: false,
-                  refUID: parent.refUID,
-                  data: encodedName as `0x${string}`,
-                  value: 0n,
-                },
-              },
-            ],
-          },
-          { silent: true },
-        );
-        if (!anchorTxHash) throw new Error("No txHash returned for file ANCHOR creation.");
-        const anchorReceipt = await publicClient.waitForTransactionReceipt({ hash: anchorTxHash });
-        fileAnchorUID = extractUIDFromReceipt(anchorReceipt);
-        if (!fileAnchorUID) throw new Error("Could not extract file Anchor UID");
-        ops.log(opId, "File anchor created.");
-        // NO checkCancelled() here: once the ANCHOR is broadcast, the placement PIN
-        // MUST follow (see the note above). The cancellation checkpoint is the
-        // checkCancelled() before this block, after the MIRROR step.
+      if (!easAddress || !indexer) {
+        const msg = "EAS / Indexer address unavailable. Is it deployed?";
+        notification.error(msg);
+        ops.fail(opId, msg);
+        return;
+      }
+      const edgeResolverAddress = await getEdgeResolverAddress(targetNetwork.id);
+      if (!edgeResolverAddress) {
+        const msg = "EdgeResolver address not available. Is it deployed?";
+        notification.error(msg);
+        ops.fail(opId, msg);
+        return;
       }
 
-      ops.log(opId, "Placing file in folder via PIN...");
-      // AGENT-NOTE: File placement is a PIN under ADR-0041 (cardinality 1). Re-uploading
-      // a different DATA at the same file anchor supersedes the prior PIN in O(1).
-      const encodedPin = ethers.AbiCoder.defaultAbiCoder().encode(["bytes32"], [fileAnchorUID]);
-      const pinTxHash = await attest(
-        {
-          functionName: "attest",
-          args: [
-            {
-              schema: pinSchemaUID as `0x${string}`,
-              data: {
-                recipient: ethers.ZeroAddress,
-                expirationTime: 0n,
-                revocable: true,
-                refUID: dataUID,
-                data: encodedPin as `0x${string}`,
-                value: 0n,
-              },
-            },
-          ],
-        },
-        { silent: true },
-      );
-      if (pinTxHash) await publicClient.waitForTransactionReceipt({ hash: pinTxHash });
-      checkCancelled();
-
-      // Ancestor-walk visibility TAGs (tag-only folder-visibility model, ADR-0038 / ADR-0041).
-      // Ancestor-walk visibility TAGs (tag-only folder-visibility model, ADR-0038 / ADR-0041).
-      // A folder appears in a lens listing iff at least one lens attester has an
-      // active TAG(definition=dataSchemaUID, refUID=folder). Active = exists and not revoked;
-      // weight is opaque metadata (ADR-0041 §4). On upload, the uploader must emit that TAG
-      // at every generic-folder ancestor from the immediate parent up to (but excluding) root,
-      // or those folders stay hidden in the uploader's lens. Skip already-tagged ancestors.
-      if (indexer) {
-        const edgeResolverAddress = await getEdgeResolverAddress(targetNetwork.id);
-        if (edgeResolverAddress) {
-          try {
-            const rootUID = (await publicClient.readContract({
-              address: indexer.address as `0x${string}`,
-              abi: indexer.abi,
-              functionName: "rootAnchorUID",
-            })) as `0x${string}`;
-
-            const attester = walletClient.account.address;
-            let current = currentAnchorUID as `0x${string}`;
-            const MAX_ANCHOR_DEPTH = 32;
-            let walked = 0;
-            while (
-              walked < MAX_ANCHOR_DEPTH &&
-              current &&
-              current !== (ethers.ZeroHash as `0x${string}`) &&
-              current.toLowerCase() !== rootUID.toLowerCase()
-            ) {
-              // Schema-aware check on the TAG slot. Under ADR-0041 there is no
-              // `applies=false` and no supersede-via-negative-weight; an active TAG either
-              // exists (slot is non-empty) or it doesn't (revoked / never created), so a
-              // simple `isActiveEdge(... TAG_SCHEMA_UID)` is the correct check.
-              const tagged = (await publicClient.readContract({
-                address: edgeResolverAddress,
-                abi: EDGE_RESOLVER_ABI,
-                functionName: "isActiveEdge",
-                args: [attester, current, dataSchemaUID as `0x${string}`, tagSchemaUID as `0x${string}`],
-              })) as boolean;
-
-              if (!tagged) {
-                ops.log(opId, `Tagging ancestor folder ${current.slice(0, 10)}... for visibility`);
-                const encodedVisTag = ethers.AbiCoder.defaultAbiCoder().encode(
-                  ["bytes32", "int256"],
-                  [dataSchemaUID, 1n],
-                );
-                const visTxHash = await attest(
-                  {
-                    functionName: "attest",
-                    args: [
-                      {
-                        schema: tagSchemaUID as `0x${string}`,
-                        data: {
-                          recipient: ethers.ZeroAddress,
-                          expirationTime: 0n,
-                          revocable: true,
-                          refUID: current,
-                          data: encodedVisTag as `0x${string}`,
-                          value: 0n,
-                        },
-                      },
-                    ],
-                  },
-                  { silent: true },
-                );
-                if (visTxHash) await publicClient.waitForTransactionReceipt({ hash: visTxHash });
-              }
-
-              const parent = (await publicClient.readContract({
-                address: indexer.address as `0x${string}`,
-                abi: indexer.abi,
-                functionName: "getParent",
-                args: [current],
-              })) as `0x${string}`;
-              current = parent;
-              walked += 1;
-              checkCancelled();
-            }
-          } catch (e) {
-            console.warn("Ancestor-walk visibility tagging failed; some ancestors may stay hidden.", e);
-          }
-        }
-      }
+      await createExternalFileReference({
+        name: nfcName,
+        mirrorUri,
+        transportName,
+        contentType,
+        contentHash,
+        fileSize,
+        parentAnchorUID: currentAnchorUID as `0x${string}`,
+        walletClient,
+        publicClient,
+        chainId: targetNetwork.id,
+        easAddress,
+        indexerAddress: indexer.address as `0x${string}`,
+        indexerAbi: indexer.abi,
+        anchorSchemaUID: anchorSchemaUID as `0x${string}`,
+        dataSchemaUID: dataSchemaUID as `0x${string}`,
+        propertySchemaUID: propertySchemaUID as `0x${string}`,
+        pinSchemaUID: pinSchemaUID as `0x${string}`,
+        tagSchemaUID: tagSchemaUID as `0x${string}`,
+        mirrorSchemaUID: mirrorSchemaUID as `0x${string}`,
+        edgeResolverAddress,
+        edgeResolverAbi: EDGE_RESOLVER_ABI,
+        fileAnchorRefUID: anchorParent().refUID,
+        fileAnchorRecipient: anchorParent().recipient,
+        knownFileAnchorUID,
+        isCancelled: () => cancelledRef.current,
+        onCanCancelChange: setCanCancelSubmit,
+        onProgress: m => ops.log(opId, m),
+      });
 
       notification.success("File uploaded and placed successfully.");
       ops.complete(opId, "File uploaded and placed.");
@@ -1379,12 +1013,21 @@ export const CreateItemModal = ({
       }
     } finally {
       setIsSubmitting(false);
+      setCanCancelSubmit(true);
       cancelledRef.current = false;
     }
   };
 
   return (
-    <dialog id="create_modal" className="modal" ref={modalRef}>
+    <dialog
+      id="create_modal"
+      className="modal"
+      ref={modalRef}
+      onCancel={e => {
+        e.preventDefault();
+        requestClose();
+      }}
+    >
       <div className="modal-box">
         <h3 className="font-bold text-lg">
           {internalType === "Folder" ? "Create New Folder" : internalType === "List" ? "Create List" : "Add File"}
@@ -1538,7 +1181,7 @@ export const CreateItemModal = ({
                 (internalType !== "PasteLink" || pasteUri)
               )
                 handleSubmit();
-              if (e.key === "Escape") handleClose();
+              if (e.key === "Escape") requestClose();
             }}
             autoComplete="off"
             autoFocus
@@ -1755,14 +1398,19 @@ export const CreateItemModal = ({
           {isSubmitting ? (
             <button
               type="button"
-              className="btn btn-error"
+              className={`btn ${canCancelSubmit ? "btn-error" : "btn-warning"}`}
+              disabled={!canCancelSubmit}
               onClick={() => {
-                cancelledRef.current = true;
+                if (canCancelSubmit) cancelledRef.current = true;
               }}
-              title="Stop upload. Transactions already broadcast will still settle on-chain."
+              title={
+                canCancelSubmit
+                  ? "Stops at the next safe boundary. If final placement has begun, approve remaining prompts to finish safely."
+                  : "Final placement is in progress. Use the wallet prompt if you need to reject the current transaction."
+              }
             >
               <StopIcon className="w-4 h-4" />
-              Stop
+              {canCancelSubmit ? "Stop" : "Finishing placement"}
             </button>
           ) : (
             <button className="btn btn-ghost" onClick={handleClose}>
@@ -1783,7 +1431,9 @@ export const CreateItemModal = ({
           >
             {isSubmitting && <span className="loading loading-spinner loading-xs" />}
             {isSubmitting
-              ? "Creating..."
+              ? canCancelSubmit
+                ? "Creating..."
+                : "Finishing..."
               : existingAnchorWarning && internalType !== "Folder" && internalType !== "List"
                 ? "Update Existing"
                 : internalType === "List"
@@ -1793,7 +1443,14 @@ export const CreateItemModal = ({
         </div>
       </div>
       <form method="dialog" className="modal-backdrop">
-        <button onClick={handleClose}>close</button>
+        <button
+          onClick={e => {
+            e.preventDefault();
+            requestClose();
+          }}
+        >
+          close
+        </button>
       </form>
     </dialog>
   );

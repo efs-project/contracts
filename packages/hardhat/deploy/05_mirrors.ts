@@ -155,8 +155,21 @@ const deployMirrors: DeployFunction = async function (hre: HardhatRuntimeEnviron
     console.log("'transports' Anchor already exists:", transportsUID);
   }
 
-  // Create transport type anchors
-  const transportTypes = ["onchain", "ipfs", "arweave", "magnet", "https"];
+  // Create default transport type anchors (ADR-0011, ADR-0063).
+  const transportTypes = [
+    "onchain",
+    "ipfs",
+    "arweave",
+    "magnet",
+    "https",
+    "ftp",
+    "s3",
+    "gs",
+    "dat",
+    "rsync",
+    "bittorrent",
+    "data",
+  ];
   for (const transportName of transportTypes) {
     const existing = await indexer.resolvePath(transportsUID, transportName);
     if (existing === ethers.ZeroHash) {

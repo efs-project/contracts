@@ -197,14 +197,15 @@ describe("DeploySafe.fork — Safe-native deploy, born Safe-owned", function () 
     expect(await indexer.resolvePath(root, "transports")).to.not.equal(ethers.ZeroHash);
     expect(await indexer.resolvePath(result.transportsAnchorUID, "https")).to.not.equal(ethers.ZeroHash);
 
-    // PR #24 P2 fix: the Safe bootstrap seeds ALL 11 allowed transport schemes
-    // (ADR-0011), so no transport name is left squattable on a fresh deploy.
+    // PR #24 P2 fix + ADR-0063: the Safe bootstrap seeds ALL 12 default transport anchors,
+    // so the common schemes resolve out of the box on a fresh deploy.
     const ALL_TRANSPORTS = [
       "onchain",
       "ipfs",
       "arweave",
       "magnet",
       "https",
+      "data",
       "ftp",
       "s3",
       "gs",

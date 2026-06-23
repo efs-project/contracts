@@ -111,7 +111,8 @@ export async function seedDemoTree() {
   }
 
   // Resolve /transports/ anchors for MIRRORs. Registered by deploy script
-  // 05_mirrors.ts (names: onchain, ipfs, arweave, magnet, https).
+  // 05_mirrors.ts / orchestrated bootstrap (default names include onchain, data,
+  // ipfs, arweave, magnet, https, and lower-priority extension schemes).
   const transportsUID = await indexer.resolvePath(rootUID, "transports");
   const httpsTransportUID = await indexer.resolvePath(transportsUID, "https");
   // READMEs use the on-chain transport so the Overview pane can actually fetch
