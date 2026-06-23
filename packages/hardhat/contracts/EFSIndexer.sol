@@ -139,14 +139,15 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
 
     // Maximum anchor nesting depth — bounds gas on the ancestor-chain walks (_propagateContains,
     // _indexGlobal, creation-time depth check). The cap's ONLY purpose is anti-grief gas-bounding;
-    // it is deliberately set far above any real tree. Raised 32 -> 1024 (ADR-0065 supersedes ADR-0021):
-    // no real filesystem imposes an explicit depth cap (depth is bounded emergently by path length,
-    // e.g. Linux PATH_MAX 4096 => ~2048 levels, Windows long-path => ~16k), so 32 wrongly rejected
-    // deep trees EFS must be able to mirror. 1024 is ~90x the deepest tree ever observed in the wild
-    // and still gas-trivial (~2.1K gas/level => ~2.1M worst-case one-time, self-paid by the creator;
-    // steady state is O(1) via early-break). A depth COUNTER (not a path-byte cap) is the right tool
-    // because it is what actually bounds these walks.
-    uint256 public constant MAX_ANCHOR_DEPTH = 1024;
+    // it is set far above any real tree (deepest cited ~11 levels) yet within the WRITE-SIDE block-gas
+    // budget. History: 32 (ADR-0021) -> 1024 (ADR-0065) -> 256 (ADR-0068). 32 wrongly rejected deep
+    // trees EFS must mirror; 1024 was unexecutable for a first-time deep placement — _propagateContains
+    // does ~4 cold (zero->nonzero) SSTOREs/level (~90k gas/level, NOT the ~2.1k warm-SLOAD figure
+    // ADR-0065 assumed), so a fresh lens hardlinking/placing at depth 1024 needs ~92M gas > ~30M block
+    // limit and reverts. 256 fits (~23M worst-case, self-paid by the creator) while still being 8x the
+    // original and beyond any real tree. A depth COUNTER (not a path-byte cap) is the right tool because
+    // it is what actually bounds these walks.
+    uint256 public constant MAX_ANCHOR_DEPTH = 256;
 
     // Content-addressed deduplication: keccak256(contentHash) => first DATA UID.
     // AGENT-NOTE: this is a RETAINED DEAD SLOT, kept for storage-layout stability, no longer

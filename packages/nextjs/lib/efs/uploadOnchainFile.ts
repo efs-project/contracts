@@ -130,10 +130,11 @@ export interface UploadOnchainFileResult {
  * attestation layers) surfaces as the same graceful-cancel sentinel the UI checks. */
 export const UPLOAD_CANCELLED = SUBMIT_CANCELLED;
 
-// Keep in sync with the contract cap EFSIndexer.MAX_ANCHOR_DEPTH (raised 32 → 1024, ADR-0065). Bounds
-// the uploader's ancestor visibility-TAG walk; if it stops short of the contract cap, a deep upload's
-// upper ancestor folders go un-tagged and hide from root EFSFileView listings even though the path exists.
-const MAX_ANCHOR_DEPTH = 1024;
+// Keep in sync with the contract cap EFSIndexer.MAX_ANCHOR_DEPTH — 256 (ADR-0068; ADR-0065 had set
+// 1024, gas-unsafe for a first-time deep placement). Bounds the uploader's ancestor visibility-TAG walk;
+// if it stops short of the contract cap, a deep upload's upper ancestor folders go un-tagged and hide
+// from root EFSFileView listings even though the path exists.
+const MAX_ANCHOR_DEPTH = 256;
 
 // MirrorResolver caps the final UTF-8 URI bytes at 8192. Keep a cheap raw-byte
 // prefilter so large files never pay the base64 cost, then check the exact URI

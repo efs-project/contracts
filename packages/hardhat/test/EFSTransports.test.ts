@@ -895,9 +895,9 @@ describe("EFS Transports & Data Model", function () {
   // ─── MAX_ANCHOR_DEPTH Tests ───────────────────────────────────────────────
 
   describe("MAX_ANCHOR_DEPTH", function () {
-    it("MAX_ANCHOR_DEPTH constant is 1024 (ADR-0065)", async function () {
+    it("MAX_ANCHOR_DEPTH constant is 256 (ADR-0068)", async function () {
       // Value lock: catches an accidental change to the cap. 32 -> 1024 per ADR-0065.
-      expect(await indexer.MAX_ANCHOR_DEPTH()).to.equal(1024n);
+      expect(await indexer.MAX_ANCHOR_DEPTH()).to.equal(256n);
     });
 
     it("allows trees far deeper than the old 32-level cap (ADR-0065)", async function () {

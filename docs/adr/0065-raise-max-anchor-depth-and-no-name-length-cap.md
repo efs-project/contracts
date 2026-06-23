@@ -1,6 +1,6 @@
 # ADR-0065: Raise `MAX_ANCHOR_DEPTH` to 1024; do not cap anchor-name length
 
-**Status:** Accepted
+**Status:** Accepted (depth value **superseded in part by ADR-0068** — lowered 1024 → 256 after the propagation gas estimate in Consequences §Depth was found wrong: the walk does ~90k gas/level of cold SSTOREs, not the ~2.1k warm SLOAD assumed, making a first-time deep placement at 1024 exceed the block gas limit. The **no-anchor-name-length-cap decision (§2) still holds.** Body preserved unedited as the historical record.)
 **Date:** 2026-06-20
 **Related:** ADR-0021 (superseded), ADR-0025 (anchor name validation), ADR-0030 (mainnet permanence), ADR-0048 (proxy-ready resolvers / burn), ADR-0056 (kernel-minimal, client owns presentation/safety), `docs/FS_OPERATIONS_AUDIT.md`
 
