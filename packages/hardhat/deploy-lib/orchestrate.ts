@@ -38,6 +38,16 @@ export interface OrchestrationResult {
   ownershipTransferred: boolean;
 }
 
+export interface OrchestrationHooks {
+  // Test-only seam for fork fixtures that need to snapshot the exact sealed-but-untransferred
+  // state after smoke has completed but before the irreversible ownership handoff begins.
+  afterSmokeBeforeTransfer?: (ctx: {
+    result: OrchestrationResult;
+    rootUID: string;
+    transportsUID: string;
+  }) => Promise<void>;
+}
+
 const EAS_IFACE = [
   "function getSchemaRegistry() view returns (address)",
   "function attest((bytes32 schema,(address recipient,uint64 expirationTime,bool revocable,bytes32 refUID,bytes data,uint256 value) data)) payable returns (bytes32)",
@@ -127,7 +137,12 @@ const BOOTSTRAP_SCAFFOLDING: { name: string; parentIndex: number }[] = [
   { name: "data", parentIndex: 2 }, // 14 → transports (data: inline, ADR-0063)
 ];
 
-export async function orchestrate(deployer: Signer, mode: RunMode, log = true): Promise<OrchestrationResult> {
+export async function orchestrate(
+  deployer: Signer,
+  mode: RunMode,
+  log = true,
+  hooks: OrchestrationHooks = {},
+): Promise<OrchestrationResult> {
   const deployerAddr = await deployer.getAddress();
   const l = (...a: unknown[]) => log && console.log(...a);
 
@@ -241,7 +256,7 @@ export async function orchestrate(deployer: Signer, mode: RunMode, log = true): 
       registered: false,
       ownershipTransferred: false,
     };
-    await registerAndTransfer(result, deployer, schemaRegistry, eas, l);
+    await registerAndTransfer(result, deployer, schemaRegistry, eas, l, hooks);
     return result;
   }
 
@@ -320,7 +335,7 @@ export async function orchestrate(deployer: Signer, mode: RunMode, log = true): 
     return result;
   }
 
-  await registerAndTransfer(result, deployer, schemaRegistry, eas, l);
+  await registerAndTransfer(result, deployer, schemaRegistry, eas, l, hooks);
   return result;
 }
 
@@ -332,6 +347,7 @@ export async function registerAndTransfer(
   schemaRegistry: Contract,
   eas: Contract,
   l: (...a: unknown[]) => void,
+  hooks: OrchestrationHooks = {},
 ): Promise<void> {
   const { proxies, schemaUIDs } = result;
 
@@ -438,7 +454,8 @@ export async function registerAndTransfer(
   //     resolve the real UIDs from the index (rootAnchorUID / resolvePath) so transfer can finish.
   // bootstrap itself is idempotent (reuses existing anchors) but is gated whenNotSealed, so the SKIP
   // is what makes a post-seal retry safe — the not-sealed branch covers a pre-seal partial.
-  if (!(await systemAccount.bootstrapSealed())) {
+  const alreadySealed = await systemAccount.bootstrapSealed();
+  if (!alreadySealed) {
     const specs = BOOTSTRAP_SCAFFOLDING.map(a => ({
       name: a.name,
       parentIndex: a.parentIndex,
@@ -466,8 +483,18 @@ export async function registerAndTransfer(
   }
 
   // ── Step 8 (smoke): push one attestation through each of the 9 schemas BEFORE handing off
-  //     ownership (deployer is the attester; works on the fork without the Safe signer).
+  //     ownership. Smoke runs on EVERY path — including post-seal retries — because seal() fires
+  //     BEFORE smoke, so alreadySealed==true does not imply smoke completed. A run that reaches
+  //     seal() and then fails during smoke leaves the ceremony sealed but unverified; skipping smoke
+  //     on the retry would silently bypass the only pre-transfer proof that all 9 schemas are wired
+  //     and reachable, and ownership would transfer to the Safe against potentially broken resolvers.
+  //     Re-running smoke is safe: the ANCHOR case is already idempotent (smoke.txt check inside
+  //     perSchemaSmoke), and no other smoke schema has a uniqueness constraint that rejects a second
+  //     pass. The only thing skipped on a post-seal retry is bootstrap+seal above.
   await perSchemaSmoke(result, deployer, eas, indexer, rootUID, l);
+  if (hooks.afterSmokeBeforeTransfer) {
+    await hooks.afterSmokeBeforeTransfer({ result, rootUID, transportsUID });
+  }
 
   // ── Step 7: transfer ownership to the Safe ──────────────────────────────────────────────────
   const deployerAddr = await deployer.getAddress();
