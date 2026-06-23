@@ -1301,7 +1301,9 @@ export const CreateItemModal = ({
 
             const attester = walletClient.account.address;
             let current = currentAnchorUID as `0x${string}`;
-            const MAX_ANCHOR_DEPTH = 32;
+            // Keep in sync with the contract cap EFSIndexer.MAX_ANCHOR_DEPTH (raised 32 → 1024, ADR-0065):
+            // a short walk leaves a deep upload's upper ancestors un-tagged → hidden from root listings.
+            const MAX_ANCHOR_DEPTH = 1024;
             let walked = 0;
             while (
               walked < MAX_ANCHOR_DEPTH &&

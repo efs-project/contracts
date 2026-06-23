@@ -105,7 +105,10 @@ export interface UploadOnchainFileResult {
 /** Thrown when `isCancelled()` flips true at a tx boundary. */
 export const UPLOAD_CANCELLED = "__UPLOAD_CANCELLED__";
 
-const MAX_ANCHOR_DEPTH = 32;
+// Keep in sync with the contract cap EFSIndexer.MAX_ANCHOR_DEPTH (raised 32 → 1024, ADR-0065). Bounds
+// the uploader's ancestor visibility-TAG walk; if it stops short of the contract cap, a deep upload's
+// upper ancestor folders go un-tagged and hide from root EFSFileView listings even though the path exists.
+const MAX_ANCHOR_DEPTH = 1024;
 
 // Inlined from CreateItemModal.tsx ~lines 351–369. Extracts the UID emitted by
 // the EAS `Attested` event from a tx receipt.
