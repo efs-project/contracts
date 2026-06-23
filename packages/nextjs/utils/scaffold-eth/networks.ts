@@ -1,3 +1,4 @@
+import { DEVNET_CHAIN_ID } from "./networkLabel";
 import * as chains from "viem/chains";
 import scaffoldConfig from "~~/scaffold.config";
 
@@ -123,8 +124,17 @@ export function getBlockExplorerTxLink(chainId: number, txnHash: string) {
  */
 export function getBlockExplorerAddressLink(network: chains.Chain, address: string) {
   const blockExplorerBaseURL = network.blockExplorers?.default?.url;
+  // Local hardhat (31337) → the in-app blockexplorer, which reads the local node. (Falling through
+  // to mainnet Etherscan would open misleading mainnet links for local fork addresses.)
   if (network.id === chains.hardhat.id) {
     return `/blockexplorer/address/${address}`;
+  }
+  // EFS Devnet (26001993, ADR-0062): a remote Sepolia fork with no block explorer. The in-app
+  // explorer is Local-only — its block list / tx history come from a hardhat test client over
+  // localhost WS (`useFetchBlocks`), so it can't serve devnet — and Etherscan would show mainnet,
+  // not fork state. Emit no link rather than a misleading one; callers treat "" as "not linkable".
+  if (network.id === DEVNET_CHAIN_ID) {
+    return "";
   }
 
   if (!blockExplorerBaseURL) {

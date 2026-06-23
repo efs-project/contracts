@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import { getAddress, isAddress } from "viem";
 import { useAccount, usePublicClient } from "wagmi";
@@ -14,7 +14,7 @@ import { TopicTree } from "~~/components/explorer/TopicTree";
 import type { PathItem } from "~~/components/explorer/types";
 import deployedContracts from "~~/contracts/deployedContracts";
 import { useContainerName } from "~~/hooks/efs/useContainerName";
-import { useDeployedContractInfo, useScaffoldReadContract } from "~~/hooks/scaffold-eth";
+import { useDeployedContractInfo, useScaffoldReadContract, useTargetNetwork } from "~~/hooks/scaffold-eth";
 import {
   ClassifiedContainer,
   DEVNET_BOOTSTRAP_CURATOR,
@@ -23,6 +23,7 @@ import {
   classifyTopLevelSegment,
   defaultLensesForContainer,
 } from "~~/utils/efs/containers";
+import { inferNetworkFlavor, networkLabel } from "~~/utils/scaffold-eth";
 
 export default function ExplorerClient() {
   const [currentPath, setCurrentPath] = useState<PathItem[]>([]);
@@ -35,6 +36,11 @@ export default function ExplorerClient() {
   const [currentContainer, setCurrentContainer] = useState<ClassifiedContainer | null>(null);
   const [isResolving, setIsResolving] = useState(false);
   const [pathError, setPathError] = useState<string | null>(null);
+
+  // If the system schema reads don't arrive within a grace period, the active chain's RPC is
+  // unreachable (e.g. defaulted to hardhat with no local node, or a dead Sepolia RPC). Show a
+  // clear message + switch hint instead of an indefinite "Loading System...". Reset on chain switch.
+  const [systemReadTimedOut, setSystemReadTimedOut] = useState(false);
 
   const [resolvedLensAddresses, setResolvedLensAddresses] = useState<string[]>([]);
   const [isResolvingLenses, setIsResolvingLenses] = useState(false);
@@ -107,7 +113,8 @@ export default function ExplorerClient() {
 
   const sortParam = searchParams.get("sort");
   const activeSortInfoUID = sortParam || null;
-  const publicClient = usePublicClient();
+  const { targetNetwork } = useTargetNetwork();
+  const publicClient = usePublicClient({ chainId: targetNetwork.id });
   // Mainnet client for ENS resolution only. `targetNetworks` in
   // `scaffold.config.ts` is `[hardhat]`, so the active `publicClient` above is
   // hardhat and has no ENS registry — `getEnsAddress` / `getEnsName` against
@@ -339,6 +346,46 @@ export default function ExplorerClient() {
       cancelled = true;
     };
   }, [lensesParam, mainnetPublicClient]);
+
+  // Chain-switch reset (Codex P2, rounds 2–3). Runtime network switching
+  // (hardhat 31337 ↔ Sepolia 11155111) re-keys `publicClient`, so the Path
+  // Resolution Effect below re-fires. Until it completes, the OLD chain's
+  // resolved `currentAnchorUID` / `currentPath` / `currentContainer` stay
+  // exposed to the write controls (FileActionsBar + any open CreateItemModal,
+  // which reads `currentAnchorUID` LIVE at submit time) — a submit in that
+  // window would create under a stale-chain parent while the wallet guard
+  // already points at the NEW chain. Clear the resolved anchor synchronously on
+  // the id change and re-assert `isResolving`; the `key={targetNetwork.id}` on
+  // FileActionsBar force-closes an open creation modal.
+  //
+  // This MUST be declared BEFORE the Path Resolution Effect so it runs first in
+  // the commit: for a root-level switch (no path segments) that effect resolves
+  // the new root SYNCHRONOUSLY in the same flush, so a reset running *after* it
+  // would clear the freshly-resolved root and leave `isResolving` stuck with no
+  // rerun (rootUID may not change again). Running first, we clear then the
+  // resolver re-resolves. The first (mount) run is skipped.
+  const didMountChainRef = useRef(false);
+  useEffect(() => {
+    if (!didMountChainRef.current) {
+      didMountChainRef.current = true;
+      return;
+    }
+    setCurrentAnchorUID(null);
+    setCurrentPath([]);
+    setCurrentContainer(null);
+    setCurrentIsFileLeaf(false);
+    setPathError(null);
+    setIsResolving(true);
+  }, [targetNetwork.id]);
+
+  // Grace-period timer for the "system unreachable" state. Reset on every chain switch; if the
+  // system schema reads still haven't landed when it fires, the gate below shows a switch hint
+  // instead of hanging on "Loading System..." forever.
+  useEffect(() => {
+    setSystemReadTimedOut(false);
+    const t = setTimeout(() => setSystemReadTimedOut(true), 12000);
+    return () => clearTimeout(t);
+  }, [targetNetwork.id]);
 
   // Path Resolution Effect — cancel-guarded.
   //
@@ -607,8 +654,27 @@ export default function ExplorerClient() {
     !pinSchemaUID ||
     !tagSchemaUID ||
     !mirrorSchemaUID
-  )
+  ) {
+    if (systemReadTimedOut) {
+      const label = networkLabel(targetNetwork);
+      const flavor = inferNetworkFlavor(targetNetwork.id);
+      const advice =
+        flavor === "local"
+          ? "Start a local chain (`yarn preview`, or `yarn fork` + `yarn deploy`), or switch network at the top-right."
+          : flavor === "devnet"
+            ? "The devnet may be down or resetting — switch to Sepolia at the top-right, or try again shortly."
+            : "The RPC may be unreachable or rate-limited — try again, or switch network at the top-right.";
+      return (
+        <div className="flex flex-col items-center gap-3 py-16 px-4 text-center">
+          <div className="text-2xl">⚠️ Can&apos;t reach {label}</div>
+          <p className="opacity-70 max-w-md text-sm">
+            The explorer couldn&apos;t read the EFS contracts from {label}&apos;s RPC. {advice}
+          </p>
+        </div>
+      );
+    }
     return <div>Loading System...</div>;
+  }
   if (isResolvingLenses) return <div>Resolving Lenses...</div>;
 
   const containerKind = currentContainer?.kind ?? "anchor";
@@ -780,6 +846,12 @@ export default function ExplorerClient() {
           <section className="flex-grow flex flex-col min-w-0">
             {!pathError && (
               <FileActionsBar
+                // Remount on chain switch so an already-open CreateItemModal
+                // (whose open state lives inside FileActionsBar) is force-closed
+                // before write controls re-expose for the new chain. Pairs with
+                // the chain-switch reset effect that clears the resolved anchor
+                // (Codex P2).
+                key={targetNetwork.id}
                 currentAnchorUID={currentAnchorUID}
                 currentIsFileLeaf={currentIsFileLeaf}
                 container={currentContainer}

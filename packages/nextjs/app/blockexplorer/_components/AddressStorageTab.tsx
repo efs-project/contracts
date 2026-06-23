@@ -1,16 +1,19 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Address, createPublicClient, http, toHex } from "viem";
-import { hardhat } from "viem/chains";
-
-const publicClient = createPublicClient({
-  chain: hardhat,
-  transport: http(),
-});
+import { useTargetNetwork } from "~~/hooks/scaffold-eth";
 
 export const AddressStorageTab = ({ address }: { address: Address }) => {
   const [storage, setStorage] = useState<string[]>([]);
+  const { targetNetwork } = useTargetNetwork();
+
+  // Read storage from the selected network's RPC, not a hardcoded localhost client.
+  // Local (31337) → the dev node; EFS Devnet (26001993) → the VPS RPC (ADR-0062).
+  const publicClient = useMemo(
+    () => createPublicClient({ chain: targetNetwork, transport: http(targetNetwork.rpcUrls.default.http[0]) }),
+    [targetNetwork],
+  );
 
   useEffect(() => {
     const fetchStorage = async () => {
@@ -39,7 +42,7 @@ export const AddressStorageTab = ({ address }: { address: Address }) => {
     };
 
     fetchStorage();
-  }, [address]);
+  }, [address, publicClient]);
 
   return (
     <div className="flex flex-col gap-3 p-4">

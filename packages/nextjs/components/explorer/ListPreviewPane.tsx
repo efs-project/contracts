@@ -20,7 +20,7 @@ import {
   XMarkIcon,
 } from "@heroicons/react/24/outline";
 import { Address, AddressInput } from "~~/components/scaffold-eth";
-import { useDeployedContractInfo } from "~~/hooks/scaffold-eth";
+import { useDeployedContractInfo, useTargetNetwork } from "~~/hooks/scaffold-eth";
 import { useBackgroundOps } from "~~/services/store/backgroundOps";
 import { EDGE_RESOLVER_ABI } from "~~/utils/efs/edgeResolver";
 import {
@@ -309,7 +309,9 @@ const DragDots = () => (
 
 /** A SCHEMA-mode row: fetch the target attestation and summarize it. */
 const AttestationLabel = ({ uid, easAddress }: { uid: `0x${string}`; easAddress?: `0x${string}` }) => {
+  const { targetNetwork } = useTargetNetwork();
   const { data: att } = useReadContract({
+    chainId: targetNetwork.id,
     address: easAddress,
     abi: EAS_ABI,
     functionName: "getAttestation",
@@ -374,32 +376,38 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
   const { data: edgeResolverInfo } = useDeployedContractInfo({ contractName: "EdgeResolver" });
   const edgeResolverAddress = edgeResolverInfo?.address as `0x${string}` | undefined;
 
+  const { targetNetwork } = useTargetNetwork();
+
   const { data: propertySchemaUID } = useReadContract({
+    chainId: targetNetwork.id,
     address: indexerAddress,
     abi: INDEXER_PROPERTY_ABI,
     functionName: "PROPERTY_SCHEMA_UID",
     query: { enabled: !!indexerAddress },
   });
   const { data: anchorSchemaUID } = useReadContract({
+    chainId: targetNetwork.id,
     address: indexerAddress,
     abi: INDEXER_PROPERTY_ABI,
     functionName: "ANCHOR_SCHEMA_UID",
     query: { enabled: !!indexerAddress },
   });
   const { data: pinSchemaUID } = useReadContract({
+    chainId: targetNetwork.id,
     address: indexerAddress,
     abi: INDEXER_PROPERTY_ABI,
     functionName: "PIN_SCHEMA_UID",
     query: { enabled: !!indexerAddress },
   });
 
-  const publicClient = usePublicClient();
+  const publicClient = usePublicClient({ chainId: targetNetwork.id });
   const ops = useBackgroundOps();
   const { writeContractAsync } = useWriteContract();
 
   const listUID = uid as `0x${string}`;
 
   const { data: mode } = useReadContract({
+    chainId: targetNetwork.id,
     address: listReaderAddress,
     abi: LIST_READER_ABI,
     functionName: "getMode",
@@ -428,6 +436,7 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
   // so smart contracts read it the same way). Append-only; we keep all of them as edition chips.
   // First 100 contributors is ample for the edition picker; paginate further if ever needed.
   const { data: rawAttesters } = useReadContract({
+    chainId: targetNetwork.id,
     address: listEntryResolverAddress,
     abi: LIST_ENTRY_RESOLVER_ABI,
     functionName: "getListAttesters",
@@ -493,9 +502,14 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
     }
   }, [publicClient, listReaderAddress, listUID, effectiveLens]);
   useEffect(() => {
+    // Clear stale rows on chain/list/lens identity change (refetchEntries is memoized on
+    // publicClient/listUID/effectiveLens) so a network switch can't leave the old chain's entries —
+    // and their Remove buttons — rendered while the new chain's read is in flight. (Codex P2 analog.)
+    setRawEntries([]);
     void refetchEntries();
   }, [refetchEntries]);
   const { data: entrySchemaUID } = useReadContract({
+    chainId: targetNetwork.id,
     address: listReaderAddress,
     abi: LIST_READER_ABI,
     functionName: "LIST_ENTRY_SCHEMA_UID",
@@ -510,7 +524,9 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
   // order/label PROPERTYs (which re-PIN, never revoke the entry) are still allowed —
   // so an append-only list (incl. an empty one) can still be populated and reordered.
   const canEdit = viewingOwn; // add / reorder / edit-label
-  const canRemove = viewingOwn && !mode?.appendOnly; // entry revocation only
+  // `mode?.exists` gates Remove on the current chain's mode being loaded — otherwise a network switch
+  // would briefly expose Remove (revoke) while `mode` is undefined, acting on a stale-chain entry UID.
+  const canRemove = viewingOwn && !!mode?.exists && !mode.appendOnly; // entry revocation only
 
   // ── Entry-scoped order/label PROPERTY reads (ADR-0046, lens-scoped) ──────────
   // The order ("weight") and label ("name") that ADR-0044 stored inline now live as
@@ -695,6 +711,9 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
    */
   const attestEntry = async (recipient: `0x${string}`, target: `0x${string}`): Promise<`0x${string}`> => {
     const hash = await writeContractAsync({
+      // Guard: reads follow targetNetwork, so pin writes to it too — wagmi throws
+      // ChainMismatchError if the wallet is on a different chain (no cross-chain write).
+      chainId: targetNetwork.id,
       address: easAddress!,
       abi: EAS_ABI,
       functionName: "attest",
@@ -752,6 +771,7 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
         [keyName, propertySchemaUID as `0x${string}`],
       );
       const keyHash = await writeContractAsync({
+        chainId: targetNetwork.id,
         address: easAddress,
         abi: EAS_ABI,
         functionName: "attest",
@@ -779,6 +799,7 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
     opLog?.(`Writing “${keyName}” value…`);
     const encodedProperty = encodeAbiParameters([{ name: "value", type: "string" }], [value]);
     const propHash = await writeContractAsync({
+      chainId: targetNetwork.id,
       address: easAddress,
       abi: EAS_ABI,
       functionName: "attest",
@@ -804,6 +825,7 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
     opLog?.(`Binding “${keyName}”…`);
     const encodedPin = encodeAbiParameters([{ name: "definition", type: "bytes32" }], [keyAnchorUID]);
     const pinHash = await writeContractAsync({
+      chainId: targetNetwork.id,
       address: easAddress,
       abi: EAS_ABI,
       functionName: "attest",
@@ -826,6 +848,7 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
 
   const revokeEntry = async (e: Entry) => {
     const hash = await writeContractAsync({
+      chainId: targetNetwork.id,
       address: easAddress!,
       abi: EAS_ABI,
       functionName: "revoke",
@@ -858,6 +881,7 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
   // BEFORE the user pays gas. Saves a guaranteed-to-revert transaction.
   const schemaDraftIsUID = targetType === MODE.SCHEMA && draft.trim().startsWith("0x") && draft.trim().length === 66;
   const { data: draftAtt } = useReadContract({
+    chainId: targetNetwork.id,
     address: easAddress,
     abi: EAS_ABI,
     functionName: "getAttestation",

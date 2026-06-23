@@ -27,6 +27,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Abi } from "viem";
 import { usePublicClient } from "wagmi";
+import { useTargetNetwork } from "~~/hooks/scaffold-eth/useTargetNetwork";
 import { reconcileMinWeights, shouldUseFilteredQuery } from "~~/utils/efs/excludeFilter";
 
 interface UseLensesDirectoryPageOptions {
@@ -91,7 +92,8 @@ export function useLensesDirectoryPage({
   minWeights = [],
   enabled,
 }: UseLensesDirectoryPageOptions): UseLensesDirectoryPageResult {
-  const publicClient = usePublicClient();
+  const { targetNetwork } = useTargetNetwork();
+  const publicClient = usePublicClient({ chainId: targetNetwork.id });
   // The on-chain `getDirectoryPageFiltered` requires `minWeights.length ===
   // excludeTagDefs.length` (parallel arrays). A caller that omits `minWeights`
   // (default `[]`) or passes a length-mismatched array alongside non-empty
@@ -110,7 +112,12 @@ export function useLensesDirectoryPage({
   // joins depsKey. Lowercased to keep the key stable across hex casing.
   const excludeKey = excludeTagDefs.join(",").toLowerCase();
   const minWeightsKey = effectiveMinWeights.map(w => w.toString()).join(",");
-  const depsKey = `${enabled ? "1" : "0"}|${parentAnchor ?? ""}|${dataSchemaUID ?? ""}|${lensesKey}|${pageSize.toString()}|${excludeKey}|${minWeightsKey}`;
+  // targetNetwork.id joins the reset identity so a runtime chain switch (hardhat
+  // ↔ Sepolia) restarts from an empty cursor/result set. The fetch client is
+  // pinned to the chain above, but without the chain in depsKey the reset effect
+  // wouldn't fire when parent/schema/lenses are identical across chains — and the
+  // new-chain page would append onto stale rows or replay a stale cursor.
+  const depsKey = `${enabled ? "1" : "0"}|${targetNetwork.id}|${parentAnchor ?? ""}|${dataSchemaUID ?? ""}|${lensesKey}|${pageSize.toString()}|${excludeKey}|${minWeightsKey}`;
   const lastDepsRef = useRef<string>("");
   // NOTE: There was previously an `inFlightRef` guard at the top of the fetch
   // effect (`if (inFlightRef.current) return;`) intended to prevent concurrent

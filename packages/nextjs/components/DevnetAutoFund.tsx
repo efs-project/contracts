@@ -12,8 +12,8 @@
  * it matters: on their first connection.
  *
  * Scope / guards:
- *   - hardhat chain id only (31337). On mainnet / Sepolia / anywhere else,
- *     the component is a no-op.
+ *   - fork chains only: the local fork (31337) and the devnet (26001993), via
+ *     `isFundableForkChainId`. On mainnet / Sepolia / anywhere else, a no-op.
  *   - Only when `balance.value === 0n`. A wallet that already has funds is
  *     left alone.
  *   - Once per (address × browser-session). Tracked in a `Set` ref so the
@@ -31,34 +31,18 @@
  *   whole flow is chain-independent, and we skip the toast lifecycle so
  *   there's no stuck-toast failure mode.
  *
- * The `hardhat.id` guard is hardcoded. This component must never, ever fire
- * on mainnet — auto-sending 1 ETH to any connecting address would be ruinous.
+ * The fork-chain guard (`isFundableForkChainId`, an explicit allowlist of 31337/26001993) is
+ * load-bearing. This component must never, ever fire on mainnet — auto-sending 1 ETH to any
+ * connecting address would be ruinous.
  */
 import { useEffect, useRef } from "react";
 import { createPublicClient, createWalletClient, http, parseEther } from "viem";
-import { hardhat } from "viem/chains";
 import { useAccount } from "wagmi";
 import { useWatchBalance } from "~~/hooks/scaffold-eth/useWatchBalance";
+import { isFundableForkChainId } from "~~/utils/scaffold-eth";
 
 const FAUCET_ADDRESS = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
 const NUM_OF_ETH = "1";
-
-// `scaffold.config.ts` builds a *patched* hardhat chain with the env-var URL,
-// but we're importing the vanilla `hardhat` from `viem/chains` here (so the
-// type stays simple). `http()` with no URL would therefore fall back to the
-// viem default `http://127.0.0.1:8545`, which is wrong whenever another
-// worktree or the Claude Code Preview auto-port scan shifted hardhat to a
-// different port. Read the env var directly so we always target the same
-// node the rest of the app is using.
-const HARDHAT_RPC_URL = process.env.NEXT_PUBLIC_HARDHAT_RPC_URL || "http://127.0.0.1:8545";
-const localWalletClient = createWalletClient({
-  chain: hardhat,
-  transport: http(HARDHAT_RPC_URL),
-});
-const localPublicClient = createPublicClient({
-  chain: hardhat,
-  transport: http(HARDHAT_RPC_URL),
-});
 
 export const DevnetAutoFund = () => {
   const { address, chain } = useAccount();
@@ -70,7 +54,7 @@ export const DevnetAutoFund = () => {
 
   useEffect(() => {
     if (!address) return;
-    if (chain?.id !== hardhat.id) return;
+    if (!chain || !isFundableForkChainId(chain.id)) return;
     // `balance` is undefined until the first query resolves; wait for a real
     // reading before deciding "zero" (otherwise we'd fire on the loading
     // state, which returns no data but also not yet a zero value).
@@ -82,16 +66,23 @@ export const DevnetAutoFund = () => {
     fundedRef.current.add(address);
     inFlightRef.current = true;
 
+    // Pin a client to THIS fork's chain + RPC for the whole send→receipt flow, captured now (not a
+    // module singleton) so it targets the correct fork — local (31337) or devnet (26001993) — and a
+    // mid-flight wallet swap can't redirect the receipt poll to another chain (see component doc).
+    const rpcUrl = chain.rpcUrls.default.http[0];
+    const forkWalletClient = createWalletClient({ chain, transport: http(rpcUrl) });
+    const forkPublicClient = createPublicClient({ chain, transport: http(rpcUrl) });
+
     (async () => {
       try {
-        const hash = await localWalletClient.sendTransaction({
+        const hash = await forkWalletClient.sendTransaction({
           account: FAUCET_ADDRESS,
           to: address,
           value: parseEther(NUM_OF_ETH),
         });
-        // Wait against the SAME local client, not wagmi's config-wide public
+        // Wait against the SAME pinned client, not wagmi's config-wide public
         // client — avoids a chain-swap race (see component doc).
-        await localPublicClient.waitForTransactionReceipt({ hash });
+        await forkPublicClient.waitForTransactionReceipt({ hash });
       } catch (err) {
         // Roll back the funded-set entry so a retry path exists on the next
         // balance update or reconnect.
@@ -101,7 +92,7 @@ export const DevnetAutoFund = () => {
         inFlightRef.current = false;
       }
     })();
-  }, [address, balance, chain?.id]);
+  }, [address, balance, chain]);
 
   return null;
 };

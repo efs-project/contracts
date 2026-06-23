@@ -40,31 +40,12 @@
  * skipped / silently fails, so nothing renders.
  */
 import { useEffect, useState } from "react";
-import { useAccount, useConfig } from "wagmi";
+import { useAccount } from "wagmi";
 import { CheckIcon, DocumentDuplicateIcon, ExclamationTriangleIcon, GlobeAltIcon } from "@heroicons/react/24/outline";
 import deployedContracts from "~~/contracts/deployedContracts";
-
-const HARDHAT_CHAIN_ID = 31337;
-
-type NetworkFlavor = "local" | "devnet" | "other" | "unknown";
-
-// All flavors render ghost-style — the chip is informational, not a CTA, so
-// colour-coding would overstate its importance. The label alone differentiates.
-const flavorLabels: Record<NetworkFlavor, string> = {
-  local: "Local",
-  devnet: "Devnet",
-  other: "", // derived from chain.name
-  unknown: "?",
-};
-
-function inferFlavor(rpcUrl: string | undefined, chainId: number | undefined): NetworkFlavor {
-  if (!rpcUrl || !chainId) return "unknown";
-  if (chainId === HARDHAT_CHAIN_ID) {
-    if (rpcUrl.startsWith("http://127.0.0.1") || rpcUrl.startsWith("http://localhost")) return "local";
-    return "devnet";
-  }
-  return "other";
-}
+import { useTargetNetwork } from "~~/hooks/scaffold-eth";
+// Local | Devnet | Sepolia inference is shared (NetworkSwitcher + explorer unreachable state use it too).
+import { type NetworkFlavor, inferNetworkFlavor, networkLabel } from "~~/utils/scaffold-eth";
 
 // Build-time constants baked by next.config.js.
 const GIT_SHA: string = process.env.NEXT_PUBLIC_GIT_SHA ?? "";
@@ -198,17 +179,19 @@ const CopyButton = ({ value, label }: { value: string; label: string }) => {
 
 export const NetworkChip = () => {
   const { chain } = useAccount();
-  const config = useConfig();
+  const { targetNetwork } = useTargetNetwork();
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => setMounted(true), []);
 
-  // Prefer the connected account's chain; fall back to first configured chain so the chip
-  // still shows something useful before wallet connect.
-  const activeChain = chain ?? config.chains[0];
+  // Prefer the connected account's chain; fall back to the selected target network
+  // (what reads run against) so the chip matches the NetworkSwitcher even before a
+  // wallet connects — not the first *configured* chain, which would mislabel as the
+  // default when the user has switched the UI to the other network.
+  const activeChain = chain ?? targetNetwork;
   const rpcUrl = activeChain?.rpcUrls.default.http[0];
-  const flavor = inferFlavor(rpcUrl, activeChain?.id);
-  const label = flavor === "other" ? (activeChain?.name ?? "Unknown") : flavorLabels[flavor];
+  const flavor = inferNetworkFlavor(activeChain?.id);
+  const label = networkLabel(activeChain);
   const shortSha = GIT_SHA ? GIT_SHA.slice(0, 7) : "";
 
   // Fetches `/version.json` from the RPC origin when we're on devnet — silent
@@ -354,7 +337,7 @@ export const NetworkChip = () => {
             </div>
           )}
           <div className="text-[11px] opacity-60 pt-1 border-t border-base-200">
-            Switching networks requires a rebuild. See <code>NEXT_PUBLIC_HARDHAT_RPC_URL</code>.
+            Switch networks from the header. Set the default with <code>NEXT_PUBLIC_TARGET_CHAIN</code>.
           </div>
         </div>
       </div>

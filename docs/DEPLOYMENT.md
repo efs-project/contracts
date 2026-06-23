@@ -42,7 +42,7 @@ The flow is **three** Safe batches around the freeze gate: **Batch 1 (pre-gate)*
 
 > For local/devnet, a fork-without-Safe, or any environment where standing up the Safe execution is overkill, the **deployer EOA** runs the script and its **last actions transfer every `ProxyAdmin` owner and every resolver `Ownable` owner to the EFS.eth Safe**. The EOA ends with zero authority; the Safe is the upgrade key from that moment. This is how OZ Defender / most protocols do it, and it remains fully supported (`deploy:efs` without `--via-safe`). Trade-off: the EOA briefly holds the nascent system before the transfer, and the canonical addresses are keyed to the EOA, not the Safe.
 >
-> **Public-network restriction (PR #24 P1):** the EOA path registers schemas and creates the root in _separate_ txs, so on a real public network there is a mempool window between ANCHOR registration and `SystemAccount.bootstrap` where a front-runner could attest the first generic ANCHOR and become the canonical root (`EFSIndexer` accepts the first generic anchor as root). The EOA register/bootstrap step is therefore **gated to the local pinned fork (chainId 31337)** — which covers local, the fork, and the devnet VPS (anvil `--chain-id 31337`). On real Sepolia/mainnet you **must** use the Safe-native ceremony above (`EFS_DEPLOY_VIA_SAFE=1`), whose Batch 2 registers + bootstraps atomically in one MultiSend, leaving no window. The EOA path can still deploy+wire (`--until-freeze-gate`) anywhere.
+> **Public-network restriction (PR #24 P1):** the EOA path registers schemas and creates the root in _separate_ txs, so on a real public network there is a mempool window between ANCHOR registration and `SystemAccount.bootstrap` where a front-runner could attest the first generic ANCHOR and become the canonical root (`EFSIndexer` accepts the first generic anchor as root). The EOA register/bootstrap step is therefore **gated to the trusted operator forks** — the local/CI pinned fork (chainId `31337`) and the devnet VPS (anvil `--chain-id 26001993`, ADR-0062), both of which are single-operator nodes with no public mempool. On real Sepolia/mainnet you **must** use the Safe-native ceremony above (`EFS_DEPLOY_VIA_SAFE=1`), whose Batch 2 registers + bootstraps atomically in one MultiSend, leaving no window. The EOA path can still deploy+wire (`--until-freeze-gate`) anywhere.
 
 **Why the Safe as owner is the _right_ posture** (and supersedes the earlier "simple single-admin EOA" assumption): the upgrade authority is a multisig you control — no single hot key can rewrite resolver logic behind a "permanent" schema. It directly satisfies the PM's "who holds the keys + guardrails" requirement, the good way. The eventual **burn** is then a deliberate Safe transaction.
 
@@ -174,7 +174,7 @@ yarn deploy:efs-views --network sepolia
 
 **EOA-then-transfer (fork / devnet only — NOT for the real Sepolia/mainnet freeze):**
 
-> ⚠️ The EOA register/bootstrap step is **gated to chainId 31337** (`orchestrate.ts` — front-run safety, PR #24 P1: on a public network there's a mempool window between ANCHOR registration and root bootstrap). So this gated two-phase EOA flow runs only on the **local pinned fork and the devnet VPS** (anvil `--chain-id 31337`). For the **real Sepolia/mainnet freeze use the Safe-native ceremony above** (`--via-safe`), whose Batch 2 registers + bootstraps atomically. The EOA `--until-freeze-gate` (deploy + wire, no register) is allowed on any network, but `--after-freeze-gate` (register) will hard-fail off-31337.
+> ⚠️ The EOA register/bootstrap step is **gated to the trusted operator forks — chainId `31337` (local/CI) and `26001993` (devnet VPS, ADR-0062)** (`orchestrate.ts` — front-run safety, PR #24 P1: on a public network there's a mempool window between ANCHOR registration and root bootstrap; both forks are single-operator nodes with no public mempool). So this gated two-phase EOA flow runs only on the **local pinned fork and the devnet VPS** (anvil `--chain-id 26001993`). For the **real Sepolia/mainnet freeze use the Safe-native ceremony above** (`--via-safe`), whose Batch 2 registers + bootstraps atomically. The EOA `--until-freeze-gate` (deploy + wire, no register) is allowed on any network, but `--after-freeze-gate` (register) will hard-fail on any chain other than `31337`/`26001993`.
 
 ```bash
 cd packages/hardhat
@@ -183,10 +183,10 @@ yarn account:import                       # JamesCarnley.eth or a dedicated depl
 echo "EFS_SAFE_ADDRESS=0x...your Safe..." >> .env
 # 2. rehearse the FULL ceremony on the pinned fork (no real txs, full verify + smoke)
 yarn deploy:efs --network hardhat         # (Phase-D script; dry-run/fork)
-# 3. devnet (anvil --chain-id 31337): deploy UP TO the freeze gate (deploys + verifies, STOPS before register)
+# 3. devnet (anvil --chain-id 26001993, ADR-0062): deploy UP TO the freeze gate (deploys + verifies, STOPS before register)
 yarn deploy:efs --network localhost --until-freeze-gate
 #    -> review + sign docs/SEPOLIA_FREEZE_TABLE.md
-# 4. devnet: register + transfer-to-Safe + smoke (after signing) — 31337 only; real nets use --via-safe
+# 4. devnet: register + transfer-to-Safe + smoke (after signing) — 31337/26001993 only; real nets use --via-safe
 yarn deploy:efs --network localhost --after-freeze-gate
 # 5. deploy the read views (NON-FROZEN; redeployable anytime, in no UID, outside the freeze)
 yarn deploy:efs-views --network localhost

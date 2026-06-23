@@ -61,21 +61,21 @@ equivalent prompt that explicitly requires all of the following:
 
 ## Change-type → required reads
 
-If your task fits one of these categories, load the listed ADRs *before* writing code. Most Tier 1 mistakes come from missing the right governing decision.
+If your task fits one of these categories, load the listed ADRs _before_ writing code. Most Tier 1 mistakes come from missing the right governing decision.
 
-| Change type | Required reads |
-|---|---|
-| Schema field change (ANCHOR, DATA, MIRROR, PIN, TAG, PROPERTY, SORT_INFO) | ADR-0005, ADR-0030, ADR-0032, ADR-0041, `specs/02-Data-Models-and-Schemas.md` |
-| New transport type or priority change | ADR-0011, ADR-0012, ADR-0023, `specs/02` §Mirror |
-| Kernel index / indexing logic (EFSIndexer / EdgeResolver) | ADR-0007, ADR-0008, ADR-0009, ADR-0010, ADR-0021, ADR-0041, `specs/03-Onchain-Indexing-Strategy.md` |
-| Edge writes (PIN vs TAG choice; cardinality) | ADR-0041, `specs/02-Data-Models-and-Schemas.md` §Pin/Tag |
-| Lenses / router resolution | ADR-0013, ADR-0014, ADR-0016, ADR-0017, ADR-0020, ADR-0031, ADR-0033, `specs/04-Core-Workflows.md` |
-| Root URL classification / schema alias anchors | ADR-0033, ADR-0019, ADR-0025 |
-| Display-name / address-label rendering | ADR-0014, ADR-0034, `specs/02` §Property |
-| Security limits (MAX_*) | ADR-0021 through ADR-0026 |
-| Deploy / wiring / contract addresses | ADR-0027, ADR-0028, ADR-0030 |
-| Sort overlay | ADR-0011 (transports pattern analog), `specs/07-Sort-Overlay-Architecture.md` |
-| Licensing / legal | ADR-0029 |
+| Change type                                                               | Required reads                                                                                      |
+| ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| Schema field change (ANCHOR, DATA, MIRROR, PIN, TAG, PROPERTY, SORT_INFO) | ADR-0005, ADR-0030, ADR-0032, ADR-0041, `specs/02-Data-Models-and-Schemas.md`                       |
+| New transport type or priority change                                     | ADR-0011, ADR-0012, ADR-0023, `specs/02` §Mirror                                                    |
+| Kernel index / indexing logic (EFSIndexer / EdgeResolver)                 | ADR-0007, ADR-0008, ADR-0009, ADR-0010, ADR-0021, ADR-0041, `specs/03-Onchain-Indexing-Strategy.md` |
+| Edge writes (PIN vs TAG choice; cardinality)                              | ADR-0041, `specs/02-Data-Models-and-Schemas.md` §Pin/Tag                                            |
+| Lenses / router resolution                                                | ADR-0013, ADR-0014, ADR-0016, ADR-0017, ADR-0020, ADR-0031, ADR-0033, `specs/04-Core-Workflows.md`  |
+| Root URL classification / schema alias anchors                            | ADR-0033, ADR-0019, ADR-0025                                                                        |
+| Display-name / address-label rendering                                    | ADR-0014, ADR-0034, `specs/02` §Property                                                            |
+| Security limits (MAX\_\*)                                                 | ADR-0021 through ADR-0026                                                                           |
+| Deploy / wiring / contract addresses                                      | ADR-0027, ADR-0028, ADR-0030                                                                        |
+| Sort overlay                                                              | ADR-0011 (transports pattern analog), `specs/07-Sort-Overlay-Architecture.md`                       |
+| Licensing / legal                                                         | ADR-0029                                                                                            |
 
 ## Setup
 
@@ -171,18 +171,20 @@ Exit 0 means `yarn deploy` regenerated the file byte-identically to what's commi
 
 ### Running Foundry anvil directly (devnet VPS / long-lived nodes)
 
-`yarn fork` and `yarn preview` both wrap **Hardhat's node**, which reads `blockNumber` from `hardhat.config.ts` automatically — the pin is inherited, nothing to do. But a long-lived devnet is typically run with **Foundry `anvil`** directly (faster, lighter, supports `--state` for restart persistence). Foundry does not read hardhat's config, so the pin must be passed on the CLI:
+`yarn fork` and `yarn preview` both wrap **Hardhat's node**, which reads `blockNumber` from `hardhat.config.ts` automatically — the pin is inherited, nothing to do. But a long-lived devnet is typically run with **Foundry `anvil`** directly (faster, lighter, supports `--state` for restart persistence). Foundry does not read hardhat's config, so both the pin **and the chain id** must be passed on the CLI. The shared devnet is its **own** chain — `26001993` (ADR-0062), _not_ `31337` — so it stays distinct from a developer's local fork; this is what the devnet repo's `scripts/start-anvil.sh` runs:
 
 ```bash
 anvil \
   --host 0.0.0.0 \
   --port 8545 \
-  --chain-id 31337 \
+  --chain-id "${CHAIN_ID:-26001993}" \
   --fork-url "$SEPOLIA_FORK_RPC_URL" \
   --fork-block-number "${FORK_BLOCK:-10691000}" \
   --state /data/anvil-state.json \
   --state-interval 30
 ```
+
+`--chain-id` defaults to the devnet's own `26001993`; pass `CHAIN_ID=31337` only for a local long-lived fork. The app build must target the **same** id (`26001993` for the devnet — see the static-export section below); a `31337` node serving a `26001993`-targeted app rejects every EIP-155 write and faucet drip.
 
 **Trap: `--state` + pin bump.** `--state` persists live chain state (accumulated nonces, new blocks) across restarts. When you bump `FORK_BLOCK` or first introduce the pin on an already-running node, the state file encodes drifted state — loading it on startup replays that drift on top of the fresh pin and addresses still come out wrong. Wipe or rotate the state file when bumping the pin:
 
@@ -203,7 +205,7 @@ The Next.js app ships as a **pure static export** — `output: "export"` in `pac
 ```bash
 cd packages/nextjs
 NEXT_PUBLIC_SITE_URL=https://app.efs.eth.limo \
-NEXT_PUBLIC_HARDHAT_RPC_URL=https://<vps-host>/rpc \
+NEXT_PUBLIC_DEVNET_RPC_URL=https://<vps-host>/rpc \
 NEXT_PUBLIC_IPFS_GATEWAY=https://<vps-host>/ipfs/ \
 NEXT_PUBLIC_ARWEAVE_GATEWAY=https://<vps-host>/arweave/ \
 NEXT_PUBLIC_DEVNET_BANNER="DEVNET — resets weekly." \
@@ -211,6 +213,8 @@ yarn build
 ```
 
 Outputs `packages/nextjs/out/`. `ipfs add -r out/` → copy the resulting root CID to the ENS name.
+
+The devnet is its own chain — **EFS Devnet, chain id `26001993`** (ADR-0062). A deployed (`next build`) app defaults to **Devnet**, with Sepolia one click away in the switcher; **Local (31337) is not offered** (no node on a visitor's machine). Point the Devnet chain at the VPS with `NEXT_PUBLIC_DEVNET_RPC_URL` (defaults to the devnet VPS if unset). Do **not** use `NEXT_PUBLIC_HARDHAT_RPC_URL` for the devnet — that configures the _Local_ chain (31337); on a `26001993` node it would default the build to Local and sign writes for the wrong chain (the node rejects them). For a public **Sepolia**-first SPA, set `NEXT_PUBLIC_TARGET_CHAIN=sepolia`. The devnet VPS anvil must run `--chain-id 26001993` (devnet repo `scripts/start-anvil.sh`). See `packages/nextjs/scaffold.config.ts`.
 
 **Deep-link SPA fallback.** The only truly dynamic route is `/explorer/[[...path]]` — anchor / address / schema / attestation URLs aren't enumerable at build time. Next's static export emits one shell at `/explorer/index.html`; `public/_redirects` tells IPFS gateways (per the [web-redirects spec](https://specs.ipfs.tech/http-gateways/web-redirects-file/), honored by Kubo ≥ 0.23 and eth.limo) to serve that shell with status 200 for any `/explorer/*` URL. The shell is a client component that reads `useParams()` at runtime and renders the real path. Blockexplorer's `/address/[address]` and `/transaction/[txHash]` use the same trick via dummy `generateStaticParams` values.
 
@@ -242,6 +246,7 @@ yarn lint && yarn format    # both packages
 ```
 
 Single test file:
+
 ```bash
 cd packages/hardhat && npx hardhat test test/EFSIndexer.test.ts --network hardhat
 ```
@@ -267,4 +272,4 @@ cd packages/hardhat && npx hardhat test test/EFSIndexer.test.ts --network hardha
 
 ---
 
-*Claude Code: see CLAUDE.md (pointer to this file).*
+_Claude Code: see CLAUDE.md (pointer to this file)._

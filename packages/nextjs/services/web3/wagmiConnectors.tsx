@@ -87,6 +87,13 @@ const wallets = [
   coinbaseWallet,
   rainbowWallet,
   safeWallet,
+  // AGENT-NOTE: With Sepolia now in targetNetworks and `onlyLocalBurnerWallet: false`,
+  // the burner is reachable on Sepolia by design. This fails safe: the faucet is
+  // hardhat-only and a burner has no Sepolia funds, so it can't accidentally spend.
+  // Do NOT "fix" this by setting `onlyLocalBurnerWallet: true` — the gate's first
+  // clause (`!targetNetworks.some(id !== hardhat)`) is false the moment a non-hardhat
+  // network is present, so flipping the flag would REMOVE the burner entirely and
+  // break the local dev flow.
   ...(!targetNetworks.some(network => network.id !== (chains.hardhat as chains.Chain).id) || !onlyLocalBurnerWallet
     ? typeof window !== "undefined"
       ? [rainbowkitBurnerWallet]

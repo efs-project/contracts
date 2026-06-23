@@ -1,14 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AddressCodeTab } from "./AddressCodeTab";
 import { AddressLogsTab } from "./AddressLogsTab";
 import { AddressStorageTab } from "./AddressStorageTab";
 import { PaginationButton } from "./PaginationButton";
 import { TransactionsTable } from "./TransactionsTable";
 import { createPublicClient, http } from "viem";
-import { hardhat } from "viem/chains";
-import { useFetchBlocks } from "~~/hooks/scaffold-eth";
+import { useFetchBlocks, useTargetNetwork } from "~~/hooks/scaffold-eth";
 
 type AddressCodeTabProps = {
   bytecode: string;
@@ -20,15 +19,18 @@ type PageProps = {
   contractData: AddressCodeTabProps | null;
 };
 
-const publicClient = createPublicClient({
-  chain: hardhat,
-  transport: http(),
-});
-
 export const ContractTabs = ({ address, contractData }: PageProps) => {
   const { blocks, transactionReceipts, currentPage, totalBlocks, setCurrentPage } = useFetchBlocks();
   const [activeTab, setActiveTab] = useState("transactions");
   const [isContract, setIsContract] = useState(false);
+  const { targetNetwork } = useTargetNetwork();
+
+  // Probe bytecode on the selected network's RPC, not a hardcoded localhost client.
+  // Local (31337) → the dev node; EFS Devnet (26001993) → the VPS RPC (ADR-0062).
+  const publicClient = useMemo(
+    () => createPublicClient({ chain: targetNetwork, transport: http(targetNetwork.rpcUrls.default.http[0]) }),
+    [targetNetwork],
+  );
 
   useEffect(() => {
     const checkIsContract = async () => {
@@ -37,7 +39,7 @@ export const ContractTabs = ({ address, contractData }: PageProps) => {
     };
 
     checkIsContract();
-  }, [address]);
+  }, [address, publicClient]);
 
   const filteredBlocks = blocks.filter(block =>
     block.transactions.some(tx => {

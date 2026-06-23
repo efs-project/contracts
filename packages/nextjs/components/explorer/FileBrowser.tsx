@@ -26,7 +26,12 @@ import {
 } from "@heroicons/react/24/outline";
 import { useLensesDirectoryPage } from "~~/hooks/efs/useLensesDirectoryPage";
 import { useSortedData } from "~~/hooks/efs/useSortedData";
-import { useDeployedContractInfo, useScaffoldReadContract, useScaffoldWriteContract } from "~~/hooks/scaffold-eth";
+import {
+  useDeployedContractInfo,
+  useScaffoldReadContract,
+  useScaffoldWriteContract,
+  useTargetNetwork,
+} from "~~/hooks/scaffold-eth";
 import { useBackgroundOps } from "~~/services/store/backgroundOps";
 import { EDGE_RESOLVER_ABI, getEdgeResolverAddress } from "~~/utils/efs/edgeResolver";
 import { isFile, isList, isTopic } from "~~/utils/efs/efsTypes";
@@ -184,6 +189,13 @@ export const FileBrowser = ({
   // to text/blob-URL (lossy for binary), so downloads must derive from here.
   const [fileBytes, setFileBytes] = useState<Uint8Array | null>(null);
   const fetchIdRef = useRef(0);
+  // Generation counter bumped on every chain switch (see the targetNetwork.id
+  // reset effect below). Chain-scoped async resolvers capture this at request
+  // time and discard their result if it no longer matches — so a resolver that
+  // launched against the previous chain can't write that chain's
+  // edgeResolverAddress/tagsRoot back into state after the switch. Makes the
+  // chain change atomic for the resolvers, not just for the synchronous reset.
+  const chainGenRef = useRef(0);
   const [fileContentType, setFileContentType] = useState<string | null>(null);
   const [fileTransportType, setFileTransportType] = useState<string>("onchain");
   const [isFileLoading, setIsFileLoading] = useState(false);
@@ -251,9 +263,69 @@ export const FileBrowser = ({
 
   const { data: indexerInfo } = useDeployedContractInfo({ contractName: "Indexer" });
   const { data: efsFileViewInfo } = useDeployedContractInfo({ contractName: "EFSFileView" });
-  const publicClient = usePublicClient();
+  const { targetNetwork } = useTargetNetwork();
+  const publicClient = usePublicClient({ chainId: targetNetwork.id });
   const { address: connectedAddress } = useAccount();
   const { writeContractAsync: easWrite } = useScaffoldWriteContract("EAS");
+
+  // On a network switch the chain-scoped tag-filter resolver state below was
+  // resolved against the previous chain's Indexer/EdgeResolver. The `/tags` gate
+  // (`if (tagsRoot) return`) never re-resolves once set, so without this reset a
+  // hardhat <-> Sepolia switch reuses the old chain's `/tags` UID + edge-resolver
+  // address while the directory reads follow the new chain — the exclude filter
+  // then resolves empty/wrong and the listing falls back to unfiltered until a
+  // reload. Keyed on targetNetwork.id so it clears only on an actual chain change.
+  //
+  // Clearing this state synchronously is necessary but NOT sufficient on its own:
+  // a chain-scoped async resolver launched against the previous chain (the `/tags`
+  // resolver below has no cancel guard) can still resolve AFTER this reset and
+  // write the old chain's edgeResolverAddress/tagsRoot back. Bumping chainGenRef
+  // makes those resolvers discard their stale result (they capture the gen at
+  // request time). We also clear the selected file/list/preview/modal state and
+  // bump fetchIdRef so any in-flight content fetch is invalidated — otherwise the
+  // old chain's bytes/UIDs stay visible in the preview while the write panels act
+  // against the newly-selected chain.
+  useEffect(() => {
+    chainGenRef.current += 1;
+    fetchIdRef.current += 1;
+    setTagsRoot(null);
+    setTagsRootSettled(false);
+    setEdgeResolverAddress(null);
+    setExcludeResolved(false);
+    setExcludeTagDefUIDs([]);
+    setTagFilteredUIDs(null);
+    setExcludeRetry(0);
+    // Clear selection / preview / modal state so no old-chain bytes or UIDs remain
+    // rendered after the switch.
+    setSelectedFile(null);
+    setSelectedList(null);
+    setSelectedDebugItem(null);
+    setPropertiesModalUID(null);
+    setTagModalUID(null);
+    setTagModalIsFile(false);
+    setDeleteConfirm(null);
+    setFileContent(null);
+    setFileBytes(null);
+    setFileContentType(null);
+    setFetchError(null);
+    setIsFileLoading(false);
+    setPreviewFullscreen(false);
+    // Client-side preview-sort state is chain-scoped too: previewCacheKey already
+    // includes targetNetwork.id, but previewFetchKey/previewFetchRef do NOT, so
+    // after a switch the preview effect can early-return on
+    // `previewFetchRef.current === previewFetchKey` (the (anchor,sort,staleness)
+    // tuple is chain-agnostic and unchanged when the same folder/sort exists on
+    // both chains) before reading the chain-scoped cache or refetching — leaving
+    // the previous chain's previewSortKeys/isPreviewSort applied to the new
+    // chain's items whenever on-chain sortedUIDs is empty (Codex round 2,
+    // FileBrowser.tsx:920). Clear all three here so the effect re-fetches against
+    // the new chain instead of reusing stale keys. (Refs and the setters are
+    // declared below; the effect body runs at commit time after all hooks
+    // initialize, so the forward references resolve — same as setSelectedList.)
+    previewFetchRef.current = null;
+    setPreviewSortKeys(new Map());
+    setIsPreviewSort(false);
+  }, [targetNetwork.id]);
 
   // PIN and TAG schema UIDs from EdgeResolver (ADR-0041 — distinct schemas
   // for cardinality 1 vs N). Declared early because the tag-filter useEffect
@@ -285,6 +357,7 @@ export const FileBrowser = ({
   ] as const;
 
   const { data: listSchemaUID } = useReadContract({
+    chainId: targetNetwork.id,
     address: listReaderAddress,
     abi: LIST_SCHEMA_UID_ABI,
     functionName: "LIST_SCHEMA_UID",
@@ -333,7 +406,12 @@ export const FileBrowser = ({
     // exists but `/tags/system` doesn't — the real-deploy case — tagsRoot is
     // unchanged and the exclude resolver re-resolves directly off excludeRefreshKey.)
     if (tagsRoot) return;
+    // Capture the chain generation at request time; a switch bumps chainGenRef,
+    // so a result computed against the previous chain is discarded instead of
+    // writing that chain's edgeResolverAddress/tagsRoot after the reset.
+    const gen = chainGenRef.current;
     getEdgeResolverAddress(publicClient.chain.id).then(async addr => {
+      if (gen !== chainGenRef.current) return;
       if (addr) setEdgeResolverAddress(addr);
       try {
         const fsRoot = (await publicClient.readContract({
@@ -341,6 +419,7 @@ export const FileBrowser = ({
           abi: indexerInfo.abi,
           functionName: "rootAnchorUID",
         })) as `0x${string}`;
+        if (gen !== chainGenRef.current) return;
         if (!fsRoot || fsRoot === zeroHash) {
           // No filesystem root → no `/tags`, nothing taggable. Settle as absent.
           setTagsRootSettled(true);
@@ -352,6 +431,7 @@ export const FileBrowser = ({
           functionName: "resolvePath",
           args: [fsRoot, "tags"],
         })) as `0x${string}`;
+        if (gen !== chainGenRef.current) return;
         if (tagsUID && tagsUID !== zeroHash) setTagsRoot(tagsUID);
         // Resolved either way (UID or absent) — settle so the exclude gate can
         // release instead of holding "Loading…" forever on a deploy without /tags.
@@ -847,11 +927,12 @@ export const FileBrowser = ({
       ? `${currentAnchorUID}:${activeSortInfoUID}:${activeSortStaleness?.toString() ?? "0"}`
       : null;
 
-  // sessionStorage key for preview sort cache: includes anchor + sort + staleness count
-  // so the cache is automatically invalidated when new items are added (staleness changes).
+  // sessionStorage key for preview sort cache: includes chain + anchor + sort + staleness count
+  // so the cache is scoped per selected network (a chain switch can't reload another chain's
+  // preview entry) and is automatically invalidated when new items are added (staleness changes).
   const previewCacheKey =
     activeSortInfoUID && currentAnchorUID
-      ? `efs-preview:${currentAnchorUID}:${activeSortInfoUID}:${activeSortStaleness?.toString() ?? "0"}`
+      ? `efs-preview:${targetNetwork.id}:${currentAnchorUID}:${activeSortInfoUID}:${activeSortStaleness?.toString() ?? "0"}`
       : null;
 
   // Client-side preview sort: fetch sort keys locally when on-chain sort is 0% processed.
@@ -1549,6 +1630,13 @@ export const FileBrowser = ({
   // (the curator's placement), then show the pane against that LIST.
   const openList = async (item: any) => {
     if (!publicClient || !edgeResolverAddress || !listSchemaUID) return;
+    // Capture the chain generation up front. openList closes over the old chain's
+    // publicClient / edgeResolverAddress / listSchemaUID and awaits getActivePinTarget;
+    // if the user switches networks mid-resolve, the reset effect bumps chainGenRef and
+    // clears the pane, then this old-chain promise would otherwise restore an old-chain
+    // LIST UID into setSelectedList (Codex round 2, FileBrowser.tsx:288). Re-check before
+    // every state write below — same guard the /tags resolver uses.
+    const gen = chainGenRef.current;
     setSelectedFile(null);
     const resolvePin = (attester: `0x${string}`) =>
       publicClient.readContract({
@@ -1578,12 +1666,16 @@ export const FileBrowser = ({
       let resolvedAttester: `0x${string}` = item.attester;
       for (const cand of candidates) {
         const uid = await resolvePin(cand);
+        // A chain switch during the resolve loop invalidates every remaining probe
+        // (they ran against the old chain's edgeResolver) — stop and write nothing.
+        if (gen !== chainGenRef.current) return;
         if (uid && uid !== zeroHash) {
           listUID = uid;
           resolvedAttester = cand;
           break;
         }
       }
+      if (gen !== chainGenRef.current) return;
       if (!listUID || listUID === zeroHash) {
         notification.error(
           "This list has no active placement here — it was deleted, or its creation was " +

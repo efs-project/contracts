@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   decodeAbiParameters,
   decodeEventLog,
@@ -13,7 +13,7 @@ import {
 } from "viem";
 import { usePublicClient, useReadContract, useWriteContract } from "wagmi";
 import { useSchemaRegistry } from "~~/hooks/efs/useSchemaRegistry";
-import { useScaffoldReadContract } from "~~/hooks/scaffold-eth";
+import { useScaffoldReadContract, useTargetNetwork } from "~~/hooks/scaffold-eth";
 import { notification } from "~~/utils/scaffold-eth";
 
 // Minimal EAS ABI (standard, doesn't change per deployment)
@@ -87,7 +87,8 @@ const EAS_ABI = [
 
 export default function DebugSchemas() {
   const { writeContractAsync, isPending } = useWriteContract();
-  const publicClient = usePublicClient();
+  const { targetNetwork } = useTargetNetwork();
+  const publicClient = usePublicClient({ chainId: targetNetwork.id });
   const registry = useSchemaRegistry();
 
   // State for forms
@@ -111,12 +112,23 @@ export default function DebugSchemas() {
 
   const [lastTxHash, setLastTxHash] = useState("");
 
-  // Initialize/Update form refs when rootTopicUid loads
+  // Tracks the last rootTopicUid we auto-filled into the ref fields, so a chain
+  // switch (which changes rootTopicUid — e.g. hardhat → Sepolia) can refresh
+  // fields still holding the prior chain's default while preserving user edits.
+  const lastAutoRootRef = useRef("");
+
+  // Initialize/Update form refs when rootTopicUid loads or changes (chain switch).
+  // A field is "still an auto-filled default" iff it's empty/zero OR equals the
+  // previously auto-filled root; those get updated to the new root. A field the
+  // user typed a custom value into (anything else) is left untouched.
   useEffect(() => {
     if (registry.rootTopicUid && registry.rootTopicUid !== zeroHash) {
-      if (!pinRef || pinRef === zeroHash) setPinRef(registry.rootTopicUid);
-      if (!tagRef || tagRef === zeroHash) setTagRef(registry.rootTopicUid);
-      if (!propRef || propRef === zeroHash) setPropRef(registry.rootTopicUid);
+      const prevRoot = lastAutoRootRef.current;
+      const isAutoDefault = (v: string) => !v || v === zeroHash || v === prevRoot;
+      if (isAutoDefault(pinRef)) setPinRef(registry.rootTopicUid);
+      if (isAutoDefault(tagRef)) setTagRef(registry.rootTopicUid);
+      if (isAutoDefault(propRef)) setPropRef(registry.rootTopicUid);
+      lastAutoRootRef.current = registry.rootTopicUid;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [registry.rootTopicUid]);
@@ -128,6 +140,9 @@ export default function DebugSchemas() {
     }
     try {
       const tx = await writeContractAsync({
+        // Guard: writes go to the selected network (reads already do) — wagmi throws
+        // ChainMismatchError if the wallet is on a different chain.
+        chainId: targetNetwork.id,
         address: registry.easAddress as `0x${string}`,
         abi: EAS_ABI,
         functionName: "attest",
@@ -690,7 +705,9 @@ function AttestationItem({
   easAddress: string;
   onFocus: (uid: string) => void;
 }) {
+  const { targetNetwork } = useTargetNetwork();
   const { data: attestation } = useReadContract({
+    chainId: targetNetwork.id,
     address: easAddress as `0x${string}`,
     abi: EAS_ABI,
     functionName: "getAttestation",

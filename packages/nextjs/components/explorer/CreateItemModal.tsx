@@ -22,7 +22,7 @@ import type { ClassifiedContainer } from "~~/utils/efs/containers";
 import { EDGE_RESOLVER_ABI, getEdgeResolverAddress } from "~~/utils/efs/edgeResolver";
 import { SORT_OVERLAY_ABI } from "~~/utils/efs/sortOverlay";
 import { TRANSPORT_LABELS, computeContentHash, detectTransport, resolveGatewayUrl } from "~~/utils/efs/transports";
-import { notification } from "~~/utils/scaffold-eth";
+import { ensureWalletChain, notification } from "~~/utils/scaffold-eth";
 
 export type CreationType = "Folder" | "File" | "PasteLink" | "List";
 
@@ -212,7 +212,9 @@ export const CreateItemModal = ({
   const { data: listReaderInfo } = useDeployedContractInfo({ contractName: "ListReader" as any });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const listReaderAddress = (listReaderInfo as any)?.address as `0x${string}` | undefined;
+  const { targetNetwork } = useTargetNetwork();
   const { data: listSchemaUID } = useReadContract({
+    chainId: targetNetwork.id,
     address: listReaderAddress,
     abi: [
       {
@@ -226,7 +228,6 @@ export const CreateItemModal = ({
     functionName: "LIST_SCHEMA_UID",
     query: { enabled: !!listReaderAddress },
   });
-  const { targetNetwork } = useTargetNetwork();
 
   const [internalType, setInternalType] = useState<CreationType | null>(creationType);
   const [newName, setNewName] = useState("");
@@ -275,7 +276,7 @@ export const CreateItemModal = ({
   // Flipped by the Stop button mid-upload. Checked between transactions so we
   // break cleanly on the next safe boundary (can't abort an already-broadcast tx).
   const cancelledRef = useRef(false);
-  const publicClient = usePublicClient();
+  const publicClient = usePublicClient({ chainId: targetNetwork.id });
   const { data: walletClient } = useWalletClient();
 
   // Sync external `creationType` prop to internal state + dialog visibility.
@@ -669,6 +670,7 @@ export const CreateItemModal = ({
 
   const handleSubmit = async () => {
     if (!currentAnchorUID || !newName || !walletClient || !publicClient || !internalType) return;
+    if (!ensureWalletChain(walletClient, targetNetwork.id, targetNetwork.name)) return;
     const nameError = validateAnchorName(newName);
     if (nameError) {
       notification.error(nameError);
@@ -967,6 +969,10 @@ export const CreateItemModal = ({
           const hash = await walletClient.sendTransaction({
             data: bytecode as `0x${string}`,
             account: walletClient.account,
+            // Pin to the selected chain: a mid-upload wallet switch must fail loudly here
+            // rather than silently deploy chunks on another chain while the receipt waits
+            // and the web3://…:${targetNetwork.id} mirror URI stay scoped to this one.
+            chain: targetNetwork,
           });
           const chunkReceipt = await publicClient.waitForTransactionReceipt({ hash });
           if (!chunkReceipt.contractAddress) throw new Error("Chunk deployment failed");
@@ -985,6 +991,7 @@ export const CreateItemModal = ({
         const managerHash = await walletClient.sendTransaction({
           data: deployData,
           account: walletClient.account,
+          chain: targetNetwork,
         });
         const managerReceipt = await publicClient.waitForTransactionReceipt({ hash: managerHash });
         if (!managerReceipt.contractAddress) throw new Error("Manager deployment failed");

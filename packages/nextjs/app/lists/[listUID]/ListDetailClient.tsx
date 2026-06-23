@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import { encodeAbiParameters, zeroAddress, zeroHash } from "viem";
 import { useAccount, usePublicClient, useReadContract, useWaitForTransactionReceipt, useWriteContract } from "wagmi";
-import { useDeployedContractInfo } from "~~/hooks/scaffold-eth";
+import { useDeployedContractInfo, useTargetNetwork } from "~~/hooks/scaffold-eth";
 import { notification } from "~~/utils/scaffold-eth";
 
 const EAS_ABI = [
@@ -145,7 +145,10 @@ export default function ListDetailPage() {
 
   const lensAddress = connectedAddress ?? zeroAddress;
 
+  const { targetNetwork } = useTargetNetwork();
+
   const { data: mode } = useReadContract({
+    chainId: targetNetwork.id,
     address: listReaderAddress,
     abi: LIST_READER_ABI,
     functionName: "getMode",
@@ -154,6 +157,7 @@ export default function ListDetailPage() {
   });
 
   const { data: listLen, refetch: refetchLength } = useReadContract({
+    chainId: targetNetwork.id,
     address: listReaderAddress,
     abi: LIST_READER_ABI,
     functionName: "length",
@@ -166,7 +170,7 @@ export default function ListDetailPage() {
   // unremovable) every entry past the 50th. Loop the reader cursor until a short page, mirroring
   // ListPreviewPane.refetchEntries, with a safety bound for the debug UI.
   type EntryRow = { entryUID: `0x${string}`; identityKey: `0x${string}` };
-  const publicClient = usePublicClient();
+  const publicClient = usePublicClient({ chainId: targetNetwork.id });
   const [entries, setEntries] = useState<readonly EntryRow[] | undefined>(undefined);
   // Generation guard (mirrors ListPreviewPane): if `lensAddress` changes (wallet account switch)
   // while a paginated read is in flight, the stale read must not setEntries() under the new lens.
@@ -195,28 +199,42 @@ export default function ListDetailPage() {
     }
   }, [publicClient, listReaderAddress, listUID, lensAddress]);
   useEffect(() => {
+    // Clear the displayed rows whenever the chain/list/lens identity changes (refetchEntries is memoized on
+    // publicClient/listUID/lensAddress). Otherwise a network switch leaves the old chain's entries — and
+    // their Remove buttons — rendered while the new chain's read is in flight, so a Remove could revoke an
+    // old-chain entry UID against the newly selected chain. (Codex P2.)
+    setEntries(undefined);
     void refetchEntries();
   }, [refetchEntries]);
 
   const { data: listEntrySchemaUID } = useReadContract({
+    chainId: targetNetwork.id,
     address: listReaderAddress,
     abi: LIST_READER_ABI,
     functionName: "LIST_ENTRY_SCHEMA_UID",
     query: { enabled: !!listReaderAddress },
   });
 
-  // Pending tx hash — watched by useWaitForTransactionReceipt to trigger refetch.
-  const [pendingTxHash, setPendingTxHash] = useState<`0x${string}` | undefined>(undefined);
-  const { data: txReceipt } = useWaitForTransactionReceipt({ hash: pendingTxHash });
+  // Pending tx — watched by useWaitForTransactionReceipt to trigger refetch. We store the
+  // chainId the write was dispatched on alongside the hash: the watcher defaults to the
+  // wallet's current chain, so a mid-pending network switch would otherwise wait for the
+  // old hash on the new chain and fire a stale refetch. Pinning chainId keeps the watcher
+  // and the post-confirm refetch scoped to the chain the tx actually landed on.
+  const [pendingTx, setPendingTx] = useState<{ hash: `0x${string}`; chainId: number } | undefined>(undefined);
+  const { data: txReceipt } = useWaitForTransactionReceipt({ hash: pendingTx?.hash, chainId: pendingTx?.chainId });
 
-  // Refetch both length and entries once the pending tx confirms.
+  // Refetch both length and entries once the pending tx confirms — but only if the user
+  // hasn't switched away from the chain the tx was submitted on (the reads are pinned to
+  // targetNetwork.id, so a refetch under a different target would be meaningless).
   useEffect(() => {
     if (txReceipt) {
-      refetchLength();
-      refetchEntries();
-      setPendingTxHash(undefined);
+      if (pendingTx?.chainId === targetNetwork.id) {
+        refetchLength();
+        refetchEntries();
+      }
+      setPendingTx(undefined);
     }
-  }, [txReceipt, refetchLength, refetchEntries]);
+  }, [txReceipt, pendingTx, targetNetwork.id, refetchLength, refetchEntries]);
 
   // ADD ENTRY form
   const [entryTarget, setEntryTarget] = useState("");
@@ -260,6 +278,9 @@ export default function ListDetailPage() {
 
     try {
       const tx = await writeContractAsync({
+        // Guard: writes follow the selected network (reads already do) — wagmi
+        // throws ChainMismatchError if the wallet is on a different chain.
+        chainId: targetNetwork.id,
         address: easAddress,
         abi: EAS_ABI,
         functionName: "attest",
@@ -278,7 +299,7 @@ export default function ListDetailPage() {
         ],
       });
       notification.success("Entry submitted — waiting for confirmation…");
-      setPendingTxHash(tx);
+      setPendingTx({ hash: tx, chainId: targetNetwork.id });
       setEntryTarget("");
       setEntryRecipient("");
     } catch (e) {
@@ -291,13 +312,14 @@ export default function ListDetailPage() {
     if (!listEntrySchemaUID || !easAddress) return;
     try {
       const tx = await writeContractAsync({
+        chainId: targetNetwork.id,
         address: easAddress,
         abi: EAS_ABI,
         functionName: "revoke",
         args: [{ schema: listEntrySchemaUID, data: { uid: entryUID, value: 0n } }],
       });
       notification.success("Revoke submitted — waiting for confirmation…");
-      setPendingTxHash(tx);
+      setPendingTx({ hash: tx, chainId: targetNetwork.id });
     } catch (e) {
       console.error(e);
       notification.error("Revoke failed. Check console.");
@@ -362,8 +384,9 @@ export default function ListDetailPage() {
         </div>
       )}
 
-      {/* ENTRIES */}
-      {entries && entries.length > 0 && (
+      {/* ENTRIES — gated on the current chain's mode being loaded and the list existing, so a chain
+          switch can't render stale rows (or their Remove buttons) before the new chain's mode resolves. */}
+      {mode?.exists && entries && entries.length > 0 && (
         <div className="card w-full max-w-xl bg-base-100 shadow border border-base-200">
           <div className="card-body">
             <h2 className="card-title text-lg">Entries ({entries.length})</h2>
@@ -389,7 +412,7 @@ export default function ListDetailPage() {
                         <td>
                           <button
                             className="btn btn-xs btn-error btn-outline"
-                            disabled={isPending || !!pendingTxHash}
+                            disabled={isPending || !!pendingTx}
                             onClick={() => handleRemoveEntry(e.entryUID as `0x${string}`)}
                           >
                             Remove
@@ -452,10 +475,10 @@ export default function ListDetailPage() {
             <div className="card-actions justify-end mt-2">
               <button
                 className="btn btn-primary"
-                disabled={isPending || !!pendingTxHash || !connectedAddress}
+                disabled={isPending || !!pendingTx || !connectedAddress}
                 onClick={handleAddEntry}
               >
-                {isPending || !!pendingTxHash ? <span className="loading loading-spinner" /> : "Add Entry"}
+                {isPending || !!pendingTx ? <span className="loading loading-spinner" /> : "Add Entry"}
               </button>
             </div>
           </div>

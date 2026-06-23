@@ -5,6 +5,7 @@ import { decodeEventLog, encodeAbiParameters, parseAbiItem, parseAbiParameters, 
 import { useAccount, usePublicClient } from "wagmi";
 import { PlusIcon, XMarkIcon } from "@heroicons/react/24/outline";
 import { useDeployedContractInfo, useScaffoldReadContract, useScaffoldWriteContract } from "~~/hooks/scaffold-eth";
+import { useTargetNetwork } from "~~/hooks/scaffold-eth/useTargetNetwork";
 import { useBackgroundOps } from "~~/services/store/backgroundOps";
 import { notification } from "~~/utils/scaffold-eth";
 
@@ -37,7 +38,8 @@ export const PropertiesModal = ({ uid, onClose }: PropertiesModalProps) => {
   const [refreshKey, setRefreshKey] = useState(0);
 
   const { address: connectedAddress } = useAccount();
-  const publicClient = usePublicClient();
+  const { targetNetwork } = useTargetNetwork();
+  const publicClient = usePublicClient({ chainId: targetNetwork.id });
 
   const { data: anchorSchemaUID } = useScaffoldReadContract({
     contractName: "Indexer",
