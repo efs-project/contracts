@@ -3,11 +3,18 @@
 import { useEffect, useRef } from "react";
 import { useAccount } from "wagmi";
 import { isFaucetEnabled, requestDrip, useFaucetStatus } from "~~/utils/scaffold-eth/faucet";
-import { consumeInstantBurnerDripRequest, shouldAutoDripInstantBurner } from "~~/utils/scaffold-eth/instantBurner";
+import {
+  BURNER_WALLET_CONNECTOR_ID,
+  consumeInstantBurnerDripRequest,
+  shouldAutoDripInstantBurner,
+  shouldBlockFaucetDripRecipient,
+} from "~~/utils/scaffold-eth/instantBurner";
+import { HARDHAT_ACCOUNTS } from "~~/utils/scaffold-eth/hardhatAccounts";
 
-// At most one auto-drip per (chain × address) across the session, tracked in a
-// module-level Set so it survives component remounts.
+// At most one editing-wallet drip per (chain × address) across the current page,
+// tracked in a module-level Set so it survives component remounts but not reloads.
 const dripped = new Set<string>();
+const hardhatAddresses = HARDHAT_ACCOUNTS.map(account => account.address);
 
 /**
  * Fire one best-effort drip after the visitor explicitly clicks "Enable
@@ -23,10 +30,13 @@ export function useAutoFaucetDrip() {
 
   useEffect(() => {
     if (!address) return;
+    const faucetEnabled = isFaucetEnabled(chainId);
+    if (!faucetEnabled || connector?.id !== BURNER_WALLET_CONNECTOR_ID) return;
+
     const dripRequested = consumeInstantBurnerDripRequest();
     if (
       !shouldAutoDripInstantBurner({
-        faucetEnabled: isFaucetEnabled(chainId),
+        faucetEnabled,
         activeConnectorId: connector?.id,
         dripRequested,
       })
@@ -35,6 +45,10 @@ export function useAutoFaucetDrip() {
     }
     const key = `${chainId}:${address.toLowerCase()}`;
     if (dripped.has(key) || inFlight.current) return;
+    if (shouldBlockFaucetDripRecipient({ recipientAddress: address, hardhatAddresses })) {
+      useFaucetStatus.getState().setError("This is a public local-dev address. Enable editing again to create a private wallet.");
+      return;
+    }
 
     dripped.add(key);
     inFlight.current = true;

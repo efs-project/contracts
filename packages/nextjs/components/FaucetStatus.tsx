@@ -3,7 +3,7 @@
 import { useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAccount, useBalance } from "wagmi";
-import { useFaucetStatus } from "~~/utils/scaffold-eth";
+import { FAUCET_CHAIN_ID, shouldMarkInstantBurnerReady, useFaucetStatus } from "~~/utils/scaffold-eth";
 
 /**
  * Persistent "Adding gas…" indicator next to the wallet while a faucet drip is in
@@ -17,7 +17,11 @@ export const FaucetStatus = () => {
   const { pendingHash, setPending, setReady } = useFaucetStatus();
   const { address } = useAccount();
   const queryClient = useQueryClient();
-  const { data, queryKey } = useBalance({ address, query: { enabled: !!address } });
+  const { data, queryKey } = useBalance({
+    address,
+    chainId: FAUCET_CHAIN_ID,
+    query: { enabled: !!address },
+  });
   const baseline = useRef<bigint | undefined>(undefined);
 
   // On a fresh drip: snapshot the pre-drip balance (the cached value, before any
@@ -38,9 +42,16 @@ export const FaucetStatus = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingHash]);
 
-  // Clear once the balance has increased past the baseline — the ETH is in.
+  // Clear once the dripped ETH is visibly in the wallet. If no baseline was
+  // cached before the drip, any positive balance is enough to avoid a stuck chip.
   useEffect(() => {
-    if (pendingHash && baseline.current !== undefined && data?.value !== undefined && data.value > baseline.current) {
+    if (
+      shouldMarkInstantBurnerReady({
+        pendingHash,
+        baselineValue: baseline.current,
+        balanceValue: data?.value,
+      })
+    ) {
       setReady();
     }
   }, [data?.value, pendingHash, setReady]);

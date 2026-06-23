@@ -36,12 +36,19 @@ const {
   isBurnerConnector,
   isInstantBurnerSessionEnabled,
   normalizeStoredBurnerPrivateKey,
+  consumeInstantBurnerDripRequest,
+  requestInstantBurnerDrip,
   shouldAutoConnectInstantBurner,
   shouldAutoDripInstantBurner,
+  shouldBlockFaucetDripRecipient,
+  shouldBlockFaucetDripForBurner,
   shouldClearStoredHardhatBurner,
   shouldDisconnectInstantBurner,
+  shouldMarkInstantBurnerReady,
+  shouldResetInstantBurnerDismissalOnAddressChange,
   shouldResumeInstantBurnerAfterRealWalletModal,
   shouldSeedHardhatBurner,
+  shouldShowInstantBurnerEnable,
 } = await import("./instantBurner.ts");
 
 test("instant burner only enables when a faucet URL is configured and the kill switch is not false", () => {
@@ -171,6 +178,13 @@ test("auto-drip requires an explicit editing-wallet request", () => {
   );
 });
 
+test("one-click drip request is same-page only and single-use", () => {
+  assert.equal(consumeInstantBurnerDripRequest(), false);
+  requestInstantBurnerDrip();
+  assert.equal(consumeInstantBurnerDripRequest(), true);
+  assert.equal(consumeInstantBurnerDripRequest(), false);
+});
+
 test("real-wallet modal resume waits until the modal was actually open", () => {
   assert.equal(
     shouldResumeInstantBurnerAfterRealWalletModal({
@@ -199,6 +213,43 @@ test("real-wallet modal resume waits until the modal was actually open", () => {
     }),
     false,
   );
+});
+
+test("real-wallet connects do not undo a dismissed burner chip", () => {
+  assert.equal(
+    shouldResetInstantBurnerDismissalOnAddressChange({
+      dismissed: true,
+      previousAddress: "0x1111111111111111111111111111111111111111",
+      nextAddress: "0x2222222222222222222222222222222222222222",
+      activeConnectorId: "metaMask",
+    }),
+    false,
+  );
+  assert.equal(
+    shouldResetInstantBurnerDismissalOnAddressChange({
+      dismissed: true,
+      previousAddress: "0x1111111111111111111111111111111111111111",
+      nextAddress: "0x3333333333333333333333333333333333333333",
+      activeConnectorId: BURNER_WALLET_CONNECTOR_ID,
+    }),
+    true,
+  );
+});
+
+test("enable-editing affordance remains available with no connected wallet", () => {
+  const base = {
+    enabled: true,
+    status: "disconnected" as const,
+    targetChainId: 11155111,
+    faucetChainId: 11155111,
+    address: undefined,
+  };
+
+  assert.equal(shouldShowInstantBurnerEnable(base), true);
+  assert.equal(shouldShowInstantBurnerEnable({ ...base, address: "0x1111111111111111111111111111111111111111" }), false);
+  assert.equal(shouldShowInstantBurnerEnable({ ...base, status: "connecting" }), false);
+  assert.equal(shouldShowInstantBurnerEnable({ ...base, targetChainId: 26001993 }), false);
+  assert.equal(shouldShowInstantBurnerEnable({ ...base, enabled: false }), false);
 });
 
 test("hardhat seed keys only apply when local hardhat is the default target", () => {
@@ -254,10 +305,116 @@ test("known public hardhat burner keys are cleared away from local hardhat", () 
   );
 });
 
+test("manual faucet blocks public local-dev burner keys on live faucet chains", () => {
+  const hardhatPrivateKeys = [`0x${"a".repeat(64)}`, `0x${"b".repeat(64)}`];
+
+  assert.equal(
+    shouldBlockFaucetDripForBurner({
+      activeConnectorId: BURNER_WALLET_CONNECTOR_ID,
+      targetChainId: 11155111,
+      hardhatChainId: 31337,
+      storedPrivateKey: `0x${"a".repeat(64)}`,
+      hardhatPrivateKeys,
+    }),
+    true,
+  );
+  assert.equal(
+    shouldBlockFaucetDripForBurner({
+      activeConnectorId: "metaMask",
+      targetChainId: 11155111,
+      hardhatChainId: 31337,
+      storedPrivateKey: `0x${"a".repeat(64)}`,
+      hardhatPrivateKeys,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldBlockFaucetDripForBurner({
+      activeConnectorId: BURNER_WALLET_CONNECTOR_ID,
+      targetChainId: 11155111,
+      hardhatChainId: 31337,
+      storedPrivateKey: `0x${"c".repeat(64)}`,
+      hardhatPrivateKeys,
+    }),
+    false,
+  );
+});
+
+test("http faucet blocks known public hardhat recipient addresses for every connector", () => {
+  const hardhatAddresses = [
+    "0x1111111111111111111111111111111111111111",
+    "0x2222222222222222222222222222222222222222",
+  ];
+
+  assert.equal(
+    shouldBlockFaucetDripRecipient({
+      recipientAddress: "0x1111111111111111111111111111111111111111",
+      hardhatAddresses,
+    }),
+    true,
+  );
+  assert.equal(
+    shouldBlockFaucetDripRecipient({
+      recipientAddress: "0x2222222222222222222222222222222222222222".toUpperCase(),
+      hardhatAddresses,
+    }),
+    true,
+  );
+  assert.equal(
+    shouldBlockFaucetDripRecipient({
+      recipientAddress: "0x3333333333333333333333333333333333333333",
+      hardhatAddresses,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldBlockFaucetDripRecipient({
+      recipientAddress: undefined,
+      hardhatAddresses,
+    }),
+    false,
+  );
+});
+
 test("private key normalization keeps valid stored keys and rejects placeholders", () => {
   assert.equal(normalizeStoredBurnerPrivateKey(null), undefined);
   assert.equal(normalizeStoredBurnerPrivateKey('"0x"'), undefined);
   assert.equal(normalizeStoredBurnerPrivateKey(`"0x${"a".repeat(64)}"`), `0x${"a".repeat(64)}`);
+});
+
+test("faucet status clears once funded balance is visible", () => {
+  assert.equal(
+    shouldMarkInstantBurnerReady({
+      pendingHash: "0xabc",
+      baselineValue: undefined,
+      balanceValue: 1n,
+    }),
+    true,
+  );
+  assert.equal(
+    shouldMarkInstantBurnerReady({
+      pendingHash: "0xabc",
+      baselineValue: 4n,
+      balanceValue: 4n,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldMarkInstantBurnerReady({
+      pendingHash: "0xabc",
+      baselineValue: 4n,
+      balanceValue: 5n,
+    }),
+    true,
+  );
+  assert.equal(
+    shouldMarkInstantBurnerReady({
+      pendingHash: undefined,
+      baselineValue: undefined,
+      balanceValue: 1n,
+    }),
+    false,
+  );
 });
 
 test("session chip message surfaces funding, ready, and faucet errors", () => {

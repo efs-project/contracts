@@ -9,20 +9,65 @@
  * `AddressInfoDropdown`, matching the other wallet-menu rows.
  */
 import { useState } from "react";
-import { useAccount } from "wagmi";
+import { hardhat } from "viem/chains";
+import { useAccount, useDisconnect } from "wagmi";
 import { BanknotesIcon } from "@heroicons/react/24/outline";
-import { isFaucetEnabled, notification, requestDrip, useFaucetStatus } from "~~/utils/scaffold-eth";
+import {
+  BURNER_WALLET_PK_STORAGE_KEY,
+  isFaucetEnabled,
+  normalizeStoredBurnerPrivateKey,
+  notification,
+  requestDrip,
+  shouldBlockFaucetDripForBurner,
+  shouldBlockFaucetDripRecipient,
+  useFaucetStatus,
+} from "~~/utils/scaffold-eth";
+import { HARDHAT_ACCOUNTS } from "~~/utils/scaffold-eth/hardhatAccounts";
+
+const hardhatAddresses = HARDHAT_ACCOUNTS.map(account => account.address);
+const hardhatPrivateKeys = HARDHAT_ACCOUNTS.map(account => account.pk);
 
 export const GasFaucetButton = ({ hidden = false }: { hidden?: boolean } = {}) => {
-  const { address, chainId } = useAccount();
+  const { address, chainId, connector } = useAccount();
+  const { disconnect } = useDisconnect();
   const [loading, setLoading] = useState(false);
 
   // Only on the faucet's chain with a configured faucet; otherwise the button is gone.
   if (!isFaucetEnabled(chainId)) return null;
 
+  const clearPublicHardhatBurnerBeforeFaucet = () => {
+    if (typeof window === "undefined" || chainId === undefined) return false;
+    const storedPrivateKey = normalizeStoredBurnerPrivateKey(window.localStorage.getItem(BURNER_WALLET_PK_STORAGE_KEY));
+    const blocked = shouldBlockFaucetDripForBurner({
+      activeConnectorId: connector?.id,
+      targetChainId: chainId,
+      hardhatChainId: hardhat.id,
+      storedPrivateKey,
+      hardhatPrivateKeys,
+    });
+    if (!blocked) return false;
+    window.localStorage.removeItem(BURNER_WALLET_PK_STORAGE_KEY);
+    return true;
+  };
+
   const getETH = async () => {
     if (!address) return;
     setLoading(true);
+    const clearedPublicBurnerKey = clearPublicHardhatBurnerBeforeFaucet();
+    const blockedPublicRecipient = shouldBlockFaucetDripRecipient({
+      recipientAddress: address,
+      hardhatAddresses,
+    });
+    if (clearedPublicBurnerKey || blockedPublicRecipient) {
+      const message = clearedPublicBurnerKey
+        ? "Cleared a public local-dev burner key. Reconnect the burner wallet, then request test ETH."
+        : "This is a public local-dev address. Switch to a private wallet before requesting Sepolia ETH.";
+      useFaucetStatus.getState().setError(message);
+      notification.warning(message);
+      if (clearedPublicBurnerKey) disconnect();
+      setLoading(false);
+      return;
+    }
     const res = await requestDrip(address);
     // On a real drip, hand off to the header's "Adding gas…" indicator (persists
     // until the ETH lands); only surface a toast for non-drip outcomes.

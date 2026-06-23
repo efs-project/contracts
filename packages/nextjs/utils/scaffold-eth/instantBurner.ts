@@ -3,7 +3,7 @@ import type { Connector } from "wagmi";
 export const BURNER_WALLET_CONNECTOR_ID = "burnerWallet";
 export const BURNER_WALLET_PK_STORAGE_KEY = "burnerWallet.pk";
 export const INSTANT_BURNER_PAUSE_MS = 30_000;
-const INSTANT_BURNER_DRIP_REQUEST_KEY = "efs.instantBurnerDripRequested";
+let instantBurnerDripRequested = false;
 
 type WalletStatus = "connected" | "connecting" | "disconnected" | "reconnecting";
 
@@ -62,6 +62,24 @@ export function shouldAutoConnectInstantBurner({
   return true;
 }
 
+export function shouldShowInstantBurnerEnable({
+  enabled,
+  status,
+  targetChainId,
+  faucetChainId,
+  address,
+}: {
+  enabled: boolean;
+  status: WalletStatus;
+  targetChainId: number;
+  faucetChainId: number;
+  address: string | undefined;
+}): boolean {
+  if (!enabled) return false;
+  if (targetChainId !== faucetChainId) return false;
+  return !address && status === "disconnected";
+}
+
 export function shouldDisconnectInstantBurner({
   activeConnectorId,
   editingSessionRequested,
@@ -90,6 +108,22 @@ export function shouldAutoDripInstantBurner({
   dripRequested: boolean;
 }): boolean {
   return faucetEnabled && activeConnectorId === BURNER_WALLET_CONNECTOR_ID && dripRequested;
+}
+
+export function shouldResetInstantBurnerDismissalOnAddressChange({
+  dismissed,
+  previousAddress,
+  nextAddress,
+  activeConnectorId,
+}: {
+  dismissed: boolean;
+  previousAddress: string | undefined;
+  nextAddress: string | undefined;
+  activeConnectorId: string | undefined;
+}): boolean {
+  if (!dismissed) return false;
+  if (!nextAddress || nextAddress === previousAddress) return false;
+  return activeConnectorId === BURNER_WALLET_CONNECTOR_ID;
 }
 
 export function shouldResumeInstantBurnerAfterRealWalletModal({
@@ -133,6 +167,34 @@ export function shouldClearStoredHardhatBurner({
   return hardhatPrivateKeys.some(pk => pk.toLowerCase() === storedPrivateKey.toLowerCase());
 }
 
+export function shouldBlockFaucetDripForBurner({
+  activeConnectorId,
+  targetChainId,
+  hardhatChainId,
+  storedPrivateKey,
+  hardhatPrivateKeys,
+}: {
+  activeConnectorId: string | undefined;
+  targetChainId: number;
+  hardhatChainId: number;
+  storedPrivateKey: `0x${string}` | undefined;
+  hardhatPrivateKeys: readonly string[];
+}): boolean {
+  if (activeConnectorId !== BURNER_WALLET_CONNECTOR_ID) return false;
+  return shouldClearStoredHardhatBurner({ targetChainId, hardhatChainId, storedPrivateKey, hardhatPrivateKeys });
+}
+
+export function shouldBlockFaucetDripRecipient({
+  recipientAddress,
+  hardhatAddresses,
+}: {
+  recipientAddress: string | undefined;
+  hardhatAddresses: readonly string[];
+}): boolean {
+  if (!recipientAddress) return false;
+  return hardhatAddresses.some(address => address.toLowerCase() === recipientAddress.toLowerCase());
+}
+
 export function normalizeStoredBurnerPrivateKey(raw: string | null): `0x${string}` | undefined {
   const normalized = raw?.replaceAll('"', "") as `0x${string}` | undefined;
   if (!normalized || normalized === "0x" || normalized.length < 66) return undefined;
@@ -140,14 +202,12 @@ export function normalizeStoredBurnerPrivateKey(raw: string | null): `0x${string
 }
 
 export function requestInstantBurnerDrip(): void {
-  if (typeof window === "undefined") return;
-  window.sessionStorage.setItem(INSTANT_BURNER_DRIP_REQUEST_KEY, "1");
+  instantBurnerDripRequested = true;
 }
 
 export function consumeInstantBurnerDripRequest(): boolean {
-  if (typeof window === "undefined") return false;
-  const requested = window.sessionStorage.getItem(INSTANT_BURNER_DRIP_REQUEST_KEY) === "1";
-  if (requested) window.sessionStorage.removeItem(INSTANT_BURNER_DRIP_REQUEST_KEY);
+  const requested = instantBurnerDripRequested;
+  instantBurnerDripRequested = false;
   return requested;
 }
 
@@ -155,6 +215,20 @@ export type InstantBurnerMessage = {
   tone: "funding" | "ready" | "waiting" | "error";
   label: string;
 };
+
+export function shouldMarkInstantBurnerReady({
+  pendingHash,
+  baselineValue,
+  balanceValue,
+}: {
+  pendingHash: string | undefined;
+  baselineValue: bigint | undefined;
+  balanceValue: bigint | undefined;
+}): boolean {
+  if (!pendingHash || balanceValue === undefined) return false;
+  if (baselineValue === undefined) return balanceValue > 0n;
+  return balanceValue > baselineValue;
+}
 
 export function getInstantBurnerMessage({
   pendingHash,

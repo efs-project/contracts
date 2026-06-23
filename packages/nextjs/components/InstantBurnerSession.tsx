@@ -21,7 +21,9 @@ import {
   shouldAutoConnectInstantBurner,
   shouldClearStoredHardhatBurner,
   shouldDisconnectInstantBurner,
+  shouldResetInstantBurnerDismissalOnAddressChange,
   shouldResumeInstantBurnerAfterRealWalletModal,
+  shouldShowInstantBurnerEnable,
   useFaucetStatus,
 } from "~~/utils/scaffold-eth";
 import { HARDHAT_ACCOUNTS } from "~~/utils/scaffold-eth/hardhatAccounts";
@@ -84,11 +86,18 @@ export const InstantBurnerSession = () => {
   const realWalletFlowActive = waitingForRealWallet || connectModalOpen || openedRealWalletModalRef.current;
 
   useEffect(() => {
-    if (address && address !== previousAddressRef.current) {
+    if (
+      shouldResetInstantBurnerDismissalOnAddressChange({
+        dismissed,
+        previousAddress: previousAddressRef.current,
+        nextAddress: address,
+        activeConnectorId: connector?.id,
+      })
+    ) {
       setDismissed(false);
     }
     previousAddressRef.current = address;
-  }, [address]);
+  }, [address, connector?.id, dismissed]);
 
   useEffect(() => {
     if (!INSTANT_BURNER_ENABLED || targetNetwork.id !== FAUCET_CHAIN_ID) return;
@@ -208,11 +217,27 @@ export const InstantBurnerSession = () => {
     setPauseUntil(undefined);
   }, [connectModalOpen, status]);
 
-  if (!INSTANT_BURNER_ENABLED || dismissed || targetNetwork.id !== FAUCET_CHAIN_ID) {
+  if (!INSTANT_BURNER_ENABLED || targetNetwork.id !== FAUCET_CHAIN_ID) {
     return null;
   }
 
-  if (!address && status === "disconnected") {
+  const enableEditing = () => {
+    clearPublicHardhatBurnerKey(targetNetwork.id);
+    setDismissed(false);
+    setPauseUntil(undefined);
+    setEditingSessionRequested(true);
+    requestInstantBurnerDrip();
+  };
+
+  if (
+    shouldShowInstantBurnerEnable({
+      enabled: INSTANT_BURNER_ENABLED,
+      status,
+      targetChainId: targetNetwork.id,
+      faucetChainId: FAUCET_CHAIN_ID,
+      address,
+    })
+  ) {
     return (
       <div
         className="hidden lg:flex items-center gap-2 rounded-full border border-info/30 bg-info/10 px-2 py-1 text-xs text-base-content shadow-sm"
@@ -220,21 +245,15 @@ export const InstantBurnerSession = () => {
       >
         <WalletIcon className="h-4 w-4 shrink-0 text-info" />
         <span className="whitespace-nowrap text-base-content/70">Editing</span>
-        <button
-          className="btn btn-primary btn-xs rounded-full whitespace-nowrap"
-          type="button"
-          onClick={() => {
-            clearPublicHardhatBurnerKey(targetNetwork.id);
-            setDismissed(false);
-            setPauseUntil(undefined);
-            setEditingSessionRequested(true);
-            requestInstantBurnerDrip();
-          }}
-        >
+        <button className="btn btn-primary btn-xs rounded-full whitespace-nowrap" type="button" onClick={enableEditing}>
           Enable editing
         </button>
       </div>
     );
+  }
+
+  if (dismissed) {
+    return null;
   }
 
   if (!address || chainId !== FAUCET_CHAIN_ID || !isBurnerConnector(connector)) {

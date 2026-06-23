@@ -2,8 +2,8 @@ import { sepolia } from "viem/chains";
 import { create } from "zustand";
 
 /**
- * HTTP drip-faucet client — gives a connecting wallet a little gas so users
- * don't have to hunt for a faucet.
+ * HTTP drip-faucet client — gives a wallet a little gas after the visitor asks
+ * for it through "Enable editing" or "Get test ETH".
  *
  * Serves the chain where no account is unlocked — **live Sepolia (11155111)** by
  * default. The fork chains (local 31337 and the EFS Devnet 26001993) are funded
@@ -19,7 +19,7 @@ import { create } from "zustand";
 export const FAUCET_URL = (process.env.NEXT_PUBLIC_FAUCET_URL ?? "").trim().replace(/\/$/, "");
 
 /**
- * Chain the HTTP faucet funds; the drip fires only when the wallet is on it.
+ * Chain the HTTP faucet funds; callers may drip only when the wallet is on it.
  * Defaults to live Sepolia — the one network with no unlocked account
  * (`DevnetAutoFund` covers the forks). Override with `NEXT_PUBLIC_FAUCET_CHAIN_ID`.
  */
