@@ -3,6 +3,7 @@
 import { Fragment, useEffect, useState } from "react";
 import { decodeAbiParameters, getAddress, zeroHash } from "viem";
 import { usePublicClient } from "wagmi";
+import { useTargetNetwork } from "~~/hooks/scaffold-eth/useTargetNetwork";
 import type { ClassifiedContainer, ContainerKind } from "~~/utils/efs/containers";
 
 // Tuple order MUST match EAS's on-chain `Attestation` struct in `Common.sol`
@@ -172,7 +173,8 @@ export const ContainerInfoPanel = ({
   containerDisplayName,
   expanded,
 }: ContainerInfoPanelProps) => {
-  const publicClient = usePublicClient();
+  const { targetNetwork } = useTargetNetwork();
+  const publicClient = usePublicClient({ chainId: targetNetwork.id });
   // ENS lives on mainnet; calling `getEnsName` on the active (hardhat) client
   // throws because hardhat has no ENS registry. Same fix as the two Codex P1s
   // on the lenses resolver + top-level container classifier — pull the

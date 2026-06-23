@@ -6,7 +6,7 @@ import { decodeAbiParameters, parseAbiParameters, zeroHash } from "viem";
 import { useReadContract } from "wagmi";
 import { Address } from "~~/components/scaffold-eth";
 import { useSchemaRegistry } from "~~/hooks/efs/useSchemaRegistry";
-import { useScaffoldReadContract } from "~~/hooks/scaffold-eth";
+import { useScaffoldReadContract, useTargetNetwork } from "~~/hooks/scaffold-eth";
 
 // Minimal EAS ABI for getAttestation. Tuple order matches EAS's on-chain
 // `Attestation` struct in `Common.sol` exactly: uid, schema, time,
@@ -113,11 +113,13 @@ function AttestationDetails({
   onNavigate: (uid: string) => void;
   registry: ReturnType<typeof useSchemaRegistry>;
 }) {
+  const { targetNetwork } = useTargetNetwork();
   const {
     data: attestation,
     isLoading,
     error,
   } = useReadContract({
+    chainId: targetNetwork.id,
     address: registry.easAddress as `0x${string}`,
     abi: EAS_ABI,
     functionName: "getAttestation",
