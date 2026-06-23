@@ -62,6 +62,18 @@ export function shouldAutoConnectInstantBurner({
   return true;
 }
 
+export function shouldStopInstantBurnerAfterExternalDisconnect({
+  wasBurnerConnected,
+  editingSessionRequested,
+  status,
+}: {
+  wasBurnerConnected: boolean;
+  editingSessionRequested: boolean;
+  status: WalletStatus;
+}): boolean {
+  return wasBurnerConnected && editingSessionRequested && status === "disconnected";
+}
+
 export function shouldShowInstantBurnerEnable({
   enabled,
   status,

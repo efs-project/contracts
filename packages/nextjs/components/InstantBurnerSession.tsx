@@ -18,6 +18,7 @@ import {
   shouldDisconnectInstantBurner,
   shouldResetInstantBurnerDismissalOnAddressChange,
   shouldShowInstantBurnerEnable,
+  shouldStopInstantBurnerAfterExternalDisconnect,
 } from "~~/utils/scaffold-eth";
 import { HARDHAT_ACCOUNTS } from "~~/utils/scaffold-eth/hardhatAccounts";
 
@@ -88,6 +89,7 @@ export const InstantBurnerSession = () => {
   const [pauseUntil, setPauseUntil] = useState<number | undefined>(undefined);
   const connectingBurnerRef = useRef(false);
   const disconnectingBurnerRef = useRef(false);
+  const burnerWasConnectedRef = useRef(false);
   const previousAddressRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
@@ -152,7 +154,26 @@ export const InstantBurnerSession = () => {
   }, [status]);
 
   useEffect(() => {
+    if (status !== "connected") return;
+    burnerWasConnectedRef.current = chainId === FAUCET_CHAIN_ID && isBurnerConnector(connector);
+  }, [chainId, connector, status]);
+
+  useEffect(() => {
     if (!INSTANT_BURNER_ENABLED) return;
+    if (
+      shouldStopInstantBurnerAfterExternalDisconnect({
+        wasBurnerConnected: burnerWasConnectedRef.current,
+        editingSessionRequested,
+        status,
+      })
+    ) {
+      burnerWasConnectedRef.current = false;
+      setEditingSessionRequested(false);
+      setDismissed(true);
+      setPauseUntil(undefined);
+      return;
+    }
+
     const burnerConnector = connectors.find(isBurnerConnector);
     if (!burnerConnector || connectingBurnerRef.current) return;
     if (

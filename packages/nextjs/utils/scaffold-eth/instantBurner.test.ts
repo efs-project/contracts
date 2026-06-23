@@ -49,6 +49,7 @@ const {
   shouldResumeInstantBurnerAfterRealWalletModal,
   shouldSeedHardhatBurner,
   shouldShowInstantBurnerEnable,
+  shouldStopInstantBurnerAfterExternalDisconnect,
 } = await import("./instantBurner.ts");
 
 test("instant burner only enables when a faucet URL is configured and the kill switch is not false", () => {
@@ -234,6 +235,20 @@ test("real-wallet connects do not undo a dismissed burner chip", () => {
     }),
     true,
   );
+});
+
+test("wallet-menu burner disconnect stops promptless reconnect", () => {
+  const base = {
+    wasBurnerConnected: true,
+    editingSessionRequested: true,
+    status: "disconnected" as const,
+  };
+
+  assert.equal(shouldStopInstantBurnerAfterExternalDisconnect(base), true);
+  assert.equal(shouldStopInstantBurnerAfterExternalDisconnect({ ...base, wasBurnerConnected: false }), false);
+  assert.equal(shouldStopInstantBurnerAfterExternalDisconnect({ ...base, editingSessionRequested: false }), false);
+  assert.equal(shouldStopInstantBurnerAfterExternalDisconnect({ ...base, status: "connecting" }), false);
+  assert.equal(shouldStopInstantBurnerAfterExternalDisconnect({ ...base, status: "connected" }), false);
 });
 
 test("enable-editing affordance remains available with no connected wallet", () => {
