@@ -3,6 +3,7 @@ import type { Connector } from "wagmi";
 export const BURNER_WALLET_CONNECTOR_ID = "burnerWallet";
 export const BURNER_WALLET_PK_STORAGE_KEY = "burnerWallet.pk";
 export const INSTANT_BURNER_PAUSE_MS = 30_000;
+const INSTANT_BURNER_DRIP_REQUEST_KEY = "efs.instantBurnerDripRequested";
 
 type WalletStatus = "connected" | "connecting" | "disconnected" | "reconnecting";
 
@@ -23,6 +24,7 @@ export function isBurnerConnector(connector: Pick<Connector, "id"> | undefined):
 
 export function shouldAutoConnectInstantBurner({
   enabled,
+  demoSessionRequested,
   status,
   targetChainId,
   faucetChainId,
@@ -31,6 +33,7 @@ export function shouldAutoConnectInstantBurner({
   now,
 }: {
   enabled: boolean;
+  demoSessionRequested: boolean;
   status: WalletStatus;
   targetChainId: number;
   faucetChainId: number;
@@ -39,6 +42,7 @@ export function shouldAutoConnectInstantBurner({
   now: number;
 }): boolean {
   if (!enabled) return false;
+  if (!demoSessionRequested) return false;
   if (status !== "disconnected") return false;
   if (targetChainId !== faucetChainId) return false;
   if (activeConnectorId && activeConnectorId !== BURNER_WALLET_CONNECTOR_ID) return false;
@@ -48,17 +52,32 @@ export function shouldAutoConnectInstantBurner({
 
 export function shouldDisconnectInstantBurner({
   activeConnectorId,
+  demoSessionRequested,
   chainId,
   targetChainId,
   faucetChainId,
 }: {
   activeConnectorId: string | undefined;
+  demoSessionRequested: boolean;
   chainId: number | undefined;
   targetChainId: number;
   faucetChainId: number;
 }): boolean {
   if (activeConnectorId !== BURNER_WALLET_CONNECTOR_ID) return false;
+  if (!demoSessionRequested) return true;
   return chainId !== faucetChainId || targetChainId !== faucetChainId;
+}
+
+export function shouldAutoDripInstantBurner({
+  faucetEnabled,
+  activeConnectorId,
+  dripRequested,
+}: {
+  faucetEnabled: boolean;
+  activeConnectorId: string | undefined;
+  dripRequested: boolean;
+}): boolean {
+  return faucetEnabled && activeConnectorId === BURNER_WALLET_CONNECTOR_ID && dripRequested;
 }
 
 export function shouldResumeInstantBurnerAfterRealWalletModal({
@@ -91,6 +110,18 @@ export function normalizeStoredBurnerPrivateKey(raw: string | null): `0x${string
   const normalized = raw?.replaceAll('"', "") as `0x${string}` | undefined;
   if (!normalized || normalized === "0x" || normalized.length < 66) return undefined;
   return normalized;
+}
+
+export function requestInstantBurnerDrip(): void {
+  if (typeof window === "undefined") return;
+  window.sessionStorage.setItem(INSTANT_BURNER_DRIP_REQUEST_KEY, "1");
+}
+
+export function consumeInstantBurnerDripRequest(): boolean {
+  if (typeof window === "undefined") return false;
+  const requested = window.sessionStorage.getItem(INSTANT_BURNER_DRIP_REQUEST_KEY) === "1";
+  if (requested) window.sessionStorage.removeItem(INSTANT_BURNER_DRIP_REQUEST_KEY);
+  return requested;
 }
 
 export type InstantBurnerMessage = {

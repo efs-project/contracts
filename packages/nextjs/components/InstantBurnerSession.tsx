@@ -13,6 +13,7 @@ import {
   getInstantBurnerMessage,
   isBurnerConnector,
   isInstantBurnerSessionEnabled,
+  requestInstantBurnerDrip,
   shouldAutoConnectInstantBurner,
   shouldDisconnectInstantBurner,
   shouldResumeInstantBurnerAfterRealWalletModal,
@@ -48,6 +49,7 @@ export const InstantBurnerSession = () => {
   });
 
   const [dismissed, setDismissed] = useState(false);
+  const [demoSessionRequested, setDemoSessionRequested] = useState(false);
   const [pauseUntil, setPauseUntil] = useState<number | undefined>(undefined);
   const [waitingForRealWallet, setWaitingForRealWallet] = useState(false);
   const connectingBurnerRef = useRef(false);
@@ -64,6 +66,7 @@ export const InstantBurnerSession = () => {
     if (
       !shouldDisconnectInstantBurner({
         activeConnectorId: connector?.id,
+        demoSessionRequested,
         chainId,
         targetChainId: targetNetwork.id,
         faucetChainId: FAUCET_CHAIN_ID,
@@ -78,7 +81,7 @@ export const InstantBurnerSession = () => {
         disconnectingBurnerRef.current = false;
       },
     });
-  }, [chainId, connector?.id, disconnect, targetNetwork.id]);
+  }, [chainId, connector?.id, demoSessionRequested, disconnect, targetNetwork.id]);
 
   useEffect(() => {
     if (!INSTANT_BURNER_ENABLED) return;
@@ -108,6 +111,7 @@ export const InstantBurnerSession = () => {
     if (
       !shouldAutoConnectInstantBurner({
         enabled: INSTANT_BURNER_ENABLED,
+        demoSessionRequested,
         status,
         targetChainId: targetNetwork.id,
         faucetChainId: FAUCET_CHAIN_ID,
@@ -128,7 +132,7 @@ export const InstantBurnerSession = () => {
         },
       },
     );
-  }, [connect, connector?.id, connectors, pauseUntil, status, targetNetwork.id]);
+  }, [connect, connector?.id, connectors, demoSessionRequested, pauseUntil, status, targetNetwork.id]);
 
   useEffect(() => {
     if (!waitingForRealWallet) return;
@@ -159,14 +163,35 @@ export const InstantBurnerSession = () => {
     setPauseUntil(undefined);
   }, [connectModalOpen, status]);
 
-  if (
-    !INSTANT_BURNER_ENABLED ||
-    dismissed ||
-    !address ||
-    chainId !== FAUCET_CHAIN_ID ||
-    targetNetwork.id !== FAUCET_CHAIN_ID ||
-    !isBurnerConnector(connector)
-  ) {
+  if (!INSTANT_BURNER_ENABLED || dismissed || targetNetwork.id !== FAUCET_CHAIN_ID) {
+    return null;
+  }
+
+  if (!address && status === "disconnected") {
+    return (
+      <div
+        className="hidden lg:flex items-center gap-2 rounded-full border border-info/30 bg-info/10 px-2 py-1 text-xs text-base-content shadow-sm"
+        title="Start a disposable Sepolia demo wallet funded by the faucet"
+      >
+        <WalletIcon className="h-4 w-4 shrink-0 text-info" />
+        <span className="whitespace-nowrap text-base-content/70">Demo wallet</span>
+        <button
+          className="btn btn-primary btn-xs rounded-full whitespace-nowrap"
+          type="button"
+          onClick={() => {
+            setDismissed(false);
+            setPauseUntil(undefined);
+            setDemoSessionRequested(true);
+            requestInstantBurnerDrip();
+          }}
+        >
+          Use demo wallet
+        </button>
+      </div>
+    );
+  }
+
+  if (!address || chainId !== FAUCET_CHAIN_ID || !isBurnerConnector(connector)) {
     return null;
   }
 
