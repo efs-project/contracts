@@ -9,6 +9,7 @@ import { useDeployedContractInfo, useScaffoldReadContract, useScaffoldWriteContr
 import { useTargetNetwork } from "~~/hooks/scaffold-eth/useTargetNetwork";
 import { CHUNK_SIZE, MAX_CHUNKS, MAX_ONCHAIN_SIZE } from "~~/lib/efs/sstore2";
 import { EDGE_RESOLVER_ABI } from "~~/utils/efs/edgeResolver";
+import { clearFetchFileContentCache } from "~~/utils/efs/fetchFileContent";
 import { TRANSPORT_DISPLAY_ORDER, TRANSPORT_LABELS, detectTransport, resolveGatewayUrl } from "~~/utils/efs/transports";
 import { ensureWalletChain, notification } from "~~/utils/scaffold-eth";
 
@@ -58,7 +59,15 @@ const FILE_VIEW_MIRRORS_ABI = [
   },
 ] as const;
 
-export const MirrorsPanel = ({ fileAnchorUID, lensAddresses }: { fileAnchorUID: string; lensAddresses: string[] }) => {
+export const MirrorsPanel = ({
+  fileAnchorUID,
+  lensAddresses,
+  onMirrorsChanged,
+}: {
+  fileAnchorUID: string;
+  lensAddresses: string[];
+  onMirrorsChanged?: () => void;
+}) => {
   const [mirrors, setMirrors] = useState<MirrorItem[]>([]);
   const [dataUID, setDataUID] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -306,6 +315,8 @@ export const MirrorsPanel = ({ fileAnchorUID, lensAddresses }: { fileAnchorUID: 
       }
       const submitted = await createMirrorAttestation(detected, newUri);
       if (!submitted) return;
+      clearFetchFileContentCache();
+      onMirrorsChanged?.();
       notification.success(`${TRANSPORT_LABELS[detected as keyof typeof TRANSPORT_LABELS]} mirror added.`);
       setNewUri("");
       setIsAddingMirror(false);
@@ -384,6 +395,8 @@ export const MirrorsPanel = ({ fileAnchorUID, lensAddresses }: { fileAnchorUID: 
       const submitted = await createMirrorAttestation("onchain", mirrorUri);
       if (!submitted) return;
 
+      clearFetchFileContentCache();
+      onMirrorsChanged?.();
       notification.success("On-chain mirror added.");
       setFileToUpload(null);
       setIsAddingMirror(false);
@@ -406,6 +419,8 @@ export const MirrorsPanel = ({ fileAnchorUID, lensAddresses }: { fileAnchorUID: 
       });
       if (txHash) {
         await publicClient.waitForTransactionReceipt({ hash: txHash });
+        clearFetchFileContentCache();
+        onMirrorsChanged?.();
         notification.success("Mirror removed.");
         fetchMirrors();
       }
