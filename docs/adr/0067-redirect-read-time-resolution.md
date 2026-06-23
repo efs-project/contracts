@@ -6,7 +6,7 @@
 **Date:** 2026-06-20
 **Deciders:** James (this pins behavior before durable seeding; human-gated)
 **Permanence-tier:** Durable (the resolution algorithm + conformance vectors — ADR-governed, NOT frozen in a UID; the on-chain follower is a redeployable view)
-**Related:** ADR-0050 (REDIRECT schema — requires this spec before durable seeding), ADR-0055 (WHITEOUT negative terminal — reserved here), ADR-0031 (lens first-attester-wins), ADR-0021/0062 (depth-cap precedent), ADR-0051 (reads exclude revoked), spec `specs/09-redirect-resolution.md` (the normative algorithm + vectors)
+**Related:** ADR-0050 (REDIRECT schema — requires this spec before durable seeding), ADR-0055 (WHITEOUT negative terminal — now live as a separate schema, applied OUTSIDE this follower; §Decision 6-7), ADR-0031 (lens first-attester-wins), ADR-0021/0062 (depth-cap precedent), ADR-0051 (reads exclude revoked), spec `specs/09-redirect-resolution.md` (the normative algorithm + vectors)
 
 ## Context
 
@@ -23,8 +23,8 @@ Adopt the read-time resolution rules in `specs/09-redirect-resolution.md` as the
 3. **Cycle handling.** The on-chain follower keeps a **visited-set** within the walk and **stops** on revisit (`CycleStopped`) — catches direct and multi-hop cycles the resolver's `SelfLoop` guard cannot. Separately, `sameAs`-cluster **canonicalization** elects the **lowest UID in the SCC** (start-independent, deterministic) — a **client/indexer** dedup concern; the on-chain navigational follower does NOT run SCC analysis.
 4. **Lens precedence (ADR-0031).** A redirect is followable only if its attester is in the active lens set; foreign redirects are invisible. Competing edges resolve first-attester-wins by lens order, ties by lowest redirect UID. A symlink resolves within the same lens scope as the surrounding walk.
 5. **Dangling targets.** A target that is missing, revoked, or fails read-time kind-typing → status `Dangling` surfacing the last good node; never reverts.
-6. **WHITEOUT negative-terminal reservation (ADR-0055).** The resolution loop reserves a *non-following* terminal ("suppressed/empty in this lens — STOP, no fall-through"). The follower carries a defined-but-unreturned `Suppressed-reserved` status today so the future WHITEOUT schema slots in without restructuring the loop. This spec does NOT implement WHITEOUT.
-7. **Seeding ban.** Until the WHITEOUT schema exists, NO durable data may encode whiteout/suppression via any sentinel (reserved REDIRECT kind, `weight < 0` TAG, sentinel PIN, tombstone DATA). A stray reserved-kind REDIRECT is inert/ignored (no on-chain guard per ADR-0055 §3); the ban is the protection.
+6. **WHITEOUT is a live, separate schema — the redirect follower never produces suppression (ADR-0055).** WHITEOUT now ships as its own EAS schema + resolver; its negative terminal ("suppressed/empty in this lens — STOP, no fall-through") is applied by the router / file view against `WhiteoutResolver`, **outside** this redirect follower. The follower reserves a `Suppressed-reserved` status that is **defined-but-never-returned** — not because WHITEOUT is unbuilt, but because suppression lives in a separate schema handled elsewhere; the slot was kept so the follower never had to change when WHITEOUT shipped. This spec's *follower* does not implement WHITEOUT.
+7. **Seeding ban (PERMANENT — does not expire now that WHITEOUT ships).** Suppression is expressed ONLY by the dedicated WHITEOUT schema. NO durable data may encode whiteout/suppression via any sentinel — reserved REDIRECT kind, `weight < 0` TAG, sentinel PIN, tombstone DATA — **ever**: using a follow/placement vocabulary as a stop terminal is a category error whose forever-fact cost is identical before and after WHITEOUT exists. A stray reserved-kind REDIRECT is inert/ignored (no on-chain guard per ADR-0055 §3); the permanent ban is the protection. (Authoritative: `specs/09-redirect-resolution.md` §10.)
 
 ## Consequences
 
