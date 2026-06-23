@@ -3,22 +3,27 @@
 import { useEffect, useRef, useState } from "react";
 import { useConnectModal } from "@rainbow-me/rainbowkit";
 import { Address, formatEther } from "viem";
+import { hardhat } from "viem/chains";
 import { useAccount, useBalance, useConnect, useConnectors, useDisconnect } from "wagmi";
 import { WalletIcon, XMarkIcon } from "@heroicons/react/24/outline";
 import { useTargetNetwork } from "~~/hooks/scaffold-eth";
 import {
+  BURNER_WALLET_PK_STORAGE_KEY,
   FAUCET_CHAIN_ID,
   FAUCET_URL,
   INSTANT_BURNER_PAUSE_MS,
   getInstantBurnerMessage,
   isBurnerConnector,
   isInstantBurnerSessionEnabled,
+  normalizeStoredBurnerPrivateKey,
   requestInstantBurnerDrip,
   shouldAutoConnectInstantBurner,
+  shouldClearStoredHardhatBurner,
   shouldDisconnectInstantBurner,
   shouldResumeInstantBurnerAfterRealWalletModal,
   useFaucetStatus,
 } from "~~/utils/scaffold-eth";
+import { HARDHAT_ACCOUNTS } from "~~/utils/scaffold-eth/hardhatAccounts";
 
 const INSTANT_BURNER_ENABLED = isInstantBurnerSessionEnabled({
   faucetUrl: FAUCET_URL,
@@ -26,6 +31,22 @@ const INSTANT_BURNER_ENABLED = isInstantBurnerSessionEnabled({
 });
 
 const shortAddress = (address: string) => `${address.slice(0, 6)}...${address.slice(-4)}`;
+const hardhatPrivateKeys = HARDHAT_ACCOUNTS.map(account => account.pk);
+
+const clearPublicHardhatBurnerKey = (targetChainId: number) => {
+  if (typeof window === "undefined") return;
+  const storedPrivateKey = normalizeStoredBurnerPrivateKey(window.localStorage.getItem(BURNER_WALLET_PK_STORAGE_KEY));
+  if (
+    shouldClearStoredHardhatBurner({
+      targetChainId,
+      hardhatChainId: hardhat.id,
+      storedPrivateKey,
+      hardhatPrivateKeys,
+    })
+  ) {
+    window.localStorage.removeItem(BURNER_WALLET_PK_STORAGE_KEY);
+  }
+};
 
 const messageClass = {
   funding: "text-info",
@@ -65,6 +86,11 @@ export const InstantBurnerSession = () => {
     }
     previousAddressRef.current = address;
   }, [address]);
+
+  useEffect(() => {
+    if (!INSTANT_BURNER_ENABLED || targetNetwork.id !== FAUCET_CHAIN_ID) return;
+    clearPublicHardhatBurnerKey(targetNetwork.id);
+  }, [targetNetwork.id]);
 
   useEffect(() => {
     if (!INSTANT_BURNER_ENABLED) return;
@@ -195,6 +221,7 @@ export const InstantBurnerSession = () => {
           className="btn btn-primary btn-xs rounded-full whitespace-nowrap"
           type="button"
           onClick={() => {
+            clearPublicHardhatBurnerKey(targetNetwork.id);
             setDismissed(false);
             setPauseUntil(undefined);
             setEditingSessionRequested(true);

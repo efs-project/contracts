@@ -210,7 +210,7 @@ test("known public hardhat burner keys are cleared away from local hardhat", () 
 
   assert.equal(
     shouldClearStoredHardhatBurner({
-      defaultChainId: 11155111,
+      targetChainId: 11155111,
       hardhatChainId: 31337,
       storedPrivateKey: `0x${"a".repeat(64)}`,
       hardhatPrivateKeys,
@@ -219,7 +219,7 @@ test("known public hardhat burner keys are cleared away from local hardhat", () 
   );
   assert.equal(
     shouldClearStoredHardhatBurner({
-      defaultChainId: 31337,
+      targetChainId: 31337,
       hardhatChainId: 31337,
       storedPrivateKey: `0x${"a".repeat(64)}`,
       hardhatPrivateKeys,
@@ -228,7 +228,7 @@ test("known public hardhat burner keys are cleared away from local hardhat", () 
   );
   assert.equal(
     shouldClearStoredHardhatBurner({
-      defaultChainId: 11155111,
+      targetChainId: 11155111,
       hardhatChainId: 31337,
       storedPrivateKey: `0x${"c".repeat(64)}`,
       hardhatPrivateKeys,
@@ -237,7 +237,7 @@ test("known public hardhat burner keys are cleared away from local hardhat", () 
   );
   assert.equal(
     shouldClearStoredHardhatBurner({
-      defaultChainId: 11155111,
+      targetChainId: 11155111,
       hardhatChainId: 31337,
       storedPrivateKey: undefined,
       hardhatPrivateKeys,

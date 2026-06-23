@@ -86,7 +86,7 @@ if (typeof window !== "undefined") {
   const hardhatPrivateKeys = HARDHAT_ACCOUNTS.map(account => account.pk);
   if (
     shouldClearStoredHardhatBurner({
-      defaultChainId,
+      targetChainId: defaultChainId,
       hardhatChainId,
       storedPrivateKey: existing,
       hardhatPrivateKeys,

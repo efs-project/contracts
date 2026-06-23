@@ -110,17 +110,17 @@ export function shouldSeedHardhatBurner({
 }
 
 export function shouldClearStoredHardhatBurner({
-  defaultChainId,
+  targetChainId,
   hardhatChainId,
   storedPrivateKey,
   hardhatPrivateKeys,
 }: {
-  defaultChainId: number;
+  targetChainId: number;
   hardhatChainId: number;
   storedPrivateKey: `0x${string}` | undefined;
   hardhatPrivateKeys: readonly string[];
 }): boolean {
-  if (defaultChainId === hardhatChainId || !storedPrivateKey) return false;
+  if (targetChainId === hardhatChainId || !storedPrivateKey) return false;
   return hardhatPrivateKeys.some(pk => pk.toLowerCase() === storedPrivateKey.toLowerCase());
 }
 
