@@ -64,10 +64,11 @@ export class FileNotFoundError extends Error {
 const MAX_CACHE_ENTRIES = 50;
 const MAX_CACHE_BYTES = 50 * 1024 * 1024;
 const MAX_CACHE_ITEM_BYTES = 10 * 1024 * 1024;
+const MAX_CACHE_AGE_MS = 60 * 1000;
 
 let cacheBytes = 0;
 let cacheEpoch = 0;
-const fileContentCache = new Map<string, FetchedFile>();
+const fileContentCache = new Map<string, { file: FetchedFile; storedAt: number }>();
 
 function cloneFetchedFile(file: FetchedFile): FetchedFile {
   return {
@@ -94,27 +95,32 @@ function cacheKeyFor(args: FetchFileArgs): string | null {
 function getCachedFile(key: string): FetchedFile | null {
   const cached = fileContentCache.get(key);
   if (!cached) return null;
+  if (Date.now() - cached.storedAt > MAX_CACHE_AGE_MS) {
+    cacheBytes -= cached.file.bytes.length;
+    fileContentCache.delete(key);
+    return null;
+  }
   fileContentCache.delete(key);
   fileContentCache.set(key, cached);
-  return cached;
+  return cached.file;
 }
 
 function setCachedFile(key: string, file: FetchedFile) {
   if (file.bytes.length > MAX_CACHE_ITEM_BYTES) return;
 
   const prior = fileContentCache.get(key);
-  if (prior) cacheBytes -= prior.bytes.length;
+  if (prior) cacheBytes -= prior.file.bytes.length;
 
   const cached = cloneFetchedFile(file);
   fileContentCache.delete(key);
-  fileContentCache.set(key, cached);
+  fileContentCache.set(key, { file: cached, storedAt: Date.now() });
   cacheBytes += cached.bytes.length;
 
   while (fileContentCache.size > MAX_CACHE_ENTRIES || cacheBytes > MAX_CACHE_BYTES) {
     const oldestKey = fileContentCache.keys().next().value;
     if (!oldestKey) break;
     const oldest = fileContentCache.get(oldestKey);
-    if (oldest) cacheBytes -= oldest.bytes.length;
+    if (oldest) cacheBytes -= oldest.file.bytes.length;
     fileContentCache.delete(oldestKey);
   }
 }

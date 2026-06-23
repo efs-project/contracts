@@ -166,6 +166,36 @@ test("fetchFileContent caches repeat mirror reads by route identity", async () =
   }
 });
 
+test("fetchFileContent caches repeat on-chain body reads by route identity", async () => {
+  const body = "cached on-chain bytes";
+  let readCount = 0;
+  const publicClient = {
+    chain: { id: 31337 },
+    readContract: async () => {
+      readCount += 1;
+      return [
+        200n,
+        `0x${Buffer.from(body, "utf8").toString("hex")}`,
+        [{ key: "Content-Type", value: "text/plain" }],
+      ];
+    },
+  };
+  const args = {
+    routerAddress: `0x${"1".repeat(40)}` as `0x${string}`,
+    routerAbi: [],
+    publicClient: publicClient as any,
+    lensAddresses: [`0x${"a".repeat(40)}`],
+    resourcePath: ["docs", "onchain.txt"],
+  };
+
+  const first = await fetchFileContent(args);
+  const second = await fetchFileContent(args);
+
+  assert.equal(new TextDecoder().decode(first.bytes), body);
+  assert.equal(new TextDecoder().decode(second.bytes), body);
+  assert.equal(readCount, 1);
+});
+
 test("fetchFileContent uses explicit chainId when the public client has no chain metadata", async () => {
   const ipfsUri = "ipfs://bafychain/example.png";
   let fetchCount = 0;
@@ -215,6 +245,127 @@ test("fetchFileContent uses explicit chainId when the public client has no chain
     assert.equal(fetchCount, 2);
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+test("fetchFileContent does not cache when chain identity is unavailable", async () => {
+  const ipfsUri = "ipfs://bafynochain/example.png";
+  let fetchCount = 0;
+  let readCount = 0;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: Parameters<typeof fetch>[0]) => {
+    fetchCount += 1;
+    assert.equal(String(url), "https://dweb.link/ipfs/bafynochain/example.png");
+    const body = fetchCount === 1 ? "first no-chain body" : "second no-chain body";
+    return {
+      ok: true,
+      headers: { get: (name: string) => (name.toLowerCase() === "content-type" ? "image/png" : null) },
+      arrayBuffer: async () => new TextEncoder().encode(body).buffer,
+    };
+  }) as any;
+
+  try {
+    const publicClient = {
+      readContract: async () => {
+        readCount += 1;
+        return [
+          200n,
+          "0x",
+          [
+            {
+              key: "Content-Type",
+              value: `message/external-body; access-type=URL; URL="${ipfsUri}"; content-type="image/png"`,
+            },
+          ],
+        ];
+      },
+    };
+    const args = {
+      routerAddress: `0x${"1".repeat(40)}` as `0x${string}`,
+      routerAbi: [],
+      publicClient: publicClient as any,
+      lensAddresses: [`0x${"a".repeat(40)}`],
+      resourcePath: ["images", "photo.png"],
+    };
+
+    const first = await fetchFileContent(args);
+    const second = await fetchFileContent(args);
+
+    assert.equal(new TextDecoder().decode(first.bytes), "first no-chain body");
+    assert.equal(new TextDecoder().decode(second.bytes), "second no-chain body");
+    assert.equal(readCount, 2);
+    assert.equal(fetchCount, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("clearFetchFileContentCache makes a cached route refetch after a write boundary", async () => {
+  let readCount = 0;
+  const publicClient = {
+    chain: { id: 31337 },
+    readContract: async () => {
+      readCount += 1;
+      const body = readCount === 1 ? "before write" : "after write";
+      return [
+        200n,
+        `0x${Buffer.from(body, "utf8").toString("hex")}`,
+        [{ key: "Content-Type", value: "text/plain" }],
+      ];
+    },
+  };
+  const args = {
+    routerAddress: `0x${"1".repeat(40)}` as `0x${string}`,
+    routerAbi: [],
+    publicClient: publicClient as any,
+    lensAddresses: [`0x${"a".repeat(40)}`],
+    resourcePath: ["docs", "edited.txt"],
+  };
+
+  const first = await fetchFileContent(args);
+  clearFetchFileContentCache();
+  const second = await fetchFileContent(args);
+
+  assert.equal(new TextDecoder().decode(first.bytes), "before write");
+  assert.equal(new TextDecoder().decode(second.bytes), "after write");
+  assert.equal(readCount, 2);
+});
+
+test("fetchFileContent expires browser-memory cache entries", async () => {
+  let readCount = 0;
+  const originalDateNow = Date.now;
+  let now = 1_000_000;
+  Date.now = () => now;
+  const publicClient = {
+    chain: { id: 31337 },
+    readContract: async () => {
+      readCount += 1;
+      const body = readCount === 1 ? "fresh cache body" : "expired cache body";
+      return [
+        200n,
+        `0x${Buffer.from(body, "utf8").toString("hex")}`,
+        [{ key: "Content-Type", value: "text/plain" }],
+      ];
+    },
+  };
+  const args = {
+    routerAddress: `0x${"1".repeat(40)}` as `0x${string}`,
+    routerAbi: [],
+    publicClient: publicClient as any,
+    lensAddresses: [`0x${"a".repeat(40)}`],
+    resourcePath: ["docs", "ttl.txt"],
+  };
+
+  try {
+    const first = await fetchFileContent(args);
+    now += 60_001;
+    const second = await fetchFileContent(args);
+
+    assert.equal(new TextDecoder().decode(first.bytes), "fresh cache body");
+    assert.equal(new TextDecoder().decode(second.bytes), "expired cache body");
+    assert.equal(readCount, 2);
+  } finally {
+    Date.now = originalDateNow;
   }
 });
 

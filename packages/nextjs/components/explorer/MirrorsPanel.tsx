@@ -59,7 +59,15 @@ const FILE_VIEW_MIRRORS_ABI = [
   },
 ] as const;
 
-export const MirrorsPanel = ({ fileAnchorUID, lensAddresses }: { fileAnchorUID: string; lensAddresses: string[] }) => {
+export const MirrorsPanel = ({
+  fileAnchorUID,
+  lensAddresses,
+  onMirrorsChanged,
+}: {
+  fileAnchorUID: string;
+  lensAddresses: string[];
+  onMirrorsChanged?: () => void;
+}) => {
   const [mirrors, setMirrors] = useState<MirrorItem[]>([]);
   const [dataUID, setDataUID] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -308,6 +316,7 @@ export const MirrorsPanel = ({ fileAnchorUID, lensAddresses }: { fileAnchorUID: 
       const submitted = await createMirrorAttestation(detected, newUri);
       if (!submitted) return;
       clearFetchFileContentCache();
+      onMirrorsChanged?.();
       notification.success(`${TRANSPORT_LABELS[detected as keyof typeof TRANSPORT_LABELS]} mirror added.`);
       setNewUri("");
       setIsAddingMirror(false);
@@ -387,6 +396,7 @@ export const MirrorsPanel = ({ fileAnchorUID, lensAddresses }: { fileAnchorUID: 
       if (!submitted) return;
 
       clearFetchFileContentCache();
+      onMirrorsChanged?.();
       notification.success("On-chain mirror added.");
       setFileToUpload(null);
       setIsAddingMirror(false);
@@ -410,6 +420,7 @@ export const MirrorsPanel = ({ fileAnchorUID, lensAddresses }: { fileAnchorUID: 
       if (txHash) {
         await publicClient.waitForTransactionReceipt({ hash: txHash });
         clearFetchFileContentCache();
+        onMirrorsChanged?.();
         notification.success("Mirror removed.");
         fetchMirrors();
       }

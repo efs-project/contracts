@@ -1179,6 +1179,9 @@ export const FileBrowser = ({
     }
     if (directoryRefreshKey === 0) return;
     clearFetchFileContentCache();
+    if (selectedFile && !selectedFile.isFolder) {
+      fetchFileContent(selectedFile).catch(e => console.error("Preview refetch after directory refresh failed", e));
+    }
     // Only create/delete/list mutations bump directoryRefreshKey — they don't touch
     // /tags/system, so the exclude defs are never stale here and a normal refetch is
     // correct (and filtered, since excludeTagDefUIDs is already resolved). Overview
@@ -2152,7 +2155,19 @@ export const FileBrowser = ({
           </div>
 
           {/* Mirrors panel */}
-          {!selectedFile.isFolder && <MirrorsPanel fileAnchorUID={selectedFile.uid} lensAddresses={lensAddresses} />}
+          {!selectedFile.isFolder && (
+            <MirrorsPanel
+              fileAnchorUID={selectedFile.uid}
+              lensAddresses={lensAddresses}
+              onMirrorsChanged={() => {
+                if (selectedFile && !selectedFile.isFolder) {
+                  fetchFileContent(selectedFile).catch(e =>
+                    console.error("Preview refetch after mirror change failed", e),
+                  );
+                }
+              }}
+            />
+          )}
         </div>
       )}
 
