@@ -14,7 +14,7 @@ import { useFaucetStatus } from "~~/utils/scaffold-eth";
  * the balance has visibly increased — i.e. the ETH actually landed.
  */
 export const FaucetStatus = () => {
-  const { pendingHash, setPending } = useFaucetStatus();
+  const { pendingHash, setPending, setReady } = useFaucetStatus();
   const { address } = useAccount();
   const queryClient = useQueryClient();
   const { data, queryKey } = useBalance({ address, query: { enabled: !!address } });
@@ -41,9 +41,9 @@ export const FaucetStatus = () => {
   // Clear once the balance has increased past the baseline — the ETH is in.
   useEffect(() => {
     if (pendingHash && baseline.current !== undefined && data?.value !== undefined && data.value > baseline.current) {
-      setPending(undefined);
+      setReady();
     }
-  }, [data?.value, pendingHash, setPending]);
+  }, [data?.value, pendingHash, setReady]);
 
   if (!pendingHash) return null;
 

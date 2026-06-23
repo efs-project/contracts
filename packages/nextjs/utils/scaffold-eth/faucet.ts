@@ -16,7 +16,7 @@ import { create } from "zustand";
  * The client holds no key; it only POSTs an address. The faucet service decides
  * eligibility (already-funded / cooldown / cap).
  */
-const FAUCET_URL = (process.env.NEXT_PUBLIC_FAUCET_URL ?? "").trim().replace(/\/$/, "");
+export const FAUCET_URL = (process.env.NEXT_PUBLIC_FAUCET_URL ?? "").trim().replace(/\/$/, "");
 
 /**
  * Chain the HTTP faucet funds; the drip fires only when the wallet is on it.
@@ -53,11 +53,19 @@ export function isFaucetEnabled(chainId: number | undefined): boolean {
  */
 type FaucetStatusStore = {
   pendingHash?: string;
+  errorMessage?: string;
+  readyAt?: number;
   setPending: (hash?: string) => void;
+  setReady: () => void;
+  setError: (message: string) => void;
 };
 export const useFaucetStatus = create<FaucetStatusStore>(set => ({
   pendingHash: undefined,
-  setPending: hash => set({ pendingHash: hash }),
+  errorMessage: undefined,
+  readyAt: undefined,
+  setPending: hash => set({ pendingHash: hash, errorMessage: undefined }),
+  setReady: () => set({ pendingHash: undefined, errorMessage: undefined, readyAt: Date.now() }),
+  setError: message => set({ pendingHash: undefined, errorMessage: message }),
 }));
 
 export async function requestDrip(address: string): Promise<DripResult> {

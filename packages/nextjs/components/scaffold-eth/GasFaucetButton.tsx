@@ -3,8 +3,8 @@
 /**
  * GasFaucetButton — manual "Get test ETH", backed by the HTTP faucet service.
  * Renders null unless `NEXT_PUBLIC_FAUCET_URL` is set and the wallet is on the
- * faucet's chain (`NEXT_PUBLIC_FAUCET_CHAIN_ID` — the devnet 26001993 by default,
- * or live Sepolia). Sibling to `FaucetButton` (hardhat-only, which funds the
+ * faucet's chain (`NEXT_PUBLIC_FAUCET_CHAIN_ID` — live Sepolia by default).
+ * Sibling to `FaucetButton` (hardhat-only, which funds the
  * burner from the unlocked node account). Rendered as an `<li>` in
  * `AddressInfoDropdown`, matching the other wallet-menu rows.
  */
@@ -26,8 +26,13 @@ export const GasFaucetButton = ({ hidden = false }: { hidden?: boolean } = {}) =
     const res = await requestDrip(address);
     // On a real drip, hand off to the header's "Adding gas…" indicator (persists
     // until the ETH lands); only surface a toast for non-drip outcomes.
-    if (res.ok && res.txHash) useFaucetStatus.getState().setPending(res.txHash);
-    else if (!res.ok) notification.error(res.message ?? "Faucet request failed. Try again shortly.");
+    if (res.ok && res.txHash) {
+      useFaucetStatus.getState().setPending(res.txHash);
+    } else if (!res.ok) {
+      const message = res.message ?? "Faucet request failed. Try again shortly.";
+      useFaucetStatus.getState().setError(message);
+      notification.error(message);
+    }
     setLoading(false);
   };
 

@@ -10,6 +10,7 @@ import {
 import { rainbowkitBurnerWallet } from "burner-connector";
 import * as chains from "viem/chains";
 import scaffoldConfig from "~~/scaffold.config";
+import { normalizeStoredBurnerPrivateKey, shouldSeedHardhatBurner } from "~~/utils/scaffold-eth";
 import { HARDHAT_ACCOUNTS } from "~~/utils/scaffold-eth/hardhatAccounts";
 
 // Polyfill indexedDB for server-side build/prerendering
@@ -72,9 +73,16 @@ const { onlyLocalBurnerWallet, targetNetworks } = scaffoldConfig;
 // dev UI is usable immediately without clicking the faucet. Only runs when hardhat
 // is a target network and no PK has been stored yet — subsequent visits keep the
 // account the user last switched to via DevWalletSwitcher.
-if (typeof window !== "undefined" && targetNetworks.some(n => n.id === (chains.hardhat as chains.Chain).id)) {
-  const existing = window.localStorage.getItem("burnerWallet.pk")?.replaceAll('"', "");
-  if (!existing || existing === "0x" || existing.length < 66) {
+if (
+  typeof window !== "undefined" &&
+  shouldSeedHardhatBurner({
+    hasHardhatTarget: targetNetworks.some(n => n.id === (chains.hardhat as chains.Chain).id),
+    defaultChainId: targetNetworks[0].id,
+    hardhatChainId: (chains.hardhat as chains.Chain).id,
+  })
+) {
+  const existing = normalizeStoredBurnerPrivateKey(window.localStorage.getItem("burnerWallet.pk"));
+  if (!existing) {
     const pick = HARDHAT_ACCOUNTS[Math.floor(Math.random() * HARDHAT_ACCOUNTS.length)];
     window.localStorage.setItem("burnerWallet.pk", pick.pk);
   }
