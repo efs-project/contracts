@@ -1,4 +1,5 @@
 import { sepolia } from "viem/chains";
+import { create } from "zustand";
 
 /**
  * HTTP drip-faucet client — gives a connecting wallet a little gas so users
@@ -44,6 +45,21 @@ export function isFaucetEnabled(chainId: number | undefined): boolean {
  * `{ ok: false }` so callers (especially the fire-and-forget connect path) don't
  * need try/catch.
  */
+/**
+ * Shared status of an in-flight drip, so the header can show a persistent
+ * "adding gas" indicator next to the wallet until the dripped ETH lands (the
+ * balance widget only refreshes on block-detection, ~30s, so a brief toast
+ * leaves a confusing gap). `pendingHash` truthy ⇒ a drip is in flight.
+ */
+type FaucetStatusStore = {
+  pendingHash?: string;
+  setPending: (hash?: string) => void;
+};
+export const useFaucetStatus = create<FaucetStatusStore>(set => ({
+  pendingHash: undefined,
+  setPending: hash => set({ pendingHash: hash }),
+}));
+
 export async function requestDrip(address: string): Promise<DripResult> {
   if (!FAUCET_URL) return { ok: false, reason: "disabled" };
   try {

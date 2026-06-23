@@ -11,7 +11,7 @@
 import { useState } from "react";
 import { useAccount } from "wagmi";
 import { BanknotesIcon } from "@heroicons/react/24/outline";
-import { isFaucetEnabled, notification, requestDrip } from "~~/utils/scaffold-eth";
+import { isFaucetEnabled, notification, requestDrip, useFaucetStatus } from "~~/utils/scaffold-eth";
 
 export const GasFaucetButton = ({ hidden = false }: { hidden?: boolean } = {}) => {
   const { address, chainId } = useAccount();
@@ -24,8 +24,10 @@ export const GasFaucetButton = ({ hidden = false }: { hidden?: boolean } = {}) =
     if (!address) return;
     setLoading(true);
     const res = await requestDrip(address);
-    if (res.ok) notification.success("Test ETH sent.");
-    else notification.error(res.message ?? "Faucet request failed. Try again shortly.");
+    // On a real drip, hand off to the header's "Adding gas…" indicator (persists
+    // until the ETH lands); only surface a toast for non-drip outcomes.
+    if (res.ok && res.txHash) useFaucetStatus.getState().setPending(res.txHash);
+    else if (!res.ok) notification.error(res.message ?? "Faucet request failed. Try again shortly.");
     setLoading(false);
   };
 
