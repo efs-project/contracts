@@ -44,15 +44,16 @@ once run.
 
 ### Read views (stateless, redeployable — in no schema UID)
 
-Deployed 2026-06-19 (plain EOA deploy, no Safe — these are ownerless and in no UID). Redeployable at any
-time; on a redeploy, off-chain consumers update a config value. (On-chain consumers should bind to the
-permanent kernel/resolvers, not these addresses — see `docs/FUTURE_WORK.md`.)
+Redeployed 2026-06-23 (plain EOA deploy, no Safe — these are ownerless and in no UID) to ship the
+hardened web3:// router + latest views (ADR-0057/0058/0059). Redeployable at any time; on a redeploy,
+off-chain consumers update a config value. (On-chain consumers should bind to the permanent
+kernel/resolvers, not these addresses — see `docs/FUTURE_WORK.md`.)
 
 | Contract | Address |
 |---|---|
-| EFSFileView | `0x141D9FdbadCd9f6e6928A4842FF00094502CC146` |
-| EFSRouter | `0x4EF216e1096237dA8A962157Ed13ea1B3FcC5E17` |
-| ListReader | `0x689AA70BF6a8b22BE4E959dcf33A40ea03F85Bd5` |
+| EFSFileView | `0x76B10909Ff10b53c54387C66B083b1613E2276d3` |
+| EFSRouter | `0x44D5F6803127B442218e9aA0481A9931444dc82c` |
+| ListReader | `0xCc182611B572b5C162a3D96674E821C61ac658FC` |
 
 ### Frozen schema UIDs
 

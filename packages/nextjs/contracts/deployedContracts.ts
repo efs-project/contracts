@@ -8457,7 +8457,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     EFSFileView: {
-      address: "0x141D9FdbadCd9f6e6928A4842FF00094502CC146",
+      address: "0x76B10909Ff10b53c54387C66B083b1613E2276d3",
       abi: [
         {
           inputs: [
@@ -9199,7 +9199,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     EFSRouter: {
-      address: "0x4EF216e1096237dA8A962157Ed13ea1B3FcC5E17",
+      address: "0x44D5F6803127B442218e9aA0481A9931444dc82c",
       abi: [
         {
           inputs: [
@@ -9341,9 +9341,9 @@ const deployedContracts = {
           name: "request",
           outputs: [
             {
-              internalType: "uint256",
+              internalType: "uint16",
               name: "statusCode",
-              type: "uint256",
+              type: "uint16",
             },
             {
               internalType: "bytes",
@@ -13705,7 +13705,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     ListReader: {
-      address: "0x689AA70BF6a8b22BE4E959dcf33A40ea03F85Bd5",
+      address: "0xCc182611B572b5C162a3D96674E821C61ac658FC",
       abi: [
         {
           inputs: [
@@ -14626,11 +14626,6 @@ const deployedContracts = {
         {
           inputs: [],
           name: "InvalidTransport",
-          type: "error",
-        },
-        {
-          inputs: [],
-          name: "InvalidURIScheme",
           type: "error",
         },
         {
