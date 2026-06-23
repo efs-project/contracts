@@ -4,7 +4,7 @@ import { Chain } from "viem";
  * Human-facing name for the EFS environments, keyed off the CHAIN ID (ADR-0062). Each environment
  * is now its own chain, so the label is unambiguous — no RPC sniffing, no probing:
  *   - 31337   → "Local"   (a developer's `yarn fork`)
- *   - 5318008 → "Devnet"  (the shared community fork on the VPS)
+ *   - 26001993 → "Devnet"  (the shared community fork on the VPS)
  *   - anything else → chain.name (e.g. "Sepolia")
  *
  * Single source of truth for NetworkChip, NetworkSwitcher, and the explorer's unreachable-network
@@ -13,7 +13,7 @@ import { Chain } from "viem";
 export type NetworkFlavor = "local" | "devnet" | "other" | "unknown";
 
 export const HARDHAT_CHAIN_ID = 31337;
-export const DEVNET_CHAIN_ID = 5318008;
+export const DEVNET_CHAIN_ID = 26001993;
 
 const FLAVOR_LABELS: Record<NetworkFlavor, string> = {
   local: "Local",
@@ -55,7 +55,7 @@ export function networkSortRank(chain: Chain | undefined): number {
 
 /**
  * Chains where browser-side faucet funding (auto-fund + the manual Fund-wallet button) is allowed:
- * the local fork (31337) and the shared devnet (5318008). Both are open anvil Sepolia forks whose
+ * the local fork (31337) and the shared devnet (26001993). Both are open anvil Sepolia forks whose
  * standard accounts are pre-funded and unlocked, so the UI can top up a 0-balance burner via an
  * `eth_sendTransaction` from account #0 (devnet drain is accepted by design — see project notes).
  *

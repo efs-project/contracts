@@ -23,7 +23,7 @@ import { isFundableForkChainId } from "~~/utils/scaffold-eth";
 const NUM_OF_ETH = "1";
 const FAUCET_ADDRESS = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
 
-// Funding works on BOTH fork chains (ADR-0062): the local fork (31337) and the devnet (5318008),
+// Funding works on BOTH fork chains (ADR-0062): the local fork (31337) and the devnet (26001993),
 // which have different RPC URLs. Build the wallet client from the CONNECTED wagmi chain (already
 // patched with the right RPC in scaffold.config.ts) so it targets the correct node per chain. The
 // env var is only the vanilla-hardhat fallback. See also `DevnetAutoFund.tsx`.
@@ -46,7 +46,7 @@ export const FaucetButton = ({ hidden = false }: { hidden?: boolean } = {}) => {
   );
   const faucetTxn = useTransactor(walletClient);
 
-  // Only meaningful on a fork chain (local 31337 / devnet 5318008) — on any other chain the button
+  // Only meaningful on a fork chain (local 31337 / devnet 26001993) — on any other chain the button
   // disappears entirely (no placeholder, no greyed-out state).
   if (!fundable) {
     return null;

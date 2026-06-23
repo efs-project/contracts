@@ -7884,7 +7884,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
   },
-  5318008: {
+  26001993: {
     AliasResolver: {
       address: "0xB0B76064eE417f7568427cbd3fDAcB2e5589743d",
       abi: [

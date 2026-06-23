@@ -12,7 +12,7 @@
  * it matters: on their first connection.
  *
  * Scope / guards:
- *   - fork chains only: the local fork (31337) and the devnet (5318008), via
+ *   - fork chains only: the local fork (31337) and the devnet (26001993), via
  *     `isFundableForkChainId`. On mainnet / Sepolia / anywhere else, a no-op.
  *   - Only when `balance.value === 0n`. A wallet that already has funds is
  *     left alone.
@@ -31,7 +31,7 @@
  *   whole flow is chain-independent, and we skip the toast lifecycle so
  *   there's no stuck-toast failure mode.
  *
- * The fork-chain guard (`isFundableForkChainId`, an explicit allowlist of 31337/5318008) is
+ * The fork-chain guard (`isFundableForkChainId`, an explicit allowlist of 31337/26001993) is
  * load-bearing. This component must never, ever fire on mainnet — auto-sending 1 ETH to any
  * connecting address would be ruinous.
  */
@@ -67,7 +67,7 @@ export const DevnetAutoFund = () => {
     inFlightRef.current = true;
 
     // Pin a client to THIS fork's chain + RPC for the whole send→receipt flow, captured now (not a
-    // module singleton) so it targets the correct fork — local (31337) or devnet (5318008) — and a
+    // module singleton) so it targets the correct fork — local (31337) or devnet (26001993) — and a
     // mid-flight wallet swap can't redirect the receipt poll to another chain (see component doc).
     const rpcUrl = chain.rpcUrls.default.http[0];
     const forkWalletClient = createWalletClient({ chain, transport: http(rpcUrl) });

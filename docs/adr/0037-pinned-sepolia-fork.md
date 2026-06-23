@@ -1,6 +1,6 @@
 # ADR-0037: Pinned Sepolia fork for cross-environment determinism
 
-**Status:** Accepted (superseded in part by ADR-0062 — the devnet moves to its own chain id `5318008`; local + CI forks stay `31337` and the byte-identical-addresses property still holds)
+**Status:** Accepted (superseded in part by ADR-0062 — the devnet moves to its own chain id `26001993`; local + CI forks stay `31337` and the byte-identical-addresses property still holds)
 **Date:** 2026-04-19
 **Related:** ADR-0027, ADR-0030, ADR-0032, ADR-0062
 

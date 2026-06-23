@@ -50,14 +50,14 @@ const deployEfsCore: DeployFunction = async function (hre: HardhatRuntimeEnviron
   // producing resolvers mainnet EAS can't call. Until verified per-chain constants are wired, hard-fail
   // anything but Sepolia (11155111) and its local fork (31337). This is the "reject non-Sepolia until
   // mainnet constants are wired" guard — the deploy is mainnet-forward, not mainnet-now.
-  // 5318008 is the EFS devnet (ADR-0062) — also a *pinned Sepolia fork*, so the Sepolia EAS /
+  // 26001993 is the EFS devnet (ADR-0062) — also a *pinned Sepolia fork*, so the Sepolia EAS /
   // SchemaRegistry constants in deploy-lib/addresses.ts are correct there too (the fork carries
   // the same EAS at the same address). It's allowed for the same reason 31337 is; both are forks.
   const chainId = Number((await hre.ethers.provider.getNetwork()).chainId);
-  if (chainId !== 11155111 && chainId !== 31337 && chainId !== 5318008) {
+  if (chainId !== 11155111 && chainId !== 31337 && chainId !== 26001993) {
     throw new Error(
       `[efs-core] EFS deploy is configured for Sepolia (11155111), its local fork (31337), and the ` +
-        `devnet fork (5318008) only; chainId ${chainId} is unsupported. Wire verified ` +
+        `devnet fork (26001993) only; chainId ${chainId} is unsupported. Wire verified ` +
         `EAS/SchemaRegistry constants in deploy-lib/addresses.ts (select by chainId) before deploying ` +
         `to another chain.`,
     );

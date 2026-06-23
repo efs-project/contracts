@@ -124,7 +124,7 @@ export function getBlockExplorerTxLink(chainId: number, txnHash: string) {
  */
 export function getBlockExplorerAddressLink(network: chains.Chain, address: string) {
   const blockExplorerBaseURL = network.blockExplorers?.default?.url;
-  // Fork chains (local 31337 + EFS Devnet 5318008, ADR-0062) have no real block explorer — route
+  // Fork chains (local 31337 + EFS Devnet 26001993, ADR-0062) have no real block explorer — route
   // them to the in-app blockexplorer instead of falling through to mainnet Etherscan, which would
   // open misleading mainnet links for fork/devnet addresses.
   if (network.id === chains.hardhat.id || network.id === DEVNET_CHAIN_ID) {

@@ -14,7 +14,7 @@ export const DEFAULT_ALCHEMY_API_KEY = "IZYEU2cWBgnFmgiTAgpWD";
 
 // The three EFS environments are now THREE DISTINCT wagmi chains (ADR-0062):
 //   • Sepolia      11155111  — live testnet
-//   • EFS Devnet    5318008  — shared community fork on the VPS (its own chain id, so a wallet
+//   • EFS Devnet    26001993  — shared community fork on the VPS (its own chain id, so a wallet
 //                              can't confuse it with a contributor's local node)
 //   • Local (hardhat) 31337  — a developer's `yarn fork`, only present when a node is around
 // Each is a real, explicit, persisted choice in the NetworkSwitcher — never auto-selected.
@@ -65,7 +65,7 @@ const efsDevnetChain: chains.Chain = {
 // independent of this (it sorts Sepolia → Devnet → Local; see NetworkSwitcher).
 //
 // `NEXT_PUBLIC_TARGET_CHAIN` is an explicit override that always wins. Accepts
-// sepolia|11155111, devnet|5318008, local|hardhat|31337. Blank/whitespace counts as UNSET.
+// sepolia|11155111, devnet|26001993, local|hardhat|31337. Blank/whitespace counts as UNSET.
 // Default by build type when unset: `next dev` → Local; `next build` (deployed) → Devnet
 // (community testers land on the devnet; Sepolia is one click away). Set TARGET_CHAIN=sepolia
 // for a public Sepolia-first SPA.
@@ -75,7 +75,7 @@ const HARDHAT_RPC_CONFIGURED = HARDHAT_RPC_URL.length > 0;
 // hardhat RPC. A deployed public build never lists Local (nothing on the visitor's machine).
 const LOCAL_AVAILABLE = process.env.NODE_ENV !== "production" || HARDHAT_RPC_CONFIGURED;
 
-const RECOGNIZED = ["", "hardhat", "local", "31337", "sepolia", "11155111", "devnet", "5318008"];
+const RECOGNIZED = ["", "hardhat", "local", "31337", "sepolia", "11155111", "devnet", "26001993"];
 if (!RECOGNIZED.includes(TARGET_CHAIN)) {
   console.warn(
     `[scaffold.config] Unrecognized NEXT_PUBLIC_TARGET_CHAIN="${TARGET_CHAIN}" — using the build default. Use one of: sepolia, devnet, local.`,
@@ -83,7 +83,7 @@ if (!RECOGNIZED.includes(TARGET_CHAIN)) {
 }
 
 const wantsSepolia = TARGET_CHAIN === "sepolia" || TARGET_CHAIN === "11155111";
-const wantsDevnet = TARGET_CHAIN === "devnet" || TARGET_CHAIN === "5318008";
+const wantsDevnet = TARGET_CHAIN === "devnet" || TARGET_CHAIN === "26001993";
 const wantsLocal = TARGET_CHAIN === "hardhat" || TARGET_CHAIN === "local" || TARGET_CHAIN === "31337";
 
 // Available networks: Sepolia + Devnet always; Local only when a node is around.

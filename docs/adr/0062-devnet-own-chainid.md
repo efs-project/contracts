@@ -1,4 +1,4 @@
-# ADR-0062: Devnet gets its own chainId (5318008), distinct from the local fork
+# ADR-0062: Devnet gets its own chainId (26001993), distinct from the local fork
 
 **Status:** Accepted
 **Date:** 2026-06-21
@@ -17,20 +17,20 @@ An interim attempt to keep one `31337` slot and pick the RPC dynamically (local-
 
 ## Decision
 
-Give the devnet its **own chain id, `5318008`**, making it a first-class network distinct from the local fork:
+Give the devnet its **own chain id, `26001993`**, making it a first-class network distinct from the local fork:
 
-- The devnet VPS `anvil` runs `--chain-id 5318008` (was `31337`); contracts are redeployed against it, producing a `deployedContracts[5318008]` block (the per-chain merge generation of ADR-0061 carries it alongside `31337`/`11155111` with no generator change). Addresses are unchanged — CREATE/CREATE2 don't depend on chain id — so only the network identity differs.
-- The debug UI defines `5318008` as a real wagmi chain ("EFS Devnet", RPC = the VPS) with proper `wallet_addEthereumChain` metadata. The switcher offers **Sepolia + Devnet** as stable explicit choices; **Local** (`31337`) is shown additionally only when a local node is configured/available. Selection is the user's, persisted — never automatic.
-- The local fork keeps `31337` (ADR-0037 determinism for local/CI is unchanged). A `HARDHAT_CHAIN_ID` override (default `31337`) lets a node be run at `5318008` for local block generation / parity.
+- The devnet VPS `anvil` runs `--chain-id 26001993` (was `31337`); contracts are redeployed against it, producing a `deployedContracts[26001993]` block (the per-chain merge generation of ADR-0061 carries it alongside `31337`/`11155111` with no generator change). Addresses are unchanged — CREATE/CREATE2 don't depend on chain id — so only the network identity differs.
+- The debug UI defines `26001993` as a real wagmi chain ("EFS Devnet", RPC = the VPS) with proper `wallet_addEthereumChain` metadata. The switcher offers **Sepolia + Devnet** as stable explicit choices; **Local** (`31337`) is shown additionally only when a local node is configured/available. Selection is the user's, persisted — never automatic.
+- The local fork keeps `31337` (ADR-0037 determinism for local/CI is unchanged). A `HARDHAT_CHAIN_ID` override (default `31337`) lets a node be run at `26001993` for local block generation / parity.
 
-`5318008` was chosen by the human; it is outside the ranges of real networks the UI uses and clearly a dev-style id.
+`26001993` was chosen by the human and **verified unregistered** against the ethereum-lists/chains registry (chainid.network) before adoption. An earlier candidate, `5318008`, was rejected in review: it is the registered **Reactive Kopli** chain — a vanity id is exactly the kind already taken, which would reintroduce the very wallet-collision this ADR removes. Lesson for any future pick: avoid vanity numbers and verify the id against the registry first.
 
 ## Consequences
 
 - **Three real, stable networks.** Sepolia / Devnet / Local are protocol-distinct; the platform — not a heuristic — enforces separation. A wallet shows which one you're on; data/addresses are namespaced per chain in `deployedContracts`.
-- **Requires a devnet redeploy (ops).** "Devnet" only functions — especially **writes** (attestations, faucet) — once the VPS node actually runs `--chain-id 5318008`: an EIP-155 tx signed for `5318008` is rejected by a `31337` node. The VPS `--state` file must be wiped on cutover (chain-id change). This is a separate devnet-repo change and the gating step.
-- **Wallet UX:** the burner wallet is unaffected (app-managed). An external wallet (MetaMask) treats `5318008` as a custom network → a one-time "add network" approval on first connect, with metadata we supply. This is *more* correct than today's `31337`, which collides with every user's own local node.
-- **web3:// URIs on the devnet carry `:5318008`** (ADR-0060) — deliberate, hence choosing the id with care now.
+- **Requires a devnet redeploy (ops).** "Devnet" only functions — especially **writes** (attestations, faucet) — once the VPS node actually runs `--chain-id 26001993`: an EIP-155 tx signed for `26001993` is rejected by a `31337` node. The VPS `--state` file must be wiped on cutover (chain-id change). This is a separate devnet-repo change and the gating step.
+- **Wallet UX:** the burner wallet is unaffected (app-managed). An external wallet (MetaMask) treats `26001993` as a custom network → a one-time "add network" approval on first connect, with metadata we supply. This is *more* correct than today's `31337`, which collides with every user's own local node.
+- **web3:// URIs on the devnet carry `:26001993`** (ADR-0060) — deliberate, hence choosing the id with care now.
 - **Supersedes ADR-0037 in part:** forks are no longer all `31337`. Local + CI stay `31337` (determinism intact); the devnet diverges to its own id. The "byte-identical addresses across environments" property still holds (chain-id-independent), but the "same chain id everywhere" simplification no longer does.
 
 ## Alternatives considered

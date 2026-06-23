@@ -110,7 +110,7 @@ What else we looked at and why it lost.
 - [ADR-0037 — Pinned Sepolia fork for cross-environment determinism](./0037-pinned-sepolia-fork.md)
 - [ADR-0048 — Sepolia freeze set + proxy-ready resolvers (burn to immutable)](./0048-sepolia-freeze-set-and-proxy-ready-resolvers.md)
 - [ADR-0061 — deployedContracts.ts is multi-chain; generation merges per-chain](./0061-multichain-deployedcontracts-merge.md)
-- [ADR-0062 — Devnet gets its own chainId (5318008), distinct from the local fork](./0062-devnet-own-chainid.md) *(supersedes ADR-0037 in part)*
+- [ADR-0062 — Devnet gets its own chainId (26001993), distinct from the local fork](./0062-devnet-own-chainid.md) *(supersedes ADR-0037 in part)*
 
 ### Architectural Foundations
 - [ADR-0030 — Mainnet permanence (no upgradeability)](./0030-mainnet-permanence.md)
