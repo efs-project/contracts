@@ -36,6 +36,8 @@ import { deployResolverProxy } from "./helpers/deployResolverProxy";
  *   13 folder whiteout hides a (visibility-TAG-listed) folder
  *   14 folder whiteout + same-lens visibility-TAG re-add → visible (THE FOLDER-FIX)
  *   15 plain phase-1 listing scan is BUDGET-BOUNDED when many direct files are whited out
+ *   16 getDirectoryPageByAddressList (attester-scoped, schema-agnostic) honors whiteout
+ *   17 the folder-visibility-TAG positive is FOLDER-gated — a TAG on a whited FILE anchor doesn't un-hide
  *
  * HARNESS: the beforeEach predicts deterministic CREATE addresses via the deployer nonce, so this
  * file MUST be run as a FULL FILE (`yarn test test/Whiteout.test.ts`), NEVER via `--grep` — a grep
@@ -1257,5 +1259,67 @@ describe("Whiteout (WHITEOUT cross-lens negative mask, ADR-0055)", function () {
       aliceItems.map(i => i.uid),
       "control lens (excludes owner) still sees the child",
     ).to.have.members([keepAnchor, hideAnchor]);
+  });
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // VECTOR 17 — the folder-visibility-TAG positive is gated to FOLDER anchors (P2 fix)
+  //   The folder re-add fix (vector 14) lets a lens's own visibility TAG beat its own whiteout in a
+  //   listing. That positive must apply ONLY to generic folder anchors (forSchema == 0). On a FILE anchor
+  //   (forSchema == dataSchemaUID), the only valid positive re-assertion is a placement PIN — matching the
+  //   PIN-gated resolution path. Without the gate, a same-lens TAG (definition = dataSchemaUID) on a
+  //   whited-out FILE anchor would un-hide it in directory listings while `getFilesAtPath` / the router
+  //   still return it deleted — a listing/resolution inconsistency. This vector reproduces that exploit
+  //   shape and asserts the file STAYS hidden in BOTH listing views, AND that resolution agrees.
+  // ════════════════════════════════════════════════════════════════════════════
+  it("vector 17: a same-lens visibility-TAG on a whited-out FILE anchor does NOT un-hide it (TAG positive is folder-only)", async function () {
+    const root = await createAnchor("root", ZERO_BYTES32);
+    const dir = await createAnchor("dir", root);
+
+    // A lower-lens FILE: alice's DATA placed at file.txt (forSchema == dataSchemaUID ⇒ a file, not a folder).
+    const fileAnchor = await createAnchor("file.txt", dir, dataSchemaUID);
+    const d = await mintData(alice);
+    await createPin(fileAnchor, d, alice);
+
+    // OWNER whites out the file, THEN attempts the exploit: a visibility TAG (definition = dataSchemaUID)
+    // on the FILE anchor — the same shape that legitimately re-adds a FOLDER (vector 14).
+    await attestWhiteout(fileAnchor, owner);
+    await createTag(dataSchemaUID, fileAnchor, owner);
+    expect(await whiteoutResolver.isWhitedOut(dir, ownerAddr, fileAnchor)).to.equal(true);
+
+    // The TAG positive is folder-gated → it does NOT count on a file anchor → owner's whiteout stands.
+    // (1) Schema-aware listing (phase-1 file walk) for [owner, alice]: file stays hidden.
+    const schemaPage = await fileView.getDirectoryPageBySchemaAndAddressList(
+      dir,
+      dataSchemaUID,
+      [ownerAddr, aliceAddr],
+      "0x",
+      10,
+    );
+    expect(
+      schemaPage.items.map(i => i.uid),
+      "file stays hidden in the schema-aware listing",
+    ).to.deep.equal([]);
+
+    // (2) Schema-agnostic attester-scoped listing: same — the TAG must not resurrect the file.
+    const [mixedItems] = await fileView.getDirectoryPageByAddressList(dir, [ownerAddr, aliceAddr], 0, 10);
+    expect(
+      mixedItems.map(i => i.uid),
+      "file stays hidden in the attester-scoped listing",
+    ).to.deep.equal([]);
+
+    // (3) Resolution parity: getFilesAtPath (PIN-gated) also returns the file as deleted for [owner, alice]
+    //     — listing and resolution now agree (the inconsistency the gate closes).
+    const files = await fileView.getFilesAtPath(dir, [ownerAddr, aliceAddr], dataSchemaUID, "0x", 10);
+    expect(
+      files.items.map(i => i.uid),
+      "getFilesAtPath agrees the file is deleted",
+    ).to.deep.equal([]);
+
+    // Control: a viewer EXCLUDING the whiteout author (alice only) still sees her file via her own PIN.
+    const alonePage = await fileView.getDirectoryPageBySchemaAndAddressList(dir, dataSchemaUID, [aliceAddr], "0x", 10);
+    expect(
+      alonePage.items.map(i => i.uid),
+      "control lens (excludes owner) still sees the file",
+    ).to.deep.equal([fileAnchor]);
   });
 });

@@ -913,15 +913,25 @@ contract EFSFileView {
     }
 
     /// @dev The per-item LISTING-side negative-mask predicate (ADR-0055). Split from the resolution-side
-    ///      `_isItemWhitedOutForResolution`: its positive terminal is a file PIN OR a folder visibility
-    ///      TAG (the FOLDER RE-ADD FIX, via the `_one(lens)` wrapper around `hasActiveTagFromAny`), so a
-    ///      lens that whites out a folder then re-asserts it with its OWN visibility TAG is un-hidden in
-    ///      listings. `visibilityTagDef` is the listing's `anchorSchema` param (the visibility TAG's
-    ///      definition — `dataSchemaUID` in the standard file/folder listing, NOT the ANCHOR schema UID).
+    ///      `_isItemWhitedOutForResolution`: its positive terminal is a file PIN OR — for GENERIC FOLDER
+    ///      anchors only — a folder visibility TAG (the FOLDER RE-ADD FIX, via the `_one(lens)` wrapper
+    ///      around `hasActiveTagFromAny`), so a lens that whites out a folder then re-asserts it with its
+    ///      OWN visibility TAG is un-hidden in listings. `visibilityTagDef` is the listing's `anchorSchema`
+    ///      param (the visibility TAG's definition — `dataSchemaUID` in the standard file/folder listing,
+    ///      NOT the ANCHOR schema UID).
+    ///
+    ///      The TAG branch is gated to generic folder anchors (`forSchema == 0`, the same discriminator
+    ///      `_buildFileSystemItems` uses for `isFolder`). A FILE anchor's only positive re-assertion is its
+    ///      placement PIN — matching the PIN-gated resolution path (`_isItemWhitedOutForResolution`, the
+    ///      router, `getFilesAtPath`). Without this gate a same-lens TAG (`definition = dataSchemaUID`) on a
+    ///      whited-out FILE anchor would un-hide it in directory listings while resolution still returns it
+    ///      as deleted — a listing/resolution inconsistency (PR #37 review).
+    ///
     ///      Walk the lenses in precedence order:
-    ///        - the FIRST lens that asserts a positive (file PIN OR folder visibility TAG) is the item's
-    ///          contributing lens ⇒ VISIBLE (return false), terminate. A newer same-lens positive thus
-    ///          beats that lens's own earlier whiteout (positive-before-whiteout within a lens).
+    ///        - the FIRST lens that asserts a positive (file PIN, or folder visibility TAG when the child is
+    ///          a generic folder) is the item's contributing lens ⇒ VISIBLE (return false), terminate. A
+    ///          newer same-lens positive thus beats that lens's own earlier whiteout (positive-before-
+    ///          whiteout within a lens).
     ///        - else if that lens has an ACTIVE whiteout on this child ⇒ NEGATIVE terminal: the lens
     ///          masks the entry and stops fall-through to lower lenses ⇒ DROP (return true), terminate.
     ///        - else continue to the next (lower) lens.
@@ -936,13 +946,24 @@ contract EFSFileView {
     ) internal view returns (bool) {
         IWhiteoutResolverForFileView wr = whiteoutResolver;
         if (address(wr) == address(0)) return false;
+        // Classify the child once: a generic folder anchor has `forSchema == 0` (a file anchor has
+        // `forSchema == DATA_SCHEMA_UID`, a typed/alias anchor a schema UID). Only a generic folder may be
+        // re-asserted by a visibility TAG; everything else is PIN-positive only (resolution parity).
+        bool childIsGenericFolder;
+        {
+            Attestation memory ca = eas.getAttestation(childAnchor);
+            if (ca.data.length > 0) {
+                (, bytes32 childForSchema) = abi.decode(ca.data, (string, bytes32));
+                childIsGenericFolder = (childForSchema == bytes32(0));
+            }
+        }
         for (uint256 i = 0; i < attesters.length; i++) {
             address lens = attesters[i];
-            // Positive terminal: file placement PIN (Shape A) OR folder visibility TAG (Shape B) →
-            // visible, stop. The folder visibility TAG is the folder re-add fix.
+            // Positive terminal: file placement PIN (Shape A) OR — folders only — folder visibility TAG
+            // (Shape B, the folder re-add fix) → visible, stop.
             if (
                 edgeResolver.getActivePinTarget(childAnchor, lens, dataSchemaUID) != bytes32(0) ||
-                edgeResolver.hasActiveTagFromAny(childAnchor, visibilityTagDef, _one(lens))
+                (childIsGenericFolder && edgeResolver.hasActiveTagFromAny(childAnchor, visibilityTagDef, _one(lens)))
             ) {
                 return false;
             }
