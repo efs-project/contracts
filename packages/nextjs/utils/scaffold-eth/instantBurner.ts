@@ -74,6 +74,26 @@ export function shouldStopInstantBurnerAfterExternalDisconnect({
   return wasBurnerConnected && editingSessionRequested && status === "disconnected";
 }
 
+export function trackInstantBurnerWasConnected({
+  current,
+  status,
+  chainId,
+  faucetChainId,
+  activeConnectorId,
+  disablingInstantBurner = false,
+}: {
+  current: boolean;
+  status: WalletStatus;
+  chainId: number | undefined;
+  faucetChainId: number;
+  activeConnectorId: string | undefined;
+  disablingInstantBurner?: boolean;
+}): boolean {
+  if (disablingInstantBurner) return false;
+  if (status !== "connected") return current;
+  return chainId === faucetChainId && activeConnectorId === BURNER_WALLET_CONNECTOR_ID;
+}
+
 export function shouldShowInstantBurnerEnable({
   enabled,
   status,

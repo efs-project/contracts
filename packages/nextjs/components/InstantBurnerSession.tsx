@@ -19,6 +19,7 @@ import {
   shouldResetInstantBurnerDismissalOnAddressChange,
   shouldShowInstantBurnerEnable,
   shouldStopInstantBurnerAfterExternalDisconnect,
+  trackInstantBurnerWasConnected,
 } from "~~/utils/scaffold-eth";
 import { HARDHAT_ACCOUNTS } from "~~/utils/scaffold-eth/hardhatAccounts";
 
@@ -154,9 +155,14 @@ export const InstantBurnerSession = () => {
   }, [status]);
 
   useEffect(() => {
-    if (status !== "connected") return;
-    burnerWasConnectedRef.current = chainId === FAUCET_CHAIN_ID && isBurnerConnector(connector);
-  }, [chainId, connector, status]);
+    burnerWasConnectedRef.current = trackInstantBurnerWasConnected({
+      current: burnerWasConnectedRef.current,
+      status,
+      chainId,
+      faucetChainId: FAUCET_CHAIN_ID,
+      activeConnectorId: connector?.id,
+    });
+  }, [chainId, connector?.id, status]);
 
   useEffect(() => {
     if (!INSTANT_BURNER_ENABLED) return;
@@ -216,6 +222,14 @@ export const InstantBurnerSession = () => {
   };
 
   const disableEditing = () => {
+    burnerWasConnectedRef.current = trackInstantBurnerWasConnected({
+      current: burnerWasConnectedRef.current,
+      status,
+      chainId,
+      faucetChainId: FAUCET_CHAIN_ID,
+      activeConnectorId: connector?.id,
+      disablingInstantBurner: true,
+    });
     setEditingSessionRequested(false);
     setDismissed(true);
     setPauseUntil(undefined);

@@ -50,6 +50,7 @@ const {
   shouldSeedHardhatBurner,
   shouldShowInstantBurnerEnable,
   shouldStopInstantBurnerAfterExternalDisconnect,
+  trackInstantBurnerWasConnected,
 } = await import("./instantBurner.ts");
 
 test("instant burner only enables when a faucet URL is configured and the kill switch is not false", () => {
@@ -249,6 +250,37 @@ test("wallet-menu burner disconnect stops promptless reconnect", () => {
   assert.equal(shouldStopInstantBurnerAfterExternalDisconnect({ ...base, editingSessionRequested: false }), false);
   assert.equal(shouldStopInstantBurnerAfterExternalDisconnect({ ...base, status: "connecting" }), false);
   assert.equal(shouldStopInstantBurnerAfterExternalDisconnect({ ...base, status: "connected" }), false);
+});
+
+test("turning Easy Edits off clears stale burner disconnect tracking before re-enable", () => {
+  let wasBurnerConnected = trackInstantBurnerWasConnected({
+    current: false,
+    status: "connected" as const,
+    chainId: 11155111,
+    faucetChainId: 11155111,
+    activeConnectorId: BURNER_WALLET_CONNECTOR_ID,
+  });
+
+  assert.equal(wasBurnerConnected, true);
+
+  wasBurnerConnected = trackInstantBurnerWasConnected({
+    current: wasBurnerConnected,
+    status: "disconnected" as const,
+    chainId: undefined,
+    faucetChainId: 11155111,
+    activeConnectorId: undefined,
+    disablingInstantBurner: true,
+  });
+
+  assert.equal(wasBurnerConnected, false);
+  assert.equal(
+    shouldStopInstantBurnerAfterExternalDisconnect({
+      wasBurnerConnected,
+      editingSessionRequested: true,
+      status: "disconnected",
+    }),
+    false,
+  );
 });
 
 test("enable-editing affordance remains available with no connected wallet", () => {
