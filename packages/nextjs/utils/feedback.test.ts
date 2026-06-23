@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { buildFeedbackMailtoUrl } from "./feedback.ts";
 
@@ -37,4 +38,11 @@ test("buildFeedbackMailtoUrl warns against sending sensitive secrets", () => {
   const body = url.searchParams.get("body") ?? "";
 
   assert.match(body, /Do not include seed phrases, private keys, signatures, or private RPC keys\./);
+});
+
+test("FeedbackButton opens mail handlers outside the current app tab", async () => {
+  const source = await readFile(new URL("../components/FeedbackButton.tsx", import.meta.url), "utf8");
+
+  assert.equal((source.match(/target="_blank"/g) ?? []).length, 2);
+  assert.equal((source.match(/rel="noopener noreferrer"/g) ?? []).length, 2);
 });

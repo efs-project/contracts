@@ -23,6 +23,8 @@ export const FeedbackButton = ({ variant = "desktop" }: FeedbackButtonProps) => 
     return (
       <a
         href={href}
+        target="_blank"
+        rel="noopener noreferrer"
         onClick={refreshHref}
         aria-label={label}
         className="hover:bg-secondary hover:shadow-md hover:text-white dark:hover:text-base-content focus:!bg-secondary active:!text-neutral py-1.5 px-3 text-sm rounded-full gap-2 grid grid-flow-col"
@@ -36,6 +38,8 @@ export const FeedbackButton = ({ variant = "desktop" }: FeedbackButtonProps) => 
   return (
     <a
       href={href}
+      target="_blank"
+      rel="noopener noreferrer"
       onClick={refreshHref}
       aria-label={label}
       title={label}
