@@ -30,6 +30,7 @@ export function shouldAutoConnectInstantBurner({
   faucetChainId,
   activeConnectorId,
   pausedUntil,
+  realWalletFlowActive,
   now,
 }: {
   enabled: boolean;
@@ -39,10 +40,12 @@ export function shouldAutoConnectInstantBurner({
   faucetChainId: number;
   activeConnectorId: string | undefined;
   pausedUntil: number | undefined;
+  realWalletFlowActive: boolean;
   now: number;
 }): boolean {
   if (!enabled) return false;
   if (!editingSessionRequested) return false;
+  if (realWalletFlowActive) return false;
   if (status !== "disconnected") return false;
   if (targetChainId !== faucetChainId) return false;
   if (activeConnectorId && activeConnectorId !== BURNER_WALLET_CONNECTOR_ID) return false;

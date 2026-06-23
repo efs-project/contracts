@@ -56,9 +56,14 @@ export const InstantBurnerSession = () => {
   const disconnectingBurnerRef = useRef(false);
   const openedRealWalletModalRef = useRef(false);
   const realWalletModalWasOpenRef = useRef(false);
+  const previousAddressRef = useRef<string | undefined>(undefined);
+  const realWalletFlowActive = waitingForRealWallet || connectModalOpen || openedRealWalletModalRef.current;
 
   useEffect(() => {
-    setDismissed(false);
+    if (address && address !== previousAddressRef.current) {
+      setDismissed(false);
+    }
+    previousAddressRef.current = address;
   }, [address]);
 
   useEffect(() => {
@@ -111,12 +116,13 @@ export const InstantBurnerSession = () => {
     if (
       !shouldAutoConnectInstantBurner({
         enabled: INSTANT_BURNER_ENABLED,
-        editingSessionRequested,
+        editingSessionRequested: editingSessionRequested && !dismissed,
         status,
         targetChainId: targetNetwork.id,
         faucetChainId: FAUCET_CHAIN_ID,
         activeConnectorId: connector?.id,
         pausedUntil: pauseUntil,
+        realWalletFlowActive,
         now: Date.now(),
       })
     ) {
@@ -132,7 +138,17 @@ export const InstantBurnerSession = () => {
         },
       },
     );
-  }, [connect, connector?.id, connectors, editingSessionRequested, pauseUntil, status, targetNetwork.id]);
+  }, [
+    connect,
+    connector?.id,
+    connectors,
+    dismissed,
+    editingSessionRequested,
+    pauseUntil,
+    realWalletFlowActive,
+    status,
+    targetNetwork.id,
+  ]);
 
   useEffect(() => {
     if (!waitingForRealWallet) return;

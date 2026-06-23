@@ -60,6 +60,7 @@ test("auto-connect is limited to settled no-wallet state on the faucet target ch
     faucetChainId: 11155111,
     activeConnectorId: undefined,
     pausedUntil: undefined,
+    realWalletFlowActive: false,
     now: 1_000,
   };
 
@@ -70,6 +71,7 @@ test("auto-connect is limited to settled no-wallet state on the faucet target ch
   assert.equal(shouldAutoConnectInstantBurner({ ...base, enabled: false }), false);
   assert.equal(shouldAutoConnectInstantBurner({ ...base, editingSessionRequested: false }), false);
   assert.equal(shouldAutoConnectInstantBurner({ ...base, pausedUntil: base.now + INSTANT_BURNER_PAUSE_MS }), false);
+  assert.equal(shouldAutoConnectInstantBurner({ ...base, realWalletFlowActive: true }), false);
 });
 
 test("burner connector detection is explicit", () => {
