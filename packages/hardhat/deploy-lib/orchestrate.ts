@@ -38,6 +38,16 @@ export interface OrchestrationResult {
   ownershipTransferred: boolean;
 }
 
+export interface OrchestrationHooks {
+  // Test-only seam for fork fixtures that need to snapshot the exact sealed-but-untransferred
+  // state after smoke has completed but before the irreversible ownership handoff begins.
+  afterSmokeBeforeTransfer?: (ctx: {
+    result: OrchestrationResult;
+    rootUID: string;
+    transportsUID: string;
+  }) => Promise<void>;
+}
+
 const EAS_IFACE = [
   "function getSchemaRegistry() view returns (address)",
   "function attest((bytes32 schema,(address recipient,uint64 expirationTime,bool revocable,bytes32 refUID,bytes data,uint256 value) data)) payable returns (bytes32)",
@@ -127,7 +137,12 @@ const BOOTSTRAP_SCAFFOLDING: { name: string; parentIndex: number }[] = [
   { name: "data", parentIndex: 2 }, // 14 → transports (data: inline, ADR-0063)
 ];
 
-export async function orchestrate(deployer: Signer, mode: RunMode, log = true): Promise<OrchestrationResult> {
+export async function orchestrate(
+  deployer: Signer,
+  mode: RunMode,
+  log = true,
+  hooks: OrchestrationHooks = {},
+): Promise<OrchestrationResult> {
   const deployerAddr = await deployer.getAddress();
   const l = (...a: unknown[]) => log && console.log(...a);
 
@@ -241,7 +256,7 @@ export async function orchestrate(deployer: Signer, mode: RunMode, log = true): 
       registered: false,
       ownershipTransferred: false,
     };
-    await registerAndTransfer(result, deployer, schemaRegistry, eas, l);
+    await registerAndTransfer(result, deployer, schemaRegistry, eas, l, hooks);
     return result;
   }
 
@@ -320,7 +335,7 @@ export async function orchestrate(deployer: Signer, mode: RunMode, log = true): 
     return result;
   }
 
-  await registerAndTransfer(result, deployer, schemaRegistry, eas, l);
+  await registerAndTransfer(result, deployer, schemaRegistry, eas, l, hooks);
   return result;
 }
 
@@ -332,6 +347,7 @@ export async function registerAndTransfer(
   schemaRegistry: Contract,
   eas: Contract,
   l: (...a: unknown[]) => void,
+  hooks: OrchestrationHooks = {},
 ): Promise<void> {
   const { proxies, schemaUIDs } = result;
 
@@ -476,6 +492,9 @@ export async function registerAndTransfer(
   //     perSchemaSmoke), and no other smoke schema has a uniqueness constraint that rejects a second
   //     pass. The only thing skipped on a post-seal retry is bootstrap+seal above.
   await perSchemaSmoke(result, deployer, eas, indexer, rootUID, l);
+  if (hooks.afterSmokeBeforeTransfer) {
+    await hooks.afterSmokeBeforeTransfer({ result, rootUID, transportsUID });
+  }
 
   // ── Step 7: transfer ownership to the Safe ──────────────────────────────────────────────────
   const deployerAddr = await deployer.getAddress();
