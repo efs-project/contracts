@@ -196,7 +196,7 @@ describe("Deploy.fork — orchestrated CREATE3 deploy + register-last", function
   // bootstrap() and revert BootstrapSealed, so recovery could never finish. This test stands the system
   // up to the sealed state (a `full` run seals + transfers), then RE-INVOKES the --after-freeze-gate
   // path and asserts it completes cleanly: bootstrap is skipped (already sealed), anchors are reused,
-  // ownership still ends at the Safe.
+  // NO new EAS writes are emitted on the retry, ownership still ends at the Safe.
   it("post-seal --after-freeze-gate retry completes without reverting (skips bootstrap, reuses anchors)", async function () {
     // Restore the clean pre-deploy fork: the first test already deployed at these deterministic CREATE3
     // addresses, so without this restore our own `full` deploy below would collide (CreateX reverts).
@@ -217,17 +217,28 @@ describe("Deploy.fork — orchestrated CREATE3 deploy + register-last", function
     // Re-invoke the after-gate path. The proxies + SystemAccount already exist (re-bound, not
     // redeployed), the schemas are already registered (register tolerates AlreadyExists), the ceremony
     // is already sealed, and ownership is already the Safe. The fix makes registerAndTransfer SKIP
-    // bootstrap + seal on the sealed branch and resolve anchors from the index instead of re-attesting,
-    // so this must NOT throw (pre-fix it reverted BootstrapSealed).
+    // bootstrap + seal on the sealed branch, SKIP the per-schema smoke, and resolve anchors from the
+    // index instead of re-attesting, so this must NOT throw (pre-fix it re-entered write-time smoke).
+    const retryFromBlock = (await ethers.provider.getBlockNumber()) + 1;
     const retry = await orchestrate(deployer, "after-freeze-gate", false);
+    const retryToBlock = await ethers.provider.getBlockNumber();
+    const eas = await ethers.getContractAt("EAS", EAS_ADDRESS, deployer);
+    const attestedTopic = eas.interface.getEvent("Attested").topicHash;
+    const retryAttestedLogs = await ethers.provider.getLogs({
+      address: EAS_ADDRESS,
+      fromBlock: retryFromBlock,
+      toBlock: retryToBlock,
+      topics: [attestedTopic],
+    });
 
     // Completed cleanly: bootstrap skipped (still sealed, root unchanged — reused, not re-attested),
-    // ownership still the Safe, transports anchor resolved from the index.
+    // no new EAS writes on the retry, ownership still the Safe, transports anchor resolved from the index.
     expect(await systemAccount.bootstrapSealed(), "still sealed after retry").to.equal(true);
     const indexer = await ethers.getContractAt("EFSIndexer", retry.proxies.EFSIndexer, deployer);
     expect((await indexer.rootAnchorUID()).toLowerCase(), "root reused, not re-attested").to.equal(
       rootBefore.toLowerCase(),
     );
+    expect(retryAttestedLogs.length, "sealed retry emits no new EAS Attested logs").to.equal(0);
     expect(retry.transportsAnchorUID, "transports UID resolved from index on retry").to.not.equal(ethers.ZeroHash);
     expect(retry.ownershipTransferred, "ownership idempotently ends at the Safe").to.equal(true);
     const sa = await ethers.getContractAt("SystemAccount", retry.systemAccount, deployer);
