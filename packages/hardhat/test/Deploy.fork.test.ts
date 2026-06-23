@@ -190,13 +190,23 @@ describe("Deploy.fork — orchestrated CREATE3 deploy + register-last", function
 
   // ── PR #24 P1 follow-up: post-seal --after-freeze-gate retry must NOT revert BootstrapSealed ──────
   // Earlier this session bootstrap was made onlyOwner + whenNotSealed and the deploy calls seal() right
-  // after bootstrap. If an --after-freeze-gate run reaches seal() and then fails BEFORE ownership
-  // transfer completes (e.g. resolveSafe() throwing on a bad EFS_SAFE_ADDRESS, or a partial transfer),
-  // the next retry re-enters registerAndTransfer and — without this fix — would unconditionally call
-  // bootstrap() and revert BootstrapSealed, so recovery could never finish. This test stands the system
-  // up to the sealed state (a `full` run seals + transfers), then RE-INVOKES the --after-freeze-gate
-  // path and asserts it completes cleanly: bootstrap is skipped (already sealed), anchors are reused,
-  // NO new EAS writes are emitted on the retry, ownership still ends at the Safe.
+  // after bootstrap. If an --after-freeze-gate run reaches seal() and then fails (e.g. resolveSafe()
+  // throwing on a bad EFS_SAFE_ADDRESS, a partial transfer, or a smoke failure partway through), the
+  // next retry re-enters registerAndTransfer and — without this fix — would call bootstrap() and revert
+  // BootstrapSealed, so recovery could never finish.
+  //
+  // The fix: on retry, skip ONLY bootstrap+seal (already done); always re-run the per-schema smoke.
+  // seal() fires BEFORE smoke in the ceremony, so alreadySealed==true does NOT imply smoke completed.
+  // A retry that skipped smoke when a prior run failed inside smoke would transfer ownership to the
+  // Safe against potentially broken resolvers. Smoke is safe to re-run: the smoke.txt ANCHOR is
+  // idempotent (checked inside perSchemaSmoke), and no other smoke schema has a uniqueness constraint
+  // that rejects a second pass.
+  //
+  // This test stands the system up, then RE-INVOKES the --after-freeze-gate path and asserts:
+  // - bootstrap is skipped (already sealed, root unchanged)
+  // - smoke DOES run (emits new EAS Attested logs for the non-ANCHOR schemas)
+  // - smoke.txt ANCHOR is reused (idempotent path in perSchemaSmoke)
+  // - ownership ends at the Safe
   it("post-seal --after-freeze-gate retry completes without reverting (skips bootstrap, reuses anchors)", async function () {
     // Restore the clean pre-deploy fork: the first test already deployed at these deterministic CREATE3
     // addresses, so without this restore our own `full` deploy below would collide (CreateX reverts).
@@ -216,9 +226,7 @@ describe("Deploy.fork — orchestrated CREATE3 deploy + register-last", function
 
     // Re-invoke the after-gate path. The proxies + SystemAccount already exist (re-bound, not
     // redeployed), the schemas are already registered (register tolerates AlreadyExists), the ceremony
-    // is already sealed, and ownership is already the Safe. The fix makes registerAndTransfer SKIP
-    // bootstrap + seal on the sealed branch, SKIP the per-schema smoke, and resolve anchors from the
-    // index instead of re-attesting, so this must NOT throw (pre-fix it re-entered write-time smoke).
+    // is already sealed, and ownership is already the Safe. bootstrap+seal is skipped; smoke runs.
     const retryFromBlock = (await ethers.provider.getBlockNumber()) + 1;
     const retry = await orchestrate(deployer, "after-freeze-gate", false);
     const retryToBlock = await ethers.provider.getBlockNumber();
@@ -231,14 +239,17 @@ describe("Deploy.fork — orchestrated CREATE3 deploy + register-last", function
       topics: [attestedTopic],
     });
 
-    // Completed cleanly: bootstrap skipped (still sealed, root unchanged — reused, not re-attested),
-    // no new EAS writes on the retry, ownership still the Safe, transports anchor resolved from the index.
+    // bootstrap skipped (still sealed, root unchanged — reused, not re-attested)
     expect(await systemAccount.bootstrapSealed(), "still sealed after retry").to.equal(true);
     const indexer = await ethers.getContractAt("EFSIndexer", retry.proxies.EFSIndexer, deployer);
     expect((await indexer.rootAnchorUID()).toLowerCase(), "root reused, not re-attested").to.equal(
       rootBefore.toLowerCase(),
     );
-    expect(retryAttestedLogs.length, "sealed retry emits no new EAS Attested logs").to.equal(0);
+    // Smoke ran: non-ANCHOR schemas emit new Attested events; ANCHOR (smoke.txt) is idempotent.
+    expect(retryAttestedLogs.length, "sealed retry emits new EAS Attested logs (smoke ran)").to.be.greaterThan(0);
+    expect(await indexer.resolvePath(rootBefore, "smoke.txt"), "smoke.txt anchor reused after retry").to.not.equal(
+      ethers.ZeroHash,
+    );
     expect(retry.transportsAnchorUID, "transports UID resolved from index on retry").to.not.equal(ethers.ZeroHash);
     expect(retry.ownershipTransferred, "ownership idempotently ends at the Safe").to.equal(true);
     const sa = await ethers.getContractAt("SystemAccount", retry.systemAccount, deployer);

@@ -467,16 +467,15 @@ export async function registerAndTransfer(
   }
 
   // ── Step 8 (smoke): push one attestation through each of the 9 schemas BEFORE handing off
-  //     ownership on a FRESH run. On a post-seal retry the prior attempt may already have emitted
-  //     some of these attestation txs before failing later in the ceremony; rerunning the smoke is
-  //     therefore not a pure "verify" step anymore and can trip write-time invariants on the retry.
-  //     Once the ceremony is sealed, the remaining recovery obligation is to finish the ownership
-  //     handoff using the already-authored anchors and already-wired resolvers.
-  if (alreadySealed) {
-    l("EFS deploy: skipping per-schema smoke on post-seal retry; proceeding to ownership transfer.");
-  } else {
-    await perSchemaSmoke(result, deployer, eas, indexer, rootUID, l);
-  }
+  //     ownership. Smoke runs on EVERY path — including post-seal retries — because seal() fires
+  //     BEFORE smoke, so alreadySealed==true does not imply smoke completed. A run that reaches
+  //     seal() and then fails during smoke leaves the ceremony sealed but unverified; skipping smoke
+  //     on the retry would silently bypass the only pre-transfer proof that all 9 schemas are wired
+  //     and reachable, and ownership would transfer to the Safe against potentially broken resolvers.
+  //     Re-running smoke is safe: the ANCHOR case is already idempotent (smoke.txt check inside
+  //     perSchemaSmoke), and no other smoke schema has a uniqueness constraint that rejects a second
+  //     pass. The only thing skipped on a post-seal retry is bootstrap+seal above.
+  await perSchemaSmoke(result, deployer, eas, indexer, rootUID, l);
 
   // ── Step 7: transfer ownership to the Safe ──────────────────────────────────────────────────
   const deployerAddr = await deployer.getAddress();
