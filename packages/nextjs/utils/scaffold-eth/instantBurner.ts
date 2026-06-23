@@ -109,6 +109,21 @@ export function shouldSeedHardhatBurner({
   return hasHardhatTarget && defaultChainId === hardhatChainId;
 }
 
+export function shouldClearStoredHardhatBurner({
+  defaultChainId,
+  hardhatChainId,
+  storedPrivateKey,
+  hardhatPrivateKeys,
+}: {
+  defaultChainId: number;
+  hardhatChainId: number;
+  storedPrivateKey: `0x${string}` | undefined;
+  hardhatPrivateKeys: readonly string[];
+}): boolean {
+  if (defaultChainId === hardhatChainId || !storedPrivateKey) return false;
+  return hardhatPrivateKeys.some(pk => pk.toLowerCase() === storedPrivateKey.toLowerCase());
+}
+
 export function normalizeStoredBurnerPrivateKey(raw: string | null): `0x${string}` | undefined {
   const normalized = raw?.replaceAll('"', "") as `0x${string}` | undefined;
   if (!normalized || normalized === "0x" || normalized.length < 66) return undefined;

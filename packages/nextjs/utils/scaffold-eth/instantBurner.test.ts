@@ -38,6 +38,7 @@ const {
   normalizeStoredBurnerPrivateKey,
   shouldAutoConnectInstantBurner,
   shouldAutoDripInstantBurner,
+  shouldClearStoredHardhatBurner,
   shouldDisconnectInstantBurner,
   shouldResumeInstantBurnerAfterRealWalletModal,
   shouldSeedHardhatBurner,
@@ -200,6 +201,47 @@ test("hardhat seed keys only apply when local hardhat is the default target", ()
   );
   assert.equal(
     shouldSeedHardhatBurner({ hasHardhatTarget: false, defaultChainId: 11155111, hardhatChainId: 31337 }),
+    false,
+  );
+});
+
+test("known public hardhat burner keys are cleared away from local hardhat", () => {
+  const hardhatPrivateKeys = [`0x${"a".repeat(64)}`, `0x${"b".repeat(64)}`];
+
+  assert.equal(
+    shouldClearStoredHardhatBurner({
+      defaultChainId: 11155111,
+      hardhatChainId: 31337,
+      storedPrivateKey: `0x${"a".repeat(64)}`,
+      hardhatPrivateKeys,
+    }),
+    true,
+  );
+  assert.equal(
+    shouldClearStoredHardhatBurner({
+      defaultChainId: 31337,
+      hardhatChainId: 31337,
+      storedPrivateKey: `0x${"a".repeat(64)}`,
+      hardhatPrivateKeys,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldClearStoredHardhatBurner({
+      defaultChainId: 11155111,
+      hardhatChainId: 31337,
+      storedPrivateKey: `0x${"c".repeat(64)}`,
+      hardhatPrivateKeys,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldClearStoredHardhatBurner({
+      defaultChainId: 11155111,
+      hardhatChainId: 31337,
+      storedPrivateKey: undefined,
+      hardhatPrivateKeys,
+    }),
     false,
   );
 });
