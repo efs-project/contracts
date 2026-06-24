@@ -83,10 +83,9 @@ describe("BurnToImmutable.fork — upgradeable pre-burn, permanently immutable p
     const deployerAddr = await deployer.getAddress();
     // Bound to RESOLVERS.length + 1 (resolvers + SystemAccount) so the additive WhiteoutResolver
     // (ADR-0055) — the 7th resolver, making 8 CREATE3 deploys — doesn't rot this count.
-    expect(
-      Object.keys(result.deploys),
-      "CREATE3 deploys = RESOLVERS.length + SystemAccount",
-    ).to.have.lengthOf(RESOLVERS.length + 1);
+    expect(Object.keys(result.deploys), "CREATE3 deploys = RESOLVERS.length + SystemAccount").to.have.lengthOf(
+      RESOLVERS.length + 1,
+    );
     for (const [name, d] of Object.entries(result.deploys)) {
       const pa = await proxyAdminAs(d.proxyAdmin, owner);
       expect((await pa.owner()).toLowerCase(), `${name} ProxyAdmin owned by Safe`).to.equal(ownerAddr.toLowerCase());
