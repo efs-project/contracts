@@ -3,6 +3,7 @@ import { ethers } from "hardhat";
 import { Signer } from "ethers";
 import { CREATEX_ADDRESS, EAS_ADDRESS } from "../deploy-lib/addresses";
 import { orchestrate, OrchestrationResult } from "../deploy-lib/orchestrate";
+import { RESOLVERS } from "../deploy-lib/schemas";
 import { upgradeProxy } from "./helpers/deployUpgradeableProxy";
 
 // Burn-to-immutable ceremony (docs/DEPLOYMENT.md §4, docs/SEPOLIA_FREEZE_TABLE.md; ADR-0048/0030/0053).
@@ -13,10 +14,10 @@ import { upgradeProxy } from "./helpers/deployUpgradeableProxy";
 // halves of the promise end to end against a real deploy, so when this PR merges we know the
 // contracts are (a) genuinely upgradeable beforehand and (b) can DEFINITELY be made immutable:
 //
-//   1. PRE-BURN  — every one of the 7 proxies (6 resolvers + SystemAccount) is upgradeable by the
-//                  owner: all 7 ProxyAdmins are owner-controlled, and a real EFSIndexer V1→V2→V1
+//   1. PRE-BURN  — every one of the 8 proxies (7 resolvers + SystemAccount) is upgradeable by the
+//                  owner: all 8 ProxyAdmins are owner-controlled, and a real EFSIndexer V1→V2→V1
 //                  ProxyAdmin.upgradeAndCall round-trip succeeds.
-//   2. BURN      — the exact documented sequence: SystemAccount.sealModules(), then renounce all 7
+//   2. BURN      — the exact documented sequence: SystemAccount.sealModules(), then renounce all 8
 //                  ProxyAdmins, then renounce the three Ownable contracts (EFSIndexer, MirrorResolver,
 //                  SystemAccount). Every owner ends at address(0).
 //   3. POST-BURN — immutability is real: every ProxyAdmin.upgradeAndCall and every owner-gated setter
@@ -71,16 +72,21 @@ describe("BurnToImmutable.fork — upgradeable pre-burn, permanently immutable p
     process.env.EFS_SAFE_ADDRESS = ownerAddr;
 
     result = await orchestrate(deployer, "full", false);
-    expect(result.registered, "9 schemas registered").to.equal(true);
+    expect(result.registered, "all 10 schemas registered").to.equal(true);
     expect(result.ownershipTransferred, "ownership handed to the stand-in Safe").to.equal(true);
     expect(result.safe.toLowerCase(), "owner is the stand-in Safe signer").to.equal(ownerAddr.toLowerCase());
   });
 
-  it("is UPGRADEABLE pre-burn: all 7 ProxyAdmins owner-controlled + a real EFSIndexer V1→V2→V1 upgrade", async function () {
-    // (a) Every proxy is upgrade-controllable by the owner: all 7 ProxyAdmins are owned by the owner,
+  it("is UPGRADEABLE pre-burn: all 8 ProxyAdmins owner-controlled + a real EFSIndexer V1→V2→V1 upgrade", async function () {
+    // (a) Every proxy is upgrade-controllable by the owner: all 8 ProxyAdmins are owned by the owner,
     //     and the deployer (who created them) holds nothing.
     const deployerAddr = await deployer.getAddress();
-    expect(Object.keys(result.deploys), "7 CREATE3 deploys (6 resolvers + SystemAccount)").to.have.lengthOf(7);
+    // Bound to RESOLVERS.length + 1 (resolvers + SystemAccount) so the additive WhiteoutResolver
+    // (ADR-0055) — the 7th resolver, making 8 CREATE3 deploys — doesn't rot this count.
+    expect(
+      Object.keys(result.deploys),
+      "CREATE3 deploys = RESOLVERS.length + SystemAccount",
+    ).to.have.lengthOf(RESOLVERS.length + 1);
     for (const [name, d] of Object.entries(result.deploys)) {
       const pa = await proxyAdminAs(d.proxyAdmin, owner);
       expect((await pa.owner()).toLowerCase(), `${name} ProxyAdmin owned by Safe`).to.equal(ownerAddr.toLowerCase());
@@ -114,7 +120,7 @@ describe("BurnToImmutable.fork — upgradeable pre-burn, permanently immutable p
     );
   });
 
-  it("BURNS to immutable: sealModules + renounce 7 ProxyAdmins + 3 contract owners → every owner == 0", async function () {
+  it("BURNS to immutable: sealModules + renounce 8 ProxyAdmins + 3 contract owners → every owner == 0", async function () {
     const sa = await ethers.getContractAt("SystemAccount", result.systemAccount, owner);
 
     // Pre-conditions documented in SEPOLIA_FREEZE_TABLE.md: bootstrap already sealed by the deploy,
@@ -126,7 +132,7 @@ describe("BurnToImmutable.fork — upgradeable pre-burn, permanently immutable p
     await (await sa.sealModules()).wait();
     expect(await sa.modulesSealed(), "modules sealed").to.equal(true);
 
-    // Step 2: renounce all 7 ProxyAdmins — freezes the upgrade capability of every proxy.
+    // Step 2: renounce all 8 ProxyAdmins — freezes the upgrade capability of every proxy.
     for (const [name, d] of Object.entries(result.deploys)) {
       const pa = await proxyAdminAs(d.proxyAdmin, owner);
       await (await pa.renounceOwnership()).wait();
