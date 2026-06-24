@@ -41,6 +41,7 @@ import { deployResolverProxy } from "./helpers/deployResolverProxy";
  *   18 getFilesAtPath stops at a MID-STACK whiteout (higher positive kept, lower lens suppressed)
  *   19 getActiveWhiteout returns the live UID for un-delete (0 when none; new UID after re-whiteout)
  *   20 a fabricated getFilesAtPath cursor cannot resume PAST a mid-stack whiteout terminal
+ *   21 listing a folder that is ITSELF whited out returns empty across all listing entrypoints
  *
  * HARNESS: the beforeEach predicts deterministic CREATE addresses via the deployer nonce, so this
  * file MUST be run as a FULL FILE (`yarn test test/Whiteout.test.ts`), NEVER via `--grep` — a grep
@@ -1483,5 +1484,80 @@ describe("Whiteout (WHITEOUT cross-lens negative mask, ADR-0055)", function () {
       "fabricated cursor cannot bypass the whiteout terminal (no lower-lens DATA leaks)",
     ).to.deep.equal([]);
     expect(attacked.nextCursor, "bypassed-whiteout page is terminal").to.equal("0x");
+  });
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // VECTOR 21 — listing a folder that is ITSELF whited out returns an empty page (router parity)
+  //   The per-item filters drop whited CHILDREN, but if the FOLDER BEING LISTED is whited out by a
+  //   higher lens (and not re-added), the whole page must be suppressed — otherwise EFSFileView would
+  //   list lower-lens children while EFSRouter 404s a deep link into the same folder. Applies to all
+  //   three lens-scoped listing entrypoints.
+  // ════════════════════════════════════════════════════════════════════════════
+  it("vector 21: listing a whited-out folder returns empty across all listing entrypoints (router parity)", async function () {
+    const root = await createAnchor("root", ZERO_BYTES32);
+    const dir = await createAnchor("dir", root, ZERO_BYTES32); // a generic folder under root
+    const fileAnchor = await createAnchor("child.txt", dir, dataSchemaUID);
+
+    // alice (lower lens) places a child under /dir and tags /dir visible (so it lists when not whited).
+    const dAlice = await mintData(alice);
+    await createPin(fileAnchor, dAlice, alice);
+    await createTag(dataSchemaUID, dir, alice); // alice's folder-visibility TAG on /dir
+
+    // Baseline: viewer [owner, alice] sees /dir's child before any whiteout.
+    let schemaPage = await fileView.getDirectoryPageBySchemaAndAddressList(
+      dir,
+      dataSchemaUID,
+      [ownerAddr, aliceAddr],
+      "0x",
+      10,
+    );
+    expect(
+      schemaPage.items.map(i => i.uid),
+      "baseline lists the child",
+    ).to.deep.equal([fileAnchor]);
+
+    // owner (higher lens) whiteouts the FOLDER /dir itself (a child of root).
+    await attestWhiteout(dir, owner);
+    expect(await whiteoutResolver.isWhitedOut(root, ownerAddr, dir)).to.equal(true);
+
+    // Now ALL three listing entrypoints return empty for [owner, alice] — the listed folder is whited.
+    schemaPage = await fileView.getDirectoryPageBySchemaAndAddressList(
+      dir,
+      dataSchemaUID,
+      [ownerAddr, aliceAddr],
+      "0x",
+      10,
+    );
+    expect(
+      schemaPage.items.map(i => i.uid),
+      "schema-aware listing of a whited folder is empty",
+    ).to.deep.equal([]);
+
+    const [mixedItems] = await fileView.getDirectoryPageByAddressList(dir, [ownerAddr, aliceAddr], 0, 10);
+    expect(
+      mixedItems.map(i => i.uid),
+      "attester-scoped listing of a whited folder is empty",
+    ).to.deep.equal([]);
+
+    const filtered = await fileView.getDirectoryPageFiltered(
+      dir,
+      dataSchemaUID,
+      [ownerAddr, aliceAddr],
+      [],
+      [],
+      "0x",
+      10,
+    );
+    expect(
+      filtered.items.map(i => i.uid),
+      "filtered listing of a whited folder is empty",
+    ).to.deep.equal([]);
+
+    // Control: a viewer EXCLUDING the whiteout author (alice only) still lists the child.
+    const alonePage = await fileView.getDirectoryPageBySchemaAndAddressList(dir, dataSchemaUID, [aliceAddr], "0x", 10);
+    expect(
+      alonePage.items.map(i => i.uid),
+      "control lens (excludes owner) still lists the child",
+    ).to.deep.equal([fileAnchor]);
   });
 });

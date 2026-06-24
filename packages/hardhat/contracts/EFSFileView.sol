@@ -202,6 +202,12 @@ contract EFSFileView {
         uint256 startingCursor,
         uint256 pageSize
     ) external view returns (FileSystemItem[] memory items, uint256 nextCursor) {
+        // Parent-folder terminal (ADR-0055): if the listed folder is itself whited out for this viewer,
+        // the page is empty — consistent with the router 404ing a deep link into a whited folder.
+        if (_isListedFolderWhitedOut(parentAnchor, attesters)) {
+            return (new FileSystemItem[](0), 0);
+        }
+
         (bytes32[] memory resolvedUIDs, uint256 nextCur) = indexer.getChildrenByAddressList(
             parentAnchor,
             attesters,
@@ -350,6 +356,14 @@ contract EFSFileView {
         require(attesters.length > 0, "Attesters list cannot be empty");
         require(attesters.length <= MAX_ATTESTERS_PER_QUERY, "Too many attesters");
         require(maxItems > 0, "maxItems must be > 0");
+
+        // Parent-folder terminal (ADR-0055): if the listed folder is itself whited out for this viewer,
+        // the whole page is empty — consistent with the router 404ing a deep link into a whited folder.
+        if (_isListedFolderWhitedOut(parentAnchor, attesters)) {
+            page.items = new FileSystemItem[](0);
+            page.nextCursor = "";
+            return page;
+        }
 
         // Decode cursor — empty OR malformed = fresh start at (phase=0, folderIdx=0,
         // fileIdx=0). ADR-0036 treats the cursor as opaque caller-supplied bytes, so a
@@ -564,6 +578,13 @@ contract EFSFileView {
         require(excludeTagDefs.length == minWeights.length, "excludeTagDefs/minWeights length mismatch");
         require(excludeTagDefs.length <= MAX_EXCLUDE_TAGS_PER_QUERY, "Too many exclude tags");
         require(maxItems > 0, "maxItems must be > 0");
+
+        // Parent-folder terminal (ADR-0055): a whited-out listed folder yields an empty page (router parity).
+        if (_isListedFolderWhitedOut(parentAnchor, attesters)) {
+            page.items = new FileSystemItem[](0);
+            page.nextCursor = "";
+            return page;
+        }
 
         // Decode cursor — same defensive contract as getDirectoryPageBySchemaAndAddressList:
         // wrong length OR out-of-range phase = fresh walk at (phase=0, folderIdx=0, fileIdx=0).
@@ -969,6 +990,22 @@ contract EFSFileView {
             if (wr.isWhitedOut(parentAnchor, lens, childAnchor)) return true;
         }
         return false; // no lens asserted a positive or a whiteout → transparent.
+    }
+
+    /// @dev Listing-side PARENT-folder terminal (ADR-0055). The per-item filters above suppress whited
+    ///      CHILDREN, but if the FOLDER BEING LISTED is itself whited out by a lens under ITS OWN parent
+    ///      (and not re-added), the whole page must be suppressed for that viewer — otherwise listing the
+    ///      known `/dir` anchor would still return lower-lens children while the router 404s `/dir/child`
+    ///      (the per-segment terminal in EFSRouter). This is the listing analogue of that router terminal:
+    ///      it evaluates the same `_isItemWhitedOutForListing` predicate (PIN OR folder visibility-TAG
+    ///      re-add positive) with (grandparent, folderAnchor). Cheap + short-circuits when whiteout is
+    ///      disabled; root / address-root (no parent) can't be whited (OrphanAnchor guard) → false.
+    function _isListedFolderWhitedOut(bytes32 folderAnchor, address[] memory attesters) internal view returns (bool) {
+        if (address(whiteoutResolver) == address(0)) return false;
+        bytes32 grandparent = indexer.getParent(folderAnchor);
+        if (grandparent == bytes32(0)) return false;
+        bytes32 dataSchemaUID = indexer.DATA_SCHEMA_UID();
+        return _isItemWhitedOutForListing(grandparent, folderAnchor, attesters, dataSchemaUID, dataSchemaUID);
     }
 
     function _buildFileSystemItems(
