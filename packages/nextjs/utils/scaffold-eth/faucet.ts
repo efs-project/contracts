@@ -40,6 +40,20 @@ export function isFaucetEnabled(chainId: number | undefined): boolean {
   return FAUCET_URL.length > 0 && chainId === FAUCET_CHAIN_ID;
 }
 
+export function normalizeDripResponse({ httpOk, body }: { httpOk: boolean; body: DripResult }): DripResult {
+  if (!httpOk || body.ok === false) {
+    return { ok: false, reason: body.reason, message: body.message };
+  }
+  if (body.txHash) {
+    return { ok: true, txHash: body.txHash };
+  }
+  return {
+    ok: false,
+    reason: body.reason ?? "missing_tx_hash",
+    message: body.message ?? "Faucet response did not include a transaction hash.",
+  };
+}
+
 /**
  * Request a drip for `address`. Never throws — network/parse failures resolve to
  * `{ ok: false }` so callers (especially the fire-and-forget connect path) don't
@@ -77,7 +91,7 @@ export async function requestDrip(address: string): Promise<DripResult> {
       body: JSON.stringify({ address }),
     });
     const body = (await res.json().catch(() => ({}))) as DripResult;
-    return res.ok ? { ok: true, txHash: body.txHash } : { ok: false, reason: body.reason, message: body.message };
+    return normalizeDripResponse({ httpOk: res.ok, body });
   } catch {
     return { ok: false, reason: "network_error" };
   }

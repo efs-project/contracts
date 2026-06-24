@@ -62,6 +62,14 @@ export function shouldAutoConnectInstantBurner({
   return true;
 }
 
+export function shouldReconnectWagmiOnMount({
+  instantBurnerEnabled,
+}: {
+  instantBurnerEnabled: boolean;
+}): boolean {
+  return !instantBurnerEnabled;
+}
+
 export function shouldStopInstantBurnerAfterExternalDisconnect({
   wasBurnerConnected,
   editingSessionRequested,

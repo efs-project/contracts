@@ -47,6 +47,7 @@ const {
   shouldDisconnectInstantBurner,
   shouldMarkInstantBurnerReady,
   shouldResetInstantBurnerDismissalOnAddressChange,
+  shouldReconnectWagmiOnMount,
   shouldResumeInstantBurnerAfterRealWalletModal,
   shouldSeedHardhatBurner,
   shouldShowInstantBurnerEnable,
@@ -54,6 +55,8 @@ const {
   shouldStopInstantBurnerAfterExternalDisconnect,
   trackInstantBurnerWasConnected,
 } = await import("./instantBurner.ts");
+
+const { normalizeDripResponse } = await import("./faucet.ts");
 
 test("instant burner only enables when a faucet URL is configured and the kill switch is not false", () => {
   const base = {
@@ -69,6 +72,11 @@ test("instant burner only enables when a faucet URL is configured and the kill s
   assert.equal(isInstantBurnerSessionEnabled({ ...base, flag: "false" }), false);
   assert.equal(isInstantBurnerSessionEnabled({ ...base, flag: "0" }), false);
   assert.equal(isInstantBurnerSessionEnabled({ ...base, defaultChainId: 26001993 }), false);
+});
+
+test("wagmi reconnect-on-mount is disabled while instant burner can be offered", () => {
+  assert.equal(shouldReconnectWagmiOnMount({ instantBurnerEnabled: true }), false);
+  assert.equal(shouldReconnectWagmiOnMount({ instantBurnerEnabled: false }), true);
 });
 
 test("auto-connect is limited to settled no-wallet state on the faucet target chain", () => {
@@ -187,6 +195,29 @@ test("one-click drip request is same-page only and single-use", () => {
   requestInstantBurnerDrip();
   assert.equal(consumeInstantBurnerDripRequest(), true);
   assert.equal(consumeInstantBurnerDripRequest(), false);
+});
+
+test("faucet response requires a tx hash for a successful drip", () => {
+  assert.deepEqual(
+    normalizeDripResponse({ httpOk: true, body: { ok: true, txHash: "0xabc" } }),
+    { ok: true, txHash: "0xabc" },
+  );
+  assert.deepEqual(
+    normalizeDripResponse({ httpOk: true, body: { ok: true } }),
+    {
+      ok: false,
+      reason: "missing_tx_hash",
+      message: "Faucet response did not include a transaction hash.",
+    },
+  );
+  assert.deepEqual(
+    normalizeDripResponse({ httpOk: true, body: { ok: false, reason: "cooldown", message: "Try later." } }),
+    { ok: false, reason: "cooldown", message: "Try later." },
+  );
+  assert.deepEqual(
+    normalizeDripResponse({ httpOk: false, body: { ok: false, reason: "disabled", message: "Disabled." } }),
+    { ok: false, reason: "disabled", message: "Disabled." },
+  );
 });
 
 test("real-wallet modal resume waits until the modal was actually open", () => {

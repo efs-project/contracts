@@ -53,19 +53,22 @@ export function useAutoFaucetDrip() {
       return;
     }
 
-    dripped.add(key);
     inFlight.current = true;
     (async () => {
-      const res = await requestDrip(address);
-      const faucetStatus = useFaucetStatus.getState();
-      if (res.ok && res.txHash) {
-        faucetStatus.setPending(res.txHash);
-      } else if (!res.ok) {
-        const message = res.message ?? "Faucet unreachable. Try Get test ETH or use your wallet.";
-        faucetStatus.setError(message);
-        notification.error(message, { position: "bottom-center" });
+      try {
+        const res = await requestDrip(address);
+        const faucetStatus = useFaucetStatus.getState();
+        if (res.ok && res.txHash) {
+          dripped.add(key);
+          faucetStatus.setPending(res.txHash);
+        } else if (!res.ok) {
+          const message = res.message ?? "Faucet unreachable. Try Get test ETH or use your wallet.";
+          faucetStatus.setError(message);
+          notification.error(message, { position: "bottom-center" });
+        }
+      } finally {
+        inFlight.current = false;
       }
-      inFlight.current = false;
     })();
   }, [address, chainId, connector?.id]);
 }

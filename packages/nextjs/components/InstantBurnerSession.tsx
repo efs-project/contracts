@@ -36,7 +36,7 @@ const hardhatPrivateKeys = HARDHAT_ACCOUNTS.map(account => account.pk);
 
 const InstantBurnerToggle = ({ active, onClick, title }: { active: boolean; onClick: () => void; title: string }) => (
   <button
-    className={`hidden h-10 w-auto shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-left shadow-[0_0_16px_rgba(0,255,76,0.16)] transition-colors lg:inline-flex ${
+    className={`inline-flex h-9 w-auto shrink-0 items-center gap-1 rounded-full border px-2 text-left shadow-[0_0_16px_rgba(0,255,76,0.16)] transition-colors sm:gap-1.5 lg:h-10 lg:px-2.5 ${
       active
         ? "border-primary bg-primary/20 text-primary hover:bg-primary/25"
         : "border-primary/65 bg-primary/10 text-primary hover:border-primary hover:bg-primary/15"
@@ -44,11 +44,17 @@ const InstantBurnerToggle = ({ active, onClick, title }: { active: boolean; onCl
     type="button"
     onClick={onClick}
     title={title}
+    aria-label="Easy Edits. No prompts."
     aria-pressed={active}
   >
     <span className="flex flex-col justify-center leading-none">
-      <span className="whitespace-nowrap text-[11px] font-semibold leading-[1.05]">Easy Edits</span>
-      <span className="mt-1 whitespace-nowrap text-[9px] leading-[1.05] text-base-content/60">No prompts</span>
+      <span className="whitespace-nowrap text-[11px] font-semibold leading-[1.05]">
+        <span className="sm:hidden">Edits</span>
+        <span className="hidden sm:inline">Easy Edits</span>
+      </span>
+      <span className="mt-1 hidden whitespace-nowrap text-[9px] leading-[1.05] text-base-content/60 sm:block">
+        No prompts
+      </span>
     </span>
     <span
       className={`relative h-5 w-9 shrink-0 rounded-full border transition-colors ${
