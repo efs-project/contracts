@@ -14,6 +14,7 @@ import {
   normalizeStoredBurnerPrivateKey,
   requestInstantBurnerDrip,
   shouldAutoConnectInstantBurner,
+  shouldClearInstantBurnerTrackingBeforeDisconnect,
   shouldClearStoredHardhatBurner,
   shouldDisconnectInstantBurner,
   shouldResetInstantBurnerDismissalOnAddressChange,
@@ -34,7 +35,7 @@ const hardhatPrivateKeys = HARDHAT_ACCOUNTS.map(account => account.pk);
 
 const InstantBurnerToggle = ({ active, onClick, title }: { active: boolean; onClick: () => void; title: string }) => (
   <button
-    className={`hidden h-10 w-[7.75rem] shrink-0 items-center gap-2 rounded-full border px-3 text-left shadow-[0_0_16px_rgba(0,255,76,0.16)] transition-colors lg:inline-flex ${
+    className={`hidden h-10 w-auto shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-left shadow-[0_0_16px_rgba(0,255,76,0.16)] transition-colors lg:inline-flex ${
       active
         ? "border-primary bg-primary/20 text-primary hover:bg-primary/25"
         : "border-primary/65 bg-primary/10 text-primary hover:border-primary hover:bg-primary/15"
@@ -44,19 +45,19 @@ const InstantBurnerToggle = ({ active, onClick, title }: { active: boolean; onCl
     title={title}
     aria-pressed={active}
   >
-    <span className="flex min-w-[4rem] flex-col justify-center leading-none">
+    <span className="flex flex-col justify-center leading-none">
       <span className="whitespace-nowrap text-[11px] font-semibold leading-[1.05]">Easy Edits</span>
       <span className="mt-1 whitespace-nowrap text-[9px] leading-[1.05] text-base-content/60">No prompts</span>
     </span>
     <span
-      className={`relative h-[1.125rem] w-8 shrink-0 rounded-full border transition-colors ${
+      className={`relative h-5 w-9 shrink-0 rounded-full border transition-colors ${
         active ? "border-primary bg-primary" : "border-primary/60 bg-primary/10"
       }`}
       aria-hidden="true"
     >
       <span
-        className={`absolute left-0.5 top-0.5 h-3.5 w-3.5 rounded-full shadow transition-transform ${
-          active ? "translate-x-3.5 bg-base-300" : "translate-x-0 bg-primary"
+        className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full shadow transition-transform ${
+          active ? "translate-x-4 bg-[#07120b]" : "translate-x-0 bg-primary"
         }`}
       />
     </span>
@@ -114,25 +115,39 @@ export const InstantBurnerSession = () => {
 
   useEffect(() => {
     if (!INSTANT_BURNER_ENABLED) return;
-    if (
-      !shouldDisconnectInstantBurner({
-        activeConnectorId: connector?.id,
-        editingSessionRequested,
-        chainId,
-        targetChainId: targetNetwork.id,
-        faucetChainId: FAUCET_CHAIN_ID,
-      })
-    ) {
+    const shouldDisconnect = shouldDisconnectInstantBurner({
+      activeConnectorId: connector?.id,
+      editingSessionRequested,
+      chainId,
+      targetChainId: targetNetwork.id,
+      faucetChainId: FAUCET_CHAIN_ID,
+    });
+    if (!shouldDisconnect) {
       return;
     }
     if (disconnectingBurnerRef.current) return;
+    if (
+      shouldClearInstantBurnerTrackingBeforeDisconnect({
+        activeConnectorId: connector?.id,
+        shouldDisconnect,
+      })
+    ) {
+      burnerWasConnectedRef.current = trackInstantBurnerWasConnected({
+        current: burnerWasConnectedRef.current,
+        status,
+        chainId,
+        faucetChainId: FAUCET_CHAIN_ID,
+        activeConnectorId: connector?.id,
+        disablingInstantBurner: true,
+      });
+    }
     disconnectingBurnerRef.current = true;
     disconnect(undefined, {
       onSettled: () => {
         disconnectingBurnerRef.current = false;
       },
     });
-  }, [chainId, connector?.id, editingSessionRequested, disconnect, targetNetwork.id]);
+  }, [chainId, connector?.id, editingSessionRequested, disconnect, status, targetNetwork.id]);
 
   useEffect(() => {
     if (!INSTANT_BURNER_ENABLED) return;

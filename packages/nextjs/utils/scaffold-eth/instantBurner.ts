@@ -130,6 +130,16 @@ export function shouldDisconnectInstantBurner({
   return chainId !== faucetChainId || targetChainId !== faucetChainId;
 }
 
+export function shouldClearInstantBurnerTrackingBeforeDisconnect({
+  activeConnectorId,
+  shouldDisconnect,
+}: {
+  activeConnectorId: string | undefined;
+  shouldDisconnect: boolean;
+}): boolean {
+  return shouldDisconnect && activeConnectorId === BURNER_WALLET_CONNECTOR_ID;
+}
+
 export function shouldAutoDripInstantBurner({
   faucetEnabled,
   activeConnectorId,

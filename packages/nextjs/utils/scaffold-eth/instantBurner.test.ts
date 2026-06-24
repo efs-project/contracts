@@ -43,6 +43,7 @@ const {
   shouldBlockFaucetDripRecipient,
   shouldBlockFaucetDripForBurner,
   shouldClearStoredHardhatBurner,
+  shouldClearInstantBurnerTrackingBeforeDisconnect,
   shouldDisconnectInstantBurner,
   shouldMarkInstantBurnerReady,
   shouldResetInstantBurnerDismissalOnAddressChange,
@@ -278,6 +279,30 @@ test("turning Easy Edits off clears stale burner disconnect tracking before re-e
       wasBurnerConnected,
       editingSessionRequested: true,
       status: "disconnected",
+    }),
+    false,
+  );
+});
+
+test("forced burner disconnect clears stale tracking before re-enable", () => {
+  assert.equal(
+    shouldClearInstantBurnerTrackingBeforeDisconnect({
+      activeConnectorId: BURNER_WALLET_CONNECTOR_ID,
+      shouldDisconnect: true,
+    }),
+    true,
+  );
+  assert.equal(
+    shouldClearInstantBurnerTrackingBeforeDisconnect({
+      activeConnectorId: "metaMask",
+      shouldDisconnect: true,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldClearInstantBurnerTrackingBeforeDisconnect({
+      activeConnectorId: BURNER_WALLET_CONNECTOR_ID,
+      shouldDisconnect: false,
     }),
     false,
   );
