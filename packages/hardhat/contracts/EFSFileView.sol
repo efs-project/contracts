@@ -924,9 +924,29 @@ contract EFSFileView {
     ) internal view returns (bool) {
         IWhiteoutResolverForFileView wr = whiteoutResolver;
         if (address(wr) == address(0)) return false;
-        // Classify the child once: a generic folder anchor has `forSchema == 0` (a file anchor has
-        // `forSchema == DATA_SCHEMA_UID`, a typed/alias anchor a schema UID). Only a generic folder may be
-        // re-asserted by a visibility TAG; everything else is PIN-positive only (resolution parity).
+
+        // Read-cost guard (specs/02 WHITEOUT invariant — whiteout must NOT double per-item EAS reads).
+        // The ONLY way this predicate drops an item is an active whiteout on it; positives merely
+        // OVERRIDE a whiteout. So scan the lens stack for ANY whiteout FIRST — O(1)-class WhiteoutResolver
+        // mapping reads, NO `eas.getAttestation`. If none, the item is never dropped → return false
+        // WITHOUT the folder-classification decode below. Ordinary pages (no active whiteouts) thus pay
+        // ZERO extra EAS reads — only the per-item batched index reads they already did; the second
+        // `getAttestation` happens once, in `_buildFileSystemItems`, for kept items. Only an item that
+        // actually carries a whiteout pays the one decode needed to evaluate the folder re-add override.
+        bool anyWhiteout = false;
+        for (uint256 i = 0; i < attesters.length; i++) {
+            if (wr.isWhitedOut(parentAnchor, attesters[i], childAnchor)) {
+                anyWhiteout = true;
+                break;
+            }
+        }
+        if (!anyWhiteout) return false;
+
+        // A whiteout exists in the stack — run the full precedence walk (positive-before-whiteout), which
+        // needs the folder-vs-file classification for the folder-TAG re-add positive. Classify once: a
+        // generic folder anchor has `forSchema == 0` (a file anchor has `forSchema == DATA_SCHEMA_UID`, a
+        // typed/alias anchor a schema UID). Only a generic folder may be re-asserted by a visibility TAG;
+        // everything else is PIN-positive only (resolution parity).
         bool childIsGenericFolder;
         {
             Attestation memory ca = eas.getAttestation(childAnchor);
