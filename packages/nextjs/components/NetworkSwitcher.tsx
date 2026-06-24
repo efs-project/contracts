@@ -26,6 +26,7 @@ import { GlobeAltIcon } from "@heroicons/react/24/outline";
 import { getNetworkColor, useTargetNetwork } from "~~/hooks/scaffold-eth";
 import { useGlobalState } from "~~/services/store/store";
 import {
+  DEVNET_CHAIN_ID,
   getTargetNetworks,
   networkLabel,
   networkSortRank,
@@ -40,6 +41,7 @@ const allowedNetworks = getTargetNetworks();
 // configured `targetNetworks` order so the menu order never changes which network the store
 // defaults to (that stays `targetNetworks[0]`).
 const displayNetworks = [...allowedNetworks].sort((a, b) => networkSortRank(a) - networkSortRank(b));
+const ignoredLegacyTargetNetworkIds = [DEVNET_CHAIN_ID] as const;
 
 export const NetworkSwitcher = () => {
   const { targetNetwork } = useTargetNetwork();
@@ -63,7 +65,9 @@ export const NetworkSwitcher = () => {
     if (status === "connecting" || status === "reconnecting") return;
     restoredRef.current = true;
     if (isConnected) return;
-    const stored = readStoredTargetNetworkId(targetNetworkStorage());
+    const stored = readStoredTargetNetworkId(targetNetworkStorage(), {
+      ignoredLegacyChainIds: ignoredLegacyTargetNetworkIds,
+    });
     const restored = allowedNetworks.find(n => n.id === stored);
     if (restored && restored.id !== targetNetwork.id) {
       setTargetNetwork(restored);

@@ -16,6 +16,7 @@ type TargetChainLike = { id: number };
 
 export function resolveDefaultTargetChain<TChain extends TargetChainLike>({
   targetChain,
+  allowDevnetDefault = true,
   localAvailable,
   sepoliaChain,
   devnetChain,
@@ -23,6 +24,7 @@ export function resolveDefaultTargetChain<TChain extends TargetChainLike>({
   available,
 }: {
   targetChain: string;
+  allowDevnetDefault?: boolean;
   localAvailable: boolean;
   sepoliaChain: TChain;
   devnetChain: TChain;
@@ -31,7 +33,7 @@ export function resolveDefaultTargetChain<TChain extends TargetChainLike>({
 }): TChain {
   const normalizedTarget = targetChain.trim().toLowerCase();
   const wantsSepolia = normalizedTarget === "sepolia" || normalizedTarget === "11155111";
-  const wantsDevnet = normalizedTarget === "devnet" || normalizedTarget === "26001993";
+  const wantsDevnet = allowDevnetDefault && (normalizedTarget === "devnet" || normalizedTarget === "26001993");
   const wantsLocal = normalizedTarget === "hardhat" || normalizedTarget === "local" || normalizedTarget === "31337";
 
   const defaultChain = wantsSepolia
@@ -99,14 +101,18 @@ const efsDevnetChain: chains.Chain = {
 // the network the store starts on — `targetNetworks[0]`). The SWITCHER's display order is
 // independent of this (it sorts Sepolia → Devnet → Local; see NetworkSwitcher).
 //
-// `NEXT_PUBLIC_TARGET_CHAIN` is an explicit override that always wins. Accepts
-// sepolia|11155111, devnet|26001993, local|hardhat|31337. Blank/whitespace counts as UNSET.
+// `NEXT_PUBLIC_TARGET_CHAIN` accepts sepolia|11155111, devnet|26001993,
+// local|hardhat|31337. Blank/whitespace counts as UNSET.
 // Default by build type when unset: `next dev` → Local; `next build` (deployed) → Sepolia.
+// Production Devnet-first builds must also set NEXT_PUBLIC_ALLOW_DEVNET_DEFAULT=true; this keeps
+// the public app.efs.eth.limo/.link export Sepolia-first even if an old publish env still says devnet.
 const TARGET_CHAIN = (process.env.NEXT_PUBLIC_TARGET_CHAIN ?? "").trim().toLowerCase();
 const HARDHAT_RPC_CONFIGURED = HARDHAT_RPC_URL.length > 0;
 // Local is only offered when a local node is plausibly present: a dev build, or an explicit
 // hardhat RPC. A deployed public build never lists Local (nothing on the visitor's machine).
 const LOCAL_AVAILABLE = process.env.NODE_ENV !== "production" || HARDHAT_RPC_CONFIGURED;
+const ALLOW_DEVNET_DEFAULT =
+  process.env.NODE_ENV !== "production" || process.env.NEXT_PUBLIC_ALLOW_DEVNET_DEFAULT === "true";
 
 const RECOGNIZED = ["", "hardhat", "local", "31337", "sepolia", "11155111", "devnet", "26001993"];
 if (!RECOGNIZED.includes(TARGET_CHAIN)) {
@@ -114,15 +120,21 @@ if (!RECOGNIZED.includes(TARGET_CHAIN)) {
     `[scaffold.config] Unrecognized NEXT_PUBLIC_TARGET_CHAIN="${TARGET_CHAIN}" — using the build default. Use one of: sepolia, devnet, local.`,
   );
 }
+if ((TARGET_CHAIN === "devnet" || TARGET_CHAIN === "26001993") && !ALLOW_DEVNET_DEFAULT) {
+  console.warn(
+    "[scaffold.config] Ignoring NEXT_PUBLIC_TARGET_CHAIN=devnet for a production build. Set NEXT_PUBLIC_ALLOW_DEVNET_DEFAULT=true only for a Devnet-first deployment.",
+  );
+}
 
 // Available networks: Sepolia + Devnet always; Local only when a node is around.
 const available: chains.Chain[] = [sepoliaChain, efsDevnetChain];
 if (LOCAL_AVAILABLE) available.push(hardhatChain);
 
-// Resolve the default (first) network. Explicit override wins (but falls back to Sepolia if it
-// asks for Local where Local isn't available); otherwise dev → Local, deployed → Sepolia.
+// Resolve the default (first) network. Explicit overrides win except production Devnet defaults,
+// which require the allow flag above; otherwise dev → Local, deployed → Sepolia.
 const defaultChain = resolveDefaultTargetChain({
   targetChain: TARGET_CHAIN,
+  allowDevnetDefault: ALLOW_DEVNET_DEFAULT,
   localAvailable: LOCAL_AVAILABLE,
   sepoliaChain,
   devnetChain: efsDevnetChain,

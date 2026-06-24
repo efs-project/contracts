@@ -337,7 +337,7 @@ export const NetworkChip = () => {
             </div>
           )}
           <div className="text-[11px] opacity-60 pt-1 border-t border-base-200">
-            Switch networks from the header. Set the default with <code>NEXT_PUBLIC_TARGET_CHAIN</code>.
+            Switch networks from the header. Public exports default to Sepolia.
           </div>
         </div>
       </div>
