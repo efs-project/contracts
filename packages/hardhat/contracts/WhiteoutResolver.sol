@@ -197,6 +197,18 @@ contract WhiteoutResolver is EFSUpgradeableResolver {
         return _cfg().activeWhiteout[parent][attester][child] != bytes32(0);
     }
 
+    /// @notice The LIVE WHITEOUT attestation UID for a slot, or `bytes32(0)` if none is active. This is
+    ///         the UID `eas.revoke()` needs to UN-DELETE (specs/04 §8f) — recoverable on-chain from the
+    ///         `(parent, attester, child)` slot a reloaded client already knows, so un-delete never
+    ///         depends on off-chain event-log replay. After a re-whiteout this returns the CURRENT UID
+    ///         (a prior UID intentionally no-ops on revoke), so a client always revokes the right one.
+    /// @param parent   The parent anchor (`indexer.getParent(child)` at attest time).
+    /// @param attester The lens whose whiteout to read.
+    /// @param child    The suppressed child anchor (the refUID of the whiteout).
+    function getActiveWhiteout(bytes32 parent, address attester, bytes32 child) external view returns (bytes32) {
+        return _cfg().activeWhiteout[parent][attester][child];
+    }
+
     /// @notice Paged discovery: child anchors `attester` has an ACTIVE whiteout on under `parent`.
     ///         Walks the append-only list and filters to live markers (a stale entry — revoked — is
     ///         skipped). Co-shaped with `EdgeResolver.getChildrenWithEdge` for readdir participation.

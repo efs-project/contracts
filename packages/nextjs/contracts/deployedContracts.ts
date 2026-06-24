@@ -8175,6 +8175,35 @@ const deployedContracts = {
               type: "address",
             },
             {
+              internalType: "bytes32",
+              name: "child",
+              type: "bytes32",
+            },
+          ],
+          name: "getActiveWhiteout",
+          outputs: [
+            {
+              internalType: "bytes32",
+              name: "",
+              type: "bytes32",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "bytes32",
+              name: "parent",
+              type: "bytes32",
+            },
+            {
+              internalType: "address",
+              name: "attester",
+              type: "address",
+            },
+            {
               internalType: "uint256",
               name: "start",
               type: "uint256",

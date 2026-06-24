@@ -39,6 +39,7 @@ import { deployResolverProxy } from "./helpers/deployResolverProxy";
  *   16 getDirectoryPageByAddressList (attester-scoped, schema-agnostic) honors whiteout
  *   17 the folder-visibility-TAG positive is FOLDER-gated — a TAG on a whited FILE anchor doesn't un-hide
  *   18 getFilesAtPath stops at a MID-STACK whiteout (higher positive kept, lower lens suppressed)
+ *   19 getActiveWhiteout returns the live UID for un-delete (0 when none; new UID after re-whiteout)
  *
  * HARNESS: the beforeEach predicts deterministic CREATE addresses via the deployer nonce, so this
  * file MUST be run as a FULL FILE (`yarn test test/Whiteout.test.ts`), NEVER via `--grep` — a grep
@@ -1366,5 +1367,35 @@ describe("Whiteout (WHITEOUT cross-lens negative mask, ADR-0055)", function () {
       both.items.map(i => i.uid),
       "no whiteout in the stack → both lenses' placements surface",
     ).to.have.members([dataOwner, dataAlice]);
+  });
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // VECTOR 19 — getActiveWhiteout exposes the live UID for un-delete (no log replay)
+  //   The un-delete path is `eas.revoke(WHITEOUT_SCHEMA, whiteoutUID)` (specs/04 §8f). A reloaded client
+  //   knows the (parent, attester, child) slot but not the UID; getActiveWhiteout returns it on-chain.
+  //   After a re-whiteout it must return the CURRENT UID, since revoking the stale one is an intentional
+  //   no-op (vector 8). 0 when none is live.
+  // ════════════════════════════════════════════════════════════════════════════
+  it("vector 19: getActiveWhiteout returns the live UID (0 when none; the NEW UID after re-whiteout)", async function () {
+    const root = await createAnchor("root", ZERO_BYTES32);
+    const dir = await createAnchor("dir", root);
+    const fileAnchor = await createAnchor("file.txt", dir, dataSchemaUID);
+
+    // None yet → 0 (the slot a reloaded client would query).
+    expect(await whiteoutResolver.getActiveWhiteout(dir, ownerAddr, fileAnchor)).to.equal(ZERO_BYTES32);
+
+    // Attest → the getter returns the live UID, recoverable from the slot alone (no event-log replay).
+    const uid1 = await attestWhiteout(fileAnchor, owner);
+    expect(await whiteoutResolver.getActiveWhiteout(dir, ownerAddr, fileAnchor)).to.equal(uid1);
+
+    // Re-whiteout the SAME slot → the getter returns the NEW UID; the stale uid1 would no-op on revoke.
+    const uid2 = await attestWhiteout(fileAnchor, owner);
+    expect(uid2).to.not.equal(uid1);
+    expect(await whiteoutResolver.getActiveWhiteout(dir, ownerAddr, fileAnchor)).to.equal(uid2);
+
+    // Un-delete with the getter's UID → slot cleared back to 0 (the documented revoke path works).
+    await revoke(whiteoutSchemaUID, uid2, owner);
+    expect(await whiteoutResolver.getActiveWhiteout(dir, ownerAddr, fileAnchor)).to.equal(ZERO_BYTES32);
+    expect(await whiteoutResolver.isWhitedOut(dir, ownerAddr, fileAnchor)).to.equal(false);
   });
 });
