@@ -2014,7 +2014,7 @@ export const FileBrowser = ({
 
       {/* File Preview Side Pane */}
       {selectedFile && !previewFullscreen && (
-        <div className="preview-pane absolute inset-0 z-10 max-lg:bg-base-200 lg:static lg:w-[400px] lg:flex-shrink-0 border-l border-base-300 flex flex-col overflow-hidden">
+        <div className="preview-pane absolute inset-0 z-10 max-xl:bg-base-200 xl:static xl:w-[min(52vw,800px)] xl:flex-shrink-0 border-l border-base-300 flex flex-col overflow-hidden">
           <div className="flex items-center justify-between px-4 py-3 border-b border-base-300 shrink-0">
             <div className="flex items-center gap-2 min-w-0">
               {fileItems.length > 1 && (

@@ -100,7 +100,7 @@ export const NetworkSwitcher = () => {
         title="Switch the network the debug UI reads from"
       >
         <GlobeAltIcon className="h-4 w-4" style={{ color: getNetworkColor(targetNetwork, isDarkMode) }} />
-        <span className="hidden sm:inline">{networkLabel(targetNetwork)}</span>
+        <span className="hidden 2xl:inline">{networkLabel(targetNetwork)}</span>
       </label>
       <ul
         tabIndex={0}

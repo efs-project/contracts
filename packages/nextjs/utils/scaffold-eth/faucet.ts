@@ -2,8 +2,8 @@ import { sepolia } from "viem/chains";
 import { create } from "zustand";
 
 /**
- * HTTP drip-faucet client — gives a connecting wallet a little gas so users
- * don't have to hunt for a faucet.
+ * HTTP drip-faucet client — gives a wallet a little gas after the visitor asks
+ * for it through "Enable promptless edits" or "Get test ETH".
  *
  * Serves the chain where no account is unlocked — **live Sepolia (11155111)** by
  * default. The fork chains (local 31337 and the EFS Devnet 26001993) are funded
@@ -16,10 +16,10 @@ import { create } from "zustand";
  * The client holds no key; it only POSTs an address. The faucet service decides
  * eligibility (already-funded / cooldown / cap).
  */
-const FAUCET_URL = (process.env.NEXT_PUBLIC_FAUCET_URL ?? "").trim().replace(/\/$/, "");
+export const FAUCET_URL = (process.env.NEXT_PUBLIC_FAUCET_URL ?? "").trim().replace(/\/$/, "");
 
 /**
- * Chain the HTTP faucet funds; the drip fires only when the wallet is on it.
+ * Chain the HTTP faucet funds; callers may drip only when the wallet is on it.
  * Defaults to live Sepolia — the one network with no unlocked account
  * (`DevnetAutoFund` covers the forks). Override with `NEXT_PUBLIC_FAUCET_CHAIN_ID`.
  */
@@ -40,6 +40,20 @@ export function isFaucetEnabled(chainId: number | undefined): boolean {
   return FAUCET_URL.length > 0 && chainId === FAUCET_CHAIN_ID;
 }
 
+export function normalizeDripResponse({ httpOk, body }: { httpOk: boolean; body: DripResult }): DripResult {
+  if (!httpOk || body.ok === false) {
+    return { ok: false, reason: body.reason, message: body.message };
+  }
+  if (body.txHash) {
+    return { ok: true, txHash: body.txHash };
+  }
+  return {
+    ok: false,
+    reason: body.reason ?? "missing_tx_hash",
+    message: body.message ?? "Faucet response did not include a transaction hash.",
+  };
+}
+
 /**
  * Request a drip for `address`. Never throws — network/parse failures resolve to
  * `{ ok: false }` so callers (especially the fire-and-forget connect path) don't
@@ -53,11 +67,19 @@ export function isFaucetEnabled(chainId: number | undefined): boolean {
  */
 type FaucetStatusStore = {
   pendingHash?: string;
+  errorMessage?: string;
+  readyAt?: number;
   setPending: (hash?: string) => void;
+  setReady: () => void;
+  setError: (message: string) => void;
 };
 export const useFaucetStatus = create<FaucetStatusStore>(set => ({
   pendingHash: undefined,
-  setPending: hash => set({ pendingHash: hash }),
+  errorMessage: undefined,
+  readyAt: undefined,
+  setPending: hash => set({ pendingHash: hash, errorMessage: undefined }),
+  setReady: () => set({ pendingHash: undefined, errorMessage: undefined, readyAt: Date.now() }),
+  setError: message => set({ pendingHash: undefined, errorMessage: message }),
 }));
 
 export async function requestDrip(address: string): Promise<DripResult> {
@@ -69,7 +91,7 @@ export async function requestDrip(address: string): Promise<DripResult> {
       body: JSON.stringify({ address }),
     });
     const body = (await res.json().catch(() => ({}))) as DripResult;
-    return res.ok ? { ok: true, txHash: body.txHash } : { ok: false, reason: body.reason, message: body.message };
+    return normalizeDripResponse({ httpOk: res.ok, body });
   } catch {
     return { ok: false, reason: "network_error" };
   }

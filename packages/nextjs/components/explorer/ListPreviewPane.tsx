@@ -1273,7 +1273,7 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
   );
 
   return (
-    <div className="preview-pane absolute inset-0 z-10 max-lg:bg-base-200 lg:static lg:w-[380px] lg:flex-shrink-0 flex flex-col overflow-hidden border-l border-base-300 bg-gradient-to-b from-base-100 to-base-200/40">
+    <div className="preview-pane absolute inset-0 z-10 max-xl:bg-base-200 xl:static xl:w-[min(52vw,760px)] xl:flex-shrink-0 flex flex-col overflow-hidden border-l border-base-300 bg-gradient-to-b from-base-100 to-base-200/40">
       {/* Header */}
       <div className="shrink-0 px-4 pt-4 pb-3 border-b border-base-300">
         <div className="flex items-start justify-between gap-2">

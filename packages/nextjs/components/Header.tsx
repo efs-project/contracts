@@ -8,6 +8,7 @@ import { Bars3Icon, BugAntIcon, FolderIcon } from "@heroicons/react/24/outline";
 import { DevWalletSwitcher } from "~~/components/DevWalletSwitcher";
 import { FaucetStatus } from "~~/components/FaucetStatus";
 import { FeedbackButton } from "~~/components/FeedbackButton";
+import { InstantBurnerSession } from "~~/components/InstantBurnerSession";
 import { NetworkSwitcher } from "~~/components/NetworkSwitcher";
 import { SwitchTheme } from "~~/components/SwitchTheme";
 import { RainbowKitCustomConnectButton } from "~~/components/scaffold-eth";
@@ -124,10 +125,11 @@ export const Header = () => {
         </ul>
       </div>
       <div className="navbar-end flex-grow mr-4 gap-2">
-        <FaucetStatus />
         <NetworkSwitcher />
         <DevWalletSwitcher />
+        <FaucetStatus />
         <RainbowKitCustomConnectButton />
+        <InstantBurnerSession />
         <FeedbackButton />
         <SwitchTheme />
       </div>
