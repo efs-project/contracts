@@ -50,6 +50,7 @@ const {
   shouldResumeInstantBurnerAfterRealWalletModal,
   shouldSeedHardhatBurner,
   shouldShowInstantBurnerEnable,
+  shouldSuppressInstantBurnerTracking,
   shouldStopInstantBurnerAfterExternalDisconnect,
   trackInstantBurnerWasConnected,
 } = await import("./instantBurner.ts");
@@ -306,6 +307,48 @@ test("forced burner disconnect clears stale tracking before re-enable", () => {
     }),
     false,
   );
+});
+
+test("intentional burner disconnect suppresses stale tracking re-arm", () => {
+  let wasBurnerConnected = trackInstantBurnerWasConnected({
+    current: false,
+    status: "connected" as const,
+    chainId: 11155111,
+    faucetChainId: 11155111,
+    activeConnectorId: BURNER_WALLET_CONNECTOR_ID,
+  });
+
+  assert.equal(wasBurnerConnected, true);
+
+  wasBurnerConnected = trackInstantBurnerWasConnected({
+    current: wasBurnerConnected,
+    status: "connected" as const,
+    chainId: 11155111,
+    faucetChainId: 11155111,
+    activeConnectorId: BURNER_WALLET_CONNECTOR_ID,
+    disablingInstantBurner: true,
+  });
+
+  assert.equal(wasBurnerConnected, false);
+
+  const suppressTracking = shouldSuppressInstantBurnerTracking({
+    activeConnectorId: BURNER_WALLET_CONNECTOR_ID,
+    editingSessionRequested: true,
+    intentionalDisconnectInProgress: true,
+  });
+
+  assert.equal(suppressTracking, true);
+
+  wasBurnerConnected = trackInstantBurnerWasConnected({
+    current: wasBurnerConnected,
+    status: "connected" as const,
+    chainId: 11155111,
+    faucetChainId: 11155111,
+    activeConnectorId: BURNER_WALLET_CONNECTOR_ID,
+    disablingInstantBurner: suppressTracking,
+  });
+
+  assert.equal(wasBurnerConnected, false);
 });
 
 test("enable-editing affordance remains available with no connected wallet", () => {

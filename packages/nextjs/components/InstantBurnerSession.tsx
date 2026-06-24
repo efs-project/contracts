@@ -20,6 +20,7 @@ import {
   shouldResetInstantBurnerDismissalOnAddressChange,
   shouldShowInstantBurnerEnable,
   shouldStopInstantBurnerAfterExternalDisconnect,
+  shouldSuppressInstantBurnerTracking,
   trackInstantBurnerWasConnected,
 } from "~~/utils/scaffold-eth";
 import { HARDHAT_ACCOUNTS } from "~~/utils/scaffold-eth/hardhatAccounts";
@@ -176,8 +177,13 @@ export const InstantBurnerSession = () => {
       chainId,
       faucetChainId: FAUCET_CHAIN_ID,
       activeConnectorId: connector?.id,
+      disablingInstantBurner: shouldSuppressInstantBurnerTracking({
+        activeConnectorId: connector?.id,
+        editingSessionRequested,
+        intentionalDisconnectInProgress: disconnectingBurnerRef.current,
+      }),
     });
-  }, [chainId, connector?.id, status]);
+  }, [chainId, connector?.id, editingSessionRequested, status]);
 
   useEffect(() => {
     if (!INSTANT_BURNER_ENABLED) return;

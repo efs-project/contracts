@@ -140,6 +140,19 @@ export function shouldClearInstantBurnerTrackingBeforeDisconnect({
   return shouldDisconnect && activeConnectorId === BURNER_WALLET_CONNECTOR_ID;
 }
 
+export function shouldSuppressInstantBurnerTracking({
+  activeConnectorId,
+  editingSessionRequested,
+  intentionalDisconnectInProgress,
+}: {
+  activeConnectorId: string | undefined;
+  editingSessionRequested: boolean;
+  intentionalDisconnectInProgress: boolean;
+}): boolean {
+  if (activeConnectorId !== BURNER_WALLET_CONNECTOR_ID) return false;
+  return intentionalDisconnectInProgress || !editingSessionRequested;
+}
+
 export function shouldAutoDripInstantBurner({
   faucetEnabled,
   activeConnectorId,
