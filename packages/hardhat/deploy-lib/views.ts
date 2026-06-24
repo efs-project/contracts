@@ -44,11 +44,21 @@ export async function deployViews(hre: HardhatRuntimeEnvironment): Promise<Views
   const indexerDep = await getOrNull("Indexer");
   const edgeDep = await getOrNull("EdgeResolver");
   const listEntryDep = await getOrNull("ListEntryResolver");
-  // WhiteoutResolver (ADR-0055) — saved by 00_efs_core.ts. Optional for forward-compat: an older
-  // core deploy (pre-WHITEOUT) won't have it, so the views pass ZeroAddress (whiteout disabled) and
-  // keep their exact prior behavior. A current core deploy always has it (7th RESOLVERS entry).
+  // WhiteoutResolver (ADR-0055) — saved by 00_efs_core.ts. The views only wire to it when it has CODE
+  // on-chain; otherwise they pass ZeroAddress (whiteout disabled) and keep their exact prior behavior.
+  // Two cases that yield ZeroAddress:
+  //   (1) an older core deploy (pre-WHITEOUT) never saved the record;
+  //   (2) the Safe-native ADDITIVE PROPOSE flow: 00_efs_core.ts saves the PREDICTED WhiteoutResolver
+  //       record BEFORE the Safe batch deploys it, so the record exists but the address is code-less.
+  // Wiring the views to a non-contract address would make every `isWhitedOut()` revert and break
+  // listings/resolution until the views were redeployed (PR #37 review). The `getCode` guard treats an
+  // undeployed prediction as "not present yet"; once the additive deploy lands, re-running efs-views
+  // rewires the views (redeployIfArgsChanged sees the whiteoutAddr arg change 0 → real).
   const whiteoutDep = await getOrNull("WhiteoutResolver");
-  const whiteoutAddr = whiteoutDep?.address ?? ethers.ZeroAddress;
+  let whiteoutAddr = ethers.ZeroAddress;
+  if (whiteoutDep?.address && (await ethers.provider.getCode(whiteoutDep.address)) !== "0x") {
+    whiteoutAddr = whiteoutDep.address;
+  }
   if (!indexerDep || !edgeDep || !listEntryDep) {
     throw new Error(
       "[efs-views] frozen foundation not found — the EFS core proxies (Indexer/EdgeResolver/" +
