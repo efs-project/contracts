@@ -42,6 +42,7 @@ import { deployResolverProxy } from "./helpers/deployResolverProxy";
  *   19 getActiveWhiteout returns the live UID for un-delete (0 when none; new UID after re-whiteout)
  *   20 a fabricated getFilesAtPath cursor cannot resume PAST a mid-stack whiteout terminal
  *   21 listing a folder that is ITSELF whited out returns empty across all listing entrypoints
+ *   22 the parent-folder terminal uses the LISTING schema (non-DATA folder re-add recognized)
  *
  * HARNESS: the beforeEach predicts deterministic CREATE addresses via the deployer nonce, so this
  * file MUST be run as a FULL FILE (`yarn test test/Whiteout.test.ts`), NEVER via `--grep` — a grep
@@ -1559,5 +1560,40 @@ describe("Whiteout (WHITEOUT cross-lens negative mask, ADR-0055)", function () {
       alonePage.items.map(i => i.uid),
       "control lens (excludes owner) still lists the child",
     ).to.deep.equal([fileAnchor]);
+  });
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // VECTOR 22 — the parent-folder terminal uses the LISTING schema (non-DATA folder re-add)
+  //   The parent-folder check must use the same visibility-TAG definition as the per-item walker — the
+  //   listing's `anchorSchema` — not a hard-coded dataSchemaUID. Otherwise a folder whited out and then
+  //   re-added under a NON-DATA schema (`TAG(definition=anchorSchema, refUID=folder)`) is still treated as
+  //   whited and the whole page returns empty, contradicting the per-item re-add positive.
+  // ════════════════════════════════════════════════════════════════════════════
+  it("vector 22: a folder re-added under a non-DATA schema is recognized by the parent terminal", async function () {
+    const customSchema = propertySchemaUID; // a non-DATA schema UID used as the listing's anchorSchema
+    const root = await createAnchor("root", ZERO_BYTES32);
+    const dir = await createAnchor("dir", root, ZERO_BYTES32); // the folder being listed
+    const sub = await createAnchor("sub", dir, ZERO_BYTES32); // a child folder of /dir
+    // /sub is made visible under the CUSTOM schema, so listing /dir under customSchema is non-empty.
+    await createTag(customSchema, sub, owner);
+
+    // Baseline: [owner] lists /sub under the custom schema.
+    let page = await fileView.getDirectoryPageBySchemaAndAddressList(dir, customSchema, [ownerAddr], "0x", 10);
+    expect(
+      page.items.map(i => i.uid),
+      "baseline lists /sub under the custom schema",
+    ).to.deep.equal([sub]);
+
+    // owner whiteouts the FOLDER /dir, then RE-ADDS it under the SAME custom schema (its own TAG).
+    await attestWhiteout(dir, owner);
+    await createTag(customSchema, dir, owner);
+
+    // With the parent terminal threading anchorSchema, owner's custom-schema re-add of /dir is a positive
+    // (folder re-add) → the page lists /sub. With the old hard-coded dataSchemaUID it would be empty.
+    page = await fileView.getDirectoryPageBySchemaAndAddressList(dir, customSchema, [ownerAddr], "0x", 10);
+    expect(
+      page.items.map(i => i.uid),
+      "non-DATA folder re-add recognized by the parent terminal (not wrongly suppressed)",
+    ).to.deep.equal([sub]);
   });
 });

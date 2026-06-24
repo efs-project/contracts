@@ -203,8 +203,10 @@ contract EFSFileView {
         uint256 pageSize
     ) external view returns (FileSystemItem[] memory items, uint256 nextCursor) {
         // Parent-folder terminal (ADR-0055): if the listed folder is itself whited out for this viewer,
-        // the page is empty — consistent with the router 404ing a deep link into a whited folder.
-        if (_isListedFolderWhitedOut(parentAnchor, attesters)) {
+        // the page is empty — consistent with the router 404ing a deep link into a whited folder. This
+        // schema-agnostic view uses DATA_SCHEMA_UID as the folder visibility-TAG def (standard browsing),
+        // matching its per-item filter below.
+        if (_isListedFolderWhitedOut(parentAnchor, attesters, indexer.DATA_SCHEMA_UID())) {
             return (new FileSystemItem[](0), 0);
         }
 
@@ -359,7 +361,9 @@ contract EFSFileView {
 
         // Parent-folder terminal (ADR-0055): if the listed folder is itself whited out for this viewer,
         // the whole page is empty — consistent with the router 404ing a deep link into a whited folder.
-        if (_isListedFolderWhitedOut(parentAnchor, attesters)) {
+        // Pass `anchorSchema` as the folder visibility-TAG def, matching the per-item walker (schema-aware
+        // folder re-adds).
+        if (_isListedFolderWhitedOut(parentAnchor, attesters, anchorSchema)) {
             page.items = new FileSystemItem[](0);
             page.nextCursor = "";
             return page;
@@ -579,8 +583,9 @@ contract EFSFileView {
         require(excludeTagDefs.length <= MAX_EXCLUDE_TAGS_PER_QUERY, "Too many exclude tags");
         require(maxItems > 0, "maxItems must be > 0");
 
-        // Parent-folder terminal (ADR-0055): a whited-out listed folder yields an empty page (router parity).
-        if (_isListedFolderWhitedOut(parentAnchor, attesters)) {
+        // Parent-folder terminal (ADR-0055): a whited-out listed folder yields an empty page (router
+        // parity). `anchorSchema` is the folder visibility-TAG def, matching the per-item walker.
+        if (_isListedFolderWhitedOut(parentAnchor, attesters, anchorSchema)) {
             page.items = new FileSystemItem[](0);
             page.nextCursor = "";
             return page;
@@ -1000,12 +1005,20 @@ contract EFSFileView {
     ///      it evaluates the same `_isItemWhitedOutForListing` predicate (PIN OR folder visibility-TAG
     ///      re-add positive) with (grandparent, folderAnchor). Cheap + short-circuits when whiteout is
     ///      disabled; root / address-root (no parent) can't be whited (OrphanAnchor guard) → false.
-    function _isListedFolderWhitedOut(bytes32 folderAnchor, address[] memory attesters) internal view returns (bool) {
+    /// @param visibilityTagDef The listing's `anchorSchema` (the folder visibility-TAG definition) —
+    ///        MUST match what the per-item walker uses, so a folder re-added under a non-DATA schema
+    ///        (`TAG(definition=anchorSchema, refUID=folder)`) is recognized as visible by the parent check
+    ///        too, not just by the per-item check below it. The PIN-positive arg stays `dataSchemaUID`
+    ///        (file placement is always DATA-schema; a folder has no DATA PIN anyway).
+    function _isListedFolderWhitedOut(bytes32 folderAnchor, address[] memory attesters, bytes32 visibilityTagDef)
+        internal
+        view
+        returns (bool)
+    {
         if (address(whiteoutResolver) == address(0)) return false;
         bytes32 grandparent = indexer.getParent(folderAnchor);
         if (grandparent == bytes32(0)) return false;
-        bytes32 dataSchemaUID = indexer.DATA_SCHEMA_UID();
-        return _isItemWhitedOutForListing(grandparent, folderAnchor, attesters, dataSchemaUID, dataSchemaUID);
+        return _isItemWhitedOutForListing(grandparent, folderAnchor, attesters, indexer.DATA_SCHEMA_UID(), visibilityTagDef);
     }
 
     function _buildFileSystemItems(
