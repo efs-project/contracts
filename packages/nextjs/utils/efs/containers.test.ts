@@ -1,4 +1,4 @@
-import { type ClassifiedContainer, defaultLensesForContainer } from "./containers.ts";
+import { type ClassifiedContainer, EFS_CONTENT_LENS, defaultLensesForContainer } from "./containers.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
@@ -10,18 +10,21 @@ import { test } from "node:test";
 // `systemLenses` is populated (the production reality), and that the explicit
 // override semantics (ADR-0031) are preserved.
 
-const SYSTEM_LENSES = ["0xaCf4C2950107eF9b1C37faA1F9a866C8F0da88b9", "0x8626f6940E2eb28930eFb4CeF49B2d1F2C9C1199"];
+const SYSTEM_ACCOUNT = "0x4444444444444444444444444444444444444444";
+const SYSTEM_LENSES = [EFS_CONTENT_LENS, SYSTEM_ACCOUNT];
 const ALICE = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
+const VIEWED_ADDRESS = "0x1111111111111111111111111111111111111111";
+const TRUSTED_ADDRESS = "0x2222222222222222222222222222222222222222";
 
 const hex = (s: string) => s as `0x${string}`;
 const CONTAINERS: Record<string, ClassifiedContainer> = {
   anchor: { kind: "anchor", uid: hex("0x" + "00".repeat(32)), displayName: "docs", rawSegment: "docs" },
   address: {
     kind: "address",
-    uid: hex("0x" + "00".repeat(12) + "f39fd6e51aad88f6f4ce6ab8827279cfffb92266"),
-    address: hex(ALICE),
+    uid: hex("0x" + "00".repeat(12) + "1111111111111111111111111111111111111111"),
+    address: hex(VIEWED_ADDRESS),
     displayName: "alice",
-    rawSegment: ALICE,
+    rawSegment: VIEWED_ADDRESS,
   },
   schema: { kind: "schema", uid: hex("0x" + "11".repeat(32)), displayName: "schema", rawSegment: "0x11" },
   attestation: { kind: "attestation", uid: hex("0x" + "22".repeat(32)), displayName: "att", rawSegment: "0x22" },
@@ -51,6 +54,17 @@ test("defaultLensesForContainer: non-empty even with no wallet and no web-of-tru
   assert.deepEqual(out, SYSTEM_LENSES);
 });
 
+test("defaultLensesForContainer: orders connected, viewed, web-of-trust, EFS content, system", () => {
+  const out = defaultLensesForContainer({
+    container: CONTAINERS.address,
+    connectedAddress: ALICE,
+    explicitLenses: null,
+    webOfTrust: [TRUSTED_ADDRESS],
+    systemLenses: SYSTEM_LENSES,
+  });
+  assert.deepEqual(out, [ALICE, VIEWED_ADDRESS, TRUSTED_ADDRESS, EFS_CONTENT_LENS, SYSTEM_ACCOUNT]);
+});
+
 test("defaultLensesForContainer: explicit ?lenses= overrides verbatim (ADR-0031)", () => {
   const out = defaultLensesForContainer({
     container: CONTAINERS.anchor,
@@ -72,7 +86,7 @@ test("defaultLensesForContainer: explicit-but-empty stays empty (must NOT widen 
   });
   // Empty explicit list is the user saying "scope to nothing" — the directory
   // hooks then disable and render an empty grid; it must NOT silently fall back
-  // to systemLenses/default content.
+  // to default content.
   assert.deepEqual(out, []);
 });
 

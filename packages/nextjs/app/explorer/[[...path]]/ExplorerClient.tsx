@@ -17,14 +17,13 @@ import { useContainerName } from "~~/hooks/efs/useContainerName";
 import { useDeployedContractInfo, useScaffoldReadContract, useTargetNetwork } from "~~/hooks/scaffold-eth";
 import {
   ClassifiedContainer,
-  DEVNET_BOOTSTRAP_CURATOR,
-  DEVNET_DEV_ATTESTER,
+  EFS_CONTENT_LENS,
   buildRouterPathNames,
   classifyTopLevelSegment,
   defaultLensesForContainer,
 } from "~~/utils/efs/containers";
 import { clearFetchFileContentCache } from "~~/utils/efs/fetchFileContent";
-import { DEVNET_CHAIN_ID, inferNetworkFlavor, networkLabel } from "~~/utils/scaffold-eth";
+import { inferNetworkFlavor, networkLabel } from "~~/utils/scaffold-eth";
 
 export default function ExplorerClient() {
   const [currentPath, setCurrentPath] = useState<PathItem[]>([]);
@@ -138,43 +137,35 @@ export default function ExplorerClient() {
   // Use `!== null` everywhere we care about the parameter's presence.
   const hasLensesParam = lensesParam !== null;
 
-  // System tail-fallback tier (ADR-0039). On devnet: a bootstrap curator
-  // address, the dev/demo attester, and the SystemAccount, so fresh users
-  // see seeded + live-demo content before configuring any web of trust.
+  // System tail-fallback tier (ADR-0039). The EFS content account makes
+  // buildathon datasets visible to fresh users; SystemAccount remains the
+  // final system fallback.
   // The bootstrap/system content (root, `/transports/*`, official defaults)
   // is authored by `SystemAccount` (ADR-0053), NOT by `Indexer.DEPLOYER()`
   // (which now returns `owner()` — the Safe post-transfer, which authors
   // nothing). So the system default lens must be the SystemAccount address;
   // we read it from the named deployment (deployedContracts.ts), the same
-  // way the explorer reads every other deployed address. Mainnet will
-  // replace all three with a user-configurable list.
+  // way the explorer reads every other deployed address. Mainnet/post-demo
+  // can replace this list with a user-configurable one.
   const { data: systemAccountInfo } = useDeployedContractInfo({ contractName: "SystemAccount" });
   const systemAccountAddress = systemAccountInfo?.address;
 
-  // AGENT-NOTE (ADR-0048): on the devnet (26001993) the two demo constants seed
-  // `systemLenses`; on Sepolia/Local `systemLenses` is just the SystemAccount
-  // lens. There is no longer an unfiltered read path — the unfiltered
+  // AGENT-NOTE (ADR-0048): `systemLenses` carries the EFS content account
+  // followed by SystemAccount. There is no longer an unfiltered read path — the unfiltered
   // `getDirectoryPage` listing fallback was removed, so every directory read is
   // lens-scoped through `getDirectoryPageFiltered`. An empty `lensAddresses`
   // FAILS SAFE: the FileBrowser directory hooks are disabled and the grid
   // renders empty rather than showing unfiltered content. The remaining work,
-  // when the mainnet TODO above replaces these constants with a user-configurable
+  // when the mainnet TODO above replaces this list with a user-configurable
   // list, is to give the empty-list case a FILTERED listing (so the view isn't
   // simply blank) — NOT to re-introduce an unfiltered path. (TopicTree's own lens
   // read is not yet exclude-filtered — see docs/FUTURE_WORK.md.)
   // See the matching note at `defaultLensesForContainer` in utils/efs/containers.ts.
   const systemLenses = useMemo(() => {
-    const out: string[] = [];
-    // Devnet-only demo lenses. Scope to 26001993 so they never leak into a
-    // Sepolia/Local view: there a no-wallet / no-`?lenses=` read would otherwise
-    // pass these demo attesters into directory reads, letting them show or shadow
-    // content on a live chain — a viewer-sovereignty break (ADR-0031, ADR-0062).
-    if (targetNetwork.id === DEVNET_CHAIN_ID) {
-      out.push(DEVNET_BOOTSTRAP_CURATOR, DEVNET_DEV_ATTESTER);
-    }
+    const out: string[] = [EFS_CONTENT_LENS];
     if (systemAccountAddress) out.push(systemAccountAddress);
     return out;
-  }, [systemAccountAddress, targetNetwork.id]);
+  }, [systemAccountAddress]);
 
   const lensAddresses = useMemo(() => {
     return defaultLensesForContainer({
