@@ -15,20 +15,12 @@ import { Footer } from "~~/components/Footer";
 import { Header } from "~~/components/Header";
 import { BlockieAvatar } from "~~/components/scaffold-eth";
 import { useInitializeNativeCurrencyPrice } from "~~/hooks/scaffold-eth";
-import scaffoldConfig from "~~/scaffold.config";
 import { wagmiConfig } from "~~/services/web3/wagmiConfig";
-import {
-  FAUCET_CHAIN_ID,
-  FAUCET_URL,
-  isInstantBurnerSessionEnabled,
-  shouldReconnectWagmiOnMount,
-} from "~~/utils/scaffold-eth";
+import { FAUCET_URL, isInstantBurnerSessionEnabled, shouldReconnectWagmiOnMount } from "~~/utils/scaffold-eth";
 
 const INSTANT_BURNER_ENABLED = isInstantBurnerSessionEnabled({
   faucetUrl: FAUCET_URL,
   flag: process.env.NEXT_PUBLIC_INSTANT_BURNER_SESSION,
-  defaultChainId: scaffoldConfig.targetNetworks[0].id,
-  faucetChainId: FAUCET_CHAIN_ID,
 });
 
 const RECONNECT_ON_MOUNT = shouldReconnectWagmiOnMount({

@@ -4,7 +4,6 @@ import { useEffect, useRef, useState } from "react";
 import { hardhat } from "viem/chains";
 import { useAccount, useConnect, useConnectors, useDisconnect } from "wagmi";
 import { useTargetNetwork } from "~~/hooks/scaffold-eth";
-import scaffoldConfig from "~~/scaffold.config";
 import {
   BURNER_WALLET_PK_STORAGE_KEY,
   FAUCET_CHAIN_ID,
@@ -28,8 +27,6 @@ import { HARDHAT_ACCOUNTS } from "~~/utils/scaffold-eth/hardhatAccounts";
 const INSTANT_BURNER_ENABLED = isInstantBurnerSessionEnabled({
   faucetUrl: FAUCET_URL,
   flag: process.env.NEXT_PUBLIC_INSTANT_BURNER_SESSION,
-  defaultChainId: scaffoldConfig.targetNetworks[0].id,
-  faucetChainId: FAUCET_CHAIN_ID,
 });
 
 const hardhatPrivateKeys = HARDHAT_ACCOUNTS.map(account => account.pk);

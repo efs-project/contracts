@@ -50,6 +50,7 @@ const {
   shouldReconnectWagmiOnMount,
   shouldResumeInstantBurnerAfterRealWalletModal,
   shouldSeedHardhatBurner,
+  selectBurnerChain,
   shouldShowInstantBurnerEnable,
   shouldSuppressInstantBurnerTracking,
   shouldStopInstantBurnerAfterExternalDisconnect,
@@ -62,8 +63,6 @@ test("instant burner only enables when a faucet URL is configured and the kill s
   const base = {
     faucetUrl: "https://faucet.example",
     flag: undefined,
-    defaultChainId: 11155111,
-    faucetChainId: 11155111,
   };
 
   assert.equal(isInstantBurnerSessionEnabled({ ...base, faucetUrl: "" }), false);
@@ -71,7 +70,6 @@ test("instant burner only enables when a faucet URL is configured and the kill s
   assert.equal(isInstantBurnerSessionEnabled(base), true);
   assert.equal(isInstantBurnerSessionEnabled({ ...base, flag: "false" }), false);
   assert.equal(isInstantBurnerSessionEnabled({ ...base, flag: "0" }), false);
-  assert.equal(isInstantBurnerSessionEnabled({ ...base, defaultChainId: 26001993 }), false);
 });
 
 test("wagmi reconnect-on-mount is disabled while instant burner can be offered", () => {
@@ -108,6 +106,48 @@ test("burner connector detection is explicit", () => {
   assert.equal(isBurnerConnector({ id: "burnerWallet" }), true);
   assert.equal(isBurnerConnector({ id: "metaMask" }), false);
   assert.equal(isBurnerConnector(undefined), false);
+});
+
+test("burner chain selection honors requested and switched chains over the build default", () => {
+  const devnet = { id: 26001993, name: "EFS Devnet" };
+  const sepolia = { id: 11155111, name: "Sepolia" };
+  const chains = [devnet, sepolia];
+
+  assert.deepEqual(
+    selectBurnerChain({
+      chains,
+      requestedChainId: sepolia.id,
+      connectedChainId: devnet.id,
+    }),
+    sepolia,
+  );
+
+  assert.deepEqual(
+    selectBurnerChain({
+      chains,
+      connectedChainId: sepolia.id,
+    }),
+    sepolia,
+  );
+
+  assert.throws(
+    () =>
+      selectBurnerChain({
+        chains,
+        requestedChainId: 999,
+        connectedChainId: sepolia.id,
+      }),
+    /Burner chain 999 is not configured/,
+  );
+  assert.throws(
+    () =>
+      selectBurnerChain({
+        chains,
+        connectedChainId: 999,
+      }),
+    /Burner chain 999 is not configured/,
+  );
+  assert.deepEqual(selectBurnerChain({ chains }), devnet);
 });
 
 test("burner disconnects when it drifts off the faucet chain", () => {

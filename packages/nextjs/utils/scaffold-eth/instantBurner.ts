@@ -6,29 +6,44 @@ export const INSTANT_BURNER_PAUSE_MS = 30_000;
 let instantBurnerDripRequested = false;
 
 type WalletStatus = "connected" | "connecting" | "disconnected" | "reconnecting";
+type SelectableChain = { id: number };
 
 export function isInstantBurnerSessionEnabled({
   faucetUrl,
   flag,
-  defaultChainId,
-  faucetChainId,
 }: {
   faucetUrl: string | undefined;
   flag: string | undefined;
-  defaultChainId: number;
-  faucetChainId: number;
 }): boolean {
   const normalizedFlag = (flag ?? "").trim().toLowerCase();
-  return (
-    (faucetUrl ?? "").trim().length > 0 &&
-    normalizedFlag !== "false" &&
-    normalizedFlag !== "0" &&
-    defaultChainId === faucetChainId
-  );
+  return (faucetUrl ?? "").trim().length > 0 && normalizedFlag !== "false" && normalizedFlag !== "0";
 }
 
 export function isBurnerConnector(connector: Pick<Connector, "id"> | undefined): boolean {
   return connector?.id === BURNER_WALLET_CONNECTOR_ID;
+}
+
+export function selectBurnerChain<TChain extends SelectableChain>({
+  chains,
+  requestedChainId,
+  connectedChainId,
+}: {
+  chains: readonly TChain[];
+  requestedChainId?: number;
+  connectedChainId?: number;
+}): TChain {
+  if (chains.length === 0) throw new Error("No burner chains configured.");
+  if (requestedChainId !== undefined) {
+    const requestedChain = chains.find(chain => chain.id === requestedChainId);
+    if (!requestedChain) throw new Error(`Burner chain ${requestedChainId} is not configured.`);
+    return requestedChain;
+  }
+  if (connectedChainId !== undefined) {
+    const connectedChain = chains.find(chain => chain.id === connectedChainId);
+    if (!connectedChain) throw new Error(`Burner chain ${connectedChainId} is not configured.`);
+    return connectedChain;
+  }
+  return chains[0];
 }
 
 export function shouldAutoConnectInstantBurner({

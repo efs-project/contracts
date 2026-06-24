@@ -7,8 +7,8 @@ import {
   safeWallet,
   walletConnectWallet,
 } from "@rainbow-me/rainbowkit/wallets";
-import { rainbowkitBurnerWallet } from "burner-connector";
 import * as chains from "viem/chains";
+import { rainbowkitBurnerWallet } from "~~/services/web3/chainAwareBurnerWallet";
 import scaffoldConfig from "~~/scaffold.config";
 import {
   BURNER_WALLET_PK_STORAGE_KEY,
