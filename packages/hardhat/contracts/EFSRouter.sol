@@ -308,6 +308,22 @@ contract EFSRouter is IDecentralizedApp {
             currentParent = aliasUID != bytes32(0) ? aliasUID : rawUID;
             targetAnchor = currentParent;
             startIdx = 1;
+
+            // ADR-0055 deep-link terminal for the ALIAS seed. The loop below starts at startIdx=1 and
+            // never checks segment 0 (the alias anchor). When an alias is used AND there are deeper
+            // segments, the alias is an INTERMEDIATE folder — apply the same per-segment whiteout terminal
+            // (parent = root, child = aliasUID) so a viewer who whiteouts a schema/attestation alias anchor
+            // 404s a deep link `/0x<uid>/child.txt` instead of descending through the whited alias into
+            // lower-lens content. Only when an alias was actually used (a raw-UID seed is not a tree anchor,
+            // so there is nothing to whiteout); the bare-alias leaf (resource.length == 1) follows the
+            // loop's leaf rule and stays PIN-gated via `_findDataAtPath` below.
+            if (
+                aliasUID != bytes32(0) &&
+                resource.length > 1 &&
+                _isSegmentWhitedOut(indexer.rootAnchorUID(), aliasUID, effLenses)
+            ) {
+                return (404, bytes("Not Found: Path does not exist"), new KeyValue[](0));
+            }
         }
 
         for (uint i = startIdx; i < resource.length; i++) {

@@ -656,6 +656,7 @@ describe("Whiteout (WHITEOUT cross-lens negative mask, ADR-0055)", function () {
     let dir: string;
     let childAnchor: string;
     let onchainUID: string;
+    let eas2: EAS; // the isolated-stack EAS (also used by the alias-seed it-block to attest a mirror)
 
     // The router beforeEach builds a fresh stack INCLUDING a MirrorResolver (the router needs a
     // wired MIRROR schema to serve content), the WhiteoutResolver, and a /transports/ tree, then
@@ -665,7 +666,7 @@ describe("Whiteout (WHITEOUT cross-lens negative mask, ADR-0055)", function () {
       const reg2 = await RegistryFactory.deploy();
       await reg2.waitForDeployment();
       const EASFactory = await ethers.getContractFactory("EAS");
-      const eas2 = (await EASFactory.deploy(await reg2.getAddress())) as EAS;
+      eas2 = (await EASFactory.deploy(await reg2.getAddress())) as EAS;
       await eas2.waitForDeployment();
 
       // Rebind the suite-level helpers' `eas`/`registry` to this isolated stack for vector 10.
@@ -856,6 +857,50 @@ describe("Whiteout (WHITEOUT cross-lens negative mask, ADR-0055)", function () {
       // Control: a viewer whose lens list EXCLUDES the whiteout author (alice only) is unaffected → 200.
       const aliceRes = await router.request(["dir", "child.txt"], [{ key: "lenses", value: `${aliceAddr}` }]);
       expect(aliceRes.statusCode).to.equal(200n);
+    });
+
+    // ADR-0055 deep-link terminal for the ALIAS SEED (PR #37 review). A schema/attestation container
+    // seeds `currentParent` from a root *alias anchor* and starts the path walk at startIdx=1, so the
+    // per-segment loop never checks segment 0 (the alias). A viewer who whiteouts the alias anchor must
+    // still 404 a deep link `/<UID>/child.txt` — not descend through the whited alias into lower content.
+    it("deep link through a whited-out schema-alias anchor 404s (alias seed, segment 0)", async function () {
+      // Build a schema-alias container at root: an anchor whose NAME is the lowercase 0x-hex of a real
+      // registered schema UID (DATA's), so the router classifies the top segment as a schema and seeds
+      // from this alias (startIdx=1). Put alice's (lower-lens) child under it, with a web3:// mirror.
+      const aliasAnchor = await createAnchor(dataSchemaUID.toLowerCase(), dirRoot); // root-child alias
+      const aliasChild = await createAnchor("child.txt", aliasAnchor, dataSchemaUID);
+      const dAlias = await mintData(alice);
+      await createPin(aliasChild, dAlias, alice);
+      await eas2.connect(alice).attest({
+        schema: mirrorSchemaUID,
+        data: {
+          recipient: ZeroAddress,
+          expirationTime: NO_EXPIRATION,
+          revocable: true,
+          refUID: dAlias,
+          data: enc.encode(["bytes32", "string"], [onchainUID, `web3://${await eas2.getAddress()}`]),
+          value: 0n,
+        },
+      });
+
+      // Control: no whiteout → the deep link /<schemaUID>/child.txt serves alice's content (200).
+      let res = await router.request(
+        [dataSchemaUID, "child.txt"],
+        [{ key: "lenses", value: `${ownerAddr},${aliceAddr}` }],
+      );
+      expect(res.statusCode).to.equal(200n);
+
+      // owner (higher lens) whiteouts the ALIAS anchor itself (a root child, segment 0).
+      await attestWhiteout(aliasAnchor, owner);
+      expect(await whiteoutResolver.isWhitedOut(dirRoot, ownerAddr, aliasAnchor)).to.equal(true);
+
+      // Viewer [owner, alice]: the alias-seed terminal fires at segment 0 → 404, no fall-through.
+      res = await router.request([dataSchemaUID, "child.txt"], [{ key: "lenses", value: `${ownerAddr},${aliceAddr}` }]);
+      expect(res.statusCode).to.equal(404n);
+
+      // Control: a viewer whose lens list EXCLUDES the whiteout author (alice only) → 200.
+      const aliceOnly = await router.request([dataSchemaUID, "child.txt"], [{ key: "lenses", value: `${aliceAddr}` }]);
+      expect(aliceOnly.statusCode).to.equal(200n);
     });
 
     // ADR-0055 folder re-add fix: the per-SEGMENT intermediate-folder whiteout terminal uses the
