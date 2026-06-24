@@ -1078,6 +1078,29 @@ contract EFSFileView {
             attesterIdx = abi.decode(cursor, (uint256));
         }
 
+        // Cursor-bypass guard (ADR-0055 / specs/04): the per-lens whiteout terminal in the walk below only
+        // fires for lenses at index >= attesterIdx. A caller-supplied opaque cursor could resume PAST a
+        // whiteout-terminal lens (a stale or hand-crafted `abi.encode(k)`), skipping the terminal and
+        // serving a lower lens's DATA — while the router's cursorless `_findDataAtPath` would 404. So
+        // re-evaluate the SKIPPED prefix [0, attesterIdx): if any skipped lens whites out this anchor with
+        // NO own positive PIN (it would have been a negative terminal), everything strictly below it is
+        // suppressed → return the terminal empty page. A legitimate forward cursor never points past a
+        // whiteout terminal (the walk sets `attesterIdx = attesters.length` on the first one), so this
+        // only trips on a fabricated cursor. Bounded by MAX_ATTESTERS_PER_QUERY; zero when disabled.
+        if (address(wr) != address(0)) {
+            uint256 skipEnd = attesterIdx < attesters.length ? attesterIdx : attesters.length;
+            for (uint256 j = 0; j < skipEnd; j++) {
+                if (
+                    edgeResolver.getActivePinTarget(anchorUID, attesters[j], schema) == bytes32(0) &&
+                    wr.isWhitedOut(parentAnchor, attesters[j], anchorUID)
+                ) {
+                    page.items = new FileSystemItem[](0);
+                    page.nextCursor = "";
+                    return page;
+                }
+            }
+        }
+
         bytes32[] memory buf = new bytes32[](maxItems);
         // Winning placement (lens) attester for each buffered target, kept in lockstep with
         // `buf`. The item's `attester` must be the attester whose active PIN won the walk —

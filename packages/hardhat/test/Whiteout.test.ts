@@ -40,6 +40,7 @@ import { deployResolverProxy } from "./helpers/deployResolverProxy";
  *   17 the folder-visibility-TAG positive is FOLDER-gated — a TAG on a whited FILE anchor doesn't un-hide
  *   18 getFilesAtPath stops at a MID-STACK whiteout (higher positive kept, lower lens suppressed)
  *   19 getActiveWhiteout returns the live UID for un-delete (0 when none; new UID after re-whiteout)
+ *   20 a fabricated getFilesAtPath cursor cannot resume PAST a mid-stack whiteout terminal
  *
  * HARNESS: the beforeEach predicts deterministic CREATE addresses via the deployer nonce, so this
  * file MUST be run as a FULL FILE (`yarn test test/Whiteout.test.ts`), NEVER via `--grep` — a grep
@@ -1442,5 +1443,45 @@ describe("Whiteout (WHITEOUT cross-lens negative mask, ADR-0055)", function () {
     await revoke(whiteoutSchemaUID, uid2, owner);
     expect(await whiteoutResolver.getActiveWhiteout(dir, ownerAddr, fileAnchor)).to.equal(ZERO_BYTES32);
     expect(await whiteoutResolver.isWhitedOut(dir, ownerAddr, fileAnchor)).to.equal(false);
+  });
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // VECTOR 20 — a crafted getFilesAtPath cursor cannot BYPASS a mid-stack whiteout terminal
+  //   The per-lens terminal only fires for lenses at index >= the cursor. A hand-crafted opaque cursor
+  //   that resumes PAST the whiteout lens would otherwise skip the terminal and serve the lower lens's
+  //   DATA (the router, cursorless, would 404). The skipped-prefix guard re-evaluates [0, cursor) and
+  //   returns empty when a skipped lens is a whiteout terminal.
+  // ════════════════════════════════════════════════════════════════════════════
+  it("vector 20: a fabricated cursor cannot resume past a whiteout terminal in getFilesAtPath", async function () {
+    const root = await createAnchor("root", ZERO_BYTES32);
+    const dir = await createAnchor("dir", root);
+    const fileAnchor = await createAnchor("file.txt", dir, dataSchemaUID);
+
+    // Stack [owner(PIN), bob(whiteout), alice(PIN)] at the same file anchor.
+    const dataOwner = await mintData(owner);
+    const dataAlice = await mintData(alice);
+    await createPin(fileAnchor, dataOwner, owner);
+    await createPin(fileAnchor, dataAlice, alice);
+    await attestWhiteout(fileAnchor, bob);
+    const stack = [ownerAddr, bobAddr, aliceAddr];
+
+    // Baseline (empty cursor): the walk hits bob's terminal at index 1 → owner's DATA only, terminal cursor.
+    const fresh = await fileView.getFilesAtPath(fileAnchor, stack, dataSchemaUID, "0x", 10);
+    expect(
+      fresh.items.map(i => i.uid),
+      "fresh walk: owner kept, alice suppressed",
+    ).to.deep.equal([dataOwner]);
+    expect(fresh.nextCursor, "fresh walk terminates the cursor at the whiteout").to.equal("0x");
+
+    // Attack: a fabricated cursor `abi.encode(2)` resumes at alice (index 2), skipping bob's terminal at
+    // index 1. Without the skipped-prefix guard this returns alice's DATA; with it, the guard re-checks
+    // [0,2), finds bob's whiteout (no own PIN) → terminal empty page, no fall-through.
+    const craftedCursor = ethers.AbiCoder.defaultAbiCoder().encode(["uint256"], [2]);
+    const attacked = await fileView.getFilesAtPath(fileAnchor, stack, dataSchemaUID, craftedCursor, 10);
+    expect(
+      attacked.items.map(i => i.uid),
+      "fabricated cursor cannot bypass the whiteout terminal (no lower-lens DATA leaks)",
+    ).to.deep.equal([]);
+    expect(attacked.nextCursor, "bypassed-whiteout page is terminal").to.equal("0x");
   });
 });
