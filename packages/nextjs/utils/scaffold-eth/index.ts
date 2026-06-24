@@ -8,3 +8,4 @@ export * from "./faucet";
 export * from "./getParsedError";
 export * from "./instantBurner";
 export * from "./networkLabel";
+export * from "./targetNetworkPreference";

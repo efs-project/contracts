@@ -25,7 +25,14 @@ import { useAccount, useSwitchChain } from "wagmi";
 import { GlobeAltIcon } from "@heroicons/react/24/outline";
 import { getNetworkColor, useTargetNetwork } from "~~/hooks/scaffold-eth";
 import { useGlobalState } from "~~/services/store/store";
-import { getTargetNetworks, networkLabel, networkSortRank } from "~~/utils/scaffold-eth";
+import {
+  getTargetNetworks,
+  networkLabel,
+  networkSortRank,
+  readStoredTargetNetworkId,
+  targetNetworkStorage,
+  writeStoredTargetNetworkId,
+} from "~~/utils/scaffold-eth";
 
 const allowedNetworks = getTargetNetworks();
 
@@ -33,10 +40,6 @@ const allowedNetworks = getTargetNetworks();
 // configured `targetNetworks` order so the menu order never changes which network the store
 // defaults to (that stays `targetNetworks[0]`).
 const displayNetworks = [...allowedNetworks].sort((a, b) => networkSortRank(a) - networkSortRank(b));
-
-// Persist the no-wallet selection so a manual switch survives a reload. Only
-// consulted when no wallet is connected (a connected wallet's chain wins).
-const STORAGE_KEY = "efs.targetNetworkId";
 
 export const NetworkSwitcher = () => {
   const { targetNetwork } = useTargetNetwork();
@@ -59,8 +62,8 @@ export const NetworkSwitcher = () => {
     if (restoredRef.current) return;
     if (status === "connecting" || status === "reconnecting") return;
     restoredRef.current = true;
-    if (isConnected || typeof window === "undefined") return;
-    const stored = Number(window.localStorage.getItem(STORAGE_KEY));
+    if (isConnected) return;
+    const stored = readStoredTargetNetworkId(targetNetworkStorage());
     const restored = allowedNetworks.find(n => n.id === stored);
     if (restored && restored.id !== targetNetwork.id) {
       setTargetNetwork(restored);
@@ -75,19 +78,19 @@ export const NetworkSwitcher = () => {
   const selectNetwork = (chainId: number) => {
     if (isConnected) {
       // Ask the wallet to switch; useTargetNetwork's effect syncs the store after.
-      // Don't persist here: a connected wallet's chain is authoritative on reload
-      // (the restore effect is skipped while connected), so persisting a not-yet-
-      // confirmed switch would only leave a stale default if the user rejects it.
-      switchChain?.({ chainId });
+      // Persist only after the connector confirms the switch; a rejected wallet
+      // prompt must not poison the remembered startup network.
+      switchChain?.(
+        { chainId },
+        {
+          onSuccess: () => writeStoredTargetNetworkId(targetNetworkStorage(), chainId),
+        },
+      );
     } else {
       const next = allowedNetworks.find(n => n.id === chainId);
       if (next) {
         setTargetNetwork(next);
-        // Persist only the no-wallet selection — it's the sole value the restore
-        // effect ever reads back.
-        if (typeof window !== "undefined") {
-          window.localStorage.setItem(STORAGE_KEY, String(chainId));
-        }
+        writeStoredTargetNetworkId(targetNetworkStorage(), chainId);
       }
     }
   };

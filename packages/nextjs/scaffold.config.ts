@@ -12,6 +12,41 @@ export type ScaffoldConfig = {
 
 export const DEFAULT_ALCHEMY_API_KEY = "IZYEU2cWBgnFmgiTAgpWD";
 
+type TargetChainLike = { id: number };
+
+export function resolveDefaultTargetChain<TChain extends TargetChainLike>({
+  targetChain,
+  localAvailable,
+  sepoliaChain,
+  devnetChain,
+  hardhatChain,
+  available,
+}: {
+  targetChain: string;
+  localAvailable: boolean;
+  sepoliaChain: TChain;
+  devnetChain: TChain;
+  hardhatChain: TChain;
+  available: readonly TChain[];
+}): TChain {
+  const normalizedTarget = targetChain.trim().toLowerCase();
+  const wantsSepolia = normalizedTarget === "sepolia" || normalizedTarget === "11155111";
+  const wantsDevnet = normalizedTarget === "devnet" || normalizedTarget === "26001993";
+  const wantsLocal = normalizedTarget === "hardhat" || normalizedTarget === "local" || normalizedTarget === "31337";
+
+  const defaultChain = wantsSepolia
+    ? sepoliaChain
+    : wantsDevnet
+      ? devnetChain
+      : wantsLocal
+        ? hardhatChain
+        : localAvailable
+          ? hardhatChain
+          : sepoliaChain;
+
+  return available.includes(defaultChain) ? defaultChain : sepoliaChain;
+}
+
 // The three EFS environments are now THREE DISTINCT wagmi chains (ADR-0062):
 //   • Sepolia      11155111  — live testnet
 //   • EFS Devnet    26001993  — shared community fork on the VPS (its own chain id, so a wallet
@@ -66,9 +101,7 @@ const efsDevnetChain: chains.Chain = {
 //
 // `NEXT_PUBLIC_TARGET_CHAIN` is an explicit override that always wins. Accepts
 // sepolia|11155111, devnet|26001993, local|hardhat|31337. Blank/whitespace counts as UNSET.
-// Default by build type when unset: `next dev` → Local; `next build` (deployed) → Devnet
-// (community testers land on the devnet; Sepolia is one click away). Set TARGET_CHAIN=sepolia
-// for a public Sepolia-first SPA.
+// Default by build type when unset: `next dev` → Local; `next build` (deployed) → Sepolia.
 const TARGET_CHAIN = (process.env.NEXT_PUBLIC_TARGET_CHAIN ?? "").trim().toLowerCase();
 const HARDHAT_RPC_CONFIGURED = HARDHAT_RPC_URL.length > 0;
 // Local is only offered when a local node is plausibly present: a dev build, or an explicit
@@ -82,26 +115,20 @@ if (!RECOGNIZED.includes(TARGET_CHAIN)) {
   );
 }
 
-const wantsSepolia = TARGET_CHAIN === "sepolia" || TARGET_CHAIN === "11155111";
-const wantsDevnet = TARGET_CHAIN === "devnet" || TARGET_CHAIN === "26001993";
-const wantsLocal = TARGET_CHAIN === "hardhat" || TARGET_CHAIN === "local" || TARGET_CHAIN === "31337";
-
 // Available networks: Sepolia + Devnet always; Local only when a node is around.
 const available: chains.Chain[] = [sepoliaChain, efsDevnetChain];
 if (LOCAL_AVAILABLE) available.push(hardhatChain);
 
-// Resolve the default (first) network. Explicit override wins (but falls back to Devnet if it
-// asks for Local where Local isn't available); otherwise dev → Local, deployed → Devnet.
-let defaultChain: chains.Chain = wantsSepolia
-  ? sepoliaChain
-  : wantsDevnet
-    ? efsDevnetChain
-    : wantsLocal
-      ? hardhatChain
-      : LOCAL_AVAILABLE
-        ? hardhatChain
-        : efsDevnetChain;
-if (!available.includes(defaultChain)) defaultChain = efsDevnetChain;
+// Resolve the default (first) network. Explicit override wins (but falls back to Sepolia if it
+// asks for Local where Local isn't available); otherwise dev → Local, deployed → Sepolia.
+const defaultChain = resolveDefaultTargetChain({
+  targetChain: TARGET_CHAIN,
+  localAvailable: LOCAL_AVAILABLE,
+  sepoliaChain,
+  devnetChain: efsDevnetChain,
+  hardhatChain,
+  available,
+});
 
 // Default first (store init); the rest follow. Non-empty tuple — wagmi's createConfig requires it.
 const targetNetworks = [defaultChain, ...available.filter(c => c !== defaultChain)] as [
