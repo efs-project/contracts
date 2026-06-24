@@ -34,7 +34,7 @@ const hardhatPrivateKeys = HARDHAT_ACCOUNTS.map(account => account.pk);
 
 const InstantBurnerToggle = ({ active, onClick, title }: { active: boolean; onClick: () => void; title: string }) => (
   <button
-    className={`hidden h-10 w-[8.5rem] shrink-0 items-center justify-between gap-3 rounded-full border px-3 text-left shadow-[0_0_16px_rgba(0,255,76,0.16)] transition-colors lg:inline-flex ${
+    className={`hidden h-10 w-[7.75rem] shrink-0 items-center gap-2 rounded-full border px-3 text-left shadow-[0_0_16px_rgba(0,255,76,0.16)] transition-colors lg:inline-flex ${
       active
         ? "border-primary bg-primary/20 text-primary hover:bg-primary/25"
         : "border-primary/65 bg-primary/10 text-primary hover:border-primary hover:bg-primary/15"
@@ -44,7 +44,7 @@ const InstantBurnerToggle = ({ active, onClick, title }: { active: boolean; onCl
     title={title}
     aria-pressed={active}
   >
-    <span className="flex min-w-[4.5rem] flex-col justify-center leading-none">
+    <span className="flex min-w-[4rem] flex-col justify-center leading-none">
       <span className="whitespace-nowrap text-[11px] font-semibold leading-[1.05]">Easy Edits</span>
       <span className="mt-1 whitespace-nowrap text-[9px] leading-[1.05] text-base-content/60">No prompts</span>
     </span>
@@ -56,7 +56,7 @@ const InstantBurnerToggle = ({ active, onClick, title }: { active: boolean; onCl
     >
       <span
         className={`absolute left-0.5 top-0.5 h-3.5 w-3.5 rounded-full shadow transition-transform ${
-          active ? "translate-x-3.5 bg-base-100" : "translate-x-0 bg-primary"
+          active ? "translate-x-3.5 bg-base-300" : "translate-x-0 bg-primary"
         }`}
       />
     </span>
