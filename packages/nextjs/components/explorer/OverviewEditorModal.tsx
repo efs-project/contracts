@@ -23,11 +23,10 @@ import { createPortal } from "react-dom";
 import { usePublicClient, useWalletClient } from "wagmi";
 import { StopIcon, XMarkIcon } from "@heroicons/react/24/outline";
 import { MarkdownEditor } from "~~/components/markdown/MarkdownEditor";
-import { useDeployedContractInfo, useScaffoldWriteContract } from "~~/hooks/scaffold-eth";
+import { useDeployedContractInfo } from "~~/hooks/scaffold-eth";
 import { useTargetNetwork } from "~~/hooks/scaffold-eth/useTargetNetwork";
-import { applySystemTag } from "~~/lib/efs/applySystemTag";
+import { applySystemTag, createWalletClientAttest } from "~~/lib/efs/applySystemTag";
 import { CHUNK_SIZE } from "~~/lib/efs/sstore2";
-import type { AttestFn } from "~~/lib/efs/uploadOnchainFile";
 import { uploadOnchainFile } from "~~/lib/efs/uploadOnchainFile";
 import { useBackgroundOps } from "~~/services/store/backgroundOps";
 import { EDGE_RESOLVER_ABI, getEdgeResolverAddress } from "~~/utils/efs/edgeResolver";
@@ -68,15 +67,6 @@ export const OverviewEditorModal = (props: OverviewEditorModalProps) => {
   const { targetNetwork } = useTargetNetwork();
   const publicClient = usePublicClient({ chainId: targetNetwork.id });
   const { data: walletClient } = useWalletClient();
-  // attest is the EAS write handle; the seams take it injected (they're plain
-  // async and can't call a React hook). The scaffold handle's `variables.args` is
-  // a strict 1-tuple `[AttestRequest | undefined]`, while the seams' `AttestFn`
-  // widens it to `readonly unknown[]` — a contravariant gap, so the handle is NOT
-  // directly assignable. The seams always call with exactly one attest-request
-  // element, so the runtime shape is identical; we bridge the variance with a
-  // single localized cast at the hook boundary rather than loosening `AttestFn`.
-  const { writeContractAsync } = useScaffoldWriteContract({ contractName: "EAS" });
-  const attest = writeContractAsync as unknown as AttestFn;
   const { data: indexer } = useDeployedContractInfo({ contractName: "Indexer" });
   const indexerAbi = indexer?.abi;
   // EAS address — the target of the batched `multiAttest` in the upload seam.
@@ -94,6 +84,7 @@ export const OverviewEditorModal = (props: OverviewEditorModalProps) => {
       return;
     }
     if (!ensureWalletChain(walletClient, targetNetwork.id, targetNetwork.name)) return;
+    const attest = createWalletClientAttest({ walletClient, easAddress });
 
     const edgeResolverAddress = await getEdgeResolverAddress(targetNetwork.id);
     if (!edgeResolverAddress) {
