@@ -5,6 +5,7 @@ import {
   SwitchChainError,
   createWalletClient,
   custom,
+  fallback,
   fromHex,
   getAddress,
   http,
@@ -18,6 +19,7 @@ import {
   BURNER_WALLET_PK_STORAGE_KEY,
   selectBurnerChain,
 } from "~~/utils/scaffold-eth/instantBurner";
+import { getAlchemyHttpUrl } from "~~/utils/scaffold-eth/networks";
 
 export class BurnerConnectorNotConnectedError extends BaseError {
   override name = "BurnerConnectorNotConnectedError";
@@ -91,8 +93,47 @@ function configuredChain(chains: readonly Chain[], chainId: number): Chain {
   return chain;
 }
 
+function addUniqueRpcUrl(urls: string[], url: string | undefined) {
+  if (url && !urls.includes(url)) urls.push(url);
+}
+
+function hasExplicitRpcOverride(chainRpcUrls: readonly string[]): boolean {
+  const explicitUrls = [
+    process.env.NEXT_PUBLIC_SEPOLIA_RPC_URL,
+    process.env.NEXT_PUBLIC_DEVNET_RPC_URL,
+    process.env.NEXT_PUBLIC_HARDHAT_RPC_URL,
+  ]
+    .map(url => url?.trim())
+    .filter((url): url is string => !!url);
+
+  return chainRpcUrls.some(url => explicitUrls.includes(url));
+}
+
+export function getBurnerRpcUrls(chain: Chain): readonly string[] {
+  const urls: string[] = [];
+  const chainRpcUrls = chain.rpcUrls.default.http;
+  const alchemyUrl = getAlchemyHttpUrl(chain.id);
+
+  if (hasExplicitRpcOverride(chainRpcUrls)) {
+    for (const url of chainRpcUrls) addUniqueRpcUrl(urls, url);
+    addUniqueRpcUrl(urls, alchemyUrl);
+  } else {
+    addUniqueRpcUrl(urls, alchemyUrl);
+    for (const url of chainRpcUrls) addUniqueRpcUrl(urls, url);
+  }
+
+  return urls;
+}
+
+function burnerTransport(chain: Chain) {
+  const urls = getBurnerRpcUrls(chain);
+  if (urls.length === 0) throw new Error(`No RPC URL found for burner chain ${chain.id}.`);
+  const transports = urls.map(url => http(url));
+  return transports.length === 1 ? transports[0] : fallback(transports);
+}
+
 function chainRpcUrl(chain: Chain): string {
-  const url = chain.rpcUrls.default.http[0];
+  const url = getBurnerRpcUrls(chain)[0];
   if (!url) throw new Error(`No RPC URL found for burner chain ${chain.id}.`);
   return url;
 }
@@ -157,7 +198,7 @@ export const chainAwareBurner = ({ useSessionStorage = false }: { useSessionStor
           const client = createWalletClient({
             chain,
             account: burnerAccount,
-            transport: http(),
+            transport: burnerTransport(chain),
           });
 
           if (method === "eth_sendTransaction") {
