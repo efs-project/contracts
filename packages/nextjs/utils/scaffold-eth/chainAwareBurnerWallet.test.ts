@@ -28,7 +28,7 @@ registerHooks({
   },
 });
 
-const { chainAwareBurner } = await import("../../services/web3/chainAwareBurnerWallet.ts");
+const { chainAwareBurner, getBurnerRpcUrls } = await import("../../services/web3/chainAwareBurnerWallet.ts");
 const { mainnet, sepolia } = await import("viem/chains");
 const { numberToHex } = await import("viem/utils");
 
@@ -104,4 +104,46 @@ test("burner rejects mainnet even when wagmi appends it for ENS reads", async ()
 
   await assert.rejects(() => connector.connect({ chainId: mainnet.id }), rejectsUnsupportedChain(mainnet.id));
   await assert.rejects(() => connector.switchChain({ chainId: mainnet.id }), rejectsUnsupportedChain(mainnet.id));
+});
+
+test("burner Sepolia transport prefers the configured Alchemy fallback before public RPC", () => {
+  const previousSepoliaRpcUrl = process.env.NEXT_PUBLIC_SEPOLIA_RPC_URL;
+  delete process.env.NEXT_PUBLIC_SEPOLIA_RPC_URL;
+
+  const sepoliaUrls = getBurnerRpcUrls(sepolia);
+  try {
+    assert.match(sepoliaUrls[0] ?? "", /^https:\/\/eth-sepolia\.g\.alchemy\.com\/v2\//);
+    assert.equal(new Set(sepoliaUrls).size, sepoliaUrls.length);
+
+    assert.deepEqual(getBurnerRpcUrls(devnet), devnet.rpcUrls.default.http);
+  } finally {
+    if (previousSepoliaRpcUrl === undefined) {
+      delete process.env.NEXT_PUBLIC_SEPOLIA_RPC_URL;
+    } else {
+      process.env.NEXT_PUBLIC_SEPOLIA_RPC_URL = previousSepoliaRpcUrl;
+    }
+  }
+});
+
+test("burner honors an explicit Sepolia RPC override before the Alchemy fallback", () => {
+  const previousSepoliaRpcUrl = process.env.NEXT_PUBLIC_SEPOLIA_RPC_URL;
+  const explicitRpcUrl = "https://custom-sepolia.example/rpc";
+  const customSepolia = {
+    ...sepolia,
+    rpcUrls: { default: { http: [explicitRpcUrl] } },
+  };
+
+  process.env.NEXT_PUBLIC_SEPOLIA_RPC_URL = explicitRpcUrl;
+  try {
+    const sepoliaUrls = getBurnerRpcUrls(customSepolia);
+    assert.equal(sepoliaUrls[0], explicitRpcUrl);
+    assert.match(sepoliaUrls[1] ?? "", /^https:\/\/eth-sepolia\.g\.alchemy\.com\/v2\//);
+    assert.equal(new Set(sepoliaUrls).size, sepoliaUrls.length);
+  } finally {
+    if (previousSepoliaRpcUrl === undefined) {
+      delete process.env.NEXT_PUBLIC_SEPOLIA_RPC_URL;
+    } else {
+      process.env.NEXT_PUBLIC_SEPOLIA_RPC_URL = previousSepoliaRpcUrl;
+    }
+  }
 });

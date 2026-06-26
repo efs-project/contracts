@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { hardhat } from "viem/chains";
 import { useAccount, useConnect, useConnectors, useDisconnect } from "wagmi";
 import { useTargetNetwork } from "~~/hooks/scaffold-eth";
@@ -8,9 +8,11 @@ import {
   BURNER_WALLET_PK_STORAGE_KEY,
   FAUCET_CHAIN_ID,
   FAUCET_URL,
+  getParsedError,
   isBurnerConnector,
   isInstantBurnerSessionEnabled,
   normalizeStoredBurnerPrivateKey,
+  notification,
   requestInstantBurnerDrip,
   shouldAutoConnectInstantBurner,
   shouldClearInstantBurnerTrackingBeforeDisconnect,
@@ -93,6 +95,7 @@ export const InstantBurnerSession = () => {
   const [dismissed, setDismissed] = useState(false);
   const [editingSessionRequested, setEditingSessionRequested] = useState(false);
   const [pauseUntil, setPauseUntil] = useState<number | undefined>(undefined);
+  const [connectError, setConnectError] = useState<string | undefined>(undefined);
   const connectingBurnerRef = useRef(false);
   const disconnectingBurnerRef = useRef(false);
   const burnerWasConnectedRef = useRef(false);
@@ -173,6 +176,35 @@ export const InstantBurnerSession = () => {
     }
   }, [status]);
 
+  const connectBurner = useCallback(() => {
+    const burnerConnector = connectors.find(isBurnerConnector);
+    if (!burnerConnector || connectingBurnerRef.current) return false;
+
+    connectingBurnerRef.current = true;
+    connect(
+      { connector: burnerConnector, chainId: FAUCET_CHAIN_ID },
+      {
+        onSuccess: () => {
+          setConnectError(undefined);
+        },
+        onError: error => {
+          const detail = getParsedError(error);
+          const message = detail
+            ? `Easy Edits could not connect: ${detail}`
+            : "Easy Edits could not connect the burner wallet.";
+          setConnectError(message);
+          setEditingSessionRequested(false);
+          setDismissed(false);
+          notification.error(`${message} Try Connect Wallet > Burner Wallet.`, { position: "bottom-center" });
+        },
+        onSettled: () => {
+          connectingBurnerRef.current = false;
+        },
+      },
+    );
+    return true;
+  }, [connect, connectors]);
+
   useEffect(() => {
     burnerWasConnectedRef.current = trackInstantBurnerWasConnected({
       current: burnerWasConnectedRef.current,
@@ -204,8 +236,7 @@ export const InstantBurnerSession = () => {
       return;
     }
 
-    const burnerConnector = connectors.find(isBurnerConnector);
-    if (!burnerConnector || connectingBurnerRef.current) return;
+    if (connectingBurnerRef.current) return;
     if (
       !shouldAutoConnectInstantBurner({
         enabled: INSTANT_BURNER_ENABLED,
@@ -222,16 +253,8 @@ export const InstantBurnerSession = () => {
       return;
     }
 
-    connectingBurnerRef.current = true;
-    connect(
-      { connector: burnerConnector, chainId: FAUCET_CHAIN_ID },
-      {
-        onSettled: () => {
-          connectingBurnerRef.current = false;
-        },
-      },
-    );
-  }, [connect, connector?.id, connectors, dismissed, editingSessionRequested, pauseUntil, status, targetNetwork.id]);
+    connectBurner();
+  }, [connectBurner, connector?.id, dismissed, editingSessionRequested, pauseUntil, status, targetNetwork.id]);
 
   if (!INSTANT_BURNER_ENABLED || targetNetwork.id !== FAUCET_CHAIN_ID) {
     return null;
@@ -241,8 +264,24 @@ export const InstantBurnerSession = () => {
     clearPublicHardhatBurnerKey(targetNetwork.id);
     setDismissed(false);
     setPauseUntil(undefined);
+    setConnectError(undefined);
     setEditingSessionRequested(true);
     requestInstantBurnerDrip();
+    if (
+      shouldAutoConnectInstantBurner({
+        enabled: INSTANT_BURNER_ENABLED,
+        editingSessionRequested: true,
+        status,
+        targetChainId: targetNetwork.id,
+        faucetChainId: FAUCET_CHAIN_ID,
+        activeConnectorId: connector?.id,
+        pausedUntil: undefined,
+        realWalletFlowActive: false,
+        now: Date.now(),
+      })
+    ) {
+      connectBurner();
+    }
   };
 
   const disableEditing = () => {
@@ -257,6 +296,7 @@ export const InstantBurnerSession = () => {
     setEditingSessionRequested(false);
     setDismissed(true);
     setPauseUntil(undefined);
+    setConnectError(undefined);
     disconnect();
   };
 
@@ -273,7 +313,7 @@ export const InstantBurnerSession = () => {
       <InstantBurnerToggle
         active={false}
         onClick={enableEditing}
-        title="Use a free Sepolia wallet for promptless edits"
+        title={connectError ?? "Use a free Sepolia wallet for promptless edits"}
       />
     );
   }
