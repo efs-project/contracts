@@ -76,6 +76,7 @@ What else we looked at and why it lost.
 - [ADR-0049 — DATA is pure identity; hash and size are data, not identity](./0049-file-content-identity-hash-as-data.md)
 - [ADR-0050 — REDIRECT: first-class canonical / sameAs / symlink edge](./0050-redirect-canonical-symlink-schema.md)
 - [ADR-0052 — PROPERTY is non-revocable (interned shared value)](./0052-property-is-non-revocable.md)
+- [ADR-0064 — `contentHash`/`size`/`cid` self-describing encoding (multibase-multihash + CID)](./0064-content-hash-self-describing-encoding.md) _(Accepted — sha2-256 canonical so `contentHash` shares the IPFS CID digest; keccak-256 optional alternate)_
 
 ### Index Design
 
@@ -83,6 +84,7 @@ What else we looked at and why it lost.
 - [ADR-0008 — Qualifying-folder write-time index](./0008-qualifying-folder-write-time-index.md)
 - [ADR-0009 — Append-only indices stay append-only](./0009-append-only-indices.md)
 - [ADR-0010 — `_containsAttestations` propagation is one-way (sticky)](./0010-contains-attestations-sticky-propagation.md)
+- [ADR-0066 — `index()` is discovery-only; folder presence is placement-driven](./0066-index-discovery-only-no-folder-presence.md)
 
 ### Transports & Mirrors
 
@@ -104,11 +106,14 @@ What else we looked at and why it lost.
 - [ADR-0058 — Harden the EFSRouter web3:// serving path (pagination round-trip, parity, sanitization)](./0058-router-web3-serving-hardening.md)
 - [ADR-0059 — web3:// reads depend on extcodecopy; EOF/EVM-evolution survival posture](./0059-extcodecopy-eof-survival-posture.md)
 - [ADR-0060 — Multi-chain web3:// addressing: per-chain ENS subdomains + movable default](./0060-multichain-web3-ens-addressing.md) _(Proposed)_
+- [ADR-0067 — REDIRECT read-time resolution rules](./0067-redirect-read-time-resolution.md) _(Accepted — symlink-only following (supersededBy is a non-followed terminal; path=newest/UID=exact), D_MAX=16/ceiling 32, cycle-stop, lowest-UID-in-SCC canonicalization, lens precedence, WHITEOUT negative-terminal reservation + seeding ban; gates durable REDIRECT seeding)_
 
 ### Security Limits
 
-- [ADR-0021 — `MAX_ANCHOR_DEPTH = 32`](./0021-max-anchor-depth.md)
+- [ADR-0021 — `MAX_ANCHOR_DEPTH = 32`](./0021-max-anchor-depth.md) _(Superseded by ADR-0065 → ADR-0068 — now 256)_
 - [ADR-0022 — `MAX_URI_LENGTH = 8192` in MirrorResolver](./0022-max-uri-length.md)
+- [ADR-0065 — Raise `MAX_ANCHOR_DEPTH` to 1024; no anchor-name length cap](./0065-raise-max-anchor-depth-and-no-name-length-cap.md) _(depth value superseded by ADR-0068 → 256; no-name-cap still holds)_
+- [ADR-0068 — Lower `MAX_ANCHOR_DEPTH` to 256 (derive the cap from the propagation gas budget)](./0068-lower-max-anchor-depth-to-256-for-propagation-gas.md)
 - [ADR-0023 — URI scheme allowlist in MirrorResolver](./0023-uri-scheme-allowlist.md)
 - [ADR-0024 — Content-Type sanitization](./0024-content-type-sanitization.md)
 - [ADR-0025 — Anchor name validation](./0025-anchor-name-validation.md)

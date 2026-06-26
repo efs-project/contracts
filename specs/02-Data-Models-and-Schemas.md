@@ -340,11 +340,11 @@ See [ADR-0044](../docs/adr/0044-list-and-list-entry-schemas.md) and [Lists and C
 
 `refUID` = the **source**: the duplicate DATA for `sameAs`/`supersededBy`; the source path Anchor for `symlink`.
 
-**Kinds taxonomy** (initial — evolvable, not in the UID):
-- `0 = sameAs` — strong dedup. Source + target both DATA. Followed at read time.
-- `1 = supersededBy` — version replacement. Source + target both DATA. Followed at read time.
-- `2 = symlink` — path → target. Source ANCHOR; target ANCHOR or DATA. Followed one hop.
-- `3+ = reserved` — recorded but **not type-checked** by the resolver (e.g. `relatedVersion`: a weak discovery hint that is **never** auto-followed). Follow rules for these are decided by the read-time resolution spec, not the resolver.
+**Kinds taxonomy** (initial — evolvable, not in the UID). **Follow rules are authoritative in `specs/09-redirect-resolution.md` (ADR-0067, James ratified 2026-06-20): `symlink` is the ONLY auto-followed kind; `sameAs`/`supersededBy`/reserved are non-followed terminals.**
+- `0 = sameAs` — strong dedup. Source + target both DATA. **Not auto-followed** — a canonicalization relation only; clients/indexers pick a canonical representative for dedup, but a navigational walk that lands on a DATA does not chase `sameAs` (specs/09 §4.2).
+- `1 = supersededBy` — version replacement. Source + target both DATA. **NOT auto-followed** — a discoverable version breadcrumb only. "Latest" is reached the EFS way (the path's placement PIN, which the publisher re-points), NOT by chasing this edge; auto-following it would let a fixed DATA UID silently resolve to a newer version, violating "no silent revision" (specs/09).
+- `2 = symlink` — path → target. Source ANCHOR; target ANCHOR or DATA. **The only auto-followed kind** — when path resolution lands on a symlink source, the follower advances to `target` (a `D_MAX`-bounded, cycle-safe walk per specs/09, not a hardcoded single hop).
+- `3+ = reserved` — recorded but **not type-checked** by the resolver (e.g. `relatedVersion`: a weak discovery hint that is **never** auto-followed). Non-followed terminal; meaning is assigned by a future taxonomy revision (specs/09), never by silent client guesswork.
 
 **Write-time guards enforced by `AliasResolver`** (correctness before any mainnet burn):
 - `a.schema == redirectSchemaUID` (self-derived in `initialize()` against the proxy address; rejects foreign schemas pointed at the resolver) else `WrongSchema`.
@@ -356,13 +356,35 @@ See [ADR-0044](../docs/adr/0044-list-and-list-entry-schemas.md) and [Lists and C
   - `symlink` (2): source must be an ANCHOR (`SourceNotAnchor`); target must be ANCHOR or DATA (`TargetNotAnchorOrData`).
   - `kind >= 3`: no typing (reserved); only the `target != 0` / `target != source` guards apply.
 
-**Read-time resolution is client/spec, not the resolver.** The resolver enforces only **write-time** correctness (direct self-loops, typing). **Multi-hop cycle handling** (resolve to the lowest UID in the strongly-connected component — start-independent), **chain following**, **depth caps** (`D_MAX`), **lens precedence** (ADR-0031), and **kind-following rules** all live in the client/router + a later Durable resolution spec (ADR-0050 §"Write-time guards vs read-time resolution"). The resolver cannot afford to walk the graph on each write.
+**Read-time resolution is client/spec, not the resolver.** The resolver enforces only **write-time** correctness (direct self-loops, typing). **Multi-hop cycle handling** (for symlink navigation: a bounded visited-set stop returning `CycleStopped` — NOT lowest-UID-in-SCC, which is the separate `sameAs` *dedup-canonicalization* rule; ADR-0067 / specs/09), **chain following**, **depth caps** (`D_MAX`), **lens precedence** (ADR-0031), and **kind-following rules** (only `symlink` is auto-followed) all live in the client/router + the **[specs/09-redirect-resolution.md](./09-redirect-resolution.md)** resolution spec (Accepted, ADR-0067). The resolver cannot afford to walk the graph on each write.
 
 **Reverse fan-in** ("what points at me?") is intentionally not indexed on-chain by `AliasResolver` — it is the off-chain indexer's job (a future on-chain advisory index is addable as upgradeable logic; ADR-0050 §4).
 
 **Symlink / hardlink mapping**: a *hardlink* (one DATA PINned at many path Anchors) is native and untouched — no follow, no cycle. A *symlink* is `REDIRECT kind=2`. *Canonical/dedup* is `REDIRECT kind=0` (`sameAs`).
 
-See [ADR-0050](../docs/adr/0050-redirect-canonical-symlink-schema.md) for full design rationale.
+See [ADR-0050](../docs/adr/0050-redirect-canonical-symlink-schema.md) for full design rationale, [ADR-0067](../docs/adr/0067-redirect-read-time-resolution.md) for the read-time resolution decision, and **[specs/09-redirect-resolution.md](./09-redirect-resolution.md)** for the authoritative follow rules + conformance vectors.
+
+## Schema 10: WHITEOUT (additive post-freeze, ADR-0055)
+
+> **Not in the frozen nine.** WHITEOUT is added **additively after the Sepolia freeze** (ADR-0055) — a new schema + resolver orphans nothing, exactly how SORT_INFO or any future primitive is added. It is not part of the nine-schema freeze set. Resolver: `WhiteoutResolver`.
+
+**Purpose**: the cross-lens **negative mask** — the one filesystem primitive additive-only lenses (ADR-0031) otherwise lack: *"render this path empty in MY view; stop fall-through to lower lenses, WITHOUT substituting my own content."* This is the overlayfs *whiteout*. It powers the lens-local **delete** of inherited content and the other half of a lens-local **rename** (whiteout the old inherited name + place the new one).
+
+| Schema | Field string | Revocable | refUID | Payload | Resolver |
+|---|---|---|---|---|---|
+| **WHITEOUT** | `""` (empty — pure-identity negative marker, DATA/ADR-0049 idiom) | yes (revoke == un-hide) | the suppressed **child path ANCHOR** | none (zero-length) | WhiteoutResolver |
+
+- **Per-name WHITEOUT** (`refUID = leaf/folder Anchor`) hides one entry. Keyed on `(parent, attester, suppressedChildAnchor)` — `parent = indexer.getParent(refUID)`. Whiting out a root-level anchor reverts (`OrphanAnchor`): there is no lens below the parent slot to suppress.
+
+**Write-time guards** (`WhiteoutResolver`): `a.schema` must be the resolver's own self-derived WHITEOUT UID (`WrongSchema` otherwise — EAS lets anyone register a foreign schema pointing here); `revocable` (`NotRevocable`); no expiry (`HasExpiration`); `refUID != 0` (`ZeroRef`); payload empty (`BadPayload`); refUID is an ANCHOR (`SourceNotAnchor`); refUID is not a root-level anchor (`OrphanAnchor`). The resolver keeps its **own** append-only discovery indices (ADR-0009 shape), NOT co-keyed with EdgeResolver, and writes no kernel state (read-only `getParent` / `ANCHOR_SCHEMA_UID`).
+
+**Read-time resolution** (`EFSFileView` listings + `EFSRouter` path walk) — *"deleted means gone" across BOTH listing AND resolution*:
+- **Negative terminal in first-attester-wins**: walking `L0…system`, the first lens at a path with EITHER a positive placement (file PIN or folder visibility TAG) OR a whiteout terminates the scan — positive ⇒ serve / list it; whiteout ⇒ serve **empty** (404-equivalent) and **stop** (no fall-through, no `system` gap-fill).
+- **Lens-scoped & viewer-sovereign**: a whiteout affects only viewers who voluntarily include the authoring lens; never a global delete. Revoke un-hides. Same-lens override: a lens's own newer positive placement beats its own earlier whiteout (in listings the positive can be a visibility TAG — the folder re-add fix; in single-anchor DATA *resolution* the positive is PIN-only, the correct overlayfs lookup gate). Reads stay single-pass (one extra O(1)-class index source per page, never a per-item doubling).
+
+**Out of scope (explicit, ADR-0055)**: DATA-whiteout (suppressing a DATA UID directly) is **not** a unionfs concept and is not built — whiteout suppresses a *path entry* in a lens, not content identity. Suppressing a PROPERTY / MIRROR / another whiteout is meaningless and rejected at write time. The **opaque-directory variant** (*"show only MY children here"*) is **DEFERRED** (no concrete use case yet; re-adds additively per ADR-0055).
+
+See [ADR-0055](../docs/adr/0055-whiteout-cross-lens-negative-mask.md) for full design rationale + the rejected encodings (REDIRECT kind, TAG `weight < 0`, sentinel PIN, tombstone DATA).
 
 ## Schema Hierarchy
 To represent a standard filesystem interaction where a file has a name within a folder:

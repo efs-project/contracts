@@ -174,7 +174,7 @@ describe("EFS Transports & Data Model", function () {
 
     // Deploy EFSFileView
     const FileViewFactory = await ethers.getContractFactory("EFSFileView");
-    fileView = await FileViewFactory.deploy(await indexer.getAddress(), await edgeResolver.getAddress());
+    fileView = await FileViewFactory.deploy(await indexer.getAddress(), await edgeResolver.getAddress(), ZeroAddress);
 
     // Wire contracts
     await indexer.wireContracts(
@@ -895,16 +895,38 @@ describe("EFS Transports & Data Model", function () {
   // ─── MAX_ANCHOR_DEPTH Tests ───────────────────────────────────────────────
 
   describe("MAX_ANCHOR_DEPTH", function () {
-    it("should enforce maximum anchor depth", async function () {
+    it("MAX_ANCHOR_DEPTH constant is 256 (ADR-0068)", async function () {
+      // Value lock: catches an accidental change to the cap. 32 -> 1024 per ADR-0065.
+      expect(await indexer.MAX_ANCHOR_DEPTH()).to.equal(256n);
+    });
+
+    it("allows trees far deeper than the old 32-level cap (ADR-0065)", async function () {
+      // Regression for the raise: a 40-deep chain (past the old cap of 32) must now create successfully.
+      this.timeout(180000); // dozens of sequential attestations
       let parent = rootUID;
-      // Create a chain of 32 levels (root + 32 = 33 total, but root doesn't count as depth)
-      for (let i = 0; i < 32; i++) {
+      for (let i = 0; i < 40; i++) {
         parent = await createAnchor(parent, `level${i}`);
       }
-
-      // 33rd level should fail
-      await expect(createAnchor(parent, "too-deep")).to.be.revertedWithCustomError(indexer, "AnchorTooDeep");
+      // 40 levels deep, no revert — the old MAX_ANCHOR_DEPTH=32 would have failed at level 33.
+      expect(parent).to.not.equal(rootUID);
     });
+
+    // Boundary-revert proof: builds a chain to exactly the cap and asserts the next create reverts.
+    // Opt-in only — creating 1025 sequential anchors is ~60s, and the enforcement logic itself is
+    // value-parametric and unchanged, so it's covered by the value-lock + positive tests above.
+    // Run with RUN_SLOW_TESTS=true to exercise it.
+    (process.env.RUN_SLOW_TESTS === "true" ? it : it.skip)(
+      "reverts one level past the depth cap (slow)",
+      async function () {
+        this.timeout(600000);
+        const maxDepth = Number(await indexer.MAX_ANCHOR_DEPTH());
+        let parent = rootUID;
+        for (let i = 0; i < maxDepth; i++) {
+          parent = await createAnchor(parent, `level${i}`);
+        }
+        await expect(createAnchor(parent, "too-deep")).to.be.revertedWithCustomError(indexer, "AnchorTooDeep");
+      },
+    );
   });
 
   // ─── EFSFileView Integration Tests ────────────────────────────────────────

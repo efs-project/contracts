@@ -128,7 +128,7 @@ describe("EFSFileView", function () {
 
     // Deploy FileView (with EdgeResolver)
     const FileViewFactory = await ethers.getContractFactory("EFSFileView");
-    fileView = await FileViewFactory.deploy(await indexer.getAddress(), await edgeResolver.getAddress());
+    fileView = await FileViewFactory.deploy(await indexer.getAddress(), await edgeResolver.getAddress(), ZeroAddress);
     await fileView.waitForDeployment();
 
     // Wire the indexer -> edgeResolver link so EdgeResolver.onAttest can call

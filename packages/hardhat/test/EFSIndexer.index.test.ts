@@ -345,7 +345,7 @@ describe("EFSIndexer — public index() API", function () {
       expect(byAttester).to.include(uid);
     });
 
-    it("containsAttestations returns true after index with refUID", async function () {
+    it("index() is DISCOVERY-ONLY: a foreign attestation does NOT manufacture folder presence (ADR-0066)", async function () {
       const rootTx = await eas.connect(owner).attest({
         schema: anchorSchemaUID,
         data: {
@@ -363,7 +363,23 @@ describe("EFSIndexer — public index() API", function () {
       expect(await indexer.containsAttestations(rootUID, aliceAddr)).to.be.false;
       const uid = await attestThirdParty(alice, "linked", rootUID);
       await indexer.index(uid);
-      expect(await indexer.containsAttestations(rootUID, aliceAddr)).to.be.true;
+
+      // Schema-blind FOLDER PRESENCE is NOT propagated by a permissionless discovery call (ADR-0066).
+      // A foreign/junk attestation pointed at an anchor must not make that anchor "contain alice's
+      // content" — that is the index() pollution vector (and the WHITEOUT positive-presence case). Real
+      // presence comes only from intentional placement (PIN/TAG via EdgeResolver, or anchor creation).
+      expect(
+        await indexer.containsAttestations(rootUID, aliceAddr),
+        "index() must NOT set schema-blind folder presence",
+      ).to.be.false;
+
+      // …but DISCOVERY did happen: the attestation is findable, and the accurate schema-SCOPED fact is set.
+      const refs = await indexer.getReferencingAttestations(rootUID, thirdPartySchemaUID, 0, 10, false, false);
+      expect(refs, "index() makes the attestation discoverable via getReferencingAttestations").to.include(uid);
+      expect(
+        await indexer.containsSchemaAttestations(rootUID, aliceAddr, thirdPartySchemaUID),
+        "the schema-scoped discovery fact is accurate (alice has a thirdParty-schema attestation here)",
+      ).to.be.true;
     });
 
     it("does not double-index: counts stay stable on re-index", async function () {

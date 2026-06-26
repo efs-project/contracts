@@ -4,17 +4,17 @@
 // RPC, no private key).
 //
 // Sequence:
-//   1. Predict all 6 proxy CREATE3 addresses (depend only on deployer+salt) → compute all 9 UIDs.
+//   1. Predict all 7 proxy CREATE3 addresses (depend only on deployer+salt) → compute all 10 UIDs.
 //   2. Deploy each resolver impl + its CREATE3 proxy (atomic initialize via the proxy constructor),
 //      passing the precomputed UIDs/partner refs as init args.
 //   3. VERIFY GATE (deploy-lib/verify.ts) — abort on any failure.
 //   4. Wire: EFSIndexer.wireContracts(...) ONLY — pure storage, no EAS call (safe pre-register). The
 //      /transports/* anchors + MirrorResolver.setTransportsAnchor need ANCHOR registered first → step 6.
 //   --- FREEZE GATE (human on real Sepolia; auto on fork) ---
-//   6. Register the 9 schemas LAST; assert getSchema(uid).resolver==proxy. THEN SystemAccount.bootstrap
+//   6. Register the 10 schemas LAST; assert getSchema(uid).resolver==proxy. THEN SystemAccount.bootstrap
 //      authors root + /transports/* (then seal) and MirrorResolver.setTransportsAnchor binds the UID.
 //   7. Transfer every ProxyAdmin owner + resolver Ownable owner to the Safe; assert owner()==Safe.
-//   8. Per-schema smoke: push one attestation through each of the 9 schemas; assert no revert.
+//   8. Per-schema smoke: push one attestation through each of the 10 schemas; assert no revert.
 
 import { Contract, Signer, ZeroAddress, ZeroHash } from "ethers";
 import { ethers } from "hardhat";
@@ -153,7 +153,7 @@ export async function orchestrate(
   // ── Step 1: predict all proxy addresses, compute all UIDs ──────────────────────────────────
   // SystemAccount (ADR-0053) is predicted/deployed alongside the resolvers (own committed salt,
   // frozen for address stability) but is NOT in any schema UID — so it does NOT feed
-  // computeAllSchemaUIDs. The schema UIDs depend only on the six resolver proxy addresses.
+  // computeAllSchemaUIDs. The schema UIDs depend only on the seven resolver proxy addresses.
   l("EFS deploy: predicting CREATE3 proxy addresses...");
   const proxies = {} as Record<ResolverName, string>;
   const rawSalts = {} as Record<Create3Name, string>;
@@ -186,6 +186,9 @@ export async function orchestrate(
     ListResolver: { fn: "initialize", args: [] },
     ListEntryResolver: { fn: "initialize", args: [schemaUIDs.LIST] },
     AliasResolver: { fn: "initialize", args: [schemaUIDs.DATA, schemaUIDs.ANCHOR] },
+    // WhiteoutResolver (ADR-0055): read-only kernel ref. It self-derives its WHITEOUT schema UID +
+    // snapshots ANCHOR_SCHEMA_UID from the indexer in initialize(); no kernel writes, no Ownable.
+    WhiteoutResolver: { fn: "initialize", args: [proxies.EFSIndexer] },
   };
 
   const deploys: Record<string, Create3DeployResult> = {};
@@ -339,7 +342,7 @@ export async function orchestrate(
   return result;
 }
 
-/// Steps 6 + (post-register anchors) + 7 + 8: register the 9 schemas LAST, create the /transports/*
+/// Steps 6 + (post-register anchors) + 7 + 8: register the 10 schemas LAST, create the /transports/*
 /// anchors + setTransportsAnchor, transfer all ownership to the Safe, then the per-schema smoke.
 export async function registerAndTransfer(
   result: OrchestrationResult,
@@ -383,6 +386,20 @@ export async function registerAndTransfer(
         `REDIRECT UID ${schemaUIDs.REDIRECT} — proxy/schema drift between freeze-gate runs.`,
     );
   }
+  // WHITEOUT (ADR-0055): the WhiteoutResolver self-derives its UID — re-assert it before the
+  // irreversible register (same ListEntry-class drift guard).
+  const whiteoutProxy = (await ethers.getContractAt(
+    "WhiteoutResolver",
+    proxies.WhiteoutResolver,
+    deployer,
+  )) as unknown as Contract;
+  const onchainWhiteoutUID: string = await whiteoutProxy.whiteoutSchemaUID();
+  if (onchainWhiteoutUID.toLowerCase() !== schemaUIDs.WHITEOUT.toLowerCase()) {
+    throw new Error(
+      `REGISTER ABORT: WhiteoutResolver.whiteoutSchemaUID() ${onchainWhiteoutUID} != to-be-registered ` +
+        `WHITEOUT UID ${schemaUIDs.WHITEOUT} — proxy/schema drift between freeze-gate runs.`,
+    );
+  }
 
   // ── Step 6: register LAST ─────────────────────────────────────────────────────────────────
   // FIX (PR #24 P1): the EOA path registers each schema in a SEPARATE tx and only creates the
@@ -407,7 +424,7 @@ export async function registerAndTransfer(
         `(docs/DEPLOYMENT.md §3). The EOA path may still deploy+wire (--until-freeze-gate) anywhere.`,
     );
   }
-  l("EFS deploy: registering 9 schemas LAST...");
+  l("EFS deploy: registering 10 schemas LAST...");
   for (const s of SCHEMAS) {
     const resolver = proxies[s.resolver];
     const uid = schemaUIDs[s.name];
@@ -482,11 +499,12 @@ export async function registerAndTransfer(
     l(`  MirrorResolver.transportsAnchorUID = ${transportsUID}`);
   }
 
-  // ── Step 8 (smoke): push one attestation through each of the 9 schemas BEFORE handing off
-  //     ownership. Smoke runs on EVERY path — including post-seal retries — because seal() fires
+  // ── Step 8 (smoke): push one attestation through each of the 10 schemas (9 frozen + WHITEOUT,
+  //     ADR-0055) BEFORE handing off ownership (deployer is the attester; works on the fork without the
+  //     Safe signer). Smoke runs on EVERY path — including post-seal retries — because seal() fires
   //     BEFORE smoke, so alreadySealed==true does not imply smoke completed. A run that reaches
   //     seal() and then fails during smoke leaves the ceremony sealed but unverified; skipping smoke
-  //     on the retry would silently bypass the only pre-transfer proof that all 9 schemas are wired
+  //     on the retry would silently bypass the only pre-transfer proof that all 10 schemas are wired
   //     and reachable, and ownership would transfer to the Safe against potentially broken resolvers.
   //     Re-running smoke is safe: the ANCHOR case is already idempotent (smoke.txt check inside
   //     perSchemaSmoke), and no other smoke schema has a uniqueness constraint that rejects a second
@@ -647,7 +665,7 @@ async function assertIsSafe(addr: string, networkName: string): Promise<void> {
   }
 }
 
-/// Step 8 (subset): push one attestation through each of the 9 schemas; assert no revert + index write.
+/// Step 8 (subset): push one attestation through each of the 10 schemas; assert no revert + index write.
 async function perSchemaSmoke(
   result: OrchestrationResult,
   deployer: Signer,
@@ -721,6 +739,11 @@ async function perSchemaSmoke(
   // REDIRECT (symlink: source ANCHOR -> target). kind=2 (symlink) requires ANCHOR source.
   await attest(schemaUIDs.REDIRECT, abi.encode(["bytes32", "uint16"], [rootUID, 2]), fileAnchor, true);
 
+  // WHITEOUT (ADR-0055): empty payload, refUID = an ANCHOR with a parent. `fileAnchor` is under
+  // root, so getParent != 0 (OrphanAnchor would reject a root-level whiteout). Idempotent / no-op-
+  // safe: whiting out a real anchor is legal even with no lower-lens content to suppress.
+  await attest(schemaUIDs.WHITEOUT, "0x", fileAnchor, true);
+
   // index write proof: the file anchor resolves under root, and the PIN placed DATA there.
   const resolved = await indexer.resolvePath(rootUID, "smoke.txt");
   if (resolved.toLowerCase() !== fileAnchor.toLowerCase()) {
@@ -728,5 +751,5 @@ async function perSchemaSmoke(
   }
   void attesterAddr;
   void propUID;
-  l("  9/9 per-schema smokes passed; index write confirmed.");
+  l(`  ${SCHEMAS.length}/${SCHEMAS.length} per-schema smokes passed; index write confirmed.`);
 }

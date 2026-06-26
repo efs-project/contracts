@@ -201,9 +201,11 @@ contract AliasResolver is EFSUpgradeableResolver {
         // revocable == true: a REDIRECT can always be retracted. Guard the schema for symmetry with
         // onAttest (reject foreign-schema revokes), then accept. No state to unwind — reverse
         // fan-in is off-chain (see contract NatSpec).
-        if (a.schema != _cfg().redirectSchemaUID) revert WrongSchema();
+        AliasConfig storage $ = _cfg();
+        if (a.schema != $.redirectSchemaUID) revert WrongSchema();
         if (a.data.length != EXPECTED_DATA_LEN) revert BadPayload();
         (bytes32 target, uint16 kind) = abi.decode(a.data, (bytes32, uint16));
+
         emit RedirectRevoked(a.refUID, target, kind, a.uid);
         return true;
     }

@@ -97,8 +97,10 @@ describe("DeploySafe.fork — Safe-native deploy, born Safe-owned", function () 
     expect(batch2Idx, "Batch 2 executed").to.be.greaterThan(-1);
     expect(gateGreenIdx, "verify gate ran BEFORE Batch 2 (before any register leg)").to.be.lessThan(batch2Idx);
 
-    // ── 7 proxies at the Safe-keyed predicted CREATE3 addresses, with code ──────────────────────────
-    expect(Object.keys(result.proxies)).to.have.lengthOf(6);
+    // ── One proxy per RESOLVERS entry at the Safe-keyed predicted CREATE3 addresses, with code ───────
+    // Bound to RESOLVERS.length (not a hardcoded count) so appending an additive resolver — e.g.
+    // WhiteoutResolver (ADR-0055) — doesn't silently rot this assertion.
+    expect(Object.keys(result.proxies)).to.have.lengthOf(RESOLVERS.length);
     for (const r of RESOLVERS) {
       const proxy = result.proxies[r];
       const predicted = (await predictProxyAddress(createx, safe, r)).predicted;
@@ -291,13 +293,15 @@ describe("DeploySafe.fork — Safe-native deploy, born Safe-owned", function () 
     // Re-build the plan against the deployed+sealed system. This is the post-seal re-run path.
     const plan = await buildSafePlan(deployer, deployedSafe, false);
 
-    // ── The omit flags are set: bootstrap+seal omitted, and all 9 registers omitted ─────────────────
+    // ── The omit flags are set: bootstrap+seal omitted, and all register legs omitted ───────────────
+    // SCHEMAS is the frozen nine PLUS the additive post-freeze WHITEOUT (ADR-0055), so the count is the
+    // full SCHEMAS.length, not a hardcoded 9 — every register leg is omitted on a post-seal re-run
+    // (register is NOT idempotent).
     expect(plan.batch2BootstrapOmitted, "batch2BootstrapOmitted on a post-seal re-run").to.equal(true);
-    expect(SCHEMAS.length, "freeze set is 9 schemas").to.equal(9);
     expect(
       plan.batch2RegistersOmitted,
-      "all 9 register legs omitted — the schemas are already registered (register is NOT idempotent)",
-    ).to.equal(9);
+      "all register legs omitted — the schemas are already registered (register is NOT idempotent)",
+    ).to.equal(SCHEMAS.length);
 
     // ── Batch 2 is EMPTY — every register leg + bootstrap + seal omitted (full idempotency) ─────────
     expect(plan.batch2, "Batch 2 is an empty no-op (all registers + bootstrap + seal omitted)").to.have.lengthOf(0);
@@ -437,8 +441,13 @@ describe("DeploySafe.fork — Safe-native deploy, born Safe-owned", function () 
     expect(res.batches[0].safeTxHash, "SafeTx hash present").to.match(/^0x[0-9a-fA-F]{64}$/);
     expect(res.batches[0].operation, "MultiSend is a delegatecall (operation 1)").to.equal(1);
     expect(res.batches[0].to.toLowerCase(), "targets MultiSendCallOnly").to.not.equal(ethers.ZeroAddress);
-    // Batch 1 carries the 7 proxy deploys + wireContracts (8 legs). No register leg is proposed at Phase 0.
-    expect(res.batches[0].legs.length, "Batch 1 has 8 legs (7 deploys + wire)").to.equal(8);
+    // Batch 1 carries one deploy leg per RESOLVERS entry + the SystemAccount deploy + wireContracts.
+    // Bound to RESOLVERS.length (deploys) + 2 (SystemAccount + wire) so an additive resolver — e.g.
+    // WhiteoutResolver (ADR-0055) — doesn't rot the count. No register leg is proposed at Phase 0.
+    expect(
+      res.batches[0].legs.length,
+      "Batch 1 has RESOLVERS.length + 2 legs (per-resolver deploys + SystemAccount + wire)",
+    ).to.equal(RESOLVERS.length + 2);
     expect(
       res.batches[0].legs.filter(leg => /^register /.test(leg.label ?? "")).length,
       "no register legs proposed at Phase 0 (Batch 2 is not emitted until Phase 1)",

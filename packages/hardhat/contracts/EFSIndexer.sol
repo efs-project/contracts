@@ -137,8 +137,17 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
         return owner();
     }
 
-    // Maximum anchor nesting depth — prevents gas griefing in propagateContains
-    uint256 public constant MAX_ANCHOR_DEPTH = 32;
+    // Maximum anchor nesting depth — bounds gas on the ancestor-chain walks (_propagateContains,
+    // _indexGlobal, creation-time depth check). The cap's ONLY purpose is anti-grief gas-bounding;
+    // it is set far above any real tree (deepest cited ~11 levels) yet within the WRITE-SIDE block-gas
+    // budget. History: 32 (ADR-0021) -> 1024 (ADR-0065) -> 256 (ADR-0068). 32 wrongly rejected deep
+    // trees EFS must mirror; 1024 was unexecutable for a first-time deep placement — _propagateContains
+    // does ~4 cold (zero->nonzero) SSTOREs/level (~90k gas/level, NOT the ~2.1k warm-SLOAD figure
+    // ADR-0065 assumed), so a fresh lens hardlinking/placing at depth 1024 needs ~92M gas > ~30M block
+    // limit and reverts. 256 fits (~23M worst-case, self-paid by the creator) while still being 8x the
+    // original and beyond any real tree. A depth COUNTER (not a path-byte cap) is the right tool because
+    // it is what actually bounds these walks.
+    uint256 public constant MAX_ANCHOR_DEPTH = 256;
 
     // Content-addressed deduplication: keccak256(contentHash) => first DATA UID.
     // AGENT-NOTE: this is a RETAINED DEAD SLOT, kept for storage-layout stability, no longer
@@ -365,8 +374,9 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
     }
 
     function onAttest(Attestation calldata attestation, uint256 /*value*/) internal override returns (bool) {
-        // 1. GLOBAL INDEXING (ALL ATTESTATIONS)
-        _indexGlobal(attestation);
+        // 1. GLOBAL INDEXING (ALL ATTESTATIONS). Native path → folder-presence propagation ON (anchor
+        //    creation builds the creator's navigable tree; DATA/PROPERTY have refUID 0 so it is a no-op).
+        _indexGlobal(attestation, true);
 
         // 2. EFS CORE LOGIC (ANCHORS)
         bytes32 schema = attestation.schema;
@@ -1111,7 +1121,14 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
     ///      Writes all generic discovery indices: schema, attester, sent, received,
     ///      referencing, and the upward _childrenByAttester propagation chain.
     ///      Does NOT run EFS-specific logic (Anchor tree, DATA content, Property validation).
-    function _indexGlobal(Attestation memory attestation) private {
+    /// @param propagateFolderPresence  When true, also walk the `_parents` chain marking
+    ///        `_containsAttestations`/`_childrenByAttester` (the SCHEMA-BLIND "navigable tree" that
+    ///        `getChildrenByAddressList` reads). Folder presence is an INTENTIONAL placement signal, so
+    ///        only the native `onAttest` path passes true; the permissionless `index()`/`indexBatch()`
+    ///        discovery path passes FALSE — every schema (incl. WHITEOUT + foreign) stays findable via the
+    ///        global discovery indices below, but a discovery call must not manufacture positive folder
+    ///        presence (ADR-0066; PR #37 review).
+    function _indexGlobal(Attestation memory attestation, bool propagateFolderPresence) private {
         // Cache struct fields to avoid repeated memory reads across multiple mappings.
         bytes32 uid = attestation.uid;
         bytes32 schema = attestation.schema;
@@ -1152,33 +1169,41 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
                 _containsSchemaAttestations[currentUID][attester][schema] = true;
             }
 
-            // Propagate generic "active in this structure" flag all the way up the tree.
-            // Depth-capped at MAX_ANCHOR_DEPTH (symmetric with _propagateContains, ADR-0021): anchor
-            // creation already bounds _parents chains, but this guard makes the walk self-limiting
-            // regardless of how currentUID was reached (notably the permissionless index()/indexBatch()
-            // paths), so no chain can make this loop unbounded.
-            uint256 depth = 0;
-            while (currentUID != bytes32(0)) {
-                // If this level is already flagged true, the rest of the chain above it must be too.
-                // Break early to save gas (amortized O(1) for repeat contributions by same user).
-                if (_containsAttestations[currentUID][attester]) {
-                    break;
+            // Propagate the generic "active in this structure" flag up the tree — but ONLY for an
+            // intentional placement (`propagateFolderPresence`). Discovery via index()/indexBatch() passes
+            // false: the schema-blind `_containsAttestations`/`_childrenByAttester` index must reflect real
+            // content placement (PIN/TAG via EdgeResolver.propagateContains, or anchor creation here), NOT
+            // any attestation a permissionless caller chooses to index. Without this gate, index()-ing a
+            // negative WHITEOUT — or a junk foreign attestation whose refUID points at a popular anchor —
+            // would mark that anchor's ancestors as "containing the caller's content" (self-lens, and
+            // sticky past revoke), surfacing folders in getChildrenByAddressList that hold no real content
+            // (ADR-0066; PR #37 review). The `_containsSchemaAttestations` direct set above stays universal
+            // (it is an accurate, schema-scoped discovery fact); only the schema-blind upward walk is gated.
+            // Depth-capped at MAX_ANCHOR_DEPTH (symmetric with _propagateContains) so the walk self-limits.
+            if (propagateFolderPresence) {
+                uint256 depth = 0;
+                while (currentUID != bytes32(0)) {
+                    // If this level is already flagged true, the rest of the chain above it must be too.
+                    // Break early to save gas (amortized O(1) for repeat contributions by same user).
+                    if (_containsAttestations[currentUID][attester]) {
+                        break;
+                    }
+                    if (depth++ > MAX_ANCHOR_DEPTH) break;
+
+                    _containsAttestations[currentUID][attester] = true;
+
+                    // Drive the structural index: push this child into the parent's
+                    // Lens array, guarded by the append-only dedup flag so a
+                    // remove-then-readd cycle doesn't duplicate (`clearContains`
+                    // resets `_containsAttestations` but never this flag).
+                    bytes32 parentUID = _parents[currentUID];
+                    if (parentUID != bytes32(0) && !_childInChildrenByAttester[parentUID][attester][currentUID]) {
+                        _childrenByAttester[parentUID][attester].push(currentUID);
+                        _childInChildrenByAttester[parentUID][attester][currentUID] = true;
+                    }
+
+                    currentUID = parentUID;
                 }
-                if (depth++ > MAX_ANCHOR_DEPTH) break;
-
-                _containsAttestations[currentUID][attester] = true;
-
-                // Drive the structural index: push this child into the parent's
-                // Lens array, guarded by the append-only dedup flag so a
-                // remove-then-readd cycle doesn't duplicate (`clearContains`
-                // resets `_containsAttestations` but never this flag).
-                bytes32 parentUID = _parents[currentUID];
-                if (parentUID != bytes32(0) && !_childInChildrenByAttester[parentUID][attester][currentUID]) {
-                    _childrenByAttester[parentUID][attester].push(currentUID);
-                    _childInChildrenByAttester[parentUID][attester][currentUID] = true;
-                }
-
-                currentUID = parentUID;
             }
         }
     }
@@ -1219,8 +1244,15 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
      *   - getAttestationsBySchema(schema, ...)
      *   - getOutgoingAttestations(attester, schema, ...)
      *   - getIncomingAttestations(recipient, schema, ...)
-     *   - containsAttestations / containsSchemaAttestations
+     *   - containsSchemaAttestations(refUID, attester, schema)  // schema-scoped discovery fact
      *   - getReferencingSchemas(refUID)
+     *
+     * DISCOVERY ONLY (ADR-0066): index() makes any attestation FINDABLE, but does NOT propagate
+     * schema-blind FOLDER PRESENCE (`_containsAttestations` / `_childrenByAttester`, read by
+     * getChildrenByAddressList). Folder presence is an intentional placement signal driven by real
+     * content writes (PIN/TAG via EdgeResolver.propagateContains, or anchor creation in onAttest) — a
+     * permissionless discovery call must not let a caller manufacture positive presence (e.g. by
+     * index()-ing a negative WHITEOUT, or a junk foreign attestation pointed at a popular anchor).
      *
      * Reverts if the UID does not exist in EAS (uid == bytes32(0) on the returned attestation).
      * Silently skips EFS-native schemas (ANCHOR, DATA, PROPERTY) — those are indexed
@@ -1243,7 +1275,10 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
         }
 
         _indexed[uid] = true;
-        _indexGlobal(att);
+        // Discovery only — folder-presence propagation OFF. A permissionless index() makes any
+        // attestation FINDABLE (global indices) but must not manufacture positive folder presence
+        // (ADR-0066). Real placement signals come from onAttest / EdgeResolver.propagateContains.
+        _indexGlobal(att, false);
 
         // Mirror revocation state: if the attestation was already revoked in EAS when indexed,
         // mark it revoked now so callers don't need a separate indexRevocation() call.
@@ -1284,7 +1319,7 @@ contract EFSIndexer is EFSUpgradeableResolver, OwnableUpgradeable {
             }
 
             _indexed[uid] = true;
-            _indexGlobal(att);
+            _indexGlobal(att, false); // discovery only — no folder-presence propagation (ADR-0066)
             if (att.revocationTime != 0) {
                 _isRevoked[uid] = true;
             }

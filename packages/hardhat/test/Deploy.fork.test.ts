@@ -32,14 +32,16 @@ describe("Deploy.fork — orchestrated CREATE3 deploy + register-last", function
     cleanFork = await takeSnapshot();
   });
 
-  it("stands up the whole ceremony: 6 proxies @predicted, verify green, 9 schemas registered, owner==Safe, 9 smokes", async function () {
+  it("stands up the whole ceremony: 7 proxies @predicted, verify green, 10 schemas registered, owner==Safe, 10 smokes", async function () {
     const [deployer, safeSigner] = await ethers.getSigners();
     process.env.EFS_SAFE_ADDRESS = await safeSigner.getAddress();
 
     const result = await orchestrate(deployer, "full", false);
 
-    // 6 proxies at their predicted CREATE3 addresses, with code.
-    expect(Object.keys(result.proxies)).to.have.lengthOf(6);
+    // One proxy per RESOLVERS entry at its predicted CREATE3 address, with code. Bound to
+    // RESOLVERS.length (not a hardcoded count) so appending an additive resolver — e.g. WhiteoutResolver
+    // (ADR-0055) — doesn't silently rot this assertion.
+    expect(Object.keys(result.proxies)).to.have.lengthOf(RESOLVERS.length);
     for (const r of RESOLVERS) {
       const d = result.deploys[r];
       expect(d.proxy.toLowerCase(), `${r} realized==predicted`).to.equal(d.predicted.toLowerCase());
