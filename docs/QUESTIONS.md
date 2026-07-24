@@ -1,72 +1,46 @@
 # Open Questions
 
-Questions agents have flagged for human decision. Review and resolve before agents continue work in those areas.
+Tier 1 and Tier 2 questions blocking work in this repository.
 
-> **For agents:** see `docs/agent-workflow.md` for the full escalation tier system. This file holds **Tier 1 and Tier 2 blocking questions only** — it is auto-loaded at session start and must stay sharp.
->
-> Routing:
-> - **Tier 1** — belong in chat first (blocking). Add here only after the human acknowledges, for tracking.
-> - **Tier 2** — belong in chat AND here.
-> - **Tier 3** (task-specific questions) — do NOT go here. Use inline `// AGENT-Q:` code comments, or `decisions.md` if you made a call, or `FUTURE_WORK.md` if it's a nice-to-have.
->
-> When resolved, move the entry to `docs/decisions.md` as a one-liner. Don't let this file grow past ~10 items; resolve or reroute.
+> **Current state (2026-07-23): no active repo-local blockers.** The questions
+> previously listed here were settled for v1. EFS v2 architecture questions
+> belong in the planning vault's owner-decision inboxes, not in this file.
 
-> **Format:** newest at top. When resolved, move to `docs/decisions.md` (one-liner) and either delete from this file OR mark resolved in-place. Promote to an ADR if the decision is durable and architectural.
-
----
+See `docs/agent-workflow.md` for escalation rules.
 
 ## Open
 
-### [tier-2, 2026-04-16, claude] Devnet upgradeability proxy pattern
+None.
 
-You said you plan to add upgradeability for devnet/Sepolia. Which proxy pattern?
+## Recently resolved
 
-- **TransparentUpgradeableProxy (OpenZeppelin)**: well-documented, proven, but adds ~2,600 gas per call (delegatecall + impl SLOAD).
-- **UUPS (OpenZeppelin)**: cheaper per-call, upgrade logic lives in the implementation (more flexible, slightly more risk).
-- **Beacon proxy**: shared upgrade target across many proxies; overkill for EFS.
+### Devnet and Sepolia proxy pattern
 
-For EFS the gas-sensitive path is the EFSIndexer hot path (every attestation). Worth the per-call overhead for devnet flexibility?
+Resolved by ADR-0048 and the Sepolia deployment: the v1 schema resolvers use
+`TransparentUpgradeableProxy` plus `ProxyAdmin`. The deployed contracts are
+Safe-owned and remain upgradeable; no burn timeline is active. See
+`docs/CHAINS.md`.
 
-**Default if not answered:** TransparentUpgradeableProxy with `hardhat-upgrades` plugin (storage layout enforced). Devnet only — mainnet stays direct deploy per ADR-0030.
+### Multi-lens merge semantics
 
-**Blocks:** any work on the devnet upgradeability branch.
+Resolved for v1 by ADR-0031: ordered, first-attester-wins fallback. A
+newest-across-lenses merge mode was not added.
 
-### [tier-2, 2026-04-16, claude] Multi-lens merge semantics
+### Production EFS client repository
 
-ADR-0031 establishes first-attester-wins fallback semantics. Holistic review noted that for `?lenses=alice,bob,carol` users may expect "merge by newest timestamp across all lenses" rather than strict precedence.
-
-Should we:
-- **A**: keep first-wins as the only model, document it loudly in the production UI ("attesters are tried in order").
-- **B**: add a second router function `_findDataAtPathMerge()` that returns newest-by-timestamp across all lenses; UI offers a toggle.
-- **C**: add a query param `?merge=newest` that switches the existing function's behavior.
-
-C is cleanest for URLs. B is cleanest for code. A is cheapest.
-
-**Default if not answered:** A for v1; revisit based on production UI feedback.
-
-**Blocks:** anything that depends on multi-lens resolution semantics being final. Doesn't block this PR.
-
----
-
-## Resolved (recent — keep for context)
-
-### [resolved 2026-04-16] Production EFS Client repo path
-URL: https://github.com/efs-project/client — recorded inline in `AGENTS.md`. Production client review is still deferred to a dedicated session (tracked in `docs/LAUNCH_CHECKLIST.md` under Pre-Mainnet → Production UI).
-
----
+The separate `efs-project/client` repository exists but is a legacy v1 client,
+not the implementation target for Client v2.
 
 ## How to add a question
+
+Add only a Tier 1 or Tier 2 blocker after surfacing it in chat:
 
 ```markdown
 ### [tier-N, YYYY-MM-DD, agent-name] Short title
 
-What's the question? Be specific.
-
-Options if applicable:
-- **A**: option with trade-offs.
-- **B**: another option with trade-offs.
-
-**Default if not answered:** what the agent will do otherwise (so blocked work isn't fully blocked — there's a default position).
-
-**Blocks:** what other work this affects.
+State the concrete fork, options, default, and exactly what it blocks.
 ```
+
+Task-local questions belong in code comments. Nice-to-have work belongs in
+`docs/FUTURE_WORK.md`. Cross-repo and v2 architecture choices belong in the
+planning vault.
