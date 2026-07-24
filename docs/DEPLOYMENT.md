@@ -126,6 +126,8 @@ yarn account:import                       # a funded deployer EOA (gas)
 yarn deploy:efs --via-safe --network hardhat
 #    (or run the mechanism rehearsal directly:
 #     MAINNET_FORKING_ENABLED=true npx hardhat test test/DeploySafe.fork.test.ts --network hardhat)
+#    If your local .env already sets EFS_SAFE_ADDRESS, blank it for this throwaway test-Safe path:
+#     EFS_SAFE_ADDRESS= yarn deploy:efs --via-safe --network hardhat
 # 2b. REAL-SAFE FORK PRE-FLIGHT (with the real EFS_SAFE_ADDRESS exported): a supplied real Safe is NOT
 #     owned by any local signer — even on the fork — so the task runs in BUILD/PROPOSE mode (PR #24 P2):
 #     it emits deployments/hardhat/safe-batches.json + the REAL Safe-keyed predicted addresses / freeze-
@@ -196,6 +198,47 @@ yarn deploy:efs-views --network localhost
 
 `deploy:efs-views` is the companion post-freeze task (`packages/hardhat/tasks/deployEfsViews.ts`, run via the `deploy:efs-views` package script with the same encrypted-key flow). It runs **only** the `EFSViews` tag (`deploy/10_efs_views.ts`) — it deploys the three stateless views against the already-registered proxies and **never** registers a schema or redeploys a proxy. The views are in **no UID** and are **freely redeployable**: re-running is safe (redeploy-or-no-op), and you can redeploy them at any later time (view bugfix, new feature) without re-running the freeze ceremony and without affecting any attestation. The fork rehearsal `yarn deploy:efs-views --network hardhat` skips gracefully when CreateX is absent (no foundation present); the full round-trip is exercised by `test/DeployE2E.fork.test.ts` (orchestrate → views → write anchor/DATA/PIN/TAG/MIRROR/LIST/LIST_ENTRY → read it all back through EFSRouter/EFSFileView/ListReader). On local/devnet (no CreateX) the views are deployed by the legacy `02_fileview` / `03_router` / `09_lists` scripts instead — `10_efs_views` only runs where CreateX exists, so the two paths never double-deploy.
 
+**Dataset seeding (post-foundation, curator EOA):**
+
+`seed:dataset` pins manifest files to IPFS and writes the user-content layer: DATA, MIRROR, reserved-key PROPERTYs (`contentType`, `contentHash`, `size`), file/folder anchors, placement PINs, and TAGs. It is dry-run by default and requires `--execute --pin` before it sends IPFS uploads or EAS writes.
+
+```bash
+cd /Users/james/Code/EFS/contracts
+
+# Dry-run the current buildathon games dataset. No IPFS writes, no chain writes.
+yarn hardhat:seed:dataset --manifest ../datasets/web-games/manifest.json
+
+# Sepolia: prompts for the encrypted key from `packages/hardhat/.env`.
+IPFS_API_URL=https://178.104.79.94.nip.io/api/v0 \
+SEPOLIA_RPC_URL=https://... \
+yarn hardhat:seed:dataset \
+  --manifest ../datasets/web-games/manifest.json \
+  --execute \
+  --pin \
+  --network sepolia
+
+# Devnet VPS: use the devnet RPC + devnet IPFS pinning API.
+# EFS_USE_DEPLOYER_KEY_ON_LOCALHOST=1 makes `--network localhost`
+# use the imported encrypted curator key instead of the node's unlocked account.
+EFS_USE_DEPLOYER_KEY_ON_LOCALHOST=1 \
+LOCALHOST_RPC_URL=https://178.104.79.94.nip.io/rpc \
+IPFS_API_URL=https://178.104.79.94.nip.io/api/v0 \
+yarn hardhat:seed:dataset \
+  --manifest ../datasets/web-games/manifest.json \
+  --execute \
+  --pin \
+  --network localhost
+```
+
+Use a dedicated funded curator EOA for the Monday demo and record the `[seed-dataset] signer=0x...`
+line in the operator notes. Viewer reads are lens-scoped: on Sepolia, share the demo as
+`/games?lenses=<curator-address>` (or configure the app to include that curator as a demo lens) or the
+dataset can seed successfully while remaining invisible to default viewers. On devnet chain `26001993`,
+the debug client has devnet-only demo lenses; if you want default devnet visibility, seed from one of
+those configured demo-lens addresses or pass `?lenses=<curator-address>` explicitly.
+
+Writing the dataset from the EFS.eth Safe is possible, but not the fast path: EAS UIDs are returned only after each tx lands, and the later PIN/TAG/anchor writes depend on earlier UIDs. Without a helper contract, that makes Safe-authored seeding an iterative propose/execute/read loop instead of one clean batch. The EOA path gives a simple click-to-play demo now; Safe-authored or Safe-endorsed dataset provenance can be added later as a separate ceremony/tool.
+
 **Upgrading a resolver later (from the Safe):** in Safe{Wallet}, propose a tx to `ProxyAdmin.upgradeAndCall(proxy, newImpl, 0x)`; sign; execute. Or script it with `@safe-global/protocol-kit`.
 
 **Burn to immutable (pre-mainnet, after a ≥14-day soak):** the pre-burn checklist is in `docs/SEPOLIA_FREEZE_TABLE.md`; when satisfied, the Safe executes `ProxyAdmin.renounceOwnership()` per proxy — all **7** proxies (6 resolver proxies + SystemAccount proxy). **The contract-owner vs ProxyAdmin distinction (PR #24 50yr-review):** each proxied contract has two independent owners — its external ProxyAdmin (controls upgrades) and, where the logic is `Ownable`/`OwnableUpgradeable`, the contract's own owner (controls its setters). `ProxyAdmin.renounceOwnership()` does NOT zero the contract-owner; both must be renounced or the Safe retains live authority over a nominally "frozen" contract. So the burn also calls **`EFSIndexer.renounceOwnership()`** and **`MirrorResolver.renounceOwnership()`** — the two `OwnableUpgradeable` resolvers. This is load-bearing for EFSIndexer: its one-shot `setSortsAnchor(...)` is never set in this freeze (SORT_INFO deferred), so until the kernel owner is renounced a post-burn Safe could weld a permanent value into the immutable kernel. (EdgeResolver/ListResolver/ListEntryResolver/AliasResolver have no owner — config is `initialize()`-only — so they need no renounce.) For SystemAccount specifically: (1) call `SystemAccount.sealModules()` **before** burning, verify `SystemAccount.modulesSealed() == true` (permanently prevents any new system-writer module from being authorized post-burn — ADR-0053 "pre-burn only" membership); (2) burn its ProxyAdmin like the others; and (3) call `SystemAccount.renounceOwnership()` to zero its own `OwnableUpgradeable` owner. Post-burn verify `EFSIndexer.owner()==0`, `MirrorResolver.owner()==0`, `SystemAccount.owner()==0` (+ every ProxyAdmin), and that `setSortsAnchor`/`upgradeAndCall` now revert. Address + UID + data unchanged; logic frozen forever.
@@ -209,6 +252,7 @@ yarn deploy:efs-views --network localhost
 - ✅ **Safe-native deploy path** (`deploy-lib/{safe,safePlan,orchestrateSafe}.ts` + `deploy:efs --via-safe` / `EFS_DEPLOY_VIA_SAFE=1`) — deploy the whole system _from_ the EFS.eth Safe as owner-signed MultiSend batches (Batch 1 born-Safe-owned proxy deploys + wire; verify gate; freeze-table signing; Batch 2 register-last + one `SystemAccount.bootstrap` + `seal`; Batch 3 `setTransportsAnchor`), **born owned by the Safe so the transfer phase disappears**. Safe-keyed CREATE3 addresses (the Safe is the CreateX caller). Drives the canonical on-chain Safe v1.4.1 MultiSend directly (no `@safe-global/protocol-kit` runtime dep). Fork-rehearsed by `test/DeploySafe.fork.test.ts` against a real Gnosis Safe stood up on the pinned fork (7 proxies at Safe-keyed predicted addresses, the verify gate runs before Batch 2, 9 schemas registered, ProxyAdmins + resolvers + `SystemAccount` all born Safe-owned + sealed, scaffolding authored by `SystemAccount` with the realized UIDs read back from the index). The EOA-then-transfer path is retained as the simpler fallback.
 - ✅ **Phase-D deploy script** (`deploy-lib/{schemas,create3,verify,orchestrate,superseded}.ts` + the `deploy:efs` task) — implements steps 1–4, 6–8 above; fork-rehearsable on the pinned fork without real keys. The Sepolia surface is the **EFS core only** (the `EFSCore` tag): the downstream/legacy scripts (01–06, 09) are neutralized wherever CreateX is present and are now a **local/devnet-only** concern — they are _not_ part of the Sepolia deploy (the stateless views EFSRouter/EFSFileView/ListReader are redeployed separately post-freeze, outside this ceremony).
 - ✅ **Post-freeze read-views deploy** (`deploy/10_efs_views.ts` + `deploy-lib/views.ts` + the `deploy:efs-views` task) — the NON-FROZEN view layer (EFSFileView, EFSRouter, ListReader; in no UID, freely redeployable). Binds to the proxies + frozen UIDs registered by the core; runs only where CreateX is present (so it never double-deploys with the local/devnet `02`/`03`/`09` path); idempotent re-run. Full round-trip proven on the pinned fork by `test/DeployE2E.fork.test.ts` (frozen foundation → views → write anchor/DATA/PIN/TAG/MIRROR/LIST/LIST_ENTRY → read back through all three views; assertions on returned UIDs/paths/values).
+- ✅ **IPFS dataset seeder** (`seed:dataset`) — dry-run by default; pins local manifest files through Kubo `/api/v0/add`; writes DATA/MIRROR/PROPERTY/PIN/TAG/anchor attestations from a curator EOA; skips files already placed by that attester unless `--force` is passed. Intended for post-foundation demo content such as `../datasets/web-games/manifest.json`.
 - ⏳ **Resolution-spec + reference vectors** for REDIRECT-following and the content-hash preimage (Durable; must land before durable seed data — ADR-0050/0049 action items).
 - 🔒 **Sepolia deploy + freeze** (steps 5–8 on real Sepolia): needs the funded deployer EOA + EFS.eth Safe address + **James's FREEZE_LEDGER signature.**
 
