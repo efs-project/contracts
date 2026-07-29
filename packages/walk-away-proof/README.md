@@ -29,6 +29,15 @@ The signed manifest and full onchain receipt are committed as
 workflow compare rebuilt output with the committed manifest, then verify the
 publication through both independent carriers.
 
+For a compact review, download the self-contained 11,534-byte evidence bundle
+from [IPFS](https://w3s.link/ipfs/bafkreiblww44k5hmyimnlktnyf27rmdazxs7hajk65gcqydqhxsguelwwe)
+or [Arweave](https://ardrive.net/LwXdLNPkpHMAlDdhfbHnSndkz_5igAW7L8kTkhqoX0U).
+Both locations return SHA-256
+`2bb5b9c574ecc218d5aa6dc175f8b060cde5f3812af74c2860703de46a1176b1`.
+The bundle contains the proof, manifest, verifier source, pinned runtime
+dependencies, and standalone instructions from commit
+`8d585f05f00851bcabd522d98c339d8c878423a7`.
+
 ## Rebuild
 
 From the repository root:
