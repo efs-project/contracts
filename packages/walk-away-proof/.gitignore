@@ -1,0 +1,5 @@
+dist/
+output/
+proof/proof.json
+proof/*.upload.json
+public/proof/

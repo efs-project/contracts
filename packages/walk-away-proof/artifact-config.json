@@ -1,0 +1,30 @@
+{
+  "artifactName": "efs-sepolia-deployment-reference-v0.tar.gz",
+  "archivePrefix": "efs-sepolia-deployment-reference-v0/",
+  "builderCommit": null,
+  "sourceRepository": "https://github.com/efs-project/contracts",
+  "sourceCommit": "c6b4075308dd37bb36665eabecb66ec8b47fc7dd",
+  "sourcePaths": [
+    "LICENSE",
+    "docs/CHAINS.md",
+    "packages/hardhat/contracts/AliasResolver.sol",
+    "packages/hardhat/contracts/EdgeResolver.sol",
+    "packages/hardhat/contracts/EFSIndexer.sol",
+    "packages/hardhat/contracts/IEASDataIndexer.sol",
+    "packages/hardhat/contracts/ListEntryResolver.sol",
+    "packages/hardhat/contracts/ListResolver.sol",
+    "packages/hardhat/contracts/MirrorResolver.sol",
+    "packages/hardhat/contracts/SystemAccount.sol",
+    "packages/hardhat/contracts/base",
+    "packages/hardhat/contracts/interfaces"
+  ],
+  "abiSources": {
+    "AliasResolver": "packages/hardhat/deployments/sepolia/AliasResolver.json",
+    "EdgeResolver": "packages/hardhat/deployments/sepolia/EdgeResolver.json",
+    "EFSIndexer": "packages/hardhat/deployments/sepolia/Indexer.json",
+    "ListEntryResolver": "packages/hardhat/deployments/sepolia/ListEntryResolver.json",
+    "ListResolver": "packages/hardhat/deployments/sepolia/ListResolver.json",
+    "MirrorResolver": "packages/hardhat/deployments/sepolia/MirrorResolver.json",
+    "SystemAccount": "packages/hardhat/deployments/sepolia/SystemAccount.json"
+  }
+}

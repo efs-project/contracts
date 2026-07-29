@@ -1,0 +1,30 @@
+{
+  "name": "@efs/walk-away-proof",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "artifact": "node src/build-artifact.js",
+    "artifact:assert": "node src/assert-build.js",
+    "build": "vite build",
+    "dev": "vite --host 127.0.0.1",
+    "manifest": "node src/create-manifest.js",
+    "publish:arweave": "node src/publish-arweave.js",
+    "publish:ipfs": "node src/publish-ipfs.js",
+    "simulate": "node src/simulate-fork.js",
+    "test": "node --test test/*.test.js",
+    "verify": "node src/verify-cli.js"
+  },
+  "dependencies": {
+    "@ardrive/turbo-sdk": "1.42.0",
+    "arweave": "1.15.7",
+    "ethers": "6.17.0",
+    "fflate": "0.8.2",
+    "json-canonicalize": "2.0.0",
+    "multiformats": "13.4.1",
+    "tar-stream": "3.2.0"
+  },
+  "devDependencies": {
+    "vite": "5.4.21"
+  }
+}

@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light" />
+    <title>EFS Walk-Away Proof Publisher</title>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="masthead">
+        <img src="/efs-logo.png" alt="" width="42" height="42" />
+        <div>
+          <p class="eyebrow">Ethereum File System</p>
+          <h1>Walk-Away Proof Publisher</h1>
+        </div>
+        <span class="network">Sepolia</span>
+      </header>
+
+      <section class="summary" aria-labelledby="artifact-heading">
+        <div>
+          <p class="label">Artifact</p>
+          <h2 id="artifact-heading" data-artifact-name>Loading manifest</h2>
+          <p class="mono digest" data-artifact-sha>Waiting for manifest...</p>
+        </div>
+        <dl>
+          <div>
+            <dt>Size</dt>
+            <dd data-artifact-size>--</dd>
+          </div>
+          <div>
+            <dt>Signer</dt>
+            <dd class="mono" data-signer>--</dd>
+          </div>
+          <div>
+            <dt>Target</dt>
+            <dd class="mono" data-contract>--</dd>
+          </div>
+          <div>
+            <dt>ETH sent</dt>
+            <dd>0</dd>
+          </div>
+          <div>
+            <dt>Source commit</dt>
+            <dd class="mono" data-source-commit>--</dd>
+          </div>
+          <div>
+            <dt>IPFS CID</dt>
+            <dd class="mono" data-ipfs-cid>--</dd>
+          </div>
+          <div>
+            <dt>Arweave ID</dt>
+            <dd class="mono" data-arweave-id>--</dd>
+          </div>
+        </dl>
+      </section>
+
+      <section class="workflow" aria-labelledby="workflow-heading">
+        <div class="section-heading">
+          <div>
+            <p class="label">Publishing session</p>
+            <h2 id="workflow-heading">Four approvals</h2>
+          </div>
+          <button type="button" class="secondary" data-load-file>Choose manifest</button>
+          <input type="file" accept=".json,application/json" hidden data-file-input />
+        </div>
+
+        <ol class="steps">
+          <li data-step="connect">
+            <div class="step-index">1</div>
+            <div class="step-copy">
+              <h3>Connect and sign</h3>
+              <p>Sign the complete artifact, source, and carrier manifest shown above.</p>
+              <p class="mono result" data-connect-result></p>
+            </div>
+            <button type="button" data-connect disabled>Connect</button>
+          </li>
+          <li data-step="stage1">
+            <div class="step-index">2</div>
+            <div class="step-copy">
+              <h3>Attest artifact values</h3>
+              <p>One DATA record and three immutable PROPERTY records.</p>
+              <p class="mono result" data-stage1-result></p>
+            </div>
+            <button type="button" data-stage1 disabled>Approve</button>
+          </li>
+          <li data-step="stage2">
+            <div class="step-index">3</div>
+            <div class="step-copy">
+              <h3>Attest paths and mirrors</h3>
+              <p>Four ANCHOR records and IPFS plus Arweave MIRROR records.</p>
+              <p class="mono result" data-stage2-result></p>
+            </div>
+            <button type="button" data-stage2 disabled>Approve</button>
+          </li>
+          <li data-step="stage3">
+            <div class="step-index">4</div>
+            <div class="step-copy">
+              <h3>Pin the graph</h3>
+              <p>Four PIN records connect names, values, and artifact identity.</p>
+              <p class="mono result" data-stage3-result></p>
+            </div>
+            <button type="button" data-stage3 disabled>Approve</button>
+          </li>
+        </ol>
+      </section>
+
+      <section class="completion" aria-live="polite">
+        <div>
+          <p class="label">Session status</p>
+          <p class="status" data-status>Loading the manifest.</p>
+        </div>
+        <button type="button" class="primary" data-download disabled>Download proof.json</button>
+      </section>
+    </main>
+    <script type="module" src="/src/publisher.js"></script>
+  </body>
+</html>
