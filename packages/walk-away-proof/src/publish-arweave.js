@@ -11,7 +11,8 @@ const FREE_LIMIT = 100 * 1024;
 
 async function waitForPublicGateway(id, build) {
   const attempts = Number(process.env.ARWEAVE_GATEWAY_ATTEMPTS || 60);
-  const url = `https://arweave.net/${id}`;
+  const gateway = process.env.ARWEAVE_GATEWAY || "https://ardrive.net/";
+  const url = `${gateway}${id}`;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
       const response = await fetch(url, { signal: AbortSignal.timeout(20_000) });
@@ -31,8 +32,12 @@ async function waitForPublicGateway(id, build) {
 }
 
 async function main() {
-  const build = JSON.parse(await readFile(resolve(packageRoot, "output/artifact-build.json"), "utf8"));
-  const artifactPath = resolve(packageRoot, "output", build.artifactName);
+  const buildPath = process.env.PUBLISH_BUILD || "output/artifact-build.json";
+  const artifactFile = process.env.PUBLISH_FILE;
+  const pendingName = process.env.PUBLISH_PENDING_RECORD || "arweave.pending.json";
+  const uploadName = process.env.PUBLISH_RECORD || "arweave.upload.json";
+  const build = JSON.parse(await readFile(resolve(packageRoot, buildPath), "utf8"));
+  const artifactPath = resolve(packageRoot, artifactFile || `output/${build.artifactName}`);
   const bytes = await readFile(artifactPath);
   if (bytes.length >= FREE_LIMIT) {
     throw new Error(`Artifact is ${bytes.length} bytes; unauthenticated Turbo limit is below ${FREE_LIMIT} bytes`);
@@ -63,12 +68,17 @@ async function main() {
   }
   const id = result.id || result.dataItemId || result.transactionId;
   if (!id) throw new Error(`Turbo returned no retrievable ID: ${JSON.stringify(result)}`);
-  const gatewayVerification = await waitForPublicGateway(id, build);
-
   const proofDir = resolve(packageRoot, "proof");
   await mkdir(proofDir, { recursive: true });
   await writeFile(
-    resolve(proofDir, "arweave.upload.json"),
+    resolve(proofDir, pendingName),
+    `${canonicalJson({ id, freeUpload: true, method, service: "Turbo", result })}\n`,
+  );
+  console.log(`Submitted Arweave data item ${id}; waiting for public retrieval`);
+  const gatewayVerification = await waitForPublicGateway(id, build);
+
+  await writeFile(
+    resolve(proofDir, uploadName),
     `${canonicalJson({ gatewayVerification, id, freeUpload: true, method, service: "Turbo", result })}\n`,
   );
   console.log(`Uploaded https://arweave.net/${id}`);

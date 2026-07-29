@@ -8,6 +8,8 @@
     "artifact:assert": "node src/assert-build.js",
     "build": "vite build",
     "dev": "vite --host 127.0.0.1",
+    "evidence": "node src/build-proof-bundle.js",
+    "finalize:arweave": "node src/finalize-arweave.js",
     "manifest": "node src/create-manifest.js",
     "publish:arweave": "node src/publish-arweave.js",
     "publish:ipfs": "node src/publish-ipfs.js",

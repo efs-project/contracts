@@ -1,0 +1,58 @@
+{
+  "format": "efs-walk-away-proof-result/v0",
+  "manifestDigest": "0x70cb68e93f76076cca7cd530e15cf98d7318d562e57ce05f39812ffdeeeed52b",
+  "signature": "0x0cf0578190b5175cb21c79a1d4dd35c96b184254dc3383a894734ecf13a3456839008850b9fa15e8d93e00a748906d5e6cd73b2768a6deb4a2ccc6b77dfa48271c",
+  "signer": "0xaCf4C2950107eF9b1C37faA1F9a866C8F0da88b9",
+  "efs": {
+    "chainId": 11155111,
+    "contracts": {
+      "eas": "0xC2679fBD37d54388Ce493F1DB75320D236e1815e",
+      "indexer": "0xc4DeaBB482C2FA74690629eEa662efb166BD658a",
+      "edgeResolver": "0xD6643DB36B20895E3E46aD08cdD4ED4BC1dBB7F1",
+      "mirrorResolver": "0xd4991Ced6D460A3794E9120dC6C19975092982b9"
+    },
+    "dataUid": "0xcb848af3a9508e4cf9bac6948d2221a0a8ef2c74887a637260ee10ffe83f8e49",
+    "properties": {
+      "contentHash": {
+        "value": "f12209c5bbda410deea8714a37b5ab82d3e22982cee79d1d1320cd43a91d562f34d39",
+        "valueUid": "0x66a14d8a283073fb7edc41ac0e4541be52ce0ba3074fa9cae9be661ae1158ed7",
+        "keyAnchorUid": "0x856df257eec86dfe56b6adedc86e94fb68f7b337229b2a96e38f388310789b19",
+        "pinUid": "0x51cbf73b9cb9268f953ff6ec5e358a001b6c79c81e7cb200aeced5afabe23e48"
+      },
+      "size": {
+        "value": "63245",
+        "valueUid": "0x2df9d74c076693f902a09d9edf29e4ae44e936a7366f66c29e1a5b7d5673cd5d",
+        "keyAnchorUid": "0xa6407af5174123dfb80d2bec5a97e5a851ebf6669e7358bd310fa47086b83894",
+        "pinUid": "0x5ce7ee3121150a12c9887c57539c4aceef77f5af801d9852eb84a0ff9701b4fb"
+      },
+      "cid": {
+        "value": "bafkreie4lo62ieg65kdrji33lk4c2prctawo46or2ezazvb2shkwf42nhe",
+        "valueUid": "0xb2d32fe7e903e86358d903892bc924f0f9cb5c14d089fa4f8abd594e08d83f32",
+        "keyAnchorUid": "0xfbf320acc7c54ec43934afbf395c00c741e4c3387dee37b40fee6309db453938",
+        "pinUid": "0x6cb5ca4fe67ebd4b81ed3eb7c7b93a42fab5eb753bcd09c1943e47b1661dbe7b"
+      }
+    },
+    "mirrors": {
+      "ipfs": {
+        "uid": "0x7036ac769aac2fe20df13a4ca5245198b08d896c19e19d2e4ba53b04995eb9c2",
+        "transportDefinition": "0x6a4b8fe8bc24a1de569f5ab2d46d83db9cd87ff234a6976b57e9cd4156a363ee",
+        "uri": "ipfs://bafkreie4lo62ieg65kdrji33lk4c2prctawo46or2ezazvb2shkwf42nhe"
+      },
+      "arweave": {
+        "uid": "0x0391f816ea5a122130d94b1a967885117d7bdcdaa7984e0037059b42aa23cce5",
+        "transportDefinition": "0xca1596777bbeca44eb28d78df6e2c7c664c7d6de062f8530f84b188e44093336",
+        "uri": "ar://-34W1UeEynCbiM_wSU-v2vCw_M7SUeBnUF2xPco0M1k"
+      }
+    },
+    "file": {
+      "name": "efs-sepolia-deployment-reference-v0.tar.gz",
+      "anchorUid": "0x6fcb8c2ea7bcf283d5089fb821e1f9cb924ea687577ab0ac384b818467b5013e",
+      "pinUid": "0xd10105d26ee9ee6becc2793776339f3a5ea616917eaf1afa15891f7f9ad7c186"
+    },
+    "transactions": {
+      "stage1": "0xb718f21d58fee081c73128b6af721cfa97fb87b93105d8731381c9b75300a933",
+      "stage2": "0x72619bc19e4b822815ae9741a00781a0a1f4d73796d810d5b7778e545f3f1a16",
+      "stage3": "0x5f6fce39b8efc2463f007a61012fe41a089ee320b721053700aaa0ca7cc3a701"
+    }
+  }
+}

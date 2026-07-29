@@ -49,5 +49,5 @@ export const EIP712_TYPES = Object.freeze({
 export const DEFAULT_ENDPOINTS = Object.freeze({
   sepoliaRpc: "https://ethereum-sepolia-rpc.publicnode.com",
   ipfsGateway: "https://w3s.link/ipfs/",
-  arweaveGateway: "https://arweave.net/",
+  arweaveGateway: "https://ardrive.net/",
 });

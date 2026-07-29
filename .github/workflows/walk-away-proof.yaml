@@ -53,18 +53,30 @@ jobs:
             packages/walk-away-proof/output/artifact-build.json
           if-no-files-found: error
 
+  verify-publication:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: yarn
+
+      - run: corepack enable
+      - run: yarn install --immutable
+
       - name: Verify published proof through IPFS
-        if: ${{ hashFiles('packages/walk-away-proof/proof/proof.json') != '' }}
         run: >-
           yarn workspace @efs/walk-away-proof verify
-          --manifest packages/walk-away-proof/proof/manifest.json
-          --proof packages/walk-away-proof/proof/proof.json
+          --manifest proof/manifest.json
+          --proof proof/proof.json
           --carrier ipfs
 
       - name: Verify published proof through Arweave
-        if: ${{ hashFiles('packages/walk-away-proof/proof/proof.json') != '' }}
         run: >-
           yarn workspace @efs/walk-away-proof verify
-          --manifest packages/walk-away-proof/proof/manifest.json
-          --proof packages/walk-away-proof/proof/proof.json
+          --manifest proof/manifest.json
+          --proof proof/proof.json
           --carrier arweave

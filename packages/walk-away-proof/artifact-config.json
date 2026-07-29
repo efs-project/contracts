@@ -1,7 +1,7 @@
 {
   "artifactName": "efs-sepolia-deployment-reference-v0.tar.gz",
   "archivePrefix": "efs-sepolia-deployment-reference-v0/",
-  "builderCommit": null,
+  "builderCommit": "d0cd39c5651b04abc833d5f9a96c48836cfc9b55",
   "sourceRepository": "https://github.com/efs-project/contracts",
   "sourceCommit": "c6b4075308dd37bb36665eabecb66ec8b47fc7dd",
   "sourcePaths": [

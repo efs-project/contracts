@@ -1,5 +1,5 @@
 dist/
 output/
-proof/proof.json
 proof/*.upload.json
+proof/*.pending.json
 public/proof/

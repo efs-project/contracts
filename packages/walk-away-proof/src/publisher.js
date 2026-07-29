@@ -1,5 +1,11 @@
-import { BrowserProvider, getAddress } from "ethers";
-import { CHAIN_HEX, CONTRACTS, EXPECTED_SIGNER } from "./constants.js";
+import { BrowserProvider, JsonRpcProvider, getAddress } from "ethers";
+import {
+  CHAIN_HEX,
+  CHAIN_ID,
+  CONTRACTS,
+  DEFAULT_ENDPOINTS,
+  EXPECTED_SIGNER,
+} from "./constants.js";
 import {
   assertExpectedSigner,
   buildStage1,
@@ -86,10 +92,10 @@ function render() {
   stepDone("stage2", session.stage2);
   stepDone("stage3", session.stage3);
 
-  elements.connect.disabled = busy || Boolean(session.signature);
-  elements.stage1.disabled = busy || !session.signature || Boolean(session.stage1);
-  elements.stage2.disabled = busy || !session.stage1 || Boolean(session.stage2);
-  elements.stage3.disabled = busy || !session.stage2 || Boolean(session.stage3);
+  elements.connect.disabled = busy || Boolean(session.signature) || Boolean(session.pending);
+  elements.stage1.disabled = busy || Boolean(session.pending) || !session.signature || Boolean(session.stage1);
+  elements.stage2.disabled = busy || Boolean(session.pending) || !session.stage1 || Boolean(session.stage2);
+  elements.stage3.disabled = busy || Boolean(session.pending) || !session.stage2 || Boolean(session.stage3);
   elements.download.disabled = !session.stage3;
 
   document.querySelectorAll("[data-step]").forEach(item => item.classList.remove("active"));
@@ -105,8 +111,33 @@ function render() {
   if (active) document.querySelector(`[data-step="${active}"]`).classList.add("active");
 
   if (session.stage3) setStatus("Proof complete. Download the signed result.");
-  else if (busy) setStatus("Waiting for MetaMask or transaction confirmation.");
+  else if (session.pending) {
+    setStatus(`Waiting for ${session.pending.stage} confirmation: ${short(session.pending.transactionHash)}`);
+  } else if (busy) setStatus("Waiting for MetaMask or transaction confirmation.");
   else setStatus("Ready for the next approval.");
+}
+
+async function recoverPending() {
+  if (!session.pending) return;
+  const { stage, transactionHash } = session.pending;
+  const interpretations = {
+    stage1: interpretStage1,
+    stage2: interpretStage2,
+    stage3: interpretStage3,
+  };
+  try {
+    const readProvider = new JsonRpcProvider(DEFAULT_ENDPOINTS.sepoliaRpc, CHAIN_ID, {
+      staticNetwork: true,
+    });
+    const receipt = await readProvider.waitForTransaction(transactionHash, 1, 120_000);
+    if (!receipt || receipt.status !== 1) throw new Error(`${stage} transaction failed`);
+    session[stage] = interpretations[stage](receipt);
+    delete session.pending;
+    saveSession();
+    render();
+  } catch (error) {
+    setStatus(`Could not recover pending transaction: ${error.message}`, true);
+  }
 }
 
 async function setManifest(value) {
@@ -126,6 +157,7 @@ async function setManifest(value) {
   }
   elements.connect.disabled = false;
   render();
+  recoverPending();
 }
 
 async function connect() {
@@ -155,13 +187,17 @@ async function connectedSigner() {
   return signer;
 }
 
-async function attest(requests, interpret) {
+async function attest(stage, requests, interpret) {
   const activeSigner = await connectedSigner();
   const transaction = await easContract(activeSigner).multiAttest(requests, { value: 0n });
+  session.pending = { stage, transactionHash: transaction.hash };
+  saveSession();
   setStatus(`Submitted ${short(transaction.hash)}. Waiting for confirmation.`);
   const receipt = await transaction.wait();
   if (receipt.status !== 1) throw new Error(`Transaction failed: ${transaction.hash}`);
-  return interpret(receipt);
+  const result = interpret(receipt);
+  delete session.pending;
+  return result;
 }
 
 async function run(action) {
@@ -187,13 +223,14 @@ elements.connect.addEventListener("click", () =>
 
 elements.stage1.addEventListener("click", () =>
   run(async () => {
-    session.stage1 = await attest(buildStage1(manifest), interpretStage1);
+    session.stage1 = await attest("stage1", buildStage1(manifest), interpretStage1);
   }),
 );
 
 elements.stage2.addEventListener("click", () =>
   run(async () => {
     session.stage2 = await attest(
+      "stage2",
       buildStage2(manifest, session.signer, session.stage1),
       interpretStage2,
     );
@@ -202,7 +239,11 @@ elements.stage2.addEventListener("click", () =>
 
 elements.stage3.addEventListener("click", () =>
   run(async () => {
-    session.stage3 = await attest(buildStage3(session.stage1, session.stage2), interpretStage3);
+    session.stage3 = await attest(
+      "stage3",
+      buildStage3(session.stage1, session.stage2),
+      interpretStage3,
+    );
   }),
 );
 

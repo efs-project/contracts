@@ -87,7 +87,7 @@ proxy and implementation pages are the bytecode-specific source record.
 `;
 }
 
-async function packEntries(entries, prefix) {
+export async function packEntries(entries, prefix) {
   const pack = tar.pack();
   const chunks = [];
   const complete = new Promise((resolvePromise, reject) => {
