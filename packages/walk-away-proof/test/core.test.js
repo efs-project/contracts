@@ -196,6 +196,28 @@ test("offline verification distinguishes valid bytes, tampering, and unavailabil
   });
   assert.equal(tampered.outcome, "INVALID");
 
+  const changedSignature = await verifyProof(
+    fixture.manifest,
+    { ...fixture.proof, signature: `0x${"00".repeat(65)}` },
+    {
+      expectedSigner: fixture.manifest.signer,
+      verifyEfs: false,
+      fetchImpl: async () => response(bytes),
+    },
+  );
+  assert.equal(changedSignature.outcome, "INVALID");
+
+  const changedLocator = await verifyProof(
+    { ...fixture.manifest, arweaveId: "substituted-location" },
+    fixture.proof,
+    {
+      expectedSigner: fixture.manifest.signer,
+      verifyEfs: false,
+      fetchImpl: async () => response(bytes),
+    },
+  );
+  assert.equal(changedLocator.outcome, "INVALID");
+
   const unavailable = await verifyProof(fixture.manifest, fixture.proof, {
     expectedSigner: fixture.manifest.signer,
     verifyEfs: false,
