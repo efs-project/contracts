@@ -16,6 +16,7 @@ import generateTsAbis from "./scripts/generateTsAbis";
 import "./tasks/deployEfs";
 import "./tasks/deployEfsViews";
 import "./tasks/mirrorUpgrade";
+import "./tasks/seedDataset";
 
 // If not set, it uses Scaffold-ETH-2's public default Alchemy API key.
 // You can get your own at https://dashboard.alchemyapi.io.

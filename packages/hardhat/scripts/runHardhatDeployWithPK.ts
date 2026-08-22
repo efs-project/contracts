@@ -15,8 +15,13 @@ async function main() {
   // same encrypted-key decryption flow works for the EFS core ceremony as for a plain deploy.
   const hardhatTask = process.env.HARDHAT_DEPLOY_TASK ?? "deploy";
 
-  if (networkName === "localhost" || networkName === "hardhat") {
-    // Deploy command on the localhost network
+  const isLocalNetwork = networkName === "localhost" || networkName === "hardhat";
+  const useNodeAccount = isLocalNetwork && process.env.EFS_USE_DEPLOYER_KEY_ON_LOCALHOST !== "1";
+
+  if (useNodeAccount) {
+    // Local/fork commands normally use the node's unlocked accounts. Set
+    // EFS_USE_DEPLOYER_KEY_ON_LOCALHOST=1 when `localhost` points at a remote
+    // devnet and provenance should come from the encrypted deployer/curator key.
     const hardhat = spawn("hardhat", [hardhatTask, ...process.argv.slice(2)], {
       stdio: "inherit",
       env: process.env,
@@ -32,8 +37,8 @@ async function main() {
   const encryptedKey = process.env.DEPLOYER_PRIVATE_KEY_ENCRYPTED;
 
   if (!encryptedKey) {
-    console.log("🚫️ You don't have a deployer account. Run `yarn generate` or `yarn account:import` first");
-    return;
+    console.error("🚫️ You don't have a deployer account. Run `yarn generate` or `yarn account:import` first");
+    process.exit(1);
   }
 
   const pass = await password({ message: "Enter password to decrypt private key:" });
