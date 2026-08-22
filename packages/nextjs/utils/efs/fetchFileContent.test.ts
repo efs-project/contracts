@@ -113,6 +113,43 @@ test("fetchFileContent keeps external-body IPFS mirrors non-editable", async () 
   }
 });
 
+test("fetchFileContent reports the mirror URI and gateway URL when gateway fetch fails", async () => {
+  const ipfsUri = "ipfs://bafyfailed/example.html";
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    throw new Error("network refused");
+  }) as any;
+
+  try {
+    const publicClient = {
+      readContract: async () => [
+        200n,
+        "0x",
+        [
+          {
+            key: "Content-Type",
+            value: `message/external-body; access-type=URL; URL="${ipfsUri}"; content-type="text/html"`,
+          },
+        ],
+      ],
+    };
+
+    await assert.rejects(
+      () =>
+        fetchFileContent({
+          routerAddress: `0x${"1".repeat(40)}`,
+          routerAbi: [],
+          publicClient: publicClient as any,
+          lensAddresses: [`0x${"a".repeat(40)}`],
+          resourcePath: ["games", "failed.html"],
+        }),
+      /Gateway fetch failed for ipfs:\/\/bafyfailed\/example\.html via https:\/\/dweb\.link\/ipfs\/bafyfailed\/example\.html: network refused/,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("fetchFileContent caches repeat mirror reads by route identity", async () => {
   const body = "cached pinned bytes";
   const ipfsUri = "ipfs://bafycache/example.png";

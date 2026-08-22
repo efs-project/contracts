@@ -7,7 +7,7 @@ import { GenericContractsDeclaration } from "~~/utils/scaffold-eth/contract";
 const deployedContracts = {
   31337: {
     AliasResolver: {
-      address: "0xB0B76064eE417f7568427cbd3fDAcB2e5589743d",
+      address: "0x3FcB55C8Df3059F1492AD576C1634f34451a6bfE",
       abi: [
         {
           inputs: [
@@ -578,7 +578,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     EFSFileView: {
-      address: "0x857576b079E5521ffEb76DE4f685907AA789f2E8",
+      address: "0x3AB718580b476D64fdD3CE6a9Ab63491B15767d9",
       abi: [
         {
           inputs: [
@@ -1320,7 +1320,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     EFSRouter: {
-      address: "0xf1a3B23faB73e9Dd294d11fc0d6F7222511400DD",
+      address: "0x3B42d507E1B13eE164cAb0FbA4EA66f8a1B653f1",
       abi: [
         {
           inputs: [
@@ -1535,7 +1535,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     EdgeResolver: {
-      address: "0xb40297CC4ccD2f837CcF75831B5fA2cAb96C1CFe",
+      address: "0x381f0A7D6aB1874B96778Ad0b0eE18259D0bE5AB",
       abi: [
         {
           inputs: [
@@ -2905,7 +2905,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     Indexer: {
-      address: "0x7B2dE8E2c646B73c084610d8553F0E63F5D493Dd",
+      address: "0xA91B04369224894A2a7E0a6396b2B63CeaCBD1a4",
       abi: [
         {
           inputs: [
@@ -5079,7 +5079,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     ListEntryResolver: {
-      address: "0x9Dd2CAE58F9F46280D84aE0ef31c243dc5dAd8aA",
+      address: "0xBf1EA964481dfe084943da36Bf5Cb30650B5c23A",
       abi: [
         {
           inputs: [
@@ -5826,7 +5826,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     ListReader: {
-      address: "0x9a6ff90672C00b1cFF81E8493562acd703095cde",
+      address: "0x45e6D4230064F9dd806330dA9D92639f8665D9bf",
       abi: [
         {
           inputs: [
@@ -6225,7 +6225,7 @@ const deployedContracts = {
       },
     },
     ListResolver: {
-      address: "0xdEAb8859ab356B5db7c27313eE079461cB87e137",
+      address: "0xcF150FEf63524625Bc55D2D877C1B21f827270BA",
       abi: [
         {
           inputs: [
@@ -6696,7 +6696,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     MirrorResolver: {
-      address: "0xf844378a282FB3F9A4c2A47DaD3Be1706c6f3226",
+      address: "0x05AD55fe395D17Bcb123039306A98CAe3FCDfF9f",
       abi: [
         {
           inputs: [
@@ -7345,7 +7345,7 @@ const deployedContracts = {
       inheritedFunctions: {},
     },
     SystemAccount: {
-      address: "0x19b249b3E733049f7B97DFddb6dE60c4Bf95C205",
+      address: "0x4c3C2b6f552c251838336B370B9E2B71ce162dAc",
       abi: [
         {
           inputs: [

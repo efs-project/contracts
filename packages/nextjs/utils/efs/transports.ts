@@ -45,10 +45,15 @@ export const TRANSPORT_DISPLAY_ORDER: TransportType[] = [
  * it serves this app, so the devnet sets these to `/ipfs/` / `/arweave/` and stays
  * same-origin.
  *
- * Trailing `/` matters — we concatenate `${gateway}${cid}` without inserting one.
+ * Gateway bases are normalized below so env values may include or omit the
+ * trailing `/`.
  */
-const IPFS_GATEWAY = process.env.NEXT_PUBLIC_IPFS_GATEWAY || "https://dweb.link/ipfs/";
-const ARWEAVE_GATEWAY = process.env.NEXT_PUBLIC_ARWEAVE_GATEWAY || "https://arweave.net/";
+function normalizeGatewayBase(base: string): string {
+  return base.endsWith("/") ? base : `${base}/`;
+}
+
+const IPFS_GATEWAY = normalizeGatewayBase(process.env.NEXT_PUBLIC_IPFS_GATEWAY || "https://dweb.link/ipfs/");
+const ARWEAVE_GATEWAY = normalizeGatewayBase(process.env.NEXT_PUBLIC_ARWEAVE_GATEWAY || "https://arweave.net/");
 
 /** Detect transport type from a URI string. */
 export function detectTransport(uri: string): TransportType {

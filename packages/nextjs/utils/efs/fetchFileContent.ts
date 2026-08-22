@@ -217,8 +217,16 @@ export async function fetchFileContent(args: FetchFileArgs): Promise<FetchedFile
           const gatewayUrl = resolveGatewayUrl(externalUri);
           if (gatewayUrl) {
             // Fetch from gateway
-            const gatewayResp = await globalThis.fetch(gatewayUrl);
-            if (!gatewayResp.ok) throw new Error(`Gateway returned ${gatewayResp.status} for ${gatewayUrl}`);
+            let gatewayResp: Response;
+            try {
+              gatewayResp = await globalThis.fetch(gatewayUrl);
+            } catch (error) {
+              const detail = error instanceof Error ? error.message : String(error);
+              throw new Error(`Gateway fetch failed for ${externalUri} via ${gatewayUrl}: ${detail}`);
+            }
+            if (!gatewayResp.ok) {
+              throw new Error(`Gateway returned HTTP ${gatewayResp.status} for ${externalUri} via ${gatewayUrl}`);
+            }
             if (maxBytes != null) {
               // Reject a declared oversized body before reading it…
               const declared = Number(gatewayResp.headers.get("content-length"));
