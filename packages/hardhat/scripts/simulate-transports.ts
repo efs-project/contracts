@@ -3,6 +3,7 @@ import { ethers } from "hardhat";
 // `@nomicfoundation/hardhat-chai-matchers` import — see EFSTransports.test.ts.
 import { expect } from "chai";
 import { EFSIndexer, EdgeResolver, EFSFileView, EFSRouter, MirrorResolver } from "../typechain-types";
+import { canonicalContentHash } from "../deploy-lib/contentHash";
 
 /**
  * EFS Transports & Mirrors Simulation
@@ -164,7 +165,7 @@ async function main() {
   // the DATA payload. Attaching it as a PROPERTY is future PROPERTY/SDK work.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const createData = async (signer: any, content: string) => {
-    const contentHash = ethers.keccak256(ethers.toUtf8Bytes(content));
+    const contentHash = canonicalContentHash(content); // specs/10 form, never a bare 0x digest
     const tx = await eas.connect(signer).attest({
       schema: dataSchemaUID,
       data: {
