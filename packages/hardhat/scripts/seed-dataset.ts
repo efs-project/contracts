@@ -2,7 +2,7 @@ import { createReadStream, existsSync, readdirSync, readFileSync, statSync } fro
 import http from "http";
 import https from "https";
 import path from "path";
-import { AbiCoder, Contract, Signer, ZeroAddress, ZeroHash, keccak256 } from "ethers";
+import { AbiCoder, Contract, Signer, ZeroAddress, ZeroHash } from "ethers";
 import {
   ActiveDatasetPlacement,
   DatasetManifest,
@@ -14,6 +14,8 @@ import {
   decideSeedFileAction,
   loadDatasetManifest,
   parseKuboAddResponse,
+  canonicalContentHash,
+  legacyKeccakContentHash,
   parseSeedDatasetArgs,
 } from "./seed-dataset-lib";
 
@@ -80,7 +82,10 @@ interface PreparedFile {
   relativePath: string;
   size: bigint;
   contentType: string;
+  /** Canonical specs/10 multihash (`f1220…`) — what this seeder writes. */
   contentHash: string;
+  /** The pre-specs/10 `keccak256(bytes)` claim — only to recognise legacy placements. */
+  legacyContentHash: string;
 }
 
 interface SeedStats {
@@ -89,6 +94,8 @@ interface SeedStats {
   created: number;
   updated: number;
   repaired: number;
+  /** Files whose legacy `0x`-keccak claim was re-bound to the canonical form in place. */
+  healed: number;
   forced: number;
   pinned: number;
   transactions: number;
@@ -224,6 +231,7 @@ function createSeedStats(): SeedStats {
     created: 0,
     updated: 0,
     repaired: 0,
+    healed: 0,
     forced: 0,
     pinned: 0,
     transactions: 0,
@@ -254,7 +262,8 @@ function prepareFiles(manifest: DatasetManifest, datasetDir: string, only: strin
       relativePath: entry.path,
       size: BigInt(statSync(absolutePath).size),
       contentType: contentTypeForEntry(entry, defaults),
-      contentHash: keccak256(bytes),
+      contentHash: canonicalContentHash(bytes),
+      legacyContentHash: legacyKeccakContentHash(bytes),
     };
   });
 }
@@ -320,11 +329,17 @@ async function planOneFile(args: {
     activePlacement,
     force,
     localContentHash: file.contentHash,
+    localLegacyContentHash: file.legacyContentHash,
   });
 
   if (decision.action === "skip") {
     ctx.stats.skipped += 1;
     console.log(`  plan skip  ${file.relativePath} (contentHash ${shortHash(file.contentHash)} already active)`);
+    return;
+  }
+  if (decision.action === "heal") {
+    ctx.stats.plannedWrites += 1;
+    console.log(`  plan heal  ${file.relativePath} (${formatDecisionReason(decision.reason, activePlacement, file)})`);
     return;
   }
 
@@ -351,11 +366,16 @@ async function seedOneFile(args: {
     activePlacement,
     force,
     localContentHash: file.contentHash,
+    localLegacyContentHash: file.legacyContentHash,
   });
 
   if (decision.action === "skip") {
     ctx.stats.skipped += 1;
     console.log(`  skip ${file.relativePath} (contentHash ${shortHash(file.contentHash)} already active)`);
+    return;
+  }
+  if (decision.action === "heal" && activePlacement) {
+    await healContentHash(ctx, activePlacement.dataUID, file);
     return;
   }
   if (activePlacement) {
@@ -459,6 +479,55 @@ async function seedOneFile(args: {
   await attestMany(ctx, commitRequests, `commit:${file.relativePath}`);
   recordWriteStats(ctx, decision.reason);
   console.log(`  wrote ${file.relativePath} data=${dataUID.slice(0, 10)}... mirror=${mirrorUri}`);
+}
+
+/**
+ * Re-bind a canonical `contentHash` on an EXISTING DATA whose active claim is the legacy
+ * bare-keccak form of the same bytes (specs/10 §8 remediation).
+ *
+ * The content is unchanged, so nothing is re-pinned or re-minted: the DATA, its mirror and
+ * its placement keep their identity (existing links stay valid). PROPERTY values are
+ * non-revocable, so the old value stays on-chain as history — the binding PIN is
+ * cardinality-1 per (attester, key anchor), so pinning the new PROPERTY supersedes it and
+ * readers see the canonical claim (ADR-0052). Two attestations per file: the PROPERTY,
+ * then the PIN that references it.
+ */
+async function healContentHash(ctx: SeedContext, dataUID: UID, file: PreparedFile): Promise<void> {
+  // The legacy claim was read THROUGH this key anchor, so it exists; mint one only if a
+  // concurrent writer somehow removed the path to it.
+  const keyAnchorUID =
+    (await findAnchor(ctx, dataUID, "contentHash", ctx.schemas.property)) ??
+    (await attestOne(
+      ctx,
+      ctx.schemas.anchor,
+      {
+        recipient: ZeroAddress,
+        expirationTime: 0n,
+        revocable: false,
+        refUID: dataUID,
+        data: ABI.encode(["string", "bytes32"], ["contentHash", ctx.schemas.property]),
+        value: 0n,
+      },
+      `heal-key:${file.relativePath}`,
+    ));
+  const propertyUID = await attestOne(
+    ctx,
+    ctx.schemas.property,
+    {
+      recipient: ZeroAddress,
+      expirationTime: 0n,
+      revocable: false,
+      refUID: ZeroHash,
+      data: ABI.encode(["string"], [file.contentHash]),
+      value: 0n,
+    },
+    `heal-prop:${file.relativePath}`,
+  );
+  await attestOne(ctx, ctx.schemas.pin, pinRequest(propertyUID, keyAnchorUID), `heal-pin:${file.relativePath}`);
+  recordWriteStats(ctx, "legacy-content-hash");
+  console.log(
+    `  heal ${file.relativePath} contentHash -> ${shortHash(file.contentHash)} (data=${dataUID.slice(0, 10)}...)`,
+  );
 }
 
 async function ensureEntryParent(ctx: SeedContext, datasetRootUID: UID, relativePath: string): Promise<UID> {
@@ -643,6 +712,9 @@ function formatDecisionReason(
     return `active hash ${shortHash(activePlacement?.contentHash ?? null)} -> ${shortHash(file.contentHash)}`;
   }
   if (reason === "missing-content-hash") return "active placement is missing contentHash metadata";
+  if (reason === "legacy-content-hash") {
+    return `legacy claim ${shortHash(activePlacement?.contentHash ?? null)} -> canonical ${shortHash(file.contentHash)}, same bytes`;
+  }
   if (reason === "forced") return "forced despite matching active contentHash";
   return "missing active placement";
 }
@@ -651,6 +723,7 @@ function recordWriteStats(ctx: SeedContext, reason: SeedFileDecision["reason"]):
   if (reason === "content-hash-changed") ctx.stats.updated += 1;
   else if (reason === "missing-content-hash") ctx.stats.repaired += 1;
   else if (reason === "forced") ctx.stats.forced += 1;
+  else if (reason === "legacy-content-hash") ctx.stats.healed += 1;
   else ctx.stats.created += 1;
 }
 
@@ -659,9 +732,9 @@ function logSummary(ctx: SeedContext, mode: "execute" | "plan"): void {
     console.log(`[seed-dataset] plan summary skipped=${ctx.stats.skipped} writes=${ctx.stats.plannedWrites}`);
     return;
   }
-  const wrote = ctx.stats.created + ctx.stats.updated + ctx.stats.repaired + ctx.stats.forced;
+  const wrote = ctx.stats.created + ctx.stats.updated + ctx.stats.repaired + ctx.stats.healed + ctx.stats.forced;
   console.log(
-    `[seed-dataset] summary skipped=${ctx.stats.skipped} wrote=${wrote} created=${ctx.stats.created} updated=${ctx.stats.updated} repaired=${ctx.stats.repaired} forced=${ctx.stats.forced} ipfsPins=${ctx.stats.pinned} txs=${ctx.stats.transactions} attestations=${ctx.stats.attestations}`,
+    `[seed-dataset] summary skipped=${ctx.stats.skipped} wrote=${wrote} created=${ctx.stats.created} updated=${ctx.stats.updated} repaired=${ctx.stats.repaired} healed=${ctx.stats.healed} forced=${ctx.stats.forced} ipfsPins=${ctx.stats.pinned} txs=${ctx.stats.transactions} attestations=${ctx.stats.attestations}`,
   );
 }
 

@@ -2,8 +2,9 @@ import { expect } from "chai";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
-import { AbiCoder, Interface, ZeroAddress, ZeroHash, getAddress, keccak256, toUtf8Bytes } from "ethers";
+import { AbiCoder, Interface, ZeroAddress, ZeroHash, getAddress, toUtf8Bytes } from "ethers";
 import { seedDataset } from "../scripts/seed-dataset";
+import { canonicalContentHash } from "../scripts/seed-dataset-lib";
 
 const ABI = AbiCoder.defaultAbiCoder();
 const EAS = new Interface([
@@ -45,7 +46,9 @@ describe("seedDataset execution boundaries", function () {
       const pinSchema = uid("c1");
       const tagSchema = uid("e1");
       const propertySchema = uid("f1");
-      const localHash = keccak256(toUtf8Bytes(bytes));
+      // The CANONICAL claim of these bytes (specs/10) — what this seeder now writes, so an
+      // active placement carrying it is a genuine match: nothing may be pinned or written.
+      const localHash = canonicalContentHash(toUtf8Bytes(bytes));
 
       let easWrites = 0;
       let tagsAnchorLookups = 0;
