@@ -1,3 +1,4 @@
+import { keccak256, sha256 } from "ethers";
 import { readFileSync } from "fs";
 import path from "path";
 
@@ -42,7 +43,29 @@ export interface ActiveDatasetPlacement {
 
 export type SeedFileDecision =
   | { action: "skip"; reason: "matching-content-hash" }
+  /** Same bytes, but the active claim is the pre-specs/10 bare keccak form: re-bind a
+   * canonical contentHash on the EXISTING DATA instead of re-seeding the file. */
+  | { action: "heal"; reason: "legacy-content-hash" }
   | { action: "write"; reason: "missing-placement" | "missing-content-hash" | "content-hash-changed" | "forced" };
+
+/**
+ * The canonical `contentHash` of file bytes: `f1220` + the sha2-256 digest in lowercase
+ * hex — a multibase-base16 multihash (specs/10 §2.3, ADR-0064). `f` = base16, `12` =
+ * sha2-256, `20` = 32-byte digest. This seeder minted `keccak256(bytes)` — a bare `0x…`
+ * digest that does not say which algorithm made it — until specs/10 §8; readers (the SDK)
+ * report that form as `malformed-claim`, and PROPERTY values are non-revocable.
+ */
+export function canonicalContentHash(bytes: Uint8Array): string {
+  return `f1220${sha256(bytes).slice(2)}`;
+}
+
+/**
+ * The claim this seeder USED to mint for the same bytes — `keccak256(bytes)`. Only for
+ * RECOGNISING a legacy claim of unchanged content; never written.
+ */
+export function legacyKeccakContentHash(bytes: Uint8Array): string {
+  return keccak256(bytes);
+}
 
 const DEFAULT_IPFS_API_URL = "http://127.0.0.1:5001/api/v0";
 
@@ -146,12 +169,23 @@ export function decideSeedFileAction(args: {
   activePlacement: ActiveDatasetPlacement | null;
   force: boolean;
   localContentHash: string;
+  /** `legacyKeccakContentHash(bytes)` of the local file — lets a legacy claim of the SAME
+   * bytes be healed in place rather than mistaken for changed content. */
+  localLegacyContentHash?: string;
 }): SeedFileDecision {
   if (args.force) return { action: "write", reason: "forced" };
   if (!args.activePlacement) return { action: "write", reason: "missing-placement" };
   if (!args.activePlacement.contentHash) return { action: "write", reason: "missing-content-hash" };
-  if (normalizeHash(args.activePlacement.contentHash) === normalizeHash(args.localContentHash)) {
+  const active = normalizeHash(args.activePlacement.contentHash);
+  if (active === normalizeHash(args.localContentHash)) {
     return { action: "skip", reason: "matching-content-hash" };
+  }
+  // A plain string compare breaks across the format change: every file seeded before it
+  // carries `0x`+keccak, which never equals the local `f1220…`, so a re-run would re-pin
+  // and re-seed the whole dataset. When the legacy claim is keccak of the SAME local
+  // bytes, the content is unchanged — only the claim's form is wrong — so heal it.
+  if (args.localLegacyContentHash !== undefined && active === normalizeHash(args.localLegacyContentHash)) {
+    return { action: "heal", reason: "legacy-content-hash" };
   }
   return { action: "write", reason: "content-hash-changed" };
 }

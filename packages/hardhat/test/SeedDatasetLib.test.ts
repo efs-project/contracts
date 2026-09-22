@@ -3,8 +3,10 @@ import {
   assertSafeAnchorPath,
   assertSafeManifestPath,
   buildIpfsAddUrl,
+  canonicalContentHash,
   contentTypeForEntry,
   decideSeedFileAction,
+  legacyKeccakContentHash,
   parseKuboAddResponse,
   parseSeedDatasetArgs,
 } from "../scripts/seed-dataset-lib";
@@ -160,5 +162,74 @@ describe("seed-dataset helpers", function () {
       action: "write",
       reason: "forced",
     });
+  });
+
+  it("hashes to the canonical specs/10 multihash, not a bare keccak digest", function () {
+    // Vector: sha256("hello") = 2cf24dba…9824
+    const bytes = new TextEncoder().encode("hello");
+    expect(canonicalContentHash(bytes)).to.equal(
+      "f12202cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+    );
+    expect(canonicalContentHash(bytes)).to.match(/^f1220[0-9a-f]{64}$/);
+    // The legacy claim this seeder used to mint for the same bytes — recognised, never written.
+    expect(legacyKeccakContentHash(bytes)).to.equal(
+      "0x1c8aff950685c2ed4bc3174f3472287b56d9517b9c948127319a09a7a36deac8",
+    );
+  });
+
+  it("HEALS a legacy keccak claim of the SAME bytes instead of re-seeding the file", function () {
+    // Every file seeded before specs/10 carries `0x`+keccak, which never string-equals the
+    // local `f1220…`; without this a re-run would re-pin and re-seed the whole dataset.
+    const bytes = new TextEncoder().encode("hello");
+    const local = canonicalContentHash(bytes);
+    const legacy = legacyKeccakContentHash(bytes);
+    expect(
+      decideSeedFileAction({
+        activePlacement: { dataUID: "0xdata", contentHash: legacy },
+        force: false,
+        localContentHash: local,
+        localLegacyContentHash: legacy,
+      }),
+    ).to.deep.equal({ action: "heal", reason: "legacy-content-hash" });
+
+    // Case-insensitive, like the existing skip comparison.
+    expect(
+      decideSeedFileAction({
+        activePlacement: { dataUID: "0xdata", contentHash: legacy.toUpperCase().replace("0X", "0x") },
+        force: false,
+        localContentHash: local,
+        localLegacyContentHash: legacy,
+      }).action,
+    ).to.equal("heal");
+
+    // A legacy claim of DIFFERENT bytes is a real content change, not a heal.
+    expect(
+      decideSeedFileAction({
+        activePlacement: { dataUID: "0xdata", contentHash: legacyKeccakContentHash(new TextEncoder().encode("old")) },
+        force: false,
+        localContentHash: local,
+        localLegacyContentHash: legacy,
+      }),
+    ).to.deep.equal({ action: "write", reason: "content-hash-changed" });
+
+    // Once healed, the canonical claim matches and the file is skipped.
+    expect(
+      decideSeedFileAction({
+        activePlacement: { dataUID: "0xdata", contentHash: local },
+        force: false,
+        localContentHash: local,
+        localLegacyContentHash: legacy,
+      }),
+    ).to.deep.equal({ action: "skip", reason: "matching-content-hash" });
+
+    // --force still wins.
+    expect(
+      decideSeedFileAction({
+        activePlacement: { dataUID: "0xdata", contentHash: legacy },
+        force: true,
+        localContentHash: local,
+        localLegacyContentHash: legacy,
+      }).action,
+    ).to.equal("write");
   });
 });
