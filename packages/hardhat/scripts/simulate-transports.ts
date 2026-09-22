@@ -34,6 +34,13 @@ import { canonicalContentHash } from "../deploy-lib/contentHash";
  *
  * Run: npx hardhat run scripts/simulate-transports.ts --network localhost
  */
+/** Whether a `web3-next-chunk` header value is the ADR-0058 form pointing at `nextIdx`:
+ * a leading-slash relative URL whose `chunk` query param is the next index. */
+function isNextChunkURL(value: string, nextIdx: number): boolean {
+  if (!value.startsWith("/")) return false;
+  return new URL(value, "web3://router").searchParams.get("chunk") === String(nextIdx);
+}
+
 async function main() {
   const PASS = "\u2705 PASS";
   const FAIL = "\u274c FAIL";
@@ -684,14 +691,19 @@ async function main() {
       break;
     } else {
       if (nextHeader === undefined) sawNextHeaderOnNonLast = false;
-      else if (nextHeader.value !== `?chunk=${chunkIdx + 1}`) sawNextHeaderOnNonLast = false;
+      // ADR-0058: the router emits a LEADING-SLASH relative URL — this request's path and
+      // routing params (e.g. `lenses`) re-encoded, with `chunk` set to the next index. The
+      // bare `?chunk=N` form this check used to expect makes the web3protocol-js reference
+      // client throw, and dropping the lens params could splice another attester's bytes
+      // into chunk N+1. So require the leading slash and the correct next index.
+      else if (!isNextChunkURL(nextHeader.value, chunkIdx + 1)) sawNextHeaderOnNonLast = false;
       chunkIdx++;
     }
   }
 
   assert("web3:// chunked serving status==200 for every chunk", onchainStatusOk);
   assert("Content-Type header == resolved contentType PROPERTY", onchainCtOk, "application/octet-stream");
-  assert("web3-next-chunk present on every non-last chunk (correct ?chunk=N+1)", sawNextHeaderOnNonLast);
+  assert("web3-next-chunk present on every non-last chunk (leading-slash URL, chunk=N+1)", sawNextHeaderOnNonLast);
   assert("web3-next-chunk absent on last chunk", lastChunkHadNoNextHeader);
   assert("client walked exactly chunkSlices.length chunks", reassembled.length === chunkSlices.length);
 
