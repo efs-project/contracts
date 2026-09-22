@@ -90,9 +90,14 @@ jobs:
       MAINNET_FORKING_ENABLED: "true"
       FORK_BLOCK: "10691000"
       # The default Alchemy demo key is rate-limited and returns 429 in CI, so the fork
-      # never starts. Point at a public archive RPC (drpc) that serves the pinned block.
-      # If this proves flaky, replace with an Alchemy/Infura key via repo secrets.
-      SEPOLIA_FORK_RPC_URL: "https://sepolia.drpc.org"
+      # never starts. Point at a public ARCHIVE RPC that serves the pinned block — the
+      # fork needs historical state at FORK_BLOCK, which pruned endpoints can't serve.
+      # drpc was used until 2026-09 and now answers "chain is not available on free
+      # plan" (HH604 / 400), failing every run. Tenderly's public gateway serves the
+      # pinned block (verified 2026-09-22: cold-cache fork + full deploy + this pin
+      # check all pass); publicnode and 1rpc are pruned at this height. The durable
+      # fix is still an Alchemy/Infura key via repo secrets — free endpoints change.
+      SEPOLIA_FORK_RPC_URL: "https://sepolia.gateway.tenderly.co"
     steps:
       - uses: actions/checkout@master
 
