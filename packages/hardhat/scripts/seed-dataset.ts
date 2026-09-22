@@ -91,6 +91,8 @@ interface PreparedFile {
 interface SeedStats {
   skipped: number;
   plannedWrites: number;
+  /** Planned in-place heals — counted apart from writes so a plan run is easy to check. */
+  plannedHeals: number;
   created: number;
   updated: number;
   repaired: number;
@@ -228,6 +230,7 @@ function createSeedStats(): SeedStats {
   return {
     skipped: 0,
     plannedWrites: 0,
+    plannedHeals: 0,
     created: 0,
     updated: 0,
     repaired: 0,
@@ -338,7 +341,7 @@ async function planOneFile(args: {
     return;
   }
   if (decision.action === "heal") {
-    ctx.stats.plannedWrites += 1;
+    ctx.stats.plannedHeals += 1;
     console.log(`  plan heal  ${file.relativePath} (${formatDecisionReason(decision.reason, activePlacement, file)})`);
     return;
   }
@@ -729,7 +732,13 @@ function recordWriteStats(ctx: SeedContext, reason: SeedFileDecision["reason"]):
 
 function logSummary(ctx: SeedContext, mode: "execute" | "plan"): void {
   if (mode === "plan") {
-    console.log(`[seed-dataset] plan summary skipped=${ctx.stats.skipped} writes=${ctx.stats.plannedWrites}`);
+    // heals and writes are reported SEPARATELY: a heal re-binds one PROPERTY on an existing
+    // file, a write re-seeds the whole file. A plan that shows writes where heals were
+    // expected usually means the wrong signer — every file then looks like it has no
+    // placement under that account, and executing would re-seed them all under it.
+    console.log(
+      `[seed-dataset] plan summary signer=${ctx.signerAddress} skipped=${ctx.stats.skipped} heals=${ctx.stats.plannedHeals} writes=${ctx.stats.plannedWrites}`,
+    );
     return;
   }
   const wrote = ctx.stats.created + ctx.stats.updated + ctx.stats.repaired + ctx.stats.healed + ctx.stats.forced;
