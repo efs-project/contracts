@@ -18,7 +18,7 @@ export const wagmiConfig = createConfig({
   ssr: true,
   client({ chain }) {
     // Same endpoint order as the burner wallet's writes (explicit NEXT_PUBLIC_*_RPC_URL
-    // override, else Alchemy, then viem's public default), so reads and writes hit the same
+    // override, else Alchemy, then the chain's public RPCs), so reads and writes hit the same
     // node. The hardhat chain is patched in `scaffold.config.ts` to honour
     // NEXT_PUBLIC_HARDHAT_RPC_URL. See AGENTS.md → "Running alongside another project".
     const rpcFallbacks = getPreferredRpcUrls(chain).map(url => http(url));
