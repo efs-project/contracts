@@ -56,8 +56,8 @@ test("app Sepolia tries Alchemy, then working public RPCs, and never sepolia.drp
     const urls = getPreferredRpcUrls(appSepolia);
     assert.match(urls[0] ?? "", ALCHEMY_SEPOLIA);
     assert.deepEqual(urls.slice(1), [
-      "https://sepolia.gateway.tenderly.co",
       "https://ethereum-sepolia-rpc.publicnode.com",
+      "https://sepolia.gateway.tenderly.co",
     ]);
     assert.ok(!urls.some(url => url.includes("drpc.org")), "sepolia.drpc.org rejects keyless traffic");
   });

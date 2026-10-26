@@ -78,10 +78,12 @@ const hardhatChain: chains.Chain = HARDHAT_RPC_URL
 // every keyless request with HTTP 400. Keep every entry LIVE: viem's fallback transport moves on to
 // the next endpoint even when a read legitimately reverts, so the last endpoint's answer is the error
 // the app sees, and a dead entry turns every revert into "HTTP request failed". Checked 2026-10-26:
-// both allow cross-origin calls from app.efs.eth.limo and return proper reverts.
+// both allow cross-origin calls from app.efs.eth.limo and return proper reverts. publicnode goes
+// first because it absorbs a page-load burst: it answered all of 100 concurrent requests from that
+// origin, while Tenderly answered 40 and throttled 60 with HTTP 429.
 export const SEPOLIA_PUBLIC_RPC_URLS = [
-  "https://sepolia.gateway.tenderly.co",
   "https://ethereum-sepolia-rpc.publicnode.com",
+  "https://sepolia.gateway.tenderly.co",
 ] as const;
 
 // `NEXT_PUBLIC_SEPOLIA_RPC_URL` overrides Sepolia's RPC the same way
