@@ -58,8 +58,9 @@ function hasExplicitRpcOverride(chainRpcUrls: readonly string[]): boolean {
 /**
  * The order the app tries a chain's RPC endpoints in, shared by wagmi reads and the burner
  * wallet's writes so the two can never disagree. An explicit NEXT_PUBLIC_*_RPC_URL override
- * goes first; otherwise Alchemy goes ahead of viem's built-in public default, because those
- * defaults rot (Sepolia's sepolia.drpc.org now rejects keyless traffic with HTTP 400).
+ * goes first; otherwise Alchemy goes ahead of the chain's public default RPCs, because those
+ * rot (viem's Sepolia default, sepolia.drpc.org, now rejects keyless traffic with HTTP 400, so
+ * scaffold.config.ts replaces it with SEPOLIA_PUBLIC_RPC_URLS).
  */
 export function getPreferredRpcUrls(chain: chains.Chain): readonly string[] {
   const chainRpcUrls = chain.rpcUrls.default.http;

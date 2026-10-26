@@ -73,18 +73,27 @@ const hardhatChain: chains.Chain = HARDHAT_RPC_URL
     }
   : chains.hardhat;
 
+// Keyless public Sepolia RPCs tried after Alchemy (see utils/scaffold-eth/networks.ts →
+// getPreferredRpcUrls). These replace viem's built-in default, sepolia.drpc.org, which now answers
+// every keyless request with HTTP 400. Keep every entry LIVE: viem's fallback transport moves on to
+// the next endpoint even when a read legitimately reverts, so the last endpoint's answer is the error
+// the app sees, and a dead entry turns every revert into "HTTP request failed". Checked 2026-10-26:
+// both allow cross-origin calls from app.efs.eth.limo and return proper reverts.
+export const SEPOLIA_PUBLIC_RPC_URLS = [
+  "https://sepolia.gateway.tenderly.co",
+  "https://ethereum-sepolia-rpc.publicnode.com",
+] as const;
+
 // `NEXT_PUBLIC_SEPOLIA_RPC_URL` overrides Sepolia's RPC the same way
-// NEXT_PUBLIC_HARDHAT_RPC_URL overrides the fork's — leave unset to use Alchemy first, with
-// viem's public default as the fallback (see utils/scaffold-eth/networks.ts → getPreferredRpcUrls).
+// NEXT_PUBLIC_HARDHAT_RPC_URL overrides the fork's: set, it goes first with Alchemy second;
+// unset, Alchemy goes first and SEPOLIA_PUBLIC_RPC_URLS follow.
 const SEPOLIA_RPC_URL = (process.env.NEXT_PUBLIC_SEPOLIA_RPC_URL ?? "").trim();
-const sepoliaChain: chains.Chain = SEPOLIA_RPC_URL
-  ? {
-      ...chains.sepolia,
-      rpcUrls: {
-        default: { http: [SEPOLIA_RPC_URL] },
-      },
-    }
-  : chains.sepolia;
+const sepoliaChain: chains.Chain = {
+  ...chains.sepolia,
+  rpcUrls: {
+    default: { http: SEPOLIA_RPC_URL ? [SEPOLIA_RPC_URL] : [...SEPOLIA_PUBLIC_RPC_URLS] },
+  },
+};
 
 // The shared community devnet as a first-class chain. The metadata (name, nativeCurrency)
 // is what an external wallet shows in its one-time `wallet_addEthereumChain` prompt.
