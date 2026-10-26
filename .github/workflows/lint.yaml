@@ -90,9 +90,11 @@ jobs:
       MAINNET_FORKING_ENABLED: "true"
       FORK_BLOCK: "10691000"
       # The default Alchemy demo key is rate-limited and returns 429 in CI, so the fork
-      # never starts. Point at a public archive RPC (drpc) that serves the pinned block.
-      # If this proves flaky, replace with an Alchemy/Infura key via repo secrets.
-      SEPOLIA_FORK_RPC_URL: "https://sepolia.drpc.org"
+      # never starts. Point at a public archive RPC that serves the pinned block.
+      # sepolia.drpc.org was used until it started rejecting keyless Sepolia traffic
+      # (HTTP 400, "chain is not available on free plan"). A repo secret of the same
+      # name, if set, wins over the public default (secrets are absent on fork PRs).
+      SEPOLIA_FORK_RPC_URL: ${{ secrets.SEPOLIA_FORK_RPC_URL || 'https://sepolia.gateway.tenderly.co' }}
     steps:
       - uses: actions/checkout@master
 

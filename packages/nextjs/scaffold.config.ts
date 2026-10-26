@@ -10,7 +10,7 @@ export type ScaffoldConfig = {
   onlyLocalBurnerWallet: boolean;
 };
 
-export const DEFAULT_ALCHEMY_API_KEY = "IZYEU2cWBgnFmgiTAgpWD";
+const DEFAULT_ALCHEMY_API_KEY = "IZYEU2cWBgnFmgiTAgpWD";
 
 type TargetChainLike = { id: number };
 
@@ -74,9 +74,9 @@ const hardhatChain: chains.Chain = HARDHAT_RPC_URL
   : chains.hardhat;
 
 // `NEXT_PUBLIC_SEPOLIA_RPC_URL` overrides Sepolia's RPC the same way
-// NEXT_PUBLIC_HARDHAT_RPC_URL overrides the fork's — leave unset to use viem's
-// default + wagmiConfig's Alchemy fallback (see wagmiConfig.tsx → getAlchemyHttpUrl).
-const SEPOLIA_RPC_URL = process.env.NEXT_PUBLIC_SEPOLIA_RPC_URL;
+// NEXT_PUBLIC_HARDHAT_RPC_URL overrides the fork's — leave unset to use Alchemy first, with
+// viem's public default as the fallback (see utils/scaffold-eth/networks.ts → getPreferredRpcUrls).
+const SEPOLIA_RPC_URL = (process.env.NEXT_PUBLIC_SEPOLIA_RPC_URL ?? "").trim();
 const sepoliaChain: chains.Chain = SEPOLIA_RPC_URL
   ? {
       ...chains.sepolia,

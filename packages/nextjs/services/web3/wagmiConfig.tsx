@@ -2,8 +2,8 @@ import { wagmiConnectors } from "./wagmiConnectors";
 import { Chain, createClient, fallback, http } from "viem";
 import { hardhat, mainnet } from "viem/chains";
 import { createConfig } from "wagmi";
-import scaffoldConfig, { DEFAULT_ALCHEMY_API_KEY } from "~~/scaffold.config";
-import { getAlchemyHttpUrl } from "~~/utils/scaffold-eth";
+import scaffoldConfig from "~~/scaffold.config";
+import { getPreferredRpcUrls } from "~~/utils/scaffold-eth";
 
 const { targetNetworks } = scaffoldConfig;
 
@@ -17,18 +17,11 @@ export const wagmiConfig = createConfig({
   connectors: wagmiConnectors,
   ssr: true,
   client({ chain }) {
-    // `http()` with no arg reads `chain.rpcUrls.default.http[0]`. The hardhat chain is
-    // patched in `scaffold.config.ts` to honour NEXT_PUBLIC_HARDHAT_RPC_URL, so both
-    // the public client (here) and the burner wallet (which reads chain.rpcUrls) stay
-    // pinned to the same node. See AGENTS.md → "Running alongside another project".
-    let rpcFallbacks = [http()];
-
-    const alchemyHttpUrl = getAlchemyHttpUrl(chain.id);
-    if (alchemyHttpUrl) {
-      const isUsingDefaultKey = scaffoldConfig.alchemyApiKey === DEFAULT_ALCHEMY_API_KEY;
-      // If using default Scaffold-ETH 2 API key, we prioritize the default RPC
-      rpcFallbacks = isUsingDefaultKey ? [http(), http(alchemyHttpUrl)] : [http(alchemyHttpUrl), http()];
-    }
+    // Same endpoint order as the burner wallet's writes (explicit NEXT_PUBLIC_*_RPC_URL
+    // override, else Alchemy, then viem's public default), so reads and writes hit the same
+    // node. The hardhat chain is patched in `scaffold.config.ts` to honour
+    // NEXT_PUBLIC_HARDHAT_RPC_URL. See AGENTS.md → "Running alongside another project".
+    const rpcFallbacks = getPreferredRpcUrls(chain).map(url => http(url));
 
     return createClient({
       chain,
