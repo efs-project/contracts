@@ -41,6 +41,11 @@ export default function ExplorerClient() {
   // close, back/forward) reuse it instead of re-walking the path — see
   // `classifyPathChange`. Cleared whenever a full resolution starts or fails.
   const resolvedFolderRef = useRef<{ inputs: unknown[]; segments: string[]; folderUID: `0x${string}` } | null>(null);
+  // Bumped on every back/forward. A file click sets `urlFile` with its URL write;
+  // if Back follows before Next commits that write, both history transitions
+  // land in one batch and `pathname` never changes — so the resolution effect
+  // must re-run on popstate itself to replace the click's `urlFile`.
+  const [historyPops, setHistoryPops] = useState(0);
   const [currentContainer, setCurrentContainer] = useState<ClassifiedContainer | null>(null);
   const [isResolving, setIsResolving] = useState(false);
   const [pathError, setPathError] = useState<string | null>(null);
@@ -665,7 +670,13 @@ export default function ExplorerClient() {
     // code paths. The derived `pathSegments` array would change identity
     // every render and thrash the effect, so we intentionally exclude it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rootUID, pathname, publicClient, mainnetPublicClient, easAddress, dataSchemaUID]);
+  }, [rootUID, pathname, historyPops, publicClient, mainnetPublicClient, easAddress, dataSchemaUID]);
+
+  useEffect(() => {
+    const onPop = () => setHistoryPops(n => n + 1);
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
 
   // Keep the browser tab title in sync with the deepest path segment. When
   // the container has a resolved display name (ENS / persona / property)
@@ -701,8 +712,14 @@ export default function ExplorerClient() {
   // without a navigation, so the explorer stays mounted and the resolution
   // effect takes its one-segment fast path. Back/forward restore these entries
   // the same way.
-  const setFileUrl = (newPathItems: PathItem[], { replace = false } = {}) => {
-    const url = pathUrl(newPathItems);
+  const setFileUrl = (file: { uid: string; name: string } | null, { replace = false } = {}) => {
+    // Set `urlFile` with the URL write (not after the async re-resolution) so
+    // the preview never sees a stale target.
+    setUrlFile(file ? { uid: file.uid, name: file.name } : null);
+    // The folder URL keeps the trailing slash `router.push` adds (`trailingSlash: true`).
+    const url = file
+      ? pathUrl([...currentPath, { uid: file.uid, name: file.name }])
+      : pathUrl(currentPath).replace(/^([^?]*?)\/?(\?|$)/, "$1/$2");
     if (replace) window.history.replaceState(null, "", url);
     else window.history.pushState(null, "", url);
   };
@@ -980,9 +997,7 @@ export default function ExplorerClient() {
                     // user selects (push) / steps (replace) / closes a file, so a
                     // previewed file is a shareable link and back/forward work.
                     urlFile={urlFile}
-                    onFileSelect={(file, opts) =>
-                      setFileUrl(file ? [...currentPath, { uid: file.uid, name: file.name }] : currentPath, opts)
-                    }
+                    onFileSelect={setFileUrl}
                   />
                 )}
               </div>

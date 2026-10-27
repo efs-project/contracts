@@ -1345,9 +1345,6 @@ export const FileBrowser = ({
   // pagination) reads `visibleItems`.
   const visibleItems = items;
 
-  // Last `urlFile` UID applied to the preview (see the URL-selection effect below).
-  const appliedUrlFileRef = useRef<string | null>(null);
-
   // Close the side/fullscreen preview if a filter change or refetch removed the
   // open item from the visible (post-exclude) set — otherwise toggling `system`
   // back on (or applying an exclude tag) would leave a now-hidden file still
@@ -1362,9 +1359,8 @@ export const FileBrowser = ({
     if (!openUID) return;
     const stillVisible = visibleItems.some((it: any) => (it.uid as string | undefined)?.toLowerCase() === openUID);
     if (!stillVisible) {
-      // Re-arm the URL selection below so a deep-linked file reopens if a later
-      // filter change makes it visible again.
-      appliedUrlFileRef.current = null;
+      // The URL keeps naming the file, so the URL-selection effect below reopens
+      // it if a later filter change makes it visible again.
       setSelectedFile(null);
       setSelectedList(null);
       setFileContent(null);
@@ -1375,43 +1371,45 @@ export const FileBrowser = ({
     }
   }, [visibleItems, selectedFile, selectedList]);
 
-  // Apply the URL's file (deep link, back/forward) to the preview. Selection is
-  // local-first: a click selects immediately and the URL follows via
-  // `onFileSelect`, so this only acts when `urlFile` itself changes (tracked in
-  // `appliedUrlFileRef`) — never on the click-to-URL gap. A URL file that isn't
-  // in the listing stays PENDING rather than failing: the directory hook resets
-  // in an effect (one render of stale or empty items after any query change),
-  // and the file may sit on a later page. It opens whenever it appears; until
-  // then the not-listed banner below explains the empty preview.
+  // Keep the preview in step with the URL's file (deep link, click, back/forward).
+  // ExplorerClient sets `urlFile` in the same update as a click's URL write, so
+  // there's no gap where a local selection disagrees with it — any disagreement
+  // means the URL moved (back/forward, a deep link resolving) and the preview
+  // follows. A URL file that isn't in the listing stays PENDING rather than
+  // failing (the directory hook resets on any query change, and the file may sit
+  // on a later page); meanwhile no other file's content is shown, and the
+  // not-listed banner below explains the empty preview.
   useEffect(() => {
+    if (urlFile === undefined) return; // not URL-driven
     const target = urlFile?.uid.toLowerCase() ?? null;
-    if (appliedUrlFileRef.current === target) return;
-    if (target === null) {
-      appliedUrlFileRef.current = null;
+    const selected = (selectedFile?.uid as string | undefined)?.toLowerCase() ?? null;
+    if (target === selected) return;
+    const item = target
+      ? visibleItems?.find(
+          (it: any) => isFile(it, dataSchemaUID) && (it.uid as string | undefined)?.toLowerCase() === target,
+        )
+      : undefined;
+    if (!item) {
       if (selectedFile) {
+        fetchIdRef.current++; // drop any in-flight fetch for the old file
         setSelectedFile(null);
         setFileContent(null);
         setFileBytes(null);
         setFileContentType(null);
         setFetchError(null);
+        setIsFileLoading(false);
         setPreviewFullscreen(false);
       }
       return;
     }
-    const item = visibleItems?.find(
-      (it: any) => isFile(it, dataSchemaUID) && (it.uid as string | undefined)?.toLowerCase() === target,
-    );
-    if (!item) return;
     // `fetchFileContent` bails while the router/client reads are still loading
-    // (they resolve independently of the listing on a cold deep link), so stay
-    // pending until they're ready rather than marking a skipped fetch applied.
+    // (they resolve independently of the listing on a cold deep link); this
+    // effect re-runs when they arrive.
     if (!efsRouter || !publicClient) return;
-    appliedUrlFileRef.current = target;
-    if ((selectedFile?.uid as string | undefined)?.toLowerCase() === target) return;
     setSelectedList(null);
     setSelectedFile(item);
     fetchFileContent(item);
-    // `fetchFileContent` is a per-render closure; the guard above makes reruns no-ops.
+    // `fetchFileContent` is a per-render closure; once selected, reruns are no-ops.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [urlFile, visibleItems, selectedFile, dataSchemaUID, efsRouter, publicClient]);
 
