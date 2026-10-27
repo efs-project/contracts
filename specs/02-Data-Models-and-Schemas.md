@@ -54,6 +54,8 @@ The resolver validates only the byte-level canonical form (percent-encoding + up
 
 **Worked example.** Human name `Q&A: Episode 5` → NFC (no change, already normalized) → percent-encode `&`, `:`, and the two spaces → on-chain `name` = `Q%26A%3A%20Episode%205`. A simple name like `readme.txt` has no reserved bytes and encodes to itself.
 
+**Reading a name from a URL.** Generic `web3://` clients percent-decode path segments, so `EFSRouter` re-encodes each incoming segment to this canonical form before the lookup (`Q&A: Episode 5` → `Q%26A%3A%20Episode%205`). The re-encode is idempotent on canonical input: a `%` followed by uppercase hex that decodes to a reserved byte (or `%`) is kept as an escape; any other `%` is treated as literal text and becomes `%25`. Consequence: a name whose human form literally contains such a sequence (a file named `50%20off`) is reached by URL as `50 off`, not `50%20off`.
+
 ## 2. Property Schema
 **Purpose**: Free-floating value attached to a container via PIN placement under a *key anchor*. Symmetric with DATA (see §3) — both are standalone values placed via an edge attestation, not via `refUID`.
 **Structure**:

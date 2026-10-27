@@ -1855,4 +1855,113 @@ describe("EFSRouter Web3 Capabilities", function () {
       });
     });
   });
+  // Generic web3:// clients (web3protocol-js, w3link, eth.limo) percent-DECODE each path segment
+  // before calling request(), so the router must re-encode to EFSIndexer's canonical anchor-name
+  // form (specs/02 §Canonical anchor-name encoding) or names with reserved bytes 404 (issue #34).
+  describe("Decoded path segments (canonical re-encoding, #34)", function () {
+    // Mirror of specs/02: escape exactly the reserved set (C0, DEL, space, `%`, and
+    // `" # & / : = ? @ [ \ ] ^ ` { | }`) with UPPERCASE hex; every other byte stays literal.
+    const RESERVED = new Set([
+      0x20, 0x22, 0x23, 0x25, 0x26, 0x2f, 0x3a, 0x3d, 0x3f, 0x40, 0x5b, 0x5c, 0x5d, 0x5e, 0x60, 0x7b, 0x7c, 0x7d,
+    ]);
+    const isReserved = (b: number) => b < 0x20 || b === 0x7f || RESERVED.has(b);
+    const canonical = (human: string): string => {
+      let out = "";
+      for (const b of Buffer.from(human, "utf8")) {
+        out += isReserved(b) ? "%" + b.toString(16).toUpperCase().padStart(2, "0") : String.fromCharCode(b);
+      }
+      // Re-read as latin1 → utf8 so multi-byte UTF-8 survives the byte loop above.
+      return Buffer.from(out, "latin1").toString("utf8");
+    };
+    const NOT_FOUND_PATH = "Not Found: Path does not exist";
+
+    async function placeFile(parentUID: string, storedName: string, content: string): Promise<void> {
+      const fileAnchorUID = await createFileAnchor(parentUID, storedName);
+      const dataUID = await createData(content);
+      await addProperty(dataUID, "contentType", "text/plain");
+      await addMirror(dataUID, ipfsTransportUID, `ipfs://${content}`);
+      await pinAtPath(dataUID, fileAnchorUID);
+    }
+
+    it("resolves a decoded name with spaces (what a generic web3:// client sends)", async function () {
+      await placeFile(ideasUID, canonical("my notes.txt"), "QmSpaces");
+      const [status, , headers] = await router.request(["ideas", "my notes.txt"], ownerParams());
+      expect(status).to.equal(200);
+      expect(headers.find((h: any) => h.key === "Content-Type")?.value).to.include('URL="ipfs://QmSpaces"');
+    });
+
+    it("still resolves an already-canonical segment (explorer/SDK callers) — idempotent", async function () {
+      await placeFile(ideasUID, canonical("my notes.txt"), "QmSpaces");
+      const [status] = await router.request(["ideas", "my%20notes.txt"], ownerParams());
+      expect(status).to.equal(200);
+    });
+
+    it("re-encodes reserved bytes in intermediate folder segments too", async function () {
+      const folderUID = await createFolder(ideasUID, canonical("Q&A: Episode 5"));
+      await placeFile(folderUID, canonical("show notes #1.md"), "QmFolder");
+      const [status] = await router.request(["ideas", "Q&A: Episode 5", "show notes #1.md"], ownerParams());
+      expect(status).to.equal(200);
+    });
+
+    it("treats a `%` that is not a canonical escape as a literal percent", async function () {
+      // "100%" and the literal text "a%2fb" (lowercase hex — never a canonical escape) are
+      // stored with their `%` escaped as %25.
+      await placeFile(ideasUID, canonical("100%"), "QmPercent");
+      await placeFile(ideasUID, canonical("a%2fb"), "QmLowerHex");
+      expect((await router.request(["ideas", "100%"], ownerParams()))[0]).to.equal(200);
+      expect((await router.request(["ideas", "a%2fb"], ownerParams()))[0]).to.equal(200);
+    });
+
+    it("treats an over-escape of an unreserved byte (`%41`) as literal text, not `A`", async function () {
+      await placeFile(ideasUID, "A.txt", "QmPlainA");
+      const [status, body] = await router.request(["ideas", "%41.txt"], ownerParams());
+      expect(status).to.equal(404);
+      expect(Buffer.from(ethers.getBytes(body)).toString()).to.equal(NOT_FOUND_PATH);
+    });
+
+    it("agrees with EFSIndexer's canonical form for every ASCII byte and a UTF-8 name", async function () {
+      // One folder per byte: EFSIndexer must ACCEPT the canonical name (proving the encoder here
+      // matches the kernel), and the router must find it from the DECODED name. A found folder
+      // with no file reports "No data attached"; a miss reports "Path does not exist".
+      const samples: string[] = [];
+      for (let b = 0x00; b <= 0x7f; b++) samples.push(`x${String.fromCharCode(b)}y`);
+      samples.push("café ☕");
+      for (const human of samples) {
+        await createFolder(ideasUID, canonical(human));
+        const [status, body] = await router.request(["ideas", human], ownerParams());
+        expect(status, `byte ${JSON.stringify(human)}`).to.equal(404);
+        expect(Buffer.from(ethers.getBytes(body)).toString(), `byte ${JSON.stringify(human)}`).to.not.equal(
+          NOT_FOUND_PATH,
+        );
+      }
+    });
+
+    it("keeps the next-chunk URL round-trippable for a decoded name with spaces", async function () {
+      const a0 = "0x0000000000000000000000000000000000000060";
+      const a1 = "0x0000000000000000000000000000000000000061";
+      await setCode(a0, "0x00" + Buffer.from("AA").toString("hex"));
+      await setCode(a1, "0x00" + Buffer.from("BB").toString("hex"));
+      const store = await (
+        await ethers.getContractFactory("EFSBytesStore")
+      ).deploy([a0, a1], "application/octet-stream");
+      await store.waitForDeployment();
+      const fileAnchorUID = await createFileAnchor(ideasUID, canonical("big file.bin"));
+      const dataUID = await createData("chunked");
+      await addMirror(dataUID, onchainTransportUID, `web3://${await store.getAddress()}`);
+      await pinAtPath(dataUID, fileAnchorUID);
+
+      const [s0, , h0] = await router.request(["ideas", "big file.bin"], [{ key: "lenses", value: ownerAddr }]);
+      expect(s0).to.equal(200);
+      const next = h0.find((h: any) => h.key === "web3-next-chunk")?.value as string;
+      expect(next).to.equal(`/ideas/big%20file.bin?lenses=${ownerAddr}&chunk=1`);
+      // The client decodes that URL back to ["ideas", "big file.bin"] and asks for chunk 1.
+      const segs = next.split("?")[0].split("/").slice(1).map(decodeURIComponent);
+      const [s1, b1] = await router.request(segs, [
+        { key: "lenses", value: ownerAddr },
+        { key: "chunk", value: "1" },
+      ]);
+      expect(s1).to.equal(200);
+      expect(Buffer.from(ethers.getBytes(b1)).toString()).to.equal("BB");
+    });
+  });
 });
