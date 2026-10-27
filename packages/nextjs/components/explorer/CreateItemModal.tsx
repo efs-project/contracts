@@ -13,7 +13,13 @@ import { useBackgroundOps } from "~~/services/store/backgroundOps";
 import type { ClassifiedContainer } from "~~/utils/efs/containers";
 import { EDGE_RESOLVER_ABI, getEdgeResolverAddress } from "~~/utils/efs/edgeResolver";
 import { SORT_OVERLAY_ABI } from "~~/utils/efs/sortOverlay";
-import { TRANSPORT_LABELS, computeContentHash, detectTransport, resolveGatewayUrl } from "~~/utils/efs/transports";
+import {
+  CANONICAL_CONTENT_HASH,
+  TRANSPORT_LABELS,
+  computeContentHash,
+  detectTransport,
+  resolveGatewayUrl,
+} from "~~/utils/efs/transports";
 import { ensureWalletChain, notification } from "~~/utils/scaffold-eth";
 
 export type CreationType = "Folder" | "File" | "PasteLink" | "List";
@@ -207,7 +213,7 @@ export const CreateItemModal = ({
   const [pasteUri, setPasteUri] = useState("");
   const [pasteContentType, setPasteContentType] = useState("");
   const [pasteSize, setPasteSize] = useState("");
-  const [pasteContentHash, setPasteContentHash] = useState<`0x${string}` | null>(null);
+  const [pasteContentHash, setPasteContentHash] = useState<string | null>(null);
   const [isFetchingInfo, setIsFetchingInfo] = useState(false);
   // Mirror of the live pasteUri readable from inside an in-flight handleFetchInfo (whose closed-over
   // `pasteUri` is frozen at call time). Lets a fetch detect a mid-flight URI edit and discard its now-
@@ -951,7 +957,17 @@ export const CreateItemModal = ({
       }
       const transportName = detected;
       const contentType = pasteContentType || "application/octet-stream";
-      const contentHash: `0x${string}` = pasteContentHash || (ethers.ZeroHash as `0x${string}`);
+      // No hash known → write NO contentHash claim (readers report `no-claim`). The old
+      // fallback minted the all-zero digest, a permanent claim that reads as malformed.
+      // A typed value must be one of the two canonical specs/10 forms: PROPERTY values
+      // are non-revocable, so a typo would be permanent.
+      const contentHash = pasteContentHash?.trim().toLowerCase() || undefined;
+      if (contentHash !== undefined && !CANONICAL_CONTENT_HASH.test(contentHash)) {
+        const msg = "Content hash must be the canonical form: f1220 + 64 hex (sha2-256). Use Fetch Info to compute it.";
+        notification.error(msg);
+        ops.fail(opId, msg);
+        return;
+      }
       const fileSize: bigint = pasteSize ? BigInt(pasteSize) : 0n;
 
       if (!easAddress || !indexer) {
@@ -1311,7 +1327,7 @@ export const CreateItemModal = ({
                     </label>
                     <input
                       type="text"
-                      placeholder="0x... (auto-computed via Fetch Info)"
+                      placeholder="f1220… (auto-computed via Fetch Info)"
                       className="input input-bordered input-sm w-full font-mono text-xs"
                       value={pasteContentHash || ""}
                       onChange={e => {
@@ -1320,7 +1336,7 @@ export const CreateItemModal = ({
                           setPasteContentHash(null);
                           return;
                         }
-                        setPasteContentHash(val as `0x${string}`);
+                        setPasteContentHash(val);
                       }}
                     />
                     {pasteContentHash && (

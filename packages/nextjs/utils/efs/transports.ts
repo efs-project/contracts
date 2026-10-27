@@ -1,4 +1,4 @@
-import { keccak256 } from "viem";
+import { keccak256, sha256 } from "viem";
 
 export type TransportType =
   | "onchain"
@@ -102,14 +102,35 @@ export function resolveGatewayUrl(uri: string): string | null {
   }
 }
 
-/** Compute keccak256 content hash from file bytes. */
-export function computeContentHash(data: Uint8Array): `0x${string}` {
-  return keccak256(data);
+/**
+ * The canonical `contentHash` of file bytes: `f1220` + the sha2-256 digest in
+ * lowercase hex — a multibase-base16 multihash (specs/10, ADR-0064).
+ *
+ * `f` = base16, `12` = sha2-256, `20` = 32-byte digest. The label matters: a bare
+ * `0x…` digest does not say which algorithm made it, so readers (the SDK) report it
+ * as `malformed-claim` and the fail-closed reads throw. sha2-256 is canonical
+ * because it shares the IPFS CID digest. PROPERTY values are non-revocable, so a
+ * wrong form is permanent — this was `keccak256(bytes)` until specs/10 §8.
+ */
+export function computeContentHash(data: Uint8Array): string {
+  return `f1220${sha256(data).slice(2)}`;
 }
 
-/** Verify content hash matches expected. */
-export function verifyContentHash(data: Uint8Array, expected: `0x${string}`): boolean {
-  return computeContentHash(data) === expected;
+/** The two registered canonical base16 forms (specs/10 §2.1): `f1220…` sha2-256
+ * (canonical for writers) and the `f1b20…` keccak-256 alternate. */
+export const CANONICAL_CONTENT_HASH = /^f1(2|b)20[0-9a-f]{64}$/;
+
+/**
+ * Whether `expected` is a canonical claim that matches `data`. Accepts the two
+ * registered base16 forms — `f1220…` (sha2-256) and the `f1b20…` keccak-256
+ * alternate (specs/10 §2.1). A bare `0x…` digest is algorithm-ambiguous (specs/10
+ * §1) and is never accepted.
+ */
+export function verifyContentHash(data: Uint8Array, expected: string): boolean {
+  const claim = expected.toLowerCase();
+  if (claim.startsWith("f1220")) return claim === computeContentHash(data);
+  if (claim.startsWith("f1b20")) return claim === `f1b20${keccak256(data).slice(2)}`;
+  return false;
 }
 
 /** Short label for transport type (for UI badges). */

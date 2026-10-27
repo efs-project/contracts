@@ -37,7 +37,7 @@ import type { PlannedAttestation } from "./submitLayered";
 import { SUBMIT_CANCELLED, submitLayered } from "./submitLayered";
 import { encodeAbiParameters, encodeDeployData, toHex, zeroHash } from "viem";
 import type { Abi, PublicClient, WalletClient } from "viem";
-import { computeContentHash, detectTransport } from "~~/utils/efs/transports";
+import { CANONICAL_CONTENT_HASH, computeContentHash, detectTransport } from "~~/utils/efs/transports";
 
 /**
  * Injected attest handle (kept for back-compat: `beforePlacement` callers wire
@@ -205,7 +205,8 @@ type FileRecordWithMirrorArgs = Pick<
 > & {
   mirrorUri: string;
   transportAnchorUID: `0x${string}`;
-  contentHash?: `0x${string}`;
+  /** Canonical multihash (`f1220…`, specs/10); omit when the bytes are unknown. */
+  contentHash?: string;
   fileSize?: bigint;
 };
 
@@ -239,7 +240,8 @@ export interface CreateExternalFileReferenceArgs
   > {
   mirrorUri: string;
   transportName: string;
-  contentHash?: `0x${string}`;
+  /** Canonical multihash (`f1220…`, specs/10); omit when the bytes are unknown. */
+  contentHash?: string;
   fileSize?: bigint;
 }
 
@@ -312,7 +314,16 @@ async function submitFileRecordWithMirror(args: FileRecordWithMirrorArgs): Promi
     onProgress,
     beforePlacement,
   } = args;
-  const contentHash = args.contentHash ?? zeroHash;
+  // Unknown → write NO contentHash claim (readers report `no-claim`). `zeroHash` is still
+  // accepted as "unknown" — the historical sentinel callers pass. Anything else must be a
+  // canonical specs/10 multihash: PROPERTY values are non-revocable, so a malformed claim
+  // (e.g. a bare `0x…` digest, which readers report as `malformed-claim`) is permanent.
+  const contentHash = args.contentHash === undefined || args.contentHash === zeroHash ? undefined : args.contentHash;
+  if (contentHash !== undefined && !CANONICAL_CONTENT_HASH.test(contentHash)) {
+    throw new Error(
+      `contentHash must be the canonical multihash (f1220 + 64 lowercase hex, specs/10); got ${contentHash.slice(0, 20)}…`,
+    );
+  }
   const fileSize = args.fileSize ?? 0n;
 
   if (walletClient.chain?.id !== chainId) {
@@ -355,32 +366,19 @@ async function submitFileRecordWithMirror(args: FileRecordWithMirrorArgs): Promi
     }
   }
 
-  // DEDUP NOTE: we read dataByContentKey for the log but STILL mint a fresh DATA.
-  // Intentional — for re-saves we WANT a new DATA so the placement PIN supersedes
-  // the previous one cleanly (ADR-0041); reusing the canonical DATA would re-point
-  // the PIN at unchanged content. Matches CreateItemModal's behavior.
-  if (contentHash !== zeroHash) {
-    try {
-      const canonical = (await publicClient.readContract({
-        address: indexerAddress,
-        abi: indexerAbi,
-        functionName: "dataByContentKey",
-        args: [contentHash],
-      })) as `0x${string}`;
-      if (canonical && canonical !== zeroHash) {
-        log("Note: DATA for this content already exists. A new one will still be created and tagged.");
-      }
-    } catch {
-      /* non-fatal */
-    }
-  }
+  // DEDUP NOTE: every upload mints a fresh DATA, even for content that already
+  // exists — for re-saves we WANT a new DATA so the placement PIN supersedes the
+  // previous one cleanly (ADR-0041). (This used to log a hint from
+  // `EFSIndexer.dataByContentKey`, but that slot is retired and never written
+  // since ADR-0049 — the lookup always returned zero — and it takes a bytes32,
+  // which a canonical `f1220…` multihash string is not.)
 
   // ── Reserved keys: contentType (always); contentHash/size only when real. ──
   // Each is a key ANCHOR + free PROPERTY + binding PIN. Because DATA is minted
   // fresh every upload (see DEDUP NOTE), its key anchors are keyed under a not-yet-
   // existent DATA UID and so are always fresh too — no reuse probe needed.
   const reservedKeys: { key: string; value: string }[] = [{ key: "contentType", value: contentType }];
-  if (contentHash !== zeroHash) reservedKeys.push({ key: "contentHash", value: contentHash });
+  if (contentHash !== undefined) reservedKeys.push({ key: "contentHash", value: contentHash });
   if (fileSize > 0n) reservedKeys.push({ key: "size", value: fileSize.toString() });
 
   // ── STAGE A: content layers (DATA, MIRROR, key ANCHORs, PROPERTYs). ──
@@ -613,7 +611,7 @@ export async function createExternalFileReference(
   return submitFileRecordWithMirror({
     ...args,
     transportAnchorUID,
-    contentHash: args.contentHash ?? zeroHash,
+    ...(args.contentHash !== undefined ? { contentHash: args.contentHash } : {}),
     fileSize: args.fileSize ?? 0n,
   });
 }

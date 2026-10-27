@@ -1,5 +1,6 @@
 import { ethers } from "hardhat";
 import { EFSIndexer, EFSSortOverlay, NameSort, TimestampSort, EdgeResolver } from "../typechain-types";
+import { canonicalContentHash } from "../deploy-lib/contentHash";
 
 /**
  * EFS Sort Overlay + Lenses + PINs/TAGs Simulation
@@ -152,7 +153,7 @@ async function main() {
   // the DATA payload. Attaching it as a PROPERTY is future PROPERTY/SDK work.
   /** Create a standalone DATA attestation (empty per ADR-0049, non-revocable, standalone) */
   const createData = async (signer: any, content: string): Promise<{ uid: string; contentHash: string }> => {
-    const contentHash = ethers.keccak256(ethers.toUtf8Bytes(content));
+    const contentHash = canonicalContentHash(content); // specs/10 form, never a bare 0x digest
     const tx = await eas.connect(signer).attest({
       schema: dataSchemaUID,
       data: {
