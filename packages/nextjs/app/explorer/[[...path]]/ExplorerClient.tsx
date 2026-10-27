@@ -22,17 +22,25 @@ import {
   classifyTopLevelSegment,
   defaultLensesForContainer,
 } from "~~/utils/efs/containers";
+import { classifyPathChange } from "~~/utils/efs/explorerPath";
 import { clearFetchFileContentCache } from "~~/utils/efs/fetchFileContent";
 import { inferNetworkFlavor, networkLabel } from "~~/utils/scaffold-eth";
 
 export default function ExplorerClient() {
   const [currentPath, setCurrentPath] = useState<PathItem[]>([]);
   const [currentAnchorUID, setCurrentAnchorUID] = useState<string | null>(null);
-  // True when the resolved path's last segment is a DATA-schema FILE leaf (e.g.
-  // deep-linking to /explorer/docs/readme.txt), not a generic folder. Gates the
-  // Overview editor off: creating a README "inside" a file would tag the file
-  // anchor as a visible folder via the ancestor walk (Codex P2 / reachable via URL).
-  const [currentIsFileLeaf, setCurrentIsFileLeaf] = useState(false);
+  // The file (anchor UID + on-chain name) when the URL's last segment is a
+  // DATA-schema FILE leaf (e.g. /explorer/docs/readme.txt). The file is never
+  // the current anchor: the PARENT folder is, and FileBrowser opens this file in
+  // its side preview. Keeping file anchors out of `currentAnchorUID` is also what
+  // keeps the Overview editor and the Add actions from writing "inside" a file
+  // (the ancestor walk would tag the file anchor as a visible folder — Codex P2).
+  const [urlFile, setUrlFile] = useState<{ uid: string; name: string } | null>(null);
+  // The last committed full resolution: its inputs, folder URL segments and
+  // folder UID. URL changes that only add/drop a trailing file segment (select,
+  // close, back/forward) reuse it instead of re-walking the path — see
+  // `classifyPathChange`. Cleared whenever a full resolution starts or fails.
+  const resolvedFolderRef = useRef<{ inputs: unknown[]; segments: string[]; folderUID: `0x${string}` } | null>(null);
   const [currentContainer, setCurrentContainer] = useState<ClassifiedContainer | null>(null);
   const [isResolving, setIsResolving] = useState(false);
   const [pathError, setPathError] = useState<string | null>(null);
@@ -372,7 +380,8 @@ export default function ExplorerClient() {
     setCurrentAnchorUID(null);
     setCurrentPath([]);
     setCurrentContainer(null);
-    setCurrentIsFileLeaf(false);
+    setUrlFile(null);
+    resolvedFolderRef.current = null;
     setPathError(null);
     setIsResolving(true);
   }, [targetNetwork.id]);
@@ -428,10 +437,44 @@ export default function ExplorerClient() {
     // `pathSegments` is derived above from pathname ∪ params; see the comment
     // next to the hooks for why useParams alone isn't reliable in static export.
     const segments = pathSegments;
+    const inputs = [rootUID, publicClient, mainnetPublicClient, easAddress, dataSchemaUID];
+    const ZERO_UID = "0x0000000000000000000000000000000000000000000000000000000000000000";
 
     let cancelled = false;
 
     const resolveUrlPath = async () => {
+      // Fast path: the URL only added or dropped a trailing segment on the folder
+      // we already resolved (file select / close / back-forward between files).
+      // Keep the folder and skip the dimmed whole-path walk; a trailing segment
+      // that isn't a file (a subfolder) falls through to the full resolution.
+      const prev = resolvedFolderRef.current;
+      if (prev && prev.inputs.every((v, i) => v === inputs[i])) {
+        const change = classifyPathChange(prev.segments, segments);
+        if (change === "same") {
+          setUrlFile(null);
+          return;
+        }
+        if (change === "child") {
+          try {
+            const fileUID = (await publicClient.readContract({
+              address: indexerConfig.address as `0x${string}`,
+              abi: indexerConfig.abi,
+              functionName: "resolveAnchor",
+              args: [prev.folderUID, segments[segments.length - 1], dataSchemaUID as `0x${string}`],
+            })) as `0x${string}`;
+            if (cancelled) return;
+            if (fileUID !== ZERO_UID) {
+              setUrlFile({ uid: fileUID, name: segments[segments.length - 1] });
+              return;
+            }
+          } catch (e) {
+            if (cancelled) return;
+            console.warn("File lookup failed; re-resolving the full path", e);
+          }
+        }
+      }
+
+      resolvedFolderRef.current = null;
       setIsResolving(true);
       setPathError(null);
 
@@ -493,11 +536,10 @@ export default function ExplorerClient() {
           },
         ];
         let currentUID: `0x${string}` = seedUID;
-        // Tracks whether the LAST segment resolved as a DATA-schema file leaf (vs a
-        // generic folder), so the Overview editor can be gated off on files.
-        let lastSegmentIsFile = false;
+        // Set when the LAST segment resolves as a DATA-schema file leaf (vs a
+        // generic folder): the walk stops at the parent and the file is selected.
+        let file: { uid: `0x${string}`; name: string } | null = null;
 
-        const ZERO_UID = "0x0000000000000000000000000000000000000000000000000000000000000000";
         for (let i = 0; i < walkSegments.length; i++) {
           const segment = walkSegments[i];
           const isLast = i === walkSegments.length - 1;
@@ -518,8 +560,11 @@ export default function ExplorerClient() {
             })) as `0x${string}`;
             if (cancelled) return;
             // The DATA-schema lookup succeeding means the last segment is a file
-            // leaf (not a folder) — used below to gate the Overview editor.
-            lastSegmentIsFile = childUID !== ZERO_UID;
+            // leaf (not a folder): open its parent folder with the file selected.
+            if (childUID !== ZERO_UID) {
+              file = { uid: childUID, name: segment };
+              break;
+            }
           }
           if (childUID === ZERO_UID) {
             childUID = (await publicClient.readContract({
@@ -558,8 +603,13 @@ export default function ExplorerClient() {
         if (cancelled) return;
         setCurrentPath(resolvedPath);
         setCurrentAnchorUID(currentUID);
-        setCurrentIsFileLeaf(lastSegmentIsFile);
+        setUrlFile(file);
         setCurrentContainer(container);
+        resolvedFolderRef.current = {
+          inputs,
+          segments: file ? segments.slice(0, -1) : segments,
+          folderUID: currentUID,
+        };
 
         // localStorage writes are side-effects on global state; keep them
         // inside the cancel guard so a stale resolution can't promote a
@@ -620,7 +670,7 @@ export default function ExplorerClient() {
     document.title = label ? `${label} - EFS` : "File Explorer - EFS";
   }, [currentPath, containerDisplayName]);
 
-  const navigateToPath = (newPathItems: PathItem[]) => {
+  const navigateToPath = (newPathItems: PathItem[], { replace = false } = {}) => {
     // The first path item is the container root; we skip it in the URL only for
     // anchor walks (where the head *is* rootUID, not a URL segment). For
     // address/schema/attestation containers, the first item *is* a URL segment
@@ -632,7 +682,8 @@ export default function ExplorerClient() {
     const currentQuery = searchParams.toString();
     const queryPart = currentQuery ? `?${currentQuery}` : "";
     const url = `/explorer/${urlSegments.join("/")}${queryPart}`;
-    router.push(url);
+    if (replace) router.replace(url);
+    else router.push(url);
   };
 
   const handleSortChange = (sortInfoUID: string | null) => {
@@ -699,11 +750,10 @@ export default function ExplorerClient() {
   const writerIsTopLens = !!connectedAddress && lensAddresses[0]?.toLowerCase() === connectedAddress.toLowerCase();
   const onRealAnchor =
     !!currentAnchorUID && (!currentContainer || currentAnchorUID.toLowerCase() !== currentContainer.uid.toLowerCase());
-  // Overviews are folder-scoped. Block the editor when the current anchor is a
-  // DATA-schema file leaf (reachable by deep-linking a file URL) — saving there
-  // would pass the file anchor as parentAnchorUID and the ancestor walk would
-  // mis-tag it as a visible folder (Codex P2).
-  const overviewEditable = writerIsTopLens && onRealAnchor && !currentIsFileLeaf;
+  // Overviews are folder-scoped. A file deep link never makes the file anchor
+  // current (path resolution stops at its parent), so the editor can't save a
+  // README "inside" a file (Codex P2).
+  const overviewEditable = writerIsTopLens && onRealAnchor;
 
   return (
     <div className="flex flex-col h-screen w-full bg-base-100 p-4 gap-3">
@@ -801,11 +851,9 @@ export default function ExplorerClient() {
               there's no Overview, so the layout naturally falls back to the
               two-pane (tree + file) arrangement. Hidden below `lg` to mirror
               how the tree `<aside>` collapses on narrow screens.
-              Overviews are FOLDER-SCOPED: skip the pane (and its README probe) on a
-              file leaf — the router can't resolve `<file>/README.md` (intermediate
-              file anchors 404 under generic resolvePath), so it would always probe
-              to a 404 (Codex P2). */}
-          {!pathError && !currentIsFileLeaf && (
+              Overviews are FOLDER-SCOPED; a file deep link shows its parent
+              folder's Overview, since the file is never the current anchor. */}
+          {!pathError && (
             <div className="hidden lg:block">
               <OverviewPane
                 key={currentAnchorUID ?? "none"}
@@ -854,7 +902,6 @@ export default function ExplorerClient() {
                 // (Codex P2).
                 key={targetNetwork.id}
                 currentAnchorUID={currentAnchorUID}
-                currentIsFileLeaf={currentIsFileLeaf}
                 container={currentContainer}
                 anchorSchemaUID={anchorSchemaUID}
                 dataSchemaUID={dataSchemaUID}
@@ -908,6 +955,13 @@ export default function ExplorerClient() {
                     excludeRefreshKey={excludeRefreshKey}
                     reverseOrder={reverseOrder}
                     onNavigate={(uid, name) => navigateToPath([...currentPath, { uid, name }])}
+                    // The file the URL points at, and the URL write-back when the
+                    // user selects (push) / steps (replace) / closes a file, so a
+                    // previewed file is a shareable link and back/forward work.
+                    urlFile={urlFile}
+                    onFileSelect={(file, opts) =>
+                      navigateToPath(file ? [...currentPath, { uid: file.uid, name: file.name }] : currentPath, opts)
+                    }
                   />
                 )}
               </div>

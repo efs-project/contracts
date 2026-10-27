@@ -142,6 +142,8 @@ export const FileBrowser = ({
   currentPathNames,
   lensAddresses,
   onNavigate,
+  urlFile = null,
+  onFileSelect,
   tagFilter = "",
   drawerTagFilters = {},
   activeSortInfoUID = null,
@@ -158,6 +160,12 @@ export const FileBrowser = ({
   currentPathNames: string[];
   lensAddresses: string[];
   onNavigate: (uid: string, name: string) => void;
+  /** The file a deep link (`/explorer/<folder>/<file>`) points at. Opened in the
+   *  side preview once it shows up in this folder's listing; closed when cleared. */
+  urlFile?: { uid: string; name: string } | null;
+  /** Writes a user's file selection back to the URL: `null` = preview closed,
+   *  `replace` for gallery stepping so arrow keys don't flood history. */
+  onFileSelect?: (file: { uid: string; name: string } | null, opts?: { replace?: boolean }) => void;
   tagFilter?: string;
   drawerTagFilters?: Record<string, DrawerTagFilterState>;
   activeSortInfoUID?: string | null;
@@ -1337,6 +1345,9 @@ export const FileBrowser = ({
   // pagination) reads `visibleItems`.
   const visibleItems = items;
 
+  // Last `urlFile` UID applied to the preview (see the URL-selection effect below).
+  const appliedUrlFileRef = useRef<string | null>(null);
+
   // Close the side/fullscreen preview if a filter change or refetch removed the
   // open item from the visible (post-exclude) set — otherwise toggling `system`
   // back on (or applying an exclude tag) would leave a now-hidden file still
@@ -1351,6 +1362,9 @@ export const FileBrowser = ({
     if (!openUID) return;
     const stillVisible = visibleItems.some((it: any) => (it.uid as string | undefined)?.toLowerCase() === openUID);
     if (!stillVisible) {
+      // Re-arm the URL selection below so a deep-linked file reopens if a later
+      // filter change makes it visible again.
+      appliedUrlFileRef.current = null;
       setSelectedFile(null);
       setSelectedList(null);
       setFileContent(null);
@@ -1360,6 +1374,42 @@ export const FileBrowser = ({
       setPreviewFullscreen(false);
     }
   }, [visibleItems, selectedFile, selectedList]);
+
+  // Apply the URL's file (deep link, back/forward) to the preview. Selection is
+  // local-first: a click selects immediately and the URL follows via
+  // `onFileSelect`, so this only acts when `urlFile` itself changes (tracked in
+  // `appliedUrlFileRef`) — never on the click-to-URL gap. A URL file that isn't
+  // in the listing stays PENDING rather than failing: the directory hook resets
+  // in an effect (one render of stale or empty items after any query change),
+  // and the file may sit on a later page. It opens whenever it appears; until
+  // then the not-listed banner below explains the empty preview.
+  useEffect(() => {
+    const target = urlFile?.uid.toLowerCase() ?? null;
+    if (appliedUrlFileRef.current === target) return;
+    if (target === null) {
+      appliedUrlFileRef.current = null;
+      if (selectedFile) {
+        setSelectedFile(null);
+        setFileContent(null);
+        setFileBytes(null);
+        setFileContentType(null);
+        setFetchError(null);
+        setPreviewFullscreen(false);
+      }
+      return;
+    }
+    const item = visibleItems?.find(
+      (it: any) => isFile(it, dataSchemaUID) && (it.uid as string | undefined)?.toLowerCase() === target,
+    );
+    if (!item) return;
+    appliedUrlFileRef.current = target;
+    if ((selectedFile?.uid as string | undefined)?.toLowerCase() === target) return;
+    setSelectedList(null);
+    setSelectedFile(item);
+    fetchFileContent(item);
+    // `fetchFileContent` is a per-render closure; the guard above makes reruns no-ops.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [urlFile, visibleItems, selectedFile, dataSchemaUID]);
 
   // Keyboard handler ref — lets the useEffect stay above early returns while
   // the actual handler logic (which depends on computed values) is set later.
@@ -1437,6 +1487,7 @@ export const FileBrowser = ({
   );
 
   const closePreview = () => {
+    if (selectedFile) onFileSelect?.(null);
     setSelectedFile(null);
     setSelectedList(null);
     setFileContent(null);
@@ -1474,6 +1525,7 @@ export const FileBrowser = ({
     if (currentIdx === -1) return;
     const nextIdx = (currentIdx + direction + fileItems.length) % fileItems.length;
     const nextItem = fileItems[nextIdx];
+    onFileSelect?.(nextItem, { replace: true });
     setSelectedFile(nextItem);
     fetchFileContent(nextItem);
   };
@@ -1663,6 +1715,8 @@ export const FileBrowser = ({
     // LIST UID into setSelectedList (Codex round 2, FileBrowser.tsx:288). Re-check before
     // every state write below — same guard the /tags resolver uses.
     const gen = chainGenRef.current;
+    // Lists aren't URL-addressable; drop a previewed file from the URL.
+    if (selectedFile) onFileSelect?.(null);
     setSelectedFile(null);
     const resolvePin = (attester: `0x${string}`) =>
       publicClient.readContract({
@@ -1880,6 +1934,16 @@ export const FileBrowser = ({
   return (
     <div className="relative h-full flex flex-row">
       <div className={`${selectedFile || selectedList ? "flex-1 min-w-0" : "w-full"} overflow-y-auto`}>
+        {/* Deep-linked file not in the listing — hidden by lenses/filters, or on a later page */}
+        {urlFile &&
+          !visibleItems?.some(
+            (it: any) => (it.uid as string | undefined)?.toLowerCase() === urlFile.uid.toLowerCase(),
+          ) && (
+            <div className="mx-4 mt-2 px-3 py-2 rounded-lg bg-warning/10 border border-warning/20 text-sm">
+              &ldquo;{urlFile.name}&rdquo; isn&apos;t listed in this folder under the current lenses and filters
+              {hasMoreLenses ? " yet. Load more to keep looking." : "."}
+            </div>
+          )}
         {/* Preview sort banner — shown when no on-chain sorted data exists yet */}
         {isPreviewSort && previewSortKeys.size > 0 && (!sortedUIDs || sortedUIDs.length === 0) && (
           <div className="mx-4 mt-2 px-3 py-2 rounded-lg bg-info/10 border border-info/20 flex items-center justify-between text-sm gap-3">
@@ -1923,6 +1987,7 @@ export const FileBrowser = ({
                   onClick={() => {
                     if (isItemTopic) onNavigate(item.uid, item.name);
                     else if (isItemFile) {
+                      if (selectedFile?.uid !== item.uid) onFileSelect?.(item);
                       setSelectedFile(item);
                       fetchFileContent(item);
                     } else if (isItemList) openList(item);
