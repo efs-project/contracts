@@ -49,8 +49,11 @@ The `name` field carries the **canonical encoding** of a human-facing name, neve
 - a **bare reserved byte** (it must be percent-encoded) — e.g. a literal space or `&`;
 - a malformed or truncated escape — `%`, `%2`, `%ZZ`;
 - a **lowercase-hex** escape — `%2f` is rejected; only `%2F` is canonical, so `%2f` and `%2F` can never both exist.
+- a **non-canonical over-escape** — a well-formed uppercase `%XX` whose decoded byte is *unreserved* (it did not have to be escaped). `%2F` (`/`), `%20` (space) and `%25` (literal `%`) are accepted; `%41` (`A`) and `%2E` (`.`) are rejected, because unreserved bytes must appear bare. This gives every byte exactly one valid spelling. It also means a generic encoder such as JavaScript's `encodeURIComponent` — which escapes every `≥ 0x80` byte and several unreserved ASCII bytes — produces names the resolver **reverts**; encode exactly the reserved set above and nothing else.
 
 The resolver validates only the byte-level canonical form (percent-encoding + uppercase hex); NFC is trusted from the client per step 1.
+
+**NFC is a property of the decoded name, not the escaped string.** Canonical = NFC(*human name*) **then** percent-encode, so a client that verifies normalization must percent-decode first and check NFC on the result. Checking NFC on the escaped string gives wrong answers in both directions: `%3D` + U+0338 is NFC-stable as escaped text but decodes to `=` + U+0338, which NFC composes to `≠` (a miss); and `:` + U+0300 escapes to `%3A` + U+0300, where the `A` + U+0300 pair composes only in the escaped form (a false reject).
 
 **Worked example.** Human name `Q&A: Episode 5` → NFC (no change, already normalized) → percent-encode `&`, `:`, and the two spaces → on-chain `name` = `Q%26A%3A%20Episode%205`. A simple name like `readme.txt` has no reserved bytes and encodes to itself.
 
@@ -365,6 +368,8 @@ See [ADR-0044](../docs/adr/0044-list-and-list-entry-schemas.md) and [Lists and C
 See [ADR-0050](../docs/adr/0050-redirect-canonical-symlink-schema.md) for full design rationale, [ADR-0067](../docs/adr/0067-redirect-read-time-resolution.md) for the read-time resolution decision, and **[specs/09-redirect-resolution.md](./09-redirect-resolution.md)** for the authoritative follow rules + conformance vectors.
 
 ## Schema 10: WHITEOUT (additive post-freeze, ADR-0055)
+
+> **Deployment status:** implemented in source and tested; **not deployed on Sepolia** — no `WhiteoutResolver`, no registered schema, and the live router / file view are not wired to it (readback 2026-10-27 in `docs/CHAINS.md`). The behavior below is the implemented design, not a description of the live chain.
 
 > **Not in the frozen nine.** WHITEOUT is added **additively after the Sepolia freeze** (ADR-0055) — a new schema + resolver orphans nothing, exactly how SORT_INFO or any future primitive is added. It is not part of the nine-schema freeze set. Resolver: `WhiteoutResolver`.
 

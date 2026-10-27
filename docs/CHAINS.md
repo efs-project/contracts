@@ -55,6 +55,19 @@ kernel/resolvers, not these addresses — see `docs/FUTURE_WORK.md`.)
 | EFSRouter | `0x44D5F6803127B442218e9aA0481A9931444dc82c` |
 | ListReader | `0xCc182611B572b5C162a3D96674E821C61ac658FC` |
 
+### Additive features not deployed here
+
+**WHITEOUT (ADR-0055) — implemented in source and tested; NOT deployed on Sepolia.** Do not treat
+WHITEOUT as available on this chain because its ABI exists. Deploying it is a separate owner decision
+(the additive path in `docs/DEPLOYMENT.md`). Readback on 2026-10-27 at block 12007898:
+
+| Check | Result |
+|---|---|
+| `WhiteoutResolver` proxy at its Safe-keyed CREATE3 address `0xE007f06400B2c4E73405454b9Cc41b0FD7F7eBFa` (salt `"whiteout"`; the same derivation reproduces EdgeResolver's address above) | no code |
+| SchemaRegistry `getSchema` for the UID that deploy would register, `0xfccce2f853d5c6a0435292b7ae113b175b3939c821042a59618405c5ca0e541d` (`""`, that resolver, revocable) | not registered |
+| `whiteoutResolver()` on the EFSRouter and EFSFileView above (and on the pre-2026-06-23 views) | reverts — these views predate WHITEOUT wiring, so no whiteout terminal is applied on Sepolia |
+| `packages/hardhat/deployments/sepolia/WhiteoutResolver.json`, Sepolia `WhiteoutResolver` in `deployedContracts.ts` | absent |
+
 ### Frozen schema UIDs
 
 | Schema | UID |

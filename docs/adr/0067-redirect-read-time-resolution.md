@@ -2,7 +2,7 @@
 
 > Renumbered from ADR-0063 (2026-06-23) to avoid a collision with main's ADR-0063 (`data:` inline-mirror transport) merged into this branch concurrently. References elsewhere updated to 0067.
 
-**Status:** Accepted (James ratified 2026-06-20) — rules accepted; on-chain follower IMPLEMENTATION DEFERRED (built when REDIRECTs are actually used — see Consequences)
+**Status:** Accepted (James ratified 2026-06-20) — rules accepted; on-chain follower IMPLEMENTATION DEFERRED (built when REDIRECTs are actually used — see Consequences). **Status note 2026-10-27 (Status-line amendment per `docs/adr/README.md`; body unedited):** Decision §6's "WHITEOUT is a live, separate schema" / "now ships" means implemented in source. WHITEOUT is **not deployed on Sepolia** (readback in `docs/CHAINS.md`); the redirect rules here are unaffected.
 **Date:** 2026-06-20
 **Deciders:** James (this pins behavior before durable seeding; human-gated)
 **Permanence-tier:** Durable (the resolution algorithm + conformance vectors — ADR-governed, NOT frozen in a UID; the on-chain follower is a redeployable view)
