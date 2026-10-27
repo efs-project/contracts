@@ -22,12 +22,12 @@ class MarkdownRenderBoundary extends Component<{ children: ReactNode }, { failed
     return { failed: true };
   }
   componentDidCatch(err: unknown) {
-    console.error("Overview markdown failed to render", err);
+    console.error("Markdown failed to render", err);
   }
   render() {
     if (this.state.failed) {
       return (
-        <p className="text-sm opacity-70">This Overview couldn’t be rendered (content too complex or malformed).</p>
+        <p className="text-sm opacity-70">This document couldn’t be rendered (content too complex or malformed).</p>
       );
     }
     return this.props.children;

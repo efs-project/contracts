@@ -61,7 +61,7 @@ export const TagModal = ({ uid, isFile, lensAddresses = [], onClose, onTagChange
   });
 
   // Single EAS write hook used for both attest (add tag) and revoke (remove tag).
-  const { writeContractAsync: easWrite } = useScaffoldWriteContract("EAS");
+  const { writeContractAsync: easWrite } = useScaffoldWriteContract({ contractName: "EAS" });
   const { data: easInfo } = useDeployedContractInfo({ contractName: "EAS" });
 
   const { data: dataSchemaUID } = useScaffoldReadContract({

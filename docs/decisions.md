@@ -8,6 +8,15 @@ Informal dated log of small decisions agents made while working. Lighter than AD
 
 ---
 
+### 2026-10-26 — [claude-opus-5.5 · dev] PDF preview is the one unsandboxed render frame (ADR-0056 exception)
+
+James chose this over pdf.js-in-a-sandbox and over dropping inline preview. Chromium never starts its
+PDF viewer in a sandboxed iframe (no token re-enables it), so the June sandbox (`61afaee`) blanked every
+PDF in the explorer. The PDF frame is now unsandboxed; isolation comes from the browser's viewer, which
+runs PDF content outside the app's origin. Two guards: the blob is typed exactly `application/pdf`, and
+the preview only renders when the bytes carry a real `%PDF-` header (`looksLikePdf`) and
+`navigator.pdfViewerEnabled` is not false. HTML previews stay sandboxed.
+
 ### 2026-06-22 — [claude-opus-4.8 · dev] Activated the `data:` inline-mirror transport (ADR-0063)
 
 James greenlit activating `data:`. Seeded `data` as the 12th default `/transports/*` child in the

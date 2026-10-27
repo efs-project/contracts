@@ -24,6 +24,7 @@ import {
   TrashIcon,
   XMarkIcon,
 } from "@heroicons/react/24/outline";
+import { MarkdownView } from "~~/components/markdown/MarkdownView";
 import { useLensesDirectoryPage } from "~~/hooks/efs/useLensesDirectoryPage";
 import { useSortedData } from "~~/hooks/efs/useSortedData";
 import {
@@ -40,6 +41,8 @@ import { clearFetchFileContentCache, fetchFileContent as fetchFileContentUtil } 
 import { SORT_OVERLAY_ABI } from "~~/utils/efs/sortOverlay";
 import { TRANSPORT_LABELS } from "~~/utils/efs/transports";
 import { safeDownloadName } from "~~/utils/markdown/downloadName";
+import { MAX_RENDER_BYTES } from "~~/utils/markdown/limits";
+import { looksLikePdf, sniffContent } from "~~/utils/markdown/sniff";
 import { notification } from "~~/utils/scaffold-eth";
 
 export type DrawerTagFilterState = "neutral" | "include" | "exclude";
@@ -200,6 +203,23 @@ export const FileBrowser = ({
   const [fileTransportType, setFileTransportType] = useState<string>("onchain");
   const [isFileLoading, setIsFileLoading] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  // Inline PDF preview needs real PDF bytes AND a built-in viewer: without one
+  // (e.g. Android Chrome) the unsandboxed frame below would auto-download the
+  // file on select, so fall back to the binary placeholder + Download button.
+  const pdfPreviewable = useMemo(
+    () => !!fileBytes && looksLikePdf(fileBytes) && navigator.pdfViewerEnabled !== false,
+    [fileBytes],
+  );
+  // Render markdown through the same hardened, sanitized renderer as the
+  // Overview pane, with the same byte cap + text sniff gate in front of it.
+  const markdownPreviewable = useMemo(
+    () =>
+      !!fileBytes &&
+      !!fileContentType?.startsWith("text/markdown") &&
+      fileBytes.length <= MAX_RENDER_BYTES &&
+      sniffContent(fileBytes) === "text",
+    [fileBytes, fileContentType],
+  );
   const [previewFullscreen, setPreviewFullscreen] = useState(false);
   // Per-fetch page target. Constant since the lens load-more iterates the opaque
   // cursor (ADR-0036) rather than growing a page size (the old standard-path
@@ -266,7 +286,7 @@ export const FileBrowser = ({
   const { targetNetwork } = useTargetNetwork();
   const publicClient = usePublicClient({ chainId: targetNetwork.id });
   const { address: connectedAddress } = useAccount();
-  const { writeContractAsync: easWrite } = useScaffoldWriteContract("EAS");
+  const { writeContractAsync: easWrite } = useScaffoldWriteContract({ contractName: "EAS" });
 
   // On a network switch the chain-scoped tag-filter resolver state below was
   // resolved against the previous chain's Indexer/EdgeResolver. The `/tags` gate
@@ -1981,8 +2001,11 @@ export const FileBrowser = ({
             <div className="col-span-full text-center text-gray-500">
               {tagFilteredUIDs !== null
                 ? `No items match tag filter: "${tagFilter}"`
-                : excludeTagDefUIDs.length > 0
-                  ? "All items hidden by active exclusion filter"
+                : // Excludes apply on-chain (ADR-0054), so we can't tell an empty
+                  // topic from a fully-filtered one — and `system`/`nsfw` are
+                  // always-on defaults, so don't claim the filter hid anything.
+                  excludeTagDefUIDs.length > 0
+                  ? "Topic is empty (tag filters may be hiding some items)"
                   : "Topic is empty"}
             </div>
           )}
@@ -2014,7 +2037,7 @@ export const FileBrowser = ({
 
       {/* File Preview Side Pane */}
       {selectedFile && !previewFullscreen && (
-        <div className="preview-pane absolute inset-0 z-10 max-xl:bg-base-200 xl:static xl:w-[min(52vw,800px)] xl:flex-shrink-0 border-l border-base-300 flex flex-col overflow-hidden">
+        <div className="preview-pane absolute inset-0 z-10 max-xl:bg-base-200 xl:static xl:w-[min(65%,800px)] xl:flex-shrink-0 border-l border-base-300 flex flex-col overflow-hidden">
           <div className="flex items-center justify-between px-4 py-3 border-b border-base-300 shrink-0">
             <div className="flex items-center gap-2 min-w-0">
               {fileItems.length > 1 && (
@@ -2097,22 +2120,21 @@ export const FileBrowser = ({
                   className="max-w-full max-h-full w-auto h-auto object-contain rounded cursor-pointer mx-auto"
                   onClick={() => setPreviewFullscreen(true)}
                 />
-              ) : fileContentType === "application/pdf" ? (
-                // Untrusted PDF bytes from a mirror, served through a blob: URL —
-                // which would otherwise inherit the app's origin. Sandbox it for
-                // the same reason as the HTML preview below: `allow-scripts` keeps
-                // the browser's PDF viewer (incl. pdf.js, which needs JS) working,
-                // but OMITTING `allow-same-origin` pins the frame to an opaque
-                // origin so embedded PDF JS can't reach the parent app's DOM /
-                // cookies / storage. A spoofed contentType only mislabels which
-                // viewer renders here; it can't escalate to a same-origin script.
+              ) : fileContentType === "application/pdf" && pdfPreviewable ? (
+                // Deliberately NOT sandboxed — the one exception to the ADR-0056
+                // sandboxed-iframe rule (see docs/decisions.md 2026-10-26).
+                // Chromium refuses to start its PDF viewer in ANY sandboxed frame
+                // (no token re-enables it), so a sandbox here just renders blank.
+                // Isolation still holds: the blob is typed exactly
+                // `application/pdf`, so the browser hands it to its built-in
+                // viewer, which runs PDF content in its own isolated context and
+                // never as a document in the app's origin; and `pdfPreviewable`
+                // requires a real `%PDF-` header, so mislabeled bytes never get here.
                 <iframe
-                  sandbox="allow-scripts"
                   src={fileContent}
                   title={selectedFile.name}
-                  className="w-full rounded cursor-pointer"
+                  className="w-full rounded"
                   style={{ height: "60vh" }}
-                  onClick={() => setPreviewFullscreen(true)}
                 />
               ) : fileContentType?.startsWith("video/") ? (
                 <video
@@ -2126,6 +2148,8 @@ export const FileBrowser = ({
                 />
               ) : fileContentType?.startsWith("audio/") ? (
                 <audio src={fileContent} controls className="w-full" />
+              ) : markdownPreviewable ? (
+                <MarkdownView source={fileContent} />
               ) : fileContentType?.startsWith("text/html") || fileContentType === "application/xhtml+xml" ? (
                 // Untrusted HTML from a mirror. `allow-scripts` runs JS + WASM, but
                 // we deliberately OMIT `allow-same-origin`: that pairing lets the
@@ -2257,11 +2281,9 @@ export const FileBrowser = ({
                     alt={selectedFile.name}
                     className="max-w-[90vw] max-h-[85vh] object-contain"
                   />
-                ) : fileContentType === "application/pdf" ? (
-                  // Untrusted PDF bytes via blob: URL — sandboxed to an opaque
-                  // origin (allow-scripts, no allow-same-origin), same as inline.
+                ) : fileContentType === "application/pdf" && pdfPreviewable ? (
+                  // Unsandboxed for the same reason as the inline PDF preview above.
                   <iframe
-                    sandbox="allow-scripts"
                     src={fileContent}
                     title={selectedFile.name}
                     className="rounded"
@@ -2271,6 +2293,10 @@ export const FileBrowser = ({
                   <video src={fileContent} controls className="max-w-[90vw] max-h-[85vh] object-contain" />
                 ) : fileContentType?.startsWith("audio/") ? (
                   <audio src={fileContent} controls className="w-[60vw]" />
+                ) : markdownPreviewable ? (
+                  <div className="bg-base-100 rounded-lg p-6 overflow-auto" style={{ width: "90vw", height: "85vh" }}>
+                    <MarkdownView source={fileContent} />
+                  </div>
                 ) : fileContentType?.startsWith("text/html") || fileContentType === "application/xhtml+xml" ? (
                   // Untrusted HTML — runs JS + WASM via allow-scripts, but no
                   // allow-same-origin (opaque origin; can't reach the parent app).
