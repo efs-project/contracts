@@ -127,9 +127,8 @@ async function main() {
   // 1. Proxies
   console.log("Proxied contracts (implementation code · ProxyAdmin owner)");
   const proxies: Partial<Record<ResolverName, string>> = {};
-  for (const [record, contractName] of Object.entries(PROXIES)) {
-    const proxy = recordAddress(record);
-    if (contractName !== "SystemAccount") proxies[contractName as ResolverName] = proxy;
+  // Implementation code vs this checkout, and ProxyAdmin owner vs the EFS.eth Safe, for one proxy.
+  const checkProxy = async (contractName: string, proxy: string) => {
     const impl = await readSlotAddress(provider, proxy, EIP1967_IMPL_SLOT);
     const verdict = await compareCode(provider, impl, contractName);
     const admin = await readSlotAddress(provider, proxy, EIP1967_ADMIN_SLOT);
@@ -146,6 +145,11 @@ async function main() {
     if (verdict === "DIFFERS") problems.push(`${contractName}: live implementation differs from this checkout`);
     if (owner === undefined || getAddress(owner) !== EXPECTED_EFS_SAFE)
       problems.push(`${contractName}: ProxyAdmin owner is not the EFS.eth Safe (${owner ?? "unreadable"})`);
+  };
+  for (const [record, contractName] of Object.entries(PROXIES)) {
+    const proxy = recordAddress(record);
+    if (contractName !== "SystemAccount") proxies[contractName as ResolverName] = proxy;
+    await checkProxy(contractName, proxy);
   }
 
   // WhiteoutResolver has no deployment record; derive its Safe-keyed CREATE3 address the way the deploy would.
@@ -162,8 +166,12 @@ async function main() {
   const whiteout = getAddress(await createx.computeCreate3Address(guarded));
   const whiteoutLive = (await provider.getCode(whiteout)) !== "0x";
   proxies.WhiteoutResolver = whiteout;
-  line(["WhiteoutResolver", whiteoutLive ? "DEPLOYED" : "ABSENT", `predicted proxy ${whiteout}`]);
-  if (!whiteoutLive) problems.push("WhiteoutResolver: not deployed (ADR-0055)");
+  if (whiteoutLive) {
+    await checkProxy("WhiteoutResolver", whiteout);
+  } else {
+    line(["WhiteoutResolver", "ABSENT", `predicted proxy ${whiteout}`]);
+    problems.push("WhiteoutResolver: not deployed (ADR-0055)");
+  }
 
   // 2. Views
   console.log("\nStateless views (runtime code)");
@@ -220,7 +228,11 @@ async function main() {
         : getAddress(wired) === whiteout
           ? "wired to the predicted WhiteoutResolver"
           : `points at ${wired}`;
-    line([`${name} whiteout`, wired === undefined ? "ABSENT" : "PRESENT", note]);
+    const correct = wired !== undefined && whiteoutLive && getAddress(wired) === whiteout;
+    line([`${name} whiteout`, wired === undefined ? "ABSENT" : correct ? "WIRED" : "WRONG", note]);
+    // Code comparison can't see this: the router keeps the address in storage and the file view's
+    // immutable is masked, so a view can MATCH while suppression is off or pointed elsewhere.
+    if (!correct) problems.push(`${name}: not wired to the live WhiteoutResolver (${note})`);
   }
 
   console.log("");
