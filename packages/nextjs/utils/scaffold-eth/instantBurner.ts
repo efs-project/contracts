@@ -1,12 +1,14 @@
-import type { Connector } from "wagmi";
+import type { Config, Connector } from "wagmi";
 
 export const BURNER_WALLET_CONNECTOR_ID = "burnerWallet";
 export const BURNER_WALLET_PK_STORAGE_KEY = "burnerWallet.pk";
+export const EASY_EDITS_STORAGE_KEY = "instantBurner.easyEdits";
 export const INSTANT_BURNER_PAUSE_MS = 30_000;
 let instantBurnerDripRequested = false;
 
 type WalletStatus = "connected" | "connecting" | "disconnected" | "reconnecting";
 type SelectableChain = { id: number };
+type EasyEditsStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 
 export function isInstantBurnerSessionEnabled({
   faucetUrl,
@@ -55,6 +57,7 @@ export function shouldAutoConnectInstantBurner({
   activeConnectorId,
   pausedUntil,
   realWalletFlowActive,
+  initialReconnectSettled,
   now,
 }: {
   enabled: boolean;
@@ -65,11 +68,13 @@ export function shouldAutoConnectInstantBurner({
   activeConnectorId: string | undefined;
   pausedUntil: number | undefined;
   realWalletFlowActive: boolean;
+  initialReconnectSettled: boolean;
   now: number;
 }): boolean {
   if (!enabled) return false;
   if (!editingSessionRequested) return false;
   if (realWalletFlowActive) return false;
+  if (!initialReconnectSettled) return false;
   if (status !== "disconnected") return false;
   if (targetChainId !== faucetChainId) return false;
   if (activeConnectorId && activeConnectorId !== BURNER_WALLET_CONNECTOR_ID) return false;
@@ -77,11 +82,86 @@ export function shouldAutoConnectInstantBurner({
   return true;
 }
 
-export function shouldReconnectWagmiOnMount({
-  instantBurnerEnabled,
+// wagmi starts every page "disconnected" and only then reconnects remembered wallets, so the
+// first connecting/reconnecting -> settled transition marks the end of that page-load restore.
+export function isInitialReconnectSettled({
+  previousStatus,
+  status,
 }: {
-  instantBurnerEnabled: boolean;
+  previousStatus: WalletStatus;
+  status: WalletStatus;
 }): boolean {
+  const wasReconnecting = previousStatus === "connecting" || previousStatus === "reconnecting";
+  return wasReconnecting && (status === "connected" || status === "disconnected");
+}
+
+/**
+ * Watches one page load: records which wallet wagmi last had active (read before this load's
+ * reconnect can change it) and announces, once, when that reconnect has settled. Subscribed
+ * from the store itself rather than React state, so the settle transition can't be batched away.
+ */
+export function createPageLoadWalletTracker(config: Pick<Config, "subscribe" | "storage">) {
+  let settled = false;
+  let recentConnectorIdAtLoad: string | null = null;
+  const listeners = new Set<() => void>();
+
+  void Promise.resolve(config.storage?.getItem("recentConnectorId")).then(
+    id => {
+      recentConnectorIdAtLoad = id ?? null;
+    },
+    () => undefined,
+  );
+  const stopWatching = config.subscribe(
+    state => state.status,
+    (status, previousStatus) => {
+      if (!isInitialReconnectSettled({ previousStatus, status })) return;
+      settled = true;
+      stopWatching();
+      listeners.forEach(listener => listener());
+    },
+  );
+
+  return {
+    hasSettled: () => settled,
+    recentConnectorIdAtLoad: () => recentConnectorIdAtLoad,
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+  };
+}
+
+// A reload restores the burner only if it was the active wallet before the reload. If a real
+// wallet was active but couldn't be restored (e.g. it is locked), end Easy Edits rather than
+// silently switching the visitor to the burner's address.
+export function shouldEndEasyEditsAfterPageLoad({
+  editingSessionRequested,
+  status,
+  recentConnectorIdAtLoad,
+}: {
+  editingSessionRequested: boolean;
+  status: WalletStatus;
+  recentConnectorIdAtLoad: string | null;
+}): boolean {
+  return editingSessionRequested && status === "disconnected" && recentConnectorIdAtLoad !== BURNER_WALLET_CONNECTOR_ID;
+}
+
+// Easy Edits is a remembered choice, like a connected wallet: it stays on across reloads until
+// the visitor turns it off or disconnects the burner.
+export function readStoredEasyEdits(storage: EasyEditsStorage | undefined): boolean {
+  return storage?.getItem(EASY_EDITS_STORAGE_KEY) === "1";
+}
+
+export function writeStoredEasyEdits(storage: EasyEditsStorage | undefined, enabled: boolean): void {
+  if (enabled) storage?.setItem(EASY_EDITS_STORAGE_KEY, "1");
+  else storage?.removeItem(EASY_EDITS_STORAGE_KEY);
+}
+
+// wagmi never restores the instant burner by itself: Easy Edits reconnects it after wagmi's
+// page-load reconnect settles, so it can't race a real wallet being restored.
+export function shouldRestoreBurnerOnLoad({ instantBurnerEnabled }: { instantBurnerEnabled: boolean }): boolean {
   return !instantBurnerEnabled;
 }
 

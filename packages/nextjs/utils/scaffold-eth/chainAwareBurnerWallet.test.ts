@@ -45,9 +45,9 @@ const devnet = {
   testnet: true,
 } as const;
 
-function createTestConnector() {
+function createTestConnector(options?: Parameters<typeof chainAwareBurner>[0]) {
   const emitted: Array<{ event: string; payload?: unknown }> = [];
-  const connector = chainAwareBurner()({
+  const connector = chainAwareBurner(options)({
     chains: [devnet, sepolia, mainnet],
     emitter: {
       emit: (event: string, payload?: unknown) => {
@@ -62,8 +62,10 @@ const rejectsUnsupportedChain = (chainId: number) => (error: unknown) => {
   if (!(error instanceof Error)) return false;
   const cause = "cause" in error ? (error.cause as unknown) : undefined;
   const causeMessage = cause instanceof Error ? cause.message : "";
-  return error.message.includes(`Burner chain ${chainId} is not configured`) ||
-    causeMessage.includes(`Burner chain ${chainId} is not configured`);
+  return (
+    error.message.includes(`Burner chain ${chainId} is not configured`) ||
+    causeMessage.includes(`Burner chain ${chainId} is not configured`)
+  );
 };
 
 test("provider follows wallet_switchEthereumChain instead of a stale provider chain", async () => {
@@ -97,6 +99,59 @@ test("onChainChanged rejects unsupported chain ids before emitting", () => {
 
   assert.throws(() => connector.onChainChanged(numberToHex(mainnet.id)), rejectsUnsupportedChain(mainnet.id));
   assert.deepEqual(emitted, []);
+});
+
+test("burner restores itself on page load by default (local dev keeps its account)", async () => {
+  const { connector } = createTestConnector();
+  assert.equal(await connector.isAuthorized(), true);
+});
+
+test("burner opted out of page-load restore stays unauthorized until explicitly connected", async () => {
+  // wagmi's reconnect() attaches every authorized connector, so this is what keeps a
+  // page-load reconnect from silently giving every visitor a burner while still
+  // letting real wallets reconnect.
+  const { connector } = createTestConnector({ restoreOnLoad: false });
+  assert.equal(await connector.isAuthorized(), false);
+
+  await connector.connect({ chainId: sepolia.id });
+  assert.equal(await connector.isAuthorized(), true);
+
+  await connector.disconnect();
+  assert.equal(await connector.isAuthorized(), false);
+});
+
+test("page-load reconnect restores a real wallet but skips an opted-out burner", async () => {
+  const { createConfig, createConnector, http, reconnect } = await import("@wagmi/core");
+  const realWalletAccount = "0x00000000000000000000000000000000000000a1";
+  // Stands in for an injected wallet (MetaMask) that already authorized this site.
+  const realWallet = createConnector(() => ({
+    id: "realWallet",
+    name: "Real wallet",
+    type: "injected",
+    connect: async () => ({ accounts: [realWalletAccount], chainId: sepolia.id }),
+    disconnect: async () => undefined,
+    getAccounts: async () => [realWalletAccount],
+    getChainId: async () => sepolia.id,
+    getProvider: async () => ({}),
+    isAuthorized: async () => true,
+    onAccountsChanged: () => undefined,
+    onChainChanged: () => undefined,
+    onDisconnect: () => undefined,
+  })) as any;
+  const reconnectOnLoad = async (restoreOnLoad: boolean) => {
+    const connections = await reconnect(
+      createConfig({
+        chains: [sepolia],
+        connectors: [chainAwareBurner({ restoreOnLoad }), realWallet],
+        multiInjectedProviderDiscovery: false,
+        transports: { [sepolia.id]: http() },
+      }),
+    );
+    return connections.map(connection => connection.connector.id).sort();
+  };
+
+  assert.deepEqual(await reconnectOnLoad(false), ["realWallet"]);
+  assert.deepEqual(await reconnectOnLoad(true), ["burnerWallet", "realWallet"]);
 });
 
 test("burner rejects mainnet even when wagmi appends it for ENS reads", async () => {
