@@ -1,5 +1,6 @@
 import { task } from "hardhat/config";
 import { seedDataset } from "../scripts/seed-dataset";
+import { parseAttester } from "../scripts/seed-dataset-lib";
 
 task("seed:dataset", "Pin a dataset to IPFS and seed EFS DATA/MIRROR/PIN/TAG attestations")
   .addOptionalParam("manifest", "Path to the dataset manifest JSON. Default: all sibling dataset manifests.", "")
@@ -9,6 +10,10 @@ task("seed:dataset", "Pin a dataset to IPFS and seed EFS DATA/MIRROR/PIN/TAG att
   .addFlag("force", "Re-seed even if the active contentHash already matches.")
   .addOptionalParam("ipfsApiUrl", "Kubo API base URL, e.g. https://host/api/v0", process.env.IPFS_API_URL)
   .addOptionalParam("only", "Comma-separated manifest paths to seed")
+  .addOptionalParam(
+    "attester",
+    "The lens to publish under. --plan reads as it (no key needed); --execute refuses unless the loaded key matches.",
+  )
   .setAction(async (args, hre) => {
     const only =
       typeof args.only === "string" && args.only.length > 0
@@ -26,6 +31,9 @@ task("seed:dataset", "Pin a dataset to IPFS and seed EFS DATA/MIRROR/PIN/TAG att
         force: Boolean(args.force),
         ipfsApiUrl: args.ipfsApiUrl ?? process.env.IPFS_API_URL ?? "http://127.0.0.1:5001/api/v0",
         only,
+        ...(typeof args.attester === "string" && args.attester.length > 0
+          ? { attester: parseAttester(args.attester) }
+          : {}),
       },
       hre.ethers,
     );

@@ -41,6 +41,12 @@ describe("seed-dataset helpers", function () {
     expect(args.plan).to.equal(true);
   });
 
+  it("parses --attester as a checksummed address and rejects a malformed one", function () {
+    const args = parseSeedDatasetArgs(["--plan", "--attester", "0x11cbe1b619bb9fe79e2f4c22c9a62412b3e79912"]);
+    expect(args.attester).to.equal("0x11CbE1b619bb9fe79e2F4C22c9A62412b3E79912");
+    expect(() => parseSeedDatasetArgs(["--plan", "--attester", "0x1234"])).to.throw(/--attester/);
+  });
+
   it("keeps dry-run as the default", function () {
     const args = parseSeedDatasetArgs(["--manifest", "../datasets/web-games/manifest.json"]);
 

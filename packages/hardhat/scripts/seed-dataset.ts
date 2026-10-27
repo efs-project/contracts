@@ -117,7 +117,7 @@ export async function seedDataset(args: SeedDatasetArgs, ethersRuntime?: Hardhat
   if (!args.execute) {
     if (args.plan) {
       const runtime = ethersRuntime ?? (await import("hardhat")).ethers;
-      const ctx = await connectContext(runtime, stats);
+      const ctx = await connectContext(runtime, stats, { mode: "plan", attester: args.attester });
       for (const manifestPath of manifestPaths) {
         const { manifest, selected } = loadPreparedDataset(manifestPath, args.only);
         console.log(
@@ -154,7 +154,7 @@ export async function seedDataset(args: SeedDatasetArgs, ethersRuntime?: Hardhat
   }
 
   const runtime = ethersRuntime ?? (await import("hardhat")).ethers;
-  const ctx = await connectContext(runtime, stats);
+  const ctx = await connectContext(runtime, stats, { mode: "execute", attester: args.attester });
   console.log(`[seed-dataset] ipfsApiUrl=${args.ipfsApiUrl}`);
   const tagCache = new Map<string, UID>();
 
@@ -271,9 +271,23 @@ function prepareFiles(manifest: DatasetManifest, datasetDir: string, only: strin
   });
 }
 
-async function connectContext(ethersRuntime: HardhatEthersRuntime, stats: SeedStats): Promise<SeedContext> {
+async function connectContext(
+  ethersRuntime: HardhatEthersRuntime,
+  stats: SeedStats,
+  opts: { mode: "plan" | "execute"; attester?: string },
+): Promise<SeedContext> {
   const [signer] = await ethersRuntime.getSigners();
-  const signerAddress = await signer.getAddress();
+  const keyAddress = await signer.getAddress();
+  // Every read below is lens-scoped to `signerAddress`. A plan only reads, so it may read
+  // as the curator without holding its key. An execute writes as the loaded key, so that
+  // key must BE the expected lens: otherwise the run publishes a second copy of the dataset
+  // under a lens the app never reads.
+  if (opts.mode === "execute" && opts.attester && keyAddress.toLowerCase() !== opts.attester.toLowerCase()) {
+    throw new Error(
+      `Loaded key ${keyAddress} is not the expected attester ${opts.attester}; refusing to write. Load the curator key or drop --attester.`,
+    );
+  }
+  const signerAddress = opts.mode === "plan" && opts.attester ? opts.attester : keyAddress;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const indexer = (await ethersRuntime.getContract("Indexer", signer)) as any;
   const easAddr = await indexer.getEAS();
@@ -301,7 +315,11 @@ async function connectContext(ethersRuntime: HardhatEthersRuntime, stats: SeedSt
     const network = await provider.getNetwork();
     console.log(`[seed-dataset] network=${network.name} chainId=${network.chainId.toString()}`);
   }
-  console.log(`[seed-dataset] signer=${signerAddress}`);
+  console.log(
+    signerAddress === keyAddress
+      ? `[seed-dataset] signer=${signerAddress}`
+      : `[seed-dataset] reading as attester=${signerAddress} (plan only; loaded key ${keyAddress} is never used to write)`,
+  );
   console.log(`[seed-dataset] indexer=${await indexer.getAddress()} eas=${easAddr}`);
   return {
     signer,

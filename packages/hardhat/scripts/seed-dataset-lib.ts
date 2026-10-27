@@ -1,4 +1,4 @@
-import { keccak256, sha256 } from "ethers";
+import { getAddress, keccak256, sha256 } from "ethers";
 import { readFileSync } from "fs";
 import path from "path";
 
@@ -34,6 +34,12 @@ export interface SeedDatasetArgs {
   force: boolean;
   ipfsApiUrl: string;
   only: string[];
+  /**
+   * The lens the dataset is published under (the curator). `--plan` reads chain state as
+   * this address, so planning needs no key; `--execute` refuses to run unless the loaded
+   * key IS this address. Omitted = the loaded key's own address, as before.
+   */
+  attester?: string;
 }
 
 export interface ActiveDatasetPlacement {
@@ -104,6 +110,9 @@ export function parseSeedDatasetArgs(argv: string[]): SeedDatasetArgs {
       case "--only":
         args.only.push(requireValue(argv, ++i, arg));
         break;
+      case "--attester":
+        args.attester = parseAttester(requireValue(argv, ++i, arg));
+        break;
       case "--help":
       case "-h":
         throw new Error(usage());
@@ -131,7 +140,18 @@ export function usage(): string {
     "  --ipfs-api-url <url>    Kubo API base. Default: IPFS_API_URL or http://127.0.0.1:5001/api/v0.",
     "  --only <path>           Seed only one manifest path. Repeatable.",
     "  --force                 Re-seed even if the active contentHash already matches.",
+    "  --attester <address>    The lens to publish under. --plan reads as it (no key needed);",
+    "                          --execute refuses to run unless the loaded key is this address.",
   ].join("\n");
+}
+
+/** Checksums an `--attester` value; anything that isn't a 20-byte address is rejected. */
+export function parseAttester(value: string): string {
+  try {
+    return getAddress(value);
+  } catch {
+    throw new Error(`--attester must be a 20-byte hex address; got ${value}`);
+  }
 }
 
 function requireValue(argv: string[], index: number, flag: string): string {
