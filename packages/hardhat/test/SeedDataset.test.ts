@@ -4,11 +4,12 @@ import { tmpdir } from "os";
 import path from "path";
 import { AbiCoder, Interface, ZeroAddress, ZeroHash, getAddress, toUtf8Bytes } from "ethers";
 import { seedDataset } from "../scripts/seed-dataset";
-import { canonicalContentHash } from "../scripts/seed-dataset-lib";
+import { SeedDatasetArgs, canonicalContentHash } from "../scripts/seed-dataset-lib";
 
 const ABI = AbiCoder.defaultAbiCoder();
 const EAS = new Interface([
   "function getAttestation(bytes32 uid) view returns (tuple(bytes32 uid,bytes32 schema,uint64 time,uint64 expirationTime,uint64 revocationTime,bytes32 refUID,address recipient,address attester,bool revocable,bytes data))",
+  "function multiRevoke((bytes32 schema,(bytes32 uid,uint256 value)[] data)[] multiRequests) payable",
 ]);
 
 function uid(hex: string): string {
@@ -19,14 +20,27 @@ interface SeedFixture {
   dir: string;
   manifestPath: string;
   runtime: Parameters<typeof seedDataset>[1];
-  counters: { easWrites: number; tagsAnchorLookups: number; lensReads: string[] };
+  counters: { easWrites: number; tagsAnchorLookups: number; lensReads: string[]; sentData: string[] };
+  /** UID of the stale file's placement PIN, when `staleFile` was given. */
+  stalePinUID: string;
+  pinSchema: string;
 }
 
 /**
  * A one-file `/games` dataset whose active placement (under `lensAddress`) already
- * carries `activeHash`. The fake signer is `signerAddress`; every EAS write throws.
+ * carries `activeHash`. The fake signer is `signerAddress`. `staleFile` adds a second file
+ * the lens has placed under `/games` that the manifest no longer lists (for `--prune`).
+ * Every EAS write is recorded in `counters.sentData`; unless `allowWrites`, it then throws.
  */
-function buildFixture(opts: { signerAddress: string; lensAddress: string; activeHash?: string }): SeedFixture {
+function buildFixture(opts: {
+  signerAddress: string;
+  lensAddress: string;
+  activeHash?: string;
+  chainId?: bigint;
+  tags?: string[];
+  staleFile?: string;
+  allowWrites?: boolean;
+}): SeedFixture {
   const dir = mkdtempSync(path.join(tmpdir(), "efs-seed-dataset-"));
   const bytes = "<html>same</html>";
   writeFileSync(path.join(dir, "snake.html"), bytes);
@@ -36,7 +50,7 @@ function buildFixture(opts: { signerAddress: string; lensAddress: string; active
     JSON.stringify({
       dataset: "test-games",
       anchorPath: "/games",
-      files: [{ path: "snake.html", contentType: "text/html", tags: ["arcade"] }],
+      files: [{ path: "snake.html", contentType: "text/html", tags: opts.tags ?? ["arcade"] }],
     }),
   );
 
@@ -49,6 +63,8 @@ function buildFixture(opts: { signerAddress: string; lensAddress: string; active
   const dataUID = uid("06");
   const contentHashKeyUID = uid("07");
   const propertyUID = uid("08");
+  const staleAnchorUID = uid("09");
+  const stalePinUID = uid("0a");
   const anchorSchema = uid("a1");
   const dataSchema = uid("d1");
   const mirrorSchema = uid("b1");
@@ -58,38 +74,52 @@ function buildFixture(opts: { signerAddress: string; lensAddress: string; active
   // Default: the CANONICAL claim of these bytes (specs/10) — what this seeder now writes,
   // so an active placement carrying it is a genuine match: nothing may be pinned or written.
   const activeHash = opts.activeHash ?? canonicalContentHash(toUtf8Bytes(bytes));
+  const children = opts.staleFile ? [fileAnchorUID, staleAnchorUID] : [fileAnchorUID];
 
-  const counters = { easWrites: 0, tagsAnchorLookups: 0, lensReads: [] as string[] };
+  const attestation = (u: string, schema: string, attester: string, data: string) =>
+    EAS.encodeFunctionResult("getAttestation", [[u, schema, 0n, 0n, 0n, ZeroHash, ZeroAddress, attester, false, data]]);
+
+  const counters = { easWrites: 0, tagsAnchorLookups: 0, lensReads: [] as string[], sentData: [] as string[] };
   const fakeSigner = {
     provider: {
       call: async (tx: { data: string }) => {
         const parsed = EAS.parseTransaction({ data: tx.data });
         if (parsed?.name !== "getAttestation") throw new Error(`unexpected EAS call ${parsed?.name}`);
         const requestedUID = parsed.args.uid as string;
-        if (requestedUID !== propertyUID) throw new Error(`unexpected getAttestation(${requestedUID})`);
-        return EAS.encodeFunctionResult("getAttestation", [
-          [
-            propertyUID,
-            propertySchema,
-            0n,
-            0n,
-            0n,
-            ZeroHash,
-            ZeroAddress,
+        if (requestedUID === propertyUID) {
+          return attestation(propertyUID, propertySchema, lensAddress, ABI.encode(["string"], [activeHash]));
+        }
+        if (requestedUID === fileAnchorUID) {
+          return attestation(
+            fileAnchorUID,
+            anchorSchema,
             lensAddress,
-            false,
-            ABI.encode(["string"], [activeHash]),
-          ],
-        ]);
+            ABI.encode(["string", "bytes32"], ["snake.html", dataSchema]),
+          );
+        }
+        if (requestedUID === staleAnchorUID && opts.staleFile) {
+          return attestation(
+            staleAnchorUID,
+            anchorSchema,
+            lensAddress,
+            ABI.encode(["string", "bytes32"], [opts.staleFile, dataSchema]),
+          );
+        }
+        throw new Error(`unexpected getAttestation(${requestedUID})`);
       },
-      getNetwork: async () => ({ chainId: 31337n, name: "hardhat" }),
+      getNetwork: async () => ({ chainId: opts.chainId ?? 31337n, name: "test" }),
+      getTransactionCount: async () => 0,
+      estimateGas: async () => 100000n,
+      getFeeData: async () => ({ gasPrice: 1n, maxFeePerGas: 1n, maxPriorityFeePerGas: 1n }),
     },
     call: async (tx: { data: string }) => fakeSigner.provider.call(tx),
     getAddress: async () => signerAddress,
     resolveName: async (name: string) => name,
-    sendTransaction: async () => {
+    sendTransaction: async (tx: { data: string }) => {
       counters.easWrites += 1;
-      throw new Error("unexpected EAS write");
+      counters.sentData.push(tx.data);
+      if (!opts.allowWrites) throw new Error("unexpected EAS write");
+      return { wait: async () => ({ status: 1, logs: [] }), hash: uid("ff") };
     },
   };
 
@@ -117,9 +147,14 @@ function buildFixture(opts: { signerAddress: string; lensAddress: string; active
       }
       if (parent === rootUID && name === "games" && schema === ZeroHash) return gamesUID;
       if (parent === gamesUID && name === "snake.html" && schema === dataSchema) return fileAnchorUID;
+      if (parent === gamesUID && opts.staleFile && name === opts.staleFile && schema === dataSchema)
+        return staleAnchorUID;
       if (parent === dataUID && name === "contentHash" && schema === propertySchema) return contentHashKeyUID;
       return ZeroHash;
     },
+    getChildrenCount: async (parent: string) => (parent === gamesUID ? BigInt(children.length) : 0n),
+    getChildren: async (parent: string, start: bigint, length: bigint) =>
+      parent === gamesUID ? children.slice(Number(start), Number(start) + Number(length)) : [],
     getParent: async () => rootUID,
   };
 
@@ -130,6 +165,14 @@ function buildFixture(opts: { signerAddress: string; lensAddress: string; active
       if (attester !== lensAddress) return ZeroHash;
       if (definition === fileAnchorUID && schema === dataSchema) return dataUID;
       if (definition === contentHashKeyUID && schema === propertySchema) return propertyUID;
+      if (definition === staleAnchorUID && schema === dataSchema) return uid("0b");
+      return ZeroHash;
+    },
+    getActivePin: async (definition: string, attester: string, schema: string) => {
+      counters.lensReads.push(attester);
+      if (attester !== lensAddress) return ZeroHash;
+      if (definition === staleAnchorUID && schema === dataSchema) return stalePinUID;
+      if (definition === fileAnchorUID && schema === dataSchema) return uid("0c");
       return ZeroHash;
     },
     isActiveEdge: async () => false,
@@ -139,6 +182,8 @@ function buildFixture(opts: { signerAddress: string; lensAddress: string; active
     dir,
     manifestPath,
     counters,
+    stalePinUID,
+    pinSchema,
     runtime: {
       getSigners: async () => [fakeSigner as any],
       getContract: async (name: string) => {
@@ -155,28 +200,56 @@ function buildFixture(opts: { signerAddress: string; lensAddress: string; active
 
 const SIGNER = getAddress("0x0000000000000000000000000000000000000abc");
 const CURATOR = getAddress("0x0000000000000000000000000000000000000def");
+const HARDHAT_DEV_KEY = getAddress("0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266");
+
+/** Execute-mode args for a fixture. The temp dataset dir is not a git checkout, so tests
+ * that are not about provenance opt out of that check. */
+function executeArgs(f: SeedFixture, extra: Partial<SeedDatasetArgs> = {}): SeedDatasetArgs {
+  return {
+    manifest: f.manifestPath,
+    execute: true,
+    pin: true,
+    plan: false,
+    force: false,
+    ipfsApiUrl: "http://127.0.0.1:1/api/v0",
+    only: [],
+    allowUncommitted: true,
+    ...extra,
+  };
+}
+
+function planArgs(f: SeedFixture, extra: Partial<SeedDatasetArgs> = {}): SeedDatasetArgs {
+  return { ...executeArgs(f), execute: false, pin: false, plan: true, ...extra };
+}
+
+async function captureLogs(run: () => Promise<void>): Promise<{ lines: string[]; error: unknown }> {
+  const lines: string[] = [];
+  const original = console.log;
+  console.log = (...parts: unknown[]) => lines.push(parts.map(String).join(" "));
+  let error: unknown;
+  try {
+    await run();
+  } catch (err) {
+    error = err;
+  } finally {
+    console.log = original;
+  }
+  return { lines, error };
+}
+
+function cleanup(f: SeedFixture) {
+  if (existsSync(f.dir)) rmSync(f.dir, { recursive: true, force: true });
+}
 
 describe("seedDataset execution boundaries", function () {
   it("does not create tags, pin to IPFS, or write EAS txs when active contentHash matches", async function () {
     const f = buildFixture({ signerAddress: SIGNER, lensAddress: SIGNER });
     try {
-      await seedDataset(
-        {
-          manifest: f.manifestPath,
-          execute: true,
-          pin: true,
-          plan: false,
-          force: false,
-          ipfsApiUrl: "http://127.0.0.1:1/api/v0",
-          only: [],
-        },
-        f.runtime,
-      );
-
+      await seedDataset(executeArgs(f), f.runtime);
       expect(f.counters.easWrites).to.equal(0);
       expect(f.counters.tagsAnchorLookups).to.equal(0);
     } finally {
-      if (existsSync(f.dir)) rmSync(f.dir, { recursive: true, force: true });
+      cleanup(f);
     }
   });
 
@@ -185,25 +258,12 @@ describe("seedDataset execution boundaries", function () {
     // wrong lens and report every live file as missing.
     const f = buildFixture({ signerAddress: SIGNER, lensAddress: CURATOR });
     try {
-      await seedDataset(
-        {
-          manifest: f.manifestPath,
-          execute: false,
-          pin: false,
-          plan: true,
-          force: false,
-          ipfsApiUrl: "http://127.0.0.1:1/api/v0",
-          only: [],
-          attester: CURATOR,
-        },
-        f.runtime,
-      );
-
+      await seedDataset(planArgs(f, { attester: CURATOR }), f.runtime);
       expect(f.counters.lensReads.length).to.be.greaterThan(0);
       expect(f.counters.lensReads.every(a => a === CURATOR)).to.equal(true);
       expect(f.counters.easWrites).to.equal(0);
     } finally {
-      if (existsSync(f.dir)) rmSync(f.dir, { recursive: true, force: true });
+      cleanup(f);
     }
   });
 
@@ -212,29 +272,141 @@ describe("seedDataset execution boundaries", function () {
     // doesn't read. It must stop before any chain read, IPFS pin or write.
     const f = buildFixture({ signerAddress: SIGNER, lensAddress: CURATOR });
     try {
-      let error: unknown;
-      try {
-        await seedDataset(
-          {
-            manifest: f.manifestPath,
-            execute: true,
-            pin: true,
-            plan: false,
-            force: false,
-            ipfsApiUrl: "http://127.0.0.1:1/api/v0",
-            only: [],
-            attester: CURATOR,
-          },
-          f.runtime,
-        );
-      } catch (err) {
-        error = err;
-      }
+      const { error } = await captureLogs(() => seedDataset(executeArgs(f, { attester: CURATOR }), f.runtime));
       expect(String(error)).to.match(/is not the expected attester/);
       expect(f.counters.lensReads).to.deep.equal([]);
       expect(f.counters.easWrites).to.equal(0);
     } finally {
-      if (existsSync(f.dir)) rmSync(f.dir, { recursive: true, force: true });
+      cleanup(f);
+    }
+  });
+});
+
+describe("seedDataset safety rails", function () {
+  const savedRoot = process.env.DATASET_ROOT;
+  afterEach(function () {
+    if (savedRoot === undefined) delete process.env.DATASET_ROOT;
+    else process.env.DATASET_ROOT = savedRoot;
+  });
+
+  it("--plan and --execute need an explicit content source, never a guessed sibling folder", async function () {
+    // Default discovery once resolved to a stale, untracked copy of the datasets.
+    delete process.env.DATASET_ROOT;
+    const f = buildFixture({ signerAddress: SIGNER, lensAddress: SIGNER });
+    try {
+      for (const args of [executeArgs(f, { manifest: "" }), planArgs(f, { manifest: "" })]) {
+        const { error } = await captureLogs(() => seedDataset(args, f.runtime));
+        expect(String(error)).to.match(/explicit content source/);
+      }
+      expect(f.counters.lensReads).to.deep.equal([]);
+    } finally {
+      cleanup(f);
+    }
+  });
+
+  it("--execute refuses content that is not a clean git checkout", async function () {
+    // Publishing is permanent, so the run must be traceable to a commit of the content repo.
+    const f = buildFixture({ signerAddress: SIGNER, lensAddress: SIGNER });
+    try {
+      const { error } = await captureLogs(() => seedDataset(executeArgs(f, { allowUncommitted: false }), f.runtime));
+      expect(String(error)).to.match(/not a git checkout|uncommitted/);
+      expect(f.counters.lensReads).to.deep.equal([]);
+      expect(f.counters.easWrites).to.equal(0);
+    } finally {
+      cleanup(f);
+    }
+  });
+
+  it("--execute on a live chain requires --attester", async function () {
+    const f = buildFixture({ signerAddress: CURATOR, lensAddress: CURATOR, chainId: 11155111n });
+    try {
+      const { error } = await captureLogs(() => seedDataset(executeArgs(f), f.runtime));
+      expect(String(error)).to.match(/--attester is required/);
+      expect(f.counters.easWrites).to.equal(0);
+    } finally {
+      cleanup(f);
+    }
+  });
+
+  it("--execute on a live chain refuses the public Hardhat development key", async function () {
+    // Anyone holds that key, so anyone could revoke what it publishes.
+    const f = buildFixture({ signerAddress: HARDHAT_DEV_KEY, lensAddress: HARDHAT_DEV_KEY, chainId: 11155111n });
+    try {
+      const { error } = await captureLogs(() => seedDataset(executeArgs(f, { attester: HARDHAT_DEV_KEY }), f.runtime));
+      expect(String(error)).to.match(/public Hardhat development key/);
+      expect(f.counters.easWrites).to.equal(0);
+    } finally {
+      cleanup(f);
+    }
+  });
+
+  it("rejects a tag the chain would reject before any read or write", async function () {
+    // A bad tag used to revert mid-file, after DATA and PROPERTYs were already permanent.
+    const f = buildFixture({ signerAddress: SIGNER, lensAddress: SIGNER, tags: ["bad tag"] });
+    try {
+      const { error } = await captureLogs(() => seedDataset(executeArgs(f), f.runtime));
+      expect(String(error)).to.match(/tag/i);
+      expect(f.counters.lensReads).to.deep.equal([]);
+      expect(f.counters.easWrites).to.equal(0);
+    } finally {
+      cleanup(f);
+    }
+  });
+});
+
+describe("seedDataset --prune", function () {
+  it("--plan --prune lists files the lens placed that the manifest no longer has", async function () {
+    const f = buildFixture({ signerAddress: SIGNER, lensAddress: CURATOR, staleFile: "old.html" });
+    try {
+      const { lines, error } = await captureLogs(() =>
+        seedDataset(planArgs(f, { attester: CURATOR, prune: true }), f.runtime),
+      );
+      expect(error).to.equal(undefined);
+      expect(lines.some(l => /plan remove\s+old\.html/.test(l))).to.equal(true);
+      expect(lines.some(l => /plan remove\s+snake\.html/.test(l))).to.equal(false);
+      expect(lines.some(l => /removals=1/.test(l))).to.equal(true);
+      expect(f.counters.easWrites).to.equal(0);
+    } finally {
+      cleanup(f);
+    }
+  });
+
+  it("--plan without --prune still reports unlisted files, as a warning", async function () {
+    const f = buildFixture({ signerAddress: SIGNER, lensAddress: CURATOR, staleFile: "old.html" });
+    try {
+      const { lines } = await captureLogs(() => seedDataset(planArgs(f, { attester: CURATOR }), f.runtime));
+      expect(lines.some(l => /not in manifest/.test(l) && /old\.html/.test(l))).to.equal(true);
+      expect(lines.some(l => /plan remove/.test(l))).to.equal(false);
+    } finally {
+      cleanup(f);
+    }
+  });
+
+  it("--execute --prune revokes only the unlisted file's placement PIN, in one multiRevoke", async function () {
+    const f = buildFixture({ signerAddress: SIGNER, lensAddress: SIGNER, staleFile: "old.html", allowWrites: true });
+    try {
+      const { error } = await captureLogs(() => seedDataset(executeArgs(f, { prune: true }), f.runtime));
+      expect(error).to.equal(undefined);
+      expect(f.counters.sentData.length).to.equal(1);
+      const parsed = EAS.parseTransaction({ data: f.counters.sentData[0] });
+      expect(parsed?.name).to.equal("multiRevoke");
+      const [request] = parsed!.args[0];
+      expect(request.schema).to.equal(f.pinSchema);
+      expect(request.data.map((d: { uid: string }) => d.uid)).to.deep.equal([f.stalePinUID]);
+    } finally {
+      cleanup(f);
+    }
+  });
+
+  it("refuses --prune with --only, which would remove every file it wasn't told about", async function () {
+    const f = buildFixture({ signerAddress: SIGNER, lensAddress: SIGNER, staleFile: "old.html" });
+    try {
+      const { error } = await captureLogs(() =>
+        seedDataset(planArgs(f, { prune: true, only: ["snake.html"] }), f.runtime),
+      );
+      expect(String(error)).to.match(/--prune.*--only|--only.*--prune/);
+    } finally {
+      cleanup(f);
     }
   });
 });

@@ -17,8 +17,11 @@ async function main() {
 
   const isLocalNetwork = networkName === "localhost" || networkName === "hardhat";
   const useNodeAccount = isLocalNetwork && process.env.EFS_USE_DEPLOYER_KEY_ON_LOCALHOST !== "1";
+  // A seed:dataset run that never writes (dry-run or --plan) needs no key: --plan reads as
+  // --attester. Don't make the operator decrypt the curator key just to preview a run.
+  const isReadOnlySeed = hardhatTask === "seed:dataset" && !process.argv.includes("--execute");
 
-  if (useNodeAccount) {
+  if (useNodeAccount || isReadOnlySeed) {
     // Local/fork commands normally use the node's unlocked accounts. Set
     // EFS_USE_DEPLOYER_KEY_ON_LOCALHOST=1 when `localhost` points at a remote
     // devnet and provenance should come from the encrypted deployer/curator key.

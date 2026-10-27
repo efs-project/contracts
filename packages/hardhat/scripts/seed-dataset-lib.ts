@@ -40,6 +40,11 @@ export interface SeedDatasetArgs {
    * key IS this address. Omitted = the loaded key's own address, as before.
    */
   attester?: string;
+  /** Revoke the lens's placement of files under each dataset anchor that the manifest no
+   * longer lists. Without it, such files are only reported. */
+  prune?: boolean;
+  /** Allow `--execute` from a content folder that isn't a clean git checkout. */
+  allowUncommitted?: boolean;
 }
 
 export interface ActiveDatasetPlacement {
@@ -113,6 +118,12 @@ export function parseSeedDatasetArgs(argv: string[]): SeedDatasetArgs {
       case "--attester":
         args.attester = parseAttester(requireValue(argv, ++i, arg));
         break;
+      case "--prune":
+        args.prune = true;
+        break;
+      case "--allow-uncommitted":
+        args.allowUncommitted = true;
+        break;
       case "--help":
       case "-h":
         throw new Error(usage());
@@ -142,6 +153,11 @@ export function usage(): string {
     "  --force                 Re-seed even if the active contentHash already matches.",
     "  --attester <address>    The lens to publish under. --plan reads as it (no key needed);",
     "                          --execute refuses to run unless the loaded key is this address.",
+    "                          Required for --execute on any chain other than local/devnet.",
+    "  --prune                 Revoke the attester's placement of files the manifest no longer lists.",
+    "  --allow-uncommitted     Let --execute publish from a folder that isn't a clean git checkout.",
+    "",
+    "--plan and --execute need an explicit source: --manifest <path> or DATASET_ROOT=<datasets dir>.",
   ].join("\n");
 }
 
@@ -246,6 +262,14 @@ export function buildIpfsAddUrl(apiBase: string): URL {
   url.searchParams.set("cid-version", "1");
   url.searchParams.set("raw-leaves", "true");
   return url;
+}
+
+/** A manifest tag becomes an anchor name under `/tags`, so it must pass the same on-chain
+ * name rules. Checked before any write: a bad tag used to revert mid-file, after the
+ * file's DATA and PROPERTYs were already permanent. */
+export function assertValidTag(tag: string, filePath: string): void {
+  if (tag.includes("/")) throw new Error(`Tag "${tag}" on ${filePath} must not contain '/'.`);
+  assertCanonicalAnchorSegment(tag, `Tag "${tag}" on ${filePath}`);
 }
 
 function assertCanonicalAnchorSegment(segment: string, label: string): void {

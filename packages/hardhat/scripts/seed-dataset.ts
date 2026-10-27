@@ -1,4 +1,5 @@
-import { createReadStream, existsSync, readdirSync, readFileSync, statSync } from "fs";
+import { execFileSync } from "child_process";
+import { existsSync, readFileSync, readdirSync, statSync } from "fs";
 import http from "http";
 import https from "https";
 import path from "path";
@@ -14,6 +15,7 @@ import {
   decideSeedFileAction,
   loadDatasetManifest,
   parseKuboAddResponse,
+  assertValidTag,
   canonicalContentHash,
   legacyKeccakContentHash,
   parseSeedDatasetArgs,
@@ -26,7 +28,14 @@ const EAS_ABI = [
   "function attest((bytes32 schema,(address recipient,uint64 expirationTime,bool revocable,bytes32 refUID,bytes data,uint256 value) data) request) payable returns (bytes32)",
   "function getAttestation(bytes32 uid) view returns (tuple(bytes32 uid,bytes32 schema,uint64 time,uint64 expirationTime,uint64 revocationTime,bytes32 refUID,address recipient,address attester,bool revocable,bytes data))",
   "function multiAttest((bytes32 schema,(address recipient,uint64 expirationTime,bool revocable,bytes32 refUID,bytes data,uint256 value)[] data)[] multiRequests) payable returns (bytes32[])",
+  "function multiRevoke((bytes32 schema,(bytes32 uid,uint256 value)[] data)[] multiRequests) payable",
 ];
+
+/** Chains where the loaded key may be a throwaway: the local fork and the EFS devnet. */
+const LOCAL_CHAIN_IDS = new Set([31337n, 26001993n]);
+/** Hardhat account #0. Its private key is public, so anything it publishes anyone can revoke. */
+const HARDHAT_DEV_KEY_ADDRESS = "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266";
+const CHILD_PAGE = 100;
 
 const MAX_ANCHOR_DEPTH = 32;
 const ABI = AbiCoder.defaultAbiCoder();
@@ -79,6 +88,9 @@ interface SeedContext {
 interface PreparedFile {
   entry: DatasetManifestEntry;
   absolutePath: string;
+  /** The bytes hashed below. Uploaded from this same buffer, so the pinned CID, the
+   * contentHash and the size always describe identical bytes. */
+  bytes: Buffer;
   relativePath: string;
   size: bigint;
   contentType: string;
@@ -99,6 +111,8 @@ interface SeedStats {
   /** Files whose legacy `0x`-keccak claim was re-bound to the canonical form in place. */
   healed: number;
   forced: number;
+  plannedRemovals: number;
+  removed: number;
   pinned: number;
   transactions: number;
   attestations: number;
@@ -107,19 +121,32 @@ interface SeedStats {
 export async function seedDataset(args: SeedDatasetArgs, ethersRuntime?: HardhatEthersRuntime): Promise<void> {
   const manifestPaths = resolveManifestPaths(args.manifest);
   if (manifestPaths.length === 0) {
-    throw new Error("No dataset manifests found. Pass --manifest <path> or run from the datasets/deploy checkout.");
+    throw new Error(
+      "No explicit content source: pass --manifest <path> or set DATASET_ROOT to a datasets folder (e.g. the content repo's datasets/).",
+    );
   }
   if (!args.manifest && args.only.length > 0) {
     throw new Error("--only requires --manifest when defaulting to multiple dataset manifests.");
   }
+  if (args.prune && args.only.length > 0) {
+    throw new Error("--prune can't be combined with --only: it would remove every file --only left out.");
+  }
   const stats = createSeedStats();
+
+  // Load and validate EVERY dataset before touching the chain, so a bad manifest in the
+  // last dataset can't fail the run after earlier datasets were already written.
+  const datasets = manifestPaths.map(manifestPath => loadPreparedDataset(manifestPath, args.only));
+  if (args.plan || args.execute) {
+    for (const datasetDir of uniqueStrings(datasets.map(d => d.datasetDir))) {
+      checkContentSource(datasetDir, { mustBeCommitted: args.execute && !args.allowUncommitted });
+    }
+  }
 
   if (!args.execute) {
     if (args.plan) {
       const runtime = ethersRuntime ?? (await import("hardhat")).ethers;
       const ctx = await connectContext(runtime, stats, { mode: "plan", attester: args.attester });
-      for (const manifestPath of manifestPaths) {
-        const { manifest, selected } = loadPreparedDataset(manifestPath, args.only);
+      for (const { manifest, selected } of datasets) {
         console.log(
           `[seed-dataset] dataset=${manifest.dataset} anchor=${manifest.anchorPath} files=${selected.length}`,
         );
@@ -132,13 +159,16 @@ export async function seedDataset(args: SeedDatasetArgs, ethersRuntime?: Hardhat
             force: args.force,
           });
         }
+        if (datasetRootUID && args.only.length === 0) {
+          const unlisted = await findUnlistedPlacements(ctx, datasetRootUID, manifest);
+          reportUnlisted(ctx, manifest, unlisted, { prune: Boolean(args.prune), mode: "plan" });
+        }
       }
       logSummary(ctx, "plan");
       return;
     }
 
-    for (const manifestPath of manifestPaths) {
-      const { manifest, selected } = loadPreparedDataset(manifestPath, args.only);
+    for (const { manifest, selected } of datasets) {
       console.log(`[seed-dataset] dataset=${manifest.dataset} anchor=${manifest.anchorPath} files=${selected.length}`);
       for (const file of selected) {
         console.log(`  dry-run ${file.relativePath} ${file.contentType} ${file.size} bytes hash=${file.contentHash}`);
@@ -155,11 +185,10 @@ export async function seedDataset(args: SeedDatasetArgs, ethersRuntime?: Hardhat
 
   const runtime = ethersRuntime ?? (await import("hardhat")).ethers;
   const ctx = await connectContext(runtime, stats, { mode: "execute", attester: args.attester });
-  console.log(`[seed-dataset] ipfsApiUrl=${args.ipfsApiUrl}`);
+  console.log(`[seed-dataset] ipfsApiUrl=${redactUrl(args.ipfsApiUrl)}`);
   const tagCache = new Map<string, UID>();
 
-  for (const manifestPath of manifestPaths) {
-    const { manifest, datasetDir, selected } = loadPreparedDataset(manifestPath, args.only);
+  for (const { manifest, datasetDir, selected } of datasets) {
     console.log(`[seed-dataset] dataset=${manifest.dataset} anchor=${manifest.anchorPath} files=${selected.length}`);
     const datasetRootUID = await ensureAnchorPath(ctx, manifest.anchorPath);
 
@@ -173,6 +202,11 @@ export async function seedDataset(args: SeedDatasetArgs, ethersRuntime?: Hardhat
         force: args.force,
         tagCache,
       });
+    }
+    if (args.only.length === 0) {
+      const unlisted = await findUnlistedPlacements(ctx, datasetRootUID, manifest);
+      reportUnlisted(ctx, manifest, unlisted, { prune: Boolean(args.prune), mode: "execute" });
+      if (args.prune && unlisted.length > 0) await revokePlacements(ctx, unlisted, manifest.dataset);
     }
   }
   logSummary(ctx, "execute");
@@ -190,36 +224,80 @@ function loadPreparedDataset(
 
 function resolveManifestPaths(input: string): string[] {
   if (input) return [resolveManifestPath(input)];
-  return findDefaultManifestPaths();
+  return findManifestPathsIn(process.env.DATASET_ROOT);
 }
 
+/** Relative paths resolve against where the operator typed the command. `yarn` runs the
+ * task from `packages/hardhat`, so it sets INIT_CWD to the original directory. */
 function resolveManifestPath(input: string): string {
-  const candidates = [
-    path.resolve(process.cwd(), input),
-    path.resolve(__dirname, "../../..", input),
-    path.resolve(__dirname, "../../../..", input),
-  ];
-  return candidates.find(existsSync) ?? candidates[0];
+  return path.resolve(process.env.INIT_CWD ?? process.cwd(), input);
 }
 
-function findDefaultManifestPaths(): string[] {
-  const roots = uniqueStrings(
-    [process.env.DATASET_ROOT, path.resolve(process.cwd(), ".."), path.resolve(__dirname, "../../../..")].filter(
-      (value): value is string => Boolean(value),
-    ),
-  );
-  const manifests: string[] = [];
-
-  for (const root of roots) {
-    if (!existsSync(root) || !statSync(root).isDirectory()) continue;
-    for (const entry of readdirSync(root, { withFileTypes: true })) {
-      if (!entry.isDirectory() || entry.name === "deploy") continue;
-      const manifestPath = path.join(root, entry.name, "manifest.json");
-      if (existsSync(manifestPath)) manifests.push(manifestPath);
-    }
+/** Only an explicitly named datasets folder is scanned. The seeder used to guess sibling
+ * folders, which once resolved to a stale, untracked copy of the content. */
+function findManifestPathsIn(root: string | undefined): string[] {
+  if (!root) return [];
+  const resolvedRoot = path.resolve(process.env.INIT_CWD ?? process.cwd(), root);
+  if (!existsSync(resolvedRoot) || !statSync(resolvedRoot).isDirectory()) {
+    throw new Error(`DATASET_ROOT is not a directory: ${resolvedRoot}`);
   }
+  const manifests: string[] = [];
+  for (const entry of readdirSync(resolvedRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const manifestPath = path.join(resolvedRoot, entry.name, "manifest.json");
+    if (existsSync(manifestPath)) manifests.push(manifestPath);
+  }
+  return manifests.sort();
+}
 
-  return uniqueStrings(manifests).sort();
+/**
+ * Logs where the content comes from (absolute path + git commit) and, for `--execute`,
+ * refuses anything that isn't a clean git checkout: publishing is permanent, so every run
+ * must be traceable to a commit of the content repo.
+ */
+function checkContentSource(datasetDir: string, opts: { mustBeCommitted: boolean }): void {
+  const absolute = path.resolve(datasetDir);
+  let commit: string | null = null;
+  let dirty = false;
+  try {
+    commit = execFileSync("git", ["-C", absolute, "rev-parse", "HEAD"], { encoding: "utf8", stdio: "pipe" }).trim();
+    dirty =
+      execFileSync("git", ["-C", absolute, "status", "--porcelain", "--", "."], {
+        encoding: "utf8",
+        stdio: "pipe",
+      }).trim().length > 0;
+  } catch {
+    commit = null;
+  }
+  console.log(
+    `[seed-dataset] source=${absolute} git=${commit ? `${commit.slice(0, 12)}${dirty ? " (uncommitted changes)" : ""}` : "none"}`,
+  );
+  if (!opts.mustBeCommitted) return;
+  if (!commit) {
+    throw new Error(
+      `Content source ${absolute} is not a git checkout. Publish from the content repo, or pass --allow-uncommitted.`,
+    );
+  }
+  if (dirty) {
+    throw new Error(
+      `Content source ${absolute} has uncommitted changes. Commit them first, or pass --allow-uncommitted.`,
+    );
+  }
+}
+
+/** Drops any credentials from a URL before it is logged. */
+function redactUrl(value: string): string {
+  try {
+    const url = new URL(value);
+    if (url.username || url.password) {
+      url.username = "***";
+      url.password = "";
+    }
+    url.search = url.search ? "?***" : "";
+    return url.toString();
+  } catch {
+    return "(unparseable url)";
+  }
 }
 
 function uniqueStrings(values: string[]): string[] {
@@ -236,6 +314,8 @@ function createSeedStats(): SeedStats {
     repaired: 0,
     healed: 0,
     forced: 0,
+    plannedRemovals: 0,
+    removed: 0,
     pinned: 0,
     transactions: 0,
     attestations: 0,
@@ -258,12 +338,14 @@ function prepareFiles(manifest: DatasetManifest, datasetDir: string, only: strin
     if (!absolutePath.startsWith(`${datasetRoot}${path.sep}`)) {
       throw new Error(`Manifest path escapes dataset directory: ${entry.path}`);
     }
+    for (const tag of entry.tags ?? []) assertValidTag(tag, entry.path);
     const bytes = readFileSync(absolutePath);
     return {
       entry,
       absolutePath,
+      bytes,
       relativePath: entry.path,
-      size: BigInt(statSync(absolutePath).size),
+      size: BigInt(bytes.length),
       contentType: contentTypeForEntry(entry, defaults),
       contentHash: canonicalContentHash(bytes),
       legacyContentHash: legacyKeccakContentHash(bytes),
@@ -278,6 +360,21 @@ async function connectContext(
 ): Promise<SeedContext> {
   const [signer] = await ethersRuntime.getSigners();
   const keyAddress = await signer.getAddress();
+  const chainId = signer.provider ? (await signer.provider.getNetwork()).chainId : null;
+  // On a live chain, the run must name the lens it writes under, and must not use the
+  // public Hardhat key (hardhat.config.ts falls back to it when no key is loaded).
+  if (opts.mode === "execute" && chainId !== null && !LOCAL_CHAIN_IDS.has(chainId)) {
+    if (keyAddress.toLowerCase() === HARDHAT_DEV_KEY_ADDRESS) {
+      throw new Error(
+        `Loaded key ${keyAddress} is the public Hardhat development key; refusing to write to chain ${chainId}. Load the curator key.`,
+      );
+    }
+    if (!opts.attester) {
+      throw new Error(
+        `--attester is required when writing to chain ${chainId}: name the curator address to publish under.`,
+      );
+    }
+  }
   // Every read below is lens-scoped to `signerAddress`. A plan only reads, so it may read
   // as the curator without holding its key. An execute writes as the loaded key, so that
   // key must BE the expected lens: otherwise the run publishes a second copy of the dataset
@@ -406,7 +503,7 @@ async function seedOneFile(args: {
   }
 
   console.log(`  pin  ${file.relativePath}`);
-  const cid = await pinFileToIpfs(ipfsApiUrl, file.absolutePath, fileName);
+  const cid = await pinFileToIpfs(ipfsApiUrl, file.bytes, fileName);
   ctx.stats.pinned += 1;
   const mirrorUri = `ipfs://${cid}`;
   console.log(`  cid  ${cid}`);
@@ -755,13 +852,85 @@ function logSummary(ctx: SeedContext, mode: "execute" | "plan"): void {
     // expected usually means the wrong signer — every file then looks like it has no
     // placement under that account, and executing would re-seed them all under it.
     console.log(
-      `[seed-dataset] plan summary signer=${ctx.signerAddress} skipped=${ctx.stats.skipped} heals=${ctx.stats.plannedHeals} writes=${ctx.stats.plannedWrites}`,
+      `[seed-dataset] plan summary signer=${ctx.signerAddress} skipped=${ctx.stats.skipped} heals=${ctx.stats.plannedHeals} writes=${ctx.stats.plannedWrites} removals=${ctx.stats.plannedRemovals}`,
     );
     return;
   }
   const wrote = ctx.stats.created + ctx.stats.updated + ctx.stats.repaired + ctx.stats.healed + ctx.stats.forced;
   console.log(
-    `[seed-dataset] summary skipped=${ctx.stats.skipped} wrote=${wrote} created=${ctx.stats.created} updated=${ctx.stats.updated} repaired=${ctx.stats.repaired} healed=${ctx.stats.healed} forced=${ctx.stats.forced} ipfsPins=${ctx.stats.pinned} txs=${ctx.stats.transactions} attestations=${ctx.stats.attestations}`,
+    `[seed-dataset] summary skipped=${ctx.stats.skipped} wrote=${wrote} created=${ctx.stats.created} updated=${ctx.stats.updated} repaired=${ctx.stats.repaired} healed=${ctx.stats.healed} forced=${ctx.stats.forced} removed=${ctx.stats.removed} ipfsPins=${ctx.stats.pinned} txs=${ctx.stats.transactions} attestations=${ctx.stats.attestations}`,
+  );
+}
+
+interface UnlistedPlacement {
+  name: string;
+  anchorUID: UID;
+  pinUID: UID;
+}
+
+/**
+ * Files the lens has placed directly under a dataset anchor that the manifest no longer
+ * lists. Datasets are flat, so only direct children are checked. Folder anchors and
+ * anchors without an active placement by this lens are ignored.
+ */
+async function findUnlistedPlacements(
+  ctx: SeedContext,
+  datasetRootUID: UID,
+  manifest: DatasetManifest,
+): Promise<UnlistedPlacement[]> {
+  const listed = new Set(manifest.files.map(entry => path.posix.basename(entry.path)));
+  const count = Number(await ctx.indexer.getChildrenCount(datasetRootUID));
+  const unlisted: UnlistedPlacement[] = [];
+  for (let start = 0; start < count; start += CHILD_PAGE) {
+    const children = (await ctx.indexer.getChildren(datasetRootUID, start, CHILD_PAGE, false, false)) as UID[];
+    for (const anchorUID of children) {
+      const attestation = (await ctx.eas.getAttestation(anchorUID)) as { data: string };
+      const [name, anchorSchema] = ABI.decode(["string", "bytes32"], attestation.data) as unknown as [string, string];
+      if (anchorSchema.toLowerCase() !== ctx.schemas.data.toLowerCase() || listed.has(name)) continue;
+      const pinUID = (await ctx.edgeResolver.getActivePin(anchorUID, ctx.signerAddress, ctx.schemas.data)) as UID;
+      if (isZeroUID(pinUID)) continue;
+      unlisted.push({ name, anchorUID, pinUID });
+    }
+  }
+  return unlisted;
+}
+
+function reportUnlisted(
+  ctx: SeedContext,
+  manifest: DatasetManifest,
+  unlisted: UnlistedPlacement[],
+  opts: { prune: boolean; mode: "plan" | "execute" },
+): void {
+  for (const item of unlisted) {
+    if (opts.prune) {
+      if (opts.mode === "plan") {
+        ctx.stats.plannedRemovals += 1;
+        console.log(`  plan remove ${item.name} (placed under ${manifest.anchorPath}, not in manifest)`);
+      }
+    } else {
+      console.log(
+        `  warn ${item.name} is placed under ${manifest.anchorPath} but not in manifest (pass --prune to remove it)`,
+      );
+    }
+  }
+}
+
+/**
+ * Removes files by revoking this lens's placement PINs, in one `multiRevoke`. The DATA,
+ * MIRROR and PROPERTYs stay on-chain (non-revocable by design); the file just stops being
+ * at its path for this lens. WHITEOUT (ADR-0055) isn't needed: it masks LOWER lenses, and
+ * the curator is the only lens publishing these datasets.
+ */
+async function revokePlacements(ctx: SeedContext, unlisted: UnlistedPlacement[], dataset: string): Promise<void> {
+  const data = ctx.eas.interface.encodeFunctionData("multiRevoke", [
+    [{ schema: ctx.schemas.pin, data: unlisted.map(item => ({ uid: item.pinUID, value: 0n })) }],
+  ]);
+  const tx = await ctx.signer.sendTransaction({ to: await ctx.eas.getAddress(), data });
+  const receipt = await tx.wait();
+  ctx.stats.transactions += 1;
+  ctx.stats.removed += unlisted.length;
+  console.log(
+    `  tx   remove:${dataset} hash=${tx.hash ?? "unknown"} status=${receipt?.status ?? "unknown"} revoked=${unlisted.length} (${unlisted.map(i => i.name).join(", ")})`,
   );
 }
 
@@ -800,9 +969,8 @@ async function uidsFromTx(
   return uids;
 }
 
-async function pinFileToIpfs(apiBase: string, filePath: string, filename: string): Promise<string> {
+async function pinFileToIpfs(apiBase: string, bytes: Buffer, filename: string): Promise<string> {
   const url = buildIpfsAddUrl(apiBase);
-  const stat = statSync(filePath);
   const boundary = `efs-seed-${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}`;
   const safeFilename = filename.replace(/"/g, "");
   const head = Buffer.from(
@@ -811,7 +979,7 @@ async function pinFileToIpfs(apiBase: string, filePath: string, filename: string
       "Content-Type: application/octet-stream\r\n\r\n",
   );
   const tail = Buffer.from(`\r\n--${boundary}--\r\n`);
-  const contentLength = head.length + stat.size + tail.length;
+  const contentLength = head.length + bytes.length + tail.length;
   const client = url.protocol === "https:" ? https : http;
 
   const body = await new Promise<string>((resolve, reject) => {
@@ -839,10 +1007,8 @@ async function pinFileToIpfs(apiBase: string, filePath: string, filename: string
     );
     req.on("error", reject);
     req.write(head);
-    const stream = createReadStream(filePath);
-    stream.on("error", reject);
-    stream.on("end", () => req.end(tail));
-    stream.pipe(req, { end: false });
+    req.write(bytes);
+    req.end(tail);
   });
 
   return parseKuboAddResponse(body);
