@@ -2122,7 +2122,7 @@ export const FileBrowser = ({
                 />
               ) : fileContentType === "application/pdf" && pdfPreviewable ? (
                 // Deliberately NOT sandboxed — the one exception to the ADR-0056
-                // sandboxed-iframe rule (see docs/decisions.md 2026-10-26).
+                // sandboxed-iframe rule (ADR-0069).
                 // Chromium refuses to start its PDF viewer in ANY sandboxed frame
                 // (no token re-enables it), so a sandbox here just renders blank.
                 // Isolation still holds: the blob is typed exactly
