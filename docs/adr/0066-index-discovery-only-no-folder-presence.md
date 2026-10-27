@@ -1,6 +1,6 @@
 # ADR-0066: `index()` is discovery-only — folder presence is placement-driven
 
-**Status:** Accepted
+**Status:** Accepted. **Status note 2026-10-27 (Status-line amendment per `docs/adr/README.md`; body unedited):** discovery-only `index()` is implemented on `main` but **not live on Sepolia** — the EFSIndexer proxy still runs the freeze-time implementation (readback in `docs/CHAINS.md`).
 **Date:** 2026-06-23
 **Permanence-tier:** Etched (kernel index semantics — `EFSIndexer` is non-redeployable; the rule constrains what permissionless callers can write into the append-only contributor index)
 **Related:** PR #37, ADR-0009 (append-only indices), ADR-0010 (sticky `_containsAttestations`), ADR-0038 (tag-only folder visibility), ADR-0055 (WHITEOUT), ADR-0065 (anchor depth)

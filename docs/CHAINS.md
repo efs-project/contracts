@@ -55,7 +55,9 @@ kernel/resolvers, not these addresses — see `docs/FUTURE_WORK.md`.)
 | EFSRouter | `0x44D5F6803127B442218e9aA0481A9931444dc82c` |
 | ListReader | `0xCc182611B572b5C162a3D96674E821C61ac658FC` |
 
-### Additive features not deployed here
+### Changes on main not yet live here
+
+The Sepolia contracts predate several changes merged to `main` after the 2026-06-19 freeze.
 
 **WHITEOUT (ADR-0055) — implemented in source and tested; NOT deployed on Sepolia.** Do not treat
 WHITEOUT as available on this chain because its ABI exists. Deploying it is a separate owner decision
@@ -67,6 +69,19 @@ WHITEOUT as available on this chain because its ABI exists. Deploying it is a se
 | SchemaRegistry `getSchema` for the UID that deploy would register, `0xfccce2f853d5c6a0435292b7ae113b175b3939c821042a59618405c5ca0e541d` (`""`, that resolver, revocable) | not registered |
 | `whiteoutResolver()` on the EFSRouter and EFSFileView above (and on the pre-2026-06-23 views) | reverts — these views predate WHITEOUT wiring, so no whiteout terminal is applied on Sepolia |
 | `packages/hardhat/deployments/sepolia/WhiteoutResolver.json`, Sepolia `WhiteoutResolver` in `deployedContracts.ts` | absent |
+
+**EFSIndexer implementation — predates ADR-0065/0068 and ADR-0066.** The live proxy still runs the
+freeze-time implementation; the upgrade carrying these two changes was never executed:
+
+| Behavior | `main` | Live on Sepolia |
+|---|---|---|
+| `MAX_ANCHOR_DEPTH` (ADR-0068) | 256 | **32** (`MAX_ANCHOR_DEPTH()` readback 2026-10-27) |
+| `index()` / `indexBatch()` (ADR-0066) | discovery-only: no folder-presence propagation | **still propagates** folder presence (`_containsAttestations` / `_childrenByAttester`) for any indexed attestation |
+
+Storage layout is unchanged (`test/StorageLayout.gate.test.ts`), so the upgrade is a logic-only
+`upgradeAndCall` through the Safe-owned ProxyAdmin. Order matters if WHITEOUT is deployed too:
+upgrade the indexer **first**, or `index()` on a WHITEOUT attestation could mark a folder as present
+(the exact case ADR-0066 closes).
 
 ### Frozen schema UIDs
 
