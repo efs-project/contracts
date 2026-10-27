@@ -1,0 +1,886 @@
+{
+  "$comment": [
+    "Golden vectors for the EFS v1 canonical anchor-name encoding (contracts specs/02).",
+    "Source of truth: efs-project/sdk packages/sdk/test/fixtures/anchor-names.vectors.json.",
+    "The SDK suite checks encodeName/decodeName/asCanonicalName against this file; the contracts",
+    "suite checks EFSIndexer acceptance and EFSRouter path canonicalization against the same file.",
+    "accept[]: encodeName(input) === canonical; decodeName(canonical) === NFC(input);",
+    "  decodeURIComponent(canonical) === NFC(input). A web3:// request for decodeURIComponent(canonical)",
+    "  resolves iff decodedUrlReachable; a request for canonical itself always resolves.",
+    "reject[]: EFSIndexer and the SDK both reject canonical. sdkOnlyReject[]: SDK rejects; EFSIndexer accepts."
+  ],
+  "version": 1,
+  "accept": [
+    {
+      "input": "\u0000",
+      "canonical": "%00",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "\u0001",
+      "canonical": "%01",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "\u0002",
+      "canonical": "%02",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "\u0003",
+      "canonical": "%03",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "\u0004",
+      "canonical": "%04",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "\u0005",
+      "canonical": "%05",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "\u0006",
+      "canonical": "%06",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "\u0007",
+      "canonical": "%07",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "\b",
+      "canonical": "%08",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "\t",
+      "canonical": "%09",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "\n",
+      "canonical": "%0A",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "\u000b",
+      "canonical": "%0B",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "\f",
+      "canonical": "%0C",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "\r",
+      "canonical": "%0D",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "\u000e",
+      "canonical": "%0E",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "\u000f",
+      "canonical": "%0F",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "\u0010",
+      "canonical": "%10",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "\u0011",
+      "canonical": "%11",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "\u0012",
+      "canonical": "%12",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "\u0013",
+      "canonical": "%13",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "\u0014",
+      "canonical": "%14",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "\u0015",
+      "canonical": "%15",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "\u0016",
+      "canonical": "%16",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "\u0017",
+      "canonical": "%17",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "\u0018",
+      "canonical": "%18",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "\u0019",
+      "canonical": "%19",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "\u001a",
+      "canonical": "%1A",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "\u001b",
+      "canonical": "%1B",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "\u001c",
+      "canonical": "%1C",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "\u001d",
+      "canonical": "%1D",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "\u001e",
+      "canonical": "%1E",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "\u001f",
+      "canonical": "%1F",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": " ",
+      "canonical": "%20",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "!",
+      "canonical": "!",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "\"",
+      "canonical": "%22",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "#",
+      "canonical": "%23",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "$",
+      "canonical": "$",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "%",
+      "canonical": "%25",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "&",
+      "canonical": "%26",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "'",
+      "canonical": "'",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "(",
+      "canonical": "(",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": ")",
+      "canonical": ")",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "*",
+      "canonical": "*",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "+",
+      "canonical": "+",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": ",",
+      "canonical": ",",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "-",
+      "canonical": "-",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "/",
+      "canonical": "%2F",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "0",
+      "canonical": "0",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "1",
+      "canonical": "1",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "2",
+      "canonical": "2",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "3",
+      "canonical": "3",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "4",
+      "canonical": "4",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "5",
+      "canonical": "5",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "6",
+      "canonical": "6",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "7",
+      "canonical": "7",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "8",
+      "canonical": "8",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "9",
+      "canonical": "9",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": ":",
+      "canonical": "%3A",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": ";",
+      "canonical": ";",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "<",
+      "canonical": "<",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "=",
+      "canonical": "%3D",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": ">",
+      "canonical": ">",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "?",
+      "canonical": "%3F",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "@",
+      "canonical": "%40",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "A",
+      "canonical": "A",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "B",
+      "canonical": "B",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "C",
+      "canonical": "C",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "D",
+      "canonical": "D",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "E",
+      "canonical": "E",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "F",
+      "canonical": "F",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "G",
+      "canonical": "G",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "H",
+      "canonical": "H",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "I",
+      "canonical": "I",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "J",
+      "canonical": "J",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "K",
+      "canonical": "K",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "L",
+      "canonical": "L",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "M",
+      "canonical": "M",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "N",
+      "canonical": "N",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "O",
+      "canonical": "O",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "P",
+      "canonical": "P",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "Q",
+      "canonical": "Q",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "R",
+      "canonical": "R",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "S",
+      "canonical": "S",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "T",
+      "canonical": "T",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "U",
+      "canonical": "U",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "V",
+      "canonical": "V",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "W",
+      "canonical": "W",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "X",
+      "canonical": "X",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "Y",
+      "canonical": "Y",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "Z",
+      "canonical": "Z",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "[",
+      "canonical": "%5B",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "\\",
+      "canonical": "%5C",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "]",
+      "canonical": "%5D",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "^",
+      "canonical": "%5E",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "_",
+      "canonical": "_",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "`",
+      "canonical": "%60",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "a",
+      "canonical": "a",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "b",
+      "canonical": "b",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "c",
+      "canonical": "c",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "d",
+      "canonical": "d",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "e",
+      "canonical": "e",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "f",
+      "canonical": "f",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "g",
+      "canonical": "g",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "h",
+      "canonical": "h",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "i",
+      "canonical": "i",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "j",
+      "canonical": "j",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "k",
+      "canonical": "k",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "l",
+      "canonical": "l",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "m",
+      "canonical": "m",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "n",
+      "canonical": "n",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "o",
+      "canonical": "o",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "p",
+      "canonical": "p",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "q",
+      "canonical": "q",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "r",
+      "canonical": "r",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "s",
+      "canonical": "s",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "t",
+      "canonical": "t",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "u",
+      "canonical": "u",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "v",
+      "canonical": "v",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "w",
+      "canonical": "w",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "x",
+      "canonical": "x",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "y",
+      "canonical": "y",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "z",
+      "canonical": "z",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "{",
+      "canonical": "%7B",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "|",
+      "canonical": "%7C",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "}",
+      "canonical": "%7D",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "~",
+      "canonical": "~",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "\u007f",
+      "canonical": "%7F",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "a.b",
+      "canonical": "a.b",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": ".hidden",
+      "canonical": ".hidden",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "...",
+      "canonical": "...",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "index.html",
+      "canonical": "index.html",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "my notes.txt",
+      "canonical": "my%20notes.txt",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "a/b",
+      "canonical": "a%2Fb",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "a?b=c&d#e",
+      "canonical": "a%3Fb%3Dc%26d%23e",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "C:\\path",
+      "canonical": "C%3A%5Cpath",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "{x}|[y]^`z`",
+      "canonical": "%7Bx%7D%7C%5By%5D%5E%60z%60",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "\"quoted\"",
+      "canonical": "%22quoted%22",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "user@host",
+      "canonical": "user%40host",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "tab\there",
+      "canonical": "tab%09here",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "line\nbreak",
+      "canonical": "line%0Abreak",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "del\u007fend",
+      "canonical": "del%7Fend",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "100%",
+      "canonical": "100%25",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "%",
+      "canonical": "%25",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "%%",
+      "canonical": "%25%25",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "%41",
+      "canonical": "%2541",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "%2f",
+      "canonical": "%252f",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "%2F",
+      "canonical": "%252F",
+      "decodedUrlReachable": false
+    },
+    {
+      "input": "50%20off",
+      "canonical": "50%2520off",
+      "decodedUrlReachable": false
+    },
+    {
+      "input": "100%25",
+      "canonical": "100%2525",
+      "decodedUrlReachable": false
+    },
+    {
+      "input": "\u00e9",
+      "canonical": "\u00e9",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "caf\u00e9 menu.pdf",
+      "canonical": "caf\u00e9%20menu.pdf",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "\u65e5\u672c\u8a9e.txt",
+      "canonical": "\u65e5\u672c\u8a9e.txt",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "\ud83c\udf89",
+      "canonical": "\ud83c\udf89",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "na\u00efve/path",
+      "canonical": "na\u00efve%2Fpath",
+      "decodedUrlReachable": true
+    },
+    {
+      "input": "e\u0301",
+      "canonical": "\u00e9",
+      "decodedUrlReachable": true,
+      "note": "input is not NFC; canonical is NFC"
+    },
+    {
+      "input": "\u2126",
+      "canonical": "\u03a9",
+      "decodedUrlReachable": true,
+      "note": "input is not NFC; canonical is NFC"
+    },
+    {
+      "input": ":\u0300",
+      "canonical": "%3A\u0300",
+      "decodedUrlReachable": true
+    }
+  ],
+  "reject": [
+    {
+      "canonical": "",
+      "reason": "empty"
+    },
+    {
+      "canonical": ".",
+      "reason": "dot-segment"
+    },
+    {
+      "canonical": "..",
+      "reason": "dot-segment"
+    },
+    {
+      "canonical": "a b",
+      "reason": "bare-reserved-byte"
+    },
+    {
+      "canonical": "a/b",
+      "reason": "bare-reserved-byte"
+    },
+    {
+      "canonical": "a\u0000b",
+      "reason": "bare-reserved-byte"
+    },
+    {
+      "canonical": "%",
+      "reason": "malformed-escape"
+    },
+    {
+      "canonical": "%2",
+      "reason": "malformed-escape"
+    },
+    {
+      "canonical": "a%2",
+      "reason": "malformed-escape"
+    },
+    {
+      "canonical": "%ZZ",
+      "reason": "malformed-escape"
+    },
+    {
+      "canonical": "%G0",
+      "reason": "malformed-escape"
+    },
+    {
+      "canonical": "%2f",
+      "reason": "lowercase-escape"
+    },
+    {
+      "canonical": "%e9",
+      "reason": "lowercase-escape"
+    },
+    {
+      "canonical": "%41",
+      "reason": "over-escape"
+    },
+    {
+      "canonical": "%2E",
+      "reason": "over-escape"
+    },
+    {
+      "canonical": "%2E%2E",
+      "reason": "over-escape"
+    },
+    {
+      "canonical": "%C3%A9",
+      "reason": "over-escape"
+    },
+    {
+      "canonical": "my%20notes%2Etxt",
+      "reason": "over-escape"
+    }
+  ],
+  "sdkOnlyReject": [
+    {
+      "canonical": "e\u0301",
+      "reason": "not-nfc"
+    },
+    {
+      "canonical": "%3D\u0338",
+      "reason": "not-nfc"
+    }
+  ]
+}

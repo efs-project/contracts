@@ -1,4 +1,6 @@
 import { expect } from "chai";
+import * as fs from "fs";
+import * as path from "path";
 import { ethers } from "hardhat";
 import { setCode } from "@nomicfoundation/hardhat-network-helpers";
 import { Signer, ZeroAddress, ZeroHash } from "ethers";
@@ -1934,6 +1936,55 @@ describe("EFSRouter Web3 Capabilities", function () {
           NOT_FOUND_PATH,
         );
       }
+    });
+
+    // Shared golden vectors with the SDK's name codec (efs-project/sdk `names/segment.ts`), so the
+    // router, EFSIndexer and the SDK can't drift apart. Vendored VERBATIM from efs-project/sdk
+    // commit 78551f8, `packages/sdk/test/fixtures/anchor-names.vectors.json` (sdk PR #7). To re-sync:
+    // copy the file at the new commit, update this comment, and diff.
+    describe("shared anchor-name vectors (SDK golden file)", function () {
+      type Accept = { input: string; canonical: string; decodedUrlReachable: boolean; note?: string };
+      type Reject = { canonical: string; reason: string };
+      const vectors = JSON.parse(
+        fs.readFileSync(path.join(__dirname, "fixtures", "anchor-names.vectors.json"), "utf8"),
+      ) as { version: number; accept: Accept[]; reject: Reject[]; sdkOnlyReject: Reject[] };
+
+      it("is the format this test understands", function () {
+        expect(vectors.version).to.equal(1);
+      });
+
+      it("accept: EFSIndexer accepts `canonical`; the router finds it canonical and, when reachable, decoded", async function () {
+        // Each vector gets its own parent folder, so a decoded lookup can only hit this vector's anchor.
+        for (const [i, v] of vectors.accept.entries()) {
+          const label = `accept[${i}] ${JSON.stringify(v.input)}`;
+          const parentUID = await createFolder(ideasUID, `vec${i}`);
+          await createFolder(parentUID, v.canonical);
+
+          const [, canonBody] = await router.request(["ideas", `vec${i}`, v.canonical], ownerParams());
+          expect(Buffer.from(ethers.getBytes(canonBody)).toString(), `${label} (canonical)`).to.not.equal(
+            NOT_FOUND_PATH,
+          );
+
+          const [, decBody] = await router.request(
+            ["ideas", `vec${i}`, decodeURIComponent(v.canonical)],
+            ownerParams(),
+          );
+          const decodedFound = Buffer.from(ethers.getBytes(decBody)).toString() !== NOT_FOUND_PATH;
+          expect(decodedFound, `${label} (decoded)`).to.equal(v.decodedUrlReachable);
+        }
+      });
+
+      it("reject: EFSIndexer refuses every `canonical`", async function () {
+        for (const [i, v] of vectors.reject.entries()) {
+          await expect(createFolder(ideasUID, v.canonical), `reject[${i}] ${v.reason}`).to.be.reverted;
+        }
+      });
+
+      it("sdkOnlyReject: EFSIndexer accepts non-NFC names (it cannot check NFC — the writer must)", async function () {
+        for (const v of vectors.sdkOnlyReject) {
+          await createFolder(ideasUID, v.canonical);
+        }
+      });
     });
 
     it("keeps the next-chunk URL round-trippable for a decoded name with spaces", async function () {
