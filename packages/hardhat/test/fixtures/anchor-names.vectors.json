@@ -1,12 +1,13 @@
 {
   "$comment": [
-    "Golden vectors for the EFS v1 canonical anchor-name encoding (contracts specs/02).",
-    "Source of truth: efs-project/sdk packages/sdk/test/fixtures/anchor-names.vectors.json.",
-    "The SDK suite checks encodeName/decodeName/asCanonicalName against this file; the contracts",
-    "suite checks EFSIndexer acceptance and EFSRouter path canonicalization against the same file.",
+    "Conformance vectors for the EFS v1 canonical anchor-name encoding (contracts specs/02).",
+    "Canonical copy: efs-project/contracts packages/hardhat/test/fixtures/anchor-names.vectors.json.",
+    "Edit it there. efs-project/sdk keeps a byte-identical copy and its CI fails on any difference.",
+    "The contracts suite checks EFSIndexer acceptance and EFSRouter path canonicalization against",
+    "this file; the SDK suite checks encodeName/decodeName/asCanonicalName against it.",
     "accept[]: encodeName(input) === canonical; decodeName(canonical) === NFC(input);",
-    "  decodeURIComponent(canonical) === NFC(input). A web3:// request for decodeURIComponent(canonical)",
-    "  resolves iff decodedUrlReachable; a request for canonical itself always resolves.",
+    "  decodeURIComponent(canonical) === NFC(input). EFSRouter.request with the segment",
+    "  decodeURIComponent(canonical) resolves iff decodedUrlReachable; with canonical it always resolves.",
     "reject[]: EFSIndexer and the SDK both reject canonical. sdkOnlyReject[]: SDK rejects; EFSIndexer accepts."
   ],
   "version": 1,

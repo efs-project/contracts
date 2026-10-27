@@ -952,8 +952,9 @@ contract EFSRouter is IDecentralizedApp {
     ///      lowercase hex (`%2f`), an over-escape of an unreserved byte (`%41`), or a bare `%` —
     ///      can never appear in a canonical name except as literal text, so it is escaped to
     ///      `%25`. The one input this cannot tell apart is a decoded name that literally
-    ///      contains a canonical escape sequence (a file named `50%20off`): it resolves as
-    ///      `50 off`. NFC normalization is the writer's job (specs/02 step 1); this only redoes
+    ///      contains a canonical escape sequence: the decoded segment `50%20off` resolves to the
+    ///      file named `50 off`, so the file named `50%20off` (stored `50%2520off`) is reachable
+    ///      only via the SDK or a doubly-encoded URL (specs/02). NFC normalization is the writer's job (specs/02 step 1); this only redoes
     ///      the byte-level percent-encoding. Must stay byte-aligned with
     ///      `EFSIndexer._isReservedByte` — `test/EFSRouter.test.ts` checks every ASCII byte.
     function _canonicalAnchorName(string memory s) private pure returns (string memory) {

@@ -1938,10 +1938,9 @@ describe("EFSRouter Web3 Capabilities", function () {
       }
     });
 
-    // Shared golden vectors with the SDK's name codec (efs-project/sdk `names/segment.ts`), so the
-    // router, EFSIndexer and the SDK can't drift apart. Vendored VERBATIM from efs-project/sdk
-    // commit 78551f8, `packages/sdk/test/fixtures/anchor-names.vectors.json` (sdk PR #7). To re-sync:
-    // copy the file at the new commit, update this comment, and diff.
+    // Normative conformance vectors for the canonical anchor-name encoding (specs/02). THIS repo holds
+    // the canonical copy — edit it here. efs-project/sdk keeps a byte-identical copy that its CI checks
+    // against contracts main, and tests its encoder (`names/segment.ts`) against the same cases.
     describe("shared anchor-name vectors (SDK golden file)", function () {
       type Accept = { input: string; canonical: string; decodedUrlReachable: boolean; note?: string };
       type Reject = { canonical: string; reason: string };
@@ -1985,6 +1984,27 @@ describe("EFSRouter Web3 Capabilities", function () {
           await createFolder(ideasUID, v.canonical);
         }
       });
+    });
+
+    it("a literal escape in a human name is reached only via its doubly-encoded URL (specs/02)", async function () {
+      await placeFile(ideasUID, canonical("50 off"), "QmFiftyOff"); // stored `50%20off`
+      await placeFile(ideasUID, canonical("50%20off"), "QmLiteral"); // stored `50%2520off`
+      const ext = async (seg: string) =>
+        (await router.request(["ideas", seg], ownerParams()))[2].find((h: any) => h.key === "Content-Type")?.value;
+      // `…/50%2520off` decodes to `50%20off`, which stays an escape → the file named `50 off`.
+      expect(await ext("50%20off")).to.include('URL="ipfs://QmFiftyOff"');
+      // `…/50%252520off` decodes to `50%2520off` (already canonical) → the file named `50%20off`.
+      expect(await ext("50%2520off")).to.include('URL="ipfs://QmLiteral"');
+    });
+
+    it("does not decode a still-encoded non-ASCII segment (`caf%C3%A9` is not `café`)", async function () {
+      // Conforming web3:// clients decode before calling request(); a raw `%C3` is not a canonical
+      // escape (0xC3 is unreserved), so it is literal text → `caf%25C3%25A9`, which doesn't exist.
+      await createFolder(ideasUID, "café");
+      const [, found] = await router.request(["ideas", "café"], ownerParams());
+      expect(Buffer.from(ethers.getBytes(found)).toString()).to.not.equal(NOT_FOUND_PATH);
+      const [, body] = await router.request(["ideas", "caf%C3%A9"], ownerParams());
+      expect(Buffer.from(ethers.getBytes(body)).toString()).to.equal(NOT_FOUND_PATH);
     });
 
     it("keeps the next-chunk URL round-trippable for a decoded name with spaces", async function () {
