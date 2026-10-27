@@ -1,4 +1,4 @@
-import { sniffContent } from "./sniff.ts";
+import { looksLikePdf, sniffContent } from "./sniff.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
@@ -36,4 +36,21 @@ test("ZIP magic is binary", () => {
 });
 test("gzip magic is binary", () => {
   assert.equal(sniffContent(new Uint8Array([0x1f, 0x8b, 0x08])), "binary");
+});
+
+test("looksLikePdf accepts a %PDF- header at offset 0", () => {
+  assert.equal(looksLikePdf(enc("%PDF-1.4\n%âãÏÓ\n1 0 obj")), true);
+});
+test("looksLikePdf accepts a header after leading junk within 1024 bytes", () => {
+  assert.equal(looksLikePdf(enc(" ".repeat(500) + "%PDF-1.7")), true);
+});
+test("looksLikePdf rejects a header past the first 1024 bytes", () => {
+  assert.equal(looksLikePdf(enc(" ".repeat(1024) + "%PDF-1.7")), false);
+});
+test("looksLikePdf rejects HTML mislabeled as application/pdf", () => {
+  assert.equal(looksLikePdf(enc("<html><script>alert(1)</script></html>")), false);
+});
+test("looksLikePdf rejects empty and truncated input", () => {
+  assert.equal(looksLikePdf(new Uint8Array([])), false);
+  assert.equal(looksLikePdf(enc("%PDF")), false);
 });

@@ -24,6 +24,7 @@ import {
   TrashIcon,
   XMarkIcon,
 } from "@heroicons/react/24/outline";
+import { MarkdownView } from "~~/components/markdown/MarkdownView";
 import { useLensesDirectoryPage } from "~~/hooks/efs/useLensesDirectoryPage";
 import { useSortedData } from "~~/hooks/efs/useSortedData";
 import {
@@ -40,6 +41,8 @@ import { clearFetchFileContentCache, fetchFileContent as fetchFileContentUtil } 
 import { SORT_OVERLAY_ABI } from "~~/utils/efs/sortOverlay";
 import { TRANSPORT_LABELS } from "~~/utils/efs/transports";
 import { safeDownloadName } from "~~/utils/markdown/downloadName";
+import { MAX_RENDER_BYTES } from "~~/utils/markdown/limits";
+import { looksLikePdf, sniffContent } from "~~/utils/markdown/sniff";
 import { notification } from "~~/utils/scaffold-eth";
 
 export type DrawerTagFilterState = "neutral" | "include" | "exclude";
@@ -139,6 +142,8 @@ export const FileBrowser = ({
   currentPathNames,
   lensAddresses,
   onNavigate,
+  urlFile = null,
+  onFileSelect,
   tagFilter = "",
   drawerTagFilters = {},
   activeSortInfoUID = null,
@@ -155,6 +160,12 @@ export const FileBrowser = ({
   currentPathNames: string[];
   lensAddresses: string[];
   onNavigate: (uid: string, name: string) => void;
+  /** The file a deep link (`/explorer/<folder>/<file>`) points at. Opened in the
+   *  side preview once it shows up in this folder's listing; closed when cleared. */
+  urlFile?: { uid: string; name: string } | null;
+  /** Writes a user's file selection back to the URL: `null` = preview closed,
+   *  `replace` for gallery stepping so arrow keys don't flood history. */
+  onFileSelect?: (file: { uid: string; name: string } | null, opts?: { replace?: boolean }) => void;
   tagFilter?: string;
   drawerTagFilters?: Record<string, DrawerTagFilterState>;
   activeSortInfoUID?: string | null;
@@ -200,6 +211,23 @@ export const FileBrowser = ({
   const [fileTransportType, setFileTransportType] = useState<string>("onchain");
   const [isFileLoading, setIsFileLoading] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  // Inline PDF preview needs real PDF bytes AND a built-in viewer: without one
+  // (e.g. Android Chrome) the unsandboxed frame below would auto-download the
+  // file on select, so fall back to the binary placeholder + Download button.
+  const pdfPreviewable = useMemo(
+    () => !!fileBytes && looksLikePdf(fileBytes) && navigator.pdfViewerEnabled !== false,
+    [fileBytes],
+  );
+  // Render markdown through the same hardened, sanitized renderer as the
+  // Overview pane, with the same byte cap + text sniff gate in front of it.
+  const markdownPreviewable = useMemo(
+    () =>
+      !!fileBytes &&
+      !!fileContentType?.startsWith("text/markdown") &&
+      fileBytes.length <= MAX_RENDER_BYTES &&
+      sniffContent(fileBytes) === "text",
+    [fileBytes, fileContentType],
+  );
   const [previewFullscreen, setPreviewFullscreen] = useState(false);
   // Per-fetch page target. Constant since the lens load-more iterates the opaque
   // cursor (ADR-0036) rather than growing a page size (the old standard-path
@@ -266,7 +294,7 @@ export const FileBrowser = ({
   const { targetNetwork } = useTargetNetwork();
   const publicClient = usePublicClient({ chainId: targetNetwork.id });
   const { address: connectedAddress } = useAccount();
-  const { writeContractAsync: easWrite } = useScaffoldWriteContract("EAS");
+  const { writeContractAsync: easWrite } = useScaffoldWriteContract({ contractName: "EAS" });
 
   // On a network switch the chain-scoped tag-filter resolver state below was
   // resolved against the previous chain's Indexer/EdgeResolver. The `/tags` gate
@@ -1331,6 +1359,8 @@ export const FileBrowser = ({
     if (!openUID) return;
     const stillVisible = visibleItems.some((it: any) => (it.uid as string | undefined)?.toLowerCase() === openUID);
     if (!stillVisible) {
+      // The URL keeps naming the file, so the URL-selection effect below reopens
+      // it if a later filter change makes it visible again.
       setSelectedFile(null);
       setSelectedList(null);
       setFileContent(null);
@@ -1340,6 +1370,48 @@ export const FileBrowser = ({
       setPreviewFullscreen(false);
     }
   }, [visibleItems, selectedFile, selectedList]);
+
+  // Keep the preview in step with the URL's file (deep link, click, back/forward).
+  // ExplorerClient sets `urlFile` in the same update as a click's URL write, so
+  // there's no gap where a local selection disagrees with it — any disagreement
+  // means the URL moved (back/forward, a deep link resolving) and the preview
+  // follows. A URL file that isn't in the listing stays PENDING rather than
+  // failing (the directory hook resets on any query change, and the file may sit
+  // on a later page); meanwhile no other file's content is shown, and the
+  // not-listed banner below explains the empty preview.
+  useEffect(() => {
+    if (urlFile === undefined) return; // not URL-driven
+    const target = urlFile?.uid.toLowerCase() ?? null;
+    const selected = (selectedFile?.uid as string | undefined)?.toLowerCase() ?? null;
+    if (target === selected) return;
+    const item = target
+      ? visibleItems?.find(
+          (it: any) => isFile(it, dataSchemaUID) && (it.uid as string | undefined)?.toLowerCase() === target,
+        )
+      : undefined;
+    if (!item) {
+      if (selectedFile) {
+        fetchIdRef.current++; // drop any in-flight fetch for the old file
+        setSelectedFile(null);
+        setFileContent(null);
+        setFileBytes(null);
+        setFileContentType(null);
+        setFetchError(null);
+        setIsFileLoading(false);
+        setPreviewFullscreen(false);
+      }
+      return;
+    }
+    // `fetchFileContent` bails while the router/client reads are still loading
+    // (they resolve independently of the listing on a cold deep link); this
+    // effect re-runs when they arrive.
+    if (!efsRouter || !publicClient) return;
+    setSelectedList(null);
+    setSelectedFile(item);
+    fetchFileContent(item);
+    // `fetchFileContent` is a per-render closure; once selected, reruns are no-ops.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [urlFile, visibleItems, selectedFile, dataSchemaUID, efsRouter, publicClient]);
 
   // Keyboard handler ref — lets the useEffect stay above early returns while
   // the actual handler logic (which depends on computed values) is set later.
@@ -1417,6 +1489,7 @@ export const FileBrowser = ({
   );
 
   const closePreview = () => {
+    if (selectedFile) onFileSelect?.(null);
     setSelectedFile(null);
     setSelectedList(null);
     setFileContent(null);
@@ -1454,6 +1527,7 @@ export const FileBrowser = ({
     if (currentIdx === -1) return;
     const nextIdx = (currentIdx + direction + fileItems.length) % fileItems.length;
     const nextItem = fileItems[nextIdx];
+    onFileSelect?.(nextItem, { replace: true });
     setSelectedFile(nextItem);
     fetchFileContent(nextItem);
   };
@@ -1643,6 +1717,8 @@ export const FileBrowser = ({
     // LIST UID into setSelectedList (Codex round 2, FileBrowser.tsx:288). Re-check before
     // every state write below — same guard the /tags resolver uses.
     const gen = chainGenRef.current;
+    // Lists aren't URL-addressable; drop a previewed file from the URL.
+    if (selectedFile) onFileSelect?.(null);
     setSelectedFile(null);
     const resolvePin = (attester: `0x${string}`) =>
       publicClient.readContract({
@@ -1860,6 +1936,16 @@ export const FileBrowser = ({
   return (
     <div className="relative h-full flex flex-row">
       <div className={`${selectedFile || selectedList ? "flex-1 min-w-0" : "w-full"} overflow-y-auto`}>
+        {/* Deep-linked file not in the listing — hidden by lenses/filters, or on a later page */}
+        {urlFile &&
+          !visibleItems?.some(
+            (it: any) => (it.uid as string | undefined)?.toLowerCase() === urlFile.uid.toLowerCase(),
+          ) && (
+            <div className="mx-4 mt-2 px-3 py-2 rounded-lg bg-warning/10 border border-warning/20 text-sm">
+              &ldquo;{urlFile.name}&rdquo; isn&apos;t listed in this folder under the current lenses and filters
+              {hasMoreLenses ? " yet. Load more to keep looking." : "."}
+            </div>
+          )}
         {/* Preview sort banner — shown when no on-chain sorted data exists yet */}
         {isPreviewSort && previewSortKeys.size > 0 && (!sortedUIDs || sortedUIDs.length === 0) && (
           <div className="mx-4 mt-2 px-3 py-2 rounded-lg bg-info/10 border border-info/20 flex items-center justify-between text-sm gap-3">
@@ -1903,6 +1989,7 @@ export const FileBrowser = ({
                   onClick={() => {
                     if (isItemTopic) onNavigate(item.uid, item.name);
                     else if (isItemFile) {
+                      if (selectedFile?.uid !== item.uid) onFileSelect?.(item);
                       setSelectedFile(item);
                       fetchFileContent(item);
                     } else if (isItemList) openList(item);
@@ -1981,8 +2068,11 @@ export const FileBrowser = ({
             <div className="col-span-full text-center text-gray-500">
               {tagFilteredUIDs !== null
                 ? `No items match tag filter: "${tagFilter}"`
-                : excludeTagDefUIDs.length > 0
-                  ? "All items hidden by active exclusion filter"
+                : // Excludes apply on-chain (ADR-0054), so we can't tell an empty
+                  // topic from a fully-filtered one — and `system`/`nsfw` are
+                  // always-on defaults, so don't claim the filter hid anything.
+                  excludeTagDefUIDs.length > 0
+                  ? "Topic is empty (tag filters may be hiding some items)"
                   : "Topic is empty"}
             </div>
           )}
@@ -2014,7 +2104,7 @@ export const FileBrowser = ({
 
       {/* File Preview Side Pane */}
       {selectedFile && !previewFullscreen && (
-        <div className="preview-pane absolute inset-0 z-10 max-xl:bg-base-200 xl:static xl:w-[min(52vw,800px)] xl:flex-shrink-0 border-l border-base-300 flex flex-col overflow-hidden">
+        <div className="preview-pane absolute inset-0 z-10 max-xl:bg-base-200 xl:static xl:w-[min(65%,800px)] xl:flex-shrink-0 border-l border-base-300 flex flex-col overflow-hidden">
           <div className="flex items-center justify-between px-4 py-3 border-b border-base-300 shrink-0">
             <div className="flex items-center gap-2 min-w-0">
               {fileItems.length > 1 && (
@@ -2097,22 +2187,21 @@ export const FileBrowser = ({
                   className="max-w-full max-h-full w-auto h-auto object-contain rounded cursor-pointer mx-auto"
                   onClick={() => setPreviewFullscreen(true)}
                 />
-              ) : fileContentType === "application/pdf" ? (
-                // Untrusted PDF bytes from a mirror, served through a blob: URL —
-                // which would otherwise inherit the app's origin. Sandbox it for
-                // the same reason as the HTML preview below: `allow-scripts` keeps
-                // the browser's PDF viewer (incl. pdf.js, which needs JS) working,
-                // but OMITTING `allow-same-origin` pins the frame to an opaque
-                // origin so embedded PDF JS can't reach the parent app's DOM /
-                // cookies / storage. A spoofed contentType only mislabels which
-                // viewer renders here; it can't escalate to a same-origin script.
+              ) : fileContentType === "application/pdf" && pdfPreviewable ? (
+                // Deliberately NOT sandboxed — the one exception to the ADR-0056
+                // sandboxed-iframe rule (ADR-0069).
+                // Chromium refuses to start its PDF viewer in ANY sandboxed frame
+                // (no token re-enables it), so a sandbox here just renders blank.
+                // Isolation still holds: the blob is typed exactly
+                // `application/pdf`, so the browser hands it to its built-in
+                // viewer, which runs PDF content in its own isolated context and
+                // never as a document in the app's origin; and `pdfPreviewable`
+                // requires a real `%PDF-` header, so mislabeled bytes never get here.
                 <iframe
-                  sandbox="allow-scripts"
                   src={fileContent}
                   title={selectedFile.name}
-                  className="w-full rounded cursor-pointer"
+                  className="w-full rounded"
                   style={{ height: "60vh" }}
-                  onClick={() => setPreviewFullscreen(true)}
                 />
               ) : fileContentType?.startsWith("video/") ? (
                 <video
@@ -2126,6 +2215,8 @@ export const FileBrowser = ({
                 />
               ) : fileContentType?.startsWith("audio/") ? (
                 <audio src={fileContent} controls className="w-full" />
+              ) : markdownPreviewable ? (
+                <MarkdownView source={fileContent} idPrefix="user-content-preview-" />
               ) : fileContentType?.startsWith("text/html") || fileContentType === "application/xhtml+xml" ? (
                 // Untrusted HTML from a mirror. `allow-scripts` runs JS + WASM, but
                 // we deliberately OMIT `allow-same-origin`: that pairing lets the
@@ -2257,11 +2348,9 @@ export const FileBrowser = ({
                     alt={selectedFile.name}
                     className="max-w-[90vw] max-h-[85vh] object-contain"
                   />
-                ) : fileContentType === "application/pdf" ? (
-                  // Untrusted PDF bytes via blob: URL — sandboxed to an opaque
-                  // origin (allow-scripts, no allow-same-origin), same as inline.
+                ) : fileContentType === "application/pdf" && pdfPreviewable ? (
+                  // Unsandboxed for the same reason as the inline PDF preview above.
                   <iframe
-                    sandbox="allow-scripts"
                     src={fileContent}
                     title={selectedFile.name}
                     className="rounded"
@@ -2271,6 +2360,10 @@ export const FileBrowser = ({
                   <video src={fileContent} controls className="max-w-[90vw] max-h-[85vh] object-contain" />
                 ) : fileContentType?.startsWith("audio/") ? (
                   <audio src={fileContent} controls className="w-[60vw]" />
+                ) : markdownPreviewable ? (
+                  <div className="bg-base-100 rounded-lg p-6 overflow-auto" style={{ width: "90vw", height: "85vh" }}>
+                    <MarkdownView source={fileContent} idPrefix="user-content-preview-" />
+                  </div>
                 ) : fileContentType?.startsWith("text/html") || fileContentType === "application/xhtml+xml" ? (
                   // Untrusted HTML — runs JS + WASM via allow-scripts, but no
                   // allow-same-origin (opaque origin; can't reach the parent app).
