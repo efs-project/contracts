@@ -4,9 +4,10 @@
  * DevnetBanner — a floating toast-style banner pinned to the top center of the
  * viewport, surfacing "this is not mainnet".
  *
- * Rendered conditionally on `NEXT_PUBLIC_DEVNET_BANNER`. Unset = nothing renders
- * (local dev default). Set to any non-empty string = banner is shown, using that
- * string as the banner message. Typical devnet build:
+ * Message configured by `NEXT_PUBLIC_DEVNET_BANNER`. Unset = nothing renders
+ * (local dev default). Set to any non-empty string = the banner can be shown on
+ * the active Devnet chain, using that string as the banner message. Typical
+ * devnet build:
  *
  *   NEXT_PUBLIC_DEVNET_BANNER="EFS Devnet — resets weekly. Data is ephemeral."
  *
@@ -21,11 +22,14 @@
  */
 import { useEffect, useState } from "react";
 import { ExclamationTriangleIcon, XMarkIcon } from "@heroicons/react/24/outline";
+import { useTargetNetwork } from "~~/hooks/scaffold-eth";
+import { shouldShowDevnetBanner } from "~~/utils/scaffold-eth/devnetBanner";
 
 const DISMISS_KEY = "efs.devnetBanner.dismissed";
 
 export const DevnetBanner = () => {
   const message = process.env.NEXT_PUBLIC_DEVNET_BANNER;
+  const { targetNetwork } = useTargetNetwork();
   const [dismissed, setDismissed] = useState(true); // start hidden to avoid flash on unset builds
 
   useEffect(() => {
@@ -38,7 +42,7 @@ export const DevnetBanner = () => {
     }
   }, [message]);
 
-  if (!message || dismissed) return null;
+  if (!shouldShowDevnetBanner({ chainId: targetNetwork.id, dismissed, message })) return null;
 
   const onDismiss = () => {
     try {

@@ -1,6 +1,7 @@
 import { expect } from "chai";
 import { ethers } from "hardhat";
 import { EFSIndexer, EdgeResolver, EFSFileView } from "../typechain-types";
+import { canonicalContentHash } from "../deploy-lib/contentHash";
 
 /**
  * EFS File Browser Simulation
@@ -153,7 +154,7 @@ async function main() {
   // the DATA payload. Attaching it as a PROPERTY is future PROPERTY/SDK work.
   /** Create a standalone DATA attestation (empty per ADR-0049, non-revocable, standalone) */
   const createData = async (signer: any, content: string) => {
-    const contentHash = ethers.keccak256(ethers.toUtf8Bytes(content));
+    const contentHash = canonicalContentHash(content); // specs/10 form, never a bare 0x digest
     const tx = await eas.connect(signer).attest({
       schema: dataSchemaUID,
       data: {
@@ -802,7 +803,7 @@ async function main() {
   // (ADR-0049) — computed locally and attached as PROPERTY strings, not authenticated identity.
   const reservedValues: Record<string, string> = {
     name: "My Reserved File.txt",
-    contentHash: ethers.keccak256(ethers.toUtf8Bytes("reserved-key-property-bytes")),
+    contentHash: canonicalContentHash("reserved-key-property-bytes"),
     size: "27", // bytes; stored as a decimal string PROPERTY value
   };
 

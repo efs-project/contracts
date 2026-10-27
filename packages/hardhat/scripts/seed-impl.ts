@@ -50,6 +50,7 @@
 
 import { ethers, getNamedAccounts } from "hardhat";
 import { EFSIndexer } from "../typechain-types";
+import { canonicalContentHash, contentSize } from "../deploy-lib/contentHash";
 
 export async function seedDemoTree() {
   const { deployer } = await getNamedAccounts();
@@ -164,8 +165,12 @@ export async function seedDemoTree() {
 
   // AGENT-NOTE: DATA is an empty schema — pure identity (ADR-0049). It carries no inline fields;
   // contentHash/size are reserved-key PROPERTYs bound to the DATA UID, not part of the DATA
-  // attestation. Attaching them as PROPERTYs in the seed is future PROPERTY/SDK work — the seed
-  // currently mints empty DATA only.
+  // attestation. The seed binds them ONLY where it controls the served bytes — the on-chain
+  // READMEs (`makeOnchainReadmeIfMissing`), whose store holds exactly `content`. Placeholder-
+  // mirror files (`makeFileIfMissing`, https to demo hosts) deliberately get NO contentHash:
+  // `content` there is a label, not the bytes the host serves, so a hash of it would read back
+  // as `mismatch`. They read as `no-claim` instead (the SDK's fail-closed `readText` throws
+  // `MissingContentHash` for them — use `read`, which returns the bytes with that status).
   /** Create a standalone DATA attestation (ADR-0002: refUID=0x0, non-revocable; empty per ADR-0049). */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const makeData = async (signer: any, content: string): Promise<string> => {
@@ -418,6 +423,11 @@ export async function seedDemoTree() {
     // is reachable as a directory item yet (nothing points at this path slot).
     const dataUID = await makeData(signer, content);
     await makeProperty(signer, dataUID, "contentType", "text/markdown");
+    // The store below serves exactly utf8(content), so these claims are truthful — and
+    // without a contentHash the SDK's fail-closed reads (`readText`) refuse the file.
+    // Canonical specs/10 form, never a bare `0x…` digest (permanent; reads as malformed).
+    await makeProperty(signer, dataUID, "contentHash", canonicalContentHash(content));
+    await makeProperty(signer, dataUID, "size", contentSize(content));
     const onchainURI = await deployOnchainMirrorURI(signer, content);
     await makeMirror(signer, dataUID, onchainTransportUID, onchainURI);
     // Tag the DATA system BEFORE placement so the README is never reachable while

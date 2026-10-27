@@ -157,6 +157,9 @@ function initSpecs(
     ListResolver: { fn: "initialize", args: [] },
     ListEntryResolver: { fn: "initialize", args: [schemaUIDs.LIST] },
     AliasResolver: { fn: "initialize", args: [schemaUIDs.DATA, schemaUIDs.ANCHOR] },
+    // WhiteoutResolver (ADR-0055): read-only kernel ref. It self-derives its WHITEOUT schema UID +
+    // snapshots ANCHOR_SCHEMA_UID from the indexer in initialize(); no kernel writes, no Ownable.
+    WhiteoutResolver: { fn: "initialize", args: [proxies.EFSIndexer] },
     // SystemAccount: born Safe-owned so the Safe (its owner) can author the scaffolding in Batch 2.
     SystemAccount: { fn: "initialize", args: [safe] },
   };
@@ -467,6 +470,123 @@ export async function buildSafePlan(deployer: Signer, safe: string, log = true):
   };
 }
 
+// ── Additive resolver deploy (ADR-0055 — adding WHITEOUT to a LIVE core) ──────────────────────────────
+//
+// The documented additive post-freeze case: the original frozen core (the 9 schemas on the 6 core
+// resolvers) is ALREADY live on Sepolia, and only a later-appended resolver (WhiteoutResolver, or any
+// future additive primitive) + its schema are missing. There is no full-core redeploy: we deploy ONLY
+// the missing resolver proxies (born Safe-owned, same CreateX path Batch 1 uses) and register ONLY their
+// schemas. None of the core ceremony (wireContracts / bootstrap / seal / setTransportsAnchor) re-runs —
+// an additive resolver is self-contained (WhiteoutResolver's initialize(indexer) only READS the live
+// kernel; its WHITEOUT schema has no scaffolding dependency). This is exactly how the local/devnet path
+// (deploy/08_whiteout.ts) already handles it; this is its Safe-native counterpart.
+
+/// The additive deploy plan: deploy + register ONLY the named missing resolvers. Two batches mirroring
+/// the fresh split — Batch A1 = CreateX proxy deploys (atomic init, born Safe-owned); Batch A2 = register
+/// the missing resolvers' schemas. No core ceremony. `impls` holds ONLY the missing resolvers' impls
+/// (deployed from the EOA, content-addressed, in no UID). `registersOmitted` counts schema registers
+/// dropped because the schema was already registered (idempotent re-run after Batch A2 landed).
+export interface AdditivePlan {
+  resolvers: ResolverName[];
+  impls: Record<string, string>;
+  batchA1: SafeCall[];
+  batchA2: SafeCall[];
+  registersOmitted: number;
+}
+
+/// Ensure the impls for ONLY the named additive resolvers exist on-chain (EOA, CreateX CREATE2,
+/// content-addressed, in no UID) — the resolver-scoped sibling of `ensureImpls`. Idempotent + crash-safe
+/// (reuses an impl already on-chain; converges on a concurrent-deploy "address taken" revert).
+async function ensureImplsFor(
+  deployer: Signer,
+  resolvers: ResolverName[],
+  log = true,
+): Promise<Record<string, string>> {
+  const l = (...a: unknown[]) => log && console.log(...a);
+  const createx = await getCreateX(deployer);
+  const deployerAddr = await deployer.getAddress();
+  const impls: Record<string, string> = {};
+  for (const name of resolvers) {
+    const { rawSalt, initCode, predicted } = await predictImplAddress(createx, deployerAddr, name);
+    if ((await ethers.provider.getCode(predicted)) !== "0x") {
+      l(`  ${name} impl: ${predicted} (reused — already on-chain)`);
+      impls[name] = predicted;
+      continue;
+    }
+    try {
+      const tx = await createx["deployCreate2(bytes32,bytes)"](rawSalt, initCode);
+      await tx.wait();
+      l(`  ${name} impl: ${predicted} (deployed)`);
+    } catch (e) {
+      if ((await ethers.provider.getCode(predicted)) === "0x") throw e;
+      l(`  ${name} impl: ${predicted} (converged — deployed by a concurrent run)`);
+    }
+    if ((await ethers.provider.getCode(predicted)) === "0x") {
+      throw new Error(`CREATE2 ${name}: no code at predicted impl ${predicted} after deployCreate2`);
+    }
+    impls[name] = predicted;
+  }
+  return impls;
+}
+
+/// Build the additive deploy plan for the named missing resolvers against a LIVE core. Predicts (reuses)
+/// the impl-free `predicted` plan, deploys ONLY the missing resolvers' impls, assembles Batch A1
+/// (CreateX proxy deploys, atomic init, born Safe-owned) + Batch A2 (register only the missing
+/// resolvers' schemas, idempotency-omitting any already registered). Throws if `resolvers` is empty
+/// (caller must gate on `detectMissingResolvers`).
+export async function buildAdditivePlan(
+  deployer: Signer,
+  predicted: PredictedPlan,
+  resolvers: ResolverName[],
+  log = true,
+): Promise<AdditivePlan> {
+  const l = (...a: unknown[]) => log && console.log(...a);
+  if (resolvers.length === 0) throw new Error("buildAdditivePlan: no additive resolvers (caller must gate)");
+  const { safe, proxies, schemaUIDs } = predicted;
+  const createx = await getCreateX(deployer);
+  const registryAddr = SCHEMA_REGISTRY_ADDRESS;
+
+  l(`Safe-native deploy (additive): deploying ${resolvers.length} missing resolver(s): [${resolvers.join(", ")}]`);
+  const impls = await ensureImplsFor(deployer, resolvers, log);
+  const specs = initSpecs(safe, proxies, schemaUIDs, registryAddr);
+
+  // ── Batch A1: CreateX proxy deploys (atomic init, born Safe-owned) for the missing resolvers only ──
+  const batchA1: SafeCall[] = [];
+  for (const name of resolvers) {
+    const implIface = (await ethers.getContractFactory(name, deployer)).interface;
+    const initCalldata = implIface.encodeFunctionData(specs[name].fn, specs[name].args);
+    // initialOwner of the proxy (→ its ProxyAdmin owner) = the SAFE: born-owned, exactly like Batch 1.
+    const proxyInitCode = await buildProxyInitCode(impls[name], safe, initCalldata);
+    const data = CREATEX_IFACE.encodeFunctionData("deployCreate3", [predicted.rawSalts[name], proxyInitCode]);
+    batchA1.push({ to: await createx.getAddress(), data, label: `deployCreate3 ${name} (additive)` });
+  }
+
+  // ── Batch A2: register ONLY the missing resolvers' schemas (idempotency-omit already-registered) ──
+  const batchA2: SafeCall[] = [];
+  const registryIface = new Interface([
+    "function register(string schema, address resolver, bool revocable) returns (bytes32)",
+  ]);
+  const registry = await ethers.getContractAt(
+    "@ethereum-attestation-service/eas-contracts/contracts/ISchemaRegistry.sol:ISchemaRegistry",
+    registryAddr,
+    deployer,
+  );
+  const additiveSchemas = SCHEMAS.filter(s => resolvers.includes(s.resolver));
+  let registersOmitted = 0;
+  for (const s of additiveSchemas) {
+    const existing = await registry.getSchema(schemaUIDs[s.name]);
+    if (existing.uid !== ZeroHash) {
+      registersOmitted++;
+      l(`  register ${s.name} OMITTED — already registered (${schemaUIDs[s.name]})`);
+      continue;
+    }
+    const data = registryIface.encodeFunctionData("register", [s.fieldString, proxies[s.resolver], s.revocable]);
+    batchA2.push({ to: registryAddr, data, label: `register ${s.name} (additive)` });
+  }
+
+  return { resolvers, impls, batchA1, batchA2, registersOmitted };
+}
+
 /// The deploy phase of a (Safe-keyed) EFS system, derived from the SAME on-chain signals the execute
 /// path reads (proxy code present; schema registered via SchemaRegistry.getSchema; bootstrapSealed();
 /// MirrorResolver.transportsAnchorUID()). PR #24 P1: the propose path computes this to emit ONLY the
@@ -477,6 +597,23 @@ export async function buildSafePlan(deployer: Signer, safe: string, log = true):
 ///   3 — transports wired (system complete)                  → next: nothing (clean no-op)
 export type DeployPhase = 0 | 1 | 2 | 3;
 
+/// Detect the resolvers in the canonical set whose Safe-keyed proxy has NO on-chain code while the core
+/// EFSIndexer IS live (ADR-0055 additive post-freeze case). On a FRESH deploy all proxies land atomically
+/// in Batch 1, so this is empty for an in-progress fresh deploy. It is non-empty ONLY in the documented
+/// additive case: the original frozen core is already live on-chain and a later-appended resolver
+/// (WhiteoutResolver / any future additive primitive) is the only thing missing. Caller MUST have already
+/// confirmed the EFSIndexer proxy has code (i.e. NOT Phase 0) — a fresh chain has no core to be additive
+/// against. Read-only.
+export async function detectMissingResolvers(deployer: Signer, plan: PredictedPlan): Promise<ResolverName[]> {
+  void deployer;
+  const missing: ResolverName[] = [];
+  for (const r of RESOLVERS) {
+    if (r === "EFSIndexer") continue; // the kernel; its presence is the precondition, not a candidate.
+    if ((await ethers.provider.getCode(plan.proxies[r])) === "0x") missing.push(r);
+  }
+  return missing;
+}
+
 /// Detect the current deploy phase of `plan`'s Safe-keyed system from on-chain state. Reuses the exact
 /// detection signals the execute path keys off (orchestrateSafe.ts): EFSIndexer proxy code presence
 /// (all 7 proxies deploy atomically in Batch 1 — indexer code ⇒ Batch 1 landed), every schema's
@@ -485,19 +622,31 @@ export type DeployPhase = 0 | 1 | 2 | 3;
 /// yet registered" — Batch 2's per-leg omits (batch2RegistersOmitted / batch2BootstrapOmitted, resolved
 /// in buildSafePlan) handle a partially-landed Batch 2 so re-emitting Batch 2 only proposes the
 /// remaining register/bootstrap/seal legs, never a duplicate of an already-landed leg.
+///
+/// ADDITIVE-AWARE (ADR-0055): a schema only forces Phase 1 if ITS RESOLVER PROXY IS DEPLOYED but the
+/// schema isn't registered (a genuinely incomplete fresh-deploy Batch 2). A schema whose resolver proxy
+/// has NO code is the additive post-freeze case (the core is already live; a later-appended resolver +
+/// its schema were never deployed) — that is handled by the dedicated additive step (deploy the missing
+/// resolver + register only its schema), NOT by treating the complete core as a fresh Phase-1 deploy. So
+/// on a live core where only WhiteoutResolver is missing, the core phase correctly resolves to 3
+/// (sealed + transports wired) and `detectMissingResolvers` drives the additive deploy.
 export async function detectDeployPhase(deployer: Signer, plan: PredictedPlan): Promise<DeployPhase> {
   // Phase 0 — proxies not deployed. Key off EFSIndexer (all 7 proxies land atomically in Batch 1).
   const indexerCode = await ethers.provider.getCode(plan.proxies.EFSIndexer);
   if (indexerCode === "0x") return 0;
 
-  // Phase 1 — proxies live but not all 9 schemas registered yet. EAS register is not idempotent, so a
-  // single missing registration means Batch 2's register legs (minus the per-leg omits) are still owed.
+  // Phase 1 — proxies live but not all of their schemas registered yet. EAS register is not idempotent,
+  // so a single missing registration (for a schema whose resolver proxy IS deployed) means Batch 2's
+  // register legs (minus the per-leg omits) are still owed. A schema whose resolver proxy is ABSENT is
+  // the additive case — skipped here, handled by the additive step — so it never masquerades as a
+  // fresh-deploy Phase 1 on an already-complete core.
   const registry = await ethers.getContractAt(
     "@ethereum-attestation-service/eas-contracts/contracts/ISchemaRegistry.sol:ISchemaRegistry",
     SCHEMA_REGISTRY_ADDRESS,
     deployer,
   );
   for (const s of SCHEMAS) {
+    if ((await ethers.provider.getCode(plan.proxies[s.resolver])) === "0x") continue; // additive — not a Phase-1 owe
     const existing = await registry.getSchema(plan.schemaUIDs[s.name]);
     if (existing.uid === ZeroHash) return 1;
   }

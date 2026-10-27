@@ -43,6 +43,32 @@ export const getAlchemyHttpUrl = (chainId: number) => {
     : undefined;
 };
 
+function hasExplicitRpcOverride(chainRpcUrls: readonly string[]): boolean {
+  const explicitUrls = [
+    process.env.NEXT_PUBLIC_SEPOLIA_RPC_URL,
+    process.env.NEXT_PUBLIC_DEVNET_RPC_URL,
+    process.env.NEXT_PUBLIC_HARDHAT_RPC_URL,
+  ]
+    .map(url => url?.trim())
+    .filter((url): url is string => !!url);
+
+  return chainRpcUrls.some(url => explicitUrls.includes(url));
+}
+
+/**
+ * The order the app tries a chain's RPC endpoints in, shared by wagmi reads and the burner
+ * wallet's writes so the two can never disagree. An explicit NEXT_PUBLIC_*_RPC_URL override
+ * goes first; otherwise Alchemy goes ahead of the chain's public default RPCs, because those
+ * rot (viem's Sepolia default, sepolia.drpc.org, now rejects keyless traffic with HTTP 400, so
+ * scaffold.config.ts replaces it with SEPOLIA_PUBLIC_RPC_URLS).
+ */
+export function getPreferredRpcUrls(chain: chains.Chain): readonly string[] {
+  const chainRpcUrls = chain.rpcUrls.default.http;
+  const alchemyUrl = getAlchemyHttpUrl(chain.id);
+  const ordered = hasExplicitRpcOverride(chainRpcUrls) ? [...chainRpcUrls, alchemyUrl] : [alchemyUrl, ...chainRpcUrls];
+  return [...new Set(ordered.filter((url): url is string => !!url))];
+}
+
 export const NETWORKS_EXTRA_DATA: Record<string, ChainAttributes> = {
   [chains.hardhat.id]: {
     color: "#b8af0c",

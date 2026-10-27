@@ -152,6 +152,7 @@ const deployEfsCore: DeployFunction = async function (hre: HardhatRuntimeEnviron
         ListResolver: "ListResolver",
         ListEntryResolver: "ListEntryResolver",
         AliasResolver: "AliasResolver",
+        WhiteoutResolver: "WhiteoutResolver",
       };
       for (const [name, resolver] of Object.entries(proposeSaveAs)) {
         const artifact = await hre.deployments.getArtifact(resolver);
@@ -180,6 +181,7 @@ const deployEfsCore: DeployFunction = async function (hre: HardhatRuntimeEnviron
     ListResolver: "ListResolver",
     ListEntryResolver: "ListEntryResolver",
     AliasResolver: "AliasResolver",
+    WhiteoutResolver: "WhiteoutResolver",
   };
   for (const [name, resolver] of Object.entries(saveAs)) {
     const artifact = await hre.deployments.getArtifact(resolver);

@@ -1,4 +1,4 @@
-import { Chain } from "viem";
+import type { Chain } from "viem";
 
 /**
  * Human-facing name for the EFS environments, keyed off the CHAIN ID (ADR-0062). Each environment

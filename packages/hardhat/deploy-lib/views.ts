@@ -3,7 +3,7 @@
 // The three stateless read views — EFSFileView, EFSRouter, ListReader — are in NO schema UID and are
 // freely redeployable (docs/DEPLOYMENT.md §0, specs/overview.md "Core contracts"). On a CreateX
 // network (Sepolia/mainnet/pinned fork) `yarn deploy:efs` (the EFSCore tag → deploy/00_efs_core.ts)
-// stands up the frozen foundation (6 CREATE3 proxies + 9 registered schemas) but deploys NONE of the
+// stands up the frozen foundation (7 CREATE3 proxies + 10 registered schemas) but deploys NONE of the
 // views. This module is the single source for the views on those networks: the operator runs it AFTER
 // the freeze ceremony via `yarn deploy:efs-views`.
 //
@@ -44,6 +44,21 @@ export async function deployViews(hre: HardhatRuntimeEnvironment): Promise<Views
   const indexerDep = await getOrNull("Indexer");
   const edgeDep = await getOrNull("EdgeResolver");
   const listEntryDep = await getOrNull("ListEntryResolver");
+  // WhiteoutResolver (ADR-0055) — saved by 00_efs_core.ts. The views only wire to it when it has CODE
+  // on-chain; otherwise they pass ZeroAddress (whiteout disabled) and keep their exact prior behavior.
+  // Two cases that yield ZeroAddress:
+  //   (1) an older core deploy (pre-WHITEOUT) never saved the record;
+  //   (2) the Safe-native ADDITIVE PROPOSE flow: 00_efs_core.ts saves the PREDICTED WhiteoutResolver
+  //       record BEFORE the Safe batch deploys it, so the record exists but the address is code-less.
+  // Wiring the views to a non-contract address would make every `isWhitedOut()` revert and break
+  // listings/resolution until the views were redeployed (PR #37 review). The `getCode` guard treats an
+  // undeployed prediction as "not present yet"; once the additive deploy lands, re-running efs-views
+  // rewires the views (redeployIfArgsChanged sees the whiteoutAddr arg change 0 → real).
+  const whiteoutDep = await getOrNull("WhiteoutResolver");
+  let whiteoutAddr = ethers.ZeroAddress;
+  if (whiteoutDep?.address && (await ethers.provider.getCode(whiteoutDep.address)) !== "0x") {
+    whiteoutAddr = whiteoutDep.address;
+  }
   if (!indexerDep || !edgeDep || !listEntryDep) {
     throw new Error(
       "[efs-views] frozen foundation not found — the EFS core proxies (Indexer/EdgeResolver/" +
@@ -73,8 +88,10 @@ export async function deployViews(hre: HardhatRuntimeEnvironment): Promise<Views
     schemaRegistryAddress = SCHEMA_REGISTRY_ADDRESS;
   }
 
-  // ── EFSFileView(indexerProxy, edgeResolverProxy) ────────────────────────────────────────────
-  const fileViewArgs = [indexerDep.address, edgeDep.address];
+  // ── EFSFileView(indexerProxy, edgeResolverProxy, whiteoutResolverProxy) ──────────────────────
+  // ADR-0055: the 3rd arg is the WhiteoutResolver proxy (cross-lens negative mask). ZeroAddress
+  // disables the negative-mask predicate (older core without WHITEOUT).
+  const fileViewArgs = [indexerDep.address, edgeDep.address, whiteoutAddr];
   await redeployIfArgsChanged(hre, "EFSFileView", fileViewArgs);
   await deploy("EFSFileView", { from: deployer, args: fileViewArgs, log: true, autoMine: true });
   const fileView = await ethers.getContract<Contract>("EFSFileView", deployer);
@@ -92,6 +109,7 @@ export async function deployViews(hre: HardhatRuntimeEnvironment): Promise<Views
     schemaRegistryAddress,
     dataSchemaUID,
     systemAccountAddr,
+    whiteoutAddr, // ADR-0055: cross-lens negative mask (ZeroAddress = disabled).
   ];
   await redeployIfArgsChanged(hre, "EFSRouter", routerArgs);
   await deploy("EFSRouter", { from: deployer, args: routerArgs, log: true, autoMine: true });

@@ -76,7 +76,7 @@ export const PropertiesModal = ({ uid, onClose }: PropertiesModalProps) => {
     },
   });
 
-  const { writeContractAsync: attest } = useScaffoldWriteContract("EAS");
+  const { writeContractAsync: attest } = useScaffoldWriteContract({ contractName: "EAS" });
 
   const handleAddProperty = async () => {
     if (!anchorSchemaUID || !propertySchemaUID || !edgeResolverAddress || !pinSchemaUID || !publicClient) return;

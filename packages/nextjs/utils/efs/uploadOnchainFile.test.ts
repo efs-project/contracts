@@ -78,6 +78,9 @@ function attestedLog(schema: `0x${string}`, mintedUID: `0x${string}`) {
   };
 }
 
+/** A canonical specs/10 contentHash — `f1220` + 64 lowercase hex (sha2-256). */
+const CANONICAL_HASH = `f1220${"ab".repeat(32)}`;
+
 test("createExternalFileReference batches a pasted IPFS link with metadata and no storage deploys", async () => {
   const events: string[] = [];
   const readCalls: { functionName: string; args?: readonly unknown[] }[] = [];
@@ -128,7 +131,7 @@ test("createExternalFileReference batches a pasted IPFS link with metadata and n
     mirrorUri: "ipfs://bafybeigdyrzt/example",
     transportName: "ipfs",
     contentType: "text/markdown",
-    contentHash: uid(99),
+    contentHash: CANONICAL_HASH,
     fileSize: 123n,
     parentAnchorUID,
     fileAnchorRefUID: zero,
@@ -184,7 +187,7 @@ test("createExternalFileReference batches a pasted IPFS link with metadata and n
     .filter(request => request.schema === propertySchemaUID)
     .flatMap(request => request.data)
     .map(({ data }) => decodeAbiParameters([{ name: "value", type: "string" }], data)[0]);
-  assert.deepEqual(propertyValues, ["text/markdown", uid(99), "123"]);
+  assert.deepEqual(propertyValues, ["text/markdown", CANONICAL_HASH, "123"]);
 
   const commitStart = events.indexOf("canCancel:false");
   const firstCommitWrite = events.findIndex(event => event === `write:${anchorSchemaUID}:1`);
@@ -907,5 +910,66 @@ test("uploadOnchainFile ancestor walk stops at a synthetic address-root parent",
     .flat()
     .filter(r => r.schema === tagSchemaUID)
     .reduce((n, r) => n + r.data.length, 0);
-  assert.equal(tagCount, 1, "ancestor walk must emit exactly one TAG (real folder) and stop before the synthetic address root");
+  assert.equal(
+    tagCount,
+    1,
+    "ancestor walk must emit exactly one TAG (real folder) and stop before the synthetic address root",
+  );
+});
+
+test("createExternalFileReference refuses a NON-canonical contentHash before writing anything", async () => {
+  // PROPERTY values are non-revocable, so a bare `0x…` digest (the pre-specs/10 form,
+  // which readers report as `malformed-claim`) would be a permanent broken claim.
+  let wrote = false;
+  const walletClient = {
+    account: { address: account },
+    chain: { id: 31337 },
+    writeContract: async () => {
+      wrote = true;
+      return tx(1);
+    },
+  };
+  const publicClient = {
+    readContract: async ({ functionName, args }: { functionName: string; args?: readonly unknown[] }) => {
+      if (functionName === "rootAnchorUID") return rootUID;
+      if (functionName === "resolvePath") {
+        if (args?.[0] === rootUID && args?.[1] === "transports") return transportsUID;
+        if (args?.[0] === transportsUID && args?.[1] === "ipfs") return ipfsTransportUID;
+      }
+      if (functionName === "resolveAnchor") return zero;
+      throw new Error(`unexpected readContract call: ${functionName}`);
+    },
+    waitForTransactionReceipt: async () => ({ status: "success", logs: [] }),
+  };
+  for (const bad of [uid(99), "0x" + "7e".repeat(32), "F1220" + "AB".repeat(32), "f1220ab"]) {
+    await assert.rejects(
+      createExternalFileReference({
+        name: "bad.md",
+        mirrorUri: "ipfs://bafybeigdyrzt/example",
+        transportName: "ipfs",
+        contentType: "text/markdown",
+        contentHash: bad,
+        fileSize: 1n,
+        parentAnchorUID,
+        fileAnchorRefUID: zero,
+        fileAnchorRecipient: account,
+        walletClient: walletClient as any,
+        publicClient: publicClient as any,
+        chainId: 31337,
+        easAddress,
+        indexerAddress,
+        indexerAbi: [],
+        anchorSchemaUID,
+        dataSchemaUID,
+        propertySchemaUID,
+        pinSchemaUID,
+        tagSchemaUID,
+        mirrorSchemaUID,
+        edgeResolverAddress,
+        edgeResolverAbi: [],
+      }),
+      /canonical multihash/,
+    );
+  }
+  assert.equal(wrote, false, "nothing may be written for a malformed claim");
 });

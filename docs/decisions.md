@@ -8,6 +8,15 @@ Informal dated log of small decisions agents made while working. Lighter than AD
 
 ---
 
+### 2026-10-26 — [claude-opus-5.5 · dev] PDF preview is the one unsandboxed render frame (ADR-0069)
+
+James chose this over pdf.js-in-a-sandbox and over dropping inline preview. Chromium never starts its
+PDF viewer in a sandboxed iframe (no token re-enables it), so the June sandbox (`61afaee`) blanked every
+PDF in the explorer. The PDF frame is now unsandboxed; isolation comes from the browser's viewer, which
+runs PDF content outside the app's origin. Two guards: the blob is typed exactly `application/pdf`, and
+the preview only renders when the bytes carry a real `%PDF-` header (`looksLikePdf`) and
+`navigator.pdfViewerEnabled` is not false. HTML previews stay sandboxed. Formalized as ADR-0069.
+
 ### 2026-06-22 — [claude-opus-4.8 · dev] Activated the `data:` inline-mirror transport (ADR-0063)
 
 James greenlit activating `data:`. Seeded `data` as the 12th default `/transports/*` child in the
@@ -178,4 +187,6 @@ The production EFS Client (Vite/Lit) lives at https://github.com/efs-project/cli
 
 - 2026-05-05: Renamed "editions" feature to "lenses." See ADR-0043. Pre-launch clean break, no URL aliases. Each trusted attester is a lens; the ordered list is your lenses. Includes one-time in-place terminology refresh of accepted ADRs (substance preserved).
 
-- 2026-06-21: Debug-UI default network keys off the build type (NODE_ENV), not an always-hardhat default. `next dev` (development) → hardhat (paired with the local `yarn preview` fork); `next build` static SPA (production) → Sepolia (a deployed SPA has no local node, and the live chain works with the shared scaffold Alchemy key — no dedicated RPC required). `NEXT_PUBLIC_TARGET_CHAIN` remains an explicit override that always wins (e.g. a prod build pointed at a VPS hardhat-fork sets it to `hardhat`). Supersedes the prior "unset → hardhat" default, whose premise (the only production build was the VPS hardhat-fork export) no longer holds now that the public SPA targets Sepolia. Also: the explorer's "Loading System..." gate now shows an unreachable-network message + switch hint after a 12s grace period instead of hanging indefinitely. [claude-opus-4.8]
+- 2026-06-21: Debug-UI default network keys off the build type (NODE_ENV), not an always-hardhat default. `next dev` (development) → hardhat (paired with the local `yarn preview` fork); `next build` static SPA (production) → Sepolia (a deployed SPA has no local node, and the live chain works with the shared scaffold Alchemy key — no dedicated RPC required). `NEXT_PUBLIC_TARGET_CHAIN` remains an explicit override except for the 2026-06-24 Devnet production guard below. Supersedes the prior "unset → hardhat" default, whose premise (the only production build was the VPS hardhat-fork export) no longer holds now that the public SPA targets Sepolia. Also: the explorer's "Loading System..." gate now shows an unreachable-network message + switch hint after a 12s grace period instead of hanging indefinitely. [claude-opus-4.8]
+
+- 2026-06-24: Public static exports stay Sepolia-first even if an old publish env still sets `NEXT_PUBLIC_TARGET_CHAIN=devnet`; production Devnet-first builds must also set `NEXT_PUBLIC_ALLOW_DEVNET_DEFAULT=true`. The network preference key moved from `efs.targetNetworkId` to `efs.targetNetworkPreference.v2`, and legacy `efs.targetNetworkId=26001993` is ignored on startup so the bad Devnet-first public build does not pin existing browsers to Devnet. Explicit current selections still persist. [codex-gpt-5]

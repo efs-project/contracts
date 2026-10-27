@@ -51,8 +51,11 @@ async function main() {
   const aliasResolver = (await ethers.getContract("AliasResolver", deployer)) as unknown as AliasResolver;
   const listReader = (await ethers.getContract("ListReader", deployer)) as unknown as ListReader;
 
-  // The live resolver-proxy address baked into each schema's UID, keyed by the schemas.ts ResolverName.
-  const proxies: Record<ResolverName, string> = {
+  // The live resolver-proxy address baked into each FROZEN-NINE schema's UID, keyed by the schemas.ts
+  // ResolverName. WhiteoutResolver (the additive post-freeze WHITEOUT schema, ADR-0055) is NOT part of
+  // this frozen-nine conformance check, so it is intentionally absent — the loop below filters to
+  // `frozenNine`, which never indexes it. Hence a Partial map.
+  const proxies: Partial<Record<ResolverName, string>> = {
     EFSIndexer: await indexer.getAddress(),
     EdgeResolver: await (await ethers.getContract("EdgeResolver", deployer)).getAddress(),
     MirrorResolver: await (await ethers.getContract("MirrorResolver", deployer)).getAddress(),
@@ -87,13 +90,17 @@ async function main() {
     registryAddr,
   )) as any;
 
-  assert("freeze set has exactly 9 schemas (schemas.ts)", SCHEMAS.length === 9, `got ${SCHEMAS.length}`);
+  // The FROZEN nine (ADR-0048) are the schemas NOT on the WhiteoutResolver — WHITEOUT (ADR-0055) is an
+  // additive post-freeze schema on a separate proxy, so it is excluded from the frozen-nine conformance
+  // check (it has its own self-UID getter asserted in the deploy verify gate, not here).
+  const frozenNine = SCHEMAS.filter(s => s.resolver !== "WhiteoutResolver");
+  assert("freeze set has exactly 9 schemas (schemas.ts)", frozenNine.length === 9, `got ${frozenNine.length}`);
 
   const seen = new Map<string, string>(); // uid -> schema name (distinctness check)
 
-  for (const s of SCHEMAS) {
+  for (const s of frozenNine) {
     console.log(`\n── ${s.name} ──`);
-    const computed = computeSchemaUID(s.fieldString, proxies[s.resolver], s.revocable);
+    const computed = computeSchemaUID(s.fieldString, proxies[s.resolver]!, s.revocable);
     const onChain = await liveUID[s.name]();
 
     // 1. on-chain self-derived UID == off-chain golden recomputation.
@@ -112,7 +119,7 @@ async function main() {
     assert(`${s.name}: registered in EAS registry`, rec.uid.toLowerCase() === onChain.toLowerCase(), rec.uid);
     assert(
       `${s.name}: registry resolver == ${s.resolver} proxy`,
-      rec.resolver.toLowerCase() === proxies[s.resolver].toLowerCase(),
+      rec.resolver.toLowerCase() === proxies[s.resolver]!.toLowerCase(),
       rec.resolver,
     );
     assert(`${s.name}: registry revocable == ${s.revocable}`, rec.revocable === s.revocable, String(rec.revocable));

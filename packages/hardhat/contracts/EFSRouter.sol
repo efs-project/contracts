@@ -58,6 +58,10 @@ interface IEFSIndexer {
 
     function isRevoked(bytes32 uid) external view returns (bool);
 
+    /// @notice The parent anchor of `anchorUID` (ADR-0055 whiteout key: a whiteout on a file anchor
+    ///         keys on (parent, fileAnchor)). Returns bytes32(0) for root / unknown.
+    function getParent(bytes32 anchorUID) external view returns (bytes32);
+
     function DATA_SCHEMA_UID() external view returns (bytes32);
     function MIRROR_SCHEMA_UID() external view returns (bytes32);
     function PROPERTY_SCHEMA_UID() external view returns (bytes32);
@@ -73,6 +77,26 @@ interface IEdgeResolverForRouter {
         address attester,
         bytes32 targetSchema
     ) external view returns (bytes32);
+
+    /// @notice Lens-aware, TAG-specific: true iff ANY of `attesters` has an active TAG on
+    ///         (targetID, definition). One SLOAD per attester. Used for folder-visibility checks
+    ///         (ADR-0038): folder visibility is TAG-only — `TAG(definition=dataSchemaUID, refUID=folder)`.
+    ///         Mirrors `EFSFileView._isItemWhitedOutForListing`'s positive terminal so a deep-link walk
+    ///         treats a re-asserted folder visibility TAG as a traversal positive (ADR-0055 folder-fix).
+    function hasActiveTagFromAny(
+        bytes32 targetID,
+        bytes32 definition,
+        address[] calldata attesters
+    ) external view returns (bool);
+}
+
+/// @notice Minimal read view over the WhiteoutResolver (ADR-0055) for the router's negative terminal.
+///         `address(0)` ⇒ whiteout disabled: the lens scan never calls it and serves exactly as
+///         before WHITEOUT existed (pre-WHITEOUT router redeploys / harnesses that don't wire one).
+interface IWhiteoutResolverForRouter {
+    /// @notice True iff `attester` has an ACTIVE whiteout suppressing `child` under `parent`.
+    ///         See `WhiteoutResolver.isWhitedOut`.
+    function isWhitedOut(bytes32 parent, address attester, bytes32 child) external view returns (bool);
 }
 
 interface IEAS {
@@ -98,6 +122,12 @@ contract EFSRouter is IDecentralizedApp {
     IEdgeResolverForRouter public edgeResolver;
     ISchemaRegistry public schemaRegistry;
     bytes32 public dataSchemaUID;
+
+    /// @notice The WhiteoutResolver (proxy) for the cross-lens negative mask (ADR-0055). The router is
+    ///         redeployable (in no schema UID), so this is a constructor arg, not a frozen wire.
+    ///         `address(0)` ⇒ whiteout disabled: the lens scan serves exactly as before WHITEOUT
+    ///         existed (pre-WHITEOUT router redeploys + tests that don't wire one keep prior behavior).
+    IWhiteoutResolverForRouter public whiteoutResolver;
 
     /// @notice The SystemAccount (ADR-0053) — the neutral, code-governed `system` lens. Used as
     ///         the tail of the default-lens chain (ADR-0039): when no `?lenses=` is given, content
@@ -125,13 +155,16 @@ contract EFSRouter is IDecentralizedApp {
         address _edgeResolver,
         address _schemaRegistry,
         bytes32 _dataSchemaUID,
-        address _systemAccount
+        address _systemAccount,
+        address _whiteoutResolver
     ) {
         indexer = IEFSIndexer(_indexer);
         eas = IEAS(_eas);
         edgeResolver = IEdgeResolverForRouter(_edgeResolver);
         schemaRegistry = ISchemaRegistry(_schemaRegistry);
         dataSchemaUID = _dataSchemaUID;
+        // ADR-0055: the cross-lens negative mask. Zero = disabled (pre-WHITEOUT router / tests).
+        whiteoutResolver = IWhiteoutResolverForRouter(_whiteoutResolver);
         // ADR-0053: the default-lens fallback points at SystemAccount, not the deployer EOA. Falls
         // back to indexer.DEPLOYER() only if a zero address is passed (pre-ADR-0053 deploys / tests
         // that don't wire a SystemAccount), preserving the old behavior in that degenerate case.
@@ -213,6 +246,48 @@ contract EFSRouter is IDecentralizedApp {
         //    the JSON fallback below still serves raw EAS info for either case.
         (ContainerFlavor flavor, bytes32 rawUID) = _classifyTopLevel(resource[0]);
 
+        // Parse params (lenses / caller / chunk) + apply the address-default lens block before the
+        // segment walk. The data-resolution path below reads the same `lenses`.
+        address[] memory lenses;
+        bool lensesExplicit = false;
+        address caller = msg.sender; // non-zero if web3:// client sets `from` on eth_call
+        string memory chunkIndexStr = "";
+        for (uint i = 0; i < params.length; i++) {
+            if (_stringsEqual(params[i].key, "lenses")) {
+                lenses = _parseAddressList(params[i].value);
+                lensesExplicit = true;
+            } else if (_stringsEqual(params[i].key, "chunk")) {
+                chunkIndexStr = params[i].value;
+            } else if (_stringsEqual(params[i].key, "caller")) {
+                address[] memory parsed = _parseAddressList(params[i].value);
+                if (parsed.length > 0) caller = parsed[0];
+            }
+        }
+
+        // Address-default lenses: when browsing an address container with no explicit `?lenses=`,
+        // default to `[caller, segmentAddr, system]` (matches the data-resolution comment below).
+        if (flavor == ContainerFlavor.Address && !lensesExplicit) {
+            address segmentAddr = address(uint160(uint256(rawUID)));
+            address sys = _systemLens();
+            if (caller != address(0) && caller != segmentAddr) {
+                lenses = new address[](3);
+                lenses[0] = caller;
+                lenses[1] = segmentAddr;
+                lenses[2] = sys;
+            } else {
+                lenses = new address[](2);
+                lenses[0] = segmentAddr;
+                lenses[1] = sys;
+            }
+        }
+
+        // Build the effective lens stack ONCE (ADR-0031/0039/0053) and reuse it for both the
+        // per-segment deep-link whiteout terminal in the walk below and the final-target DATA read
+        // (`_findDataAtPath`). Computing it here — rather than recomputing a possibly-different stack
+        // inside `_findDataAtPath` — keeps the deep-link 404 (spec/04) and the leaf read on the exact
+        // same lens precedence (ADR-0055). An empty stack (viewer removed every lens) means no data.
+        address[] memory effLenses = _effectiveLenses(lenses, caller, lensesExplicit);
+
         bytes32 currentParent;
         bytes32 targetAnchor;
         uint256 startIdx;
@@ -233,6 +308,22 @@ contract EFSRouter is IDecentralizedApp {
             currentParent = aliasUID != bytes32(0) ? aliasUID : rawUID;
             targetAnchor = currentParent;
             startIdx = 1;
+
+            // ADR-0055 deep-link terminal for the ALIAS seed. The loop below starts at startIdx=1 and
+            // never checks segment 0 (the alias anchor). When an alias is used AND there are deeper
+            // segments, the alias is an INTERMEDIATE folder — apply the same per-segment whiteout terminal
+            // (parent = root, child = aliasUID) so a viewer who whiteouts a schema/attestation alias anchor
+            // 404s a deep link `/0x<uid>/child.txt` instead of descending through the whited alias into
+            // lower-lens content. Only when an alias was actually used (a raw-UID seed is not a tree anchor,
+            // so there is nothing to whiteout); the bare-alias leaf (resource.length == 1) follows the
+            // loop's leaf rule and stays PIN-gated via `_findDataAtPath` below.
+            if (
+                aliasUID != bytes32(0) &&
+                resource.length > 1 &&
+                _isSegmentWhitedOut(indexer.rootAnchorUID(), aliasUID, effLenses)
+            ) {
+                return (404, bytes("Not Found: Path does not exist"), new KeyValue[](0));
+            }
         }
 
         for (uint i = startIdx; i < resource.length; i++) {
@@ -250,51 +341,34 @@ contract EFSRouter is IDecentralizedApp {
             if (targetAnchor == bytes32(0)) {
                 return (404, bytes("Not Found: Path does not exist"), new KeyValue[](0));
             }
+
+            // ADR-0055 deep-link terminal (spec/04): apply the per-name whiteout terminal to each
+            // INTERMEDIATE (non-leaf) segment against the SAME effective lens stack — so a deep link
+            // into a whited-out folder (e.g. a viewer whiteouts `/dir`; `GET /dir/child.txt`) 404s
+            // instead of resolving a lower lens's content. Checked against (currentParent = the
+            // segment's parent, targetAnchor = the just-resolved child) BEFORE descending.
+            //
+            // Intermediate folder segments use the LISTING positive (PIN OR folder visibility TAG) —
+            // a folder is made visible by a TAG, not a placement PIN (ADR-0038; upload emits
+            // `TAG(definition=dataSchemaUID, refUID=folder)`). So a lens that whiteouts an inherited
+            // folder then RE-ADDS it (uploading its own child re-emits the folder's visibility TAG)
+            // makes the folder traversable again for that lens — exactly matching
+            // `EFSFileView._isItemWhitedOutForListing`. The LEAF is deliberately excluded here: its
+            // DATA resolution stays PIN-only, gated by `_findDataAtPath` below (a folder visibility
+            // TAG must NOT un-gate a direct DATA read — overlayfs lookup semantics). Cost is
+            // O(segments × lenses), bounded (MAX_LENSES ≤ 20); zero when whiteout is disabled.
+            if (i != resource.length - 1 && _isSegmentWhitedOut(currentParent, targetAnchor, effLenses)) {
+                return (404, bytes("Not Found: Path does not exist"), new KeyValue[](0));
+            }
+
             currentParent = targetAnchor;
         }
 
-        // Combine parameter checks
-        address[] memory lenses;
-        bool lensesExplicit = false;
-        address caller = msg.sender; // non-zero if web3:// client sets `from` on eth_call
-        string memory chunkIndexStr = "";
-        for (uint i = 0; i < params.length; i++) {
-            if (
-                _stringsEqual(params[i].key, "lenses")
-            ) {
-                lenses = _parseAddressList(params[i].value);
-                lensesExplicit = true;
-            } else if (_stringsEqual(params[i].key, "chunk")) {
-                chunkIndexStr = params[i].value;
-            } else if (_stringsEqual(params[i].key, "caller")) {
-                address[] memory parsed = _parseAddressList(params[i].value);
-                if (parsed.length > 0) caller = parsed[0];
-            }
-        }
-
-        // Address-default lenses: when browsing an address container with no explicit
-        // `?lenses=`, default to `[caller, segmentAddr, system]` — "Vitalik's files, with my
-        // overrides on top, then the system defaults". Consistent with ADR-0031 (explicit lenses always
-        // override). The `system` tail (ADR-0053/0039) is what every other container flavor gets via the
-        // `_findDataAtPath` fallback; including it here keeps address browsing from silently losing the
-        // canonical SystemAccount defaults. Explicit `?lenses=` still bypasses this block entirely.
-        if (flavor == ContainerFlavor.Address && !lensesExplicit) {
-            address segmentAddr = address(uint160(uint256(rawUID)));
-            address sys = _systemLens();
-            if (caller != address(0) && caller != segmentAddr) {
-                lenses = new address[](3);
-                lenses[0] = caller;
-                lenses[1] = segmentAddr;
-                lenses[2] = sys;
-            } else {
-                lenses = new address[](2);
-                lenses[0] = segmentAddr;
-                lenses[1] = sys;
-            }
-        }
-
-        // 2. Find DATA via TAG query: resolve lenses → TAG → DATA → MIRROR
-        (bytes32 dataUID, address dataAttester) = _findDataAtPath(targetAnchor, lenses, caller, lensesExplicit);
+        // 2. Find DATA via TAG query: resolve lenses → TAG → DATA → MIRROR. An empty effective stack
+        //    (viewer removed every lens) returns (0,0) → falls into the no-data branch below, which
+        //    still serves the raw schema/attestation JSON fallback for a bare container (resource
+        //    length 1), preserving pre-whiteout behavior.
+        (bytes32 dataUID, address dataAttester) = _findDataAtPath(targetAnchor, effLenses);
         if (dataUID == bytes32(0)) {
             // Schema/Attestation containers with no DATA attached fall back to raw-info JSON
             // instead of 404. Only fires when the user typed the container itself (no sub-path)
@@ -1012,25 +1086,24 @@ contract EFSRouter is IDecentralizedApp {
     // removed every lens, including system, so we must return no data — never silently fall
     // back to caller/system). Without this flag an empty `?lenses=` would be indistinguishable
     // from an absent one, violating viewer sovereignty.
-    function _findDataAtPath(
-        bytes32 targetAnchor,
+    /// @dev Build the effective attester stack from the parsed `lenses` + caller fallback (ADR-0031 /
+    ///      ADR-0039 / ADR-0053). Returns an EMPTY array when the user supplied an explicit `?lenses=`
+    ///      that parsed to zero valid lenses (every lens, including system, removed): no data, no
+    ///      fallback (viewer sovereignty).
+    function _effectiveLenses(
         address[] memory lenses,
         address caller,
         bool lensesExplicit
-    ) private view returns (bytes32, address) {
-        bytes32 dataSchema = indexer.DATA_SCHEMA_UID();
-        address systemLens = _systemLens();
-
-        address[] memory attesters;
+    ) private view returns (address[] memory attesters) {
         if (lenses.length > 0) {
-            attesters = lenses;
-        } else if (lensesExplicit) {
-            // User supplied `?lenses=` but it parsed to zero valid lenses — every lens
-            // (including the system default) has been removed. Return no data rather than
-            // falling back to caller/system.
-            return (bytes32(0), address(0));
-        } else if (caller != address(0)) {
-            // Try caller first, then the system lens as fallback
+            return lenses;
+        }
+        if (lensesExplicit) {
+            // Explicit `?lenses=` that parsed to zero valid lenses — viewer removed every lens.
+            return new address[](0);
+        }
+        address systemLens = _systemLens();
+        if (caller != address(0)) {
             attesters = new address[](2);
             attesters[0] = caller;
             attesters[1] = systemLens;
@@ -1038,17 +1111,104 @@ contract EFSRouter is IDecentralizedApp {
             attesters = new address[](1);
             attesters[0] = systemLens;
         }
+    }
+
+    /// @dev DATA resolution at a single (already path-resolved) anchor over a PRECOMPUTED effective
+    ///      lens stack (`attesters`). The caller (`request`) builds the stack once via
+    ///      `_effectiveLenses` and reuses it for BOTH the per-segment deep-link whiteout terminal
+    ///      and this final-target read, so the two never diverge (ADR-0055 spec/04: a deep link into
+    ///      a whited folder 404s on the SAME stack the leaf read uses). An empty stack means the
+    ///      viewer removed all lenses → no data (viewer sovereignty), so the caller returns early.
+    function _findDataAtPath(
+        bytes32 targetAnchor,
+        address[] memory attesters
+    ) private view returns (bytes32, address) {
+        // Empty stack — the viewer removed all lenses → no data (viewer sovereignty). Returning (0,0)
+        // here lets the caller still serve the raw schema/attestation JSON fallback for a bare
+        // container (resource length 1), matching pre-whiteout behavior.
+        if (attesters.length == 0) return (bytes32(0), address(0));
+        bytes32 dataSchema = indexer.DATA_SCHEMA_UID();
 
         // File placement is Shape A — a file Anchor holds at most one DATA per attester.
         // Read the active PIN's target in O(1); skip attesters with an empty slot.
         // (Per ADR-0041 the cardinality lives in the schema UID itself.)
+        //
+        // ADR-0055 negative terminal: within each lens, in precedence order, check the POSITIVE
+        // placement PIN FIRST, then the WHITEOUT. (1) A positive PIN serves that lens's DATA (existing
+        // behavior; same-lens positive-before-whiteout override). (2) Otherwise, if the lens has an
+        // ACTIVE whiteout on this anchor, that is a negative terminal: serve empty (the router's
+        // existing not-found path → 404) and STOP — no fall-through to lower lenses, no system gap-fill.
+        // A whiteout by Lk is transparent to any lens ABOVE Lk because a higher lens's positive PIN
+        // (or its own whiteout) terminates the scan first. `whiteoutResolver == 0` ⇒ skip the whiteout
+        // read entirely (disabled).
+        IWhiteoutResolverForRouter wr = whiteoutResolver;
+        bytes32 parentAnchor = address(wr) != address(0) ? indexer.getParent(targetAnchor) : bytes32(0);
         for (uint256 i = 0; i < attesters.length; i++) {
             bytes32 target = edgeResolver.getActivePinTarget(targetAnchor, attesters[i], dataSchema);
-            if (target == bytes32(0)) continue;
-            return (target, attesters[i]);
+            if (target != bytes32(0)) return (target, attesters[i]);
+            // Negative terminal: this lens masks the path. Stop — serve empty, no fall-through.
+            if (address(wr) != address(0) && wr.isWhitedOut(parentAnchor, attesters[i], targetAnchor)) {
+                return (bytes32(0), address(0));
+            }
         }
 
         return (bytes32(0), address(0));
+    }
+
+    /// @dev Single-element-array wrapper for `edgeResolver.hasActiveTagFromAny` (which takes an
+    ///      `address[] calldata`). The intermediate-folder traversal terminal needs a TAG check scoped
+    ///      to ONE lens at a time (precedence-ordered same-lens override), but EdgeResolver only exposes
+    ///      the lens-aware ANY-of-many form — and it is FROZEN-by-UID (its address is hashed into the
+    ///      PIN/TAG schema UIDs), so we cannot add a single-lens getter there. Wrapping the lens in a
+    ///      1-element memory array reuses the frozen reader without touching it (ADR-0055 folder-fix);
+    ///      mirrors `EFSFileView._one`.
+    function _one(address lens) private pure returns (address[] memory arr) {
+        arr = new address[](1);
+        arr[0] = lens;
+    }
+
+    /// @dev INTERMEDIATE-FOLDER per-name whiteout terminal (ADR-0055), for the per-SEGMENT deep-link
+    ///      walk on NON-LEAF segments. Shaped identically to `EFSFileView._isItemWhitedOutForListing`:
+    ///      its positive terminal is a file placement PIN OR a folder VISIBILITY TAG
+    ///      (`TAG(definition=dataSchemaUID, refUID=folder)`, ADR-0038) — folders are made visible by a
+    ///      TAG, not a placement PIN, so a lens that whiteouts an inherited folder then RE-ADDS it (its
+    ///      own child upload re-emits the folder's visibility TAG) makes the folder traversable again
+    ///      for that lens (THE FOLDER RE-ADD FIX). The leaf is NOT routed through here — its DATA read
+    ///      stays PIN-only in `_findDataAtPath` (a folder TAG must not un-gate a direct DATA read).
+    ///      Returns true iff, walking `attesters` in precedence order, some lens whites out
+    ///      `childAnchor` under `parentAnchor` with no higher-precedence lens asserting a positive
+    ///      (PIN or visibility TAG) there first:
+    ///        - the FIRST lens with a positive (file PIN OR folder visibility TAG) at `childAnchor` ⇒
+    ///          traversable, return false (same-lens positive-before-whiteout; a higher lens's positive
+    ///          is transparent to a lower lens's whiteout — spec/04 deep-link case);
+    ///        - else if that lens has an ACTIVE whiteout on `childAnchor` ⇒ negative terminal, return
+    ///          true (stop fall-through — the deep link 404s);
+    ///        - else continue to the next (lower) lens.
+    ///      `whiteoutResolver == 0` (disabled) short-circuits to false before any read — a pre-WHITEOUT
+    ///      router redeploy keeps its exact prior traversal behavior (zero cost when disabled).
+    function _isSegmentWhitedOut(
+        bytes32 parentAnchor,
+        bytes32 childAnchor,
+        address[] memory attesters
+    ) private view returns (bool) {
+        IWhiteoutResolverForRouter wr = whiteoutResolver;
+        if (address(wr) == address(0)) return false;
+        bytes32 dataSchema = indexer.DATA_SCHEMA_UID();
+        for (uint256 i = 0; i < attesters.length; i++) {
+            address lens = attesters[i];
+            // Positive terminal: this lens places its own content here (file PIN) OR re-asserts the
+            // folder's visibility (TAG, ADR-0038) → traversable, stop. The visibility TAG is the
+            // folder re-add fix — listing-positive parity with EFSFileView._isItemWhitedOutForListing.
+            if (
+                edgeResolver.getActivePinTarget(childAnchor, lens, dataSchema) != bytes32(0) ||
+                edgeResolver.hasActiveTagFromAny(childAnchor, dataSchema, _one(lens))
+            ) {
+                return false;
+            }
+            // Negative terminal: this lens whites the segment out → 404, stop (no fall-through).
+            if (wr.isWhitedOut(parentAnchor, lens, childAnchor)) return true;
+        }
+        return false; // no lens asserted a positive or a whiteout → transparent.
     }
 
     // Get the best mirror URI for a DATA attestation, scoped to the lens attester.

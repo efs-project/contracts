@@ -308,19 +308,20 @@ export function buildRouterPathNames(
 }
 
 /**
- * Devnet bootstrap curator address — included in the default `system` fallback
- * tier so fresh users see seeded content before any web-of-trust is configured.
- * Devnet-only; the mainnet build replaces this with a user-configurable seed
- * list (see ADR-0039 and `docs/FUTURE_WORK.md`).
+ * EFS content account included in the default fallback lens list so fresh users
+ * see the buildathon datasets before configuring trust.
+ */
+export const EFS_CONTENT_LENS = "0x11CbE1b619bb9fe79e2F4C22c9A62412b3E79912" as const;
+
+/**
+ * Legacy devnet bootstrap curator address. Retained for historical fixtures /
+ * explicit-lens testing; it is no longer part of the default lens chain.
  */
 export const DEVNET_BOOTSTRAP_CURATOR = "0xaCf4C2950107eF9b1C37faA1F9a866C8F0da88b9" as const;
 
 /**
- * Devnet dev/demo attester (James Carnley's dev account). Included in the
- * default `system` fallback tier alongside the bootstrap curator so live-demo
- * attestations from this account are visible to fresh viewers without having
- * to specify `?lenses=`. Devnet-only; same mainnet replacement path as
- * `DEVNET_BOOTSTRAP_CURATOR`.
+ * Legacy devnet dev/demo attester. Retained for historical fixtures /
+ * explicit-lens testing; it is no longer part of the default lens chain.
  */
 export const DEVNET_DEV_ATTESTER = "0x8626f6940E2eb28930eFb4CeF49B2d1F2C9C1199" as const;
 
@@ -343,8 +344,8 @@ export const DEVNET_DEV_ATTESTER = "0x8626f6940E2eb28930eFb4CeF49B2d1F2C9C1199" 
  *   - **webOfTrust** (future, ADR-0039): attesters the user has explicitly
  *     trusted. Empty until the web-of-trust UX ships.
  *   - **system**: a global tail fallback so unseeded users still see some
- *     content. On devnet: a bootstrap curator address + the EFS deployer.
- *     End-users will eventually be able to configure this tier themselves.
+ *     content. Today callers pass the EFS content account followed by
+ *     SystemAccount.
  *
  * Dedupes case-insensitively; drops zero addresses; preserves order so
  * first-attester-wins semantics (ADR-0031) still apply inside the chain.
@@ -358,9 +359,7 @@ export function defaultLensesForContainer(args: {
    *  when it does. */
   webOfTrust?: string[];
   /** System tail attesters. Populated by the caller (the SystemAccount address
-   *  is a runtime read from the indexer). On the devnet (26001993) the caller
-   *  also prepends the demo bootstrap-curator + dev-attester; on Sepolia/Local
-   *  it's just the SystemAccount lens (caller-scoped — see ExplorerClient). */
+   *  is a runtime read from the active deployment). */
   systemLenses?: string[];
 }): string[] {
   // `explicitLenses !== null` means the URL carried `?lenses=` — preserve
@@ -392,10 +391,10 @@ export function defaultLensesForContainer(args: {
   // lens-scoped `getDirectoryPageFiltered` — the unfiltered `getDirectoryPage`
   // listing fallback was removed, so an empty `lensAddresses` now FAILS SAFE (the
   // FileBrowser directory hooks disable and the grid renders empty, never
-  // unfiltered content). On the devnet `systemLenses` carries the demo constants,
-  // so the default view shows content; on Sepolia/Local it's just the SystemAccount
-  // lens (and an empty list still fails safe). When `systemLenses` becomes
-  // user-configurable for mainnet and could be empty, the work is to give the
+  // unfiltered content). Today `systemLenses` carries the EFS content account
+  // followed by SystemAccount so fresh users see seeded content. When
+  // `systemLenses` becomes user-configurable for mainnet and could be empty,
+  // the work is to give the
   // empty-list case a FILTERED listing so the view isn't simply blank — NOT to
   // re-introduce an unfiltered path. See the matching note in ExplorerClient.tsx.
   return out;

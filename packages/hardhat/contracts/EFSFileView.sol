@@ -80,6 +80,7 @@ interface IEFSIndexer {
         bool reverseOrder,
         bool showRevoked
     ) external view returns (bytes32[] memory results, uint256 nextCursor);
+    function getParent(bytes32 anchorUID) external view returns (bytes32);
     function getChildrenCount(bytes32 anchorUID) external view returns (uint256);
     function getChildCountBySchema(bytes32 parentAnchor, bytes32 schema) external view returns (uint256);
     function getReferencingAttestationCount(bytes32 targetUID, bytes32 schemaUID) external view returns (uint256);
@@ -107,6 +108,17 @@ interface IEFSIndexer {
         bool reverseOrder,
         bool showRevoked
     ) external view returns (bytes32[] memory);
+}
+
+/// @notice Minimal read view over the WhiteoutResolver (ADR-0055) the directory walk needs. The view
+///         binds the whiteout resolver as a constructor immutable (it is stateless/redeployable), so
+///         only the O(1) liveness predicate is declared here. `address(0)` ⇒ whiteout disabled (a
+///         pre-WHITEOUT view redeploy / a test harness that doesn't wire one) and the predicate is
+///         never called — the directory walk degrades to the no-whiteout behavior.
+interface IWhiteoutResolverForFileView {
+    /// @notice True iff `attester` has an ACTIVE whiteout suppressing `child` under `parent`.
+    ///         See `WhiteoutResolver.isWhitedOut`.
+    function isWhitedOut(bytes32 parent, address attester, bytes32 child) external view returns (bool);
 }
 
 contract EFSFileView {
@@ -156,11 +168,21 @@ contract EFSFileView {
     IEFSIndexer public immutable indexer;
     IEAS public immutable eas;
     IEdgeResolverForFileView public immutable edgeResolver;
+    /// @notice The WhiteoutResolver (proxy) for the cross-lens negative mask (ADR-0055). A constructor
+    ///         immutable because the view is stateless/redeployable. `address(0)` ⇒ whiteout disabled:
+    ///         the directory walk skips the negative-mask predicate entirely (pre-WHITEOUT views and
+    ///         harnesses that don't wire one keep their exact prior behavior).
+    IWhiteoutResolverForFileView public immutable whiteoutResolver;
 
-    constructor(IEFSIndexer _indexer, IEdgeResolverForFileView _edgeResolver) {
+    constructor(
+        IEFSIndexer _indexer,
+        IEdgeResolverForFileView _edgeResolver,
+        IWhiteoutResolverForFileView _whiteoutResolver
+    ) {
         indexer = _indexer;
         eas = _indexer.getEAS();
         edgeResolver = _edgeResolver;
+        whiteoutResolver = _whiteoutResolver;
     }
 
     function getDirectoryPage(
@@ -180,6 +202,14 @@ contract EFSFileView {
         uint256 startingCursor,
         uint256 pageSize
     ) external view returns (FileSystemItem[] memory items, uint256 nextCursor) {
+        // Parent-folder terminal (ADR-0055): if the listed folder is itself whited out for this viewer,
+        // the page is empty — consistent with the router 404ing a deep link into a whited folder. This
+        // schema-agnostic view uses DATA_SCHEMA_UID as the folder visibility-TAG def (standard browsing),
+        // matching its per-item filter below.
+        if (_isListedFolderWhitedOut(parentAnchor, attesters, indexer.DATA_SCHEMA_UID())) {
+            return (new FileSystemItem[](0), 0);
+        }
+
         (bytes32[] memory resolvedUIDs, uint256 nextCur) = indexer.getChildrenByAddressList(
             parentAnchor,
             attesters,
@@ -188,6 +218,35 @@ contract EFSFileView {
             true,
             false
         );
+
+        // Cross-lens negative mask (ADR-0055) — viewer-sovereignty consistency with the schema-aware
+        // listings. This attester-scoped, schema-AGNOSTIC view returns a FIXED indexer page (it does not
+        // run the phase walkers), so we filter the page in place: drop any child a lens in the stack
+        // whited out and no higher-precedence lens re-asserts. The `nextCursor` is the indexer's OWN
+        // source cursor (`nextCur`), independent of how many items we drop from this page — it advances
+        // over source positions, not result slots — so trimming whited children leaves pagination correct
+        // (no dup/drop across pages; the next call resumes at `nextCur` regardless).
+        //
+        // This view is schema-agnostic (returns all children), so the predicate's PIN/folder-visibility-TAG
+        // positive checks key on DATA_SCHEMA_UID — matching what the schema-aware path passes for standard
+        // file/folder browsing (`getDirectoryPageBySchemaAndAddressList` calls the predicate with
+        // `anchorSchema`, which IS dataSchemaUID on the standard listing). Zero-cost when whiteout is
+        // disabled: `_isItemWhitedOutForListing` short-circuits to false before any read when
+        // `whiteoutResolver == address(0)`.
+        if (address(whiteoutResolver) != address(0)) {
+            bytes32 dataSchemaUID = indexer.DATA_SCHEMA_UID();
+            uint256 kept = 0;
+            for (uint256 i = 0; i < resolvedUIDs.length; i++) {
+                bytes32 uid = resolvedUIDs[i];
+                // Advance the source walker (the loop) but consume no result slot for a whited child —
+                // same skip the phase walkers apply. visibilityTagDef == dataSchemaUID (standard browsing).
+                if (_isItemWhitedOutForListing(parentAnchor, uid, attesters, dataSchemaUID, dataSchemaUID)) continue;
+                resolvedUIDs[kept++] = uid; // compact in place (kept <= i, so this never overwrites unread)
+            }
+            assembly ("memory-safe") {
+                mstore(resolvedUIDs, kept)
+            }
+        }
 
         items = _buildFileSystemItems(
             resolvedUIDs,
@@ -231,15 +290,13 @@ contract EFSFileView {
     ///      guard without seeding thousands of items. Production default is unchanged.
     uint256 private constant _FOLDER_SCAN_BUDGET_PER_CALL = 2048;
 
-    /// @dev Hard cap on phase-1 entries inspected per call in `getDirectoryPageFiltered`.
-    ///      Symmetric to `_FOLDER_SCAN_BUDGET_PER_CALL` (phase 0). The plain
-    ///      `getDirectoryPageBySchemaAndAddressList` does not need a phase-1 budget because every
-    ///      phase-1 candidate the indexer returns becomes a result item (no per-item drop), so its
-    ///      inner loop is naturally bounded by `maxItems`. The filtered variant can DROP phase-1
-    ///      items (the exclusion predicate), so a page that is 100%-excluded under the lens would
-    ///      otherwise loop the entire phase-1 source in one eth_call. This budget bounds per-call
-    ///      work; the opaque cursor (ADR-0036) continues progress across calls — same pattern as
-    ///      the phase-0 budget and ADR-0020's mirror-scan cap.
+    /// @dev Hard cap on phase-1 entries inspected per call. Symmetric to `_FOLDER_SCAN_BUDGET_PER_CALL`
+    ///      (phase 0). Used by BOTH directory views: `getDirectoryPageFiltered` (the exclusion
+    ///      predicate can DROP phase-1 items) AND the plain `getDirectoryPageBySchemaAndAddressList`
+    ///      (the ADR-0055 whited-out skip likewise drops phase-1 items). In either case a page that is
+    ///      ~100% dropped under the lens would otherwise loop the entire phase-1 source in one
+    ///      eth_call. This budget bounds per-call work; the opaque cursor (ADR-0036) continues
+    ///      progress across calls — same pattern as the phase-0 budget and ADR-0020's mirror-scan cap.
     ///
     ///      Read through `_fileScanBudgetPerCall()` (not the bare constant) so a test-only
     ///      subclass can override it to a small value and exercise the budget guard without
@@ -302,6 +359,16 @@ contract EFSFileView {
         require(attesters.length <= MAX_ATTESTERS_PER_QUERY, "Too many attesters");
         require(maxItems > 0, "maxItems must be > 0");
 
+        // Parent-folder terminal (ADR-0055): if the listed folder is itself whited out for this viewer,
+        // the whole page is empty — consistent with the router 404ing a deep link into a whited folder.
+        // Pass `anchorSchema` as the folder visibility-TAG def, matching the per-item walker (schema-aware
+        // folder re-adds).
+        if (_isListedFolderWhitedOut(parentAnchor, attesters, anchorSchema)) {
+            page.items = new FileSystemItem[](0);
+            page.nextCursor = "";
+            return page;
+        }
+
         // Decode cursor — empty OR malformed = fresh start at (phase=0, folderIdx=0,
         // fileIdx=0). ADR-0036 treats the cursor as opaque caller-supplied bytes, so a
         // buggy or malicious client must not be able to brick the view with an
@@ -350,6 +417,18 @@ contract EFSFileView {
                     bytes32 uid = batch[k];
                     if (indexer.isRevoked(uid)) continue;
                     if (!edgeResolver.hasActiveTagFromAny(uid, anchorSchema, attesters)) continue;
+                    // Cross-lens negative mask (ADR-0055): a whited-out child advances the walker but
+                    // consumes no slot — same skip as revoked / out-of-lens. Unconditional viewer
+                    // sovereignty (applies to plain AND filtered listings).
+                    if (
+                        _isItemWhitedOutForListing(
+                            parentAnchor,
+                            uid,
+                            attesters,
+                            indexer.DATA_SCHEMA_UID(),
+                            anchorSchema
+                        )
+                    ) continue;
                     buf[count++] = uid;
                     if (count == maxItems) break;
                 }
@@ -366,8 +445,19 @@ contract EFSFileView {
         // ───── Phase 1: direct children by schema ─────
         bool fileSourceDone = false;
         if (phase == 1) {
-            while (count < maxItems) {
+            // Phase-1 scan budget (ADR-0055): the whited-out skip below DROPS items without consuming
+            // a result slot, so a directory with many hidden direct files could otherwise loop the
+            // entire remaining phase-1 source in one eth_call. Mirror the filtered walker's guard —
+            // cap candidates fetched per call to the remaining budget, break at the budget, and return
+            // the opaque cursor so the next page resumes mid-source (no dup/drop across pages).
+            uint256 fileBudget = _fileScanBudgetPerCall();
+            uint256 scanned = 0; // phase-1 entries inspected this call — bounded by budget
+            while (count < maxItems && scanned < fileBudget) {
+                uint256 remainingBudget = fileBudget - scanned;
                 uint256 want = maxItems - count;
+                // Fetch at most `remainingBudget` candidates so the per-call inspection count can't
+                // exceed the budget regardless of how many get whited out below.
+                if (want > remainingBudget) want = remainingBudget;
                 (bytes32[] memory batch, uint256 nextFileCur) = indexer.getAnchorsBySchemaAndAddressList(
                     parentAnchor,
                     anchorSchema,
@@ -378,7 +468,20 @@ contract EFSFileView {
                     false // showRevoked
                 );
                 for (uint256 k = 0; k < batch.length; k++) {
-                    buf[count++] = batch[k];
+                    scanned++;
+                    bytes32 uid = batch[k];
+                    // Cross-lens negative mask (ADR-0055): drop whited-out files; the walker advances
+                    // (and the scan budget) but the slot is not consumed (same as the filtered variant).
+                    if (
+                        _isItemWhitedOutForListing(
+                            parentAnchor,
+                            uid,
+                            attesters,
+                            indexer.DATA_SCHEMA_UID(),
+                            anchorSchema
+                        )
+                    ) continue;
+                    buf[count++] = uid;
                     if (count == maxItems) break;
                 }
                 fileIdx = nextFileCur;
@@ -480,6 +583,14 @@ contract EFSFileView {
         require(excludeTagDefs.length <= MAX_EXCLUDE_TAGS_PER_QUERY, "Too many exclude tags");
         require(maxItems > 0, "maxItems must be > 0");
 
+        // Parent-folder terminal (ADR-0055): a whited-out listed folder yields an empty page (router
+        // parity). `anchorSchema` is the folder visibility-TAG def, matching the per-item walker.
+        if (_isListedFolderWhitedOut(parentAnchor, attesters, anchorSchema)) {
+            page.items = new FileSystemItem[](0);
+            page.nextCursor = "";
+            return page;
+        }
+
         // Decode cursor — same defensive contract as getDirectoryPageBySchemaAndAddressList:
         // wrong length OR out-of-range phase = fresh walk at (phase=0, folderIdx=0, fileIdx=0).
         uint8 phase = 0;
@@ -572,13 +683,29 @@ contract EFSFileView {
             uint256 remainingBudget = folderBudget - scanned;
             uint256 chunk = remainingSource < _FOLDER_SCAN_CHUNK ? remainingSource : _FOLDER_SCAN_CHUNK;
             if (chunk > remainingBudget) chunk = remainingBudget;
-            bytes32[] memory batch = edgeResolver.getChildrenWithEdge(w.parentAnchor, w.anchorSchema, w.folderIdx, chunk);
+            bytes32[] memory batch = edgeResolver.getChildrenWithEdge(
+                w.parentAnchor,
+                w.anchorSchema,
+                w.folderIdx,
+                chunk
+            );
             for (uint256 k = 0; k < batch.length; k++) {
                 w.folderIdx++; // advance walker for every inspected entry
                 scanned++;
                 bytes32 uid = batch[k];
                 if (indexer.isRevoked(uid)) continue;
                 if (!edgeResolver.hasActiveTagFromAny(uid, w.anchorSchema, w.attesters)) continue;
+                // Cross-lens negative mask (ADR-0055): whited-out items advance the walker but consume
+                // no slot. Checked alongside the tag-exclusion predicate (all are post-filter skips).
+                if (
+                    _isItemWhitedOutForListing(
+                        w.parentAnchor,
+                        uid,
+                        w.attesters,
+                        w.dataSchemaUID,
+                        w.anchorSchema // visibility-TAG definition for this page (NOT ANCHOR schema UID)
+                    )
+                ) continue;
                 // Exclusion predicate (post-filter slot accounting): excluded items advance
                 // the walker but consume no slot, identical to a revoked/out-of-lens skip.
                 if (_isItemExcluded(uid, w.attesters, w.filter, w.dataSchemaUID, w.anchorSchemaUID)) continue;
@@ -617,6 +744,17 @@ contract EFSFileView {
             for (uint256 k = 0; k < batch.length; k++) {
                 scanned++;
                 bytes32 uid = batch[k];
+                // Cross-lens negative mask (ADR-0055): whited-out items advance the walker (and the scan
+                // budget) but consume no slot — same post-filter accounting as the exclusion skip.
+                if (
+                    _isItemWhitedOutForListing(
+                        w.parentAnchor,
+                        uid,
+                        w.attesters,
+                        w.dataSchemaUID,
+                        w.anchorSchema // visibility-TAG definition for this page (NOT ANCHOR schema UID)
+                    )
+                ) continue;
                 if (_isItemExcluded(uid, w.attesters, w.filter, w.dataSchemaUID, w.anchorSchemaUID)) continue;
                 w.buf[w.count++] = uid;
                 if (w.count == w.maxItems) break;
@@ -744,6 +882,145 @@ contract EFSFileView {
         return false;
     }
 
+    /// @dev Per-item cross-lens negative-mask predicate (ADR-0055). Returns true iff the directory
+    ///      entry `childAnchor` (a child of `parentAnchor`) must be rendered EMPTY for the viewer —
+    ///      i.e. a lens in the stack whited it out and no higher-precedence lens re-asserts it with
+    ///      its own placement. Same topology + budget gate as `_isItemExcluded` (O(1)-class per item,
+    ///      one read per lens, bounded by MAX_ATTESTERS_PER_QUERY ≤ 20). Skip = advance the walker,
+    ///      consume no result slot — identical to a revoked / tag-excluded skip.
+    ///
+    ///      Walk the lenses in PRECEDENCE order. Within each lens (ADR-0055 same-lens-override +
+    ///      first-lens-wins; start/index-order-independent because the winner is re-derived per item):
+    ///        - if that lens has an ACTIVE positive placement PIN at this child
+    ///          (`getActivePinTarget(child, lens, dataSchemaUID) != 0`) ⇒ the lens substitutes its own
+    ///          content here ⇒ VISIBLE, terminate (return false). A newer same-lens positive PIN thus
+    ///          beats that lens's own earlier whiteout (positive-before-whiteout within a lens).
+    ///        - else if that lens has an ACTIVE whiteout on this child ⇒ NEGATIVE terminal: the lens
+    ///          masks the entry and stops fall-through to lower lenses ⇒ DROP, terminate (return true).
+    ///        - else continue to the next (lower) lens — the whiteout/PIN of a higher lens already
+    ///          terminated, so a lower lens's whiteout is transparent to a higher lens that asserts.
+    ///      After the loop (no lens asserted either) ⇒ transparent ⇒ return false.
+    ///
+    ///      `whiteoutResolver == address(0)` (disabled) short-circuits to false before any read — a
+    ///      pre-WHITEOUT view redeploy keeps its exact prior listing behavior.
+    /// @dev Single-element-array wrapper for `edgeResolver.hasActiveTagFromAny` (which takes an
+    ///      `address[] calldata`). The folder-fix listing predicate needs a TAG check scoped to ONE
+    ///      lens at a time (precedence-ordered same-lens override), but EdgeResolver only exposes the
+    ///      lens-aware ANY-of-many form — and it is FROZEN-by-UID (its address is hashed into the PIN/
+    ///      TAG schema UIDs), so we cannot add a single-lens getter there. Wrapping the lens in a
+    ///      1-element memory array reuses the frozen reader without touching it (ADR-0055 folder-fix).
+    function _one(address lens) private pure returns (address[] memory arr) {
+        arr = new address[](1);
+        arr[0] = lens;
+    }
+
+    /// @dev The per-item LISTING-side negative-mask predicate (ADR-0055). The RESOLUTION-side terminal
+    ///      (PIN-only positive; same-lens positive-before-whiteout; a whiteout suppresses strictly-lower
+    ///      lenses) is applied inline in `getFilesAtPath`'s cursor walk and the router's `_findDataAtPath`,
+    ///      NOT here. This listing predicate differs: its positive terminal is a file PIN OR — for GENERIC FOLDER
+    ///      anchors only — a folder visibility TAG (the FOLDER RE-ADD FIX, via the `_one(lens)` wrapper
+    ///      around `hasActiveTagFromAny`), so a lens that whites out a folder then re-asserts it with its
+    ///      OWN visibility TAG is un-hidden in listings. `visibilityTagDef` is the listing's `anchorSchema`
+    ///      param (the visibility TAG's definition — `dataSchemaUID` in the standard file/folder listing,
+    ///      NOT the ANCHOR schema UID).
+    ///
+    ///      The TAG branch is gated to generic folder anchors (`forSchema == 0`, the same discriminator
+    ///      `_buildFileSystemItems` uses for `isFolder`). A FILE anchor's only positive re-assertion is its
+    ///      placement PIN — matching the PIN-gated resolution path (`getFilesAtPath`'s cursor walk and the
+    ///      router's `_findDataAtPath`). Without this gate a same-lens TAG (`definition = dataSchemaUID`) on a
+    ///      whited-out FILE anchor would un-hide it in directory listings while resolution still returns it
+    ///      as deleted — a listing/resolution inconsistency (PR #37 review).
+    ///
+    ///      Walk the lenses in precedence order:
+    ///        - the FIRST lens that asserts a positive (file PIN, or folder visibility TAG when the child is
+    ///          a generic folder) is the item's contributing lens ⇒ VISIBLE (return false), terminate. A
+    ///          newer same-lens positive thus beats that lens's own earlier whiteout (positive-before-
+    ///          whiteout within a lens).
+    ///        - else if that lens has an ACTIVE whiteout on this child ⇒ NEGATIVE terminal: the lens
+    ///          masks the entry and stops fall-through to lower lenses ⇒ DROP (return true), terminate.
+    ///        - else continue to the next (lower) lens.
+    ///      `whiteoutResolver == address(0)` (disabled) short-circuits to false — a pre-WHITEOUT view
+    ///      redeploy keeps its exact prior listing behavior.
+    function _isItemWhitedOutForListing(
+        bytes32 parentAnchor,
+        bytes32 childAnchor,
+        address[] memory attesters,
+        bytes32 dataSchemaUID,
+        bytes32 visibilityTagDef
+    ) internal view returns (bool) {
+        IWhiteoutResolverForFileView wr = whiteoutResolver;
+        if (address(wr) == address(0)) return false;
+
+        // Read-cost guard (specs/02 WHITEOUT invariant — whiteout must NOT double per-item EAS reads).
+        // The ONLY way this predicate drops an item is an active whiteout on it; positives merely
+        // OVERRIDE a whiteout. So scan the lens stack for ANY whiteout FIRST — O(1)-class WhiteoutResolver
+        // mapping reads, NO `eas.getAttestation`. If none, the item is never dropped → return false
+        // WITHOUT the folder-classification decode below. Ordinary pages (no active whiteouts) thus pay
+        // ZERO extra EAS reads — only the per-item batched index reads they already did; the second
+        // `getAttestation` happens once, in `_buildFileSystemItems`, for kept items. Only an item that
+        // actually carries a whiteout pays the one decode needed to evaluate the folder re-add override.
+        bool anyWhiteout = false;
+        for (uint256 i = 0; i < attesters.length; i++) {
+            if (wr.isWhitedOut(parentAnchor, attesters[i], childAnchor)) {
+                anyWhiteout = true;
+                break;
+            }
+        }
+        if (!anyWhiteout) return false;
+
+        // A whiteout exists in the stack — run the full precedence walk (positive-before-whiteout), which
+        // needs the folder-vs-file classification for the folder-TAG re-add positive. Classify once: a
+        // generic folder anchor has `forSchema == 0` (a file anchor has `forSchema == DATA_SCHEMA_UID`, a
+        // typed/alias anchor a schema UID). Only a generic folder may be re-asserted by a visibility TAG;
+        // everything else is PIN-positive only (resolution parity).
+        bool childIsGenericFolder;
+        {
+            Attestation memory ca = eas.getAttestation(childAnchor);
+            if (ca.data.length > 0) {
+                (, bytes32 childForSchema) = abi.decode(ca.data, (string, bytes32));
+                childIsGenericFolder = (childForSchema == bytes32(0));
+            }
+        }
+        for (uint256 i = 0; i < attesters.length; i++) {
+            address lens = attesters[i];
+            // Positive terminal: file placement PIN (Shape A) OR — folders only — folder visibility TAG
+            // (Shape B, the folder re-add fix) → visible, stop.
+            if (
+                edgeResolver.getActivePinTarget(childAnchor, lens, dataSchemaUID) != bytes32(0) ||
+                (childIsGenericFolder && edgeResolver.hasActiveTagFromAny(childAnchor, visibilityTagDef, _one(lens)))
+            ) {
+                return false;
+            }
+            // Negative terminal: this lens whites the entry out → drop, stop (no fall-through).
+            if (wr.isWhitedOut(parentAnchor, lens, childAnchor)) return true;
+        }
+        return false; // no lens asserted a positive or a whiteout → transparent.
+    }
+
+    /// @dev Listing-side PARENT-folder terminal (ADR-0055). The per-item filters above suppress whited
+    ///      CHILDREN, but if the FOLDER BEING LISTED is itself whited out by a lens under ITS OWN parent
+    ///      (and not re-added), the whole page must be suppressed for that viewer — otherwise listing the
+    ///      known `/dir` anchor would still return lower-lens children while the router 404s `/dir/child`
+    ///      (the per-segment terminal in EFSRouter). This is the listing analogue of that router terminal:
+    ///      it evaluates the same `_isItemWhitedOutForListing` predicate (PIN OR folder visibility-TAG
+    ///      re-add positive) with (grandparent, folderAnchor). Cheap + short-circuits when whiteout is
+    ///      disabled; root / address-root (no parent) can't be whited (OrphanAnchor guard) → false.
+    /// @param visibilityTagDef The listing's `anchorSchema` (the folder visibility-TAG definition) —
+    ///        MUST match what the per-item walker uses, so a folder re-added under a non-DATA schema
+    ///        (`TAG(definition=anchorSchema, refUID=folder)`) is recognized as visible by the parent check
+    ///        too, not just by the per-item check below it. The PIN-positive arg stays `dataSchemaUID`
+    ///        (file placement is always DATA-schema; a folder has no DATA PIN anyway).
+    function _isListedFolderWhitedOut(bytes32 folderAnchor, address[] memory attesters, bytes32 visibilityTagDef)
+        internal
+        view
+        returns (bool)
+    {
+        if (address(whiteoutResolver) == address(0)) return false;
+        bytes32 grandparent = indexer.getParent(folderAnchor);
+        if (grandparent == bytes32(0)) return false;
+        return _isItemWhitedOutForListing(grandparent, folderAnchor, attesters, indexer.DATA_SCHEMA_UID(), visibilityTagDef);
+    }
+
     function _buildFileSystemItems(
         bytes32[] memory uids,
         bytes32 parentAnchor,
@@ -822,12 +1099,56 @@ contract EFSFileView {
         require(attesters.length <= MAX_ATTESTERS_PER_QUERY, "Too many attesters");
         require(maxItems > 0, "maxItems must be > 0");
 
+        // Cross-lens negative mask (ADR-0055) — view/router consistency. This single-anchor file
+        // reader resolves DATA AT `anchorUID` across the lens stack, the SAME shape as the router's
+        // `_findDataAtPath` negative terminal (the resolved anchor here plays the router's
+        // `targetAnchor` role). Apply the identical terminal so a whited-out anchor never serves DATA
+        // through the view that the router would 404: precedence-ordered scan, positive placement PIN
+        // FIRST then whiteout (same-lens positive-before-whiteout override, higher-lens transparency).
+        // `_isItemWhitedOut` re-derives the winner per-item and short-circuits when the resolver is
+        // disabled (`address(0)`), so a pre-WHITEOUT view keeps its exact prior behavior. The whiteout
+        // key is (parent, lens, anchor) with parent = `indexer.getParent(anchorUID)`, exactly as the
+        // router computes it; the positive-PIN override bucket is `schema` (the slot being read). The
+        // `getParent` SLOAD is guarded on the resolver being wired — disabled views read nothing extra,
+        // mirroring the router's `_findDataAtPath` guard.
+        // Cross-lens negative mask (ADR-0055) is applied PER-LENS INSIDE the cursor walk below, NOT as a
+        // whole-anchor pre-gate: a lens's whiteout suppresses lenses STRICTLY BELOW it even when a HIGHER
+        // lens stays visible, so a higher positive PIN must not mask a lower-lens whiteout (the pre-gate
+        // bug). PIN-only positive terminal (a direct file lookup is PIN-gated — a folder visibility TAG
+        // must NOT un-gate a DATA read), mirroring the router's `_findDataAtPath`. The `getParent` SLOAD
+        // is guarded on the resolver being wired — a disabled view reads nothing extra.
+        IWhiteoutResolverForFileView wr = whiteoutResolver;
+        bytes32 parentAnchor = address(wr) == address(0) ? bytes32(0) : indexer.getParent(anchorUID);
+
         // Decode cursor — empty OR malformed = fresh start at attesterIdx=0.
         // Same defensive pattern as `getDirectoryPageBySchemaAndAddressList`: length-check
         // protects against `abi.decode` Panics on arbitrary caller-supplied bytes.
         uint256 attesterIdx = 0;
         if (cursor.length == 32) {
             attesterIdx = abi.decode(cursor, (uint256));
+        }
+
+        // Cursor-bypass guard (ADR-0055 / specs/04): the per-lens whiteout terminal in the walk below only
+        // fires for lenses at index >= attesterIdx. A caller-supplied opaque cursor could resume PAST a
+        // whiteout-terminal lens (a stale or hand-crafted `abi.encode(k)`), skipping the terminal and
+        // serving a lower lens's DATA — while the router's cursorless `_findDataAtPath` would 404. So
+        // re-evaluate the SKIPPED prefix [0, attesterIdx): if any skipped lens whites out this anchor with
+        // NO own positive PIN (it would have been a negative terminal), everything strictly below it is
+        // suppressed → return the terminal empty page. A legitimate forward cursor never points past a
+        // whiteout terminal (the walk sets `attesterIdx = attesters.length` on the first one), so this
+        // only trips on a fabricated cursor. Bounded by MAX_ATTESTERS_PER_QUERY; zero when disabled.
+        if (address(wr) != address(0)) {
+            uint256 skipEnd = attesterIdx < attesters.length ? attesterIdx : attesters.length;
+            for (uint256 j = 0; j < skipEnd; j++) {
+                if (
+                    edgeResolver.getActivePinTarget(anchorUID, attesters[j], schema) == bytes32(0) &&
+                    wr.isWhitedOut(parentAnchor, attesters[j], anchorUID)
+                ) {
+                    page.items = new FileSystemItem[](0);
+                    page.nextCursor = "";
+                    return page;
+                }
+            }
         }
 
         bytes32[] memory buf = new bytes32[](maxItems);
@@ -846,7 +1167,18 @@ contract EFSFileView {
 
             // O(1) PIN read — per-attester slot holds 0 or 1 target.
             bytes32 target = edgeResolver.getActivePinTarget(anchorUID, currentAttester, schema);
-            if (target == bytes32(0)) continue;
+            if (target == bytes32(0)) {
+                // No positive placement by this lens. If it whites out this anchor, it is a NEGATIVE
+                // TERMINAL (ADR-0055): suppress all strictly-lower lenses — keep the higher positives
+                // already buffered, then STOP and force the cursor terminal so a later page can't resume
+                // past the whiteout into the lower lenses. (A lens's own positive PIN above is emitted via
+                // the `target != 0` branch, so same-lens positive-before-whiteout still holds.)
+                if (address(wr) != address(0) && wr.isWhitedOut(parentAnchor, currentAttester, anchorUID)) {
+                    attesterIdx = attesters.length; // cursor terminal — never resume past the whiteout
+                    break;
+                }
+                continue;
+            }
 
             // Cross-attester dedup (ADR-0031 first-attester-wins): if an earlier attester
             // already has an active PIN placing this DATA at this anchor, skip — this lens

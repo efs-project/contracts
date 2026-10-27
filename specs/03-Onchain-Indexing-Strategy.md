@@ -135,7 +135,7 @@ Use `getDirectoryPageBySchemaAndAddressList(folderUID, DATA_SCHEMA_UID, [alice, 
 ### `propagateContains` (Tree Visibility)
 When a PIN or TAG places content at a structural Anchor, EdgeResolver calls `indexer.propagateContains(definition, attester)`. This walks up the `_parents` chain from the definition Anchor, setting `_containsAttestations[ancestor][attester] = true` at each level. Early-exit on already-flagged ancestors makes repeated contributions amortized O(1). This enables the sidebar tree to show which folders contain content from a given attester without scanning their children.
 
-`MAX_ANCHOR_DEPTH = 32` caps the upward walk to prevent gas griefing via deeply nested Anchor chains.
+`MAX_ANCHOR_DEPTH = 256` (ADR-0068; read it from `EFSIndexer.MAX_ANCHOR_DEPTH()`, never hardcode) caps this upward walk to prevent gas griefing via deeply nested Anchor chains. It is sized to the **write-side** budget: the walk does ~4 cold zero→nonzero SSTOREs/level (~90k gas/level), so a first-time deep placement at 256 costs ~23M gas — under the block limit, with headroom for the rest of the tx. (History: 32 in ADR-0021; raised to 1024 in ADR-0065 on a wrong ~2.1k/level estimate, which made deep placement unexecutable; corrected to 256 in ADR-0068.)
 
 ### `clearContains` (partial de-propagation)
 When the last active edge placed at a definition Anchor by an attester is removed (revocation, or PIN supersede that empties the slot), EdgeResolver calls `indexer.clearContains(definition, attester)`. This clears the **immediate folder's** `_containsAttestations` flag only — ancestor flags remain sticky (see ADR-0010). The immediate-folder clear is sufficient because `getDirectoryPageByAddressList` checks the direct child's flag; leaving ancestors flagged is conservative (a folder might stop appearing empty) and avoids the gas cost of reference-counted de-propagation.
@@ -315,10 +315,10 @@ The kernel (EFSIndexer) remains the source of truth. The sort overlay is a secon
 
 ### Public Index API
 
-EFSIndexer exposes a permissionless indexing API for any EAS attestation whose schema is resolved by a contract other than EFSIndexer:
+EFSIndexer exposes a permissionless indexing API for any EAS attestation whose schema is resolved by a contract other than EFSIndexer. **It is DISCOVERY-ONLY (ADR-0066):** it makes any attestation *findable*, but does NOT manufacture schema-blind FOLDER PRESENCE — folder presence is an intentional placement signal owned by real content writes (PIN/TAG via `EdgeResolver.propagateContains`, or anchor creation in `onAttest`), never by a permissionless discovery call (else anyone could `index()` a negative WHITEOUT, or a junk foreign attestation pointed at a popular anchor, to fake "contributor" presence + bloat `_childrenByAttester`).
 
-- **`index(bytes32 uid) → bool wasIndexed`** — reads the attestation from EAS and runs the same global indexing logic as `onAttest` (schema, attester, sent, received, referencing, upward propagation). Idempotent — guarded by `mapping(bytes32 => bool) _indexed`. Returns `false` for EFS-native schemas (already indexed via `onAttest`) and for already-indexed UIDs. Emits `AttestationIndexed`.
-- **`indexBatch(bytes32[] uids) → uint256 count`** — batch version; skips already-indexed and EFS-native UIDs without reverting. Returns count of newly indexed UIDs.
+- **`index(bytes32 uid) → bool wasIndexed`** — reads the attestation from EAS and runs the **discovery** indexing of `onAttest` (schema, attester, sent, received, referencing, and the schema-SCOPED `_containsSchemaAttestations` fact) — but **NOT** the schema-blind upward propagation of `_containsAttestations` / `_childrenByAttester` (ADR-0066). Idempotent — guarded by `mapping(bytes32 => bool) _indexed`. Returns `false` for EFS-native schemas (already indexed via `onAttest`) and for already-indexed UIDs. Emits `AttestationIndexed`.
+- **`indexBatch(bytes32[] uids) → uint256 count`** — batch version; same discovery-only semantics; skips already-indexed and EFS-native UIDs without reverting. Returns count of newly indexed UIDs.
 - **`indexRevocation(bytes32 uid)`** — mirrors a revocation from EAS into `_isRevoked`. Call after `eas.revoke()` to make `isRevoked()` return true for externally-resolved schemas. Requires the attestation to already be revoked in EAS. Idempotent. Emits `RevocationIndexed`.
 - **`isIndexed(bytes32 uid) → bool`** — returns true if a UID was indexed via the public API (not via `onAttest`).
 

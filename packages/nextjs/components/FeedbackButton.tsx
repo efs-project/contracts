@@ -46,7 +46,7 @@ export const FeedbackButton = ({ variant = "desktop" }: FeedbackButtonProps) => 
       className="hidden xl:inline-flex btn btn-ghost btn-sm rounded-full font-normal gap-1.5 px-2"
     >
       {icon}
-      <span>Feedback</span>
+      <span className="hidden 2xl:inline">Feedback</span>
     </a>
   );
 };

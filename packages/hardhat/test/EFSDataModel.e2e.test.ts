@@ -417,7 +417,7 @@ describe("EFS Data Model — E2E Integration", function () {
 
     // Deploy FileView
     const FileViewFactory = await ethers.getContractFactory("EFSFileView");
-    fileView = await FileViewFactory.deploy(await indexer.getAddress(), await edgeResolver.getAddress());
+    fileView = await FileViewFactory.deploy(await indexer.getAddress(), await edgeResolver.getAddress(), ZeroAddress);
 
     // Wire contracts
     await indexer.wireContracts(
@@ -1722,12 +1722,17 @@ describe("EFS Data Model — E2E Integration", function () {
       for (const slot of slots) expect(uniqueUIDs.has(slot)).to.equal(true);
     });
 
-    it("MAX_ANCHOR_DEPTH is enforced (prevents gas griefing)", async function () {
+    it("MAX_ANCHOR_DEPTH allows deep trees (256, ADR-0068)", async function () {
+      // Value lock + positive regression: deep trees beyond the old 32-level cap now create.
+      // The boundary-revert proof (build to cap+1) is the opt-in RUN_SLOW_TESTS test in
+      // EFSTransports.test.ts — building 1025 anchors here would blow the mocha timeout.
+      this.timeout(180000); // dozens of sequential attestations
+      expect(await indexer.MAX_ANCHOR_DEPTH()).to.equal(256n);
       let parent = rootUID;
-      for (let i = 0; i < 32; i++) {
+      for (let i = 0; i < 40; i++) {
         parent = await createAnchor(parent, `d${i}`);
       }
-      await expect(createAnchor(parent, "too-deep")).to.be.revertedWithCustomError(indexer, "AnchorTooDeep");
+      expect(parent).to.not.equal(rootUID); // 40 deep — old cap of 32 would have reverted
     });
   });
 

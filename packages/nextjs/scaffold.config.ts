@@ -10,7 +10,44 @@ export type ScaffoldConfig = {
   onlyLocalBurnerWallet: boolean;
 };
 
-export const DEFAULT_ALCHEMY_API_KEY = "IZYEU2cWBgnFmgiTAgpWD";
+const DEFAULT_ALCHEMY_API_KEY = "IZYEU2cWBgnFmgiTAgpWD";
+
+type TargetChainLike = { id: number };
+
+export function resolveDefaultTargetChain<TChain extends TargetChainLike>({
+  targetChain,
+  allowDevnetDefault = true,
+  localAvailable,
+  sepoliaChain,
+  devnetChain,
+  hardhatChain,
+  available,
+}: {
+  targetChain: string;
+  allowDevnetDefault?: boolean;
+  localAvailable: boolean;
+  sepoliaChain: TChain;
+  devnetChain: TChain;
+  hardhatChain: TChain;
+  available: readonly TChain[];
+}): TChain {
+  const normalizedTarget = targetChain.trim().toLowerCase();
+  const wantsSepolia = normalizedTarget === "sepolia" || normalizedTarget === "11155111";
+  const wantsDevnet = allowDevnetDefault && (normalizedTarget === "devnet" || normalizedTarget === "26001993");
+  const wantsLocal = normalizedTarget === "hardhat" || normalizedTarget === "local" || normalizedTarget === "31337";
+
+  const defaultChain = wantsSepolia
+    ? sepoliaChain
+    : wantsDevnet
+      ? devnetChain
+      : wantsLocal
+        ? hardhatChain
+        : localAvailable
+          ? hardhatChain
+          : sepoliaChain;
+
+  return available.includes(defaultChain) ? defaultChain : sepoliaChain;
+}
 
 // The three EFS environments are now THREE DISTINCT wagmi chains (ADR-0062):
 //   • Sepolia      11155111  — live testnet
@@ -36,18 +73,29 @@ const hardhatChain: chains.Chain = HARDHAT_RPC_URL
     }
   : chains.hardhat;
 
+// Keyless public Sepolia RPCs tried after Alchemy (see utils/scaffold-eth/networks.ts →
+// getPreferredRpcUrls). These replace viem's built-in default, sepolia.drpc.org, which now answers
+// every keyless request with HTTP 400. Keep every entry LIVE: viem's fallback transport moves on to
+// the next endpoint even when a read legitimately reverts, so the last endpoint's answer is the error
+// the app sees, and a dead entry turns every revert into "HTTP request failed". Checked 2026-10-26:
+// both allow cross-origin calls from app.efs.eth.limo and return proper reverts. publicnode goes
+// first because it absorbs a page-load burst: it answered all of 100 concurrent requests from that
+// origin, while Tenderly answered 40 and throttled 60 with HTTP 429.
+export const SEPOLIA_PUBLIC_RPC_URLS = [
+  "https://ethereum-sepolia-rpc.publicnode.com",
+  "https://sepolia.gateway.tenderly.co",
+] as const;
+
 // `NEXT_PUBLIC_SEPOLIA_RPC_URL` overrides Sepolia's RPC the same way
-// NEXT_PUBLIC_HARDHAT_RPC_URL overrides the fork's — leave unset to use viem's
-// default + wagmiConfig's Alchemy fallback (see wagmiConfig.tsx → getAlchemyHttpUrl).
-const SEPOLIA_RPC_URL = process.env.NEXT_PUBLIC_SEPOLIA_RPC_URL;
-const sepoliaChain: chains.Chain = SEPOLIA_RPC_URL
-  ? {
-      ...chains.sepolia,
-      rpcUrls: {
-        default: { http: [SEPOLIA_RPC_URL] },
-      },
-    }
-  : chains.sepolia;
+// NEXT_PUBLIC_HARDHAT_RPC_URL overrides the fork's: set, it goes first with Alchemy second;
+// unset, Alchemy goes first and SEPOLIA_PUBLIC_RPC_URLS follow.
+const SEPOLIA_RPC_URL = (process.env.NEXT_PUBLIC_SEPOLIA_RPC_URL ?? "").trim();
+const sepoliaChain: chains.Chain = {
+  ...chains.sepolia,
+  rpcUrls: {
+    default: { http: SEPOLIA_RPC_URL ? [SEPOLIA_RPC_URL] : [...SEPOLIA_PUBLIC_RPC_URLS] },
+  },
+};
 
 // The shared community devnet as a first-class chain. The metadata (name, nativeCurrency)
 // is what an external wallet shows in its one-time `wallet_addEthereumChain` prompt.
@@ -64,16 +112,18 @@ const efsDevnetChain: chains.Chain = {
 // the network the store starts on — `targetNetworks[0]`). The SWITCHER's display order is
 // independent of this (it sorts Sepolia → Devnet → Local; see NetworkSwitcher).
 //
-// `NEXT_PUBLIC_TARGET_CHAIN` is an explicit override that always wins. Accepts
-// sepolia|11155111, devnet|26001993, local|hardhat|31337. Blank/whitespace counts as UNSET.
-// Default by build type when unset: `next dev` → Local; `next build` (deployed) → Devnet
-// (community testers land on the devnet; Sepolia is one click away). Set TARGET_CHAIN=sepolia
-// for a public Sepolia-first SPA.
+// `NEXT_PUBLIC_TARGET_CHAIN` accepts sepolia|11155111, devnet|26001993,
+// local|hardhat|31337. Blank/whitespace counts as UNSET.
+// Default by build type when unset: `next dev` → Local; `next build` (deployed) → Sepolia.
+// Production Devnet-first builds must also set NEXT_PUBLIC_ALLOW_DEVNET_DEFAULT=true; this keeps
+// the public app.efs.eth.limo/.link export Sepolia-first even if an old publish env still says devnet.
 const TARGET_CHAIN = (process.env.NEXT_PUBLIC_TARGET_CHAIN ?? "").trim().toLowerCase();
 const HARDHAT_RPC_CONFIGURED = HARDHAT_RPC_URL.length > 0;
 // Local is only offered when a local node is plausibly present: a dev build, or an explicit
 // hardhat RPC. A deployed public build never lists Local (nothing on the visitor's machine).
 const LOCAL_AVAILABLE = process.env.NODE_ENV !== "production" || HARDHAT_RPC_CONFIGURED;
+const ALLOW_DEVNET_DEFAULT =
+  process.env.NODE_ENV !== "production" || process.env.NEXT_PUBLIC_ALLOW_DEVNET_DEFAULT === "true";
 
 const RECOGNIZED = ["", "hardhat", "local", "31337", "sepolia", "11155111", "devnet", "26001993"];
 if (!RECOGNIZED.includes(TARGET_CHAIN)) {
@@ -81,27 +131,27 @@ if (!RECOGNIZED.includes(TARGET_CHAIN)) {
     `[scaffold.config] Unrecognized NEXT_PUBLIC_TARGET_CHAIN="${TARGET_CHAIN}" — using the build default. Use one of: sepolia, devnet, local.`,
   );
 }
-
-const wantsSepolia = TARGET_CHAIN === "sepolia" || TARGET_CHAIN === "11155111";
-const wantsDevnet = TARGET_CHAIN === "devnet" || TARGET_CHAIN === "26001993";
-const wantsLocal = TARGET_CHAIN === "hardhat" || TARGET_CHAIN === "local" || TARGET_CHAIN === "31337";
+if ((TARGET_CHAIN === "devnet" || TARGET_CHAIN === "26001993") && !ALLOW_DEVNET_DEFAULT) {
+  console.warn(
+    "[scaffold.config] Ignoring NEXT_PUBLIC_TARGET_CHAIN=devnet for a production build. Set NEXT_PUBLIC_ALLOW_DEVNET_DEFAULT=true only for a Devnet-first deployment.",
+  );
+}
 
 // Available networks: Sepolia + Devnet always; Local only when a node is around.
 const available: chains.Chain[] = [sepoliaChain, efsDevnetChain];
 if (LOCAL_AVAILABLE) available.push(hardhatChain);
 
-// Resolve the default (first) network. Explicit override wins (but falls back to Devnet if it
-// asks for Local where Local isn't available); otherwise dev → Local, deployed → Devnet.
-let defaultChain: chains.Chain = wantsSepolia
-  ? sepoliaChain
-  : wantsDevnet
-    ? efsDevnetChain
-    : wantsLocal
-      ? hardhatChain
-      : LOCAL_AVAILABLE
-        ? hardhatChain
-        : efsDevnetChain;
-if (!available.includes(defaultChain)) defaultChain = efsDevnetChain;
+// Resolve the default (first) network. Explicit overrides win except production Devnet defaults,
+// which require the allow flag above; otherwise dev → Local, deployed → Sepolia.
+const defaultChain = resolveDefaultTargetChain({
+  targetChain: TARGET_CHAIN,
+  allowDevnetDefault: ALLOW_DEVNET_DEFAULT,
+  localAvailable: LOCAL_AVAILABLE,
+  sepoliaChain,
+  devnetChain: efsDevnetChain,
+  hardhatChain,
+  available,
+});
 
 // Default first (store init); the rest follow. Non-empty tuple — wagmi's createConfig requires it.
 const targetNetworks = [defaultChain, ...available.filter(c => c !== defaultChain)] as [

@@ -45,7 +45,7 @@ export function MarkdownEditor({ value, onChange }: { value: string; onChange: (
           {/* No extra prose wrapper: MarkdownView already renders its own
               <article className="prose prose-efs">. Wrapping again would nest prose. */}
           <div className="p-4">
-            <MarkdownView source={value} />
+            <MarkdownView source={value} idPrefix="user-content-editor-" />
           </div>
         </div>
       </div>

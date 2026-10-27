@@ -7,8 +7,9 @@
  * `tagSystemIfMissing` (`packages/hardhat/scripts/seed-impl.ts`).
  *
  * Plain async function — `attest` is injected for the same reason as in
- * `uploadOnchainFile`: it is a `useScaffoldWriteContract` hook handle that
- * cannot be called inside a plain function.
+ * `uploadOnchainFile`: this seam cannot call React hooks. Overview saves should
+ * inject `createWalletClientAttest(...)` so the pre-placement TAG write follows
+ * the same explicit wallet/client chain as the rest of the file upload.
  *
  * AGENT-NOTE: this seam still uses the single-`attest` path, NOT the layered
  * `submitLayered` engine. It runs between `uploadOnchainFile`'s stage A and stage B
@@ -65,6 +66,75 @@ const HAS_ACTIVE_TAG_FROM_ANY_ABI = [
     type: "function",
   },
 ] as const satisfies Abi;
+
+const EAS_ATTEST_ABI = [
+  {
+    type: "function",
+    name: "attest",
+    stateMutability: "payable",
+    inputs: [
+      {
+        name: "request",
+        type: "tuple",
+        components: [
+          { name: "schema", type: "bytes32" },
+          {
+            name: "data",
+            type: "tuple",
+            components: [
+              { name: "recipient", type: "address" },
+              { name: "expirationTime", type: "uint64" },
+              { name: "revocable", type: "bool" },
+              { name: "refUID", type: "bytes32" },
+              { name: "data", type: "bytes" },
+              { name: "value", type: "uint256" },
+            ],
+          },
+        ],
+      },
+    ],
+    outputs: [{ name: "", type: "bytes32" }],
+  },
+] as const satisfies Abi;
+
+type EasAttestArgs = readonly [
+  {
+    schema: `0x${string}`;
+    data: {
+      recipient: `0x${string}`;
+      expirationTime: bigint;
+      revocable: boolean;
+      refUID: `0x${string}`;
+      data: `0x${string}`;
+      value: bigint;
+    };
+  },
+];
+
+export function createWalletClientAttest({
+  easAddress,
+  walletClient,
+}: {
+  easAddress: `0x${string}`;
+  walletClient: WalletClient;
+}): AttestFn {
+  return async variables => {
+    if (variables.functionName !== "attest") {
+      throw new Error(`Unsupported EAS write '${variables.functionName}'.`);
+    }
+    const account = walletClient.account;
+    if (!account) throw new Error("walletClient has no account");
+
+    return walletClient.writeContract({
+      address: easAddress,
+      abi: EAS_ATTEST_ABI,
+      functionName: "attest",
+      args: variables.args as EasAttestArgs,
+      account,
+      chain: walletClient.chain,
+    });
+  };
+}
 
 function extractUIDFromReceipt(receipt: TransactionReceipt): `0x${string}` | undefined {
   for (const log of receipt.logs) {
@@ -203,5 +273,6 @@ export async function applySystemTag(args: ApplySystemTagArgs): Promise<void> {
     { silent: true },
   );
   if (!tagTx) throw new Error("system TAG attestation did not return a transaction hash.");
-  await publicClient.waitForTransactionReceipt({ hash: tagTx });
+  const tagReceipt = await publicClient.waitForTransactionReceipt({ hash: tagTx });
+  if (tagReceipt.status === "reverted") throw new Error("system TAG transaction reverted.");
 }

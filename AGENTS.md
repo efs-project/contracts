@@ -1,8 +1,23 @@
 # AGENTS.md
 
-EFS — Ethereum File System. On-chain file system built on EAS attestations. Pre-launch, devnet target April 19, 2026. Breaking changes are acceptable for now as there's no real data created yet. Good design and future proofing is key.
+EFS — Ethereum File System.
 
-**Production web client** (Vite/Lit, separate repo): https://github.com/efs-project/client. The internal UI at `packages/nextjs/` in this repo is a Scaffold-ETH-based devtools/debug interface — not the production client. Don't apply Scaffold-ETH patterns (`useScaffoldReadContract` etc.) to the production client.
+> **Repository status (2026-07-23): deployed v1 reference implementation.**
+> The EAS-based v1 system is live on Sepolia with registered schemas and real
+> test data. It is not deployed to mainnet. EFS is now being redesigned from
+> scratch as v2, so this repository remains authoritative for **v1 behavior**
+> only. Do not extend a v1 mechanism or present it as the v2 baseline without a
+> current planning-vault decision that explicitly carries it forward.
+>
+> **Supported bridge (ruled 2026-08-07):** v1 plus the existing SDK is the
+> supported bridge for current Nanda and Arcade work. Hardening and fixing v1 for
+> those product paths is in scope. Keep v1-specific mechanics isolated so that
+> work does not quietly become the v2 baseline (planning vault `Decisions.md`).
+
+**Legacy Vite/Lit client** (separate repo):
+https://github.com/efs-project/client. The internal UI at `packages/nextjs/`
+is the newer v1 explorer/debug interface. Neither is the Client v2
+implementation target unless the current design process explicitly chooses it.
 
 ## Read on init
 
@@ -19,23 +34,36 @@ EFS — Ethereum File System. On-chain file system built on EAS attestations. Pr
 - **[specs/README.md](./specs/README.md)** — index of detailed specs (authoritative current behavior)
 - **[docs/adr/](./docs/adr/)** — past decisions and reasoning
 - **[docs/FUTURE_WORK.md](./docs/FUTURE_WORK.md)** — backlog
-- **[docs/LAUNCH_CHECKLIST.md](./docs/LAUNCH_CHECKLIST.md)** — pre-launch blockers
+- **[docs/LAUNCH_CHECKLIST.md](./docs/LAUNCH_CHECKLIST.md)** — retired v1 launch posture and the gate for creating a future checklist
 - **[reference/README.md](./reference/README.md)** — EAS, EIP, Scaffold-ETH docs (indexed by task)
 
 ## Cross-repo coordination — the planning vault
 
-EFS uses a separate **planning vault** as the cross-repo coordination point across this repo, the production client (`efs-project/client`), and the future SDK. Repo: [efs-project/planning](https://github.com/efs-project/planning); typically cloned alongside this one (target layout: `/efs/{contracts,client,sdk,planning}/`).
+EFS uses a separate **planning vault** as the cross-repo coordination point
+across this repo, the legacy client (`efs-project/client`), the pre-v2 SDK
+(`efs-project/sdk`), and the v2 redesign. Repo:
+[efs-project/planning](https://github.com/efs-project/planning).
 
 The vault holds:
 
 - **Cross-repo designs** with a name-first → numbered-at-promotion lifecycle. Designs that span multiple repos are tracked there; per-repo decisions stay here as ADRs.
-- **Cross-repo Kanban board**, milestones (e.g., OnionDAO hackathon 2026-06-01), and an append-only decisions log.
+- **Cross-repo Kanban board**, live milestones, and an append-only decisions log.
 - **Glossary** of cross-cutting EFS terms.
 - **Onboarding** for AI agents (start-here, conventions, escalation, write-a-design walkthrough).
 
-Read the vault's [`AGENTS.md`](https://github.com/efs-project/planning/blob/main/AGENTS.md) on init when your task is cross-repo. **A landed cross-repo design typically produces one or more ADRs here** — the planning design is the cross-cutting proposal; the resulting ADR(s) in this repo's `docs/adr/` are the per-repo decision artifacts. Don't duplicate substantive content; the design tombstones to point at the per-repo ADRs once implementation lands.
+Read the vault's
+[`AGENTS.md`](https://github.com/efs-project/planning/blob/main/AGENTS.md) on
+init when your task is cross-repo. During the v2 redesign, start with the
+[`efsv2` current spine](https://github.com/efs-project/planning/blob/main/Designs/efsv2/README.md)
+before proposing architectural work here. **A landed cross-repo design
+typically produces one or more ADRs here** — the planning design is the
+cross-cutting proposal; the resulting ADR(s) in this repo's `docs/adr/` are the
+per-repo decision artifacts. Don't duplicate substantive content; the design
+tombstones to point at the per-repo ADRs once implementation lands.
 
-For tasks fully scoped to this repo, the planning vault is optional context. For tasks spanning repos or unblocking a milestone, it's required reading.
+For maintenance of the deployed v1 implementation, repo-local specs and ADRs
+remain authoritative. For architecture, v2 work, cross-repo work, or milestone
+work, the planning vault is required reading.
 
 ## PR review quick start
 
@@ -214,7 +242,7 @@ yarn build
 
 Outputs `packages/nextjs/out/`. `ipfs add -r out/` → copy the resulting root CID to the ENS name.
 
-The devnet is its own chain — **EFS Devnet, chain id `26001993`** (ADR-0062). A deployed (`next build`) app defaults to **Devnet**, with Sepolia one click away in the switcher; **Local (31337) is not offered** (no node on a visitor's machine). Point the Devnet chain at the VPS with `NEXT_PUBLIC_DEVNET_RPC_URL` (defaults to the devnet VPS if unset). Do **not** use `NEXT_PUBLIC_HARDHAT_RPC_URL` for the devnet — that configures the _Local_ chain (31337); on a `26001993` node it would default the build to Local and sign writes for the wrong chain (the node rejects them). For a public **Sepolia**-first SPA, set `NEXT_PUBLIC_TARGET_CHAIN=sepolia`. The devnet VPS anvil must run `--chain-id 26001993` (devnet repo `scripts/start-anvil.sh`). See `packages/nextjs/scaffold.config.ts`.
+The devnet is its own chain — **EFS Devnet, chain id `26001993`** (ADR-0062). A deployed (`next build`) app defaults to **Sepolia**, with Devnet one click away in the switcher; **Local (31337) is not offered** (no node on a visitor's machine). Point the Devnet chain at the VPS with `NEXT_PUBLIC_DEVNET_RPC_URL` (defaults to the devnet VPS if unset). Do **not** use `NEXT_PUBLIC_HARDHAT_RPC_URL` for the devnet — that configures the _Local_ chain (31337); on a `26001993` node it would default the build to Local and sign writes for the wrong chain (the node rejects them). For an intentional **Devnet**-first production deployment, set both `NEXT_PUBLIC_TARGET_CHAIN=devnet` and `NEXT_PUBLIC_ALLOW_DEVNET_DEFAULT=true`; the public `app.efs.eth.limo` / `.eth.link` export should not set that allow flag. The devnet VPS anvil must run `--chain-id 26001993` (devnet repo `scripts/start-anvil.sh`). See `packages/nextjs/scaffold.config.ts`.
 
 **Deep-link SPA fallback.** The only truly dynamic route is `/explorer/[[...path]]` — anchor / address / schema / attestation URLs aren't enumerable at build time. Next's static export emits one shell at `/explorer/index.html`; `public/_redirects` tells IPFS gateways (per the [web-redirects spec](https://specs.ipfs.tech/http-gateways/web-redirects-file/), honored by Kubo ≥ 0.23 and eth.limo) to serve that shell with status 200 for any `/explorer/*` URL. The shell is a client component that reads `useParams()` at runtime and renders the real path. Blockexplorer's `/address/[address]` and `/transaction/[txHash]` use the same trick via dummy `generateStaticParams` values.
 
@@ -259,7 +287,8 @@ cd packages/hardhat && npx hardhat test test/EFSIndexer.test.ts --network hardha
 
 ## Invariants
 
-**Hardened (load-bearing — don't violate without writing a superseding ADR):**
+**Hardened v1 invariants (load-bearing for the deployed Sepolia system — don't
+violate without writing a superseding ADR):**
 
 - **Cardinality is declared at the schema level (PIN vs TAG), not per-attestation.** The schema UID is the only permanent, globally-coordinated, machine-readable slot in EFS. PIN = cardinality 1 (file placement, PROPERTY value binding); TAG = cardinality N with an `int256 weight` (folder visibility, descriptive labels, schema-alias discovery). See ADR-0041.
   - **Active TAG** (kernel) = unrevoked edge exists. Weight does not affect kernel activity. Use this definition in contracts, resolver helpers, and any non-filter code path.

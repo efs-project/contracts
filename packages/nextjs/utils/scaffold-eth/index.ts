@@ -6,4 +6,6 @@ export * from "./decodeTxData";
 export * from "./ensureWalletChain";
 export * from "./faucet";
 export * from "./getParsedError";
+export * from "./instantBurner";
 export * from "./networkLabel";
+export * from "./targetNetworkPreference";
