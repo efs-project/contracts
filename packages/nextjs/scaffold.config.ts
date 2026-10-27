@@ -10,7 +10,7 @@ export type ScaffoldConfig = {
   onlyLocalBurnerWallet: boolean;
 };
 
-export const DEFAULT_ALCHEMY_API_KEY = "IZYEU2cWBgnFmgiTAgpWD";
+const DEFAULT_ALCHEMY_API_KEY = "IZYEU2cWBgnFmgiTAgpWD";
 
 type TargetChainLike = { id: number };
 
@@ -73,18 +73,29 @@ const hardhatChain: chains.Chain = HARDHAT_RPC_URL
     }
   : chains.hardhat;
 
+// Keyless public Sepolia RPCs tried after Alchemy (see utils/scaffold-eth/networks.ts →
+// getPreferredRpcUrls). These replace viem's built-in default, sepolia.drpc.org, which now answers
+// every keyless request with HTTP 400. Keep every entry LIVE: viem's fallback transport moves on to
+// the next endpoint even when a read legitimately reverts, so the last endpoint's answer is the error
+// the app sees, and a dead entry turns every revert into "HTTP request failed". Checked 2026-10-26:
+// both allow cross-origin calls from app.efs.eth.limo and return proper reverts. publicnode goes
+// first because it absorbs a page-load burst: it answered all of 100 concurrent requests from that
+// origin, while Tenderly answered 40 and throttled 60 with HTTP 429.
+export const SEPOLIA_PUBLIC_RPC_URLS = [
+  "https://ethereum-sepolia-rpc.publicnode.com",
+  "https://sepolia.gateway.tenderly.co",
+] as const;
+
 // `NEXT_PUBLIC_SEPOLIA_RPC_URL` overrides Sepolia's RPC the same way
-// NEXT_PUBLIC_HARDHAT_RPC_URL overrides the fork's — leave unset to use viem's
-// default + wagmiConfig's Alchemy fallback (see wagmiConfig.tsx → getAlchemyHttpUrl).
-const SEPOLIA_RPC_URL = process.env.NEXT_PUBLIC_SEPOLIA_RPC_URL;
-const sepoliaChain: chains.Chain = SEPOLIA_RPC_URL
-  ? {
-      ...chains.sepolia,
-      rpcUrls: {
-        default: { http: [SEPOLIA_RPC_URL] },
-      },
-    }
-  : chains.sepolia;
+// NEXT_PUBLIC_HARDHAT_RPC_URL overrides the fork's: set, it goes first with Alchemy second;
+// unset, Alchemy goes first and SEPOLIA_PUBLIC_RPC_URLS follow.
+const SEPOLIA_RPC_URL = (process.env.NEXT_PUBLIC_SEPOLIA_RPC_URL ?? "").trim();
+const sepoliaChain: chains.Chain = {
+  ...chains.sepolia,
+  rpcUrls: {
+    default: { http: SEPOLIA_RPC_URL ? [SEPOLIA_RPC_URL] : [...SEPOLIA_PUBLIC_RPC_URLS] },
+  },
+};
 
 // The shared community devnet as a first-class chain. The metadata (name, nativeCurrency)
 // is what an external wallet shows in its one-time `wallet_addEthereumChain` prompt.
