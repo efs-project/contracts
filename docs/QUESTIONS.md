@@ -16,8 +16,9 @@ None.
 
 ### Devnet and Sepolia proxy pattern
 
-Resolved by ADR-0048 and the Sepolia deployment: the v1 schema resolvers use
-`TransparentUpgradeableProxy` plus `ProxyAdmin`. The deployed contracts are
+Resolved by the Sepolia deployment, which implements ADR-0048 (still marked
+Proposed): the v1 schema resolvers use `TransparentUpgradeableProxy` plus
+`ProxyAdmin`. The deployed contracts are
 Safe-owned and remain upgradeable; no burn timeline is active. See
 `docs/CHAINS.md`.
 

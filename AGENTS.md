@@ -8,6 +8,11 @@ EFS — Ethereum File System.
 > scratch as v2, so this repository remains authoritative for **v1 behavior**
 > only. Do not extend a v1 mechanism or present it as the v2 baseline without a
 > current planning-vault decision that explicitly carries it forward.
+>
+> **Supported bridge (ruled 2026-08-07):** v1 plus the existing SDK is the
+> supported bridge for current Nanda and Arcade work. Hardening and fixing v1 for
+> those product paths is in scope. Keep v1-specific mechanics isolated so that
+> work does not quietly become the v2 baseline (planning vault `Decisions.md`).
 
 **Legacy Vite/Lit client** (separate repo):
 https://github.com/efs-project/client. The internal UI at `packages/nextjs/`
