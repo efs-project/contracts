@@ -350,6 +350,48 @@ export const DEVNET_DEV_ATTESTER = "0x8626f6940E2eb28930eFb4CeF49B2d1F2C9C1199" 
  * Dedupes case-insensitively; drops zero addresses; preserves order so
  * first-attester-wins semantics (ADR-0031) still apply inside the chain.
  */
+const isAddressContainerRoot = (container: ClassifiedContainer | null, parentAnchorUID: string | null) =>
+  container?.kind === "address" &&
+  !!container.address &&
+  !!parentAnchorUID &&
+  parentAnchorUID.toLowerCase() === container.uid.toLowerCase();
+
+/**
+ * Where a new child ANCHOR attaches. An address-container root's UID is the synthetic
+ * `bytes32(uint160(addr))`, which EAS rejects as a `refUID` (`NotFound`), so a direct child
+ * is attested with `refUID = 0, recipient = addr` and EFSIndexer.onAttest re-derives the
+ * parent from the recipient (specs/04 §4a). Every other parent is a real attestation.
+ */
+export function childAnchorParent({
+  container,
+  parentAnchorUID,
+}: {
+  container: ClassifiedContainer | null | undefined;
+  parentAnchorUID: `0x${string}`;
+}): { refUID: `0x${string}`; recipient: `0x${string}` } {
+  if (container && isAddressContainerRoot(container, parentAnchorUID)) {
+    return { refUID: zeroHash, recipient: container.address! };
+  }
+  return { refUID: parentAnchorUID, recipient: zeroAddress };
+}
+
+/**
+ * Whether a child ANCHOR can be created under `parentAnchorUID`: any real anchor (including
+ * schema/attestation alias anchors) or an address-container root. A raw schema/attestation
+ * container root (no alias anchor) has no valid parent for EAS, so it can't hold children.
+ */
+export function canAttachChildAnchor({
+  container,
+  parentAnchorUID,
+}: {
+  container: ClassifiedContainer | null | undefined;
+  parentAnchorUID: string | null | undefined;
+}): boolean {
+  if (!parentAnchorUID) return false;
+  if (!container || parentAnchorUID.toLowerCase() !== container.uid.toLowerCase()) return true;
+  return isAddressContainerRoot(container, parentAnchorUID);
+}
+
 export function defaultLensesForContainer(args: {
   container: ClassifiedContainer | null;
   connectedAddress: string | undefined;
