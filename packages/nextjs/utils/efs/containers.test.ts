@@ -1,4 +1,10 @@
-import { type ClassifiedContainer, EFS_CONTENT_LENS, defaultLensesForContainer } from "./containers.ts";
+import {
+  type ClassifiedContainer,
+  EFS_CONTENT_LENS,
+  canAttachChildAnchor,
+  childAnchorParent,
+  defaultLensesForContainer,
+} from "./containers.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
@@ -100,4 +106,52 @@ test("defaultLensesForContainer: dedupes and drops the zero address", () => {
   });
   assert.equal(new Set(out.map(a => a.toLowerCase())).size, out.length, "no duplicates");
   assert.ok(!out.includes("0x0000000000000000000000000000000000000000"), "zero address dropped");
+});
+
+// A child of an address-container root can't use `refUID = bytes32(addr)` (EAS rejects a
+// non-attestation refUID), so it is attested with `refUID = 0, recipient = addr` and
+// EFSIndexer re-derives the parent (specs/04 §4a). Deeper children use their real parent.
+const REAL_ANCHOR = hex("0x" + "ab".repeat(32));
+const ZERO_UID = hex("0x" + "00".repeat(32));
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+
+test("childAnchorParent: address-container root attaches via recipient", () => {
+  const address = CONTAINERS.address;
+  assert.deepEqual(childAnchorParent({ container: address, parentAnchorUID: address.uid }), {
+    refUID: ZERO_UID,
+    recipient: VIEWED_ADDRESS,
+  });
+});
+
+test("childAnchorParent: real anchors (including deeper paths in an address container) use refUID", () => {
+  for (const container of [null, CONTAINERS.address]) {
+    assert.deepEqual(childAnchorParent({ container, parentAnchorUID: REAL_ANCHOR }), {
+      refUID: REAL_ANCHOR,
+      recipient: ZERO_ADDRESS,
+    });
+  }
+});
+
+test("canAttachChildAnchor: real anchors and address roots, not raw schema/attestation roots", () => {
+  assert.equal(canAttachChildAnchor({ container: null, parentAnchorUID: REAL_ANCHOR }), true);
+  assert.equal(canAttachChildAnchor({ container: CONTAINERS.address, parentAnchorUID: CONTAINERS.address.uid }), true);
+  assert.equal(canAttachChildAnchor({ container: CONTAINERS.address, parentAnchorUID: REAL_ANCHOR }), true);
+  assert.equal(canAttachChildAnchor({ container: CONTAINERS.schema, parentAnchorUID: CONTAINERS.schema.uid }), false);
+  assert.equal(
+    canAttachChildAnchor({ container: CONTAINERS.attestation, parentAnchorUID: CONTAINERS.attestation.uid }),
+    false,
+  );
+  // An alias anchor (UID differs from the raw container UID) is a real anchor.
+  assert.equal(canAttachChildAnchor({ container: CONTAINERS.schema, parentAnchorUID: REAL_ANCHOR }), true);
+  assert.equal(canAttachChildAnchor({ container: null, parentAnchorUID: null }), false);
+});
+
+test("address-root detection ignores hex case (classifier lowercases container.uid)", () => {
+  const address = CONTAINERS.address;
+  const upper = hex(address.uid.toUpperCase().replace("0X", "0x"));
+  assert.equal(canAttachChildAnchor({ container: address, parentAnchorUID: upper }), true);
+  assert.deepEqual(childAnchorParent({ container: address, parentAnchorUID: upper }), {
+    refUID: ZERO_UID,
+    recipient: VIEWED_ADDRESS,
+  });
 });

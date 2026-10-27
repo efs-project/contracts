@@ -26,10 +26,12 @@ function DownloadCard({ bytes, fileName, note }: { bytes: Uint8Array; fileName: 
 }
 
 type OverviewPaneProps = Omit<UseItemOverviewArgs, "enabled"> & {
-  /** False for address-container roots (the upload helper would revert on the synthetic parent). */
+  /** False when the connected wallet can't author here, or the folder can't hold a README anchor. */
   canEdit?: boolean;
   /** Parent anchor for the README — equals the current anchor UID. */
   editAnchorUID?: `0x${string}`;
+  /** How the README anchor attaches to `editAnchorUID` (`recipient` at an address-container root). */
+  editAnchorParent?: { refUID: `0x${string}`; recipient: `0x${string}` };
   anchorSchemaUID?: `0x${string}`;
   propertySchemaUID?: `0x${string}`;
   pinSchemaUID?: `0x${string}`;
@@ -43,6 +45,7 @@ export function OverviewPane(props: OverviewPaneProps) {
   const {
     canEdit,
     editAnchorUID,
+    editAnchorParent,
     anchorSchemaUID,
     propertySchemaUID,
     pinSchemaUID,
@@ -62,8 +65,9 @@ export function OverviewPane(props: OverviewPaneProps) {
 
   const state = useItemOverview({ ...overviewArgs, enabled: overviewArgs.anchorUID != null });
 
-  // Do we have everything needed to WRITE an Overview here? (false on address
-  // roots / no wallet, or before the schema UIDs have loaded.)
+  // Do we have everything needed to WRITE an Overview here? (false with no wallet,
+  // when not the top lens, on a raw schema/attestation root, or before the schema
+  // UIDs have loaded.)
   const writeReady = !!(
     canEdit &&
     editAnchorUID &&
@@ -92,6 +96,7 @@ export function OverviewPane(props: OverviewPaneProps) {
         mode="edit"
         initialText={state.text}
         parentAnchorUID={editAnchorUID!}
+        anchorParent={editAnchorParent}
         anchorSchemaUID={anchorSchemaUID!}
         dataSchemaUID={overviewArgs.dataSchemaUID!}
         propertySchemaUID={propertySchemaUID!}
@@ -111,6 +116,7 @@ export function OverviewPane(props: OverviewPaneProps) {
         mode="create"
         initialText=""
         parentAnchorUID={editAnchorUID!}
+        anchorParent={editAnchorParent}
         anchorSchemaUID={anchorSchemaUID!}
         dataSchemaUID={overviewArgs.dataSchemaUID!}
         propertySchemaUID={propertySchemaUID!}
@@ -128,8 +134,8 @@ export function OverviewPane(props: OverviewPaneProps) {
       />
     ));
 
-  // Nothing to show and nothing to add (e.g. an address root with no README, or
-  // no wallet) → no rail at all.
+  // Nothing to show and nothing to add (no README, and no wallet / not the top
+  // lens / a raw schema or attestation root) → no rail at all.
   if (!hasContent && !canCreate && state.kind !== "loading") return null;
 
   // Minimized rail — the default. Also the only form while loading or when the

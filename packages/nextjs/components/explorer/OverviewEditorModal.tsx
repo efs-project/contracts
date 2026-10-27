@@ -37,6 +37,8 @@ export interface OverviewEditorModalProps {
   mode: "create" | "edit";
   initialText: string;
   parentAnchorUID: `0x${string}`;
+  /** README anchor's refUID/recipient; `recipient` form at an address-container root. */
+  anchorParent?: { refUID: `0x${string}`; recipient: `0x${string}` };
   anchorSchemaUID: `0x${string}`;
   dataSchemaUID: `0x${string}`;
   propertySchemaUID: `0x${string}`;
@@ -53,6 +55,7 @@ export const OverviewEditorModal = (props: OverviewEditorModalProps) => {
     mode,
     initialText,
     parentAnchorUID,
+    anchorParent,
     anchorSchemaUID,
     dataSchemaUID,
     propertySchemaUID,
@@ -114,6 +117,8 @@ export const OverviewEditorModal = (props: OverviewEditorModalProps) => {
         bytes,
         contentType: "text/markdown",
         parentAnchorUID,
+        fileAnchorRefUID: anchorParent?.refUID,
+        fileAnchorRecipient: anchorParent?.recipient,
         walletClient,
         publicClient,
         chainId: targetNetwork.id,
