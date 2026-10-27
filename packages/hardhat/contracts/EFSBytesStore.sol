@@ -38,7 +38,14 @@ contract EFSBytesStore {
     ///      this is for generic clients that hold a bare `web3://<store>` URL.
     string private _contentType;
 
-    /// @param chunks       Ordered SSTORE2 chunk contract addresses (each runtime
+    /// @dev Sent on every 200 response. The chunk list and content type are fixed at
+    ///      construction and SSTORE2 chunks cannot change, so a given `web3://<store>`
+    ///      (and `?chunk=n`) URL always returns the same bytes — gateways, CDNs and
+    ///      browsers may cache it forever (issue #34). The router path is NOT immutable
+    ///      (a lens can re-pin a path) and deliberately sends no such header.
+    string private constant CACHE_CONTROL = "public, max-age=31536000, immutable";
+
+    /// @param chunks      Ordered SSTORE2 chunk contract addresses (each runtime
     ///                     is `0x00 || chunkBytes`).
     /// @param contentType_ MIME type for the ERC-5219 path. Empty => served as
     ///                     `application/octet-stream` (ADR-0018 fallback).
@@ -118,8 +125,9 @@ contract EFSBytesStore {
 
         // Empty store = a valid empty file: 200 with an empty body, no next chunk.
         if (count == 0) {
-            headers = new KeyValue[](1);
+            headers = new KeyValue[](2);
             headers[0] = KeyValue("Content-Type", ct);
+            headers[1] = KeyValue("Cache-Control", CACHE_CONTROL);
             return (200, "", headers);
         }
 
@@ -151,13 +159,13 @@ contract EFSBytesStore {
         body = _readChunk(chunk, size);
 
         if (index + 1 < count) {
-            headers = new KeyValue[](2);
-            headers[0] = KeyValue("Content-Type", ct);
-            headers[1] = KeyValue("web3-next-chunk", _nextChunkValue(index + 1));
+            headers = new KeyValue[](3);
+            headers[2] = KeyValue("web3-next-chunk", _nextChunkValue(index + 1));
         } else {
-            headers = new KeyValue[](1);
-            headers[0] = KeyValue("Content-Type", ct);
+            headers = new KeyValue[](2);
         }
+        headers[0] = KeyValue("Content-Type", ct);
+        headers[1] = KeyValue("Cache-Control", CACHE_CONTROL);
 
         return (200, body, headers);
     }

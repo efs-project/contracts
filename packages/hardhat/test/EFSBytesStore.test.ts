@@ -104,9 +104,10 @@ describe("EFSBytesStore", function () {
       const [statusCode, body, headers] = await store.request([], []);
       expect(statusCode).to.equal(200);
       expect(Buffer.from(ethers.getBytes(body))).to.deep.equal(data);
-      expect(headers.length).to.equal(1);
+      expect(headers.length).to.equal(2);
       expect(headers[0][0]).to.equal("Content-Type");
       expect(headers[0][1]).to.equal("text/plain");
+      expect(header(headers, "Cache-Control")).to.equal("public, max-age=31536000, immutable");
       expect(header(headers, "web3-next-chunk")).to.equal(undefined);
     });
 
@@ -144,6 +145,26 @@ describe("EFSBytesStore", function () {
       expect(header(headers, "web3-next-chunk")).to.equal("/?chunk=2");
     });
 
+    it("marks every 200 as immutable for caches, and never a 404 (issue #34)", async function () {
+      const parts = [Buffer.from("AAAA"), Buffer.from("BB")];
+      for (let i = 0; i < parts.length; i++) await plantChunk(CHUNK_ADDRS[i], parts[i]);
+      const store = await deployStore([CHUNK_ADDRS[0], CHUNK_ADDRS[1]], "text/plain");
+      const empty = await deployStore([], "text/plain");
+      const IMMUTABLE = "public, max-age=31536000, immutable";
+
+      for (const [s, , h] of [
+        await store.request([], []),
+        await store.request([], [{ key: "chunk", value: "1" }]),
+        await empty.request([], []),
+      ]) {
+        expect(s).to.equal(200);
+        expect(header(h, "Cache-Control")).to.equal(IMMUTABLE);
+      }
+      const [s404, , h404] = await store.request([], [{ key: "chunk", value: "9" }]);
+      expect(s404).to.equal(404);
+      expect(header(h404, "Cache-Control")).to.equal(undefined);
+    });
+
     it("last chunk has no web3-next-chunk header", async function () {
       const parts = [Buffer.from("AAAA"), Buffer.from("BBBBBB"), Buffer.from("CC")];
       for (let i = 0; i < parts.length; i++) await plantChunk(CHUNK_ADDRS[i], parts[i]);
@@ -152,7 +173,7 @@ describe("EFSBytesStore", function () {
       const [statusCode, body, headers] = await store.request([], [{ key: "chunk", value: "2" }]);
       expect(statusCode).to.equal(200);
       expect(Buffer.from(ethers.getBytes(body))).to.deep.equal(parts[2]);
-      expect(headers.length).to.equal(1);
+      expect(headers.length).to.equal(2);
       expect(header(headers, "web3-next-chunk")).to.equal(undefined);
     });
 

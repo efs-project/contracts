@@ -327,15 +327,18 @@ contract EFSRouter is IDecentralizedApp {
         }
 
         for (uint i = startIdx; i < resource.length; i++) {
+            // Generic web3:// clients percent-DECODE each segment before calling us, so re-encode to
+            // the kernel's canonical anchor-name form before the lookup (see _canonicalAnchorName).
+            string memory name = _canonicalAnchorName(resource[i]);
             // Intermediate segments must be folders (generic schema).
             // Last segment: try data-schema anchor first (file), fall back to generic (folder).
             if (i == resource.length - 1) {
-                targetAnchor = indexer.resolveAnchor(currentParent, resource[i], dataSchemaUID);
+                targetAnchor = indexer.resolveAnchor(currentParent, name, dataSchemaUID);
                 if (targetAnchor == bytes32(0)) {
-                    targetAnchor = indexer.resolvePath(currentParent, resource[i]);
+                    targetAnchor = indexer.resolvePath(currentParent, name);
                 }
             } else {
-                targetAnchor = indexer.resolvePath(currentParent, resource[i]);
+                targetAnchor = indexer.resolvePath(currentParent, name);
             }
 
             if (targetAnchor == bytes32(0)) {
@@ -934,6 +937,102 @@ contract EFSRouter is IDecentralizedApp {
             }
         }
         return string(out);
+    }
+
+    /// @dev Re-encode a path segment to EFSIndexer's canonical anchor-name form (specs/02
+    ///      §Canonical anchor-name encoding): every byte in the kernel's reserved set — C0
+    ///      controls, DEL, space, `%`, and `" # & / : = ? @ [ \ ] ^ \` { | }` — becomes an
+    ///      UPPERCASE `%XX`; every other byte (including ≥0x80 UTF-8) stays literal.
+    ///
+    ///      Generic web3:// clients decode segments before calling `request()`, so the router
+    ///      receives `my notes.txt` for the anchor stored as `my%20notes.txt` (issue #34). The
+    ///      explorer and SDK send the canonical form instead, so this must be idempotent on it:
+    ///      a `%` followed by two UPPERCASE hex digits whose decoded byte is reserved (or `%`
+    ///      itself) is already a canonical escape and passes through unchanged. Any other `%` —
+    ///      lowercase hex (`%2f`), an over-escape of an unreserved byte (`%41`), or a bare `%` —
+    ///      can never appear in a canonical name except as literal text, so it is escaped to
+    ///      `%25`. The one input this cannot tell apart is a decoded name that literally
+    ///      contains a canonical escape sequence: the decoded segment `50%20off` resolves to the
+    ///      file named `50 off`, so the file named `50%20off` (stored `50%2520off`) is reachable
+    ///      only via the SDK or a doubly-encoded URL (specs/02). NFC normalization is the writer's job (specs/02 step 1); this only redoes
+    ///      the byte-level percent-encoding. Must stay byte-aligned with
+    ///      `EFSIndexer._isReservedByte` — `test/EFSRouter.test.ts` checks every ASCII byte.
+    function _canonicalAnchorName(string memory s) private pure returns (string memory) {
+        bytes memory b = bytes(s);
+        uint256 len = b.length;
+        uint256 outLen = 0;
+        for (uint256 i = 0; i < len; i++) {
+            uint8 c = uint8(b[i]);
+            if (c == 0x25 && _isCanonicalEscapeAt(b, i)) {
+                outLen += 3;
+                i += 2;
+            } else {
+                outLen += _isAnchorReservedByte(c) ? 3 : 1;
+            }
+        }
+        if (outLen == len) return s; // nothing to escape — common fast path
+
+        bytes memory hexChars = "0123456789ABCDEF";
+        bytes memory out = new bytes(outLen);
+        uint256 j = 0;
+        for (uint256 i = 0; i < len; i++) {
+            uint8 c = uint8(b[i]);
+            if (c == 0x25 && _isCanonicalEscapeAt(b, i)) {
+                out[j++] = b[i];
+                out[j++] = b[i + 1];
+                out[j++] = b[i + 2];
+                i += 2;
+            } else if (_isAnchorReservedByte(c)) {
+                out[j++] = "%";
+                out[j++] = hexChars[c >> 4];
+                out[j++] = hexChars[c & 0x0f];
+            } else {
+                out[j++] = bytes1(c);
+            }
+        }
+        return string(out);
+    }
+
+    /// @dev True iff `b[i..i+2]` is `%XX` with UPPERCASE hex decoding to a byte the kernel
+    ///      requires to be escaped — i.e. an escape EFSIndexer would accept as canonical.
+    function _isCanonicalEscapeAt(bytes memory b, uint256 i) private pure returns (bool) {
+        if (i + 2 >= b.length) return false;
+        int256 hi = _upperHexVal(uint8(b[i + 1]));
+        int256 lo = _upperHexVal(uint8(b[i + 2]));
+        if (hi < 0 || lo < 0) return false;
+        uint8 decoded = uint8(uint256(hi * 16 + lo));
+        return _isAnchorReservedByte(decoded);
+    }
+
+    /// @dev Value of an UPPERCASE hex digit (0-9, A-F), or -1. Lowercase is not canonical.
+    function _upperHexVal(uint8 c) private pure returns (int256) {
+        if (c >= 0x30 && c <= 0x39) return int256(uint256(c - 0x30));
+        if (c >= 0x41 && c <= 0x46) return int256(uint256(c - 0x41 + 10));
+        return -1;
+    }
+
+    /// @dev EFSIndexer's reserved set (`_isReservedByte`) plus `%` itself, which the kernel
+    ///      admits only as the lead byte of a canonical escape.
+    function _isAnchorReservedByte(uint8 c) private pure returns (bool) {
+        if (c < 0x20 || c == 0x7F) return true; // C0 controls + DEL
+        return (c == 0x20 || // space
+            c == 0x22 || // "
+            c == 0x23 || // #
+            c == 0x25 || // %
+            c == 0x26 || // &
+            c == 0x2F || // /
+            c == 0x3A || // :
+            c == 0x3D || // =
+            c == 0x3F || // ?
+            c == 0x40 || // @
+            c == 0x5B || // [
+            c == 0x5C || // \
+            c == 0x5D || // ]
+            c == 0x5E || // ^
+            c == 0x60 || // `
+            c == 0x7B || // {
+            c == 0x7C || // |
+            c == 0x7D); // }
     }
 
     /// @dev RFC 3986 unreserved set: ALPHA / DIGIT / "-" "." "_" "~".
