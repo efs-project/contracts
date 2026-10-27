@@ -373,6 +373,14 @@ p {
   border-radius: 2px;
 }
 
+/* The chip styling above is for inline code only. Inside a <pre> block the
+   <code> is inline too, so the chip would paint behind every wrapped line. */
+[data-theme] pre code {
+  background: transparent;
+  border: 0;
+  padding: 0;
+}
+
 /* ──────────────────────────────────────────────
    Content Stacking context
    Ensure UI content is on top of background animations (z-index: 1)
@@ -391,8 +399,11 @@ main,
 }
 
 /* Overview pane — map Tailwind typography to the active daisyUI theme (v4 oklch
-   vars), and override the global monospace body font for readable long-form. */
-.prose-efs {
+   vars), and override the global monospace body font for readable long-form.
+   `.prose.prose-efs` (not bare `.prose-efs`): daisyUI ships its own
+   `:root .prose` variable map at specificity (0,2,0), which otherwise wins and
+   paints code blocks with `neutral` (dark slate in the light theme). */
+.prose.prose-efs {
   --tw-prose-body: oklch(var(--bc));
   --tw-prose-headings: oklch(var(--bc));
   --tw-prose-links: oklch(var(--p));
@@ -408,6 +419,11 @@ main,
   --tw-prose-pre-bg: oklch(var(--b2));
   --tw-prose-pre-code: oklch(var(--bc));
   font-family: ui-sans-serif, system-ui, sans-serif;
+}
+
+/* base-200 on a base-100 panel is faint; an edge keeps code blocks distinct. */
+.prose-efs pre {
+  border: 1px solid oklch(var(--b3));
 }
 
 /* The global dark-mode neon glow on h1/h2 is tuned for chrome titles; inside
