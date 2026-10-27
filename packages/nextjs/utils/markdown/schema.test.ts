@@ -1,4 +1,4 @@
-import { CLOBBER_PREFIX, overviewSchema, resolveHashHref } from "./schema.ts";
+import { CLOBBER_PREFIX, markdownSchema, overviewSchema, resolveHashHref } from "./schema.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import rehypeAutolinkHeadings from "rehype-autolink-headings";
@@ -116,4 +116,22 @@ test("resolveHashHref is idempotent and leaves a bare '#' alone", () => {
   assert.equal(resolveHashHref("#hello-world"), `#${CLOBBER_PREFIX}hello-world`);
   assert.equal(resolveHashHref(`#${CLOBBER_PREFIX}hello-world`), `#${CLOBBER_PREFIX}hello-world`);
   assert.equal(resolveHashHref("#"), "#");
+});
+test("a per-document id prefix keeps two rendered docs' heading ids apart", async () => {
+  const prefix = "user-content-preview-";
+  const file = await unified()
+    .use(remarkParse)
+    .use(remarkRehype)
+    .use(rehypeSlug)
+    .use(rehypeAutolinkHeadings, { behavior: "wrap" })
+    .use(rehypeSanitize, markdownSchema(prefix))
+    .use(rehypeStringify)
+    .process("# Introduction");
+  const html = String(file);
+  const id = html.match(/<h1[^>]*id="([^"]+)"/)?.[1];
+  const rawHref = html.match(/href="(#[^"]+)"/)?.[1];
+  assert.equal(id, `${prefix}introduction`);
+  assert.notEqual(id, `${CLOBBER_PREFIX}introduction`);
+  assert.equal(resolveHashHref(rawHref as string, prefix), `#${id}`);
+  assert.equal(resolveHashHref(`#${id}`, prefix), `#${id}`);
 });

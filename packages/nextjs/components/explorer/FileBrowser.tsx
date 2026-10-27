@@ -2149,7 +2149,7 @@ export const FileBrowser = ({
               ) : fileContentType?.startsWith("audio/") ? (
                 <audio src={fileContent} controls className="w-full" />
               ) : markdownPreviewable ? (
-                <MarkdownView source={fileContent} />
+                <MarkdownView source={fileContent} idPrefix="user-content-preview-" />
               ) : fileContentType?.startsWith("text/html") || fileContentType === "application/xhtml+xml" ? (
                 // Untrusted HTML from a mirror. `allow-scripts` runs JS + WASM, but
                 // we deliberately OMIT `allow-same-origin`: that pairing lets the
@@ -2295,7 +2295,7 @@ export const FileBrowser = ({
                   <audio src={fileContent} controls className="w-[60vw]" />
                 ) : markdownPreviewable ? (
                   <div className="bg-base-100 rounded-lg p-6 overflow-auto" style={{ width: "90vw", height: "85vh" }}>
-                    <MarkdownView source={fileContent} />
+                    <MarkdownView source={fileContent} idPrefix="user-content-preview-" />
                   </div>
                 ) : fileContentType?.startsWith("text/html") || fileContentType === "application/xhtml+xml" ? (
                   // Untrusted HTML — runs JS + WASM via allow-scripts, but no

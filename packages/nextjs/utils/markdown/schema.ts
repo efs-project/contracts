@@ -28,6 +28,16 @@ export const overviewSchema = {
 export const CLOBBER_PREFIX = defaultSchema.clobberPrefix ?? "user-content-";
 
 /**
+ * {@link overviewSchema} with its own id prefix, for a document rendered on the
+ * same page as another one (the explorer preview beside the Overview). Without
+ * it, "# Introduction" in both docs yields two `user-content-introduction` ids
+ * and the preview's heading links scroll to the Overview's copy.
+ */
+export function markdownSchema(idPrefix: string = CLOBBER_PREFIX) {
+  return idPrefix === CLOBBER_PREFIX ? overviewSchema : { ...overviewSchema, clobberPrefix: idPrefix };
+}
+
+/**
  * Re-point a same-page href fragment at its clobber-prefixed element id.
  *
  * rehype-sanitize prefixes heading ids with {@link CLOBBER_PREFIX} but leaves
@@ -35,10 +45,11 @@ export const CLOBBER_PREFIX = defaultSchema.clobberPrefix ?? "user-content-";
  * around a heading ("#hello-world") points at the now-"user-content-hello-world"
  * id and scrolls nowhere. Applied in MarkdownView's `<a>` override, this fixes
  * both heading autolinks and author-written `[x](#section)` links. Idempotent;
- * leaves a bare "#" alone. (Codex P2)
+ * leaves a bare "#" alone. Pass the document's `idPrefix` when it was rendered
+ * with {@link markdownSchema}. (Codex P2)
  */
-export function resolveHashHref(href: string): string {
+export function resolveHashHref(href: string, idPrefix: string = CLOBBER_PREFIX): string {
   const fragment = href.slice(1); // drop leading '#'
-  if (!fragment || fragment.startsWith(CLOBBER_PREFIX)) return href;
-  return `#${CLOBBER_PREFIX}${fragment}`;
+  if (!fragment || fragment.startsWith(idPrefix)) return href;
+  return `#${idPrefix}${fragment}`;
 }

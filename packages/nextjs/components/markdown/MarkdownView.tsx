@@ -1,12 +1,12 @@
 "use client";
 
-import { Component, type ReactNode } from "react";
+import { Component, type ReactNode, memo, useMemo } from "react";
 import Markdown, { type Components } from "react-markdown";
 import rehypeAutolinkHeadings from "rehype-autolink-headings";
 import rehypeSanitize from "rehype-sanitize";
 import rehypeSlug from "rehype-slug";
 import remarkGfm from "remark-gfm";
-import { overviewSchema, resolveHashHref } from "~~/utils/markdown/schema";
+import { CLOBBER_PREFIX, markdownSchema, resolveHashHref } from "~~/utils/markdown/schema";
 
 /**
  * Render boundary for UNTRUSTED markdown. The Overview pane auto-loads README
@@ -36,7 +36,7 @@ class MarkdownRenderBoundary extends Component<{ children: ReactNode }, { failed
 
 const ABSOLUTE_HTTP = /^https?:\/\//i;
 
-const components: Components = {
+const makeComponents = (idPrefix: string): Components => ({
   a({ href, children }) {
     if (href && ABSOLUTE_HTTP.test(href)) {
       return (
@@ -53,23 +53,38 @@ const components: Components = {
     // the fragment at the clobber-prefixed element id so the link actually
     // resolves after sanitize (Codex P2).
     if (href && href.startsWith("#")) {
-      return <a href={resolveHashHref(href)}>{children}</a>;
+      return <a href={resolveHashHref(href, idPrefix)}>{children}</a>;
     }
     return <span className="opacity-70">{children}</span>;
   },
   img({ alt }) {
     return <span className="text-xs opacity-60">🖼 {alt || "image"}</span>;
   },
-};
+});
 
-/** Untrusted-markdown renderer. Sanitize is the LAST rehype plugin. */
-export function MarkdownView({ source }: { source: string }) {
+/**
+ * Untrusted-markdown renderer. Sanitize is the LAST rehype plugin.
+ *
+ * Memoized on its props: react-markdown parses synchronously on every render
+ * (~1.9 s for a document near MAX_RENDER_BYTES), and the explorer re-renders on
+ * every new block. Give each document on the same page its own `idPrefix` so
+ * their heading ids and hash links don't collide.
+ */
+export const MarkdownView = memo(function MarkdownView({
+  source,
+  idPrefix = CLOBBER_PREFIX,
+}: {
+  source: string;
+  idPrefix?: string;
+}) {
+  const schema = useMemo(() => markdownSchema(idPrefix), [idPrefix]);
+  const components = useMemo(() => makeComponents(idPrefix), [idPrefix]);
   return (
     <article className="prose prose-efs max-w-none">
       <MarkdownRenderBoundary key={source}>
         <Markdown
           remarkPlugins={[remarkGfm]}
-          rehypePlugins={[rehypeSlug, [rehypeAutolinkHeadings, { behavior: "wrap" }], [rehypeSanitize, overviewSchema]]}
+          rehypePlugins={[rehypeSlug, [rehypeAutolinkHeadings, { behavior: "wrap" }], [rehypeSanitize, schema]]}
           components={components}
         >
           {source}
@@ -77,4 +92,4 @@ export function MarkdownView({ source }: { source: string }) {
       </MarkdownRenderBoundary>
     </article>
   );
-}
+});
