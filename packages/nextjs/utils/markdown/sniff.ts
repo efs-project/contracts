@@ -33,3 +33,15 @@ export function sniffContent(bytes: Uint8Array): SniffResult {
   }
   return "text";
 }
+
+const PDF_HEADER = [0x25, 0x50, 0x44, 0x46, 0x2d]; // %PDF-
+// PDF readers (PDFium, pdf.js, Acrobat) accept the header anywhere in the
+// first 1 KiB, so match that window rather than strictly offset 0.
+const PDF_HEADER_WINDOW = 1024;
+
+/** True when the bytes carry a `%PDF-` header — i.e. they really are a PDF, whatever the attested contentType says. */
+export function looksLikePdf(bytes: Uint8Array): boolean {
+  const last = Math.min(bytes.length, PDF_HEADER_WINDOW) - PDF_HEADER.length;
+  for (let i = 0; i <= last; i++) if (startsWith(bytes.subarray(i), PDF_HEADER)) return true;
+  return false;
+}

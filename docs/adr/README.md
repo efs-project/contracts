@@ -163,3 +163,4 @@ What else we looked at and why it lost.
 
 - [ADR-0040 — Read dynamic route params from `usePathname`, not `useParams`, in static-exported dynamic routes](./0040-static-export-usepathname-over-useparams.md)
 - [ADR-0042 — Effective TAG as a client-layer weight filter for descriptive labels](./0042-effective-tag-weight-filter.md) _(Extended into the view layer by ADR-0054 — the same `weight >= threshold` projection is now also available on-chain via `EFSFileView.getDirectoryPageFiltered`; the kernel still never interprets weight)_
+- [ADR-0069 — PDF preview is rendered unsandboxed (narrow exception to ADR-0056 render isolation)](./0069-pdf-preview-unsandboxed-exception.md)

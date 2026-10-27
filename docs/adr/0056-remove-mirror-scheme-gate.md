@@ -1,6 +1,6 @@
 # ADR-0056: Remove the mirror URI scheme gate (allowlist → unrestricted)
 
-**Status:** Accepted
+**Status:** Accepted (amended in part by ADR-0069 — PDF previews render unsandboxed behind three guards; every other type keeps the sandboxed-iframe rule)
 **Date:** 2026-06-19
 **Related:** Supersedes ADR-0023; ADR-0048 (proxy-ready resolvers), ADR-0011 (transport anchors), ADR-0022 (MAX_URI_LENGTH), ADR-0012 (transport priority — see Consequences), ADR-0013 (lens-scoped mirror selection); planning `[[mirror-scheme-policy]]`
 **Permanence-tier:** Durable (devnet; resolver logic behind an upgradeable proxy, pre-burn)
