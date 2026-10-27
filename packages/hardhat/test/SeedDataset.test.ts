@@ -40,6 +40,8 @@ function buildFixture(opts: {
   tags?: string[];
   staleFile?: string;
   allowWrites?: boolean;
+  /** Licence on the html entry; `null` omits it. */
+  license?: string | null;
 }): SeedFixture {
   const dir = mkdtempSync(path.join(tmpdir(), "efs-seed-dataset-"));
   const bytes = "<html>same</html>";
@@ -50,7 +52,14 @@ function buildFixture(opts: {
     JSON.stringify({
       dataset: "test-games",
       anchorPath: "/games",
-      files: [{ path: "snake.html", contentType: "text/html", tags: opts.tags ?? ["arcade"] }],
+      files: [
+        {
+          path: "snake.html",
+          contentType: "text/html",
+          tags: opts.tags ?? ["arcade"],
+          ...(opts.license === null ? {} : { license: opts.license ?? "MIT" }),
+        },
+      ],
     }),
   );
 
@@ -65,6 +74,9 @@ function buildFixture(opts: {
   const propertyUID = uid("08");
   const staleAnchorUID = uid("09");
   const stalePinUID = uid("0a");
+  const staleDataUID = uid("0b");
+  const activeMirrorUID = uid("0d");
+  const staleMirrorUID = uid("0e");
   const anchorSchema = uid("a1");
   const dataSchema = uid("d1");
   const mirrorSchema = uid("b1");
@@ -95,6 +107,22 @@ function buildFixture(opts: {
             anchorSchema,
             lensAddress,
             ABI.encode(["string", "bytes32"], ["snake.html", dataSchema]),
+          );
+        }
+        if (requestedUID === activeMirrorUID) {
+          return attestation(
+            activeMirrorUID,
+            mirrorSchema,
+            lensAddress,
+            ABI.encode(["bytes32", "string"], [ipfsTransportUID, "ipfs://bafyoldsnake"]),
+          );
+        }
+        if (requestedUID === staleMirrorUID) {
+          return attestation(
+            staleMirrorUID,
+            mirrorSchema,
+            lensAddress,
+            ABI.encode(["bytes32", "string"], [ipfsTransportUID, "ipfs://bafyoldstale"]),
           );
         }
         if (requestedUID === staleAnchorUID && opts.staleFile) {
@@ -156,6 +184,14 @@ function buildFixture(opts: {
     getChildren: async (parent: string, start: bigint, length: bigint) =>
       parent === gamesUID ? children.slice(Number(start), Number(start) + Number(length)) : [],
     getParent: async () => rootUID,
+    getReferencingBySchemaAndAttesterCount: async (target: string, schema: string, attester: string) =>
+      attester === lensAddress && schema === mirrorSchema && (target === dataUID || target === staleDataUID) ? 1n : 0n,
+    getReferencingBySchemaAndAttester: async (target: string, schema: string, attester: string) => {
+      if (attester !== lensAddress || schema !== mirrorSchema) return [];
+      if (target === dataUID) return [activeMirrorUID];
+      if (target === staleDataUID) return [staleMirrorUID];
+      return [];
+    },
   };
 
   const fakeEdgeResolver = {
@@ -165,7 +201,7 @@ function buildFixture(opts: {
       if (attester !== lensAddress) return ZeroHash;
       if (definition === fileAnchorUID && schema === dataSchema) return dataUID;
       if (definition === contentHashKeyUID && schema === propertySchema) return propertyUID;
-      if (definition === staleAnchorUID && schema === dataSchema) return uid("0b");
+      if (definition === staleAnchorUID && schema === dataSchema) return staleDataUID;
       return ZeroHash;
     },
     getActivePin: async (definition: string, attester: string, schema: string) => {
@@ -405,6 +441,75 @@ describe("seedDataset --prune", function () {
         seedDataset(planArgs(f, { prune: true, only: ["snake.html"] }), f.runtime),
       );
       expect(String(error)).to.match(/--prune.*--only|--only.*--prune/);
+    } finally {
+      cleanup(f);
+    }
+  });
+});
+
+describe("seedDataset licences and unpin list", function () {
+  it("refuses a media file (games, images, audio, video) with no licence, before any read", async function () {
+    const f = buildFixture({ signerAddress: SIGNER, lensAddress: SIGNER, license: null });
+    try {
+      const { error } = await captureLogs(() => seedDataset(planArgs(f), f.runtime));
+      expect(String(error)).to.match(/licen[cs]e/i);
+      expect(String(error)).to.match(/snake\.html/);
+      expect(f.counters.lensReads).to.deep.equal([]);
+    } finally {
+      cleanup(f);
+    }
+  });
+
+  it("does not require a licence on text documents", async function () {
+    const dir = mkdtempSync(path.join(tmpdir(), "efs-seed-doc-"));
+    try {
+      writeFileSync(path.join(dir, "paper.md"), "# Paper");
+      writeFileSync(
+        path.join(dir, "manifest.json"),
+        JSON.stringify({
+          dataset: "docs",
+          anchorPath: "/docs",
+          files: [{ path: "paper.md", contentType: "text/markdown" }],
+        }),
+      );
+      const { error } = await captureLogs(() =>
+        seedDataset(
+          {
+            manifest: path.join(dir, "manifest.json"),
+            execute: false,
+            plan: false,
+            pin: false,
+            force: false,
+            ipfsApiUrl: "",
+            only: [],
+          },
+          undefined,
+        ),
+      );
+      expect(error).to.equal(undefined);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("--plan lists the IPFS CIDs a run would make obsolete (changed and removed files)", async function () {
+    // A changed file gets a new DATA and a new CID; its old CID is no longer needed.
+    // A pruned file's CID likewise. Heals keep the same bytes, so they retire nothing.
+    const f = buildFixture({
+      signerAddress: SIGNER,
+      lensAddress: CURATOR,
+      activeHash: "f1220" + "00".repeat(32),
+      staleFile: "old.html",
+    });
+    try {
+      const { lines, error } = await captureLogs(() =>
+        seedDataset(planArgs(f, { attester: CURATOR, prune: true }), f.runtime),
+      );
+      expect(error).to.equal(undefined);
+      const block = lines.join("\n");
+      expect(block).to.match(/unpin/i);
+      expect(block).to.match(/bafyoldsnake\s+\/games\/snake\.html/);
+      expect(block).to.match(/bafyoldstale\s+\/games\/old\.html/);
     } finally {
       cleanup(f);
     }

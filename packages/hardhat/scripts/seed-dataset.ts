@@ -17,6 +17,7 @@ import {
   parseKuboAddResponse,
   assertValidTag,
   canonicalContentHash,
+  requiresLicense,
   legacyKeccakContentHash,
   parseSeedDatasetArgs,
 } from "./seed-dataset-lib";
@@ -83,6 +84,8 @@ interface SeedContext {
   ipfsTransportUID: UID;
   tagsRootUID: UID | null;
   stats: SeedStats;
+  /** IPFS CIDs this run makes obsolete (changed or removed files), for unpinning. */
+  retired: { cid: string; path: string }[];
 }
 
 interface PreparedFile {
@@ -156,15 +159,18 @@ export async function seedDataset(args: SeedDatasetArgs, ethersRuntime?: Hardhat
             ctx,
             file,
             datasetRootUID,
+            anchorPath: manifest.anchorPath,
             force: args.force,
           });
         }
         if (datasetRootUID && args.only.length === 0) {
           const unlisted = await findUnlistedPlacements(ctx, datasetRootUID, manifest);
           reportUnlisted(ctx, manifest, unlisted, { prune: Boolean(args.prune), mode: "plan" });
+          if (args.prune) await retireMirrors(ctx, unlisted, manifest.anchorPath);
         }
       }
       logSummary(ctx, "plan");
+      logUnpinList(ctx, "plan");
       return;
     }
 
@@ -197,6 +203,7 @@ export async function seedDataset(args: SeedDatasetArgs, ethersRuntime?: Hardhat
         ctx,
         file,
         datasetRootUID,
+        anchorPath: manifest.anchorPath,
         datasetDir,
         ipfsApiUrl: args.ipfsApiUrl,
         force: args.force,
@@ -206,10 +213,14 @@ export async function seedDataset(args: SeedDatasetArgs, ethersRuntime?: Hardhat
     if (args.only.length === 0) {
       const unlisted = await findUnlistedPlacements(ctx, datasetRootUID, manifest);
       reportUnlisted(ctx, manifest, unlisted, { prune: Boolean(args.prune), mode: "execute" });
-      if (args.prune && unlisted.length > 0) await revokePlacements(ctx, unlisted, manifest.dataset);
+      if (args.prune && unlisted.length > 0) {
+        await revokePlacements(ctx, unlisted, manifest.dataset);
+        await retireMirrors(ctx, unlisted, manifest.anchorPath);
+      }
     }
   }
   logSummary(ctx, "execute");
+  logUnpinList(ctx, "execute");
 }
 
 function loadPreparedDataset(
@@ -332,6 +343,16 @@ function prepareFiles(manifest: DatasetManifest, datasetDir: string, only: strin
     throw new Error(`--only path(s) not found in manifest: ${missing.join(", ")}`);
   }
 
+  const unlicensedMedia = files.filter(entry => {
+    const license = entry.license ?? defaults.license;
+    return requiresLicense(contentTypeForEntry(entry, defaults)) && (!license || license === "NOASSERTION");
+  });
+  if (unlicensedMedia.length > 0) {
+    throw new Error(
+      `Media files need a licence before publishing (set "license" on the entry or in "defaults"; NOASSERTION doesn't count): ${unlicensedMedia.map(e => e.path).join(", ")}`,
+    );
+  }
+
   return files.map(entry => {
     const absolutePath = path.resolve(datasetDir, entry.path);
     const datasetRoot = path.resolve(datasetDir);
@@ -429,6 +450,7 @@ async function connectContext(
     ipfsTransportUID,
     tagsRootUID: null,
     stats,
+    retired: [],
   };
 }
 
@@ -436,9 +458,10 @@ async function planOneFile(args: {
   ctx: SeedContext;
   file: PreparedFile;
   datasetRootUID: UID | null;
+  anchorPath: string;
   force: boolean;
 }): Promise<void> {
-  const { ctx, file, datasetRootUID, force } = args;
+  const { ctx, file, datasetRootUID, anchorPath, force } = args;
   const parentUID = datasetRootUID ? await resolveEntryParent(ctx, datasetRootUID, file.relativePath) : null;
   const fileName = path.posix.basename(file.relativePath);
   const fileAnchorUID = parentUID ? await findAnchor(ctx, parentUID, fileName, ctx.schemas.data) : null;
@@ -463,18 +486,21 @@ async function planOneFile(args: {
 
   ctx.stats.plannedWrites += 1;
   console.log(`  plan write ${file.relativePath} (${formatDecisionReason(decision.reason, activePlacement, file)})`);
+  if (activePlacement)
+    await retireMirrors(ctx, [{ name: file.relativePath, dataUID: activePlacement.dataUID }], anchorPath);
 }
 
 async function seedOneFile(args: {
   ctx: SeedContext;
   file: PreparedFile;
   datasetRootUID: UID;
+  anchorPath: string;
   datasetDir: string;
   ipfsApiUrl: string;
   force: boolean;
   tagCache: Map<string, UID>;
 }): Promise<void> {
-  const { ctx, file, datasetRootUID, ipfsApiUrl, force, tagCache } = args;
+  const { ctx, file, datasetRootUID, anchorPath, ipfsApiUrl, force, tagCache } = args;
   const parentUID = await ensureEntryParent(ctx, datasetRootUID, file.relativePath);
   const fileName = path.posix.basename(file.relativePath);
   let fileAnchorUID = await findAnchor(ctx, parentUID, fileName, ctx.schemas.data);
@@ -597,6 +623,9 @@ async function seedOneFile(args: {
   await attestMany(ctx, commitRequests, `commit:${file.relativePath}`);
   recordWriteStats(ctx, decision.reason);
   console.log(`  wrote ${file.relativePath} data=${dataUID.slice(0, 10)}... mirror=${mirrorUri}`);
+  // The new placement superseded the old DATA; its IPFS copy is no longer served here.
+  if (activePlacement)
+    await retireMirrors(ctx, [{ name: file.relativePath, dataUID: activePlacement.dataUID }], anchorPath);
 }
 
 /**
@@ -866,6 +895,7 @@ interface UnlistedPlacement {
   name: string;
   anchorUID: UID;
   pinUID: UID;
+  dataUID: UID;
 }
 
 /**
@@ -889,7 +919,12 @@ async function findUnlistedPlacements(
       if (anchorSchema.toLowerCase() !== ctx.schemas.data.toLowerCase() || listed.has(name)) continue;
       const pinUID = (await ctx.edgeResolver.getActivePin(anchorUID, ctx.signerAddress, ctx.schemas.data)) as UID;
       if (isZeroUID(pinUID)) continue;
-      unlisted.push({ name, anchorUID, pinUID });
+      const dataUID = (await ctx.edgeResolver.getActivePinTarget(
+        anchorUID,
+        ctx.signerAddress,
+        ctx.schemas.data,
+      )) as UID;
+      unlisted.push({ name, anchorUID, pinUID, dataUID });
     }
   }
   return unlisted;
@@ -932,6 +967,50 @@ async function revokePlacements(ctx: SeedContext, unlisted: UnlistedPlacement[],
   console.log(
     `  tx   remove:${dataset} hash=${tx.hash ?? "unknown"} status=${receipt?.status ?? "unknown"} revoked=${unlisted.length} (${unlisted.map(i => i.name).join(", ")})`,
   );
+}
+
+/**
+ * Records the IPFS CIDs of DATA this run stops serving, so they can be unpinned afterwards.
+ * Only this lens's own `ipfs://` MIRRORs are listed.
+ */
+async function retireMirrors(
+  ctx: SeedContext,
+  files: { name: string; dataUID: UID }[],
+  anchorPath: string,
+): Promise<void> {
+  for (const file of files) {
+    const count = Number(
+      await ctx.indexer.getReferencingBySchemaAndAttesterCount(file.dataUID, ctx.schemas.mirror, ctx.signerAddress),
+    );
+    if (count === 0) continue;
+    const mirrorUIDs = (await ctx.indexer.getReferencingBySchemaAndAttester(
+      file.dataUID,
+      ctx.schemas.mirror,
+      ctx.signerAddress,
+      0,
+      count,
+      false,
+      false,
+    )) as UID[];
+    for (const mirrorUID of mirrorUIDs) {
+      const attestation = (await ctx.eas.getAttestation(mirrorUID)) as { data: string };
+      const [, uri] = ABI.decode(["bytes32", "string"], attestation.data) as unknown as [string, string];
+      if (uri.startsWith("ipfs://")) {
+        ctx.retired.push({ cid: uri.slice("ipfs://".length), path: `${anchorPath}/${file.name}` });
+      }
+    }
+  }
+}
+
+/** Prints the unpin list: one `<cid>  <path>` line per IPFS copy this run made obsolete. */
+function logUnpinList(ctx: SeedContext, mode: "plan" | "execute"): void {
+  if (ctx.retired.length === 0) return;
+  console.log(
+    mode === "plan"
+      ? `[seed-dataset] unpin after executing: ${ctx.retired.length} IPFS CID(s) this run would stop serving`
+      : `[seed-dataset] unpin: ${ctx.retired.length} IPFS CID(s) no longer served (check nothing else pins the same bytes)`,
+  );
+  for (const item of ctx.retired) console.log(`  ${item.cid}  ${item.path}`);
 }
 
 async function attestOne(ctx: SeedContext, schema: UID, data: AttestationData, label: string): Promise<UID> {

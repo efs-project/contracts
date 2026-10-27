@@ -264,6 +264,19 @@ export function buildIpfsAddUrl(apiBase: string): URL {
   return url;
 }
 
+const MEDIA_TYPES = new Set(["text/html", "application/wasm"]);
+const MEDIA_TYPE_PREFIXES = ["image/", "audio/", "video/", "model/"];
+
+/**
+ * Media (games, images, audio, video) must carry a licence before it is published.
+ * Documents (whitepapers, standards, essays) need not: the owner hosts those without a
+ * licence field (decision 2026-10-27).
+ */
+export function requiresLicense(contentType: string): boolean {
+  const base = contentType.split(";")[0].trim().toLowerCase();
+  return MEDIA_TYPES.has(base) || MEDIA_TYPE_PREFIXES.some(prefix => base.startsWith(prefix));
+}
+
 /** A manifest tag becomes an anchor name under `/tags`, so it must pass the same on-chain
  * name rules. Checked before any write: a bad tag used to revert mid-file, after the
  * file's DATA and PROPERTYs were already permanent. */
