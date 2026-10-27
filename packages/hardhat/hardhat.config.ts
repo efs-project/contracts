@@ -16,6 +16,7 @@ import generateTsAbis from "./scripts/generateTsAbis";
 import "./tasks/deployEfs";
 import "./tasks/deployEfsViews";
 import "./tasks/mirrorUpgrade";
+import "./tasks/seedDataset";
 
 // If not set, it uses Scaffold-ETH-2's public default Alchemy API key.
 // You can get your own at https://dashboard.alchemyapi.io.
@@ -26,8 +27,10 @@ const providerApiKey = envOr("ALCHEMY_API_KEY", "IZYEU2cWBgnFmgiTAgpWD");
 // If not set, it uses the hardhat account 0 private key.
 // You can generate a random account with `yarn generate` or `yarn account:import` to import your existing PK
 const defaultHardhatPrivateKey = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
-// Do not use envOr here. A blank runtime private key should fail closed on live networks
-// instead of silently falling back to the public Hardhat dev key.
+// Do not use envOr here: a blank runtime key must not be replaced. But note an UNSET key
+// still falls back to the public Hardhat dev key below, on every network. The
+// `runHardhatDeployWithPK` wrapper sets it; tools that write to live chains must check the
+// signer themselves (seed:dataset refuses this key off local chains).
 const deployerPrivateKey = process.env.__RUNTIME_DEPLOYER_PRIVATE_KEY ?? defaultHardhatPrivateKey;
 // If not set, it uses our block explorers default API keys.
 const etherscanApiKey = envOr("ETHERSCAN_MAINNET_API_KEY", "DNXJA8RX2Q3VZ4URQIWP7Z68CJXQZSC6AW");
