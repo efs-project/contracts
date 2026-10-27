@@ -1402,6 +1402,10 @@ export const FileBrowser = ({
       (it: any) => isFile(it, dataSchemaUID) && (it.uid as string | undefined)?.toLowerCase() === target,
     );
     if (!item) return;
+    // `fetchFileContent` bails while the router/client reads are still loading
+    // (they resolve independently of the listing on a cold deep link), so stay
+    // pending until they're ready rather than marking a skipped fetch applied.
+    if (!efsRouter || !publicClient) return;
     appliedUrlFileRef.current = target;
     if ((selectedFile?.uid as string | undefined)?.toLowerCase() === target) return;
     setSelectedList(null);
@@ -1409,7 +1413,7 @@ export const FileBrowser = ({
     fetchFileContent(item);
     // `fetchFileContent` is a per-render closure; the guard above makes reruns no-ops.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [urlFile, visibleItems, selectedFile, dataSchemaUID]);
+  }, [urlFile, visibleItems, selectedFile, dataSchemaUID, efsRouter, publicClient]);
 
   // Keyboard handler ref — lets the useEffect stay above early returns while
   // the actual handler logic (which depends on computed values) is set later.

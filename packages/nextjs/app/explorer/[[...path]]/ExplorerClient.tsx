@@ -102,9 +102,10 @@ export default function ExplorerClient() {
   // `usePathname()` is URL-derived — it always reflects `window.location`
   // after hydration — so it's the reliable source. We keep `params` as a
   // secondary signal (in dev it updates on `router.push` slightly before
-  // `pathname`, though both converge within a tick) and prefer whichever
-  // has segments. See the PR that introduced this comment for the
-  // reproducing test (curl + static `spa-serve` + Chromium = same bug).
+  // `pathname`, though both converge within a tick) but use it only when
+  // `pathname` isn't an explorer path. See the PR that introduced this
+  // comment for the reproducing test (curl + static `spa-serve` + Chromium =
+  // same bug).
   const pathSegmentsFromParams = (() => {
     const p = params?.path;
     return Array.isArray(p) ? p : p ? [p] : [];
@@ -117,7 +118,13 @@ export default function ExplorerClient() {
     if (!trimmed.startsWith("explorer/")) return [];
     return trimmed.slice("explorer/".length).split("/").map(decodeURIComponent).filter(Boolean);
   })();
-  const pathSegments = pathSegmentsFromPathname.length > 0 ? pathSegmentsFromPathname : pathSegmentsFromParams;
+  // A file select/close updates the URL via native history (see `setFileUrl`),
+  // which moves `pathname` but leaves `params` at the last routed path. So an
+  // explorer pathname wins even with zero segments — otherwise closing a
+  // root-level file (`/explorer/README.md` → `/explorer/`) would fall back to
+  // stale params and reopen it.
+  const pathnameIsExplorer = !!pathname && /^\/*explorer(\/|$)/.test(pathname);
+  const pathSegments = pathnameIsExplorer ? pathSegmentsFromPathname : pathSegmentsFromParams;
 
   const sortParam = searchParams.get("sort");
   const activeSortInfoUID = sortParam || null;
@@ -670,7 +677,7 @@ export default function ExplorerClient() {
     document.title = label ? `${label} - EFS` : "File Explorer - EFS";
   }, [currentPath, containerDisplayName]);
 
-  const navigateToPath = (newPathItems: PathItem[], { replace = false } = {}) => {
+  const pathUrl = (newPathItems: PathItem[]) => {
     // The first path item is the container root; we skip it in the URL only for
     // anchor walks (where the head *is* rootUID, not a URL segment). For
     // address/schema/attestation containers, the first item *is* a URL segment
@@ -681,9 +688,23 @@ export default function ExplorerClient() {
     const urlSegments = newPathItems.slice(skipHead ? 1 : 0).map(p => p.urlSegment ?? encodeURIComponent(p.name));
     const currentQuery = searchParams.toString();
     const queryPart = currentQuery ? `?${currentQuery}` : "";
-    const url = `/explorer/${urlSegments.join("/")}${queryPart}`;
-    if (replace) router.replace(url);
-    else router.push(url);
+    return `/explorer/${urlSegments.join("/")}${queryPart}`;
+  };
+
+  const navigateToPath = (newPathItems: PathItem[]) => router.push(pathUrl(newPathItems));
+
+  // Selecting / closing / stepping a file only changes the URL's trailing file
+  // segment. A `router.push` there would remount this page subtree (Next keys
+  // the catch-all page by its params; the static export also falls back to a
+  // full load), dropping filters, pagination and fullscreen state. Next 14.2
+  // syncs native `history.pushState` / `replaceState` into `usePathname`
+  // without a navigation, so the explorer stays mounted and the resolution
+  // effect takes its one-segment fast path. Back/forward restore these entries
+  // the same way.
+  const setFileUrl = (newPathItems: PathItem[], { replace = false } = {}) => {
+    const url = pathUrl(newPathItems);
+    if (replace) window.history.replaceState(null, "", url);
+    else window.history.pushState(null, "", url);
   };
 
   const handleSortChange = (sortInfoUID: string | null) => {
@@ -960,7 +981,7 @@ export default function ExplorerClient() {
                     // previewed file is a shareable link and back/forward work.
                     urlFile={urlFile}
                     onFileSelect={(file, opts) =>
-                      navigateToPath(file ? [...currentPath, { uid: file.uid, name: file.name }] : currentPath, opts)
+                      setFileUrl(file ? [...currentPath, { uid: file.uid, name: file.name }] : currentPath, opts)
                     }
                   />
                 )}
