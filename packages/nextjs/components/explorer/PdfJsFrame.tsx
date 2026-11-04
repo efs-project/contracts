@@ -15,6 +15,9 @@ import { CSSProperties, useRef } from "react";
 // them in with the bytes; the frame imports them from its own blob: URLs.
 // Chromium won't start a Worker from a blob in an opaque origin, so pdf.js
 // runs its parser on the frame's main thread (`globalThis.pdfjsWorker`).
+// With no network, pdf.js can't load its wasm image decoders, standard-font
+// files or CJK CMaps: JPEG2000/JBIG2 images may render blank and missing fonts
+// fall back to built-in substitutes. Download still gets the real file.
 
 // Emitted by webpack as hashed static files and fetched only when a fallback
 // preview is shown, so browsers with a native viewer never download pdf.js.
@@ -39,7 +42,8 @@ const loadPdfJsSources = () => {
 };
 
 // Runs inside the sandboxed frame. Kept as plain JS: it never shares the
-// app's bundle or globals. Pages render lazily as they scroll into view.
+// app's bundle or globals. Pages render as they near the viewport and are
+// cleared again once far away, so a long PDF doesn't pin every page's bitmap.
 const FRAME_HTML = `<!doctype html>
 <html><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' blob:; style-src 'unsafe-inline'; img-src blob: data:; font-src blob: data:">
@@ -47,12 +51,16 @@ const FRAME_HTML = `<!doctype html>
 html,body{margin:0;background:#525659}
 #pages{display:flex;flex-direction:column;align-items:center;gap:8px;padding:8px}
 canvas{display:block;width:100%;max-width:1000px;height:auto;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.4)}
-#msg{color:#eee;font:14px system-ui,sans-serif;padding:16px;text-align:center}
+#msg,#more{color:#eee;font:14px system-ui,sans-serif;padding:16px;text-align:center}
 </style></head>
 <body><div id="msg">Loading PDF…</div><div id="pages"></div>
 <script type="module">
 const msg = document.getElementById("msg");
 const pagesEl = document.getElementById("pages");
+// Page count and page size are attacker-chosen, and on Android this frame
+// shares the app's main thread: bound both so a hostile PDF can't hang the tab.
+const MAX_PAGES = 300;
+const MAX_CANVAS_PIXELS = 16e6;
 const fail = () => { msg.hidden = false; msg.textContent = "Couldn't render this PDF here. Use Download to open it."; };
 let started = false;
 addEventListener("message", async e => {
@@ -66,29 +74,57 @@ addEventListener("message", async e => {
     const doc = await pdfjs.getDocument({ data: e.data.bytes, enableXfa: false, useWorkerFetch: false }).promise;
     const dpr = Math.min(devicePixelRatio || 1, 2);
     const first = (await doc.getPage(1)).getViewport({ scale: 1 });
-    const observer = new IntersectionObserver(entries => {
-      for (const entry of entries) {
-        if (!entry.isIntersecting) continue;
-        observer.unobserve(entry.target);
-        renderPage(entry.target).catch(() => {});
+    const tasks = new Map();
+    let anyRendered = false;
+    const show = async canvas => {
+      if (canvas.dataset.state) return;
+      canvas.dataset.state = "rendering";
+      try {
+        const page = await doc.getPage(Number(canvas.dataset.page));
+        if (canvas.dataset.state !== "rendering") return; // scrolled away meanwhile
+        const base = page.getViewport({ scale: 1 });
+        const fit = ((canvas.clientWidth || 800) * dpr) / base.width;
+        const viewport = page.getViewport({ scale: Math.min(fit, Math.sqrt(MAX_CANVAS_PIXELS / (base.width * base.height))) });
+        canvas.width = Math.floor(viewport.width);
+        canvas.height = Math.floor(viewport.height);
+        canvas.style.aspectRatio = base.width + " / " + base.height;
+        const task = page.render({ canvas, viewport });
+        tasks.set(canvas, task);
+        await task.promise;
+        canvas.dataset.state = "done";
+        anyRendered = true;
+        msg.hidden = true;
+      } catch (err) {
+        if (err && err.name === "RenderingCancelledException") return;
+        canvas.dataset.state = "failed";
+        if (!anyRendered) fail();
+      } finally {
+        tasks.delete(canvas);
       }
-    }, { rootMargin: "200% 0px" });
-    const renderPage = async canvas => {
-      const page = await doc.getPage(Number(canvas.dataset.page));
-      const base = page.getViewport({ scale: 1 });
-      const viewport = page.getViewport({ scale: ((canvas.clientWidth || 800) * dpr) / base.width });
-      canvas.width = Math.floor(viewport.width);
-      canvas.height = Math.floor(viewport.height);
-      canvas.style.aspectRatio = base.width + " / " + base.height;
-      await page.render({ canvas, viewport }).promise;
-      msg.hidden = true;
     };
-    for (let n = 1; n <= doc.numPages; n++) {
+    const hide = canvas => {
+      if (canvas.dataset.state === "failed") return;
+      tasks.get(canvas)?.cancel();
+      delete canvas.dataset.state;
+      canvas.width = canvas.height = 0; // frees the bitmap; aspect-ratio keeps the layout
+    };
+    // root: document, because rootMargin is ignored for the implicit root in a cross-origin frame.
+    const observer = new IntersectionObserver(
+      entries => entries.forEach(e => (e.isIntersecting ? show(e.target) : hide(e.target))),
+      { root: document, rootMargin: "200% 0px" },
+    );
+    for (let n = 1; n <= Math.min(doc.numPages, MAX_PAGES); n++) {
       const canvas = document.createElement("canvas");
       canvas.dataset.page = String(n);
       canvas.style.aspectRatio = first.width + " / " + first.height; // until the page renders
       pagesEl.append(canvas);
       observer.observe(canvas);
+    }
+    if (doc.numPages > MAX_PAGES) {
+      const more = document.createElement("div");
+      more.id = "more";
+      more.textContent = "Showing the first " + MAX_PAGES + " of " + doc.numPages + " pages. Use Download for the rest.";
+      pagesEl.append(more);
     }
   } catch {
     fail();
@@ -114,17 +150,21 @@ type PdfJsFrameProps = {
 
 export const PdfJsFrame = ({ bytes, title, className, style }: PdfJsFrameProps) => {
   const frameRef = useRef<HTMLIFrameElement>(null);
+  const sentTo = useRef<Window | null>(null);
   // Sent on load: the frame's module script has run by then, so its message
-  // listener is in place. A frame replaced mid-fetch just drops the message.
+  // listener is in place. Sent once per frame, so a frame that navigates
+  // itself can't make the app re-post pdf.js and the bytes in a loop.
   const handleLoad = async () => {
     const win = frameRef.current?.contentWindow;
-    if (!win) return;
+    if (!win || sentTo.current === win) return;
+    sentTo.current = win;
     let sources: string[] | null = null;
     try {
       sources = await loadPdfJsSources();
     } catch (err) {
       console.error("pdf.js load failed", err);
     }
+    if (frameRef.current?.contentWindow !== win) return; // replaced while fetching
     const data = bytes.slice();
     // "*" because the sandboxed frame's origin is opaque; nothing here is secret.
     win.postMessage({ type: "efs-pdf", lib: sources?.[0], worker: sources?.[1], bytes: data }, "*", [data.buffer]);
