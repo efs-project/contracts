@@ -252,6 +252,7 @@ export const CreateItemModal = ({
   const enabledSortUIDs = availableSorts.filter(s => !disabledAutoSorts.has(s.sortInfoUID)).map(s => s.sortInfoUID);
 
   const modalRef = useRef<HTMLDialogElement>(null);
+  const nameInputRef = useRef<HTMLInputElement>(null);
   // Flipped by the Stop button mid-upload. Checked between transactions so we
   // break cleanly on the next safe boundary (can't abort an already-broadcast tx).
   const cancelledRef = useRef(false);
@@ -272,6 +273,10 @@ export const CreateItemModal = ({
       setShowPasteDetails(false);
       setExistingAnchorWarning(false);
       modalRef.current?.showModal();
+      // Focus on open, not via `autoFocus`: the dialog stays mounted while
+      // closed, so autoFocus fired at page load and raised phone keyboards.
+      // (The List name input mounts only once open, so it keeps autoFocus.)
+      if (creationType !== "List") nameInputRef.current?.focus();
     } else {
       modalRef.current?.close();
     }
@@ -1170,6 +1175,7 @@ export const CreateItemModal = ({
             <span className="label-text">Name</span>
           </label>
           <input
+            ref={nameInputRef}
             type="text"
             placeholder={`Enter ${internalType === "Folder" ? "folder" : "file"} name`}
             className={`input input-bordered w-full ${nameValidationError ? "input-error" : ""}`}
@@ -1190,7 +1196,6 @@ export const CreateItemModal = ({
               if (e.key === "Escape") requestClose();
             }}
             autoComplete="off"
-            autoFocus
           />
           {nameValidationError && (
             <label className="label">
