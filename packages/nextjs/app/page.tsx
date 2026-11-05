@@ -32,7 +32,7 @@ const Home: NextPage = () => {
             className="btn btn-primary btn-lg h-auto min-h-0 mt-8 px-10 py-5 !text-xl rounded-2xl shadow-lg gap-3"
           >
             <FolderOpenIcon className="h-7 w-7" />
-            Browse EFS Files
+            Browse Files
           </Link>
 
           <div className="flex justify-center items-center space-x-2 flex-col sm:flex-row mt-6">
