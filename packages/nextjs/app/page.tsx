@@ -27,7 +27,15 @@ const Home: NextPage = () => {
             via <code className="bg-base-300 px-1 rounded text-sm">web3://</code> URIs.
           </p>
 
-          <div className="flex justify-center items-center space-x-2 flex-col sm:flex-row mt-4">
+          <Link
+            href="/explorer"
+            className="btn btn-primary btn-lg h-auto min-h-0 mt-8 px-10 py-5 !text-xl rounded-2xl shadow-lg gap-3"
+          >
+            <FolderOpenIcon className="h-7 w-7" />
+            Browse EFS Files
+          </Link>
+
+          <div className="flex justify-center items-center space-x-2 flex-col sm:flex-row mt-6">
             <p className="my-2 font-medium">Connected Address:</p>
             <Address address={connectedAddress} />
           </div>
