@@ -4,6 +4,9 @@ Canonical, human-readable registry of EFS contract addresses + frozen schema UID
 machine-readable source the apps consume is `packages/nextjs/contracts/deployedContracts.ts`; this file
 is the at-a-glance reference and the cold-boot record (a reader in 50 years should be able to find the
 foundation from here without the rest of the repo). Update it in the same commit as any new deploy.
+`yarn readback:sepolia` (read-only, no key) compares live Sepolia with the contracts compiled from your checkout:
+implementation code behind every proxy, the views, schema registration, ProxyAdmin ownership and post-freeze
+features. Run it before and after any Sepolia upgrade or redeploy.
 
 > Addresses are **Safe-keyed CREATE3** — the EFS.eth Safe is the CreateX caller, so the proxy addresses
 > (and the 9 schema UIDs hashed against them) are keyed to the Safe and identical on any chain the same

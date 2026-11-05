@@ -48,6 +48,7 @@
     "next:lint": "yarn workspace @se-2/nextjs lint",
     "next:serve": "yarn workspace @se-2/nextjs serve",
     "precommit": "lint-staged",
+    "readback:sepolia": "yarn workspace @se-2/hardhat readback:sepolia",
     "preview": "node scripts/claude-preview-launch.mjs",
     "start": "yarn workspace @se-2/nextjs dev",
     "simulate": "yarn hardhat:simulate",
