@@ -1,0 +1,1101 @@
+import { execFileSync } from "child_process";
+import { existsSync, readFileSync, readdirSync, statSync } from "fs";
+import http from "http";
+import https from "https";
+import path from "path";
+import { AbiCoder, Contract, Signer, ZeroAddress, ZeroHash } from "ethers";
+import {
+  ActiveDatasetPlacement,
+  DatasetManifest,
+  DatasetManifestEntry,
+  SeedDatasetArgs,
+  SeedFileDecision,
+  buildIpfsAddUrl,
+  contentTypeForEntry,
+  decideSeedFileAction,
+  loadDatasetManifest,
+  parseKuboAddResponse,
+  assertValidTag,
+  canonicalContentHash,
+  requiresLicense,
+  legacyKeccakContentHash,
+  parseSeedDatasetArgs,
+} from "./seed-dataset-lib";
+
+type UID = string;
+
+const EAS_ABI = [
+  "event Attested(address indexed recipient,address indexed attester,bytes32 uid,bytes32 indexed schemaUID)",
+  "function attest((bytes32 schema,(address recipient,uint64 expirationTime,bool revocable,bytes32 refUID,bytes data,uint256 value) data) request) payable returns (bytes32)",
+  "function getAttestation(bytes32 uid) view returns (tuple(bytes32 uid,bytes32 schema,uint64 time,uint64 expirationTime,uint64 revocationTime,bytes32 refUID,address recipient,address attester,bool revocable,bytes data))",
+  "function multiAttest((bytes32 schema,(address recipient,uint64 expirationTime,bool revocable,bytes32 refUID,bytes data,uint256 value)[] data)[] multiRequests) payable returns (bytes32[])",
+  "function multiRevoke((bytes32 schema,(bytes32 uid,uint256 value)[] data)[] multiRequests) payable",
+];
+
+/** Chains where the loaded key may be a throwaway: the local fork and the EFS devnet. */
+const LOCAL_CHAIN_IDS = new Set([31337n, 26001993n]);
+/** Hardhat account #0. Its private key is public, so anything it publishes anyone can revoke. */
+const HARDHAT_DEV_KEY_ADDRESS = "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266";
+const CHILD_PAGE = 100;
+
+const MAX_ANCHOR_DEPTH = 32;
+const ABI = AbiCoder.defaultAbiCoder();
+
+interface HardhatEthersRuntime {
+  getSigners: () => Promise<Signer[]>;
+  getContract: (name: string, signer?: Signer) => Promise<unknown>;
+  getContractAt: (name: string, address: string, signer?: Signer) => Promise<unknown>;
+}
+
+interface AttestationData {
+  recipient: string;
+  expirationTime: bigint;
+  revocable: boolean;
+  refUID: string;
+  data: string;
+  value: bigint;
+}
+
+interface MultiRequest {
+  schema: string;
+  data: AttestationData[];
+}
+
+interface SeedContext {
+  signer: Signer;
+  signerAddress: string;
+  eas: Contract;
+  // The generated TypeChain contracts are structurally compatible here, but the
+  // script only needs a small dynamic surface and stays simpler without importing
+  // every generated type into deploy tooling.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  indexer: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  edgeResolver: any;
+  schemas: {
+    anchor: UID;
+    data: UID;
+    mirror: UID;
+    pin: UID;
+    tag: UID;
+    property: UID;
+  };
+  rootUID: UID;
+  ipfsTransportUID: UID;
+  tagsRootUID: UID | null;
+  stats: SeedStats;
+  /** IPFS CIDs this run makes obsolete (changed or removed files), for unpinning. */
+  retired: { cid: string; path: string }[];
+}
+
+interface PreparedFile {
+  entry: DatasetManifestEntry;
+  absolutePath: string;
+  /** The bytes hashed below. Uploaded from this same buffer, so the pinned CID, the
+   * contentHash and the size always describe identical bytes. */
+  bytes: Buffer;
+  relativePath: string;
+  size: bigint;
+  contentType: string;
+  /** Canonical specs/10 multihash (`f1220…`) — what this seeder writes. */
+  contentHash: string;
+  /** The pre-specs/10 `keccak256(bytes)` claim — only to recognise legacy placements. */
+  legacyContentHash: string;
+}
+
+interface SeedStats {
+  skipped: number;
+  plannedWrites: number;
+  /** Planned in-place heals — counted apart from writes so a plan run is easy to check. */
+  plannedHeals: number;
+  created: number;
+  updated: number;
+  repaired: number;
+  /** Files whose legacy `0x`-keccak claim was re-bound to the canonical form in place. */
+  healed: number;
+  forced: number;
+  plannedRemovals: number;
+  removed: number;
+  pinned: number;
+  transactions: number;
+  attestations: number;
+}
+
+export async function seedDataset(args: SeedDatasetArgs, ethersRuntime?: HardhatEthersRuntime): Promise<void> {
+  const manifestPaths = resolveManifestPaths(args.manifest);
+  if (manifestPaths.length === 0) {
+    throw new Error(
+      "No explicit content source: pass --manifest <path> or set DATASET_ROOT to a datasets folder (e.g. the content repo's datasets/).",
+    );
+  }
+  if (!args.manifest && args.only.length > 0) {
+    throw new Error("--only requires --manifest when defaulting to multiple dataset manifests.");
+  }
+  if (args.prune && args.only.length > 0) {
+    throw new Error("--prune can't be combined with --only: it would remove every file --only left out.");
+  }
+  const stats = createSeedStats();
+
+  // Load and validate EVERY dataset before touching the chain, so a bad manifest in the
+  // last dataset can't fail the run after earlier datasets were already written.
+  const datasets = manifestPaths.map(manifestPath => loadPreparedDataset(manifestPath, args.only));
+  if (args.plan || args.execute) {
+    for (const datasetDir of uniqueStrings(datasets.map(d => d.datasetDir))) {
+      checkContentSource(datasetDir, { mustBeCommitted: args.execute && !args.allowUncommitted });
+    }
+  }
+
+  if (!args.execute) {
+    if (args.plan) {
+      const runtime = ethersRuntime ?? (await import("hardhat")).ethers;
+      const ctx = await connectContext(runtime, stats, { mode: "plan", attester: args.attester });
+      for (const { manifest, selected } of datasets) {
+        console.log(
+          `[seed-dataset] dataset=${manifest.dataset} anchor=${manifest.anchorPath} files=${selected.length}`,
+        );
+        const datasetRootUID = await resolveAnchorPath(ctx, manifest.anchorPath);
+        for (const file of selected) {
+          await planOneFile({
+            ctx,
+            file,
+            datasetRootUID,
+            anchorPath: manifest.anchorPath,
+            force: args.force,
+          });
+        }
+        if (datasetRootUID && args.only.length === 0) {
+          const unlisted = await findUnlistedPlacements(ctx, datasetRootUID, manifest);
+          reportUnlisted(ctx, manifest, unlisted, { prune: Boolean(args.prune), mode: "plan" });
+          if (args.prune) await retireMirrors(ctx, unlisted, manifest.anchorPath);
+        }
+      }
+      logSummary(ctx, "plan");
+      logUnpinList(ctx, "plan");
+      return;
+    }
+
+    for (const { manifest, selected } of datasets) {
+      console.log(`[seed-dataset] dataset=${manifest.dataset} anchor=${manifest.anchorPath} files=${selected.length}`);
+      for (const file of selected) {
+        console.log(`  dry-run ${file.relativePath} ${file.contentType} ${file.size} bytes hash=${file.contentHash}`);
+      }
+    }
+    console.log(
+      `[seed-dataset] manifest dry-run only. datasets=${manifestPaths.length}. Re-run with --plan to compare chain state, or --execute --pin to pin and write attestations.`,
+    );
+    return;
+  }
+  if (!args.pin) {
+    throw new Error("IPFS seeding requires --pin so local bytes become ipfs:// mirrors.");
+  }
+
+  const runtime = ethersRuntime ?? (await import("hardhat")).ethers;
+  const ctx = await connectContext(runtime, stats, { mode: "execute", attester: args.attester });
+  console.log(`[seed-dataset] ipfsApiUrl=${redactUrl(args.ipfsApiUrl)}`);
+  const tagCache = new Map<string, UID>();
+
+  for (const { manifest, datasetDir, selected } of datasets) {
+    console.log(`[seed-dataset] dataset=${manifest.dataset} anchor=${manifest.anchorPath} files=${selected.length}`);
+    const datasetRootUID = await ensureAnchorPath(ctx, manifest.anchorPath);
+
+    for (const file of selected) {
+      await seedOneFile({
+        ctx,
+        file,
+        datasetRootUID,
+        anchorPath: manifest.anchorPath,
+        datasetDir,
+        ipfsApiUrl: args.ipfsApiUrl,
+        force: args.force,
+        tagCache,
+      });
+    }
+    if (args.only.length === 0) {
+      const unlisted = await findUnlistedPlacements(ctx, datasetRootUID, manifest);
+      reportUnlisted(ctx, manifest, unlisted, { prune: Boolean(args.prune), mode: "execute" });
+      if (args.prune && unlisted.length > 0) {
+        await revokePlacements(ctx, unlisted, manifest.dataset);
+        await retireMirrors(ctx, unlisted, manifest.anchorPath);
+      }
+    }
+  }
+  logSummary(ctx, "execute");
+  logUnpinList(ctx, "execute");
+}
+
+function loadPreparedDataset(
+  manifestPath: string,
+  only: string[],
+): { manifest: DatasetManifest; datasetDir: string; selected: PreparedFile[] } {
+  const manifest = loadDatasetManifest(manifestPath);
+  const datasetDir = path.dirname(manifestPath);
+  const selected = prepareFiles(manifest, datasetDir, only);
+  return { manifest, datasetDir, selected };
+}
+
+function resolveManifestPaths(input: string): string[] {
+  if (input) return [resolveManifestPath(input)];
+  return findManifestPathsIn(process.env.DATASET_ROOT);
+}
+
+/** Relative paths resolve against where the operator typed the command. `yarn` runs the
+ * task from `packages/hardhat`, so it sets INIT_CWD to the original directory. */
+function resolveManifestPath(input: string): string {
+  return path.resolve(process.env.INIT_CWD ?? process.cwd(), input);
+}
+
+/** Only an explicitly named datasets folder is scanned. The seeder used to guess sibling
+ * folders, which once resolved to a stale, untracked copy of the content. */
+function findManifestPathsIn(root: string | undefined): string[] {
+  if (!root) return [];
+  const resolvedRoot = path.resolve(process.env.INIT_CWD ?? process.cwd(), root);
+  if (!existsSync(resolvedRoot) || !statSync(resolvedRoot).isDirectory()) {
+    throw new Error(`DATASET_ROOT is not a directory: ${resolvedRoot}`);
+  }
+  const manifests: string[] = [];
+  for (const entry of readdirSync(resolvedRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const manifestPath = path.join(resolvedRoot, entry.name, "manifest.json");
+    if (existsSync(manifestPath)) manifests.push(manifestPath);
+  }
+  return manifests.sort();
+}
+
+/**
+ * Logs where the content comes from (absolute path + git commit) and, for `--execute`,
+ * refuses anything that isn't a clean git checkout: publishing is permanent, so every run
+ * must be traceable to a commit of the content repo.
+ */
+function checkContentSource(datasetDir: string, opts: { mustBeCommitted: boolean }): void {
+  const absolute = path.resolve(datasetDir);
+  let commit: string | null = null;
+  let dirty = false;
+  try {
+    commit = execFileSync("git", ["-C", absolute, "rev-parse", "HEAD"], { encoding: "utf8", stdio: "pipe" }).trim();
+    dirty =
+      execFileSync("git", ["-C", absolute, "status", "--porcelain", "--", "."], {
+        encoding: "utf8",
+        stdio: "pipe",
+      }).trim().length > 0;
+  } catch {
+    commit = null;
+  }
+  console.log(
+    `[seed-dataset] source=${absolute} git=${commit ? `${commit.slice(0, 12)}${dirty ? " (uncommitted changes)" : ""}` : "none"}`,
+  );
+  if (!opts.mustBeCommitted) return;
+  if (!commit) {
+    throw new Error(
+      `Content source ${absolute} is not a git checkout. Publish from the content repo, or pass --allow-uncommitted.`,
+    );
+  }
+  if (dirty) {
+    throw new Error(
+      `Content source ${absolute} has uncommitted changes. Commit them first, or pass --allow-uncommitted.`,
+    );
+  }
+}
+
+/** Drops any credentials from a URL before it is logged. */
+function redactUrl(value: string): string {
+  try {
+    const url = new URL(value);
+    if (url.username || url.password) {
+      url.username = "***";
+      url.password = "";
+    }
+    url.search = url.search ? "?***" : "";
+    return url.toString();
+  } catch {
+    return "(unparseable url)";
+  }
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values)];
+}
+
+function createSeedStats(): SeedStats {
+  return {
+    skipped: 0,
+    plannedWrites: 0,
+    plannedHeals: 0,
+    created: 0,
+    updated: 0,
+    repaired: 0,
+    healed: 0,
+    forced: 0,
+    plannedRemovals: 0,
+    removed: 0,
+    pinned: 0,
+    transactions: 0,
+    attestations: 0,
+  };
+}
+
+function prepareFiles(manifest: DatasetManifest, datasetDir: string, only: string[]): PreparedFile[] {
+  const onlySet = new Set(only);
+  const defaults = manifest.defaults ?? {};
+  const files = onlySet.size > 0 ? manifest.files.filter(entry => onlySet.has(entry.path)) : manifest.files;
+  if (onlySet.size > 0 && files.length !== onlySet.size) {
+    const found = new Set(files.map(file => file.path));
+    const missing = [...onlySet].filter(file => !found.has(file));
+    throw new Error(`--only path(s) not found in manifest: ${missing.join(", ")}`);
+  }
+
+  const unlicensedMedia = files.filter(entry => {
+    const license = entry.license ?? defaults.license;
+    return requiresLicense(contentTypeForEntry(entry, defaults)) && (!license || license === "NOASSERTION");
+  });
+  if (unlicensedMedia.length > 0) {
+    throw new Error(
+      `Media files need a licence before publishing (set "license" on the entry or in "defaults"; NOASSERTION doesn't count): ${unlicensedMedia.map(e => e.path).join(", ")}`,
+    );
+  }
+
+  return files.map(entry => {
+    const absolutePath = path.resolve(datasetDir, entry.path);
+    const datasetRoot = path.resolve(datasetDir);
+    if (!absolutePath.startsWith(`${datasetRoot}${path.sep}`)) {
+      throw new Error(`Manifest path escapes dataset directory: ${entry.path}`);
+    }
+    for (const tag of entry.tags ?? []) assertValidTag(tag, entry.path);
+    const bytes = readFileSync(absolutePath);
+    return {
+      entry,
+      absolutePath,
+      bytes,
+      relativePath: entry.path,
+      size: BigInt(bytes.length),
+      contentType: contentTypeForEntry(entry, defaults),
+      contentHash: canonicalContentHash(bytes),
+      legacyContentHash: legacyKeccakContentHash(bytes),
+    };
+  });
+}
+
+async function connectContext(
+  ethersRuntime: HardhatEthersRuntime,
+  stats: SeedStats,
+  opts: { mode: "plan" | "execute"; attester?: string },
+): Promise<SeedContext> {
+  const [signer] = await ethersRuntime.getSigners();
+  const keyAddress = await signer.getAddress();
+  const chainId = signer.provider ? (await signer.provider.getNetwork()).chainId : null;
+  // On a live chain, the run must name the lens it writes under, and must not use the
+  // public Hardhat key (hardhat.config.ts falls back to it when no key is loaded).
+  if (opts.mode === "execute" && chainId !== null && !LOCAL_CHAIN_IDS.has(chainId)) {
+    if (keyAddress.toLowerCase() === HARDHAT_DEV_KEY_ADDRESS) {
+      throw new Error(
+        `Loaded key ${keyAddress} is the public Hardhat development key; refusing to write to chain ${chainId}. Load the curator key.`,
+      );
+    }
+    if (!opts.attester) {
+      throw new Error(
+        `--attester is required when writing to chain ${chainId}: name the curator address to publish under.`,
+      );
+    }
+  }
+  // Every read below is lens-scoped to `signerAddress`. A plan only reads, so it may read
+  // as the curator without holding its key. An execute writes as the loaded key, so that
+  // key must BE the expected lens: otherwise the run publishes a second copy of the dataset
+  // under a lens the app never reads.
+  if (opts.mode === "execute" && opts.attester && keyAddress.toLowerCase() !== opts.attester.toLowerCase()) {
+    throw new Error(
+      `Loaded key ${keyAddress} is not the expected attester ${opts.attester}; refusing to write. Load the curator key or drop --attester.`,
+    );
+  }
+  const signerAddress = opts.mode === "plan" && opts.attester ? opts.attester : keyAddress;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const indexer = (await ethersRuntime.getContract("Indexer", signer)) as any;
+  const easAddr = await indexer.getEAS();
+  const eas = new Contract(easAddr, EAS_ABI, signer);
+  const edgeResolverAddr = await indexer.edgeResolver();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const edgeResolver = (await ethersRuntime.getContractAt("EdgeResolver", edgeResolverAddr, signer)) as any;
+  const rootUID = (await indexer.rootAnchorUID()) as UID;
+  if (rootUID === ZeroHash) throw new Error("Indexer rootAnchorUID is zero; EFS scaffolding is not initialized.");
+
+  const schemas = {
+    anchor: (await indexer.ANCHOR_SCHEMA_UID()) as UID,
+    data: (await indexer.DATA_SCHEMA_UID()) as UID,
+    mirror: (await indexer.MIRROR_SCHEMA_UID()) as UID,
+    pin: (await indexer.PIN_SCHEMA_UID()) as UID,
+    tag: (await indexer.TAG_SCHEMA_UID()) as UID,
+    property: (await indexer.PROPERTY_SCHEMA_UID()) as UID,
+  };
+  const transportsUID = (await indexer.resolvePath(rootUID, "transports")) as UID;
+  const ipfsTransportUID = (await indexer.resolvePath(transportsUID, "ipfs")) as UID;
+  if (ipfsTransportUID === ZeroHash) throw new Error("Missing /transports/ipfs anchor.");
+
+  const provider = signer.provider;
+  if (provider) {
+    const network = await provider.getNetwork();
+    console.log(`[seed-dataset] network=${network.name} chainId=${network.chainId.toString()}`);
+  }
+  console.log(
+    signerAddress === keyAddress
+      ? `[seed-dataset] signer=${signerAddress}`
+      : `[seed-dataset] reading as attester=${signerAddress} (plan only; loaded key ${keyAddress} is never used to write)`,
+  );
+  console.log(`[seed-dataset] indexer=${await indexer.getAddress()} eas=${easAddr}`);
+  return {
+    signer,
+    signerAddress,
+    eas,
+    indexer,
+    edgeResolver,
+    schemas,
+    rootUID,
+    ipfsTransportUID,
+    tagsRootUID: null,
+    stats,
+    retired: [],
+  };
+}
+
+async function planOneFile(args: {
+  ctx: SeedContext;
+  file: PreparedFile;
+  datasetRootUID: UID | null;
+  anchorPath: string;
+  force: boolean;
+}): Promise<void> {
+  const { ctx, file, datasetRootUID, anchorPath, force } = args;
+  const parentUID = datasetRootUID ? await resolveEntryParent(ctx, datasetRootUID, file.relativePath) : null;
+  const fileName = path.posix.basename(file.relativePath);
+  const fileAnchorUID = parentUID ? await findAnchor(ctx, parentUID, fileName, ctx.schemas.data) : null;
+  const activePlacement = fileAnchorUID ? await getActivePlacement(ctx, fileAnchorUID) : null;
+  const decision = decideSeedFileAction({
+    activePlacement,
+    force,
+    localContentHash: file.contentHash,
+    localLegacyContentHash: file.legacyContentHash,
+  });
+
+  if (decision.action === "skip") {
+    ctx.stats.skipped += 1;
+    console.log(`  plan skip  ${file.relativePath} (contentHash ${shortHash(file.contentHash)} already active)`);
+    return;
+  }
+  if (decision.action === "heal") {
+    ctx.stats.plannedHeals += 1;
+    console.log(`  plan heal  ${file.relativePath} (${formatDecisionReason(decision.reason, activePlacement, file)})`);
+    return;
+  }
+
+  ctx.stats.plannedWrites += 1;
+  console.log(`  plan write ${file.relativePath} (${formatDecisionReason(decision.reason, activePlacement, file)})`);
+  if (activePlacement)
+    await retireMirrors(ctx, [{ name: file.relativePath, dataUID: activePlacement.dataUID }], anchorPath);
+}
+
+async function seedOneFile(args: {
+  ctx: SeedContext;
+  file: PreparedFile;
+  datasetRootUID: UID;
+  anchorPath: string;
+  datasetDir: string;
+  ipfsApiUrl: string;
+  force: boolean;
+  tagCache: Map<string, UID>;
+}): Promise<void> {
+  const { ctx, file, datasetRootUID, anchorPath, ipfsApiUrl, force, tagCache } = args;
+  const parentUID = await ensureEntryParent(ctx, datasetRootUID, file.relativePath);
+  const fileName = path.posix.basename(file.relativePath);
+  let fileAnchorUID = await findAnchor(ctx, parentUID, fileName, ctx.schemas.data);
+
+  const activePlacement = fileAnchorUID ? await getActivePlacement(ctx, fileAnchorUID) : null;
+  const decision = decideSeedFileAction({
+    activePlacement,
+    force,
+    localContentHash: file.contentHash,
+    localLegacyContentHash: file.legacyContentHash,
+  });
+
+  if (decision.action === "skip") {
+    ctx.stats.skipped += 1;
+    console.log(`  skip ${file.relativePath} (contentHash ${shortHash(file.contentHash)} already active)`);
+    return;
+  }
+  if (decision.action === "heal" && activePlacement) {
+    await healContentHash(ctx, activePlacement.dataUID, file);
+    return;
+  }
+  if (activePlacement) {
+    console.log(
+      `  ${formatWriteVerb(decision.reason)} ${file.relativePath} (${formatDecisionReason(decision.reason, activePlacement, file)})`,
+    );
+  }
+
+  console.log(`  pin  ${file.relativePath}`);
+  const cid = await pinFileToIpfs(ipfsApiUrl, file.bytes, fileName);
+  ctx.stats.pinned += 1;
+  const mirrorUri = `ipfs://${cid}`;
+  console.log(`  cid  ${cid}`);
+
+  const dataUID = await attestOne(
+    ctx,
+    ctx.schemas.data,
+    {
+      recipient: ZeroAddress,
+      expirationTime: 0n,
+      revocable: false,
+      refUID: ZeroHash,
+      data: "0x",
+      value: 0n,
+    },
+    `data:${file.relativePath}`,
+  );
+
+  const reserved = [
+    { key: "contentType", value: file.contentType },
+    { key: "contentHash", value: file.contentHash },
+    { key: "size", value: file.size.toString() },
+  ];
+  const stageLabels: string[] = ["mirror"];
+  const stageRequests: MultiRequest[] = [
+    {
+      schema: ctx.schemas.mirror,
+      data: [
+        {
+          recipient: ZeroAddress,
+          expirationTime: 0n,
+          revocable: true,
+          refUID: dataUID,
+          data: ABI.encode(["bytes32", "string"], [ctx.ipfsTransportUID, mirrorUri]),
+          value: 0n,
+        },
+      ],
+    },
+    {
+      schema: ctx.schemas.anchor,
+      data: reserved.map(({ key }) => {
+        stageLabels.push(`key:${key}`);
+        return {
+          recipient: ZeroAddress,
+          expirationTime: 0n,
+          revocable: false,
+          refUID: dataUID,
+          data: ABI.encode(["string", "bytes32"], [key, ctx.schemas.property]),
+          value: 0n,
+        };
+      }),
+    },
+    {
+      schema: ctx.schemas.property,
+      data: reserved.map(({ key, value }) => {
+        stageLabels.push(`prop:${key}`);
+        return {
+          recipient: ZeroAddress,
+          expirationTime: 0n,
+          revocable: false,
+          refUID: ZeroHash,
+          data: ABI.encode(["string"], [value]),
+          value: 0n,
+        };
+      }),
+    },
+  ];
+  const stageUIDs = await attestMany(ctx, stageRequests, `stage:${file.relativePath}`);
+  const byLabel = new Map<string, UID>();
+  stageLabels.forEach((label, index) => byLabel.set(label, stageUIDs[index]));
+
+  if (!fileAnchorUID) {
+    fileAnchorUID = await makeAnchor(ctx, fileName, parentUID, ctx.schemas.data);
+  }
+
+  const tagDefinitions: UID[] = [];
+  for (const tag of file.entry.tags ?? []) {
+    tagDefinitions.push(await ensureTagDefinition(ctx, tagCache, tag));
+  }
+  const visibilityTags = await collectMissingVisibilityTags(ctx, parentUID);
+  const pinData: AttestationData[] = [
+    pinRequest(dataUID, fileAnchorUID),
+    ...reserved.map(({ key }) => pinRequest(byLabel.get(`prop:${key}`)!, byLabel.get(`key:${key}`)!)),
+  ];
+  const tagData: AttestationData[] = [
+    ...tagDefinitions.map(tagUID => tagRequest(dataUID, tagUID)),
+    ...visibilityTags.map(folderUID => tagRequest(folderUID, ctx.schemas.data)),
+  ];
+  const commitRequests: MultiRequest[] = [{ schema: ctx.schemas.pin, data: pinData }];
+  if (tagData.length > 0) commitRequests.push({ schema: ctx.schemas.tag, data: tagData });
+  await attestMany(ctx, commitRequests, `commit:${file.relativePath}`);
+  recordWriteStats(ctx, decision.reason);
+  console.log(`  wrote ${file.relativePath} data=${dataUID.slice(0, 10)}... mirror=${mirrorUri}`);
+  // The new placement superseded the old DATA; its IPFS copy is no longer served here.
+  if (activePlacement)
+    await retireMirrors(ctx, [{ name: file.relativePath, dataUID: activePlacement.dataUID }], anchorPath);
+}
+
+/**
+ * Re-bind a canonical `contentHash` on an EXISTING DATA whose active claim is the legacy
+ * bare-keccak form of the same bytes (specs/10 §8 remediation).
+ *
+ * The content is unchanged, so nothing is re-pinned or re-minted: the DATA, its mirror and
+ * its placement keep their identity (existing links stay valid). PROPERTY values are
+ * non-revocable, so the old value stays on-chain as history — the binding PIN is
+ * cardinality-1 per (attester, key anchor), so pinning the new PROPERTY supersedes it and
+ * readers see the canonical claim (ADR-0052). Two attestations per file: the PROPERTY,
+ * then the PIN that references it.
+ */
+async function healContentHash(ctx: SeedContext, dataUID: UID, file: PreparedFile): Promise<void> {
+  // The legacy claim was read THROUGH this key anchor, so it exists; mint one only if a
+  // concurrent writer somehow removed the path to it.
+  const keyAnchorUID =
+    (await findAnchor(ctx, dataUID, "contentHash", ctx.schemas.property)) ??
+    (await attestOne(
+      ctx,
+      ctx.schemas.anchor,
+      {
+        recipient: ZeroAddress,
+        expirationTime: 0n,
+        revocable: false,
+        refUID: dataUID,
+        data: ABI.encode(["string", "bytes32"], ["contentHash", ctx.schemas.property]),
+        value: 0n,
+      },
+      `heal-key:${file.relativePath}`,
+    ));
+  const propertyUID = await attestOne(
+    ctx,
+    ctx.schemas.property,
+    {
+      recipient: ZeroAddress,
+      expirationTime: 0n,
+      revocable: false,
+      refUID: ZeroHash,
+      data: ABI.encode(["string"], [file.contentHash]),
+      value: 0n,
+    },
+    `heal-prop:${file.relativePath}`,
+  );
+  await attestOne(ctx, ctx.schemas.pin, pinRequest(propertyUID, keyAnchorUID), `heal-pin:${file.relativePath}`);
+  recordWriteStats(ctx, "legacy-content-hash");
+  console.log(
+    `  heal ${file.relativePath} contentHash -> ${shortHash(file.contentHash)} (data=${dataUID.slice(0, 10)}...)`,
+  );
+}
+
+async function ensureEntryParent(ctx: SeedContext, datasetRootUID: UID, relativePath: string): Promise<UID> {
+  const dir = path.posix.dirname(relativePath.replace(/\\/g, "/"));
+  if (dir === ".") return datasetRootUID;
+  let parent = datasetRootUID;
+  for (const segment of dir.split("/").filter(Boolean)) {
+    parent = await ensureFolder(ctx, parent, segment);
+  }
+  return parent;
+}
+
+async function ensureAnchorPath(ctx: SeedContext, anchorPath: string): Promise<UID> {
+  let parent = ctx.rootUID;
+  for (const segment of anchorPath.split("/").filter(Boolean)) {
+    parent = await ensureFolder(ctx, parent, segment);
+  }
+  return parent;
+}
+
+async function resolveAnchorPath(ctx: SeedContext, anchorPath: string): Promise<UID | null> {
+  let parent = ctx.rootUID;
+  for (const segment of anchorPath.split("/").filter(Boolean)) {
+    const next = await findAnchor(ctx, parent, segment, ZeroHash);
+    if (!next) return null;
+    parent = next;
+  }
+  return parent;
+}
+
+async function resolveEntryParent(ctx: SeedContext, datasetRootUID: UID, relativePath: string): Promise<UID | null> {
+  const dir = path.posix.dirname(relativePath.replace(/\\/g, "/"));
+  if (dir === ".") return datasetRootUID;
+  let parent = datasetRootUID;
+  for (const segment of dir.split("/").filter(Boolean)) {
+    const next = await findAnchor(ctx, parent, segment, ZeroHash);
+    if (!next) return null;
+    parent = next;
+  }
+  return parent;
+}
+
+async function ensureFolder(ctx: SeedContext, parentUID: UID, name: string): Promise<UID> {
+  const existing = await findAnchor(ctx, parentUID, name, ZeroHash);
+  if (existing) return existing;
+  return makeAnchor(ctx, name, parentUID, ZeroHash);
+}
+
+async function ensureTagDefinition(ctx: SeedContext, cache: Map<string, UID>, tag: string): Promise<UID> {
+  if (!tag || tag.includes("/") || tag.includes("..")) throw new Error(`Invalid tag name: ${tag}`);
+  const cached = cache.get(tag);
+  if (cached) return cached;
+  const tagsRootUID = await ensureTagsRoot(ctx);
+  const uid = await ensureFolder(ctx, tagsRootUID, tag);
+  cache.set(tag, uid);
+  return uid;
+}
+
+async function ensureTagsRoot(ctx: SeedContext): Promise<UID> {
+  if (ctx.tagsRootUID) return ctx.tagsRootUID;
+  ctx.tagsRootUID = await ensureFolder(ctx, ctx.rootUID, "tags");
+  return ctx.tagsRootUID;
+}
+
+async function makeAnchor(ctx: SeedContext, name: string, parentUID: UID, schemaUID: UID): Promise<UID> {
+  const uid = await attestOne(
+    ctx,
+    ctx.schemas.anchor,
+    {
+      recipient: ZeroAddress,
+      expirationTime: 0n,
+      revocable: false,
+      refUID: parentUID,
+      data: ABI.encode(["string", "bytes32"], [name, schemaUID]),
+      value: 0n,
+    },
+    `anchor:${name}`,
+  );
+  console.log(`  anchor ${name} ${uid.slice(0, 10)}...`);
+  return uid;
+}
+
+async function findAnchor(ctx: SeedContext, parentUID: UID, name: string, schemaUID: UID): Promise<UID | null> {
+  const uid = (await ctx.indexer.resolveAnchor(parentUID, name, schemaUID)) as UID;
+  return uid === ZeroHash ? null : uid;
+}
+
+async function getActivePlacement(ctx: SeedContext, fileAnchorUID: UID): Promise<ActiveDatasetPlacement | null> {
+  const dataUID = (await ctx.edgeResolver.getActivePinTarget(
+    fileAnchorUID,
+    ctx.signerAddress,
+    ctx.schemas.data,
+  )) as UID;
+  if (isZeroUID(dataUID)) return null;
+  return {
+    dataUID,
+    contentHash: await getPinnedPropertyValue(ctx, dataUID, "contentHash"),
+  };
+}
+
+async function getPinnedPropertyValue(ctx: SeedContext, containerUID: UID, key: string): Promise<string | null> {
+  const keyAnchorUID = await findAnchor(ctx, containerUID, key, ctx.schemas.property);
+  if (!keyAnchorUID) return null;
+  const propertyUID = (await ctx.edgeResolver.getActivePinTarget(
+    keyAnchorUID,
+    ctx.signerAddress,
+    ctx.schemas.property,
+  )) as UID;
+  if (isZeroUID(propertyUID)) return null;
+
+  const attestation = (await ctx.eas.getAttestation(propertyUID)) as { uid: UID; data: string };
+  if (isZeroUID(attestation.uid)) return null;
+  const decoded = ABI.decode(["string"], attestation.data);
+  return decoded[0] as string;
+}
+
+async function collectMissingVisibilityTags(ctx: SeedContext, parentUID: UID): Promise<UID[]> {
+  const missing: UID[] = [];
+  let current = parentUID;
+  let walked = 0;
+  while (walked < MAX_ANCHOR_DEPTH && current !== ZeroHash && current.toLowerCase() !== ctx.rootUID.toLowerCase()) {
+    const tagged = (await ctx.edgeResolver.isActiveEdge(
+      ctx.signerAddress,
+      current,
+      ctx.schemas.data,
+      ctx.schemas.tag,
+    )) as boolean;
+    if (!tagged) missing.push(current);
+    const parent = (await ctx.indexer.getParent(current)) as UID;
+    if (/^0x0{24}[0-9a-fA-F]{40}$/.test(parent) && parent !== ZeroHash) break;
+    current = parent;
+    walked += 1;
+  }
+  return missing;
+}
+
+function pinRequest(targetUID: UID, definitionUID: UID): AttestationData {
+  return {
+    recipient: ZeroAddress,
+    expirationTime: 0n,
+    revocable: true,
+    refUID: targetUID,
+    data: ABI.encode(["bytes32"], [definitionUID]),
+    value: 0n,
+  };
+}
+
+function tagRequest(targetUID: UID, definitionUID: UID): AttestationData {
+  return {
+    recipient: ZeroAddress,
+    expirationTime: 0n,
+    revocable: true,
+    refUID: targetUID,
+    data: ABI.encode(["bytes32", "int256"], [definitionUID, 1n]),
+    value: 0n,
+  };
+}
+
+function isZeroUID(uid: UID): boolean {
+  return uid.toLowerCase() === ZeroHash;
+}
+
+function shortHash(hash: string | null): string {
+  if (!hash) return "missing";
+  return hash.length > 18 ? `${hash.slice(0, 10)}...${hash.slice(-6)}` : hash;
+}
+
+function formatWriteVerb(reason: SeedFileDecision["reason"]): string {
+  if (reason === "content-hash-changed") return "update";
+  if (reason === "missing-content-hash") return "repair";
+  if (reason === "forced") return "force";
+  return "write";
+}
+
+function formatDecisionReason(
+  reason: SeedFileDecision["reason"],
+  activePlacement: ActiveDatasetPlacement | null,
+  file: PreparedFile,
+): string {
+  if (reason === "matching-content-hash") return `contentHash ${shortHash(file.contentHash)} already active`;
+  if (reason === "content-hash-changed") {
+    return `active hash ${shortHash(activePlacement?.contentHash ?? null)} -> ${shortHash(file.contentHash)}`;
+  }
+  if (reason === "missing-content-hash") return "active placement is missing contentHash metadata";
+  if (reason === "legacy-content-hash") {
+    return `legacy claim ${shortHash(activePlacement?.contentHash ?? null)} -> canonical ${shortHash(file.contentHash)}, same bytes`;
+  }
+  if (reason === "forced") return "forced despite matching active contentHash";
+  return "missing active placement";
+}
+
+function recordWriteStats(ctx: SeedContext, reason: SeedFileDecision["reason"]): void {
+  if (reason === "content-hash-changed") ctx.stats.updated += 1;
+  else if (reason === "missing-content-hash") ctx.stats.repaired += 1;
+  else if (reason === "forced") ctx.stats.forced += 1;
+  else if (reason === "legacy-content-hash") ctx.stats.healed += 1;
+  else ctx.stats.created += 1;
+}
+
+function logSummary(ctx: SeedContext, mode: "execute" | "plan"): void {
+  if (mode === "plan") {
+    // heals and writes are reported SEPARATELY: a heal re-binds one PROPERTY on an existing
+    // file, a write re-seeds the whole file. A plan that shows writes where heals were
+    // expected usually means the wrong signer — every file then looks like it has no
+    // placement under that account, and executing would re-seed them all under it.
+    console.log(
+      `[seed-dataset] plan summary signer=${ctx.signerAddress} skipped=${ctx.stats.skipped} heals=${ctx.stats.plannedHeals} writes=${ctx.stats.plannedWrites} removals=${ctx.stats.plannedRemovals}`,
+    );
+    return;
+  }
+  const wrote = ctx.stats.created + ctx.stats.updated + ctx.stats.repaired + ctx.stats.healed + ctx.stats.forced;
+  console.log(
+    `[seed-dataset] summary skipped=${ctx.stats.skipped} wrote=${wrote} created=${ctx.stats.created} updated=${ctx.stats.updated} repaired=${ctx.stats.repaired} healed=${ctx.stats.healed} forced=${ctx.stats.forced} removed=${ctx.stats.removed} ipfsPins=${ctx.stats.pinned} txs=${ctx.stats.transactions} attestations=${ctx.stats.attestations}`,
+  );
+}
+
+interface UnlistedPlacement {
+  name: string;
+  anchorUID: UID;
+  pinUID: UID;
+  dataUID: UID;
+}
+
+/**
+ * Files the lens has placed directly under a dataset anchor that the manifest no longer
+ * lists. Datasets are flat, so only direct children are checked. Folder anchors and
+ * anchors without an active placement by this lens are ignored.
+ */
+async function findUnlistedPlacements(
+  ctx: SeedContext,
+  datasetRootUID: UID,
+  manifest: DatasetManifest,
+): Promise<UnlistedPlacement[]> {
+  const listed = new Set(manifest.files.map(entry => path.posix.basename(entry.path)));
+  const count = Number(await ctx.indexer.getChildrenCount(datasetRootUID));
+  const unlisted: UnlistedPlacement[] = [];
+  for (let start = 0; start < count; start += CHILD_PAGE) {
+    const children = (await ctx.indexer.getChildren(datasetRootUID, start, CHILD_PAGE, false, false)) as UID[];
+    for (const anchorUID of children) {
+      const attestation = (await ctx.eas.getAttestation(anchorUID)) as { data: string };
+      const [name, anchorSchema] = ABI.decode(["string", "bytes32"], attestation.data) as unknown as [string, string];
+      if (anchorSchema.toLowerCase() !== ctx.schemas.data.toLowerCase() || listed.has(name)) continue;
+      const pinUID = (await ctx.edgeResolver.getActivePin(anchorUID, ctx.signerAddress, ctx.schemas.data)) as UID;
+      if (isZeroUID(pinUID)) continue;
+      const dataUID = (await ctx.edgeResolver.getActivePinTarget(
+        anchorUID,
+        ctx.signerAddress,
+        ctx.schemas.data,
+      )) as UID;
+      unlisted.push({ name, anchorUID, pinUID, dataUID });
+    }
+  }
+  return unlisted;
+}
+
+function reportUnlisted(
+  ctx: SeedContext,
+  manifest: DatasetManifest,
+  unlisted: UnlistedPlacement[],
+  opts: { prune: boolean; mode: "plan" | "execute" },
+): void {
+  for (const item of unlisted) {
+    if (opts.prune) {
+      if (opts.mode === "plan") {
+        ctx.stats.plannedRemovals += 1;
+        console.log(`  plan remove ${item.name} (placed under ${manifest.anchorPath}, not in manifest)`);
+      }
+    } else {
+      console.log(
+        `  warn ${item.name} is placed under ${manifest.anchorPath} but not in manifest (pass --prune to remove it)`,
+      );
+    }
+  }
+}
+
+/**
+ * Removes files by revoking this lens's placement PINs, in one `multiRevoke`. The DATA,
+ * MIRROR and PROPERTYs stay on-chain (non-revocable by design); the file just stops being
+ * at its path for this lens. WHITEOUT (ADR-0055) isn't needed: it masks LOWER lenses, and
+ * the curator is the only lens publishing these datasets.
+ */
+async function revokePlacements(ctx: SeedContext, unlisted: UnlistedPlacement[], dataset: string): Promise<void> {
+  const data = ctx.eas.interface.encodeFunctionData("multiRevoke", [
+    [{ schema: ctx.schemas.pin, data: unlisted.map(item => ({ uid: item.pinUID, value: 0n })) }],
+  ]);
+  const tx = await ctx.signer.sendTransaction({ to: await ctx.eas.getAddress(), data });
+  const receipt = await tx.wait();
+  ctx.stats.transactions += 1;
+  ctx.stats.removed += unlisted.length;
+  console.log(
+    `  tx   remove:${dataset} hash=${tx.hash ?? "unknown"} status=${receipt?.status ?? "unknown"} revoked=${unlisted.length} (${unlisted.map(i => i.name).join(", ")})`,
+  );
+}
+
+/**
+ * Records the IPFS CIDs of DATA this run stops serving, so they can be unpinned afterwards.
+ * Only this lens's own `ipfs://` MIRRORs are listed.
+ */
+async function retireMirrors(
+  ctx: SeedContext,
+  files: { name: string; dataUID: UID }[],
+  anchorPath: string,
+): Promise<void> {
+  for (const file of files) {
+    const count = Number(
+      await ctx.indexer.getReferencingBySchemaAndAttesterCount(file.dataUID, ctx.schemas.mirror, ctx.signerAddress),
+    );
+    if (count === 0) continue;
+    const mirrorUIDs = (await ctx.indexer.getReferencingBySchemaAndAttester(
+      file.dataUID,
+      ctx.schemas.mirror,
+      ctx.signerAddress,
+      0,
+      count,
+      false,
+      false,
+    )) as UID[];
+    for (const mirrorUID of mirrorUIDs) {
+      const attestation = (await ctx.eas.getAttestation(mirrorUID)) as { data: string };
+      const [, uri] = ABI.decode(["bytes32", "string"], attestation.data) as unknown as [string, string];
+      if (uri.startsWith("ipfs://")) {
+        ctx.retired.push({ cid: uri.slice("ipfs://".length), path: `${anchorPath}/${file.name}` });
+      }
+    }
+  }
+}
+
+/** Prints the unpin list: one `<cid>  <path>` line per IPFS copy this run made obsolete. */
+function logUnpinList(ctx: SeedContext, mode: "plan" | "execute"): void {
+  if (ctx.retired.length === 0) return;
+  console.log(
+    mode === "plan"
+      ? `[seed-dataset] unpin after executing: ${ctx.retired.length} IPFS CID(s) this run would stop serving`
+      : `[seed-dataset] unpin: ${ctx.retired.length} IPFS CID(s) no longer served (check nothing else pins the same bytes)`,
+  );
+  for (const item of ctx.retired) console.log(`  ${item.cid}  ${item.path}`);
+}
+
+async function attestOne(ctx: SeedContext, schema: UID, data: AttestationData, label: string): Promise<UID> {
+  const tx = await ctx.eas.attest({ schema, data });
+  const uids = await uidsFromTx(ctx, tx, label);
+  if (uids.length !== 1) throw new Error(`Expected 1 Attested event, got ${uids.length}`);
+  return uids[0];
+}
+
+async function attestMany(ctx: SeedContext, requests: MultiRequest[], label: string): Promise<UID[]> {
+  const tx = await ctx.eas.multiAttest(requests.filter(req => req.data.length > 0));
+  return uidsFromTx(ctx, tx, label);
+}
+
+async function uidsFromTx(
+  ctx: SeedContext,
+  tx: { hash?: string; wait: () => Promise<{ logs: unknown[]; blockNumber?: number; status?: number }> },
+  label: string,
+): Promise<UID[]> {
+  const receipt = await tx.wait();
+  const uids: UID[] = [];
+  for (const log of receipt.logs) {
+    try {
+      const parsed = ctx.eas.interface.parseLog(log as { topics: readonly string[]; data: string });
+      if (parsed?.name === "Attested") uids.push(parsed.args.uid as string);
+    } catch {
+      /* not an EAS Attested event */
+    }
+  }
+  ctx.stats.transactions += 1;
+  ctx.stats.attestations += uids.length;
+  console.log(
+    `  tx   ${label} hash=${tx.hash ?? "unknown"} block=${receipt.blockNumber ?? "unknown"} status=${receipt.status ?? "unknown"} attestations=${uids.length}`,
+  );
+  return uids;
+}
+
+async function pinFileToIpfs(apiBase: string, bytes: Buffer, filename: string): Promise<string> {
+  const url = buildIpfsAddUrl(apiBase);
+  const boundary = `efs-seed-${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}`;
+  const safeFilename = filename.replace(/"/g, "");
+  const head = Buffer.from(
+    `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="file"; filename="${safeFilename}"\r\n` +
+      "Content-Type: application/octet-stream\r\n\r\n",
+  );
+  const tail = Buffer.from(`\r\n--${boundary}--\r\n`);
+  const contentLength = head.length + bytes.length + tail.length;
+  const client = url.protocol === "https:" ? https : http;
+
+  const body = await new Promise<string>((resolve, reject) => {
+    const req = client.request(
+      url,
+      {
+        method: "POST",
+        headers: {
+          "content-type": `multipart/form-data; boundary=${boundary}`,
+          "content-length": contentLength,
+        },
+      },
+      res => {
+        const chunks: Buffer[] = [];
+        res.on("data", chunk => chunks.push(Buffer.from(chunk)));
+        res.on("end", () => {
+          const response = Buffer.concat(chunks).toString("utf8");
+          if (!res.statusCode || res.statusCode < 200 || res.statusCode >= 300) {
+            reject(new Error(`IPFS add failed with HTTP ${res.statusCode}: ${response.slice(0, 300)}`));
+            return;
+          }
+          resolve(response);
+        });
+      },
+    );
+    req.on("error", reject);
+    req.write(head);
+    req.write(bytes);
+    req.end(tail);
+  });
+
+  return parseKuboAddResponse(body);
+}
+
+if (require.main === module) {
+  seedDataset(parseSeedDatasetArgs(process.argv.slice(2))).catch(err => {
+    console.error(err);
+    process.exit(1);
+  });
+}
