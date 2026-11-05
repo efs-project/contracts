@@ -1,6 +1,6 @@
 # ADR-0068: Lower `MAX_ANCHOR_DEPTH` from 1024 to 256 (derive the cap from the propagation gas budget)
 
-**Status:** Accepted
+**Status:** Accepted. **Status note 2026-10-27 (Status-line amendment per `docs/adr/README.md`; body unedited):** `MAX_ANCHOR_DEPTH = 256` is implemented on `main` but **not live on Sepolia** — the EFSIndexer proxy still runs the freeze-time implementation (readback in `docs/CHAINS.md`).
 **Date:** 2026-06-23
 **Permanence-tier:** Etched (kernel depth invariant — bounds the per-placement ancestor walk; a value too high makes legal deep placements unexecutable)
 **Related:** ADR-0065 (raised 32 → 1024 — depth value superseded here; its no-name-length-cap decision still holds), ADR-0021 (original `MAX_ANCHOR_DEPTH = 32`), ADR-0048 (proxy-ready resolvers / burn), PR #37 review
