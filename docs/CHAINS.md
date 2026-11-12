@@ -4,6 +4,8 @@ Canonical, human-readable registry of EFS contract addresses + frozen schema UID
 machine-readable source the apps consume is `packages/nextjs/contracts/deployedContracts.ts`; this file
 is the at-a-glance reference and the cold-boot record (a reader in 50 years should be able to find the
 foundation from here without the rest of the repo). Update it in the same commit as any new deploy.
+CI (`yarn check:deployments`) fails if the Sepolia addresses here, in `deployedContracts.ts`'s
+`11155111` block, and in `packages/hardhat/deployments/sepolia/*.json` disagree.
 
 > Addresses are **Safe-keyed CREATE3** — the EFS.eth Safe is the CreateX caller, so the proxy addresses
 > (and the 9 schema UIDs hashed against them) are keyed to the Safe and identical on any chain the same

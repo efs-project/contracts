@@ -34,6 +34,12 @@ jobs:
       - name: Install dependencies
         run: yarn install --immutable
 
+      # Static: the committed Sepolia addresses must agree across deployments/sepolia/*.json,
+      # deployedContracts.ts (11155111 block) and docs/CHAINS.md (#43). Runs before the local
+      # deploy so it checks the committed files, not regenerated output. No RPC needed.
+      - name: Check Sepolia deployment records agree
+        run: yarn check:deployments
+
       - name: Run hardhat node, deploy contracts (& generate contracts typescript output)
         run: yarn chain & yarn deploy
 
