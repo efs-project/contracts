@@ -45,6 +45,8 @@ export interface SeedDatasetArgs {
   prune?: boolean;
   /** Allow `--execute` from a content folder that isn't a clean git checkout. */
   allowUncommitted?: boolean;
+  /** Where `--execute` writes its run record. Default: the content repo's `deployments/`. */
+  recordDir?: string;
 }
 
 export interface ActiveDatasetPlacement {
@@ -124,6 +126,9 @@ export function parseSeedDatasetArgs(argv: string[]): SeedDatasetArgs {
       case "--allow-uncommitted":
         args.allowUncommitted = true;
         break;
+      case "--record-dir":
+        args.recordDir = requireValue(argv, ++i, arg);
+        break;
       case "--help":
       case "-h":
         throw new Error(usage());
@@ -156,6 +161,7 @@ export function usage(): string {
     "                          Required for --execute on any chain other than local/devnet.",
     "  --prune                 Revoke the attester's placement of files the manifest no longer lists.",
     "  --allow-uncommitted     Let --execute publish from a folder that isn't a clean git checkout.",
+    "  --record-dir <dir>      Where --execute writes its run record (default: the content repo's deployments/).",
     "",
     "--plan and --execute need an explicit source: --manifest <path> or DATASET_ROOT=<datasets dir>.",
   ].join("\n");

@@ -10,6 +10,7 @@ task("seed:dataset", "Pin a dataset to IPFS and seed EFS DATA/MIRROR/PIN/TAG att
   .addFlag("force", "Re-seed even if the active contentHash already matches.")
   .addFlag("prune", "Revoke the attester's placement of files the manifest no longer lists.")
   .addFlag("allowUncommitted", "Let --execute publish from a folder that isn't a clean git checkout.")
+  .addOptionalParam("recordDir", "Where --execute writes its run record (default: the content repo's deployments/).")
   .addOptionalParam("ipfsApiUrl", "Kubo API base URL, e.g. https://host/api/v0", process.env.IPFS_API_URL)
   .addOptionalParam("only", "Comma-separated manifest paths to seed")
   .addOptionalParam(
@@ -33,6 +34,7 @@ task("seed:dataset", "Pin a dataset to IPFS and seed EFS DATA/MIRROR/PIN/TAG att
         force: Boolean(args.force),
         prune: Boolean(args.prune),
         allowUncommitted: Boolean(args.allowUncommitted),
+        ...(typeof args.recordDir === "string" && args.recordDir.length > 0 ? { recordDir: args.recordDir } : {}),
         ipfsApiUrl: args.ipfsApiUrl ?? process.env.IPFS_API_URL ?? "http://127.0.0.1:5001/api/v0",
         only,
         ...(typeof args.attester === "string" && args.attester.length > 0

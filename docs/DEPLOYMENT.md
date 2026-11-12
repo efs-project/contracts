@@ -201,42 +201,42 @@ yarn deploy:efs-views --network localhost
 
 **Dataset seeding (post-foundation, curator EOA):**
 
-`seed:dataset` pins manifest files to IPFS and writes the user-content layer: DATA, MIRROR, reserved-key PROPERTYs (`contentType`, `contentHash`, `size`), file/folder anchors, placement PINs, and TAGs. It is dry-run by default and requires `--execute --pin` before it sends IPFS uploads or EAS writes.
+`seed:dataset` publishes the sample catalog from the [`efs-project/content`](https://github.com/efs-project/content) repo. It pins each manifest file to IPFS and writes the user-content layer: DATA, an `ipfs://` MIRROR, reserved-key PROPERTYs (`contentType`, canonical `f1220…` `contentHash`, `size`), file and folder anchors, placement PINs, and TAGs.
+
+It's safe to re-run:
+
+- **Unchanged files** are skipped.
+- **Old bare-keccak hash claims** are fixed in place.
+- **Tags** are reconciled with the manifest.
+- **Files the manifest dropped** are removed with `--prune`.
+
+Run it from a contracts checkout of `main`, with `content` checked out beside it:
 
 ```bash
-cd /Users/james/Code/EFS/contracts
+# 1. Plan (read-only; no key needed). Keep the output: it lists every change and the CIDs to unpin.
+DATASET_ROOT=../content/datasets SEPOLIA_RPC_URL=<dedicated RPC> \
+yarn hardhat:seed:dataset --plan --prune \
+  --attester 0x11CbE1b619bb9fe79e2F4C22c9A62412b3E79912 --network sepolia | tee plan.log
 
-# Dry-run the current buildathon games dataset. No IPFS writes, no chain writes.
-yarn hardhat:seed:dataset --manifest ../datasets/web-games/manifest.json
+# 2. Execute with the curator key (prompts for the encrypted key in packages/hardhat/.env).
+DATASET_ROOT=../content/datasets SEPOLIA_RPC_URL=<dedicated RPC> IPFS_API_URL=<kubo>/api/v0 \
+yarn hardhat:seed:dataset --execute --pin --prune \
+  --attester 0x11CbE1b619bb9fe79e2F4C22c9A62412b3E79912 --network sepolia | tee exec.log
 
-# Sepolia: prompts for the encrypted key from `packages/hardhat/.env`.
-IPFS_API_URL=https://178.104.79.94.nip.io/api/v0 \
-SEPOLIA_RPC_URL=https://... \
-yarn hardhat:seed:dataset \
-  --manifest ../datasets/web-games/manifest.json \
-  --execute \
-  --pin \
-  --network sepolia
-
-# Devnet VPS: use the devnet RPC + devnet IPFS pinning API.
-# EFS_USE_DEPLOYER_KEY_ON_LOCALHOST=1 makes `--network localhost`
-# use the imported encrypted curator key instead of the node's unlocked account.
-EFS_USE_DEPLOYER_KEY_ON_LOCALHOST=1 \
-LOCALHOST_RPC_URL=https://178.104.79.94.nip.io/rpc \
-IPFS_API_URL=https://178.104.79.94.nip.io/api/v0 \
-yarn hardhat:seed:dataset \
-  --manifest ../datasets/web-games/manifest.json \
-  --execute \
-  --pin \
-  --network localhost
+# 3. Re-run the plan: everything should now be `skip` with no tag changes.
 ```
 
-Use a dedicated funded curator EOA for the Monday demo and record the `[seed-dataset] signer=0x...`
-line in the operator notes. Viewer reads are lens-scoped: on Sepolia, share the demo as
-`/games?lenses=<curator-address>` (or configure the app to include that curator as a demo lens) or the
-dataset can seed successfully while remaining invisible to default viewers. On devnet chain `26001993`,
-the debug client has devnet-only demo lenses; if you want default devnet visibility, seed from one of
-those configured demo-lens addresses or pass `?lenses=<curator-address>` explicitly.
+**Safety rails:**
+
+- **Content source:** `--plan` and `--execute` need an explicit content source (`DATASET_ROOT` or `--manifest`), and log its git commit. `--execute` refuses content with uncommitted changes.
+- **Signer:** on any chain other than the local fork or devnet, `--execute` requires `--attester` and refuses the public Hardhat development key.
+- **Licences:** media files (games, images, audio, video) must carry a `license` in the manifest; documents need not.
+
+**Run record:** each `--execute` appends a record to the content repo's `deployments/<chainId>/seed-<time>.ndjson` as it runs. That covers the source and seeder commits, signer, every transaction, every file action, and the IPFS CIDs it stopped serving. Commit the record to the content repo. If a run dies, run the same command again: finished files are skipped.
+
+**IPFS:** the Sepolia catalog's mirrors are `ipfs://` CIDs. Pin them somewhere that outlives the devnet: `reset-devnet.sh` runs `docker compose down -v`, which deletes the devnet Kubo volume.
+
+**Lens:** viewer reads are lens-scoped. The debug UI includes the curator `0x11Cb…9912` as its default content lens on Sepolia, so the catalog is visible without `?lenses=`. On devnet chain `26001993` the debug client has devnet-only demo lenses; seed from one of those or pass `?lenses=<curator-address>` explicitly.
 
 Writing the dataset from the EFS.eth Safe is possible, but not the fast path: EAS UIDs are returned only after each tx lands, and the later PIN/TAG/anchor writes depend on earlier UIDs. Without a helper contract, that makes Safe-authored seeding an iterative propose/execute/read loop instead of one clean batch. The EOA path gives a simple click-to-play demo now; Safe-authored or Safe-endorsed dataset provenance can be added later as a separate ceremony/tool.
 
