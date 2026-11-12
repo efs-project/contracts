@@ -9,7 +9,8 @@
  *   1. Each Safe-owned proxy in deployments/sepolia: the EIP-1967 implementation's runtime code vs the
  *      compiled `deployedBytecode`, the proxy's ProxyAdmin owner (expected: the EFS.eth Safe), and
  *      `getEAS()` (expected: canonical Sepolia EAS — an immutable the code comparison masks).
- *   2. Each stateless view (EFSFileView, EFSRouter, ListReader): runtime code vs compiled.
+ *   2. Each stateless view (EFSFileView, EFSRouter, ListReader): runtime code vs compiled, plus its
+ *      constructor bindings (proxies, EAS, SchemaRegistry, schema UIDs) read back via its getters.
  *   3. Every schema in deploy-lib/schemas.ts: registered in the SchemaRegistry at the UID derived from
  *      the realized proxy addresses (WHITEOUT: from its Safe-keyed CREATE3 prediction).
  *   4. Feature probes for changes merged after the 2026-06-19 freeze (ADR-0055/0066/0068).
@@ -182,13 +183,58 @@ async function main() {
   }
 
   // 2. Views
-  console.log("\nStateless views (runtime code)");
+  console.log("\nStateless views (runtime code · constructor bindings)");
   const views: Record<string, string> = {};
+  // Constructor bindings each view must carry (deploy-lib/views.ts). Its immutables are masked in the
+  // code comparison, and EFSRouter keeps its references in storage, so read them back. WHITEOUT wiring
+  // is checked separately below.
+  const uid = (name: string) => {
+    const s = SCHEMAS.find(x => x.name === name)!;
+    return computeSchemaUID(s.fieldString, proxies[s.resolver]!, s.revocable);
+  };
+  const BINDINGS: Record<string, Record<string, string>> = {
+    EFSFileView: { indexer: proxies.EFSIndexer!, edgeResolver: proxies.EdgeResolver!, eas: EAS_ADDRESS },
+    EFSRouter: {
+      indexer: proxies.EFSIndexer!,
+      eas: EAS_ADDRESS,
+      edgeResolver: proxies.EdgeResolver!,
+      schemaRegistry: SCHEMA_REGISTRY_ADDRESS,
+      dataSchemaUID: uid("DATA"),
+      systemAccount: recordAddress("SystemAccount"),
+    },
+    ListReader: {
+      eas: EAS_ADDRESS,
+      resolver: proxies.ListEntryResolver!,
+      LIST_SCHEMA_UID: uid("LIST"),
+      LIST_ENTRY_SCHEMA_UID: uid("LIST_ENTRY"),
+    },
+  };
+  const sameValue = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
   for (const name of VIEWS) {
     views[name] = recordAddress(name);
     const verdict = await compareCode(provider, views[name], name);
-    line([name, verdict, views[name]]);
+    const wrong: string[] = [];
+    let unavailable = 0;
+    for (const [getter, expected] of Object.entries(BINDINGS[name])) {
+      const isUid = expected.length === 66;
+      const live = await tryCall(
+        () =>
+          new Contract(views[name], [`function ${getter}() view returns (${isUid ? "bytes32" : "address"})`], provider)[
+            getter
+          ]() as Promise<string>,
+      );
+      // A getter missing from code that already DIFFERS is that difference, not a separate one.
+      if (live === undefined && verdict === "DIFFERS") unavailable++;
+      if (live === undefined ? verdict !== "DIFFERS" : !sameValue(live, expected))
+        wrong.push(`${getter}=${live ?? "unreadable"} (expected ${expected})`);
+    }
+    line([
+      name,
+      verdict,
+      `${views[name]} · ${wrong.length} wrong / ${Object.keys(BINDINGS[name]).length - unavailable} binding(s) checked${unavailable ? ` (${unavailable} getter(s) absent from the older live code)` : ""}`,
+    ]);
     if (verdict === "DIFFERS") problems.push(`${name}: live view differs from this checkout (redeploy to ship main)`);
+    for (const w of wrong) problems.push(`${name}: wrong binding ${w}`);
   }
 
   // 3. Schemas
