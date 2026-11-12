@@ -1,5 +1,5 @@
 import { execFileSync } from "child_process";
-import { existsSync, readFileSync, readdirSync, statSync } from "fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "fs";
 import http from "http";
 import https from "https";
 import path from "path";
@@ -37,6 +37,8 @@ const LOCAL_CHAIN_IDS = new Set([31337n, 26001993n]);
 /** Hardhat account #0. Its private key is public, so anything it publishes anyone can revoke. */
 const HARDHAT_DEV_KEY_ADDRESS = "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266";
 const CHILD_PAGE = 100;
+/** A pin that hasn't answered in this long is treated as failed, so a stalled upload can't hang the run. */
+const IPFS_ADD_TIMEOUT_MS = 10 * 60 * 1000;
 
 const MAX_ANCHOR_DEPTH = 32;
 const ABI = AbiCoder.defaultAbiCoder();
@@ -86,6 +88,9 @@ interface SeedContext {
   stats: SeedStats;
   /** IPFS CIDs this run makes obsolete (changed or removed files), for unpinning. */
   retired: { cid: string; path: string }[];
+  chainId: bigint | null;
+  /** The run record (NDJSON), appended as the run goes; execute only. */
+  recordPath?: string;
 }
 
 interface PreparedFile {
@@ -115,6 +120,10 @@ interface SeedStats {
   healed: number;
   forced: number;
   plannedRemovals: number;
+  /** Files whose tags (or whose old copy's tags) a run would change. */
+  plannedTagChanges: number;
+  tagsAdded: number;
+  tagsRemoved: number;
   removed: number;
   pinned: number;
   transactions: number;
@@ -139,9 +148,10 @@ export async function seedDataset(args: SeedDatasetArgs, ethersRuntime?: Hardhat
   // Load and validate EVERY dataset before touching the chain, so a bad manifest in the
   // last dataset can't fail the run after earlier datasets were already written.
   const datasets = manifestPaths.map(manifestPath => loadPreparedDataset(manifestPath, args.only));
+  let contentCommit: string | null = null;
   if (args.plan || args.execute) {
     for (const datasetDir of uniqueStrings(datasets.map(d => d.datasetDir))) {
-      checkContentSource(datasetDir, { mustBeCommitted: args.execute && !args.allowUncommitted });
+      contentCommit = checkContentSource(datasetDir, { mustBeCommitted: args.execute && !args.allowUncommitted });
     }
   }
 
@@ -192,6 +202,16 @@ export async function seedDataset(args: SeedDatasetArgs, ethersRuntime?: Hardhat
   const runtime = ethersRuntime ?? (await import("hardhat")).ethers;
   const ctx = await connectContext(runtime, stats, { mode: "execute", attester: args.attester });
   console.log(`[seed-dataset] ipfsApiUrl=${redactUrl(args.ipfsApiUrl)}`);
+  startRecord(ctx, args.recordDir ?? defaultRecordDir(datasets[0].datasetDir), {
+    attester: args.attester ?? null,
+    contentCommit,
+    seederCommit: gitHead(__dirname),
+    datasets: datasets.map(d => ({
+      dataset: d.manifest.dataset,
+      anchorPath: d.manifest.anchorPath,
+      files: d.selected.length,
+    })),
+  });
   const tagCache = new Map<string, UID>();
 
   for (const { manifest, datasetDir, selected } of datasets) {
@@ -214,13 +234,15 @@ export async function seedDataset(args: SeedDatasetArgs, ethersRuntime?: Hardhat
       const unlisted = await findUnlistedPlacements(ctx, datasetRootUID, manifest);
       reportUnlisted(ctx, manifest, unlisted, { prune: Boolean(args.prune), mode: "execute" });
       if (args.prune && unlisted.length > 0) {
-        await revokePlacements(ctx, unlisted, manifest.dataset);
+        await revokePlacements(ctx, unlisted, manifest.dataset, manifest.anchorPath);
         await retireMirrors(ctx, unlisted, manifest.anchorPath);
       }
     }
   }
   logSummary(ctx, "execute");
   logUnpinList(ctx, "execute");
+  recordEvent(ctx, { type: "summary", ...ctx.stats });
+  if (ctx.recordPath) console.log(`[seed-dataset] record=${ctx.recordPath} (commit it to the content repo)`);
 }
 
 function loadPreparedDataset(
@@ -266,7 +288,7 @@ function findManifestPathsIn(root: string | undefined): string[] {
  * refuses anything that isn't a clean git checkout: publishing is permanent, so every run
  * must be traceable to a commit of the content repo.
  */
-function checkContentSource(datasetDir: string, opts: { mustBeCommitted: boolean }): void {
+function checkContentSource(datasetDir: string, opts: { mustBeCommitted: boolean }): string | null {
   const absolute = path.resolve(datasetDir);
   let commit: string | null = null;
   let dirty = false;
@@ -283,7 +305,7 @@ function checkContentSource(datasetDir: string, opts: { mustBeCommitted: boolean
   console.log(
     `[seed-dataset] source=${absolute} git=${commit ? `${commit.slice(0, 12)}${dirty ? " (uncommitted changes)" : ""}` : "none"}`,
   );
-  if (!opts.mustBeCommitted) return;
+  if (!opts.mustBeCommitted) return commit;
   if (!commit) {
     throw new Error(
       `Content source ${absolute} is not a git checkout. Publish from the content repo, or pass --allow-uncommitted.`,
@@ -294,6 +316,7 @@ function checkContentSource(datasetDir: string, opts: { mustBeCommitted: boolean
       `Content source ${absolute} has uncommitted changes. Commit them first, or pass --allow-uncommitted.`,
     );
   }
+  return commit;
 }
 
 /** Drops any credentials from a URL before it is logged. */
@@ -326,6 +349,9 @@ function createSeedStats(): SeedStats {
     healed: 0,
     forced: 0,
     plannedRemovals: 0,
+    plannedTagChanges: 0,
+    tagsAdded: 0,
+    tagsRemoved: 0,
     removed: 0,
     pinned: 0,
     transactions: 0,
@@ -451,6 +477,7 @@ async function connectContext(
     tagsRootUID: null,
     stats,
     retired: [],
+    chainId,
   };
 }
 
@@ -476,16 +503,25 @@ async function planOneFile(args: {
   if (decision.action === "skip") {
     ctx.stats.skipped += 1;
     console.log(`  plan skip  ${file.relativePath} (contentHash ${shortHash(file.contentHash)} already active)`);
+    if (activePlacement) await planTagDrift(ctx, file, activePlacement.dataUID);
     return;
   }
   if (decision.action === "heal") {
     ctx.stats.plannedHeals += 1;
     console.log(`  plan heal  ${file.relativePath} (${formatDecisionReason(decision.reason, activePlacement, file)})`);
+    if (activePlacement) await planTagDrift(ctx, file, activePlacement.dataUID);
     return;
   }
 
   ctx.stats.plannedWrites += 1;
   console.log(`  plan write ${file.relativePath} (${formatDecisionReason(decision.reason, activePlacement, file)})`);
+  if (activePlacement) {
+    const oldTags = await activeTagsOn(ctx, activePlacement.dataUID);
+    if (oldTags.length > 0) {
+      ctx.stats.plannedTagChanges += 1;
+      console.log(`  plan untag ${file.relativePath} (old copy): ${oldTags.map(t => t.name).join(", ")}`);
+    }
+  }
   if (activePlacement)
     await retireMirrors(ctx, [{ name: file.relativePath, dataUID: activePlacement.dataUID }], anchorPath);
 }
@@ -516,10 +552,25 @@ async function seedOneFile(args: {
   if (decision.action === "skip") {
     ctx.stats.skipped += 1;
     console.log(`  skip ${file.relativePath} (contentHash ${shortHash(file.contentHash)} already active)`);
+    recordEvent(ctx, {
+      type: "file",
+      action: "skip",
+      path: `${anchorPath}/${file.relativePath}`,
+      dataUID: activePlacement?.dataUID,
+    });
+    if (activePlacement) await reconcileTags(ctx, file, activePlacement.dataUID, tagCache);
     return;
   }
   if (decision.action === "heal" && activePlacement) {
     await healContentHash(ctx, activePlacement.dataUID, file);
+    recordEvent(ctx, {
+      type: "file",
+      action: "heal",
+      path: `${anchorPath}/${file.relativePath}`,
+      dataUID: activePlacement.dataUID,
+      contentHash: file.contentHash,
+    });
+    await reconcileTags(ctx, file, activePlacement.dataUID, tagCache);
     return;
   }
   if (activePlacement) {
@@ -623,9 +674,31 @@ async function seedOneFile(args: {
   await attestMany(ctx, commitRequests, `commit:${file.relativePath}`);
   recordWriteStats(ctx, decision.reason);
   console.log(`  wrote ${file.relativePath} data=${dataUID.slice(0, 10)}... mirror=${mirrorUri}`);
+  recordEvent(ctx, {
+    type: "file",
+    action: decision.reason,
+    path: `${anchorPath}/${file.relativePath}`,
+    dataUID,
+    mirror: mirrorUri,
+    contentHash: file.contentHash,
+    size: file.size.toString(),
+    replaces: activePlacement?.dataUID,
+  });
   // The new placement superseded the old DATA; its IPFS copy is no longer served here.
-  if (activePlacement)
+  if (activePlacement) {
     await retireMirrors(ctx, [{ name: file.relativePath, dataUID: activePlacement.dataUID }], anchorPath);
+    // The old DATA is no longer placed, but its tags would keep it listed under /tags.
+    const oldTags = await activeTagsOn(ctx, activePlacement.dataUID);
+    if (oldTags.length > 0) {
+      await sendEasCall(
+        ctx,
+        "multiRevoke",
+        [[{ schema: ctx.schemas.tag, data: oldTags.map(t => ({ uid: t.tagUID, value: 0n })) }]],
+        `untag-old:${file.relativePath}`,
+      );
+      ctx.stats.tagsRemoved += oldTags.length;
+    }
+  }
 }
 
 /**
@@ -881,13 +954,13 @@ function logSummary(ctx: SeedContext, mode: "execute" | "plan"): void {
     // expected usually means the wrong signer — every file then looks like it has no
     // placement under that account, and executing would re-seed them all under it.
     console.log(
-      `[seed-dataset] plan summary signer=${ctx.signerAddress} skipped=${ctx.stats.skipped} heals=${ctx.stats.plannedHeals} writes=${ctx.stats.plannedWrites} removals=${ctx.stats.plannedRemovals}`,
+      `[seed-dataset] plan summary signer=${ctx.signerAddress} skipped=${ctx.stats.skipped} heals=${ctx.stats.plannedHeals} writes=${ctx.stats.plannedWrites} removals=${ctx.stats.plannedRemovals} tagChanges=${ctx.stats.plannedTagChanges}`,
     );
     return;
   }
   const wrote = ctx.stats.created + ctx.stats.updated + ctx.stats.repaired + ctx.stats.healed + ctx.stats.forced;
   console.log(
-    `[seed-dataset] summary skipped=${ctx.stats.skipped} wrote=${wrote} created=${ctx.stats.created} updated=${ctx.stats.updated} repaired=${ctx.stats.repaired} healed=${ctx.stats.healed} forced=${ctx.stats.forced} removed=${ctx.stats.removed} ipfsPins=${ctx.stats.pinned} txs=${ctx.stats.transactions} attestations=${ctx.stats.attestations}`,
+    `[seed-dataset] summary skipped=${ctx.stats.skipped} wrote=${wrote} created=${ctx.stats.created} updated=${ctx.stats.updated} repaired=${ctx.stats.repaired} healed=${ctx.stats.healed} forced=${ctx.stats.forced} removed=${ctx.stats.removed} tagsAdded=${ctx.stats.tagsAdded} tagsRemoved=${ctx.stats.tagsRemoved} ipfsPins=${ctx.stats.pinned} txs=${ctx.stats.transactions} attestations=${ctx.stats.attestations}`,
   );
 }
 
@@ -956,17 +1029,139 @@ function reportUnlisted(
  * at its path for this lens. WHITEOUT (ADR-0055) isn't needed: it masks LOWER lenses, and
  * the curator is the only lens publishing these datasets.
  */
-async function revokePlacements(ctx: SeedContext, unlisted: UnlistedPlacement[], dataset: string): Promise<void> {
-  const data = ctx.eas.interface.encodeFunctionData("multiRevoke", [
-    [{ schema: ctx.schemas.pin, data: unlisted.map(item => ({ uid: item.pinUID, value: 0n })) }],
-  ]);
+async function revokePlacements(
+  ctx: SeedContext,
+  unlisted: UnlistedPlacement[],
+  dataset: string,
+  anchorPath: string,
+): Promise<void> {
+  // The placement PINs, plus the removed files' tags so they drop out of /tags listings too.
+  const tagUIDs: UID[] = [];
+  for (const item of unlisted) tagUIDs.push(...(await activeTagsOn(ctx, item.dataUID)).map(t => t.tagUID));
+  const requests = [{ schema: ctx.schemas.pin, data: unlisted.map(item => ({ uid: item.pinUID, value: 0n })) }];
+  if (tagUIDs.length > 0) requests.push({ schema: ctx.schemas.tag, data: tagUIDs.map(uid => ({ uid, value: 0n })) });
+  await sendEasCall(ctx, "multiRevoke", [requests], `remove:${dataset} (${unlisted.map(i => i.name).join(", ")})`);
+  for (const item of unlisted) {
+    recordEvent(ctx, {
+      type: "remove",
+      path: `${anchorPath}/${item.name}`,
+      dataUID: item.dataUID,
+      pinUID: item.pinUID,
+    });
+  }
+  ctx.stats.removed += unlisted.length;
+  ctx.stats.tagsRemoved += tagUIDs.length;
+}
+
+interface ActiveTag {
+  name: string;
+  /** The tag's anchor under `/tags` (the TAG's definition). */
+  definitionUID: UID;
+  /** This lens's active TAG attestation on the DATA. */
+  tagUID: UID;
+}
+
+/** `/tags`, if it exists yet. Never creates it (plans must not write). */
+async function findTagsRoot(ctx: SeedContext): Promise<UID | null> {
+  if (ctx.tagsRootUID) return ctx.tagsRootUID;
+  const found = await findAnchor(ctx, ctx.rootUID, "tags", ZeroHash);
+  if (found) ctx.tagsRootUID = found;
+  return found;
+}
+
+/**
+ * The lens's active tags on a DATA: every definition ever attested against it that is an
+ * anchor under `/tags` and still has an active TAG from this lens. (The placement anchor is
+ * also a definition on the DATA; it isn't under `/tags`, so it's skipped.)
+ */
+async function activeTagsOn(ctx: SeedContext, dataUID: UID): Promise<ActiveTag[]> {
+  const tagsRoot = await findTagsRoot(ctx);
+  if (!tagsRoot) return [];
+  const count = Number(await ctx.edgeResolver.getEdgeDefinitionCount(dataUID));
+  if (count === 0) return [];
+  const definitions = (await ctx.edgeResolver.getEdgeDefinitions(dataUID, 0, count)) as UID[];
+  const active: ActiveTag[] = [];
+  for (const definitionUID of definitions) {
+    if (((await ctx.indexer.getParent(definitionUID)) as UID).toLowerCase() !== tagsRoot.toLowerCase()) continue;
+    const tagUID = (await ctx.edgeResolver.getActiveEdgeUID(
+      ctx.signerAddress,
+      dataUID,
+      definitionUID,
+      ctx.schemas.tag,
+    )) as UID;
+    if (isZeroUID(tagUID)) continue;
+    const attestation = (await ctx.eas.getAttestation(definitionUID)) as { data: string };
+    const [name] = ABI.decode(["string", "bytes32"], attestation.data) as unknown as [string, string];
+    active.push({ name, definitionUID, tagUID });
+  }
+  return active;
+}
+
+function diffTags(file: PreparedFile, active: ActiveTag[]): { add: string[]; remove: ActiveTag[] } {
+  const wanted = new Set(file.entry.tags ?? []);
+  const have = new Set(active.map(t => t.name));
+  return { add: [...wanted].filter(t => !have.has(t)), remove: active.filter(t => !wanted.has(t.name)) };
+}
+
+/** --plan: report a kept file whose tags differ from the manifest. */
+async function planTagDrift(ctx: SeedContext, file: PreparedFile, dataUID: UID): Promise<void> {
+  const { add, remove } = diffTags(file, await activeTagsOn(ctx, dataUID));
+  if (add.length === 0 && remove.length === 0) return;
+  ctx.stats.plannedTagChanges += 1;
+  console.log(
+    `  plan tags  ${file.relativePath} ${[...add.map(t => `+${t}`), ...remove.map(t => `-${t.name}`)].join(" ")}`,
+  );
+}
+
+/**
+ * Brings a kept file's tags in line with the manifest. Skip and heal used to return before
+ * tags were checked, so a changed tag list was never applied and stale tags lived on.
+ */
+async function reconcileTags(
+  ctx: SeedContext,
+  file: PreparedFile,
+  dataUID: UID,
+  tagCache: Map<string, UID>,
+): Promise<void> {
+  const { add, remove } = diffTags(file, await activeTagsOn(ctx, dataUID));
+  if (add.length > 0) {
+    const definitions: UID[] = [];
+    for (const tag of add) definitions.push(await ensureTagDefinition(ctx, tagCache, tag));
+    await sendEasCall(
+      ctx,
+      "multiAttest",
+      [[{ schema: ctx.schemas.tag, data: definitions.map(def => tagRequest(dataUID, def)) }]],
+      `tag:${file.relativePath} +${add.join(" +")}`,
+    );
+    ctx.stats.tagsAdded += add.length;
+    recordEvent(ctx, { type: "tags", path: file.relativePath, dataUID, added: add });
+  }
+  if (remove.length > 0) {
+    await sendEasCall(
+      ctx,
+      "multiRevoke",
+      [[{ schema: ctx.schemas.tag, data: remove.map(t => ({ uid: t.tagUID, value: 0n })) }]],
+      `untag:${file.relativePath} -${remove.map(t => t.name).join(" -")}`,
+    );
+    ctx.stats.tagsRemoved += remove.length;
+    recordEvent(ctx, { type: "tags", path: file.relativePath, dataUID, removed: remove.map(t => t.name) });
+  }
+}
+
+/** Sends one EAS batch call straight from the signer and waits for it to be mined. */
+async function sendEasCall(
+  ctx: SeedContext,
+  fn: "multiAttest" | "multiRevoke",
+  args: unknown[],
+  label: string,
+): Promise<void> {
+  const data = ctx.eas.interface.encodeFunctionData(fn, args);
   const tx = await ctx.signer.sendTransaction({ to: await ctx.eas.getAddress(), data });
   const receipt = await tx.wait();
+  if (receipt && receipt.status === 0) throw new Error(`${label}: transaction reverted (${tx.hash})`);
   ctx.stats.transactions += 1;
-  ctx.stats.removed += unlisted.length;
-  console.log(
-    `  tx   remove:${dataset} hash=${tx.hash ?? "unknown"} status=${receipt?.status ?? "unknown"} revoked=${unlisted.length} (${unlisted.map(i => i.name).join(", ")})`,
-  );
+  recordEvent(ctx, { type: "tx", label, hash: tx.hash });
+  console.log(`  tx   ${label} hash=${tx.hash ?? "unknown"} status=${receipt?.status ?? "unknown"}`);
 }
 
 /**
@@ -996,7 +1191,9 @@ async function retireMirrors(
       const attestation = (await ctx.eas.getAttestation(mirrorUID)) as { data: string };
       const [, uri] = ABI.decode(["bytes32", "string"], attestation.data) as unknown as [string, string];
       if (uri.startsWith("ipfs://")) {
-        ctx.retired.push({ cid: uri.slice("ipfs://".length), path: `${anchorPath}/${file.name}` });
+        const retired = { cid: uri.slice("ipfs://".length), path: `${anchorPath}/${file.name}` };
+        ctx.retired.push(retired);
+        recordEvent(ctx, { type: "unpin", ...retired });
       }
     }
   }
@@ -1011,6 +1208,42 @@ function logUnpinList(ctx: SeedContext, mode: "plan" | "execute"): void {
       : `[seed-dataset] unpin: ${ctx.retired.length} IPFS CID(s) no longer served (check nothing else pins the same bytes)`,
   );
   for (const item of ctx.retired) console.log(`  ${item.cid}  ${item.path}`);
+}
+
+/** The content repo keeps chain outputs in `deployments/` beside `datasets/`. */
+function defaultRecordDir(datasetDir: string): string | undefined {
+  const dir = path.resolve(datasetDir, "..", "..", "deployments");
+  return existsSync(dir) && statSync(dir).isDirectory() ? dir : undefined;
+}
+
+function gitHead(dir: string): string | null {
+  try {
+    return execFileSync("git", ["-C", dir, "rev-parse", "HEAD"], { encoding: "utf8", stdio: "pipe" }).trim();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Opens the run record: `<dir>/<chainId>/seed-<time>.ndjson`, one JSON object per line,
+ * appended as the run goes (so a crash mid-run still leaves what happened, including the
+ * CIDs to unpin). Commit it to the content repo afterwards.
+ */
+function startRecord(ctx: SeedContext, dir: string | undefined, header: Record<string, unknown>): void {
+  if (!dir) {
+    console.log("[seed-dataset] no run record: pass --record-dir, or publish from the content repo (deployments/).");
+    return;
+  }
+  const chainDir = path.join(dir, String(ctx.chainId ?? "unknown"));
+  mkdirSync(chainDir, { recursive: true });
+  ctx.recordPath = path.join(chainDir, `seed-${new Date().toISOString().replace(/[:.]/g, "-")}.ndjson`);
+  recordEvent(ctx, { type: "run", chainId: String(ctx.chainId), signer: ctx.signerAddress, ...header });
+  console.log(`[seed-dataset] record=${ctx.recordPath}`);
+}
+
+function recordEvent(ctx: SeedContext, event: Record<string, unknown>): void {
+  if (!ctx.recordPath) return;
+  appendFileSync(ctx.recordPath, `${JSON.stringify({ time: new Date().toISOString(), ...event })}\n`);
 }
 
 async function attestOne(ctx: SeedContext, schema: UID, data: AttestationData, label: string): Promise<UID> {
@@ -1042,6 +1275,7 @@ async function uidsFromTx(
   }
   ctx.stats.transactions += 1;
   ctx.stats.attestations += uids.length;
+  recordEvent(ctx, { type: "tx", label, hash: tx.hash, attestations: uids.length });
   console.log(
     `  tx   ${label} hash=${tx.hash ?? "unknown"} block=${receipt.blockNumber ?? "unknown"} status=${receipt.status ?? "unknown"} attestations=${uids.length}`,
   );
@@ -1085,6 +1319,9 @@ async function pinFileToIpfs(apiBase: string, bytes: Buffer, filename: string): 
       },
     );
     req.on("error", reject);
+    req.setTimeout(IPFS_ADD_TIMEOUT_MS, () =>
+      req.destroy(new Error(`IPFS add timed out after ${IPFS_ADD_TIMEOUT_MS / 1000}s for ${filename}`)),
+    );
     req.write(head);
     req.write(bytes);
     req.end(tail);

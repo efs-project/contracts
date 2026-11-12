@@ -1,5 +1,5 @@
 import { expect } from "chai";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
 import { AbiCoder, Interface, ZeroAddress, ZeroHash, getAddress, toUtf8Bytes } from "ethers";
@@ -10,6 +10,7 @@ const ABI = AbiCoder.defaultAbiCoder();
 const EAS = new Interface([
   "function getAttestation(bytes32 uid) view returns (tuple(bytes32 uid,bytes32 schema,uint64 time,uint64 expirationTime,uint64 revocationTime,bytes32 refUID,address recipient,address attester,bool revocable,bytes data))",
   "function multiRevoke((bytes32 schema,(bytes32 uid,uint256 value)[] data)[] multiRequests) payable",
+  "function multiAttest((bytes32 schema,(address recipient,uint64 expirationTime,bool revocable,bytes32 refUID,bytes data,uint256 value)[] data)[] multiRequests) payable returns (bytes32[])",
 ]);
 
 function uid(hex: string): string {
@@ -24,6 +25,11 @@ interface SeedFixture {
   /** UID of the stale file's placement PIN, when `staleFile` was given. */
   stalePinUID: string;
   pinSchema: string;
+  tagSchema: string;
+  dataUID: string;
+  staleDataUID: string;
+  tagAnchors: Record<string, string>;
+  tagUIDFor: (target: string, tag: string) => string;
 }
 
 /**
@@ -42,6 +48,10 @@ function buildFixture(opts: {
   allowWrites?: boolean;
   /** Licence on the html entry; `null` omits it. */
   license?: string | null;
+  /** Tags the lens currently has on snake.html's DATA. Default: the manifest's tags. */
+  activeTags?: string[];
+  /** Tags the lens currently has on the stale file's DATA. */
+  staleActiveTags?: string[];
 }): SeedFixture {
   const dir = mkdtempSync(path.join(tmpdir(), "efs-seed-dataset-"));
   const bytes = "<html>same</html>";
@@ -83,6 +93,14 @@ function buildFixture(opts: {
   const pinSchema = uid("c1");
   const tagSchema = uid("e1");
   const propertySchema = uid("f1");
+  // `/tags` and its tag anchors (each becomes a TAG definition).
+  const tagsRootUID = uid("10");
+  const tagAnchors: Record<string, string> = { arcade: uid("11"), oldtag: uid("12"), puzzle: uid("13") };
+  const tagNameOf = (anchor: string) => Object.keys(tagAnchors).find(k => tagAnchors[k] === anchor);
+  const activeTags = opts.activeTags ?? opts.tags ?? ["arcade"];
+  const staleActiveTags = opts.staleActiveTags ?? [];
+  /** UID of the lens's active TAG for (target, tag), derived so tests can predict it. */
+  const tagUIDFor = (target: string, tag: string) => uid((target === dataUID ? "2" : "3") + tagAnchors[tag].slice(-2));
   // Default: the CANONICAL claim of these bytes (specs/10) — what this seeder now writes,
   // so an active placement carrying it is a genuine match: nothing may be pinned or written.
   const activeHash = opts.activeHash ?? canonicalContentHash(toUtf8Bytes(bytes));
@@ -123,6 +141,15 @@ function buildFixture(opts: {
             mirrorSchema,
             lensAddress,
             ABI.encode(["bytes32", "string"], [ipfsTransportUID, "ipfs://bafyoldstale"]),
+          );
+        }
+        const tagName = tagNameOf(requestedUID);
+        if (tagName) {
+          return attestation(
+            requestedUID,
+            anchorSchema,
+            lensAddress,
+            ABI.encode(["string", "bytes32"], [tagName, ZeroHash]),
           );
         }
         if (requestedUID === staleAnchorUID && opts.staleFile) {
@@ -171,8 +198,9 @@ function buildFixture(opts: {
     resolveAnchor: async (parent: string, name: string, schema: string) => {
       if (parent === rootUID && name === "tags" && schema === ZeroHash) {
         counters.tagsAnchorLookups += 1;
-        return ZeroHash;
+        return tagsRootUID;
       }
+      if (parent === tagsRootUID && schema === ZeroHash && tagAnchors[name]) return tagAnchors[name];
       if (parent === rootUID && name === "games" && schema === ZeroHash) return gamesUID;
       if (parent === gamesUID && name === "snake.html" && schema === dataSchema) return fileAnchorUID;
       if (parent === gamesUID && opts.staleFile && name === opts.staleFile && schema === dataSchema)
@@ -183,7 +211,7 @@ function buildFixture(opts: {
     getChildrenCount: async (parent: string) => (parent === gamesUID ? BigInt(children.length) : 0n),
     getChildren: async (parent: string, start: bigint, length: bigint) =>
       parent === gamesUID ? children.slice(Number(start), Number(start) + Number(length)) : [],
-    getParent: async () => rootUID,
+    getParent: async (anchor: string) => (tagNameOf(anchor) ? tagsRootUID : rootUID),
     getReferencingBySchemaAndAttesterCount: async (target: string, schema: string, attester: string) =>
       attester === lensAddress && schema === mirrorSchema && (target === dataUID || target === staleDataUID) ? 1n : 0n,
     getReferencingBySchemaAndAttester: async (target: string, schema: string, attester: string) => {
@@ -212,6 +240,21 @@ function buildFixture(opts: {
       return ZeroHash;
     },
     isActiveEdge: async () => false,
+    // Definitions ever attested against a target: the placement anchor plus its tags.
+    getEdgeDefinitionCount: async (target: string) =>
+      BigInt(target === dataUID ? 1 + activeTags.length : target === staleDataUID ? 1 + staleActiveTags.length : 0),
+    getEdgeDefinitions: async (target: string) => {
+      if (target === dataUID) return [fileAnchorUID, ...activeTags.map(t => tagAnchors[t])];
+      if (target === staleDataUID) return [staleAnchorUID, ...staleActiveTags.map(t => tagAnchors[t])];
+      return [];
+    },
+    getActiveEdgeUID: async (attester: string, target: string, definition: string, schema: string) => {
+      if (attester !== lensAddress || schema !== tagSchema) return ZeroHash;
+      const tag = tagNameOf(definition);
+      if (!tag) return ZeroHash;
+      const active = target === dataUID ? activeTags : target === staleDataUID ? staleActiveTags : [];
+      return active.includes(tag) ? tagUIDFor(target, tag) : ZeroHash;
+    },
   };
 
   return {
@@ -220,6 +263,11 @@ function buildFixture(opts: {
     counters,
     stalePinUID,
     pinSchema,
+    tagSchema,
+    dataUID,
+    tagAnchors,
+    tagUIDFor,
+    staleDataUID,
     runtime: {
       getSigners: async () => [fakeSigner as any],
       getContract: async (name: string) => {
@@ -283,7 +331,6 @@ describe("seedDataset execution boundaries", function () {
     try {
       await seedDataset(executeArgs(f), f.runtime);
       expect(f.counters.easWrites).to.equal(0);
-      expect(f.counters.tagsAnchorLookups).to.equal(0);
     } finally {
       cleanup(f);
     }
@@ -426,9 +473,9 @@ describe("seedDataset --prune", function () {
       expect(f.counters.sentData.length).to.equal(1);
       const parsed = EAS.parseTransaction({ data: f.counters.sentData[0] });
       expect(parsed?.name).to.equal("multiRevoke");
-      const [request] = parsed!.args[0];
-      expect(request.schema).to.equal(f.pinSchema);
-      expect(request.data.map((d: { uid: string }) => d.uid)).to.deep.equal([f.stalePinUID]);
+      const requests = parsed!.args[0];
+      const pinRequest = requests.find((r: { schema: string }) => r.schema === f.pinSchema);
+      expect(pinRequest.data.map((d: { uid: string }) => d.uid)).to.deep.equal([f.stalePinUID]);
     } finally {
       cleanup(f);
     }
@@ -512,6 +559,142 @@ describe("seedDataset licences and unpin list", function () {
       expect(block).to.match(/bafyoldstale\s+\/games\/old\.html/);
     } finally {
       cleanup(f);
+    }
+  });
+});
+
+describe("seedDataset tag reconciliation", function () {
+  const decodeTagTarget = (data: string) => ABI.decode(["bytes32", "int256"], data)[0] as string;
+
+  it("--plan reports tag drift on a file whose bytes are unchanged", async function () {
+    // Heal and skip used to return before tags were looked at, so stale tags lived on.
+    const f = buildFixture({
+      signerAddress: SIGNER,
+      lensAddress: CURATOR,
+      tags: ["arcade", "puzzle"],
+      activeTags: ["arcade", "oldtag"],
+    });
+    try {
+      const { lines, error } = await captureLogs(() => seedDataset(planArgs(f, { attester: CURATOR }), f.runtime));
+      expect(error).to.equal(undefined);
+      const tagLine = lines.find(l => /plan tags\s+snake\.html/.test(l));
+      expect(tagLine, lines.join("\n")).to.match(/\+puzzle/);
+      expect(tagLine).to.match(/-oldtag/);
+      expect(lines.some(l => /tagChanges=1/.test(l))).to.equal(true);
+      expect(f.counters.easWrites).to.equal(0);
+    } finally {
+      cleanup(f);
+    }
+  });
+
+  it("--execute adds missing tags and revokes stale ones on an unchanged file", async function () {
+    const f = buildFixture({
+      signerAddress: SIGNER,
+      lensAddress: SIGNER,
+      tags: ["arcade", "puzzle"],
+      activeTags: ["arcade", "oldtag"],
+      allowWrites: true,
+    });
+    try {
+      const { error } = await captureLogs(() => seedDataset(executeArgs(f), f.runtime));
+      expect(error).to.equal(undefined);
+      const calls = f.counters.sentData.map(d => EAS.parseTransaction({ data: d }));
+      const attest = calls.find(c => c?.name === "multiAttest");
+      const revoke = calls.find(c => c?.name === "multiRevoke");
+      expect(attest, "missing tag attested").to.not.equal(undefined);
+      const [attestReq] = attest!.args[0];
+      expect(attestReq.schema).to.equal(f.tagSchema);
+      expect(attestReq.data.map((d: { refUID: string }) => d.refUID)).to.deep.equal([f.dataUID]);
+      expect(attestReq.data.map((d: { data: string }) => decodeTagTarget(d.data))).to.deep.equal([f.tagAnchors.puzzle]);
+      expect(revoke, "stale tag revoked").to.not.equal(undefined);
+      const [revokeReq] = revoke!.args[0];
+      expect(revokeReq.schema).to.equal(f.tagSchema);
+      expect(revokeReq.data.map((d: { uid: string }) => d.uid)).to.deep.equal([f.tagUIDFor(f.dataUID, "oldtag")]);
+    } finally {
+      cleanup(f);
+    }
+  });
+
+  it("is a no-op when the tags already match", async function () {
+    const f = buildFixture({ signerAddress: SIGNER, lensAddress: SIGNER, tags: ["arcade"], activeTags: ["arcade"] });
+    try {
+      const { error } = await captureLogs(() => seedDataset(executeArgs(f), f.runtime));
+      expect(error).to.equal(undefined);
+      expect(f.counters.easWrites).to.equal(0);
+    } finally {
+      cleanup(f);
+    }
+  });
+
+  it("--plan lists the tags a republished file leaves behind on its old copy", async function () {
+    // A write mints a new DATA; the old DATA's tags would keep it listed under /tags.
+    const f = buildFixture({
+      signerAddress: SIGNER,
+      lensAddress: CURATOR,
+      activeHash: "f1220" + "00".repeat(32),
+      tags: ["arcade"],
+      activeTags: ["arcade", "oldtag"],
+    });
+    try {
+      const { lines, error } = await captureLogs(() => seedDataset(planArgs(f, { attester: CURATOR }), f.runtime));
+      expect(error).to.equal(undefined);
+      const untag = lines.find(l => /plan untag\s+snake\.html/.test(l));
+      expect(untag, lines.join("\n")).to.match(/arcade/);
+      expect(untag).to.match(/oldtag/);
+    } finally {
+      cleanup(f);
+    }
+  });
+
+  it("--execute --prune also revokes the removed file's tags", async function () {
+    const f = buildFixture({
+      signerAddress: SIGNER,
+      lensAddress: SIGNER,
+      staleFile: "old.html",
+      staleActiveTags: ["arcade"],
+      allowWrites: true,
+    });
+    try {
+      const { error } = await captureLogs(() => seedDataset(executeArgs(f, { prune: true }), f.runtime));
+      expect(error).to.equal(undefined);
+      const revoke = f.counters.sentData
+        .map(d => EAS.parseTransaction({ data: d }))
+        .find(c => c?.name === "multiRevoke");
+      const tagReq = revoke!.args[0].find((r: { schema: string }) => r.schema === f.tagSchema);
+      expect(tagReq.data.map((d: { uid: string }) => d.uid)).to.deep.equal([f.tagUIDFor(f.staleDataUID, "arcade")]);
+    } finally {
+      cleanup(f);
+    }
+  });
+});
+
+describe("seedDataset run record", function () {
+  it("--execute writes an append-only record: header, actions, unpin list, summary", async function () {
+    // Written as the run goes, so a crash mid-run still leaves the unpin list behind.
+    const f = buildFixture({ signerAddress: SIGNER, lensAddress: SIGNER, staleFile: "old.html", allowWrites: true });
+    const recordDir = mkdtempSync(path.join(tmpdir(), "efs-seed-record-"));
+    try {
+      const { error } = await captureLogs(() => seedDataset(executeArgs(f, { prune: true, recordDir }), f.runtime));
+      expect(error).to.equal(undefined);
+      const chainDir = path.join(recordDir, "31337");
+      const [file] = readdirSync(chainDir);
+      expect(file).to.match(/^seed-.*\.ndjson$/);
+      const events = readFileSync(path.join(chainDir, file), "utf8")
+        .trim()
+        .split("\n")
+        .map(line => JSON.parse(line));
+      expect(events[0].type).to.equal("run");
+      expect(events[0].signer).to.equal(SIGNER);
+      expect(events.some(e => e.type === "file" && e.action === "skip" && e.path === "/games/snake.html")).to.equal(
+        true,
+      );
+      expect(events.some(e => e.type === "remove" && e.path === "/games/old.html")).to.equal(true);
+      expect(events.some(e => e.type === "unpin" && e.cid === "bafyoldstale")).to.equal(true);
+      expect(events.some(e => e.type === "tx")).to.equal(true);
+      expect(events[events.length - 1].type).to.equal("summary");
+    } finally {
+      cleanup(f);
+      rmSync(recordDir, { recursive: true, force: true });
     }
   });
 });
