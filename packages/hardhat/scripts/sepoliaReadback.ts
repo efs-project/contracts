@@ -7,7 +7,8 @@
  *
  * Checks:
  *   1. Each Safe-owned proxy in deployments/sepolia: the EIP-1967 implementation's runtime code vs the
- *      compiled `deployedBytecode`, and the proxy's ProxyAdmin owner (expected: the EFS.eth Safe).
+ *      compiled `deployedBytecode`, the proxy's ProxyAdmin owner (expected: the EFS.eth Safe), and
+ *      `getEAS()` (expected: canonical Sepolia EAS — an immutable the code comparison masks).
  *   2. Each stateless view (EFSFileView, EFSRouter, ListReader): runtime code vs compiled.
  *   3. Every schema in deploy-lib/schemas.ts: registered in the SchemaRegistry at the UID derived from
  *      the realized proxy addresses (WHITEOUT: from its Safe-keyed CREATE3 prediction).
@@ -27,7 +28,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { artifacts, run } from "hardhat";
 import { Contract, JsonRpcProvider, getAddress, getBytes, keccak256, solidityPacked, zeroPadValue } from "ethers";
-import { CREATEX_ADDRESS, EXPECTED_EFS_SAFE, SCHEMA_REGISTRY_ADDRESS } from "../deploy-lib/addresses";
+import { CREATEX_ADDRESS, EAS_ADDRESS, EXPECTED_EFS_SAFE, SCHEMA_REGISTRY_ADDRESS } from "../deploy-lib/addresses";
 import { RESOLVER_SALT_ENTROPY } from "../deploy-lib/create3";
 import { ResolverName, SCHEMAS, computeSchemaUID } from "../deploy-lib/schemas";
 
@@ -125,9 +126,11 @@ async function main() {
   console.log(`Sepolia readback at block ${block} vs this checkout (${RPC_URL.replace(/\/v2\/.*/, "/v2/…")})\n`);
 
   // 1. Proxies
-  console.log("Proxied contracts (implementation code · ProxyAdmin owner)");
+  console.log("Proxied contracts (implementation code · ProxyAdmin owner · EAS)");
   const proxies: Partial<Record<ResolverName, string>> = {};
-  // Implementation code vs this checkout, and ProxyAdmin owner vs the EFS.eth Safe, for one proxy.
+  // Implementation code vs this checkout, ProxyAdmin owner vs the EFS.eth Safe, and the EAS the
+  // implementation was constructed with vs canonical Sepolia EAS — one proxy. The EAS address is a
+  // constructor immutable, so the code comparison masks it; read it back (as deploy-lib/verify.ts does).
   const checkProxy = async (contractName: string, proxy: string) => {
     const impl = await readSlotAddress(provider, proxy, EIP1967_IMPL_SLOT);
     const verdict = await compareCode(provider, impl, contractName);
@@ -141,10 +144,15 @@ async function main() {
         : getAddress(owner) === EXPECTED_EFS_SAFE
           ? "owner = EFS.eth Safe"
           : `owner = ${owner}`;
-    line([contractName, verdict, `impl ${impl} · ${ownerNote}`]);
+    const eas = await tryCall(
+      () => new Contract(proxy, ["function getEAS() view returns (address)"], provider).getEAS() as Promise<string>,
+    );
+    const easOk = eas !== undefined && getAddress(eas) === EAS_ADDRESS;
+    line([contractName, verdict, `impl ${impl} · ${ownerNote} · ${easOk ? "EAS ok" : `EAS ${eas ?? "unreadable"}`}`]);
     if (verdict === "DIFFERS") problems.push(`${contractName}: live implementation differs from this checkout`);
     if (owner === undefined || getAddress(owner) !== EXPECTED_EFS_SAFE)
       problems.push(`${contractName}: ProxyAdmin owner is not the EFS.eth Safe (${owner ?? "unreadable"})`);
+    if (!easOk) problems.push(`${contractName}: getEAS() is not canonical Sepolia EAS (${eas ?? "unreadable"})`);
   };
   for (const [record, contractName] of Object.entries(PROXIES)) {
     const proxy = recordAddress(record);
