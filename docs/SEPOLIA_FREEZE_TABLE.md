@@ -32,7 +32,9 @@ WHITEOUT is **NOT part of the signed 9-schema freeze above** — it is an **addi
 
 | # | Schema | Field string (exact) | revocable | Resolver (proxy) | Schema UID |
 |---|---|---|---|---|---|
-| 10 | WHITEOUT | `` (empty — pure-identity negative marker) | `true` | WhiteoutResolver proxy `<filled at additive deploy>` | `<filled at additive deploy>` |
+| 10 | WHITEOUT | `` (empty — pure-identity negative marker) | `true` | WhiteoutResolver proxy `<filled at additive deploy>` (predicted `0xE007f06400B2c4E73405454b9Cc41b0FD7F7eBFa`) | `<filled at additive deploy>` (predicted `0xfccce2f853d5c6a0435292b7ae113b175b3939c821042a59618405c5ca0e541d`) |
+
+**Status: NOT DEPLOYED.** The additive deploy has not run; the row stays unsigned. A 2026-10-27 readback found no code at the predicted proxy address, no registered schema at the predicted UID, and no WHITEOUT wiring on the live router / file view (`docs/CHAINS.md`). The predicted values hold only if the deploy uses the Safe as CreateX caller and the committed `"whiteout"` salt; record the realized values here when it runs.
 
 **WHITEOUT (ADR-0055):** empty field string = pure-identity negative marker (same idiom as DATA); `revocable: true` (revoke == un-hide). `WhiteoutResolver` self-derives its WHITEOUT schema UID in `initialize()` and write-guards source/payload/revocability. It is **not** `OwnableUpgradeable` (no deployer/owner-gated functions — like EdgeResolver/ListResolver/ListEntryResolver/AliasResolver), so at burn only its **ProxyAdmin** is renounced; there is no contract-owner to zero. Its proxy + ProxyAdmin **join the burn ceremony** (see the burn checklist — 8 ProxyAdmins once WHITEOUT is deployed).
 

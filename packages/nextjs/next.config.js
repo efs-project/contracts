@@ -85,6 +85,14 @@ const nextConfig = {
     config.resolve.fallback = { fs: false, net: false, tls: false };
     config.externals.push("pino-pretty", "lokijs", "encoding");
     config.experiments = { ...config.experiments, topLevelAwait: true };
+    // pdf.js for the sandboxed PDF preview (PdfJsFrame, ADR-0070) ships as
+    // plain static files that the page fetches as text. A .txt name keeps the
+    // production minifier from re-parsing those ES modules as scripts.
+    config.module.rules.push({
+      test: /pdfjs-dist[\\/]build[\\/]pdf(\.worker)?\.min\.mjs$/,
+      type: "asset/resource",
+      generator: { filename: "static/media/[name].[contenthash:8].txt" },
+    });
     return config;
   },
 };

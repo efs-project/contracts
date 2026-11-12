@@ -12,6 +12,7 @@
     "account:generate": "yarn workspace @se-2/hardhat account:generate",
     "account:import": "yarn workspace @se-2/hardhat account:import",
     "chain": "yarn hardhat:chain",
+    "check:deployments": "yarn workspace @se-2/hardhat check:deployments",
     "compile": "yarn hardhat:compile",
     "deploy": "yarn hardhat:deploy",
     "fork": "yarn hardhat:fork",

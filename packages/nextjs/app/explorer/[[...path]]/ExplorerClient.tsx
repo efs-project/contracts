@@ -19,6 +19,8 @@ import {
   ClassifiedContainer,
   EFS_CONTENT_LENS,
   buildRouterPathNames,
+  canAttachChildAnchor,
+  childAnchorParent,
   classifyTopLevelSegment,
   defaultLensesForContainer,
 } from "~~/utils/efs/containers";
@@ -775,23 +777,17 @@ export default function ExplorerClient() {
   // transactions yet never appear. Restrict authoring to `lensAddresses[0]` to
   // guarantee the connected wallet's Overview is the one shown.
   //
-  // It also requires a *real anchor* parent. Ordinary `/explorer/...` anchor
-  // walks leave `currentContainer` null (containerKind falls back to "anchor")
-  // with a real `currentAnchorUID` — those are writable. Only the synthetic
-  // container roots set `currentContainer`: address / schema / attestation seed
-  // `currentAnchorUID` with a synthetic-or-raw UID equal to `container.uid` (the
-  // bytes32 address, or the raw schema/attestation UID when no alias anchor
-  // exists), and the upload helper would deploy SSTORE2 chunks then revert on
-  // that invalid `refUID`. So: a real anchor unless we're at a container root
-  // whose anchor IS the raw container UID. Alias anchors and deeper paths (UID
-  // differs from container.uid) stay writable.
+  // It also requires a parent the README anchor can attach to: any real anchor, or
+  // an address-container root, whose README anchor is attested with
+  // `refUID = 0, recipient = addr` (see `childAnchorParent`). A raw schema /
+  // attestation root (no alias anchor) can't hold children: the upload helper
+  // would deploy SSTORE2 chunks then revert on that invalid `refUID`.
   const writerIsTopLens = !!connectedAddress && lensAddresses[0]?.toLowerCase() === connectedAddress.toLowerCase();
-  const onRealAnchor =
-    !!currentAnchorUID && (!currentContainer || currentAnchorUID.toLowerCase() !== currentContainer.uid.toLowerCase());
   // Overviews are folder-scoped. A file deep link never makes the file anchor
   // current (path resolution stops at its parent), so the editor can't save a
   // README "inside" a file (Codex P2).
-  const overviewEditable = writerIsTopLens && onRealAnchor;
+  const overviewEditable =
+    writerIsTopLens && canAttachChildAnchor({ container: currentContainer, parentAnchorUID: currentAnchorUID });
 
   return (
     <div className="flex flex-col h-screen w-full bg-base-100 p-4 gap-3">
@@ -906,6 +902,14 @@ export default function ExplorerClient() {
                 refreshKey={overviewRefreshKey}
                 canEdit={overviewEditable}
                 editAnchorUID={currentAnchorUID as `0x${string}` | undefined}
+                editAnchorParent={
+                  currentAnchorUID
+                    ? childAnchorParent({
+                        container: currentContainer,
+                        parentAnchorUID: currentAnchorUID as `0x${string}`,
+                      })
+                    : undefined
+                }
                 anchorSchemaUID={anchorSchemaUID as `0x${string}` | undefined}
                 propertySchemaUID={propertySchemaUID as `0x${string}` | undefined}
                 pinSchemaUID={pinSchemaUID as `0x${string}` | undefined}

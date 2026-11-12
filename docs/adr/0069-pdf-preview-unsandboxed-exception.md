@@ -1,6 +1,6 @@
 # ADR-0069: PDF preview is rendered unsandboxed (narrow exception to ADR-0056 render isolation)
 
-**Status:** Accepted
+**Status:** Accepted (amended in part by ADR-0070 — without a built-in viewer the client now renders a sandboxed pdf.js preview instead of Download only; guards 1–2 and the native path still hold)
 **Date:** 2026-10-26
 **Related:** Amends ADR-0056 in part (its "sandboxed iframe" mechanism, for PDFs only); PR #50; commit `61afaee` (the sandbox this reverses); `specs/overview.md` § Load-bearing invariants
 **Permanence-tier:** Ephemeral (client render path; changeable in any client release)

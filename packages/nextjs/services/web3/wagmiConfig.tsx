@@ -3,7 +3,7 @@ import { Chain, createClient, fallback, http } from "viem";
 import { hardhat, mainnet } from "viem/chains";
 import { createConfig } from "wagmi";
 import scaffoldConfig from "~~/scaffold.config";
-import { getPreferredRpcUrls } from "~~/utils/scaffold-eth";
+import { createPageLoadWalletTracker, getPreferredRpcUrls } from "~~/utils/scaffold-eth";
 
 const { targetNetworks } = scaffoldConfig;
 
@@ -34,3 +34,6 @@ export const wagmiConfig = createConfig({
     });
   },
 });
+
+/** Page-load reconnect state: when wagmi has finished restoring wallets, and which one was last active. */
+export const pageLoadWallet = createPageLoadWalletTracker(wagmiConfig);

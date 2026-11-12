@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ethers } from "ethers";
 import { decodeEventLog, parseAbiItem } from "viem";
 import { usePublicClient, useWalletClient } from "wagmi";
@@ -47,6 +47,7 @@ export const CreateSortModal = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const modalRef = useRef<HTMLDialogElement>(null);
+  const nameInputRef = useRef<HTMLInputElement>(null);
   const { targetNetwork } = useTargetNetwork();
   const publicClient = usePublicClient({ chainId: targetNetwork.id });
   const { data: walletClient } = useWalletClient();
@@ -58,6 +59,12 @@ export const CreateSortModal = ({
   } else if (!isOpen && modalRef.current?.open) {
     modalRef.current.close();
   }
+
+  // Focus on open, not via `autoFocus`: the dialog stays mounted while closed,
+  // so autoFocus fired at page load and raised phone keyboards.
+  useEffect(() => {
+    if (isOpen) nameInputRef.current?.focus();
+  }, [isOpen]);
 
   const handleClose = () => {
     setName("");
@@ -192,11 +199,11 @@ export const CreateSortModal = ({
             </label>
             <input
               type="text"
+              ref={nameInputRef}
               placeholder="e.g. BySize, ByRating"
               className="input input-bordered w-full"
               value={name}
               onChange={e => setName(e.target.value)}
-              autoFocus
             />
           </div>
 

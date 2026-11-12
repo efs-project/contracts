@@ -534,14 +534,27 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
   // We enrich the bare membership tuples by reading both properties per entry,
   // scoped to `effectiveLens`, then sort by the parsed order value ascending.
 
+  // True once every dependency of readEntryProperty has loaded. Effects that read
+  // properties skip their run until then (keeping prior state) rather than calling in
+  // and having the not-ready throw land in their error path on every page load.
+  const propertyReadsReady = !!(
+    publicClient &&
+    indexerAddress &&
+    edgeResolverAddress &&
+    propertySchemaUID &&
+    easAddress
+  );
+
   /** Read one PIN-bound PROPERTY value (string) on a container, scoped to `attester`. */
   // Returns the property value, or null when it is genuinely ABSENT (no key anchor,
   // no active PIN, revoked, or malformed value). RPC/network errors are NOT swallowed
   // — they propagate so the caller can tell "read failed" from "no value set" (ADR-0046
   // F1: a transient blip must never masquerade as missing data and silently reorder).
+  // Unloaded dependencies throw for the same reason: "can't read yet" is not "no value".
   const readEntryProperty = useCallback(
     async (container: `0x${string}`, keyName: string, attester: `0x${string}`): Promise<string | null> => {
-      if (!publicClient || !indexerAddress || !edgeResolverAddress || !propertySchemaUID || !easAddress) return null;
+      if (!publicClient || !indexerAddress || !edgeResolverAddress || !propertySchemaUID || !easAddress)
+        throw new Error("readEntryProperty: deps not ready");
       const keyAnchorUID = (await publicClient.readContract({
         address: indexerAddress,
         abi: INDEXER_PROPERTY_ABI,
@@ -582,7 +595,7 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
   const [listDescription, setListDescription] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
-    if (!listReaderAddress) return;
+    if (!listReaderAddress || !propertyReadsReady) return; // keep prior description until reads can run
     readEntryProperty(listUID, DESC_KEY, effectiveLens)
       .then(v => {
         if (!cancelled) setListDescription(v);
@@ -593,7 +606,7 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
     return () => {
       cancelled = true;
     };
-  }, [listUID, effectiveLens, readEntryProperty, listReaderAddress]);
+  }, [listUID, effectiveLens, readEntryProperty, listReaderAddress, propertyReadsReady]);
 
   // Display order — synced from chain (sorted by order property asc), mutated optimistically.
   const [items, setItems] = useState<Entry[]>([]);
@@ -623,6 +636,9 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
         if (!cancelled) setItems([]);
         return;
       }
+      // Deps not loaded yet: keep the current items (last-known order/label) and wait —
+      // readEntryProperty's identity changes once they load, which re-runs this effect.
+      if (!propertyReadsReady) return;
       const prevByUID = new Map(itemsRef.current.map(it => [it.entryUID, it]));
       // Read both properties for every entry in parallel (Promise.all of readContract;
       // the codebase has no multicall helper here, and readEntryProperty already
@@ -669,7 +685,7 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rawEntries, effectiveLens, readEntryProperty]);
+  }, [rawEntries, effectiveLens, readEntryProperty, propertyReadsReady]);
 
   const [busy, setBusy] = useState(false);
 
@@ -1087,13 +1103,14 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
     setEditingDesc(false);
     const opId = ops.start(`Edit description of “${name}”`);
     setBusy(true);
+    const prevDescription = listDescription; // rollback target if the re-read also fails
     setListDescription(next || null); // optimistic
     try {
       await placeEntryProperty(listUID, DESC_KEY, next, msg => ops.log(opId, msg));
       ops.complete(opId, "Saved");
     } catch (err: any) {
       ops.fail(opId, err?.shortMessage ?? err?.message ?? "Failed");
-      setListDescription(await readEntryProperty(listUID, DESC_KEY, effectiveLens).catch(() => null));
+      setListDescription(await readEntryProperty(listUID, DESC_KEY, effectiveLens).catch(() => prevDescription));
     } finally {
       setBusy(false);
     }
@@ -1108,7 +1125,11 @@ export const ListPreviewPane = ({ uid, name, attester: listAttester, onClose, co
     const src = dragSrc.current;
     dragSrc.current = null;
     setDragOver(null);
-    if (src === null || src === destIndex || !ready || busy) return;
+    if (src === null || src === destIndex || !ready) return;
+    if (busy) {
+      notification.info("Another list operation is in progress — try again when it finishes.");
+      return;
+    }
 
     // The drop indicator is a line at the TOP of the hovered row → "insert above row destIndex".
     // After removing src, every index above destIndex shifts down by one, so when dragging
