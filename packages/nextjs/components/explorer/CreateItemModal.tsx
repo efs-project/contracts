@@ -10,7 +10,7 @@ import { useDeployedContractInfo, useScaffoldWriteContract } from "~~/hooks/scaf
 import { useTargetNetwork } from "~~/hooks/scaffold-eth/useTargetNetwork";
 import { createExternalFileReference, uploadOnchainFile } from "~~/lib/efs/uploadOnchainFile";
 import { useBackgroundOps } from "~~/services/store/backgroundOps";
-import type { ClassifiedContainer } from "~~/utils/efs/containers";
+import { type ClassifiedContainer, childAnchorParent } from "~~/utils/efs/containers";
 import { EDGE_RESOLVER_ABI, getEdgeResolverAddress } from "~~/utils/efs/edgeResolver";
 import { SORT_OVERLAY_ABI } from "~~/utils/efs/sortOverlay";
 import {
@@ -252,6 +252,7 @@ export const CreateItemModal = ({
   const enabledSortUIDs = availableSorts.filter(s => !disabledAutoSorts.has(s.sortInfoUID)).map(s => s.sortInfoUID);
 
   const modalRef = useRef<HTMLDialogElement>(null);
+  const nameInputRef = useRef<HTMLInputElement>(null);
   // Flipped by the Stop button mid-upload. Checked between transactions so we
   // break cleanly on the next safe boundary (can't abort an already-broadcast tx).
   const cancelledRef = useRef(false);
@@ -272,6 +273,10 @@ export const CreateItemModal = ({
       setShowPasteDetails(false);
       setExistingAnchorWarning(false);
       modalRef.current?.showModal();
+      // Focus on open, not via `autoFocus`: the dialog stays mounted while
+      // closed, so autoFocus fired at page load and raised phone keyboards.
+      // (The List name input mounts only once open, so it keeps autoFocus.)
+      if (creationType !== "List") nameInputRef.current?.focus();
     } else {
       modalRef.current?.close();
     }
@@ -405,17 +410,7 @@ export const CreateItemModal = ({
   // != 0, it derives the parent as `bytes32(uint160(recipient))`. We use that
   // path only when the user is creating a direct child of the Address
   // container root; deeper children reference real anchor attestations.
-  const anchorParent = (): { refUID: `0x${string}`; recipient: `0x${string}` } => {
-    if (
-      container?.kind === "address" &&
-      container.address &&
-      currentAnchorUID &&
-      currentAnchorUID.toLowerCase() === container.uid.toLowerCase()
-    ) {
-      return { refUID: ethers.ZeroHash as `0x${string}`, recipient: container.address };
-    }
-    return { refUID: currentAnchorUID as `0x${string}`, recipient: ethers.ZeroAddress as `0x${string}` };
-  };
+  const anchorParent = () => childAnchorParent({ container, parentAnchorUID: currentAnchorUID as `0x${string}` });
 
   // ── List creation (ADR-0044 §1) ────────────────────────────────────────────
   // A list is placed exactly like a file: a named ANCHOR (anchorType=LIST_SCHEMA_UID)
@@ -1180,6 +1175,7 @@ export const CreateItemModal = ({
             <span className="label-text">Name</span>
           </label>
           <input
+            ref={nameInputRef}
             type="text"
             placeholder={`Enter ${internalType === "Folder" ? "folder" : "file"} name`}
             className={`input input-bordered w-full ${nameValidationError ? "input-error" : ""}`}
@@ -1200,7 +1196,6 @@ export const CreateItemModal = ({
               if (e.key === "Escape") requestClose();
             }}
             autoComplete="off"
-            autoFocus
           />
           {nameValidationError && (
             <label className="label">

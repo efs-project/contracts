@@ -34,8 +34,11 @@ const {
   INSTANT_BURNER_PAUSE_MS,
   getInstantBurnerMessage,
   isBurnerConnector,
+  createPageLoadWalletTracker,
+  isInitialReconnectSettled,
   isInstantBurnerSessionEnabled,
   normalizeStoredBurnerPrivateKey,
+  readStoredEasyEdits,
   consumeInstantBurnerDripRequest,
   requestInstantBurnerDrip,
   shouldAutoConnectInstantBurner,
@@ -45,9 +48,10 @@ const {
   shouldClearStoredHardhatBurner,
   shouldClearInstantBurnerTrackingBeforeDisconnect,
   shouldDisconnectInstantBurner,
+  shouldEndEasyEditsAfterPageLoad,
   shouldMarkInstantBurnerReady,
   shouldResetInstantBurnerDismissalOnAddressChange,
-  shouldReconnectWagmiOnMount,
+  shouldRestoreBurnerOnLoad,
   shouldResumeInstantBurnerAfterRealWalletModal,
   shouldSeedHardhatBurner,
   selectBurnerChain,
@@ -55,6 +59,7 @@ const {
   shouldSuppressInstantBurnerTracking,
   shouldStopInstantBurnerAfterExternalDisconnect,
   trackInstantBurnerWasConnected,
+  writeStoredEasyEdits,
 } = await import("./instantBurner.ts");
 
 const { normalizeDripResponse } = await import("./faucet.ts");
@@ -72,9 +77,83 @@ test("instant burner only enables when a faucet URL is configured and the kill s
   assert.equal(isInstantBurnerSessionEnabled({ ...base, flag: "0" }), false);
 });
 
-test("wagmi reconnect-on-mount is disabled while instant burner can be offered", () => {
-  assert.equal(shouldReconnectWagmiOnMount({ instantBurnerEnabled: true }), false);
-  assert.equal(shouldReconnectWagmiOnMount({ instantBurnerEnabled: false }), true);
+test("initial reconnect settles only when wagmi's page-load reconnect finishes", () => {
+  assert.equal(isInitialReconnectSettled({ previousStatus: "connecting", status: "disconnected" }), true);
+  assert.equal(isInitialReconnectSettled({ previousStatus: "reconnecting", status: "connected" }), true);
+  assert.equal(isInitialReconnectSettled({ previousStatus: "disconnected", status: "connecting" }), false);
+  assert.equal(isInitialReconnectSettled({ previousStatus: "disconnected", status: "disconnected" }), false);
+});
+
+test("page-load tracker reports when wagmi's reconnect settles and which wallet was last active", async () => {
+  const { createConfig, createStorage, http, reconnect } = await import("@wagmi/core");
+  const { sepolia } = await import("viem/chains");
+  const values = new Map<string, string>([["wagmi.recentConnectorId", JSON.stringify(BURNER_WALLET_CONNECTOR_ID)]]);
+  const config = createConfig({
+    chains: [sepolia],
+    connectors: [],
+    multiInjectedProviderDiscovery: false,
+    storage: createStorage({
+      storage: {
+        getItem: key => values.get(key) ?? null,
+        setItem: (key, value) => void values.set(key, value),
+        removeItem: key => void values.delete(key),
+      },
+    }),
+    transports: { [sepolia.id]: http() },
+  });
+
+  const tracker = createPageLoadWalletTracker(config);
+  let notifications = 0;
+  tracker.subscribe(() => notifications++);
+  assert.equal(tracker.hasSettled(), false);
+
+  await reconnect(config);
+  assert.equal(tracker.hasSettled(), true);
+  assert.equal(notifications, 1);
+  assert.equal(tracker.recentConnectorIdAtLoad(), BURNER_WALLET_CONNECTOR_ID);
+});
+
+test("a reload only brings the burner back if it was the active wallet before the reload", () => {
+  const base = {
+    editingSessionRequested: true,
+    status: "disconnected" as const,
+    recentConnectorIdAtLoad: BURNER_WALLET_CONNECTOR_ID,
+  };
+  assert.equal(shouldEndEasyEditsAfterPageLoad(base), false);
+  // MetaMask was active but couldn't be restored (e.g. locked): don't swap in the burner.
+  assert.equal(shouldEndEasyEditsAfterPageLoad({ ...base, recentConnectorIdAtLoad: "metaMask" }), true);
+  assert.equal(shouldEndEasyEditsAfterPageLoad({ ...base, recentConnectorIdAtLoad: null }), true);
+  // MetaMask restored: Easy Edits stays armed as the fallback behind it.
+  assert.equal(
+    shouldEndEasyEditsAfterPageLoad({ ...base, recentConnectorIdAtLoad: "metaMask", status: "connected" }),
+    false,
+  );
+  assert.equal(
+    shouldEndEasyEditsAfterPageLoad({ ...base, recentConnectorIdAtLoad: "metaMask", editingSessionRequested: false }),
+    false,
+  );
+});
+
+test("Easy Edits mode survives a reload until it is turned off", () => {
+  const values = new Map<string, string>();
+  const storage = {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => void values.set(key, value),
+    removeItem: (key: string) => void values.delete(key),
+  };
+
+  assert.equal(readStoredEasyEdits(storage), false);
+  writeStoredEasyEdits(storage, true);
+  assert.equal(readStoredEasyEdits(storage), true);
+  writeStoredEasyEdits(storage, false);
+  assert.equal(readStoredEasyEdits(storage), false);
+  assert.equal(values.size, 0);
+  assert.equal(readStoredEasyEdits(undefined), false);
+});
+
+test("burner page-load restore is disabled while instant burner can be offered", () => {
+  assert.equal(shouldRestoreBurnerOnLoad({ instantBurnerEnabled: true }), false);
+  assert.equal(shouldRestoreBurnerOnLoad({ instantBurnerEnabled: false }), true);
 });
 
 test("auto-connect is limited to settled no-wallet state on the faucet target chain", () => {
@@ -87,10 +166,13 @@ test("auto-connect is limited to settled no-wallet state on the faucet target ch
     activeConnectorId: undefined,
     pausedUntil: undefined,
     realWalletFlowActive: false,
+    initialReconnectSettled: true,
     now: 1_000,
   };
 
   assert.equal(shouldAutoConnectInstantBurner(base), true);
+  // Before wagmi's page-load reconnect finishes, "disconnected" only means "not restored yet".
+  assert.equal(shouldAutoConnectInstantBurner({ ...base, initialReconnectSettled: false }), false);
   assert.equal(shouldAutoConnectInstantBurner({ ...base, status: "connecting" }), false);
   assert.equal(shouldAutoConnectInstantBurner({ ...base, targetChainId: 26001993 }), false);
   assert.equal(shouldAutoConnectInstantBurner({ ...base, activeConnectorId: "metaMask" }), false);

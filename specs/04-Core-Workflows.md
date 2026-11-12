@@ -120,6 +120,8 @@ EFS files are modified by issuing new attestations.
 
 ### 8f. Suppress inherited / lower-lens content — the delete verb (WHITEOUT, ADR-0055)
 
+> **Not available on Sepolia yet:** WHITEOUT is implemented in source but not deployed there (see `docs/CHAINS.md`), so this workflow cannot run on the live chain today.
+
 Lenses are additive-only: a lens can ADD content or SHADOW a lower lens by placing its OWN content, but cannot say *"render this path empty in my view; stop the fall-through without substituting my own."* The **WHITEOUT** schema (additive post-freeze, specs/02 §10) adds that negative assertion. The client exposes it as a **single `delete` verb** — the user never picks a marker:
 
 - **`delete(path)` — "this shouldn't be here" (stay GONE).** The client **auto-selects the marker**, overlayfs-style, from what the lens stack resolves at `path` — and crucially checks whether revoking your own edge would **fall through** to a lower lens:

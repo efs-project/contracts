@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { hardhat } from "viem/chains";
 import { useAccount, useConnect, useConnectors, useDisconnect } from "wagmi";
 import { useTargetNetwork } from "~~/hooks/scaffold-eth";
+import { pageLoadWallet } from "~~/services/web3/wagmiConfig";
 import {
   BURNER_WALLET_PK_STORAGE_KEY,
   FAUCET_CHAIN_ID,
@@ -13,16 +14,19 @@ import {
   isInstantBurnerSessionEnabled,
   normalizeStoredBurnerPrivateKey,
   notification,
+  readStoredEasyEdits,
   requestInstantBurnerDrip,
   shouldAutoConnectInstantBurner,
   shouldClearInstantBurnerTrackingBeforeDisconnect,
   shouldClearStoredHardhatBurner,
   shouldDisconnectInstantBurner,
+  shouldEndEasyEditsAfterPageLoad,
   shouldResetInstantBurnerDismissalOnAddressChange,
   shouldShowInstantBurnerEnable,
   shouldStopInstantBurnerAfterExternalDisconnect,
   shouldSuppressInstantBurnerTracking,
   trackInstantBurnerWasConnected,
+  writeStoredEasyEdits,
 } from "~~/utils/scaffold-eth";
 import { HARDHAT_ACCOUNTS } from "~~/utils/scaffold-eth/hardhatAccounts";
 
@@ -93,13 +97,28 @@ export const InstantBurnerSession = () => {
   const { targetNetwork } = useTargetNetwork();
 
   const [dismissed, setDismissed] = useState(false);
-  const [editingSessionRequested, setEditingSessionRequested] = useState(false);
+  // Read straight from storage so a remembered session is in place before the page-load decision
+  // below. Safe for the static export: nothing renders until wagmi's reconnect settles.
+  const [editingSessionRequested, setEditingSessionRequested] = useState(
+    () => INSTANT_BURNER_ENABLED && typeof window !== "undefined" && readStoredEasyEdits(window.localStorage),
+  );
   const [pauseUntil, setPauseUntil] = useState<number | undefined>(undefined);
   const [connectError, setConnectError] = useState<string | undefined>(undefined);
   const connectingBurnerRef = useRef(false);
   const disconnectingBurnerRef = useRef(false);
   const burnerWasConnectedRef = useRef(false);
   const previousAddressRef = useRef<string | undefined>(undefined);
+  const pageLoadDecidedRef = useRef(false);
+  const initialReconnectSettled = useSyncExternalStore(
+    pageLoadWallet.subscribe,
+    pageLoadWallet.hasSettled,
+    () => false,
+  );
+
+  const updateEditingSession = useCallback((requested: boolean) => {
+    setEditingSessionRequested(requested);
+    writeStoredEasyEdits(window.localStorage, requested);
+  }, []);
 
   useEffect(() => {
     if (
@@ -193,7 +212,7 @@ export const InstantBurnerSession = () => {
             ? `Easy Edits could not connect: ${detail}`
             : "Easy Edits could not connect the burner wallet.";
           setConnectError(message);
-          setEditingSessionRequested(false);
+          updateEditingSession(false);
           setDismissed(false);
           notification.error(`${message} Try Connect Wallet > Burner Wallet.`, { position: "bottom-center" });
         },
@@ -203,7 +222,7 @@ export const InstantBurnerSession = () => {
       },
     );
     return true;
-  }, [connect, connectors]);
+  }, [connect, connectors, updateEditingSession]);
 
   useEffect(() => {
     burnerWasConnectedRef.current = trackInstantBurnerWasConnected({
@@ -230,10 +249,24 @@ export const InstantBurnerSession = () => {
       })
     ) {
       burnerWasConnectedRef.current = false;
-      setEditingSessionRequested(false);
+      updateEditingSession(false);
       setDismissed(true);
       setPauseUntil(undefined);
       return;
+    }
+
+    if (initialReconnectSettled && !pageLoadDecidedRef.current) {
+      pageLoadDecidedRef.current = true;
+      if (
+        shouldEndEasyEditsAfterPageLoad({
+          editingSessionRequested,
+          status,
+          recentConnectorIdAtLoad: pageLoadWallet.recentConnectorIdAtLoad(),
+        })
+      ) {
+        updateEditingSession(false);
+        return;
+      }
     }
 
     if (connectingBurnerRef.current) return;
@@ -247,6 +280,7 @@ export const InstantBurnerSession = () => {
         activeConnectorId: connector?.id,
         pausedUntil: pauseUntil,
         realWalletFlowActive: false,
+        initialReconnectSettled,
         now: Date.now(),
       })
     ) {
@@ -254,9 +288,21 @@ export const InstantBurnerSession = () => {
     }
 
     connectBurner();
-  }, [connectBurner, connector?.id, dismissed, editingSessionRequested, pauseUntil, status, targetNetwork.id]);
+  }, [
+    connectBurner,
+    connector?.id,
+    dismissed,
+    editingSessionRequested,
+    initialReconnectSettled,
+    pauseUntil,
+    status,
+    targetNetwork.id,
+    updateEditingSession,
+  ]);
 
-  if (!INSTANT_BURNER_ENABLED || targetNetwork.id !== FAUCET_CHAIN_ID) {
+  // Hidden until wagmi has restored remembered wallets, so the toggle doesn't flash "off" (or take
+  // a click) for a visitor whose wallet or Easy Edits session is about to come back.
+  if (!INSTANT_BURNER_ENABLED || targetNetwork.id !== FAUCET_CHAIN_ID || !initialReconnectSettled) {
     return null;
   }
 
@@ -265,7 +311,7 @@ export const InstantBurnerSession = () => {
     setDismissed(false);
     setPauseUntil(undefined);
     setConnectError(undefined);
-    setEditingSessionRequested(true);
+    updateEditingSession(true);
     requestInstantBurnerDrip();
     if (
       shouldAutoConnectInstantBurner({
@@ -277,6 +323,7 @@ export const InstantBurnerSession = () => {
         activeConnectorId: connector?.id,
         pausedUntil: undefined,
         realWalletFlowActive: false,
+        initialReconnectSettled,
         now: Date.now(),
       })
     ) {
@@ -293,7 +340,7 @@ export const InstantBurnerSession = () => {
       activeConnectorId: connector?.id,
       disablingInstantBurner: true,
     });
-    setEditingSessionRequested(false);
+    updateEditingSession(false);
     setDismissed(true);
     setPauseUntil(undefined);
     setConnectError(undefined);

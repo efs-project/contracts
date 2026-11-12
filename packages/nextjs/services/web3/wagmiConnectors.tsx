@@ -12,8 +12,11 @@ import { rainbowkitBurnerWallet } from "~~/services/web3/chainAwareBurnerWallet"
 import scaffoldConfig from "~~/scaffold.config";
 import {
   BURNER_WALLET_PK_STORAGE_KEY,
+  FAUCET_URL,
+  isInstantBurnerSessionEnabled,
   normalizeStoredBurnerPrivateKey,
   shouldClearStoredHardhatBurner,
+  shouldRestoreBurnerOnLoad,
   shouldSeedHardhatBurner,
 } from "~~/utils/scaffold-eth";
 import { HARDHAT_ACCOUNTS } from "~~/utils/scaffold-eth/hardhatAccounts";
@@ -76,6 +79,12 @@ const { onlyLocalBurnerWallet, targetNetworks } = scaffoldConfig;
 const hardhatChainId = (chains.hardhat as chains.Chain).id;
 const defaultChainId = targetNetworks[0].id;
 const hasHardhatTarget = targetNetworks.some(n => n.id === hardhatChainId);
+const restoreBurnerOnLoad = shouldRestoreBurnerOnLoad({
+  instantBurnerEnabled: isInstantBurnerSessionEnabled({
+    faucetUrl: FAUCET_URL,
+    flag: process.env.NEXT_PUBLIC_INSTANT_BURNER_SESSION,
+  }),
+});
 
 // Seed the burner wallet with a pre-funded hardhat account on local hardhat, and
 // clear those public keys before any non-hardhat target can faucet-fund a burner.
@@ -115,7 +124,7 @@ const wallets = [
   // break the local dev flow.
   ...(!targetNetworks.some(network => network.id !== hardhatChainId) || !onlyLocalBurnerWallet
     ? typeof window !== "undefined"
-      ? [rainbowkitBurnerWallet]
+      ? [() => rainbowkitBurnerWallet({ restoreOnLoad: restoreBurnerOnLoad })]
       : []
     : []),
 ];
