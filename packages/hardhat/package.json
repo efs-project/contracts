@@ -8,6 +8,7 @@
     "chain": "hardhat node --network hardhat --no-deploy",
     "check-types": "tsc --noEmit --incremental",
     "check:deployments": "ts-node scripts/checkDeployments.ts",
+    "readback:sepolia": "hardhat run scripts/sepoliaReadback.ts",
     "compile": "hardhat compile",
     "deploy": "ts-node scripts/runHardhatDeployWithPK.ts",
     "deploy:efs": "HARDHAT_DEPLOY_TASK=deploy:efs ts-node scripts/runHardhatDeployWithPK.ts",
