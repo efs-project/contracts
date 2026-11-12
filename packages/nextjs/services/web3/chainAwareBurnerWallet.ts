@@ -108,8 +108,16 @@ function chainRpcUrl(chain: Chain): string {
   return url;
 }
 
-export const chainAwareBurner = ({ useSessionStorage = false }: { useSessionStorage?: boolean } = {}) => {
-  let connected = true;
+/**
+ * `restoreOnLoad: false` makes the burner report itself unauthorized until it is explicitly
+ * connected, so wagmi's page-load reconnect (which attaches every authorized connector)
+ * skips it while still restoring real wallets.
+ */
+export const chainAwareBurner = ({
+  useSessionStorage = false,
+  restoreOnLoad = true,
+}: { useSessionStorage?: boolean; restoreOnLoad?: boolean } = {}) => {
+  let connected = restoreOnLoad;
   let connectedChainId: number | undefined;
 
   return createConnector(config => {
@@ -264,16 +272,14 @@ export const chainAwareBurner = ({ useSessionStorage = false }: { useSessionStor
   });
 };
 
-const rainbowkitBurnerConnector = (walletDetails: Record<string, unknown>) =>
-  createConnector(config => ({
-    ...chainAwareBurner()(config),
-    ...walletDetails,
-  }));
-
-export const rainbowkitBurnerWallet = () => ({
+export const rainbowkitBurnerWallet = ({ restoreOnLoad = true }: { restoreOnLoad?: boolean } = {}) => ({
   id: BURNER_WALLET_CONNECTOR_ID,
   name: BURNER_WALLET_NAME,
   iconUrl: burnerWalletIconUrl,
   iconBackground: "#ffffff",
-  createConnector: rainbowkitBurnerConnector,
+  createConnector: (walletDetails: Record<string, unknown>) =>
+    createConnector(config => ({
+      ...chainAwareBurner({ restoreOnLoad })(config),
+      ...walletDetails,
+    })),
 });

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { ListPreviewPane } from "./ListPreviewPane";
 import { MirrorsPanel } from "./MirrorsPanel";
+import { PdfJsFrame } from "./PdfJsFrame";
 import { PropertiesModal } from "./PropertiesModal";
 import { TagModal } from "./TagModal";
 import { createPortal } from "react-dom";
@@ -211,11 +212,11 @@ export const FileBrowser = ({
   const [fileTransportType, setFileTransportType] = useState<string>("onchain");
   const [isFileLoading, setIsFileLoading] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
-  // Inline PDF preview needs real PDF bytes AND a built-in viewer: without one
-  // (e.g. Android Chrome) the unsandboxed frame below would auto-download the
-  // file on select, so fall back to the binary placeholder + Download button.
-  const pdfPreviewable = useMemo(
-    () => !!fileBytes && looksLikePdf(fileBytes) && navigator.pdfViewerEnabled !== false,
+  // PDF preview needs real PDF bytes. Browsers with a built-in viewer get the
+  // native frame; without one (e.g. Android Chrome) that frame would just
+  // download the file, so they get the sandboxed pdf.js renderer (ADR-0070).
+  const pdfPreview = useMemo(
+    () => (!fileBytes || !looksLikePdf(fileBytes) ? null : navigator.pdfViewerEnabled === false ? "pdfjs" : "native"),
     [fileBytes],
   );
   // Render markdown through the same hardened, sanitized renderer as the
@@ -2187,7 +2188,14 @@ export const FileBrowser = ({
                   className="max-w-full max-h-full w-auto h-auto object-contain rounded cursor-pointer mx-auto"
                   onClick={() => setPreviewFullscreen(true)}
                 />
-              ) : fileContentType === "application/pdf" && pdfPreviewable ? (
+              ) : fileContentType === "application/pdf" && pdfPreview === "pdfjs" && fileBytes ? (
+                <PdfJsFrame
+                  bytes={fileBytes}
+                  title={selectedFile.name}
+                  className="w-full rounded"
+                  style={{ height: "60vh" }}
+                />
+              ) : fileContentType === "application/pdf" && pdfPreview === "native" ? (
                 // Deliberately NOT sandboxed — the one exception to the ADR-0056
                 // sandboxed-iframe rule (ADR-0069).
                 // Chromium refuses to start its PDF viewer in ANY sandboxed frame
@@ -2195,7 +2203,7 @@ export const FileBrowser = ({
                 // Isolation still holds: the blob is typed exactly
                 // `application/pdf`, so the browser hands it to its built-in
                 // viewer, which runs PDF content in its own isolated context and
-                // never as a document in the app's origin; and `pdfPreviewable`
+                // never as a document in the app's origin; and `pdfPreview`
                 // requires a real `%PDF-` header, so mislabeled bytes never get here.
                 <iframe
                   src={fileContent}
@@ -2348,7 +2356,14 @@ export const FileBrowser = ({
                     alt={selectedFile.name}
                     className="max-w-[90vw] max-h-[85vh] object-contain"
                   />
-                ) : fileContentType === "application/pdf" && pdfPreviewable ? (
+                ) : fileContentType === "application/pdf" && pdfPreview === "pdfjs" && fileBytes ? (
+                  <PdfJsFrame
+                    bytes={fileBytes}
+                    title={selectedFile.name}
+                    className="rounded"
+                    style={{ width: "90vw", height: "85vh" }}
+                  />
+                ) : fileContentType === "application/pdf" && pdfPreview === "native" ? (
                   // Unsandboxed for the same reason as the inline PDF preview above.
                   <iframe
                     src={fileContent}
