@@ -40,6 +40,9 @@ export function useRouteChain(token: string): RouteChainStatus {
   // Read in the cleanup below, which outlives the render it was created in.
   const walletRef = useRef({ isConnected, burner, walletChainId, switchChain });
   walletRef.current = { isConnected, burner, walletChainId, switchChain };
+  // One silent burner switch per visit to a link's chain: a failed switch must
+  // not retry forever, but coming back to the chain later tries again.
+  const [burnerAttempted, setBurnerAttempted] = useState<number | null>(null);
 
   useEffect(() => {
     if (!chain) return;
@@ -51,6 +54,7 @@ export function useRouteChain(token: string): RouteChainStatus {
       // that choice is the viewer's, so it stays, even when it's this chain.
       const overridden = useGlobalState.getState().routeChainId !== chain.id;
       setRouteChainId(null);
+      setBurnerAttempted(null);
       // Otherwise put it back unless something else has moved the chain since.
       // The app's burner wallet is moved back too; a viewer's own wallet stays
       // where they put it (the wallet is the source of truth).
@@ -68,8 +72,6 @@ export function useRouteChain(token: string): RouteChainStatus {
     if (chain && !isConnected && targetId !== chain.id) setTargetNetwork(chain);
   }, [chain, isConnected, targetId, setTargetNetwork]);
 
-  // One silent attempt per link chain: a failed switch must not retry forever.
-  const [burnerAttempted, setBurnerAttempted] = useState<number | null>(null);
   useEffect(() => {
     if (!chain || !burner || walletChainId === chain.id || burnerAttempted === chain.id) return;
     setBurnerAttempted(chain.id);
