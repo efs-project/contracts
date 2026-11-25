@@ -11,15 +11,15 @@
  * can't do that: gateways label the response by the URL's extension, so the
  * page arrives as a PDF.
  *
- * Grammar: `<chain>` is everything before the first `/` (empty = the viewer's
- * chain), so a top-level folder named like a chain (`#/sep/…`) stays a folder.
+ * Grammar: `<chain>` is the fragment's text between the `#` and the first `/`
+ * (empty = the viewer's chain); the page's own path never enters into it, so a top-level folder named like a chain (`#/sep/…`) stays a folder.
  * Path segments are URL-encoded names, decoded once when read — the same
  * encoding the explorer used in path URLs. Options follow the first `?`
  * (`?` inside a name is always encoded).
  */
 
 export type HashRoute = {
-  /** The chain token before the first `/`; "" means the viewer's chain. */
+  /** The fragment's chain token, between `#` and the first `/`; "" means the viewer's chain. */
   chain: string;
   /** Path segments, decoded once (anchor names / container ids). */
   segments: string[];

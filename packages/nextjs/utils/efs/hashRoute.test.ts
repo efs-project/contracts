@@ -28,7 +28,7 @@ test("parseHashRoute: no chain, path and options", () => {
   });
 });
 
-test("parseHashRoute: the chain is whatever comes before the first `/`", () => {
+test("parseHashRoute: the chain is the fragment's text between `#` and the first `/`", () => {
   assert.deepEqual(parsed("#sep/whitepapers/bitcoin.pdf"), {
     chain: "sep",
     segments: ["whitepapers", "bitcoin.pdf"],
