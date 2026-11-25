@@ -26,6 +26,12 @@ type GlobalState = {
   setIsNativeCurrencyFetching: (newIsNativeCurrencyFetching: boolean) => void;
   targetNetwork: ChainWithAttributes;
   setTargetNetwork: (newTargetNetwork: ChainWithAttributes) => void;
+  /**
+   * The chain an open explorer link names (`#sep/…`), or null. That chain is
+   * for the view only: switching to it is never saved as the preference.
+   */
+  routeChainId: number | null;
+  setRouteChainId: (chainId: number | null) => void;
 };
 
 const ignoredLegacyTargetNetworkIds = [DEVNET_CHAIN_ID] as const;
@@ -44,4 +50,6 @@ export const useGlobalState = create<GlobalState>(set => ({
     readStoredTargetNetworkId(targetNetworkStorage(), { ignoredLegacyChainIds: ignoredLegacyTargetNetworkIds }),
   ),
   setTargetNetwork: (newTargetNetwork: ChainWithAttributes) => set(() => ({ targetNetwork: newTargetNetwork })),
+  routeChainId: null,
+  setRouteChainId: (chainId: number | null) => set(() => ({ routeChainId: chainId })),
 }));

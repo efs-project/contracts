@@ -2,7 +2,7 @@
  * explorerPath — pure URL-segment logic for the explorer's file deep links,
  * extracted from ExplorerClient so it's reachable by the `utils/**` test runner.
  *
- * A file URL (`/explorer/<folder…>/<file>`) opens the PARENT folder with the
+ * A file link (`#/<folder…>/<file>`) opens the PARENT folder with the
  * file selected in the preview; the file segment is never part of the resolved
  * folder path. Selecting / closing a file (and back/forward between them) only
  * adds or drops that trailing segment, so the explorer skips the whole-path walk

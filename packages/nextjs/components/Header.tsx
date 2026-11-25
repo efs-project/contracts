@@ -12,6 +12,7 @@ import { InstantBurnerSession } from "~~/components/InstantBurnerSession";
 import { NetworkSwitcher } from "~~/components/NetworkSwitcher";
 import { SwitchTheme } from "~~/components/SwitchTheme";
 import { RainbowKitCustomConnectButton } from "~~/components/scaffold-eth";
+import { useHashRoute } from "~~/hooks/efs/useHashRoute";
 import { useOutsideClick } from "~~/hooks/scaffold-eth";
 
 type HeaderMenuLink = {
@@ -27,7 +28,7 @@ export const menuLinks: HeaderMenuLink[] = [
   },
   {
     label: "File Explorer",
-    href: "/explorer",
+    href: "/#/",
     icon: <FolderIcon className="h-4 w-4" />,
   },
   {
@@ -44,23 +45,35 @@ export const menuLinks: HeaderMenuLink[] = [
 
 export const HeaderMenuLinks = () => {
   const pathname = usePathname();
+  const route = useHashRoute();
 
   return (
     <>
       {menuLinks.map(({ label, href, icon }) => {
-        const isActive = pathname === href;
+        // Home (`/`) and the explorer (`/#/…`) are one page told apart by the
+        // URL fragment, so the fragment decides which of them is active.
+        const isRootPage = href === "/" || href.startsWith("/#");
+        const isActive = isRootPage
+          ? pathname === "/" && (route !== null) === href.startsWith("/#")
+          : pathname === href;
+        const className = `${
+          isActive ? "bg-secondary shadow-md text-white dark:text-base-content" : ""
+        } hover:bg-secondary hover:shadow-md hover:text-white dark:hover:text-base-content focus:!bg-secondary active:!text-neutral py-1.5 px-3 text-sm rounded-full gap-2 grid grid-flow-col`;
         return (
           <li key={href}>
-            <Link
-              href={href}
-              passHref
-              className={`${
-                isActive ? "bg-secondary shadow-md text-white dark:text-base-content" : ""
-              } hover:bg-secondary hover:shadow-md hover:text-white dark:hover:text-base-content focus:!bg-secondary active:!text-neutral py-1.5 px-3 text-sm rounded-full gap-2 grid grid-flow-col`}
-            >
-              {icon}
-              <span>{label}</span>
-            </Link>
+            {/* Plain anchors for the root page: next/link changes only the
+                fragment with pushState, which fires no hashchange. */}
+            {isRootPage ? (
+              <a href={href} className={className}>
+                {icon}
+                <span>{label}</span>
+              </a>
+            ) : (
+              <Link href={href} passHref className={className}>
+                {icon}
+                <span>{label}</span>
+              </Link>
+            )}
           </li>
         );
       })}

@@ -645,3 +645,12 @@ until then, selecting Devnet in a deployed build points at a node still on 31337
 
 Remaining follow-up (smaller): the burner wallet writes use a single chain's RPC; that's inherent to
 wagmi per-chain transports and fine now that each network is a real chain.
+
+### Host the static bundle from a subfolder (relative asset paths)
+
+The file explorer's fragment links (ADR-0071) work on any host that serves the bundle at a domain root. A subfolder host (`<user>.github.io/<repo>/`) or an IPFS **path** gateway (`/ipfs/<cid>/…`) still fails: the export references `/_next/…`, the logo, favicons, the manifest and page links absolutely. A relative `assetPrefix` fixes the root page but resolves the other pages' assets inside their own folders (`/debug/_next/…`), breaking `/debug`, `/blockexplorer`, `/lists` everywhere. Doing it properly needs per-page base handling (or dropping those pages, which are slated to go) plus relative logo/icon/manifest/page links. Measured 2026-11-24 while building ADR-0071.
+
+### Load the explorer lazily on the landing page
+
+ADR-0071 moved the explorer onto the root page, so plain `/` now ships the explorer's JavaScript (root first-load ~658 kB). Loading `ExplorerClient` with `next/dynamic` only when a fragment route is present would keep the landing page light, at the cost of one more chunk round trip on a cold explorer link.
+

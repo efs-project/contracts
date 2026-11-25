@@ -8,10 +8,14 @@
 #   - Caddy (with a tiny rewrite rule translating these lines)
 #
 # Status 200 = rewrite (serve the target file, keep the URL in the address
-# bar). 301/302/404 = redirect. We only use 200 so that deep links like
-# /explorer/memes/cat.jpg stay visually intact while the app renders.
+# bar). 301/302/404 = redirect.
 #
-# The explorer is the only true dynamic tree. Blockexplorer's `[address]` and
+# The file explorer needs no rule: its links live in the URL fragment
+# (`/#/memes/cat.jpg`, utils/efs/hashRoute.ts), which never reaches the host,
+# so every host serves the root index.html for them. (A rewritten
+# `/explorer/memes/cat.jpg` arrived labelled image/jpeg on IPFS gateways.)
+#
+# Blockexplorer's `[address]` and
 # `[txHash]` segments, and the lists `[listUID]` segment, are each exported
 # with a single dummy value via `generateStaticParams` — the shell reads the
 # real address/hash/UID from `usePathname()`/`useParams()` at runtime, so we
@@ -20,7 +24,6 @@
 #
 # Everything else falls through to the root index.html as a last resort.
 
-/explorer/*                /explorer/index.html                                                                         200
 /blockexplorer/address/*   /blockexplorer/address/0x0000000000000000000000000000000000000000/index.html                 200
 /blockexplorer/transaction/* /blockexplorer/transaction/0x0000000000000000000000000000000000000000/index.html           200
 /debug/*                   /debug/index.html                                                                            200

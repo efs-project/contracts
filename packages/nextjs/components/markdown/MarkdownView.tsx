@@ -51,9 +51,28 @@ const makeComponents = (idPrefix: string): Components => ({
     // autolinked heading degrades to a dim, inert span, breaking in-page
     // navigation and heading readability (Gemini). `resolveHashHref` re-points
     // the fragment at the clobber-prefixed element id so the link actually
-    // resolves after sanitize (Codex P2).
+    // resolves after sanitize (Codex P2). The click scrolls in place rather than
+    // following the href: the URL fragment is the explorer's route (ADR-0071),
+    // so setting it to `#user-content-…` would navigate away from the explorer.
     if (href && href.startsWith("#")) {
-      return <a href={resolveHashHref(href, idPrefix)}>{children}</a>;
+      const target = resolveHashHref(href, idPrefix);
+      return (
+        <a
+          href={target}
+          onClick={e => {
+            e.preventDefault();
+            let id = target.slice(1);
+            try {
+              id = decodeURIComponent(id);
+            } catch {
+              // keep the raw id
+            }
+            document.getElementById(id)?.scrollIntoView({ block: "start" });
+          }}
+        >
+          {children}
+        </a>
+      );
     }
     return <span className="opacity-70">{children}</span>;
   },

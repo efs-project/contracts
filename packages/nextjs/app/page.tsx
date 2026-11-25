@@ -1,17 +1,37 @@
 "use client";
 
+import { useEffect } from "react";
 import Link from "next/link";
 import type { NextPage } from "next";
 import { useAccount } from "wagmi";
 import { BugAntIcon, FolderOpenIcon, MagnifyingGlassIcon } from "@heroicons/react/24/outline";
+import ExplorerClient from "~~/components/explorer/ExplorerClient";
 import { Address } from "~~/components/scaffold-eth";
+import { useHashRoute } from "~~/hooks/efs/useHashRoute";
 
+/**
+ * The site root. A URL fragment route (`/#/whitepapers/bitcoin.pdf`,
+ * utils/efs/hashRoute.ts) opens the file explorer; plain `/` is the landing page.
+ * The static HTML is the landing page, so the layout's inline script marks
+ * explorer routes before first paint and CSS hides the landing page until the
+ * explorer takes over.
+ */
 const Home: NextPage = () => {
+  const route = useHashRoute();
+  useEffect(() => {
+    document.documentElement.toggleAttribute("data-efs-route", route !== null);
+    // The explorer titles the tab after its folder; the landing page resets it.
+    if (route === null) document.title = "EFS";
+  }, [route]);
+  return route ? <ExplorerClient /> : <Landing />;
+};
+
+const Landing = () => {
   const { address: connectedAddress } = useAccount();
 
   return (
     <>
-      <div className="flex items-center flex-col flex-grow pt-10">
+      <div className="efs-landing flex items-center flex-col flex-grow pt-10">
         <div className="px-5 text-center">
           <h1 className="mb-2">
             <span className="block text-2xl mb-2">Welcome to</span>
@@ -27,13 +47,14 @@ const Home: NextPage = () => {
             via <code className="bg-base-300 px-1 rounded text-sm">web3://</code> URIs.
           </p>
 
-          <Link
-            href="/explorer"
+          {/* A plain anchor: a hash-only change through next/link fires no hashchange. */}
+          <a
+            href="#/"
             className="btn btn-primary btn-lg h-auto min-h-0 mt-8 px-10 py-5 !text-xl rounded-2xl shadow-lg gap-3"
           >
             <FolderOpenIcon className="h-7 w-7" />
             Browse Files
-          </Link>
+          </a>
 
           <div className="flex justify-center items-center space-x-2 flex-col sm:flex-row mt-6">
             <p className="my-2 font-medium">Connected Address:</p>
@@ -49,9 +70,9 @@ const Home: NextPage = () => {
               <p className="mt-3 font-semibold">File Explorer</p>
               <p className="mt-1 text-sm opacity-70">
                 Browse and manage your on-chain files with the{" "}
-                <Link href="/explorer" passHref className="link">
+                <a href="#/" className="link">
                   EFS Explorer
-                </Link>
+                </a>
                 .
               </p>
             </div>

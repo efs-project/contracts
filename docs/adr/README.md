@@ -161,7 +161,8 @@ What else we looked at and why it lost.
 
 ### Frontend / Static Export
 
-- [ADR-0040 — Read dynamic route params from `usePathname`, not `useParams`, in static-exported dynamic routes](./0040-static-export-usepathname-over-useparams.md)
+- [ADR-0040 — Read dynamic route params from `usePathname`, not `useParams`, in static-exported dynamic routes](./0040-static-export-usepathname-over-useparams.md) _(no longer applies to the file explorer — ADR-0071)_
 - [ADR-0042 — Effective TAG as a client-layer weight filter for descriptive labels](./0042-effective-tag-weight-filter.md) _(Extended into the view layer by ADR-0054 — the same `weight >= threshold` projection is now also available on-chain via `EFSFileView.getDirectoryPageFiltered`; the kernel still never interprets weight)_
 - [ADR-0069 — PDF preview is rendered unsandboxed (narrow exception to ADR-0056 render isolation)](./0069-pdf-preview-unsandboxed-exception.md) _(third guard amended by ADR-0070)_
 - [ADR-0070 — Sandboxed pdf.js preview where the browser has no PDF viewer](./0070-sandboxed-pdfjs-preview-fallback.md)
+- [ADR-0071 — The file explorer routes in the URL fragment (`/#<chain>/<path>`)](./0071-explorer-hash-routing.md)

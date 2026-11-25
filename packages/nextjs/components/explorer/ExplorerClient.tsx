@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import { getAddress, isAddress } from "viem";
 import { useAccount, usePublicClient } from "wagmi";
 import { ContainerInfoPanel } from "~~/components/explorer/ContainerInfoPanel";
@@ -9,11 +8,14 @@ import { FileActionsBar } from "~~/components/explorer/FileActionsBar";
 import { DrawerTagFilterState, FileBrowser } from "~~/components/explorer/FileBrowser";
 import { OverviewPane } from "~~/components/explorer/OverviewPane";
 import { PathBar } from "~~/components/explorer/PathBar";
+import { RouteChainNotice } from "~~/components/explorer/RouteChainNotice";
 import { TagFilterDrawer } from "~~/components/explorer/TagFilterDrawer";
 import { TopicTree } from "~~/components/explorer/TopicTree";
 import type { PathItem } from "~~/components/explorer/types";
 import deployedContracts from "~~/contracts/deployedContracts";
 import { useContainerName } from "~~/hooks/efs/useContainerName";
+import { useHashRoute } from "~~/hooks/efs/useHashRoute";
+import { useRouteChain } from "~~/hooks/efs/useRouteChain";
 import { useDeployedContractInfo, useScaffoldReadContract, useTargetNetwork } from "~~/hooks/scaffold-eth";
 import {
   ClassifiedContainer,
@@ -26,6 +28,7 @@ import {
 } from "~~/utils/efs/containers";
 import { classifyPathChange } from "~~/utils/efs/explorerPath";
 import { clearFetchFileContentCache } from "~~/utils/efs/fetchFileContent";
+import { formatHashRoute, pushHashRoute, replaceHashRoute } from "~~/utils/efs/hashRoute";
 import { inferNetworkFlavor, networkLabel } from "~~/utils/scaffold-eth";
 
 export default function ExplorerClient() {
@@ -43,9 +46,10 @@ export default function ExplorerClient() {
   // close, back/forward) reuse it instead of re-walking the path — see
   // `classifyPathChange`. Cleared whenever a full resolution starts or fails.
   const resolvedFolderRef = useRef<{ inputs: unknown[]; segments: string[]; folderUID: `0x${string}` } | null>(null);
-  // Bumped on every back/forward. A file click sets `urlFile` with its URL write;
-  // if Back follows before Next commits that write, both history transitions
-  // land in one batch and `pathname` never changes — so the resolution effect
+  // Bumped on every popstate (back/forward, and in Chromium also the explorer's
+  // own fragment pushes, which costs at most a fast-path re-check). A file click sets `urlFile` with its URL write;
+  // if Back follows before React commits that write, both history transitions
+  // land in one batch and the route never changes — so the resolution effect
   // must re-run on popstate itself to replace the click's `urlFile`.
   const [historyPops, setHistoryPops] = useState(0);
   const [currentContainer, setCurrentContainer] = useState<ClassifiedContainer | null>(null);
@@ -91,47 +95,16 @@ export default function ExplorerClient() {
   // Sidebar — below `lg` it renders as an overlay, toggled via PathBar button.
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
-  const router = useRouter();
-  const params = useParams();
-  const pathname = usePathname();
-  const searchParams = useSearchParams();
-
-  // Static-export gotcha: with `output: "export"` every `/explorer/*` URL is
-  // served by the single pre-rendered shell at `/explorer/index.html`
-  // (generated from `generateStaticParams` returning the empty catch-all).
-  // Reverse-proxies (Caddy on the devnet VPS, IPFS gateways honoring our
-  // `public/_redirects`) rewrite deep URLs to that shell transparently — the
-  // browser URL stays `/explorer/0xAbCd…/` but the HTML is the empty-path
-  // shell. Next's `useParams()` then returns the pre-rendered params
-  // (`path: undefined`) even though `window.location` clearly shows segments,
-  // so the whole classifier path silently short-circuits to the root anchor.
-  //
-  // `usePathname()` is URL-derived — it always reflects `window.location`
-  // after hydration — so it's the reliable source. We keep `params` as a
-  // secondary signal (in dev it updates on `router.push` slightly before
-  // `pathname`, though both converge within a tick) but use it only when
-  // `pathname` isn't an explorer path. See the PR that introduced this
-  // comment for the reproducing test (curl + static `spa-serve` + Chromium =
-  // same bug).
-  const pathSegmentsFromParams = (() => {
-    const p = params?.path;
-    return Array.isArray(p) ? p : p ? [p] : [];
-  })();
-  const pathSegmentsFromPathname = (() => {
-    if (!pathname) return [] as string[];
-    // strip leading/trailing slashes, peel off the leading `/explorer/` prefix
-    const trimmed = pathname.replace(/^\/+|\/+$/g, "");
-    if (trimmed === "explorer") return [];
-    if (!trimmed.startsWith("explorer/")) return [];
-    return trimmed.slice("explorer/".length).split("/").map(decodeURIComponent).filter(Boolean);
-  })();
-  // A file select/close updates the URL via native history (see `setFileUrl`),
-  // which moves `pathname` but leaves `params` at the last routed path. So an
-  // explorer pathname wins even with zero segments — otherwise closing a
-  // root-level file (`/explorer/README.md` → `/explorer/`) would fall back to
-  // stale params and reopen it.
-  const pathnameIsExplorer = !!pathname && /^\/*explorer(\/|$)/.test(pathname);
-  const pathSegments = pathnameIsExplorer ? pathSegmentsFromPathname : pathSegmentsFromParams;
+  // The explorer's location is the URL fragment (`#<chain>/<path>?<options>`,
+  // utils/efs/hashRoute.ts): every static host serves this one page for every
+  // explorer link, and the app reads the route itself.
+  const route = useHashRoute();
+  // `#sep/…`: the link's chain, for this view only (utils/efs/routeChain.ts).
+  const routeChain = useRouteChain(route?.chain ?? "");
+  const pathSegments = useMemo(() => route?.segments ?? [], [route]);
+  const searchParams = useMemo(() => route?.params ?? new URLSearchParams(), [route]);
+  // Identity of the path (not the options): what the resolution effect keys on.
+  const pathKey = JSON.stringify(pathSegments);
 
   const sortParam = searchParams.get("sort");
   const activeSortInfoUID = sortParam || null;
@@ -448,8 +421,7 @@ export default function ExplorerClient() {
       return;
     }
 
-    // `pathSegments` is derived above from pathname ∪ params; see the comment
-    // next to the hooks for why useParams alone isn't reliable in static export.
+    // `pathSegments` comes from the URL fragment (see `useHashRoute` above).
     const segments = pathSegments;
     const inputs = [rootUID, publicClient, mainnetPublicClient, easAddress, dataSchemaUID];
     const ZERO_UID = "0x0000000000000000000000000000000000000000000000000000000000000000";
@@ -667,12 +639,23 @@ export default function ExplorerClient() {
     return () => {
       cancelled = true;
     };
-    // Depend on the pathname string directly — it's stable across renders
-    // and covers both the dev (`useParams`) and static-export (`usePathname`)
-    // code paths. The derived `pathSegments` array would change identity
-    // every render and thrash the effect, so we intentionally exclude it.
+    // Keyed on the path's identity (`pathKey`), not the options: a lens or
+    // sort change doesn't re-walk the path.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rootUID, pathname, historyPops, publicClient, mainnetPublicClient, easAddress, dataSchemaUID]);
+  }, [rootUID, pathKey, historyPops, publicClient, mainnetPublicClient, easAddress, dataSchemaUID]);
+
+  // A folder change used to be a page load, which reset the explorer's UI.
+  // Fragment navigation keeps the explorer mounted, so reset that per-view UI
+  // here: the overlay sidebar (TopicTree's address/schema jumps don't close it),
+  // the info band, the filter drawer, reversed order, and the list's scroll.
+  const listScrollRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    setIsSidebarOpen(false);
+    setIsInfoOpen(false);
+    setIsFilterDrawerOpen(false);
+    setReverseOrder(false);
+    listScrollRef.current?.scrollTo({ top: 0 });
+  }, [currentAnchorUID]);
 
   useEffect(() => {
     const onPop = () => setHistoryPops(n => n + 1);
@@ -690,7 +673,7 @@ export default function ExplorerClient() {
     document.title = label ? `${label} - EFS` : "File Explorer - EFS";
   }, [currentPath, containerDisplayName]);
 
-  const pathUrl = (newPathItems: PathItem[]) => {
+  const pathUrl = (newPathItems: PathItem[], params: URLSearchParams = searchParams) => {
     // The first path item is the container root; we skip it in the URL only for
     // anchor walks (where the head *is* rootUID, not a URL segment). For
     // address/schema/attestation containers, the first item *is* a URL segment
@@ -699,42 +682,42 @@ export default function ExplorerClient() {
     // through the top-level container classifier.
     const skipHead = newPathItems[0]?.uid === rootUID;
     const urlSegments = newPathItems.slice(skipHead ? 1 : 0).map(p => p.urlSegment ?? encodeURIComponent(p.name));
-    const currentQuery = searchParams.toString();
-    const queryPart = currentQuery ? `?${currentQuery}` : "";
-    return `/explorer/${urlSegments.join("/")}${queryPart}`;
+    return formatHashRoute({ chain: route?.chain, segments: urlSegments, params });
   };
 
-  const navigateToPath = (newPathItems: PathItem[]) => router.push(pathUrl(newPathItems));
+  const navigateToPath = (newPathItems: PathItem[]) => pushHashRoute(pathUrl(newPathItems));
 
-  // Selecting / closing / stepping a file only changes the URL's trailing file
-  // segment. A `router.push` there would remount this page subtree (Next keys
-  // the catch-all page by its params; the static export also falls back to a
-  // full load), dropping filters, pagination and fullscreen state. Next 14.2
-  // syncs native `history.pushState` / `replaceState` into `usePathname`
-  // without a navigation, so the explorer stays mounted and the resolution
-  // effect takes its one-segment fast path. Back/forward restore these entries
-  // the same way.
+  // Selecting / closing / stepping a file only changes the route's trailing
+  // file segment: the explorer stays mounted and the resolution effect takes
+  // its one-segment fast path. Back/forward restore these entries the same way.
   const setFileUrl = (file: { uid: string; name: string } | null, { replace = false } = {}) => {
     // Set `urlFile` with the URL write (not after the async re-resolution) so
     // the preview never sees a stale target.
     setUrlFile(file ? { uid: file.uid, name: file.name } : null);
-    // The folder URL keeps the trailing slash `router.push` adds (`trailingSlash: true`).
-    const url = file
-      ? pathUrl([...currentPath, { uid: file.uid, name: file.name }])
-      : pathUrl(currentPath).replace(/^([^?]*?)\/?(\?|$)/, "$1/$2");
-    if (replace) window.history.replaceState(null, "", url);
-    else window.history.pushState(null, "", url);
+    const url = file ? pathUrl([...currentPath, { uid: file.uid, name: file.name }]) : pathUrl(currentPath);
+    if (replace) replaceHashRoute(url);
+    else pushHashRoute(url);
   };
 
   const handleSortChange = (sortInfoUID: string | null) => {
     const currentQuery = new URLSearchParams(searchParams.toString());
     if (sortInfoUID) currentQuery.set("sort", sortInfoUID);
     else currentQuery.delete("sort");
-    const skipHead = currentPath[0]?.uid === rootUID;
-    const urlSegments = currentPath.slice(skipHead ? 1 : 0).map(p => p.urlSegment ?? encodeURIComponent(p.name));
-    const queryPart = currentQuery.toString() ? `?${currentQuery.toString()}` : "";
-    router.push(`/explorer/${urlSegments.join("/")}${queryPart}`);
+    pushHashRoute(pathUrl(currentPath, currentQuery));
   };
+
+  // A link's chain that can't be shown as-is: say so, never show another chain.
+  if (route && routeChain.kind === "switching") {
+    return (
+      <div className="flex justify-center items-center gap-2 py-16 opacity-70">
+        <span className="loading loading-spinner loading-sm" />
+        Switching to {networkLabel(routeChain.chain)}…
+      </div>
+    );
+  }
+  if (route && (routeChain.kind === "unsupported" || routeChain.kind === "wallet-elsewhere")) {
+    return <RouteChainNotice status={routeChain} route={route} />;
+  }
 
   if (
     !rootUID ||
@@ -980,9 +963,13 @@ export default function ExplorerClient() {
             )}
 
             <div className="flex flex-row flex-grow overflow-hidden">
-              <div className="flex-grow overflow-y-auto">
+              <div ref={listScrollRef} className="flex-grow overflow-y-auto">
                 {!pathError && (
                   <FileBrowser
+                    // One instance per folder: hash navigation doesn't remount the
+                    // explorer the way a page load did, so per-folder state
+                    // (selection, paging) starts fresh here instead.
+                    key={currentAnchorUID ?? "none"}
                     currentAnchorUID={currentAnchorUID}
                     dataSchemaUID={dataSchemaUID}
                     anchorSchemaUID={anchorSchemaUID}

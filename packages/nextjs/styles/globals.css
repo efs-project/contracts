@@ -576,3 +576,10 @@ main,
 .efs-md-editor .w-md-editor-text-input::selection {
   background: oklch(var(--p) / 0.25);
 }
+
+/* An explorer link (`/#/…`) opens the root page, whose static HTML is the
+   landing page: hide it from first paint until the explorer renders
+   (app/page.tsx, utils/efs/hashRoute.ts MARK_HASH_ROUTE_SCRIPT). */
+html[data-efs-route] .efs-landing {
+  display: none;
+}

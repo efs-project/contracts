@@ -161,7 +161,7 @@ export const FileBrowser = ({
   currentPathNames: string[];
   lensAddresses: string[];
   onNavigate: (uid: string, name: string) => void;
-  /** The file a deep link (`/explorer/<folder>/<file>`) points at. Opened in the
+  /** The file a deep link (`/#/<folder>/<file>`) points at. Opened in the
    *  side preview once it shows up in this folder's listing; closed when cleared. */
   urlFile?: { uid: string; name: string } | null;
   /** Writes a user's file selection back to the URL: `null` = preview closed,
