@@ -35,7 +35,7 @@ The explorer's location lives in the URL fragment, on the site root page:
 - Link unfurlers and crawlers see the root page for every explorer link (they ignore fragments), as before; there were no per-file previews to lose.
 - The root page now carries the explorer's JavaScript. An inline head script marks explorer routes before first paint so the landing page's static HTML never flashes.
 - ADR-0040's `usePathname` rule still governs the remaining static-exported dynamic routes (`/blockexplorer/**`, `/lists/[listUID]`), which keep their `_redirects` rules; it no longer applies to the explorer.
-- Not covered yet: hosting the bundle in a subfolder (`<user>.github.io/<repo>/`) or on an IPFS **path** gateway (`/ipfs/<cid>/…`) needs relative asset paths, which would break the other pages unless done per page — tracked in `docs/FUTURE_WORK.md`.
+- **v1 limit: the bundle must be served from the root of a domain** (eth.limo, a subdomain IPFS gateway, efs.com, `localhost:8000`). A subfolder (`<user>.github.io/<repo>/`) or an IPFS **path** gateway (`/ipfs/<cid>/…`) doesn't load: the export's asset paths are absolute, and making them relative would break the other pages. Accepted for v1; client-v2 builds with relative URLs (`base: './'`) and runs under any path prefix. Details in `docs/FUTURE_WORK.md`.
 - client-v2 routes shareable links as `#/r/<realm>/<link>`. The explorer deliberately uses the shorter `#<chain>/<path>`; if both ever share an origin, the two grammars need reconciling.
 
 ## Alternatives considered

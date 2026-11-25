@@ -246,6 +246,8 @@ The devnet is its own chain — **EFS Devnet, chain id `26001993`** (ADR-0062). 
 
 **File explorer links live in the URL fragment** (ADR-0071): `/#/whitepapers/bitcoin.pdf`, or with a chain, `/#sep/whitepapers/bitcoin.pdf` (ERC-3770 short name or chain id; `#/` = the viewer's chain). The host never sees the fragment, so every static host serves the root `index.html` and the app reads the route (`utils/efs/hashRoute.ts`, `utils/efs/routeChain.ts`) — no `_redirects` rule. Navigate inside the explorer with `pushHashRoute`/`replaceHashRoute`, and link into it with a plain `<a href="/#/…">`, not `next/link` (a fragment-only `next/link` change fires no `hashchange`).
 
+**Serve the bundle from a domain root.** v1 only works at the root of a domain (eth.limo, subdomain IPFS gateways, efs.com); a subfolder or an IPFS path gateway (`/ipfs/<cid>/`) doesn't load, because the export's asset paths are absolute (ADR-0071).
+
 **Deep-link SPA fallback for the other dynamic routes.** Blockexplorer's `/address/[address]` and `/transaction/[txHash]`, and `/lists/[listUID]`, are exported with a dummy `generateStaticParams` value; `public/_redirects` tells IPFS gateways (per the [web-redirects spec](https://specs.ipfs.tech/http-gateways/web-redirects-file/), honored by Kubo ≥ 0.23 and eth.limo) to serve that shell with status 200, and the client reads the real segment from `usePathname()` (ADR-0040).
 
 **CORS prerequisite on the VPS.** Because the app origin (`app.efs.eth.limo`) is different from the service origin (the VPS), the VPS reverse proxy (Caddy/nginx) MUST respond with:
