@@ -43,18 +43,24 @@ export function useRouteChain(token: string): RouteChainStatus {
   // One silent burner switch per visit to a link's chain: a failed switch must
   // not retry forever, but coming back to the chain later tries again.
   const [burnerAttempted, setBurnerAttempted] = useState<number | null>(null);
+  // The viewer's chain from before the first of consecutive link views
+  // (`#26001993/…` → `#sep/…`): a burner switch back is still in flight when
+  // the next view starts, so that view mustn't take the store's chain as its
+  // baseline. Cleared once a view without a chain (or a header choice) takes over.
+  const baselineRef = useRef<ChainWithAttributes | null>(null);
 
   useEffect(() => {
     if (!chain) return;
     setRouteChainId(chain.id);
-    // The chain the viewer was on before this link's chain took over.
-    const before = useGlobalState.getState().targetNetwork;
+    // The chain the viewer was on before link chains took over.
+    const before = (baselineRef.current ??= useGlobalState.getState().targetNetwork);
     return () => {
       // A header choice clears `routeChainId` before dropping the link's chain:
       // that choice is the viewer's, so it stays, even when it's this chain.
       const overridden = useGlobalState.getState().routeChainId !== chain.id;
       setRouteChainId(null);
       setBurnerAttempted(null);
+      if (overridden) baselineRef.current = null;
       // Otherwise put it back unless something else has moved the chain since.
       // The app's burner wallet is moved back too; a viewer's own wallet stays
       // where they put it (the wallet is the source of truth).
@@ -65,6 +71,10 @@ export function useRouteChain(token: string): RouteChainStatus {
       else if (wallet.burner && wallet.walletChainId === chain.id) wallet.switchChain({ chainId: before.id });
     };
   }, [chain, setRouteChainId]);
+
+  useEffect(() => {
+    if (resolved.kind === "default") baselineRef.current = null;
+  }, [resolved.kind]);
 
   // Re-asserted whenever the target moves (e.g. the saved preference being
   // restored once the wallet state settles), so the link's chain holds.
