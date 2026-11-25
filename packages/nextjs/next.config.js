@@ -41,7 +41,7 @@ process.env.NEXT_PUBLIC_FORK_BLOCK = process.env.NEXT_PUBLIC_FORK_BLOCK ?? proce
  * there are no server components that fetch at request time.
  *
  * Trade-offs bought with `output: "export"`:
- *   - Dynamic catch-alls (`/explorer/[[...path]]`, `/blockexplorer/**`) must
+ *   - Dynamic catch-alls (`/blockexplorer/**`, `/lists/[listUID]`) must
  *     expose `generateStaticParams`. We ship a single shell page per route and
  *     the hosting layer serves it for any deeper URL via a `_redirects` file
  *     (see `public/_redirects`). The pages are pure client components, so the
@@ -49,7 +49,7 @@ process.env.NEXT_PUBLIC_FORK_BLOCK = process.env.NEXT_PUBLIC_FORK_BLOCK ?? proce
  *   - `next/image` optimization is server-side, so `images.unoptimized = true`
  *     is mandatory for export. The logo in Header.tsx is the only consumer.
  *   - `trailingSlash: true` makes every page a directory + `index.html`
- *     (`/explorer/` → `/explorer/index.html`). This matches how IPFS gateways
+ *     (`/debug/` → `/debug/index.html`). This matches how IPFS gateways
  *     serve directories and avoids a redirect hop on first load.
  *
  * Service URLs (RPC, IPFS/Arweave gateways, WS, canonical origin) are all
@@ -61,7 +61,7 @@ process.env.NEXT_PUBLIC_FORK_BLOCK = process.env.NEXT_PUBLIC_FORK_BLOCK ?? proce
 // `output: "export"` is a build-only flag. In `next dev` it forces every
 // dynamic route — including our `[[...path]]` catch-alls — to resolve against
 // `generateStaticParams()`, which only returns the root shell. Hard-refreshing
-// a deep URL like `/explorer/memes/cat.jpg` then throws
+// a deep URL like `/blockexplorer/address/0xabc…` then throws
 //   "Error: Page ... is missing param ... in generateStaticParams()".
 // In production `public/_redirects` serves the static shell for all deeper
 // URLs (see file comments), so the constraint only matters at build time.

@@ -272,7 +272,7 @@ Durable listing semantics for all files — out of scope here.
 `parentAnchorUID`) with `definition=dataSchemaUID`. If `parentAnchorUID` were a
 FILE anchor it would be mis-tagged as a visible folder and could re-surface via
 phase-0 folder visibility after its placement PIN is revoked (Codex). This IS
-reachable — a deep link like `/explorer/docs/readme.txt` resolves
+reachable — a deep link like `#/docs/readme.txt` resolves
 `currentAnchorUID` to a file leaf — so it is now FIXED at the source: ExplorerClient
 gates the Overview editor off on file leaves (`overviewEditable && !currentIsFileLeaf`),
 and OverviewEditorModal is the helper's sole caller, so `parentAnchorUID` only
@@ -645,3 +645,12 @@ until then, selecting Devnet in a deployed build points at a node still on 31337
 
 Remaining follow-up (smaller): the burner wallet writes use a single chain's RPC; that's inherent to
 wagmi per-chain transports and fine now that each network is a real chain.
+
+### Host the static bundle from a subfolder (relative asset paths)
+
+**Accepted v1 limit (2026-11-25): v1 is served from the root of a domain only.** client-v2 already builds with relative URLs and runs under any path prefix, so this is recorded for reference rather than planned. The file explorer's fragment links (ADR-0071) work on any host that serves the bundle at a domain root. A subfolder host (`<user>.github.io/<repo>/`) or an IPFS **path** gateway (`/ipfs/<cid>/…`) still fails: the export references `/_next/…`, the logo, favicons, the manifest and page links absolutely. A relative `assetPrefix` fixes the root page but resolves the other pages' assets inside their own folders (`/debug/_next/…`), breaking `/debug`, `/blockexplorer`, `/lists` everywhere. Doing it properly needs per-page base handling (or dropping those pages, which are slated to go) plus relative logo/icon/manifest/page links. The route grammar itself needs no change (it reads only the fragment), but a few call sites assume the root page is `/`: the header's `/#/` links and its active-item check, and `NetworkSwitcher`'s `pathname === "/"` guard. Measured 2026-11-24 while building ADR-0071.
+
+### Load the explorer lazily on the landing page
+
+ADR-0071 moved the explorer onto the root page, so plain `/` now ships the explorer's JavaScript (root first-load ~658 kB). Loading `ExplorerClient` with `next/dynamic` only when a fragment route is present would keep the landing page light, at the cost of one more chunk round trip on a cold explorer link.
+

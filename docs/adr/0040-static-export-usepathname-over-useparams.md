@@ -1,6 +1,6 @@
 # ADR-0040: Read dynamic route params from `usePathname`, not `useParams`, in static-exported dynamic routes
 
-**Status:** Accepted
+**Status:** Accepted (superseded in part by ADR-0071 — the file explorer now routes in the URL fragment and no longer uses a dynamic route; the `usePathname` rule still holds for `/blockexplorer/**` and `/lists/[listUID]`)
 **Date:** 2026-04-21
 **Related:** PR (this change), ADR-0033 (root containers — where the bug surfaced)
 

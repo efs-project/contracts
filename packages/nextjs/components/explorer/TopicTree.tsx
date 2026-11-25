@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
 import type { PathItem } from "./types";
 import { zeroHash } from "viem";
 import { useAccount } from "wagmi";
@@ -14,12 +13,14 @@ import {
   UserCircleIcon,
 } from "@heroicons/react/24/outline";
 import { useDisplayName } from "~~/hooks/efs/useDisplayName";
+import { useHashRoute } from "~~/hooks/efs/useHashRoute";
 import { useLensesDirectoryPage } from "~~/hooks/efs/useLensesDirectoryPage";
 import { useSortedData } from "~~/hooks/efs/useSortedData";
 import { useDeployedContractInfo, useScaffoldReadContract } from "~~/hooks/scaffold-eth";
 import { useTargetNetwork } from "~~/hooks/scaffold-eth/useTargetNetwork";
 import type { ClassifiedContainer } from "~~/utils/efs/containers";
 import { isTopic } from "~~/utils/efs/efsTypes";
+import { formatHashRoute, pushHashRoute } from "~~/utils/efs/hashRoute";
 
 const RECENT_ADDRESSES_KEY = "efs.recentAddresses";
 const RECENT_ATTESTATIONS_KEY = "efs.recentAttestations";
@@ -304,7 +305,8 @@ const AddressEntry = ({
 };
 
 const AddressesBranch = ({ activeAddress }: { activeAddress?: string | null }) => {
-  const router = useRouter();
+  const route = useHashRoute();
+  const go = (segment: string) => pushHashRoute(formatHashRoute({ chain: route?.chain, segments: [segment] }));
   const { address: connectedAddress } = useAccount();
   // System default lens = SystemAccount (ADR-0053), the bootstrap/system author.
   // Not `Indexer.DEPLOYER()` (which now returns `owner()` — the Safe post-transfer,
@@ -327,8 +329,6 @@ const AddressesBranch = ({ activeAddress }: { activeAddress?: string | null }) =
       /* ignore */
     }
   }, [activeAddress]);
-
-  const go = (addr: string) => router.push(`/explorer/${addr}`);
 
   const activeLower = activeAddress?.toLowerCase();
   const connectedLower = connectedAddress?.toLowerCase();
@@ -391,7 +391,8 @@ const AddressesBranch = ({ activeAddress }: { activeAddress?: string | null }) =
 };
 
 const SchemasBranch = ({ activeUID }: { activeUID?: string | null }) => {
-  const router = useRouter();
+  const route = useHashRoute();
+  const go = (segment: string) => pushHashRoute(formatHashRoute({ chain: route?.chain, segments: [segment] }));
   const { data: anchorUID } = useScaffoldReadContract({ contractName: "Indexer", functionName: "ANCHOR_SCHEMA_UID" });
   const { data: propertyUID } = useScaffoldReadContract({
     contractName: "Indexer",
@@ -410,7 +411,7 @@ const SchemasBranch = ({ activeUID }: { activeUID?: string | null }) => {
 
   // Per ADR-0033 an alias anchor at root whose *name* is the schema UID in lowercase 0x-hex
   // is the EFS-native representation of the schema. The router prefers the alias anchor over
-  // the raw schema UID when walking, so linking to `/explorer/<schemaUID>` lands on the alias
+  // the raw schema UID when walking, so linking to `#/<schemaUID>` lands on the alias
   // whenever one exists and falls through to raw JSON otherwise.
   const items: { label: string; uid: string | undefined }[] = [
     { label: "ANCHOR", uid: anchorUID as string | undefined },
@@ -435,7 +436,7 @@ const SchemasBranch = ({ activeUID }: { activeUID?: string | null }) => {
               className={`w-full flex items-center gap-2 px-2 py-1 rounded-md hover:bg-base-200 disabled:opacity-40 ${
                 isActive ? "bg-primary/20 text-primary font-bold border-l-2 border-primary" : ""
               }`}
-              onClick={() => it.uid && router.push(`/explorer/${it.uid.toLowerCase()}`)}
+              onClick={() => it.uid && go(it.uid.toLowerCase())}
               disabled={!it.uid || it.uid === zeroHash}
             >
               <CircleStackIcon className="w-4 h-4 opacity-70 flex-shrink-0" />
@@ -507,7 +508,8 @@ const AttestationEntry = ({
 };
 
 const AttestationsBranch = ({ activeUID }: { activeUID?: string | null }) => {
-  const router = useRouter();
+  const route = useHashRoute();
+  const openSegment = (segment: string) => pushHashRoute(formatHashRoute({ chain: route?.chain, segments: [segment] }));
   const { address: connectedAddress } = useAccount();
   // System default lens = SystemAccount (ADR-0053), not `Indexer.DEPLOYER()`
   // (now `owner()` — the Safe, which authors nothing). See AddressesBranch.
@@ -542,7 +544,7 @@ const AttestationsBranch = ({ activeUID }: { activeUID?: string | null }) => {
     } catch {
       /* ignore */
     }
-    router.push(`/explorer/${trimmed}`);
+    openSegment(trimmed);
     setInput("");
   };
 

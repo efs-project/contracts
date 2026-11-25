@@ -16,14 +16,18 @@ export function useTargetNetwork(): { targetNetwork: ChainWithAttributes } {
   const { chain } = useAccount();
   const targetNetwork = useGlobalState(({ targetNetwork }) => targetNetwork);
   const setTargetNetwork = useGlobalState(({ setTargetNetwork }) => setTargetNetwork);
+  const routeChainId = useGlobalState(({ routeChainId }) => routeChainId);
 
   useEffect(() => {
     const newSelectedNetwork = scaffoldConfig.targetNetworks.find(targetNetwork => targetNetwork.id === chain?.id);
     if (newSelectedNetwork && newSelectedNetwork.id !== targetNetwork.id) {
       setTargetNetwork(newSelectedNetwork);
-      writeStoredTargetNetworkId(targetNetworkStorage(), newSelectedNetwork.id);
+      // While an explorer link names a chain (`#sep/…`), chain changes are for
+      // that view only: never saved as the preference. That includes a wallet
+      // that connects on another chain while the link's chain is being applied.
+      if (routeChainId === null) writeStoredTargetNetworkId(targetNetworkStorage(), newSelectedNetwork.id);
     }
-  }, [chain?.id, setTargetNetwork, targetNetwork.id]);
+  }, [chain?.id, setTargetNetwork, targetNetwork.id, routeChainId]);
 
   return useMemo(
     () => ({

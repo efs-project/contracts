@@ -244,7 +244,11 @@ Outputs `packages/nextjs/out/`. `ipfs add -r out/` → copy the resulting root C
 
 The devnet is its own chain — **EFS Devnet, chain id `26001993`** (ADR-0062). A deployed (`next build`) app defaults to **Sepolia**, with Devnet one click away in the switcher; **Local (31337) is not offered** (no node on a visitor's machine). Point the Devnet chain at the VPS with `NEXT_PUBLIC_DEVNET_RPC_URL` (defaults to the devnet VPS if unset). Do **not** use `NEXT_PUBLIC_HARDHAT_RPC_URL` for the devnet — that configures the _Local_ chain (31337); on a `26001993` node it would default the build to Local and sign writes for the wrong chain (the node rejects them). For an intentional **Devnet**-first production deployment, set both `NEXT_PUBLIC_TARGET_CHAIN=devnet` and `NEXT_PUBLIC_ALLOW_DEVNET_DEFAULT=true`; the public `app.efs.eth.limo` / `.eth.link` export should not set that allow flag. The devnet VPS anvil must run `--chain-id 26001993` (devnet repo `scripts/start-anvil.sh`). See `packages/nextjs/scaffold.config.ts`.
 
-**Deep-link SPA fallback.** The only truly dynamic route is `/explorer/[[...path]]` — anchor / address / schema / attestation URLs aren't enumerable at build time. Next's static export emits one shell at `/explorer/index.html`; `public/_redirects` tells IPFS gateways (per the [web-redirects spec](https://specs.ipfs.tech/http-gateways/web-redirects-file/), honored by Kubo ≥ 0.23 and eth.limo) to serve that shell with status 200 for any `/explorer/*` URL. The shell is a client component that reads `useParams()` at runtime and renders the real path. Blockexplorer's `/address/[address]` and `/transaction/[txHash]` use the same trick via dummy `generateStaticParams` values.
+**File explorer links live in the URL fragment** (ADR-0071): `/#/whitepapers/bitcoin.pdf`, or with a chain, `/#sep/whitepapers/bitcoin.pdf` (ERC-3770 short name or chain id; `#/` = the viewer's chain). The host never sees the fragment, so every static host serves the root `index.html` and the app reads the route (`utils/efs/hashRoute.ts`, `utils/efs/routeChain.ts`) — no `_redirects` rule. Navigate inside the explorer with `pushHashRoute`/`replaceHashRoute`, and link into it with a plain `<a href="/#/…">`, not `next/link` (a fragment-only `next/link` change fires no `hashchange`).
+
+**Serve the bundle from a domain root.** v1 only works at the root of a domain (eth.limo, subdomain IPFS gateways, efs.com); a subfolder or an IPFS path gateway (`/ipfs/<cid>/`) doesn't load, because the export's asset paths are absolute (ADR-0071).
+
+**Deep-link SPA fallback for the other dynamic routes.** Blockexplorer's `/address/[address]` and `/transaction/[txHash]`, and `/lists/[listUID]`, are exported with a dummy `generateStaticParams` value; `public/_redirects` tells IPFS gateways (per the [web-redirects spec](https://specs.ipfs.tech/http-gateways/web-redirects-file/), honored by Kubo ≥ 0.23 and eth.limo) to serve that shell with status 200, and the client reads the real segment from `usePathname()` (ADR-0040).
 
 **CORS prerequisite on the VPS.** Because the app origin (`app.efs.eth.limo`) is different from the service origin (the VPS), the VPS reverse proxy (Caddy/nginx) MUST respond with:
 
@@ -259,8 +263,8 @@ on the `/rpc`, `/ipfs/`, `/arweave/` paths. Without this, the browser blocks eve
 **Smoke test after publishing.** Visit these URLs and confirm each renders the expected content without reloading:
 
 1. `https://app.efs.eth.limo/` — landing page
-2. `https://app.efs.eth.limo/explorer/` — Explorer root
-3. `https://app.efs.eth.limo/explorer/docs/readme.txt` — deep path (tests `_redirects`)
+2. `https://app.efs.eth.limo/#/` — Explorer root
+3. `https://app.efs.eth.limo/#sep/whitepapers/bitcoin.pdf` — file link with a chain (on Android Chrome this must render the PDF, not download)
 4. DevTools → Network tab: every XHR should target `<vps-host>`, none should target `localhost` or `eth.limo`.
 
 ## Commands

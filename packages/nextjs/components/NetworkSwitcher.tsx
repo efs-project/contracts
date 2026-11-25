@@ -23,8 +23,10 @@ import { useEffect, useRef, useState } from "react";
 import { useTheme } from "next-themes";
 import { useAccount, useSwitchChain } from "wagmi";
 import { GlobeAltIcon } from "@heroicons/react/24/outline";
+import { useHashRoute } from "~~/hooks/efs/useHashRoute";
 import { getNetworkColor, useTargetNetwork } from "~~/hooks/scaffold-eth";
 import { useGlobalState } from "~~/services/store/store";
+import { formatHashRoute, replaceHashRoute } from "~~/utils/efs/hashRoute";
 import {
   DEVNET_CHAIN_ID,
   getTargetNetworks,
@@ -46,9 +48,11 @@ const ignoredLegacyTargetNetworkIds = [DEVNET_CHAIN_ID] as const;
 export const NetworkSwitcher = () => {
   const { targetNetwork } = useTargetNetwork();
   const setTargetNetwork = useGlobalState(state => state.setTargetNetwork);
+  const setRouteChainId = useGlobalState(state => state.setRouteChainId);
   const { isConnected, status } = useAccount();
   const { switchChain } = useSwitchChain();
   const { resolvedTheme } = useTheme();
+  const route = useHashRoute();
   const isDarkMode = resolvedTheme === "dark";
   const [mounted, setMounted] = useState(false);
 
@@ -80,6 +84,17 @@ export const NetworkSwitcher = () => {
   }
 
   const selectNetwork = (chainId: number) => {
+    // Picking a network here overrides a chain an open explorer link names
+    // (`#sep/…`, on the root page): drop it from the link so the view follows
+    // this choice — with a wallet, only once the wallet has actually switched.
+    // Clearing `routeChainId` first tells the link's view not to put the
+    // viewer's earlier chain back as it closes (useRouteChain).
+    const dropLinkChain = () => {
+      if (route?.chain && window.location.pathname === "/") {
+        setRouteChainId(null);
+        replaceHashRoute(formatHashRoute({ segments: route.rawSegments, params: route.params }));
+      }
+    };
     if (isConnected) {
       // Ask the wallet to switch; useTargetNetwork's effect syncs the store after.
       // Persist only after the connector confirms the switch; a rejected wallet
@@ -87,12 +102,16 @@ export const NetworkSwitcher = () => {
       switchChain?.(
         { chainId },
         {
-          onSuccess: () => writeStoredTargetNetworkId(targetNetworkStorage(), chainId),
+          onSuccess: () => {
+            dropLinkChain();
+            writeStoredTargetNetworkId(targetNetworkStorage(), chainId);
+          },
         },
       );
     } else {
       const next = allowedNetworks.find(n => n.id === chainId);
       if (next) {
+        dropLinkChain();
         setTargetNetwork(next);
         writeStoredTargetNetworkId(targetNetworkStorage(), chainId);
       }

@@ -1,11 +1,12 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import type { PathItem } from "./types";
 import { useAccount } from "wagmi";
 import { ChevronDownIcon, ChevronUpIcon } from "@heroicons/react/24/outline";
+import { useHashRoute } from "~~/hooks/efs/useHashRoute";
 import type { ClassifiedContainer, ContainerKind } from "~~/utils/efs/containers";
+import { formatHashRoute, pushHashRoute } from "~~/utils/efs/hashRoute";
 
 const TreeIcon = ({ className }: { className?: string }) => (
   <svg
@@ -110,8 +111,8 @@ export const PathBar = ({
   onToggleSidebar,
   disabled = false,
 }: PathBarProps) => {
-  const router = useRouter();
-  const searchParams = useSearchParams();
+  const route = useHashRoute();
+  const searchParams = useMemo(() => route?.params ?? new URLSearchParams(), [route]);
   const { address: connectedAddress } = useAccount();
   const [input, setInput] = useState(() => buildUrlFromPath(currentPath, containerKind));
   const [isEditing, setIsEditing] = useState(false);
@@ -145,9 +146,7 @@ export const PathBar = ({
       .map(s => s.trim())
       .filter(Boolean)
       .map(encodeSegmentIdempotent);
-    const query = searchParams.toString();
-    const url = `/explorer/${segments.join("/")}${query ? `?${query}` : ""}`;
-    router.push(url);
+    pushHashRoute(formatHashRoute({ chain: route?.chain, segments, params: searchParams }));
   };
 
   const handleSubmit = (e: FormEvent) => {
@@ -164,8 +163,7 @@ export const PathBar = ({
     const tailSegments = currentPath
       .slice(containerKind === "anchor" ? 1 : 0)
       .map(p => p.urlSegment ?? encodeURIComponent(p.name));
-    const q = next.toString();
-    router.push(`/explorer/${tailSegments.join("/")}${q ? `?${q}` : ""}`);
+    pushHashRoute(formatHashRoute({ chain: route?.chain, segments: tailSegments, params: next }));
   };
 
   const lensesCount = lensAddresses.length;
@@ -300,8 +298,7 @@ export const PathBar = ({
                 const tailSegments = currentPath
                   .slice(containerKind === "anchor" ? 1 : 0)
                   .map(p => p.urlSegment ?? encodeURIComponent(p.name));
-                const q = next.toString();
-                router.push(`/explorer/${tailSegments.join("/")}${q ? `?${q}` : ""}`);
+                pushHashRoute(formatHashRoute({ chain: route?.chain, segments: tailSegments, params: next }));
               }}
             >
               Clear
