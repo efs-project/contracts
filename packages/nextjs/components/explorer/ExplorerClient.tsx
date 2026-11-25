@@ -924,8 +924,10 @@ export default function ExplorerClient() {
                 // (whose open state lives inside FileActionsBar) is force-closed
                 // before write controls re-expose for the new chain. Pairs with
                 // the chain-switch reset effect that clears the resolved anchor
-                // (Codex P2).
-                key={targetNetwork.id}
+                // (Codex P2). Remount on folder change too: fragment navigation
+                // (Back included) keeps the explorer mounted, and a modal left
+                // open would submit into the new folder, not the one it began in.
+                key={`${targetNetwork.id}:${currentAnchorUID ?? "none"}`}
                 currentAnchorUID={currentAnchorUID}
                 container={currentContainer}
                 anchorSchemaUID={anchorSchemaUID}
