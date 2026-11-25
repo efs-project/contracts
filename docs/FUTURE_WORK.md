@@ -272,7 +272,7 @@ Durable listing semantics for all files — out of scope here.
 `parentAnchorUID`) with `definition=dataSchemaUID`. If `parentAnchorUID` were a
 FILE anchor it would be mis-tagged as a visible folder and could re-surface via
 phase-0 folder visibility after its placement PIN is revoked (Codex). This IS
-reachable — a deep link like `/explorer/docs/readme.txt` resolves
+reachable — a deep link like `#/docs/readme.txt` resolves
 `currentAnchorUID` to a file leaf — so it is now FIXED at the source: ExplorerClient
 gates the Overview editor off on file leaves (`overviewEditable && !currentIsFileLeaf`),
 and OverviewEditorModal is the helper's sole caller, so `parentAnchorUID` only

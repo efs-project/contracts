@@ -47,11 +47,14 @@ export function useRouteChain(token: string): RouteChainStatus {
     // The chain the viewer was on before this link's chain took over.
     const before = useGlobalState.getState().targetNetwork;
     return () => {
+      // A header choice clears `routeChainId` before dropping the link's chain:
+      // that choice is the viewer's, so it stays, even when it's this chain.
+      const overridden = useGlobalState.getState().routeChainId !== chain.id;
       setRouteChainId(null);
-      // Put it back unless something else has moved the chain since (a header
-      // switch). The app's burner wallet is moved back too; a viewer's own
-      // wallet stays where they put it (the wallet is the source of truth).
-      if (before.id === chain.id) return;
+      // Otherwise put it back unless something else has moved the chain since.
+      // The app's burner wallet is moved back too; a viewer's own wallet stays
+      // where they put it (the wallet is the source of truth).
+      if (overridden || before.id === chain.id) return;
       const wallet = walletRef.current;
       const { targetNetwork, setTargetNetwork } = useGlobalState.getState();
       if (!wallet.isConnected && targetNetwork.id === chain.id) setTargetNetwork(before);

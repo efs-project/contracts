@@ -48,6 +48,7 @@ const ignoredLegacyTargetNetworkIds = [DEVNET_CHAIN_ID] as const;
 export const NetworkSwitcher = () => {
   const { targetNetwork } = useTargetNetwork();
   const setTargetNetwork = useGlobalState(state => state.setTargetNetwork);
+  const setRouteChainId = useGlobalState(state => state.setRouteChainId);
   const { isConnected, status } = useAccount();
   const { switchChain } = useSwitchChain();
   const { resolvedTheme } = useTheme();
@@ -86,8 +87,11 @@ export const NetworkSwitcher = () => {
     // Picking a network here overrides a chain an open explorer link names
     // (`#sep/…`, on the root page): drop it from the link so the view follows
     // this choice — with a wallet, only once the wallet has actually switched.
+    // Clearing `routeChainId` first tells the link's view not to put the
+    // viewer's earlier chain back as it closes (useRouteChain).
     const dropLinkChain = () => {
       if (route?.chain && window.location.pathname === "/") {
+        setRouteChainId(null);
         replaceHashRoute(formatHashRoute({ segments: route.rawSegments, params: route.params }));
       }
     };
